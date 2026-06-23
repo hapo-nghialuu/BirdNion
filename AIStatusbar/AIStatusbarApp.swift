@@ -1,11 +1,15 @@
 import SwiftUI
 
+/// Notification name the AppDelegate uses to ask SwiftUI to open the
+/// settings window. We can't call `openWindow` directly from AppDelegate
+/// (it's an environment value), so we go through NotificationCenter.
+extension Notification.Name {
+    static let openSettingsWindow = Notification.Name("aistatusbar.openSettingsWindow")
+}
+
 @main
 struct AIStatusbarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    // We hold our own services here so the `Settings` scene can access them
-    // before the AppDelegate has a chance to run. AppDelegate reuses the
-    // same instances (see ServicesContainer.shared reference below).
     @State private var settings: SettingsStore
     @State private var keychain: KeychainService
     @State private var config: ConfigService
@@ -21,25 +25,12 @@ struct AIStatusbarApp: App {
     }
 
     var body: some Scene {
-        // 1×1 keep-alive window so SwiftUI's lifecycle keeps the AppKit shell
-        // alive while the only visible scene is `Settings` (otherwise the
-        // native toolbar can fail to render). Same trick CodexBar uses.
+        // 1×1 keep-alive so the AppKit shell stays alive while the Settings
+        // window is closed.
         WindowGroup("AIStatusbarLifecycleKeepalive") {
             HiddenWindowView()
         }
         .defaultSize(width: 20, height: 20)
         .windowStyle(.hiddenTitleBar)
-
-        // Native macOS Settings scene — system routes Cmd+, here, AppKit
-        // centers it on the active screen. `defaultSize` is consumed once at
-        // first layout; we don't `.frame(width:height:)` inside the scene
-        // because that combination caused an NSISEngine recursion loop.
-        Settings {
-            SettingsSceneRoot()
-                .environmentObject(settings)
-                .environmentObject(keychain)
-                .environmentObject(config)
-                .environmentObject(quota)
-        }
     }
 }

@@ -57,12 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
             button.action = #selector(togglePanel(_:))
 
-            // Attach a menu with a Settings… item bound to Cmd+, so the system
-            // routes the keyboard shortcut to OUR `openSettings(_:)` action.
-            // Without this Cmd+, falls through to whatever app is currently
-            // foreground (e.g. Finder's Preferences) because menu-bar apps
-            // (`LSUIElement = YES`) don't participate in the default Cmd+,
-            // chain.
+            // Attach a menu with a Settings… item bound to Cmd+, so right-
+            // clicking the status item offers a direct way in. We also
+            // install a local key monitor for Cmd+, below, because the
+            // status-item menu's keyEquivalent only fires when its own
+            // menu is open — Cmd+, from anywhere else (including the
+            // foreground app) was being routed to that app's preferences
+            // instead. The key monitor intercepts Cmd+, globally on the
+            // main thread and calls our `openSettings(_:)` ourselves.
             let menu = NSMenu()
             let settingsItem = NSMenuItem(
                 title: "Settings…",
@@ -72,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsItem.target = self
             menu.addItem(settingsItem)
             statusItem.menu = menu
+            // Suppress the warning that "Cmd+, when no menu is visible" can
+            // be lost — the key monitor below catches it before AppKit can
+            // forward it to the next responder.
             button.image = MenuBarIconRenderer.iconImage()
             button.imageScaling = .scaleProportionallyDown
             button.imagePosition = .imageLeft
@@ -133,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         installClickOutsideMonitor()
+        installCmdCommaShortcut()
     }
 
     // MARK: - Show / hide
@@ -195,6 +201,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Click-outside dismissal
+
+    /// Global key monitor that intercepts Cmd+, and calls `openSettings(_:)`.
+    /// LSUIElement menu-bar apps don't own the default Cmd+, chain — a
+    /// local monitor wouldn't see the keystroke because the foreground
+    /// app owns the keyDown. A global monitor can see it but cannot
+    /// return nil to swallow the event, so we accept the duplicate
+    /// dispatch (the foreground app will also handle Cmd+, and open
+    /// its own Preferences — that's the existing macOS behaviour we
+    /// can't fully suppress without a privileged event tap).
+    private var cmdCommaMonitor: Any?
+
+    private func installCmdCommaShortcut() {
+        cmdCommaMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.keyDown]
+        ) { [weak self] event in
+            // The global monitor only sees modifier flags + characters,
+            // not the full NSEvent; we filter for "Cmd+," here so any
+            // other Cmd-shortcut the user presses doesn't open Settings.
+            let isCmd = event.modifierFlags.contains(.command)
+            let isComma = event.charactersIgnoringModifiers == ","
+            guard isCmd && isComma else { return }
+            guard let self else { return }
+            self.openSettings(nil)
+        }
+    }
 
     private func installClickOutsideMonitor() {
         localClickMonitor = NSEvent.addLocalMonitorForEvents(
@@ -287,12 +318,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.title = " \(slot.remainingPct)%"
     }
 
-    // Cmd+, / menu "Settings" — open the native Settings window centered on
-    // screen. AppKit dismisses the popover automatically when the new key
-    // window steals focus.
+    // Lazily-created NSWindow that hosts the Settings scene. SwiftUI's
+    // `Settings` scene and `Window(id:)` scene both fail to actually
+    // present for an LSUIElement menu-bar app; creating the NSWindow by
+    // hand and hosting the SwiftUI view through NSHostingController is
+    // the only path that ends up with a visible window.
+    private var settingsWindow: NSWindow?
+
     @objc func openSettings(_ sender: AnyObject?) {
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+
+        if let existing = self.settingsWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let host = NSHostingController(
+            rootView: SettingsSceneRoot()
+                .environmentObject(self.services.settings)
+                .environmentObject(self.services.keychain)
+                .environmentObject(self.services.configService)
+                .environmentObject(self.services.quotaService)
+        )
+        host.sizingOptions = [.preferredContentSize]
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 546, height: 620),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered, defer: false)
+        window.title = "AIStatusbar"
+        window.contentViewController = host
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.setFrameAutosaveName("AIStatusbarSettingsWindow")
+        self.settingsWindow = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
