@@ -36,9 +36,9 @@ enum MenuBarIconRenderer {
     /// bar background on both light and dark appearances.
     ///
     /// `pointSize` controls the on-screen point size. The default menu bar
-    /// slot is ~18pt tall; using 18pt fills the slot so the bird reads at
-    /// its native size next to the percentage title.
-    static func iconImage(pointSize: CGFloat = 18) -> NSImage {
+    /// slot is ~18pt tall, but at 20pt the bird overflows slightly so it
+    /// reads larger than other status icons.
+    static func iconImage(pointSize: CGFloat = 20) -> NSImage {
         guard let source = NSImage(named: assetName) else {
             return NSImage(size: NSSize(width: pointSize, height: pointSize))
         }
