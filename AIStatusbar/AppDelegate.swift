@@ -89,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Re-render the menu bar icon whenever QuotaService publishes.
         services.quotaService.$statuses
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshIcon() }
+            .sink { [weak self] statuses in self?.refreshIcon(statuses: statuses) }
             .store(in: &cancellables)
 
         installClickOutsideMonitor()
@@ -184,8 +184,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hidePanel()
     }
 
-    private func refreshIcon() {
-        let image = MenuBarIconRenderer.image()
+    private func refreshIcon(statuses: [ProviderStatus] = []) {
+        let image = MenuBarIconRenderer.image(statuses: statuses)
         image.isTemplate = false
         statusItem.button?.image = image
         statusItem.button?.imageScaling = .scaleProportionallyDown
