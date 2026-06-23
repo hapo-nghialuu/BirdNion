@@ -2,19 +2,34 @@ import AppKit
 import SwiftUI
 import Combine
 
+/// Borderless panel used as the menu-bar dropdown. Unlike NSPopover it draws
+/// no triangular arrow and can be positioned freely. It must be allowed to
+/// become key so the SwiftUI buttons inside it receive clicks.
+final class DropdownPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 /// AppDelegate creates the NSStatusItem (menu bar icon) programmatically and
-/// manages an NSPopover for the popover content. The menu bar icon is a
-/// dynamic NSImage redrawn from the latest QuotaService statuses (codexbar
-/// "usage meter drawn dynamically" approach).
+/// manages a borderless DropdownPanel for the popover content. The menu bar
+/// icon is a dynamic NSImage redrawn from the latest QuotaService statuses.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let services = ServicesContainer()
     private var statusItem: NSStatusItem!
-    private var popover: NSPopover!
-    private var settingsWindow: NSWindow?
+    private var panel: DropdownPanel!
+    private var hostingController: NSHostingController<AnyView>!
     private var cancellables = Set<AnyCancellable>()
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
+    private var sizeObservation: NSKeyValueObservation?
+    /// Screen-space Y of the panel's top edge while shown, so height changes
+    /// (e.g. switching to the settings section) grow downward, not upward.
+    private var panelTopY: CGFloat?
+
+    // Fixed width; height is driven by the SwiftUI content's fitting size.
+    private let panelWidth: CGFloat = 420
+    /// Pixels the panel is nudged up toward the menu bar from its anchor.
+    private let topNudge: CGFloat = 10
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         services.start()
@@ -26,40 +41,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Status bar item — dynamic bird icon, redrawn once at launch.
         statusItem = NSStatusBar.system.statusItem(withLength: 30)
         refreshIcon()
-
         if let button = statusItem.button {
             button.target = self
-            button.action = #selector(togglePopover(_:))
+            button.action = #selector(togglePanel(_:))
         }
 
-        // Popover — transient behavior plus a manual click-outside monitor.
-        // Some macOS builds ignore `behavior = .transient` when the popover is
-        // opened from an NSStatusItem button, so we install an NSEvent monitor
-        // that explicitly closes the popover when a click lands outside its
-        // content frame.
-        popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        // Initial size only — the hosting controller's sizingOptions below
-        // makes the popover auto-resize to the SwiftUI content's fitting
-        // height (width stays 420), so it hugs the cards with no dead gap.
-        popover.contentSize = NSSize(width: 420, height: 480)
+        // SwiftUI content hosted in a controller that reports its fitting
+        // size, so we can resize the panel to hug the content.
         let host = NSHostingController(
-            rootView: PopoverView()
-                .environmentObject(services.quotaService)
-                .environmentObject(services.configService)
-                .environmentObject(services.keychain)
+            rootView: AnyView(
+                PopoverView()
+                    .environmentObject(services.quotaService)
+                    .environmentObject(services.configService)
+                    .environmentObject(services.keychain)
+            )
         )
         host.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = host
-        popover.delegate = self
-        // Drop the triangular arrow that NSPopover draws toward its anchor.
-        // Public API offers no arrow-less option, so call the private
-        // selector that AppKit exposes for this exact purpose.
-        popover.perform(NSSelectorFromString("_setArrowEdge:"),
-                         with: NSNumber(value: NSInteger(0)))
+        hostingController = host
 
-        // Re-render icon whenever QuotaService publishes a new status
+        // Borderless, non-activating panel — no arrow, floats above windows.
+        let p = DropdownPanel(
+            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: 480),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: true
+        )
+        p.isFloatingPanel = true
+        p.level = .popUpMenu
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.hidesOnDeactivate = false
+        p.contentViewController = host
+        // Round the corners of the hosted content; the panel itself stays
+        // clear so the rounded edges are transparent and the shadow follows.
+        p.contentView?.wantsLayer = true
+        p.contentView?.layer?.cornerRadius = 16
+        p.contentView?.layer?.masksToBounds = true
+        panel = p
+
+        // Resize the panel whenever the SwiftUI content's preferred size
+        // changes (loading -> loaded, quota -> settings section, etc.).
+        sizeObservation = host.observe(\.preferredContentSize, options: [.new]) {
+            [weak self] _, _ in
+            Task { @MainActor in self?.resizePanelToContent() }
+        }
+
+        // Re-render the menu bar icon whenever QuotaService publishes.
         services.quotaService.$statuses
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refreshIcon() }
@@ -68,46 +95,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installClickOutsideMonitor()
     }
 
+    // MARK: - Show / hide
+
+    @objc func togglePanel(_ sender: AnyObject?) {
+        if panel.isVisible {
+            hidePanel()
+        } else {
+            showPanel()
+        }
+    }
+
+    private func showPanel() {
+        guard let button = statusItem.button, let buttonWindow = button.window else { return }
+
+        // Force a layout pass so fittingSize is valid on the first open.
+        hostingController.view.layoutSubtreeIfNeeded()
+        let height = max(1, hostingController.view.fittingSize.height)
+
+        // Anchor: just below the status item button, centered, nudged up.
+        let buttonRect = buttonWindow.convertToScreen(
+            button.convert(button.bounds, to: nil)
+        )
+        let topY = buttonRect.minY + topNudge
+        panelTopY = topY
+        var originX = buttonRect.midX - panelWidth / 2
+        let originY = topY - height
+
+        // Clamp horizontally so the panel stays on screen.
+        if let screen = buttonWindow.screen ?? NSScreen.main {
+            let vf = screen.visibleFrame
+            let margin: CGFloat = 8
+            originX = min(max(originX, vf.minX + margin), vf.maxX - panelWidth - margin)
+        }
+
+        panel.setFrame(
+            NSRect(x: originX, y: originY, width: panelWidth, height: height),
+            display: true
+        )
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func hidePanel() {
+        panel.orderOut(nil)
+        panelTopY = nil
+    }
+
+    /// Keep the top edge fixed and grow/shrink downward when the content
+    /// height changes while the panel is visible.
+    private func resizePanelToContent() {
+        guard panel.isVisible else { return }
+        hostingController.view.layoutSubtreeIfNeeded()
+        let height = max(1, hostingController.view.fittingSize.height)
+        let frame = panel.frame
+        let top = panelTopY ?? frame.maxY
+        panel.setFrame(
+            NSRect(x: frame.origin.x, y: top - height, width: panelWidth, height: height),
+            display: true
+        )
+    }
+
+    // MARK: - Click-outside dismissal
+
     private func installClickOutsideMonitor() {
-        // Local monitor: catches mouse events delivered to any window of this
-        // app. If a click happens outside the popover window, close it.
         localClickMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] event in
             guard let self else { return event }
-            self.closePopoverIfClickOutside(event: event)
+            self.closePanelIfClickOutside(event: event)
             return event
         }
-
-        // Global monitor: catches mouse events outside this app entirely.
-        // If the popover is still shown after a click elsewhere on the system,
-        // close it.
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                if self.popover.isShown { self.popover.performClose(nil) }
+                if self.panel.isVisible { self.hidePanel() }
             }
         }
     }
 
-    private func closePopoverIfClickOutside(event: NSEvent) {
-        guard popover.isShown else { return }
-        guard let popoverWindow = popover.contentViewController?.view.window else {
-            return
-        }
-        // Convert event location (window coords) to screen coords for comparison
-        let mouseLocationInWindow = event.locationInWindow
-        let mouseOnScreen = popoverWindow.convertPoint(toScreen: mouseLocationInWindow)
-        if !popoverWindow.frame.contains(mouseOnScreen) {
-            // Also check we are not clicking on the status bar button itself,
-            // because that click will toggle (close) the popover via togglePopover.
-            if let button = statusItem.button, button.window?.frame.contains(mouseOnScreen) == true {
-                return
-            }
-            popover.performClose(nil)
-        }
+    private func closePanelIfClickOutside(event: NSEvent) {
+        guard panel.isVisible else { return }
+        // A click inside the panel's own window is delivered to that window;
+        // only dismiss when the event targets a different window.
+        if event.window == panel { return }
+        // Clicking the status item button toggles the panel itself.
+        if let button = statusItem.button, event.window == button.window { return }
+        hidePanel()
     }
 
     private func refreshIcon() {
@@ -118,32 +192,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.imagePosition = .imageOnly
     }
 
-    @objc func togglePopover(_ sender: AnyObject?) {
-        guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(sender)
-        } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            // Nudge the popover window up by 10pt (screen coords: +y is up)
-            // so it sits closer to the menu bar instead of dropping low.
-            if let win = popover.contentViewController?.view.window {
-                var frame = win.frame
-                frame.origin.y += 10
-                win.setFrame(frame, display: true)
-            }
-            popover.contentViewController?.view.window?.becomeKey()
-        }
-    }
-
-    // Cmd+, / menu "Settings" — open popover (if closed) and switch to the
-    // Providers section inline. PopoverView listens for `.openSettings`
-    // notifications and updates its `section` state accordingly.
+    // Cmd+, / menu "Settings" — open the panel (if closed) and switch to the
+    // Providers section inline. PopoverView listens for `.openSettings`.
     @objc func openSettings(_ sender: AnyObject?) {
-        if !popover.isShown {
-            togglePopover(sender)
+        if !panel.isVisible {
+            showPanel()
         }
-        // Repost on the next runloop tick so PopoverView's onReceive
-        // catches it even when the popover was just (re)created.
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .openSettings, object: nil)
         }
@@ -153,16 +207,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let m = localClickMonitor { NSEvent.removeMonitor(m) }
         if let m = globalClickMonitor { NSEvent.removeMonitor(m) }
         services.stop()
-    }
-}
-
-// MARK: - NSPopoverDelegate
-extension AppDelegate: NSPopoverDelegate {
-    nonisolated func popoverDidShow(_ notification: Notification) {
-        // After the popover is shown, force its window to become key so the
-        // local mouse monitor can correctly attribute clicks to its frame.
-        Task { @MainActor in
-            self.popover.contentViewController?.view.window?.becomeKey()
-        }
     }
 }
