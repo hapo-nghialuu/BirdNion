@@ -1,7 +1,35 @@
 import Foundation
 
 /// MiniMax Token Plan quota provider.
-/// Endpoint is a compile-time constant (not overridable from providers.json — Finding F2).
+///
+/// Endpoint: `GET https://api.minimax.io/v1/token_plan/remains`
+/// Auth: `Authorization: Bearer <key>` (verified 2026-06-23 against the live
+///   endpoint; raw token without `Bearer ` returns `status_code: 1004`).
+///
+/// Response envelope (verified live):
+/// ```json
+/// {
+///   "base_resp": { "status_code": 0, "status_msg": "success" },
+///   "model_remains": [
+///     {
+///       "model_name": "general",
+///       "current_interval_remaining_percent": 69,
+///       "current_weekly_remaining_percent": 96,
+///       ...
+///     },
+///     {
+///       "model_name": "video",
+///       "current_interval_remaining_percent": 100,
+///       "current_weekly_remaining_percent": 100,
+///       ...
+///     }
+///   ]
+/// }
+/// ```
+///
+/// Multi-model handling: each model becomes its own pair of windows
+/// (interval + weekly). This makes the breakdown visible per-model
+/// instead of collapsing everything into one "min across models" number.
 final class MiniMaxProvider: QuotaProvider {
     static let endpoint = URL(string: "https://api.minimax.io/v1/token_plan/remains")!
 
@@ -37,6 +65,7 @@ final class MiniMaxProvider: QuotaProvider {
         req.httpMethod = "GET"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 15
 
         let data: Data
         let response: URLResponse
@@ -53,11 +82,6 @@ final class MiniMaxProvider: QuotaProvider {
                                   lastUpdated: Date(),
                                   error: "Response không phải HTTP")
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            return ProviderStatus(id: id, displayName: displayName, windows: [],
-                                  lastUpdated: Date(),
-                                  error: "Token bị từ chối — kiểm tra loại key (inference key, không phải Subscription Key)")
-        }
         guard (200..<300).contains(http.statusCode) else {
             return ProviderStatus(id: id, displayName: displayName, windows: [],
                                   lastUpdated: Date(),
@@ -68,26 +92,49 @@ final class MiniMaxProvider: QuotaProvider {
 
     func parse(_ data: Data) -> ProviderStatus {
         let decoder = JSONDecoder()
-        guard let root = try? decoder.decode(RemainsResponse.self, from: data),
-              let m = root.model_remains.first else {
+        guard let root = try? decoder.decode(RemainsResponse.self, from: data) else {
             return ProviderStatus(id: id, displayName: displayName, windows: [],
                                   lastUpdated: Date(),
                                   error: "Response thiếu trường")
         }
-        let interval = QuotaWindow(label: "5 giờ",
-                                   usedPct: 100 - m.current_interval_remaining_percent,
-                                   remainingPct: m.current_interval_remaining_percent)
-        let weekly = QuotaWindow(label: "Tuần",
-                                 usedPct: 100 - m.current_weekly_remaining_percent,
-                                 remainingPct: m.current_weekly_remaining_percent)
+        // MiniMax returns HTTP 200 even for auth/permission failures; the
+        // real status lives in `base_resp.status_code`. 0 == success.
+        if root.base_resp.status_code != 0 {
+            return ProviderStatus(id: id, displayName: displayName, windows: [],
+                                  lastUpdated: Date(),
+                                  error: root.base_resp.status_msg)
+        }
+        guard !root.model_remains.isEmpty else {
+            return ProviderStatus(id: id, displayName: displayName, windows: [],
+                                  lastUpdated: Date(),
+                                  error: "Không có model nào trong response")
+        }
+        // 1 model → compact labels ("5 giờ" / "Tuần")
+        // ≥2 models → disambiguate with model name prefix ("general 5h" / etc.)
+        let multiple = root.model_remains.count > 1
+        var windows: [QuotaWindow] = []
+        for m in root.model_remains {
+            let prefix = multiple ? "\(m.model_name) " : ""
+            windows.append(QuotaWindow(label: "\(prefix)5 giờ",
+                                       usedPct: 100 - m.current_interval_remaining_percent,
+                                       remainingPct: m.current_interval_remaining_percent))
+            windows.append(QuotaWindow(label: "\(prefix)Tuần",
+                                       usedPct: 100 - m.current_weekly_remaining_percent,
+                                       remainingPct: m.current_weekly_remaining_percent))
+        }
         return ProviderStatus(id: id, displayName: displayName,
-                              windows: [interval, weekly],
+                              windows: windows,
                               lastUpdated: Date(),
                               error: nil)
     }
 
     private struct RemainsResponse: Decodable {
+        let base_resp: BaseResp
         let model_remains: [ModelRemain]
+    }
+    private struct BaseResp: Decodable {
+        let status_code: Int
+        let status_msg: String
     }
     private struct ModelRemain: Decodable {
         let model_name: String

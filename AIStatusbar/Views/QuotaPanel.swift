@@ -158,7 +158,9 @@ struct WindowRow: View {
     /// and ORANGE for "usage/EXP" (e.g. "EXP 147/300"). We map:
     ///   - "5 giờ" (session, remaining)  → green
     ///   - "Tuần"  (weekly, used)        → orange
-    private var isOrange: Bool { window.label == "Tuần" }
+    /// Multi-model labels (e.g. "general Tuần") use `contains` instead of
+    /// exact match so the same color mapping applies per-model.
+    private var isOrange: Bool { window.label.contains("Tuần") }
 
     private var barColor: Color {
         isOrange ? VocabbyTheme.orange : VocabbyTheme.green
@@ -166,11 +168,9 @@ struct WindowRow: View {
     private var barFill: Double { isOrange ? Double(window.usedPct) : Double(window.remainingPct) }
 
     private var resetText: String {
-        switch window.label {
-        case "5 giờ":  return "Resets in 4h 12m"
-        case "Tuần":   return "Resets in 1d 19h"
-        default:       return ""
-        }
+        if window.label.contains("Tuần") { return "Resets weekly" }
+        if window.label.contains("5 giờ") { return "Resets in 5h" }
+        return ""
     }
 
     var body: some View {
