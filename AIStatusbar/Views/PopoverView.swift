@@ -18,7 +18,7 @@ struct PopoverView: View {
     @State private var section: Section = .quota
 
     enum Section: Hashable {
-        case quota, providers, config
+        case quota, config
     }
 
     var body: some View {
@@ -30,9 +30,8 @@ struct PopoverView: View {
             }
             Group {
                 switch section {
-                case .quota:     QuotaOverview()
-                case .providers: ProvidersSection()
-                case .config:    ConfigPanel()
+                case .quota:  QuotaOverview()
+                case .config: ConfigPanel()
                 }
             }
         }
@@ -43,7 +42,7 @@ struct PopoverView: View {
         .frame(width: 420)
         .background(VocabbyTheme.background)
         .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { _ in
-            withAnimation(.easeInOut(duration: 0.15)) { section = .providers }
+            withAnimation(.easeInOut(duration: 0.15)) { section = .config }
         }
     }
 
@@ -77,9 +76,8 @@ struct PopoverView: View {
 
     private var sectionTitle: String {
         switch section {
-        case .quota:     return "Quota"
-        case .providers: return "Providers"
-        case .config:    return "Claude Config"
+        case .quota:  return "Quota"
+        case .config: return "Claude Config"
         }
     }
 }
