@@ -52,14 +52,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = MenuBarIconRenderer.iconImage()
             button.imageScaling = .scaleProportionallyDown
             button.imagePosition = .imageLeft
-            // Pull the title flush against the icon. AppKit's default
-            // imagePadding leaves a 4pt+ gap; the default title padding
-            // adds another on the trailing edge. Pin both to 2pt so the
-            // number hugs the bird on both sides.
-            if let cell = button.cell as? NSButtonCell {
-                cell.imagePadding = 2
-                cell.titlePadding = 2
-            }
+            // AppKit's NSButtonCell exposes no public imagePadding/
+            // titlePadding on macOS — the menu bar button always keeps a
+            // small internal gap between image and title. We compensate
+            // by setting a tiny leading space on the title string so the
+            // visual distance still feels tight without overflowing.
             // Use the system monospaced digit font so the title width stays
             // stable as the digits change.
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
@@ -261,7 +258,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.title = ""
             return
         }
-        button.title = "\(slot.remainingPct)%"
+        // One thin space between the icon and the digits. The button cell
+        // already inserts a couple of points of padding, so a single space
+        // is enough to keep them readable without floating far apart.
+        button.title = " \(slot.remainingPct)%"
     }
 
     // Cmd+, / menu "Settings" — open the panel (if closed) and switch to the
