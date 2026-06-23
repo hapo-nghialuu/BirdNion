@@ -7,7 +7,7 @@ import Foundation
 /// The mock values are static; real data comes from HapoHubProvider.
 final class MockHapoHubProvider: QuotaProvider {
     let id = "hapo"
-    let displayName = "Hapo AI Hub (mock)"
+    let displayName = "Hapo AI Hub"
 
     func fetch() async throws -> ProviderStatus {
         let now = Date()
