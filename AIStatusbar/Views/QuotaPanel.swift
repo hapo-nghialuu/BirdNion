@@ -79,9 +79,10 @@ struct QuotaOverview: View {
 // MARK: - Provider Tabs
 
 /// Capsule chip tabs over enabled providers. Each chip is two-line:
-/// line 1 = provider name, line 2+ = one percentage per window.
-/// The selected chip is filled brand blue; the others are muted on
-/// the badge gray with a thin track-color outline.
+/// line 1 = provider name, line 2 = compact quota summary
+/// (e.g. "5h 96% ・ tuần 95%" or just "lỗi"). The selected chip is
+/// filled brand blue; the others are muted on the badge gray with a
+/// thin track-color outline.
 struct ProviderTabs: View {
     let providers: [ProviderStatus]
     @Binding var selectedId: String
@@ -104,14 +105,9 @@ struct ProviderTabs: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(p.displayName)
                     .font(.system(size: 11, weight: .semibold))
-                ForEach(Array(p.windows.enumerated()), id: \.offset) { _, w in
-                    Text("\(w.remainingPct)%")
+                if let s = chipSuffix(for: p) {
+                    Text(s)
                         .font(.system(size: 10, weight: .medium).monospacedDigit())
-                        .opacity(0.85)
-                }
-                if p.error != nil {
-                    Text("lỗi")
-                        .font(.system(size: 10, weight: .medium))
                         .opacity(0.85)
                 }
             }
@@ -126,6 +122,26 @@ struct ProviderTabs: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    /// Single-line quota summary. "lỗi" for error, "{short} X% ・ {short} Y%"
+    /// for multi-window, just "X%" for single window, nil while loading.
+    private func chipSuffix(for p: ProviderStatus) -> String? {
+        if p.error != nil { return "lỗi" }
+        if p.windows.isEmpty { return nil }
+        if p.windows.count == 1 {
+            return "\(p.windows[0].remainingPct)%"
+        }
+        return p.windows
+            .map { "\(Self.shortLabel(for: $0.label)) \($0.remainingPct)%" }
+            .joined(separator: " ・ ")
+    }
+
+    /// Compact form of a window label for inline display on the tab chip.
+    private static func shortLabel(for label: String) -> String {
+        if label.contains("5 giờ") { return "5h" }
+        if label.contains("Tuần")  { return "tuần" }
+        return String(label.prefix(4))
     }
 }
 
