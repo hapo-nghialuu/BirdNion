@@ -327,52 +327,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Lazily-created NSWindow that hosts the Settings scene. SwiftUI's
-    // `Settings` scene and `Window(id:)` scene both fail to actually
-    // present for an LSUIElement menu-bar app; creating the NSWindow by
-    // hand and hosting the SwiftUI view through NSHostingController is
-    // the only path that ends up with a visible window.
-    private var settingsWindow: NSWindow?
-
     @objc func openSettings(_ sender: AnyObject?) {
+        // Promote to a regular app so the Settings window can come to the
+        // front and take focus, then ask SwiftUI to present its `Settings`
+        // scene. We no longer build an NSWindow by hand: an NSHostingView
+        // inside a manual NSWindow recurses NSISEngine to death on re-layout.
+        // HiddenWindowView listens for `.openSettingsWindow` and calls the
+        // `openSettings` environment action, letting SwiftUI own the window.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-
-        if let existing = self.settingsWindow, existing.isVisible {
-            existing.makeKeyAndOrderFront(nil)
-            return
-        }
-
-        let host = NSHostingController(
-            rootView: SettingsSceneRoot()
-                .environmentObject(self.services.settings)
-                .environmentObject(self.services.keychain)
-                .environmentObject(self.services.configService)
-                .environmentObject(self.services.quotaService)
-        )
-        // Keep sizing OFF: with `.preferredContentSize` the hosting controller
-        // drives the window size from the SwiftUI content, which re-enters
-        // NSISEngine through updateAnimatedWindowSize and recurses (the crash we
-        // chased earlier). With an empty set the window owns its size and we can
-        // safely use grouped Form styling inside.
-        host.sizingOptions = []
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 546, height: 620),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered, defer: false)
-        window.title = "BirdNion Settings"
-        window.contentViewController = host
-        // Force the content size explicitly: with sizingOptions = [] the
-        // controller reports a tiny fitting size (the root view fills its
-        // parent and has no intrinsic size), so without this the window
-        // collapses to ~350×100.
-        window.setContentSize(NSSize(width: 546, height: 620))
-        window.isReleasedWhenClosed = false
-        window.center()
-        self.settingsWindow = window
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

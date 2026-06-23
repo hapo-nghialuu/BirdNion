@@ -32,5 +32,18 @@ struct AIStatusbarApp: App {
         }
         .defaultSize(width: 20, height: 20)
         .windowStyle(.hiddenTitleBar)
+
+        // Native SwiftUI Settings scene. SwiftUI owns this window, so there's
+        // no hand-built NSWindow + NSHostingView to drive NSISEngine into
+        // recursion. AppDelegate brings the app forward and HiddenWindowView
+        // calls the `openSettings` environment action to present it.
+        Settings {
+            SettingsSceneRoot()
+                .environmentObject(settings)
+                .environmentObject(keychain)
+                .environmentObject(config)
+                .environmentObject(quota)
+        }
+        .windowResizability(.contentSize)
     }
 }
