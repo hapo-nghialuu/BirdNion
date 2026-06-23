@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 380, height: 460)
+        popover.contentSize = NSSize(width: 420, height: 480)
         let host = NSHostingController(
             rootView: PopoverView()
                 .environmentObject(services.quotaService)
@@ -119,29 +119,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Settings via Cmd+, — opens a regular AppKit window
+    // Cmd+, / menu "Settings" — open popover (if closed) and switch to the
+    // Providers section inline. PopoverView listens for `.openSettings`
+    // notifications and updates its `section` state accordingly.
     @objc func openSettings(_ sender: AnyObject?) {
-        if settingsWindow == nil {
-            let host = NSHostingController(
-                rootView: SettingsWindow()
-                    .environmentObject(services.quotaService)
-                    .environmentObject(services.configService)
-                    .environmentObject(services.keychain)
-            )
-            settingsWindow = NSWindow(contentViewController: host)
-            settingsWindow?.title = "BirdNion — Settings"
-            settingsWindow?.styleMask = [.titled, .closable, .miniaturizable]
-            settingsWindow?.setContentSize(NSSize(width: 420, height: 300))
-            // Force light appearance + brand background so the Settings
-            // window visually matches the popover (which uses the cream
-            // palette). Without this, macOS follows the user's dark-mode
-            // preference and the window ends up with a black background
-            // and green macOS-default controls.
-            settingsWindow?.appearance = NSAppearance(named: .aqua)
-            settingsWindow?.backgroundColor = NSColor(srgbRed: 0.988, green: 0.988, blue: 0.988, alpha: 1.0)
+        if !popover.isShown {
+            togglePopover(sender)
         }
-        settingsWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Repost on the next runloop tick so PopoverView's onReceive
+        // catches it even when the popover was just (re)created.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .openSettings, object: nil)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
