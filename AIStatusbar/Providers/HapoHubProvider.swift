@@ -85,8 +85,9 @@ final class HapoHubProvider: QuotaProvider {
         if status.error == nil {
             resolvedEmail = await fetchEmail(token: token)
         }
+        let ovr = override()
         let label = Self.deriveAccountLabel(
-            override: override(),
+            override: ovr,
             token: token,
             email: resolvedEmail
         )

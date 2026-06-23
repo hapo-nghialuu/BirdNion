@@ -107,7 +107,7 @@ struct ProviderTabs: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Image(systemName: providerIcon(for: p.id))
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                     Text(p.displayName)
                         .font(.system(size: 11, weight: .semibold))
                 }
