@@ -128,12 +128,8 @@ struct ProviderTabs: View {
                     Image("OriginalImage")
                         .resizable()
                         .interpolation(.high)
-                        .frame(width: 12, height: 12)
-                        .background(
-                            Circle().fill(Color.white)
-                        )
-                        .clipShape(Circle())
-                        .offset(x: 4, y: -4)
+                        .frame(width: 16, height: 16)
+                        .offset(x: 5, y: -5)
                 }
             }
             .overlay(

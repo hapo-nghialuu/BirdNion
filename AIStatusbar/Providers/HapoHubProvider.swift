@@ -70,15 +70,21 @@ final class HapoHubProvider: QuotaProvider {
             return errorStatus("Token chứa ký tự không hợp lệ")
         }
 
-        // 2. Two parallel HTTP calls — budget is the data we render,
-        //    /v1/me is best-effort identity enrichment.
-        async let budgetStatus = fetchBudget(token: token)
-        async let email        = fetchEmail(token: token)
-
-        var status = await budgetStatus
-        let resolvedEmail = await email
+        // 2. Sequential calls — budget first (it's the data we render);
+        //    /v1/me is best-effort identity enrichment fired only after
+        //    budget succeeds. Sequential (rather than async let) keeps
+        //    the email fetch from racing with the budget's URLSession
+        //    call under macOS's default connection pool.
+        let budgetStatus = await fetchBudget(token: token)
+        var status = budgetStatus
 
         // 3. Account label: API email > user override > token prefix.
+        //    /v1/me is fetched only when the budget call succeeded so we
+        //    don't burn a second request on every failed keychain read.
+        var resolvedEmail: String? = nil
+        if status.error == nil {
+            resolvedEmail = await fetchEmail(token: token)
+        }
         let label = Self.deriveAccountLabel(
             override: override(),
             token: token,
