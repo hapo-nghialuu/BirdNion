@@ -24,7 +24,7 @@ struct QuotaOverview: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                     // Default selection: first provider (kept across refreshes
                     // when the same id is still present).
                     let selected = effectiveSelectedId()
@@ -78,32 +78,42 @@ struct QuotaOverview: View {
 
 // MARK: - Provider Tabs
 
-/// Segmented tabs over enabled providers. Single-provider installs render
-/// only one tab (still rendered for visual consistency with multi-provider).
+/// Capsule chip tabs over enabled providers. Single-provider installs
+/// render just one active chip; multi-provider installs render a
+/// horizontally-laid row of pills with the selected one filled in
+/// brand blue and the rest muted on the badge gray.
 struct ProviderTabs: View {
     let providers: [ProviderStatus]
     @Binding var selectedId: String
 
     var body: some View {
-        if providers.count <= 1 {
-            // Compact single-provider bar: show only the provider name on the
-            // left of an empty space — no segmented control needed.
-            HStack {
-                Text(providers.first?.displayName ?? "")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-                Spacer()
+        HStack(spacing: 6) {
+            ForEach(providers, id: \.id) { p in
+                chip(for: p)
             }
-        } else {
-            Picker("", selection: $selectedId) {
-                ForEach(providers, id: \.id) { p in
-                    Text(p.displayName).tag(p.id)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .tint(VocabbyTheme.blue)
+            Spacer(minLength: 0)
         }
+    }
+
+    @ViewBuilder
+    private func chip(for p: ProviderStatus) -> some View {
+        let active = p.id == selectedId
+        Button {
+            selectedId = p.id
+        } label: {
+            Text(p.displayName)
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .foregroundStyle(active ? .white : VocabbyTheme.primary)
+                .background(active ? VocabbyTheme.blue : VocabbyTheme.badge)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(active ? Color.clear : VocabbyTheme.track, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 
