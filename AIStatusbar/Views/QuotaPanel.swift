@@ -156,22 +156,21 @@ struct ProviderCard: View {
 
 /// Single quota window row inside a ProviderCard.
 /// Vocabby style: 2-column header (label left, % right) + colored bar +
-/// 2-column footer (used left, reset right).
+/// 2-column footer (remaining left, reset right).
 struct WindowRow: View {
     let window: QuotaWindow
 
-    /// Vocabby uses GREEN for "remaining/progress" (e.g. "ĐỘ ĐỔI 90%")
-    /// and ORANGE for "usage/EXP" (e.g. "EXP 147/300"). We map:
-    ///   - "5 giờ" (session, remaining)  → green
-    ///   - "Tuần"  (weekly, used)        → orange
-    /// Multi-model labels (e.g. "general Tuần") use `contains` instead of
-    /// exact match so the same color mapping applies per-model.
+    /// Color distinguishes the *cadence*, not the metric:
+    ///   - "5 giờ" (rolling interval)  → green
+    ///   - "Tuần"  (weekly)            → orange (semantic warning: weekly
+    ///                                    caps tend to be tighter)
+    /// Both rows display `remainingPct` (BOSS prefers "còn bao nhiêu").
+    /// Multi-model labels (e.g. "general Tuần") match via `contains`.
     private var isOrange: Bool { window.label.contains("Tuần") }
 
     private var barColor: Color {
         isOrange ? VocabbyTheme.orange : VocabbyTheme.green
     }
-    private var barFill: Double { isOrange ? Double(window.usedPct) : Double(window.remainingPct) }
 
     private var resetText: String {
         if window.label.contains("Tuần") { return "Resets weekly" }
@@ -187,9 +186,7 @@ struct WindowRow: View {
                     .foregroundStyle(VocabbyTheme.secondary)
                     .tracking(0.5)
                 Spacer()
-                Text(isOrange
-                     ? "\(window.usedPct)%"
-                     : "\(window.remainingPct)%")
+                Text("\(window.remainingPct)%")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     .foregroundStyle(VocabbyTheme.primary)
             }
@@ -200,14 +197,12 @@ struct WindowRow: View {
                         .frame(height: 8)
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(barColor)
-                        .frame(width: max(0, geo.size.width * CGFloat(barFill) / 100), height: 8)
+                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 8)
                 }
             }
             .frame(height: 8)
             HStack(alignment: .firstTextBaseline) {
-                Text(isOrange
-                     ? "Đã dùng \(window.usedPct)%"
-                     : "Đã dùng \(window.usedPct)%")
+                Text("Còn \(window.remainingPct)%")
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.tertiary)
                 Spacer()
