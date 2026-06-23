@@ -79,10 +79,34 @@ extension View {
     func vocabbyCard() -> some View { modifier(VocabbyCard()) }
 }
 
-/// Header card: title + level + last-updated.
+/// Header card: logo + title + (N providers · min% · time) + status pill.
 struct HeaderCard: View {
     let footerText: String
     @EnvironmentObject var quota: QuotaService
+
+    private var providerCount: Int { quota.statuses.count }
+    private var errorCount: Int { quota.statuses.filter { $0.error != nil }.count }
+    private var allOK: Bool { errorCount == 0 && providerCount > 0 }
+
+    /// Minimum remaining % across every (provider × window). nil when no
+    /// quota windows have been fetched yet, or when all providers errored.
+    private var minRemaining: Int? {
+        let pcts = quota.statuses.flatMap { $0.windows.map(\.remainingPct) }
+        return pcts.isEmpty ? nil : pcts.min()
+    }
+
+    /// Subtitle body. While refreshing, replaces with a spinner hint.
+    private var subtitleText: String {
+        if providerCount == 0 { return footerText }
+        let countStr = "\(providerCount) providers"
+        if !allOK {
+            return "\(countStr) · \(errorCount) lỗi · \(footerText)"
+        }
+        if let m = minRemaining {
+            return "\(countStr) · \(m)% thấp nhất · \(footerText)"
+        }
+        return "\(countStr) · \(footerText)"
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -99,14 +123,38 @@ struct HeaderCard: View {
                     if quota.isRefreshing {
                         ProgressView().controlSize(.mini).tint(VocabbyTheme.blue)
                     }
-                    Text(quota.isRefreshing ? "Đang làm mới…" : footerText)
+                    Text(quota.isRefreshing ? "Đang làm mới…" : subtitleText)
                         .font(.system(size: 11))
                         .foregroundStyle(VocabbyTheme.secondary)
+                        .lineLimit(1)
                 }
             }
-            Spacer()
+            Spacer(minLength: 6)
+            StatusPill(ok: allOK, errorCount: errorCount)
         }
         .vocabbyCard()
+    }
+}
+
+/// Pill on the right of the header — green/blue "OK" or red "! N" depending
+/// on whether any provider is currently in an error state.
+struct StatusPill: View {
+    let ok: Bool
+    let errorCount: Int
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .semibold))
+            Text(ok ? "OK" : "\(errorCount)")
+                .font(.system(size: 10, weight: .bold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(ok ? VocabbyTheme.blue : Color.red)
+        .clipShape(Capsule())
     }
 }
 
