@@ -106,8 +106,8 @@ struct ProviderTabs: View {
         } label: {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Image(systemName: providerIcon(for: p.id))
-                        .font(.system(size: 17, weight: .semibold))
+                    providerLogoView(for: p.id)
+                        .frame(width: 17, height: 17)
                     Text(p.displayName)
                         .font(.system(size: 11, weight: .semibold))
                 }
@@ -140,12 +140,17 @@ struct ProviderTabs: View {
         .buttonStyle(.plain)
     }
 
-    /// SF Symbol per provider id. Add new entries as new providers land.
-    private func providerIcon(for id: String) -> String {
+    /// Real brand logo per provider id. Falls back to a SF Symbol circle
+/// when a provider has no bundled image asset.
+    @ViewBuilder
+    private func providerLogoView(for id: String) -> some View {
         switch id {
-        case "minimax": return "sparkles"
-        case "hapo":    return "bolt.fill"
-        default:        return "circle"
+        case "minimax":
+            Image("MiniMaxLogo").resizable().interpolation(.high)
+        case "hapo":
+            Image("HapoLogo").resizable().interpolation(.high)
+        default:
+            Image(systemName: "circle")
         }
     }
 

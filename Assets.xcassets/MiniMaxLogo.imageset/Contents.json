@@ -1,0 +1,26 @@
+{
+  "images" : [
+    {
+      "filename" : "logo_22x22.png",
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "22x22"
+    },
+    {
+      "filename" : "logo_22x22@2x.png",
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "22x22"
+    },
+    {
+      "filename" : "logo_22x22@3x.png",
+      "idiom" : "mac",
+      "scale" : "3x",
+      "size" : "22x22"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
