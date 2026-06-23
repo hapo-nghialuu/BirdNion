@@ -123,6 +123,19 @@ struct ProviderTabs: View {
             .foregroundStyle(active ? .white : VocabbyTheme.primary)
             .background(active ? VocabbyTheme.blue : VocabbyTheme.badge)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                if active {
+                    Image("OriginalImage")
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 12, height: 12)
+                        .background(
+                            Circle().fill(Color.white)
+                        )
+                        .clipShape(Circle())
+                        .offset(x: 4, y: -4)
+                }
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(active ? Color.clear : VocabbyTheme.track, lineWidth: 1)
