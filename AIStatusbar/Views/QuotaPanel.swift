@@ -81,6 +81,7 @@ extension View {
 /// Header card: title + level + last-updated.
 struct HeaderCard: View {
     let footerText: String
+    @EnvironmentObject var quota: QuotaService
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -97,9 +98,14 @@ struct HeaderCard: View {
                 Text("AI Statusbar")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
-                Text("Lv. 1 · \(footerText)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(VocabbyTheme.secondary)
+                HStack(spacing: 4) {
+                    if quota.isRefreshing {
+                        ProgressView().controlSize(.mini).tint(VocabbyTheme.orange)
+                    }
+                    Text(quota.isRefreshing ? "Đang làm mới…" : footerText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                }
             }
             Spacer()
         }
@@ -215,6 +221,8 @@ struct WindowRow: View {
 
 /// Footer: orange pill "ĐANG DÙNG" + menu items.
 struct FooterMenu: View {
+    @EnvironmentObject var quota: QuotaService
+
     var body: some View {
         VStack(spacing: 10) {
             Button {
@@ -236,7 +244,9 @@ struct FooterMenu: View {
 
             HStack(spacing: 0) {
                 FooterMenuItem(icon: "plus.circle", label: "Add") { }
-                FooterMenuItem(icon: "arrow.clockwise", label: "Refresh") {
+                FooterMenuItem(icon: quota.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise",
+                               label: "Refresh",
+                               isLoading: quota.isRefreshing) {
                     NotificationCenter.default.post(name: .aistatusbarRefresh, object: nil)
                 }
                 FooterMenuItem(icon: "gearshape", label: "Settings") {
@@ -251,14 +261,23 @@ struct FooterMenu: View {
 struct FooterMenuItem: View {
     let icon: String
     let label: String
+    var isLoading: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(VocabbyTheme.secondary)
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(VocabbyTheme.orange)
+                        .frame(height: 16)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 16))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                        .frame(height: 16)
+                }
                 Text(label)
                     .font(.system(size: 9))
                     .foregroundStyle(VocabbyTheme.tertiary)
@@ -267,6 +286,7 @@ struct FooterMenuItem: View {
             .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
+        .disabled(isLoading)
     }
 }
 

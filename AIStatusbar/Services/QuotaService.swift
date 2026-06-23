@@ -6,6 +6,7 @@ import Combine
 @MainActor
 final class QuotaService: ObservableObject {
     @Published private(set) var statuses: [ProviderStatus] = []
+    @Published private(set) var isRefreshing: Bool = false
 
     private(set) var providers: [QuotaProvider] = []
     private let interval: TimeInterval
@@ -35,6 +36,13 @@ final class QuotaService: ObservableObject {
 
     func start() {
         guard loopTask == nil else { return }
+        // Manual refresh hook from footer button (.aistatusbarRefresh)
+        NotificationCenter.default.addObserver(
+            forName: .aistatusbarRefresh, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in await self.refresh() }
+        }
         loopTask = Task { [weak self] in
             guard let self else { return }
             await self.refresh()
@@ -54,6 +62,8 @@ final class QuotaService: ObservableObject {
     }
 
     func refresh() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
         let snapshot = providers
         let newStatuses: [ProviderStatus] = await withTaskGroup(of: ProviderStatus.self) { group in
             for p in snapshot {
