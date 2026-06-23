@@ -78,10 +78,10 @@ struct QuotaOverview: View {
 
 // MARK: - Provider Tabs
 
-/// Capsule chip tabs over enabled providers. Each chip shows the provider
-/// name plus a small inline quota percentage (or "lỗi" if the provider is
-/// in error state). The selected chip is filled brand blue; the others are
-/// muted on the badge gray with a thin track-color outline.
+/// Capsule chip tabs over enabled providers. Each chip is two-line:
+/// line 1 = provider name, line 2+ = one percentage per window.
+/// The selected chip is filled brand blue; the others are muted on
+/// the badge gray with a thin track-color outline.
 struct ProviderTabs: View {
     let providers: [ProviderStatus]
     @Binding var selectedId: String
@@ -98,16 +98,20 @@ struct ProviderTabs: View {
     @ViewBuilder
     private func chip(for p: ProviderStatus) -> some View {
         let active = p.id == selectedId
-        let suffix = chipSuffix(for: p)
         Button {
             selectedId = p.id
         } label: {
-            HStack(spacing: 5) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(p.displayName)
                     .font(.system(size: 11, weight: .semibold))
-                if let s = suffix {
-                    Text(s)
+                ForEach(Array(p.windows.enumerated()), id: \.offset) { _, w in
+                    Text("\(w.remainingPct)%")
                         .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .opacity(0.85)
+                }
+                if p.error != nil {
+                    Text("lỗi")
+                        .font(.system(size: 10, weight: .medium))
                         .opacity(0.85)
                 }
             }
@@ -122,31 +126,6 @@ struct ProviderTabs: View {
             )
         }
         .buttonStyle(.plain)
-    }
-
-    /// Inline quota suffix. nil = don't show anything (still loading).
-    /// "lỗi" when the provider is in an error state; "X%" for the minimum
-    /// remaining percentage across the provider's windows otherwise.
-    private func chipSuffix(for p: ProviderStatus) -> String? {
-        if p.error != nil { return "lỗi" }
-        if p.windows.isEmpty { return nil }
-        // Single window: just the percentage — keeps the chip compact.
-        if p.windows.count == 1 {
-            return "\(p.windows[0].remainingPct)%"
-        }
-        // Multi-window: one short label + percentage per window, joined.
-        return p.windows
-            .map { "\(Self.shortLabel(for: $0.label)) \($0.remainingPct)%" }
-            .joined(separator: " · ")
-    }
-
-    /// Compact form of a window label for inline display on the tab chip.
-    /// Maps the well-known labels to short Vietnamese/English forms; falls
-    /// back to the first 4 characters for unknown labels.
-    private static func shortLabel(for label: String) -> String {
-        if label.contains("5 giờ") { return "5h" }
-        if label.contains("Tuần")  { return "tuần" }
-        return String(label.prefix(4))
     }
 }
 
