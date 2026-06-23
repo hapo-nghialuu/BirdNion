@@ -14,7 +14,7 @@ struct QuotaPanel: View {
             VocabbyTheme.background.ignoresSafeArea()
             if quota.statuses.isEmpty {
                 VStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(VocabbyTheme.orange)
+                    ProgressView().controlSize(.small).tint(VocabbyTheme.blue)
                     Text("Đang tải…")
                         .font(.system(size: 12))
                         .foregroundStyle(VocabbyTheme.secondary)
@@ -49,18 +49,19 @@ struct QuotaPanel: View {
     }
 }
 
-/// Vocabby color palette + reusable card style.
+/// App color palette.
 enum VocabbyTheme {
-    static let background = Color(red: 0.984, green: 0.965, blue: 0.933)  // #FBF6EE
+    static let background = Color(red: 0.988, green: 0.988, blue: 0.988)   // #FCFCFC
     static let card       = Color.white
-    static let primary    = Color(red: 0.122, green: 0.122, blue: 0.180)   // #1F1F2E navy
+    static let primary    = Color(red: 0.122, green: 0.122, blue: 0.180)   // #1F1F2E navy text
     static let secondary  = Color(red: 0.420, green: 0.447, blue: 0.502)   // #6B7280
     static let tertiary   = Color(red: 0.620, green: 0.643, blue: 0.690)   // #9EA4AE
-    static let orange     = Color(red: 0.976, green: 0.451, blue: 0.086)   // #F97316
-    static let orangeSoft = Color(red: 0.984, green: 0.572, blue: 0.235)   // #FB923C
-    static let green      = Color(red: 0.063, green: 0.725, blue: 0.506)   // #10B981
-    static let track      = Color(red: 0.890, green: 0.906, blue: 0.918)   // #E3E7EA
-    static let badge      = Color(red: 0.984, green: 0.973, blue: 0.949)   // #FBF8F2
+    static let blue       = Color(red: 0.282, green: 0.624, blue: 0.925)   // #489FEC — bright blue (primary brand)
+    static let blueSoft   = Color(red: 0.576, green: 0.773, blue: 0.992)   // #93C5FD
+    static let yellow     = Color(red: 1.000, green: 0.804, blue: 0.298)   // #FFCD4C — bright yellow (accent)
+    static let yellowSoft = Color(red: 1.000, green: 0.902, blue: 0.612)   // #FFE69C
+    static let track      = Color(red: 0.898, green: 0.906, blue: 0.918)   // #E5E7EB
+    static let badge      = Color(red: 0.976, green: 0.980, blue: 0.984)   // #F9FAFB
 }
 
 /// Card modifier with rounded corners and subtle shadow.
@@ -88,7 +89,7 @@ struct HeaderCard: View {
             // Hexagon badge
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(VocabbyTheme.orange)
+                    .fill(VocabbyTheme.blue)
                     .frame(width: 40, height: 44)
                 Text("AI")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -100,7 +101,7 @@ struct HeaderCard: View {
                     .foregroundStyle(VocabbyTheme.primary)
                 HStack(spacing: 4) {
                     if quota.isRefreshing {
-                        ProgressView().controlSize(.mini).tint(VocabbyTheme.orange)
+                        ProgressView().controlSize(.mini).tint(VocabbyTheme.blue)
                     }
                     Text(quota.isRefreshing ? "Đang làm mới…" : footerText)
                         .font(.system(size: 11))
@@ -121,7 +122,7 @@ struct ProviderCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
                 Circle()
-                    .fill(status.error != nil ? .red : VocabbyTheme.green)
+                    .fill(status.error != nil ? .red : VocabbyTheme.yellow)
                     .frame(width: 8, height: 8)
                 Text(status.displayName)
                     .font(.system(size: 13, weight: .semibold))
@@ -160,16 +161,14 @@ struct ProviderCard: View {
 struct WindowRow: View {
     let window: QuotaWindow
 
-    /// Color distinguishes the *cadence*, not the metric:
-    ///   - "5 giờ" (rolling interval)  → green
-    ///   - "Tuần"  (weekly)            → orange (semantic warning: weekly
-    ///                                    caps tend to be tighter)
-    /// Both rows display `remainingPct` (BOSS prefers "còn bao nhiêu").
-    /// Multi-model labels (e.g. "general Tuần") match via `contains`.
-    private var isOrange: Bool { window.label.contains("Tuần") }
+    /// Color distinguishes the *cadence*:
+    ///   - "5 giờ" (rolling interval)  → yellow (#FFCD4C)
+    ///   - "Tuần"  (weekly)            → blue   (#489FEC)
+    /// Both rows display `remainingPct`.
+    private var isBlue: Bool { window.label.contains("Tuần") }
 
     private var barColor: Color {
-        isOrange ? VocabbyTheme.orange : VocabbyTheme.green
+        isBlue ? VocabbyTheme.blue : VocabbyTheme.yellow
     }
 
     /// Footer-left text. Prefers explicit subtitle from the provider
@@ -254,7 +253,7 @@ struct FooterMenu: View {
                     Spacer()
                 }
                 .padding(.vertical, 10)
-                .background(VocabbyTheme.orange)
+                .background(VocabbyTheme.blue)
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -287,7 +286,7 @@ struct FooterMenuItem: View {
                 if isLoading {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(VocabbyTheme.orange)
+                        .tint(VocabbyTheme.blue)
                         .frame(height: 16)
                 } else {
                     Image(systemName: icon)
