@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(services.keychain)
             )
             settingsWindow = NSWindow(contentViewController: host)
-            settingsWindow?.title = "AI Statusbar — Settings"
+            settingsWindow?.title = "BirdNion — Settings"
             settingsWindow?.styleMask = [.titled, .closable, .miniaturizable]
             settingsWindow?.setContentSize(NSSize(width: 420, height: 300))
         }

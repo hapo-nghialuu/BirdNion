@@ -170,5 +170,5 @@ struct ConfigPanel: View {
 }
 
 enum AIStatusbarConfig {
-    static let AnthropicKeyPlaceholder = "KEYCHAIN_REF:AIStatusbar/anthropic"
+    static let AnthropicKeyPlaceholder = "KEYCHAIN_REF:BirdNion/anthropic"
 }

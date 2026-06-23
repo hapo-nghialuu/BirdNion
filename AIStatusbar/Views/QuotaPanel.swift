@@ -96,7 +96,7 @@ struct HeaderCard: View {
                     .foregroundStyle(.white)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("AI Statusbar")
+                Text("BirdNion")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                 HStack(spacing: 4) {
@@ -307,5 +307,5 @@ struct FooterMenuItem: View {
 }
 
 extension Notification.Name {
-    static let aistatusbarRefresh = Notification.Name("com.local.aistatusbar.refresh")
+    static let aistatusbarRefresh = Notification.Name("com.local.birdnion.refresh")
 }

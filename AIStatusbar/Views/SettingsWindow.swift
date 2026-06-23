@@ -20,7 +20,7 @@ struct SettingsWindow: View {
                     .frame(width: 36, height: 36)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("AI Statusbar")
+                    Text("BirdNion")
                         .font(.system(size: 12, weight: .semibold))
                     Text("Quota + Claude Config")
                         .font(.system(size: 10))
