@@ -14,6 +14,10 @@ struct SettingsSceneRoot: View {
 
     private var visibleTabs: [SettingsTab] { SettingsTab.visible(settings: settings) }
 
+    /// The providers tab uses a sidebar + detail layout that needs more width;
+    /// the rest are single-column. Height is constant.
+    private var contentWidth: CGFloat { selected == .providers ? 780 : 546 }
+
     var body: some View {
         VStack(spacing: 0) {
             SettingsTabBar(selected: $selected, tabs: visibleTabs)
@@ -31,14 +35,12 @@ struct SettingsSceneRoot: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        // Fixed size matching AppDelegate's settings NSWindow content size.
-        // This is load-bearing: a flexible (.infinity) frame lets the
-        // NSHostingView think its fitting size changes on every re-render
-        // (e.g. when QuotaService publishes), which calls
-        // invalidateSizeConstraintsIfNecessary during the display cycle and
-        // makes AppKit throw in _postWindowNeedsUpdateConstraints. A constant
-        // size makes that invalidation a no-op. Content scrolls inside.
-        .frame(width: 546, height: 620)
+        // Fixed size per tab. The SwiftUI `Settings` scene uses
+        // `.windowResizability(.contentSize)`, so this drives the window size.
+        // A constant (non-flexible) size per tab also avoids the hosting view
+        // continuously renegotiating its fitting size on each QuotaService
+        // publish.
+        .frame(width: contentWidth, height: 620)
         // Opaque backing so AppKit always has something to clear to.
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
