@@ -352,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             contentRect: NSRect(x: 0, y: 0, width: 546, height: 620),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered, defer: false)
-        window.title = "AIStatusbar"
+        window.title = "BirdNion Settings"
         window.contentViewController = host
         // Force the content size explicitly: with sizingOptions = [] the
         // controller reports a tiny fitting size (the root view fills its

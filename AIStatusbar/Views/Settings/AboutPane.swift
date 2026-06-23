@@ -35,7 +35,7 @@ struct AboutPane: View {
             .help("Mở trang dự án trên GitHub")
 
             VStack(spacing: 3) {
-                Text("AIStatusbar")
+                Text("BirdNion")
                     .font(.system(size: 18, weight: .semibold))
                 Text(versionString)
                     .font(.system(size: 11))
@@ -64,7 +64,7 @@ struct AboutPane: View {
 
             Spacer()
 
-            Text("© 2026 AIStatusbar · Hapo")
+            Text("© 2026 BirdNion · Hapo")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 8)
