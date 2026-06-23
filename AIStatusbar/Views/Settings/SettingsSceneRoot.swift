@@ -31,11 +31,11 @@ struct SettingsSceneRoot: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        // Use min/ideal width so AppKit picks the size once at first layout
-        // (via the scene's defaultSize), but doesn't force a hard constraint
-        // every pass — that combination caused an NSISEngine recursion
-        // loop in the original implementation.
-        .frame(minWidth: 540, idealWidth: 546, minHeight: 480, idealHeight: 620)
+        // Use ideal-only sizing so AppKit doesn't force a re-layout every
+        // pass. The original .frame(width:height:) and the .frame(minWidth:
+        // minHeight:) variants both triggered an NSISEngine recursion loop
+        // because updateAnimatedWindowSize kept retriggering windowDidLayout.
+        .frame(idealWidth: 546, idealHeight: 620)
         .onAppear {
             if !visibleTabs.contains(selected) { selected = .general }
         }
