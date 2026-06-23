@@ -7,8 +7,8 @@ struct GeneralPane: View {
     @EnvironmentObject var settings: SettingsStore
 
     var body: some View {
-        Form {
-            Section {
+        SettingsPage {
+            SettingsCard(header: "Hệ thống") {
                 SettingsLabeledRow(
                     title: "Ngôn ngữ",
                     subtitle: "Khởi động lại app để áp dụng."
@@ -26,6 +26,8 @@ struct GeneralPane: View {
                     }
                 }
 
+                SettingsRowDivider()
+
                 SettingsLabeledRow(
                     title: "Khởi động cùng máy",
                     subtitle: "Tự mở AIStatusbar khi đăng nhập."
@@ -37,11 +39,9 @@ struct GeneralPane: View {
                             settings.applyLaunchAtLogin()
                         }
                 }
-            } header: {
-                SettingsSectionHeader(title: "Hệ thống")
             }
 
-            Section {
+            SettingsCard(header: "Sử dụng") {
                 SettingsLabeledRow(
                     title: "Tần suất làm mới",
                     subtitle: "Mỗi bao lâu app gọi lại nhà cung cấp."
@@ -58,34 +58,34 @@ struct GeneralPane: View {
                         settings.pushRefreshInterval()
                     }
                 }
-            } header: {
-                SettingsSectionHeader(title: "Sử dụng")
             }
 
-            Section {
+            SettingsCard(header: "Tự động") {
                 SettingsLabeledRow(
                     title: "Kiểm tra trạng thái",
                     subtitle: "Poll trang trạng thái của các nhà cung cấp."
                 ) {
                     Toggle("", isOn: $settings.statusChecksEnabled).labelsHidden().toggleStyle(.switch)
                 }
+
+                SettingsRowDivider()
+
                 SettingsLabeledRow(
                     title: "Thông báo phiên 5 giờ",
                     subtitle: "Báo khi phiên quota chạm 0% và khi khôi phục."
                 ) {
                     Toggle("", isOn: $settings.sessionQuotaNotificationsEnabled).labelsHidden().toggleStyle(.switch)
                 }
+
+                SettingsRowDivider()
+
                 SettingsLabeledRow(
                     title: "Thông báo cảnh báo quota",
                     subtitle: "Cảnh báo khi còn dưới ngưỡng đã đặt."
                 ) {
                     Toggle("", isOn: $settings.quotaWarningNotificationsEnabled).labelsHidden().toggleStyle(.switch)
                 }
-            } header: {
-                SettingsSectionHeader(title: "Tự động")
             }
         }
-        
-        .scrollContentBackground(.hidden)
     }
 }

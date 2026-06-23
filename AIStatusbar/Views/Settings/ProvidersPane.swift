@@ -14,53 +14,44 @@ struct ProvidersPane: View {
     @State private var showingClaudeConfig = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Form {
-                Section {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
-                        rowView(row)
-                        if idx < rows.count - 1 { Divider() }
-                    }
-                } header: {
-                    SettingsSectionHeader(title: "Nhà cung cấp")
-                } footer: {
-                    Text("Codex tự động đăng nhập từ `codex login` trong Terminal — không cần nhập token.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
-
-                Section {
-                    Button {
-                        showingClaudeConfig = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "doc.text")
-                            Text("Cấu hình Claude…")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                } header: {
-                    SettingsSectionHeader(title: "Claude Code")
-                } footer: {
-                    Text("Sửa trực tiếp ~/.claude/settings.json (model, base URL, API key).")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
+        SettingsPage {
+            SettingsCard(
+                header: "Nhà cung cấp",
+                footer: "Codex tự động đăng nhập từ `codex login` trong Terminal — không cần nhập token."
+            ) {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                    rowView(row)
+                    if idx < rows.count - 1 { SettingsRowDivider() }
                 }
             }
-            
-            .scrollContentBackground(.hidden)
+
+            SettingsCard(
+                header: "Claude Code",
+                footer: "Sửa trực tiếp ~/.claude/settings.json (model, base URL, API key)."
+            ) {
+                Button {
+                    showingClaudeConfig = true
+                } label: {
+                    HStack {
+                        Image(systemName: "doc.text")
+                        Text("Cấu hình Claude…")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+            }
 
             if let b = savedBanner {
                 Text(b)
                     .font(.system(size: 11))
                     .foregroundStyle(.green)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, 4)
             }
         }
         .task { rows = ProvidersStore.load().providers }
@@ -123,6 +114,8 @@ struct ProvidersPane: View {
                 .disabled((pendingTokens[row.id] ?? "").isEmpty)
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     private func displayName(for row: ProviderConfig) -> String {

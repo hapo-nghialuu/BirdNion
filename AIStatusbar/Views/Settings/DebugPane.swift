@@ -15,8 +15,11 @@ struct DebugPane: View {
     }()
 
     var body: some View {
-        Form {
-            Section {
+        SettingsPage {
+            SettingsCard(
+                header: "Tệp",
+                footer: "Để xem log probe / fetch strategy thật, mở Console.app và filter theo bundle ID."
+            ) {
                 SettingsLabeledRow(
                     title: "Thư mục Application Support",
                     subtitle: supportDir?.path ?? "—"
@@ -28,6 +31,9 @@ struct DebugPane: View {
                     }
                     .controlSize(.small)
                 }
+
+                SettingsRowDivider()
+
                 SettingsLabeledRow(
                     title: "providers.json",
                     subtitle: "providers.json lưu trạng thái bật/tắt và account label."
@@ -39,15 +45,7 @@ struct DebugPane: View {
                     }
                     .controlSize(.small)
                 }
-            } header: {
-                SettingsSectionHeader(title: "Tệp")
-            } footer: {
-                Text("Để xem log probe / fetch strategy thật, mở Console.app và filter theo bundle ID.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
             }
         }
-        
-        .scrollContentBackground(.hidden)
     }
 }

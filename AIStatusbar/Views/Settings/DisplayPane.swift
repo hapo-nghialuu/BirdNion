@@ -7,14 +7,20 @@ struct DisplayPane: View {
     @EnvironmentObject var settings: SettingsStore
 
     var body: some View {
-        Form {
-            Section {
+        SettingsPage {
+            SettingsCard(
+                header: "Menu bar",
+                footer: "Cài đặt này sẽ có hiệu lực khi trình render hỗ trợ multi-icon."
+            ) {
                 SettingsLabeledRow(
                     title: "Gộp icon nhà cung cấp",
                     subtitle: "Hiện một icon duy nhất xoay vòng giữa các provider."
                 ) {
                     Toggle("", isOn: $settings.mergeIcons).labelsHidden().toggleStyle(.switch)
                 }
+
+                SettingsRowDivider()
+
                 SettingsLabeledRow(
                     title: "Switcher có icon",
                     subtitle: settings.mergeIcons
@@ -26,15 +32,7 @@ struct DisplayPane: View {
                         .toggleStyle(.switch)
                         .disabled(!settings.mergeIcons)
                 }
-            } header: {
-                SettingsSectionHeader(title: "Menu bar")
-            } footer: {
-                Text("Cài đặt này sẽ có hiệu lực khi trình render hỗ trợ multi-icon.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
             }
         }
-        
-        .scrollContentBackground(.hidden)
     }
 }

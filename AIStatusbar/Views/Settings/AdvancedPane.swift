@@ -6,34 +6,27 @@ struct AdvancedPane: View {
     @EnvironmentObject var settings: SettingsStore
 
     var body: some View {
-        Form {
-            Section {
+        SettingsPage {
+            SettingsCard(header: "Riêng tư") {
                 SettingsLabeledRow(
                     title: "Ẩn thông tin cá nhân",
                     subtitle: "Che email tài khoản trên chip và popover."
                 ) {
                     Toggle("", isOn: $settings.hidePersonalInfo).labelsHidden().toggleStyle(.switch)
                 }
-            } header: {
-                SettingsSectionHeader(title: "Riêng tư")
             }
 
-            Section {
+            SettingsCard(
+                header: "Nhà phát triển",
+                footer: "Khởi động lại app để áp dụng một số thay đổi (ví dụ ngôn ngữ)."
+            ) {
                 SettingsLabeledRow(
                     title: "Hiện mục Debug",
                     subtitle: "Thêm tab Debug để xem log và cache."
                 ) {
                     Toggle("", isOn: $settings.debugMenuEnabled).labelsHidden().toggleStyle(.switch)
                 }
-            } header: {
-                SettingsSectionHeader(title: "Nhà phát triển")
-            } footer: {
-                Text("Khởi động lại app để áp dụng một số thay đổi (ví dụ ngôn ngữ).")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
             }
         }
-        
-        .scrollContentBackground(.hidden)
     }
 }
