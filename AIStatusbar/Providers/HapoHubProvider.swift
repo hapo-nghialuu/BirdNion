@@ -1,8 +1,25 @@
 import Foundation
 
-/// Hapo Hub quota provider. Token must match `^[A-Za-z0-9._\-]+$` to prevent
-/// header injection (CR/LF in a pasted token would break URLRequest or split
-/// additional HTTP headers — Finding F1).
+/// Hapo Hub quota provider.
+///
+/// Real adapter (verified 2026-06-23):
+/// `GET <baseURL>` with `Authorization: Bearer <token>`.
+/// Response shape:
+/// ```json
+/// {
+///   "usage_percentage":       19.07,
+///   "remaining_budget_usd":   16.19,
+///   "used_budget_usd":         3.81,
+///   "weekly_budget_usd":      20,
+///   "budget_week_ends_at":   "2026-06-29T00:00:00+07:00",
+///   "budget_week_start_at":  "2026-06-22T00:00:00+07:00",
+///   "timezone": "Asia/Hanoi"
+/// }
+/// ```
+///
+/// The window's `subtitle` carries "$16.19 / $20.00" and `resetDate`
+/// is parsed from `budget_week_ends_at` so the UI can show
+/// "Resets in 6d 1h" instead of a hardcoded "weekly" hint.
 final class HapoHubProvider: QuotaProvider {
     var id: String { config.id }
     var displayName: String { config.displayName }
@@ -21,6 +38,12 @@ final class HapoHubProvider: QuotaProvider {
         var s = CharacterSet.alphanumerics
         s.insert(charactersIn: "._-")
         return s
+    }()
+
+    private static let iso8601: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
     }()
 
     func fetch() async throws -> ProviderStatus {
@@ -57,6 +80,7 @@ final class HapoHubProvider: QuotaProvider {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue(config.authHeaderTemplate.replacingOccurrences(of: "{token}", with: token),
                      forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 15
 
         let data: Data
         let response: URLResponse
@@ -88,37 +112,35 @@ final class HapoHubProvider: QuotaProvider {
     }
 
     func parse(_ data: Data) -> ProviderStatus {
-        guard let any = try? JSONSerialization.jsonObject(with: data) else {
+        let decoder = JSONDecoder()
+        guard let r = try? decoder.decode(BudgetResponse.self, from: data) else {
             return ProviderStatus(id: id, displayName: displayName, windows: [],
                                   lastUpdated: Date(),
-                                  error: "Response không phải JSON")
+                                  error: "Response thiếu trường")
         }
-        guard let value = resolve(path: config.jsonPath, in: any) as? Int else {
-            return ProviderStatus(id: id, displayName: displayName, windows: [],
-                                  lastUpdated: Date(),
-                                  error: "Response thiếu trường \(config.jsonPath)")
-        }
-        let remaining = max(0, min(100, value))
-        let win = QuotaWindow(label: "Quota",
-                              usedPct: 100 - remaining,
-                              remainingPct: remaining)
+        let remainingPct = max(0, min(100, Int((100.0 - r.usage_percentage).rounded())))
+        let usedPct = 100 - remainingPct
+        let subtitle = String(format: "$%.2f / $%.2f",
+                              r.remaining_budget_usd, r.weekly_budget_usd)
+        let resetDate = Self.iso8601.date(from: r.budget_week_ends_at)
+        let win = QuotaWindow(label: "Tuần",
+                              usedPct: usedPct,
+                              remainingPct: remainingPct,
+                              subtitle: subtitle,
+                              resetDate: resetDate)
         return ProviderStatus(id: id, displayName: displayName,
                               windows: [win],
                               lastUpdated: Date(),
                               error: nil)
     }
 
-    private func resolve(path: String, in root: Any) -> Any? {
-        var cur: Any? = root
-        for seg in path.split(separator: ".") {
-            if let d = cur as? [String: Any] {
-                cur = d[String(seg)]
-            } else if let a = cur as? [Any] {
-                if let i = Int(seg), i >= 0, i < a.count {
-                    cur = a[i]
-                } else { return nil }
-            } else { return nil }
-        }
-        return cur
+    private struct BudgetResponse: Decodable {
+        let usage_percentage: Double
+        let remaining_budget_usd: Double
+        let used_budget_usd: Double
+        let weekly_budget_usd: Double
+        let budget_week_ends_at: String
+        let budget_week_start_at: String
+        let timezone: String
     }
 }

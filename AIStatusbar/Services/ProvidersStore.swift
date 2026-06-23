@@ -23,7 +23,9 @@ struct ProvidersStore {
     static let defaultDocument: ProvidersDocument = {
         ProvidersDocument(providers: [
             ProviderConfig(id: "minimax", enabled: true),
-            ProviderConfig(id: "hapo", enabled: true, baseURL: "TODO_BOSS", displayName: "Hapo AI Hub (mock)")
+            ProviderConfig(id: "hapo", enabled: true,
+                           baseURL: "https://<HAPO_BASE_URL>",
+                           displayName: "Hapo AI Hub")
         ])
     }()
 

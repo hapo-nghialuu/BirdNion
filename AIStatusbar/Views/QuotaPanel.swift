@@ -156,7 +156,7 @@ struct ProviderCard: View {
 
 /// Single quota window row inside a ProviderCard.
 /// Vocabby style: 2-column header (label left, % right) + colored bar +
-/// 2-column footer (remaining left, reset right).
+/// 2-column footer (subtitle left, reset right).
 struct WindowRow: View {
     let window: QuotaWindow
 
@@ -172,10 +172,32 @@ struct WindowRow: View {
         isOrange ? VocabbyTheme.orange : VocabbyTheme.green
     }
 
+    /// Footer-left text. Prefers explicit subtitle from the provider
+    /// (e.g. Hapo's "$16.19 / $20.00"); falls back to "Còn X%".
+    private var subtitleText: String {
+        if let s = window.subtitle, !s.isEmpty { return s }
+        return "Còn \(window.remainingPct)%"
+    }
+
+    /// Footer-right text. Uses dynamic `resetDate` if the provider
+    /// supplied one; otherwise a label-keyed default.
     private var resetText: String {
+        if let d = window.resetDate { return Self.formatReset(d) }
         if window.label.contains("Tuần") { return "Resets weekly" }
         if window.label.contains("5 giờ") { return "Resets in 5h" }
         return ""
+    }
+
+    /// "Resets in 6d 1h" / "Resets in 2h 13m" / "Resets in 45m"
+    private static func formatReset(_ date: Date) -> String {
+        let secs = Int(date.timeIntervalSinceNow)
+        if secs <= 0 { return "Resets soon" }
+        let days = secs / 86_400
+        let hours = (secs % 86_400) / 3_600
+        let mins = (secs % 3_600) / 60
+        if days > 0 { return "Resets in \(days)d \(hours)h" }
+        if hours > 0 { return "Resets in \(hours)h \(mins)m" }
+        return "Resets in \(mins)m"
     }
 
     var body: some View {
@@ -202,7 +224,7 @@ struct WindowRow: View {
             }
             .frame(height: 8)
             HStack(alignment: .firstTextBaseline) {
-                Text("Còn \(window.remainingPct)%")
+                Text(subtitleText)
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.tertiary)
                 Spacer()
