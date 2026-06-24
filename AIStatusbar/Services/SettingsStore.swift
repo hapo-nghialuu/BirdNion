@@ -51,6 +51,10 @@ final class SettingsStore: ObservableObject {
     @AppStorage("statusChecksEnabled") var statusChecksEnabled: Bool = true
     @AppStorage("sessionQuotaNotificationsEnabled") var sessionQuotaNotificationsEnabled: Bool = true
     @AppStorage("quotaWarningNotificationsEnabled") var quotaWarningNotificationsEnabled: Bool = false
+    /// Global quota-warning thresholds (remaining %). Two levels: warning then
+    /// critical. `QuotaWarnConfig` reads the same keys; providers may override.
+    @AppStorage(QuotaWarnConfig.level1Key) var quotaWarnLevel1: Int = 50
+    @AppStorage(QuotaWarnConfig.level2Key) var quotaWarnLevel2: Int = 20
     @AppStorage("hidePersonalInfo") var hidePersonalInfo: Bool = false
     @AppStorage("mergeIcons") var mergeIcons: Bool = true
     @AppStorage("switcherShowsIcons") var switcherShowsIcons: Bool = true

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UserNotifications
 
 /// Polls every enabled provider in parallel on a 120s ± 10s loop.
 /// Throwing providers are caught and recorded on the status (no crash).
@@ -7,6 +8,10 @@ import Combine
 final class QuotaService: ObservableObject {
     @Published private(set) var statuses: [ProviderStatus] = []
     @Published private(set) var isRefreshing: Bool = false
+
+    /// Per provider+window warning state: last seen remaining % and the set of
+    /// thresholds already fired (so we notify once per crossing, not every poll).
+    private var warnState: [String: [String: (last: Int, fired: Set<Int>)]] = [:]
 
     private(set) var providers: [QuotaProvider] = []
     private var interval: TimeInterval
@@ -90,5 +95,113 @@ final class QuotaService: ObservableObject {
         // Merge: preserve order of current providers; replace by id
         var byId = Dictionary(uniqueKeysWithValues: newStatuses.map { ($0.id, $0) })
         statuses = providers.compactMap { byId.removeValue(forKey: $0.id) }
+
+        if QuotaWarnConfig.enabled { evaluateWarnings(statuses) }
+    }
+
+    // MARK: - Quota warnings
+
+    /// Fires a notification the first time a window's remaining % drops to/below
+    /// a configured threshold; re-arms once it recovers back above that level.
+    private func evaluateWarnings(_ statuses: [ProviderStatus]) {
+        for status in statuses where status.error == nil {
+            for w in status.windows {
+                let windowKey = QuotaWarnConfig.windowKey(w.label)
+                let thresholds = QuotaWarnConfig.thresholds(provider: status.id, window: windowKey)
+                guard !thresholds.isEmpty else { continue }
+
+                var state = warnState[status.id]?[windowKey] ?? (last: 100, fired: [])
+                let current = w.remainingPct
+                // Re-arm any threshold we've climbed back above.
+                state.fired = state.fired.filter { current <= $0 }
+                // Fire on a downward crossing not yet notified.
+                for t in QuotaWarnConfig.crossings(previous: state.last, current: current,
+                                                   thresholds: thresholds, fired: state.fired) {
+                    QuotaNotifier.post(
+                        id: "\(status.id).\(windowKey).\(t)",
+                        title: "\(status.displayName) • \(w.label)",
+                        body: "Còn \(current)% — dưới ngưỡng \(t)%")
+                    state.fired.insert(t)
+                }
+                state.last = current
+                warnState[status.id, default: [:]][windowKey] = state
+            }
+        }
+    }
+}
+
+// MARK: - Quota warning configuration
+
+/// Resolves quota-warning thresholds from UserDefaults (shared by SettingsStore
+/// UI and QuotaService). Thresholds are "remaining %" levels, high → low; a
+/// provider+window may override the global pair, otherwise it inherits.
+enum QuotaWarnConfig {
+    static let level1Key = "quotaWarnLevel1"   // first (warning) level, default 50
+    static let level2Key = "quotaWarnLevel2"   // second (critical) level, default 20
+    static let enabledKey = "quotaWarningNotificationsEnabled"
+
+    static var enabled: Bool {
+        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? false
+    }
+
+    static var globalThresholds: [Int] {
+        let l1 = UserDefaults.standard.object(forKey: level1Key) as? Int ?? 50
+        let l2 = UserDefaults.standard.object(forKey: level2Key) as? Int ?? 20
+        return [l1, l2].filter { $0 > 0 && $0 <= 100 }.sorted(by: >)
+    }
+
+    /// "session" for the ~5h window, "weekly" for the 7-day window.
+    static func windowKey(_ label: String) -> String {
+        label.contains("Tuần") ? "weekly" : "session"
+    }
+
+    static func overrideKey(_ provider: String, _ window: String) -> String {
+        "quotaWarn.\(provider).\(window)"
+    }
+
+    static func hasOverride(provider: String, window: String) -> Bool {
+        UserDefaults.standard.string(forKey: overrideKey(provider, window)) != nil
+    }
+
+    static func thresholds(provider: String, window: String) -> [Int] {
+        if let raw = UserDefaults.standard.string(forKey: overrideKey(provider, window)), !raw.isEmpty {
+            let parsed = raw.split(separator: ",").compactMap { Int($0) }.filter { $0 > 0 && $0 <= 100 }
+            if !parsed.isEmpty { return parsed.sorted(by: >) }
+        }
+        return globalThresholds
+    }
+
+    static func setOverride(provider: String, window: String, thresholds: [Int]?) {
+        let key = overrideKey(provider, window)
+        if let thresholds {
+            UserDefaults.standard.set(thresholds.map(String.init).joined(separator: ","), forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
+    /// Pure crossing test (unit-tested): thresholds whose level was above
+    /// `previous` but is now at/below `current`, and hasn't been fired yet.
+    static func crossings(previous: Int, current: Int, thresholds: [Int], fired: Set<Int>) -> [Int] {
+        thresholds.filter { previous > $0 && current <= $0 && !fired.contains($0) }
+    }
+}
+
+// MARK: - Notifications
+
+/// Thin wrapper over UNUserNotificationCenter. Requests authorization lazily on
+/// first use (the system caches the decision, so repeat calls don't re-prompt).
+enum QuotaNotifier {
+    static func post(id: String, title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
+            center.add(request)
+        }
     }
 }

@@ -85,6 +85,34 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.quotaWarningNotificationsEnabled).labelsHidden().toggleStyle(.switch)
                 }
+
+                if settings.quotaWarningNotificationsEnabled {
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: "Ngưỡng cảnh báo",
+                        subtitle: "Báo lần đầu khi % còn lại chạm mức này."
+                    ) {
+                        Stepper(value: $settings.quotaWarnLevel1, in: 5...95, step: 5) {
+                            Text("\(settings.quotaWarnLevel1)%")
+                                .font(.system(size: 12).monospacedDigit())
+                        }
+                        .fixedSize()
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: "Ngưỡng nguy hiểm",
+                        subtitle: "Báo lần nữa khi chạm mức thấp hơn này."
+                    ) {
+                        Stepper(value: $settings.quotaWarnLevel2, in: 1...90, step: 5) {
+                            Text("\(settings.quotaWarnLevel2)%")
+                                .font(.system(size: 12).monospacedDigit())
+                        }
+                        .fixedSize()
+                    }
+                }
             }
         }
     }

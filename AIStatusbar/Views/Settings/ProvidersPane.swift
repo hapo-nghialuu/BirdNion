@@ -112,6 +112,8 @@ struct ProvidersPane: View {
                     detailInfoGrid(rows[idx])
                     usageSection(rows[idx])
                     settingsSection(idx)
+                    QuotaWarningCard(providerID: rows[idx].id)
+                        .id(rows[idx].id)
                     linksSection(rows[idx])
                     if rows[idx].id == "claude" || rows[idx].id == "codex" {
                         claudeConfigButton
@@ -616,5 +618,97 @@ private struct TokenField: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Quota warning card
+
+/// Per-provider quota-warning thresholds. Each window (session/weekly) inherits
+/// the global thresholds unless "Customize" is on, mirroring CodexBar's panel.
+/// Overrides are persisted via `QuotaWarnConfig` (UserDefaults).
+private struct QuotaWarningCard: View {
+    let providerID: String
+
+    @State private var sessionCustom = false
+    @State private var weeklyCustom = false
+    @State private var sessionLevels: [Int] = [50, 20]
+    @State private var weeklyLevels: [Int] = [50, 20]
+
+    var body: some View {
+        SettingsCard(
+            header: "Cảnh báo quota",
+            footer: "Dùng ngưỡng chung trừ khi bật tùy chỉnh riêng cho từng cửa sổ."
+        ) {
+            windowRow(title: "Phiên (5 giờ)", window: "session",
+                      custom: $sessionCustom, levels: $sessionLevels)
+            SettingsRowDivider()
+            windowRow(title: "Tuần", window: "weekly",
+                      custom: $weeklyCustom, levels: $weeklyLevels)
+        }
+        .onAppear(perform: load)
+    }
+
+    @ViewBuilder
+    private func windowRow(title: String, window: String,
+                           custom: Binding<Bool>, levels: Binding<[Int]>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: Binding(
+                get: { custom.wrappedValue },
+                set: { on in
+                    custom.wrappedValue = on
+                    QuotaWarnConfig.setOverride(provider: providerID, window: window,
+                                                thresholds: on ? levels.wrappedValue : nil)
+                }
+            )) {
+                Text("Tùy chỉnh ngưỡng \(title)")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .toggleStyle(.checkbox)
+
+            if custom.wrappedValue {
+                HStack(spacing: 16) {
+                    levelStepper("Cảnh báo", levels: levels, index: 0, window: window)
+                    levelStepper("Nguy hiểm", levels: levels, index: 1, window: window)
+                }
+            } else {
+                let inherited = QuotaWarnConfig.globalThresholds.map { "\($0)%" }.joined(separator: ", ")
+                Text("Kế thừa: \(inherited)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func levelStepper(_ label: String, levels: Binding<[Int]>, index: Int, window: String) -> some View {
+        Stepper(value: Binding(
+            get: { levels.wrappedValue[index] },
+            set: { value in
+                var arr = levels.wrappedValue
+                arr[index] = value
+                levels.wrappedValue = arr
+                QuotaWarnConfig.setOverride(provider: providerID, window: window, thresholds: arr)
+            }
+        ), in: 1...100, step: 5) {
+            Text("\(label): \(levels.wrappedValue[index])%")
+                .font(.system(size: 11).monospacedDigit())
+        }
+        .fixedSize()
+    }
+
+    private func load() {
+        sessionCustom = QuotaWarnConfig.hasOverride(provider: providerID, window: "session")
+        weeklyCustom = QuotaWarnConfig.hasOverride(provider: providerID, window: "weekly")
+        sessionLevels = padded(QuotaWarnConfig.thresholds(provider: providerID, window: "session"))
+        weeklyLevels = padded(QuotaWarnConfig.thresholds(provider: providerID, window: "weekly"))
+    }
+
+    /// Ensure exactly two levels for the two steppers.
+    private func padded(_ values: [Int]) -> [Int] {
+        var x = values
+        while x.count < 2 { x.append(x.last ?? 20) }
+        return Array(x.prefix(2))
     }
 }

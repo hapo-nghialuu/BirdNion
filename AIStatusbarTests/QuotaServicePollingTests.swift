@@ -22,6 +22,48 @@ final class QuotaServicePollingTests: XCTestCase {
     }
 }
 
+final class QuotaWarnConfigTests: XCTestCase {
+    private let p = "test-prov-\(UUID().uuidString)"
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: QuotaWarnConfig.overrideKey(p, "session"))
+        UserDefaults.standard.removeObject(forKey: QuotaWarnConfig.level1Key)
+        UserDefaults.standard.removeObject(forKey: QuotaWarnConfig.level2Key)
+        super.tearDown()
+    }
+
+    func testWindowKey() {
+        XCTAssertEqual(QuotaWarnConfig.windowKey("Tuần"), "weekly")
+        XCTAssertEqual(QuotaWarnConfig.windowKey("5 giờ"), "session")
+    }
+
+    func testGlobalDefaults() {
+        XCTAssertEqual(QuotaWarnConfig.globalThresholds, [50, 20])
+    }
+
+    func testOverrideTakesPrecedence() {
+        QuotaWarnConfig.setOverride(provider: p, window: "session", thresholds: [40, 15])
+        XCTAssertTrue(QuotaWarnConfig.hasOverride(provider: p, window: "session"))
+        XCTAssertEqual(QuotaWarnConfig.thresholds(provider: p, window: "session"), [40, 15])
+        // Clearing falls back to global.
+        QuotaWarnConfig.setOverride(provider: p, window: "session", thresholds: nil)
+        XCTAssertFalse(QuotaWarnConfig.hasOverride(provider: p, window: "session"))
+        XCTAssertEqual(QuotaWarnConfig.thresholds(provider: p, window: "session"), [50, 20])
+    }
+
+    func testCrossingFiresOnceThenReArms() {
+        let thresholds = [50, 20]
+        // Drop 90 -> 45 crosses 50 only.
+        XCTAssertEqual(QuotaWarnConfig.crossings(previous: 90, current: 45, thresholds: thresholds, fired: []), [50])
+        // Already fired 50, drop further to 18 crosses 20.
+        XCTAssertEqual(QuotaWarnConfig.crossings(previous: 45, current: 18, thresholds: thresholds, fired: [50]), [20])
+        // No re-fire while staying low.
+        XCTAssertEqual(QuotaWarnConfig.crossings(previous: 18, current: 15, thresholds: thresholds, fired: [50, 20]), [])
+        // Upward movement never fires.
+        XCTAssertEqual(QuotaWarnConfig.crossings(previous: 15, current: 60, thresholds: thresholds, fired: []), [])
+    }
+}
+
 private final class StubProvider: QuotaProvider {
     let id: String
     let displayName: String
