@@ -165,6 +165,26 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertEqual(summary?.last30Tokens, 0)  // older than 30 days → excluded
     }
 
+    func testAccountActiveSelectionRoundTrip() {
+        let previous = CodexAccountStore.activeID()
+        defer { CodexAccountStore.setActive(previous) }
+        CodexAccountStore.setActive("system")
+        XCTAssertEqual(CodexAccountStore.activeID(), "system")
+        XCTAssertEqual(CodexAccountStore.activeAuthURL(), CodexAccountStore.systemAuthURL())
+    }
+
+    func testAccountActiveAuthURLFallsBackToSystem() {
+        let previous = CodexAccountStore.activeID()
+        defer { CodexAccountStore.setActive(previous) }
+        CodexAccountStore.setActive("does-not-exist")
+        // Unknown active id → safe fallback to the system login.
+        XCTAssertEqual(CodexAccountStore.activeAuthURL(), CodexAccountStore.systemAuthURL())
+    }
+
+    func testAllAccountsIncludesSystem() {
+        XCTAssertTrue(CodexAccountStore.allAccounts().contains { $0.id == "system" && $0.isSystem })
+    }
+
     func testMenuBarMetricFilter() {
         let session = QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)
         let weekly = QuotaWindow(label: "Tuần", usedPct: 7, remainingPct: 93)

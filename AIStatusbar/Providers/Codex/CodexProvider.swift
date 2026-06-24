@@ -15,7 +15,10 @@ final class CodexProvider: QuotaProvider {
     let displayName = "Codex"
 
     private let session: URLSession
-    private let authURL: URL
+    /// Explicit auth file (tests). When nil, resolved per fetch from the active
+    /// account so switching accounts takes effect without rebuilding the provider.
+    private let authURLOverride: URL?
+    private var authURL: URL { authURLOverride ?? CodexAccountStore.activeAuthURL() }
     /// Best-effort side data, injectable so tests stay pure (no network/process).
     /// The status probe deliberately uses its own session (a public endpoint,
     /// unrelated to the authenticated usage session).
@@ -23,11 +26,11 @@ final class CodexProvider: QuotaProvider {
     private let versionProbe: () async -> String?
 
     init(session: URLSession = .shared,
-         authURL: URL = CodexAuthStore.authFileURL(),
+         authURL: URL? = nil,
          statusProbe: @escaping () async -> OpenAIServiceStatus? = { await OpenAIStatusProbe.fetch() },
          versionProbe: @escaping () async -> String? = { await CodexCLI.shared.version() }) {
         self.session = session
-        self.authURL = authURL
+        self.authURLOverride = authURL
         self.statusProbe = statusProbe
         self.versionProbe = versionProbe
     }

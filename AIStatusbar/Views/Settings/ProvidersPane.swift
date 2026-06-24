@@ -119,6 +119,9 @@ struct ProvidersPane: View {
                     detailInfoGrid(rows[idx])
                     usageSection(rows[idx])
                     settingsSection(idx)
+                    if rows[idx].id == "codex" {
+                        CodexAccountsCard()
+                    }
                     QuotaWarningCard(providerID: rows[idx].id)
                         .id(rows[idx].id)
                     linksSection(rows[idx])
@@ -774,5 +777,120 @@ private struct QuotaWarningCard: View {
         var x = values
         while x.count < 2 { x.append(x.last ?? 20) }
         return Array(x.prefix(2))
+    }
+}
+
+// MARK: - Codex accounts card
+
+/// Multi-account management for Codex. The system account (~/.codex) is shown
+/// read-only; managed accounts live in their own CODEX_HOME and are added via
+/// `codex login` in the browser. Selecting one switches which login the
+/// provider reads.
+private struct CodexAccountsCard: View {
+    @State private var accounts: [CodexAccount] = []
+    @State private var activeID = "system"
+    @State private var busy = false
+    @State private var errorText: String?
+
+    var body: some View {
+        SettingsCard(
+            header: "Tài khoản",
+            footer: "Mỗi tài khoản đăng nhập riêng. “Thêm tài khoản” mở `codex login` trong trình duyệt; tài khoản hệ thống (~/.codex) không bị ghi đè."
+        ) {
+            ForEach(accounts) { account in
+                accountRow(account)
+                SettingsRowDivider()
+            }
+            addRow
+        }
+        .onAppear(perform: reload)
+    }
+
+    private func accountRow(_ account: CodexAccount) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: account.id == activeID ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(account.id == activeID ? Color.accentColor : Color.secondary)
+                .onTapGesture {
+                    CodexAccountStore.setActive(account.id)
+                    activeID = account.id
+                }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.email ?? (account.isSystem ? "Tài khoản hệ thống" : "Tài khoản"))
+                    .font(.system(size: 13, weight: .semibold))
+                Text(account.isSystem ? "Hệ thống · ~/.codex" : "Quản lý bởi app")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 6)
+
+            Button("Đăng nhập lại") { Task { await reauth(account.id) } }
+                .controlSize(.small)
+                .disabled(busy)
+
+            if !account.isSystem {
+                Button(role: .destructive) {
+                    CodexAccountStore.remove(id: account.id)
+                    reload()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .controlSize(.small)
+                .disabled(busy)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var addRow: some View {
+        HStack(spacing: 8) {
+            Button { Task { await add() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.circle")
+                    Text("Thêm tài khoản")
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+
+            if busy {
+                ProgressView().controlSize(.small)
+                Text("Đang chờ đăng nhập trong trình duyệt…")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 6)
+
+            if let errorText {
+                Text(errorText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func reload() {
+        accounts = CodexAccountStore.allAccounts()
+        activeID = CodexAccountStore.activeID()
+    }
+
+    private func add() async {
+        busy = true; errorText = nil
+        defer { busy = false }
+        do { _ = try await CodexAccountStore.addAccount(); reload() }
+        catch { errorText = error.localizedDescription }
+    }
+
+    private func reauth(_ id: String) async {
+        busy = true; errorText = nil
+        defer { busy = false }
+        do { try await CodexAccountStore.reauth(id: id); reload() }
+        catch { errorText = error.localizedDescription }
     }
 }
