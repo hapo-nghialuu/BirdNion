@@ -45,6 +45,7 @@
 		SET00170000000000B00C /* DebugPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET00180000000000F00C /* DebugPane.swift */; };
 		C0DE0001000000000000B001 /* CodexAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F001 /* CodexAuth.swift */; };
 		C0DE0003000000000000B002 /* CodexUsageAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0004000000000000F002 /* CodexUsageAPI.swift */; };
+		C0DE00C0000000000000B0C0 /* CodexCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00C1000000000000F0C1 /* CodexCostScanner.swift */; };
 		C0DE0005000000000000B003 /* CodexProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0006000000000000F003 /* CodexProvider.swift */; };
 		C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0008000000000000F004 /* CodexProviderTests.swift */; };
 
@@ -105,6 +106,7 @@
 		SET00180000000000F00C /* DebugPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Views/Settings/DebugPane.swift; sourceTree = "<group>"; };
 		C0DE0002000000000000F001 /* CodexAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/CodexAuth.swift; sourceTree = "<group>"; };
 		C0DE0004000000000000F002 /* CodexUsageAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/CodexUsageAPI.swift; sourceTree = "<group>"; };
+		C0DE00C1000000000000F0C1 /* CodexCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/CodexCostScanner.swift; sourceTree = "<group>"; };
 		C0DE0006000000000000F003 /* CodexProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/CodexProvider.swift; sourceTree = "<group>"; };
 
 		EEEE0003000000000000F001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -348,6 +350,7 @@
 				SET00170000000000B00C /* DebugPane.swift in Sources */,
 				C0DE0001000000000000B001 /* CodexAuth.swift in Sources */,
 				C0DE0003000000000000B002 /* CodexUsageAPI.swift in Sources */,
+				C0DE00C0000000000000B0C0 /* CodexCostScanner.swift in Sources */,
 				C0DE0005000000000000B003 /* CodexProvider.swift in Sources */,
 				FFFF0001000000000000B001 /* AppDelegate.swift in Sources */,
 				FFFF0003000000000000B002 /* ServicesContainer.swift in Sources */,

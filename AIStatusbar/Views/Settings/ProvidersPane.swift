@@ -16,6 +16,8 @@ struct ProvidersPane: View {
     @State private var rows: [ProviderConfig] = []
     @State private var selectedID: String?
     @State private var showingClaudeConfig = false
+    /// Codex token cost (today / 30d), scanned lazily when Codex is selected.
+    @State private var codexCost: CodexCostSummary?
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -27,6 +29,11 @@ struct ProvidersPane: View {
         .task {
             if rows.isEmpty { rows = ProvidersStore.load().providers }
             if selectedID == nil { selectedID = rows.first?.id }
+        }
+        .task(id: selectedID) {
+            // Scan local Codex sessions for token cost only while it's selected.
+            guard selectedID == "codex" else { codexCost = nil; return }
+            codexCost = await CodexCostScanner.summary()
         }
         .sheet(isPresented: $showingClaudeConfig) {
             ConfigPanel()
@@ -236,6 +243,10 @@ struct ProvidersPane: View {
                     SettingsRowDivider()
                     creditsRow(credits)
                 }
+                if row.id == "codex", let cost = codexCost, !cost.isEmpty {
+                    SettingsRowDivider()
+                    costRows(cost)
+                }
             } else {
                 Text(row.enabled ? "Chưa có dữ liệu — bấm làm mới." : "Đang tắt — không có dữ liệu.")
                     .font(.system(size: 12))
@@ -325,6 +336,36 @@ struct ProvidersPane: View {
             ? String(Int(credits))
             : String(format: "%.2f", credits)
         return credits <= 0 ? "Hết" : "\(amount) còn lại"
+    }
+
+    /// Token cost rows (Codex). Dollar amounts are estimates (tokens × price
+    /// table), so they're prefixed with "≈"; token counts are exact.
+    private func costRows(_ cost: CodexCostSummary) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            costLine("Hôm nay", usd: cost.todayUSD, tokens: cost.todayTokens)
+            costLine("30 ngày", usd: cost.last30USD, tokens: cost.last30Tokens)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func costLine(_ label: String, usd: Double, tokens: Int) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+            Spacer()
+            Text("≈$\(String(format: "%.2f", usd)) · \(Self.formatTokens(tokens))")
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+        }
+    }
+
+    /// Compact token count: 1_234_567 → "1.2M", 12_345 → "12.3K".
+    static func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
     }
 
     // MARK: - Settings section (token / account label / login status)

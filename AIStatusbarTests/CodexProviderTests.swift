@@ -117,6 +117,54 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertNil(usage.credits)
     }
 
+    func testCostScannerSessionDate() {
+        let d = CodexCostScanner.sessionDate(from: "rollout-2026-06-23T15-57-40-019ef3b3.jsonl")
+        XCTAssertNotNil(d)
+        let cal = Calendar(identifier: .gregorian)
+        let c = cal.dateComponents([.year, .month, .day, .hour], from: d!)
+        XCTAssertEqual(c.year, 2026)
+        XCTAssertEqual(c.month, 6)
+        XCTAssertEqual(c.day, 23)
+    }
+
+    func testCostScannerAggregatesLastCumulativeUsage() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("codexcost-\(UUID().uuidString)")
+        let sub = tmp.appendingPathComponent("2026/06")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let now = Date()
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
+        let stamp = fmt.string(from: now)
+        let file = sub.appendingPathComponent("rollout-\(stamp)-abc.jsonl")
+        let lines = [
+            #"{"type":"event_msg","payload":{"info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10,"total_tokens":110}}}}"#,
+            #"{"type":"turn_context","model":"gpt-5.5"}"#,
+            // Later cumulative line wins (running total).
+            #"{"type":"event_msg","payload":{"info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":50,"total_tokens":1050}}}}"#,
+        ].joined(separator: "\n")
+        try lines.write(to: file, atomically: true, encoding: .utf8)
+
+        let summary = CodexCostScanner.scan(sessionsDir: tmp, now: now)
+        XCTAssertEqual(summary?.last30Tokens, 1050)  // input 1000 + output 50
+        XCTAssertEqual(summary?.todayTokens, 1050)
+        XCTAssertGreaterThan(summary?.last30USD ?? 0, 0)
+    }
+
+    func testCostScannerSkipsOldSessions() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("codexcost-\(UUID().uuidString)")
+        let sub = tmp.appendingPathComponent("2025/01")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let file = sub.appendingPathComponent("rollout-2025-01-01T10-00-00-old.jsonl")
+        try #"{"payload":{"info":{"total_token_usage":{"input_tokens":999,"output_tokens":1}}}}"#
+            .write(to: file, atomically: true, encoding: .utf8)
+        let summary = CodexCostScanner.scan(sessionsDir: tmp, now: Date())
+        XCTAssertEqual(summary?.last30Tokens, 0)  // older than 30 days → excluded
+    }
+
     func testMenuBarMetricFilter() {
         let session = QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)
         let weekly = QuotaWindow(label: "Tuần", usedPct: 7, remainingPct: 93)
