@@ -41,9 +41,6 @@ struct PopoverView: View {
         // below the cards (a Spacer absorbed it into a visible gap).
         .frame(width: 420)
         .background(VocabbyTheme.background)
-        .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { _ in
-            switchTo(.config)
-        }
     }
 
     /// Single place that swaps the popover section. We intentionally switch
