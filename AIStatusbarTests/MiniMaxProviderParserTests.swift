@@ -4,6 +4,7 @@ import XCTest
 final class MiniMaxProviderParserTests: XCTestCase {
     private let happyJSON = """
     {"base_resp":{"status_code":0,"status_msg":"success"},
+    "current_subscribe_title":"Token Plan Max",
     "model_remains":[{"model_name":"general",
     "current_interval_total_count":100,"current_interval_usage_count":13,
     "current_interval_remaining_percent":87,
@@ -29,7 +30,7 @@ final class MiniMaxProviderParserTests: XCTestCase {
         let session = URLSession(configuration: makeStubConfig())
         let p = MiniMaxProvider(session: session, keychain: keychain)
         StubURLProtocol.handler = { req in
-            XCTAssertEqual(req.url?.absoluteString, "https://api.minimax.io/v1/token_plan/remains")
+            XCTAssertEqual(req.url?.absoluteString, "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains")
             return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, self.happyJSON)
         }
         defer { StubURLProtocol.reset() }
@@ -46,6 +47,39 @@ final class MiniMaxProviderParserTests: XCTestCase {
         XCTAssertEqual(status?.windows[0].remainingPct, 87)
         XCTAssertEqual(status?.windows[1].label, "Tuần")
         XCTAssertEqual(status?.windows[1].remainingPct, 89)
+        XCTAssertEqual(status?.planName, "Token Plan Max")
+    }
+
+    func testPlanNameFallback() throws {
+        // When `current_subscribe_title` is missing, `plan_name` should win.
+        let json = #"""
+        {"base_resp":{"status_code":0,"status_msg":"success"},
+        "plan_name":"Plus",
+        "model_remains":[{"model_name":"general",
+        "current_interval_total_count":100,"current_interval_usage_count":0,
+        "current_interval_remaining_percent":100,
+        "current_weekly_total_count":700,"current_weekly_usage_count":0,
+        "current_weekly_remaining_percent":100}]}
+        """#.data(using: .utf8)!
+        let p = MiniMaxProvider(keychain: KeychainService())
+        let s = p.parse(json, accountLabel: "u")
+        XCTAssertEqual(s.planName, "Plus")
+    }
+
+    func testPlanNameNilWhenAllMissing() throws {
+        // happyJSON has current_subscribe_title so non-nil; verify the parser
+        // accepts missing plan fields by parsing a payload that omits them.
+        let empty = #"""
+        {"base_resp":{"status_code":0,"status_msg":"success"},
+        "model_remains":[{"model_name":"general",
+        "current_interval_total_count":100,"current_interval_usage_count":0,
+        "current_interval_remaining_percent":100,
+        "current_weekly_total_count":700,"current_weekly_usage_count":0,
+        "current_weekly_remaining_percent":100}]}
+        """#.data(using: .utf8)!
+        let p = MiniMaxProvider(keychain: KeychainService())
+        let s2 = p.parse(empty, accountLabel: "u")
+        XCTAssertNil(s2.planName)
     }
 
     func testMissingModel() throws {

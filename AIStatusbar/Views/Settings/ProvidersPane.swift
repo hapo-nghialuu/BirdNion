@@ -180,6 +180,11 @@ struct ProvidersPane: View {
             if let plan = s?.planType, !plan.isEmpty {
                 infoRow("Gói", plan.capitalized)
             }
+            if let name = s?.planName, !name.isEmpty {
+                // Plan display name (MiniMax `current_subscribe_title`) — distinct
+                // from `planType` which carries a code (`plus` / `pro`).
+                infoRow("Tên gói", name)
+            }
             if let label = s?.accountLabel, !label.isEmpty {
                 infoRow("Tài khoản", label)
             }

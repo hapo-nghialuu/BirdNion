@@ -129,7 +129,8 @@ final class CodexProvider: QuotaProvider {
             creditsRemaining: usage.credits?.balance,
             version: version,
             serviceStatus: service?.description,
-            serviceStatusLevel: service?.indicator)
+            serviceStatusLevel: service?.indicator,
+            accountID: credentials.accountId)
     }
 
     /// Reads the same `statusChecksEnabled` preference that SettingsStore binds.

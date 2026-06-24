@@ -113,6 +113,13 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
     let serviceStatus: String?
     /// Status severity: "none" / "minor" / "major" / "critical" (drives color).
     let serviceStatusLevel: String?
+    /// OpenAI `account_id` from `~/.codex/auth.json`. Sent in the
+    /// `ChatGPT-Account-Id` header for the Codex usage + reset-credits APIs.
+    /// nil for providers that don't have an account_id.
+    let accountID: String?
+    /// Plan display name for MiniMax (e.g. "Token Plan Max") — distinct from
+    /// `planType` which carries a code (`plus` / `pro`). Surfaced in header.
+    let planName: String?
 
     init(id: String,
          displayName: String,
@@ -124,7 +131,9 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
          creditsRemaining: Double? = nil,
          version: String? = nil,
          serviceStatus: String? = nil,
-         serviceStatusLevel: String? = nil) {
+         serviceStatusLevel: String? = nil,
+         accountID: String? = nil,
+         planName: String? = nil) {
         self.id = id
         self.displayName = displayName
         self.windows = windows
@@ -136,5 +145,7 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
         self.version = version
         self.serviceStatus = serviceStatus
         self.serviceStatusLevel = serviceStatusLevel
+        self.accountID = accountID
+        self.planName = planName
     }
 }

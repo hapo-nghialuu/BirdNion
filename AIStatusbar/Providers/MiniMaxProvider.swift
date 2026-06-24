@@ -12,14 +12,30 @@ enum MiniMaxRegion: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .io:  "Global (.io)"
-        case .com: "Trung Quốc (.com)"
+        case .io:  "Global (platform.minimax.io)"
+        case .com: "Trung Quốc (platform.minimaxi.com)"
         }
     }
-    var apiHost: String { "api.minimax.\(rawValue)" }
+    /// API host for the `coding_plan/remains` endpoint (matches CodexBar).
+    /// The legacy `api.minimax.<tld>` host is no longer reliable — the .com
+    /// TLD does not resolve.
+    var platformHost: String {
+        switch self {
+        case .io:  "platform.minimax.io"
+        case .com: "platform.minimaxi.com"
+        }
+    }
+    /// Legacy `token_plan/remains` host. Kept for reference only — the
+    /// provider now uses `codingPlanURL` exclusively.
+    var apiHost: String {
+        switch self {
+        case .io:  "api.minimax.io"
+        case .com: "api.minimaxi.com"
+        }
+    }
     /// Token Plan / coding-plan management page for this region.
     var dashboardURL: URL {
-        URL(string: "https://platform.minimax.\(rawValue)/user-center/payment/coding-plan?cycle_type=3")!
+        URL(string: "https://\(platformHost)/user-center/payment/coding-plan?cycle_type=3")!
     }
 
     static var current: MiniMaxRegion {
@@ -61,9 +77,12 @@ enum MiniMaxRegion: String, CaseIterable, Identifiable {
 /// returns a separate quota bucket for video generation that BOSS does
 /// not want surfaced in the popover).
 final class MiniMaxProvider: QuotaProvider {
-    /// Token Plan endpoint for the user's selected region (global .io by default).
+    /// Coding Plan endpoint for the user's selected region. Mirrors CodexBar's
+    /// `platform.<tld>/v1/api/openplatform/coding_plan/remains` — this is the
+    /// canonical endpoint and is the only one that returns the plan name
+    /// (`current_subscribe_title` / `plan_name`).
     static func endpoint(region: MiniMaxRegion = .current) -> URL {
-        URL(string: "https://\(region.apiHost)/v1/token_plan/remains")!
+        URL(string: "https://\(region.platformHost)/v1/api/openplatform/coding_plan/remains")!
     }
 
     /// Models to filter out of the popover (case-insensitive).
@@ -107,7 +126,7 @@ final class MiniMaxProvider: QuotaProvider {
         }
         let accountLabel = Self.deriveAccountLabel(override: override(), token: token)
 
-        var req = URLRequest(url: Self.endpoint())
+        var req = URLRequest(url: Self.endpoint(region: .current))
         req.httpMethod = "GET"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -178,12 +197,28 @@ final class MiniMaxProvider: QuotaProvider {
                               windows: windows,
                               lastUpdated: Date(),
                               error: nil,
-                              accountLabel: accountLabel)
+                              accountLabel: accountLabel,
+                              planName: root.planDisplayName)
     }
 
     private struct RemainsResponse: Decodable {
         let base_resp: BaseResp
         let model_remains: [ModelRemain]
+        // Plan display name comes from one of these (the API may swap
+        // between payloads). `current_subscribe_title` is the most common.
+        let current_subscribe_title: String?
+        let plan_name: String?
+        let combo_title: String?
+        let current_plan_title: String?
+
+        /// First non-empty candidate, trimmed. nil if none set.
+        var planDisplayName: String? {
+            for raw in [current_subscribe_title, plan_name, combo_title, current_plan_title] {
+                if let v = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !v.isEmpty { return v }
+            }
+            return nil
+        }
     }
     private struct BaseResp: Decodable {
         let status_code: Int
