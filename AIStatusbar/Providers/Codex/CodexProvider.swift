@@ -24,15 +24,22 @@ final class CodexProvider: QuotaProvider {
     /// unrelated to the authenticated usage session).
     private let statusProbe: () async -> OpenAIServiceStatus?
     private let versionProbe: () async -> String?
+    /// CLI `/status` probe used as a fallback when the OAuth usage call fails
+    /// (token expired, server error). Injected so tests stay pure.
+    private let cliStatusProbe: () async -> CodexStatusSnapshot?
 
     init(session: URLSession = .shared,
          authURL: URL? = nil,
          statusProbe: @escaping () async -> OpenAIServiceStatus? = { await OpenAIStatusProbe.fetch() },
-         versionProbe: @escaping () async -> String? = { await CodexCLI.shared.version() }) {
+         versionProbe: @escaping () async -> String? = { await CodexCLI.shared.version() },
+         cliStatusProbe: @escaping () async -> CodexStatusSnapshot? = {
+             try? await CodexStatusProbe.fetch()
+         }) {
         self.session = session
         self.authURLOverride = authURL
         self.statusProbe = statusProbe
         self.versionProbe = versionProbe
+        self.cliStatusProbe = cliStatusProbe
     }
 
     func fetch() async throws -> ProviderStatus {
@@ -60,7 +67,9 @@ final class CodexProvider: QuotaProvider {
                 session: session)
             return await success(usage, credentials: credentials)
         } catch CodexUsageError.unauthorized {
-            // Reactive refresh + single retry (compensates for no CLI fallback).
+            // Reactive refresh + single retry. If still unauthorized, try the
+            // CLI `/status` probe (CodexBar's "auto" fallback chain) before
+            // giving up.
             if !credentials.refreshToken.isEmpty,
                let refreshed = try? await CodexTokenRefresher.refresh(credentials, session: session)
             {
@@ -73,14 +82,60 @@ final class CodexProvider: QuotaProvider {
                     return await success(usage, credentials: refreshed)
                 }
             }
+            if let snap = await cliStatusProbe(), let status = await cliStatusSuccess(snap, credentials: credentials) {
+                return status
+            }
             return failure("Token Codex hết hạn — chạy `codex` để đăng nhập lại")
         } catch CodexUsageError.serverError(let code) {
+            // Server down/5xx — try the CLI probe so the user still sees
+            // something rather than a hard failure.
+            if let snap = await cliStatusProbe(), let status = await cliStatusSuccess(snap, credentials: credentials) {
+                return status
+            }
             return failure("HTTP \(code)")
         } catch CodexUsageError.invalidResponse {
             return failure("Response không hợp lệ")
         } catch {
             return failure("Network: \(error.localizedDescription)")
         }
+    }
+
+    /// Map a parsed `CodexStatusSnapshot` to a `ProviderStatus` (CLI fallback).
+    /// Returns nil when the snapshot has no usable window data.
+    private func cliStatusSuccess(_ snap: CodexStatusSnapshot,
+                                  credentials: CodexCredentials) async -> ProviderStatus? {
+        var windows: [QuotaWindow] = []
+        if let five = snap.fiveHourPercentLeft {
+            windows.append(QuotaWindow(label: "5 giờ",
+                                       usedPct: 100 - five,
+                                       remainingPct: five,
+                                       resetDate: snap.fiveHourResetsAt,
+                                       windowSeconds: 5 * 3600))
+        }
+        if let week = snap.weeklyPercentLeft {
+            windows.append(QuotaWindow(label: "Tuần",
+                                       usedPct: 100 - week,
+                                       remainingPct: week,
+                                       resetDate: snap.weeklyResetsAt,
+                                       windowSeconds: 7 * 24 * 3600))
+        }
+        guard !windows.isEmpty else { return nil }
+        async let versionTask = versionProbe()
+        let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
+        let version = await versionTask
+        return ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: windows,
+            lastUpdated: Date(),
+            error: nil,
+            accountLabel: accountLabel(credentials),
+            planType: nil,
+            creditsRemaining: snap.credits,
+            version: version,
+            serviceStatus: service?.description,
+            serviceStatusLevel: service?.indicator,
+            accountID: credentials.accountId)
     }
 
     // MARK: - Mapping

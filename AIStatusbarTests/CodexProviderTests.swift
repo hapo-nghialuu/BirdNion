@@ -258,4 +258,42 @@ final class CodexProviderTests: XCTestCase {
         wait(for: [exp], timeout: 2)
         XCTAssertEqual(status?.error, "Chưa đăng nhập Codex — chạy `codex` để đăng nhập")
     }
+
+    // MARK: - CodexStatusProbe parser (CLI fallback)
+
+    func testStatusProbeParseCleanText() throws {
+        // CodexBar only supports `HH:mm` and `on <date> <time>` for reset
+        // date parsing — not relative phrases like "in 3h 12m" or bare
+        // "<date> <time>" without the "on" prefix.
+        let text = """
+        Credits: 42
+        5h limit    78% left   resets 14:30
+        Weekly limit 91% left  resets on 2 Jul 14:30
+        """
+        let snap = try CodexStatusProbe.parse(text: text)
+        XCTAssertEqual(snap.credits, 42)
+        XCTAssertEqual(snap.fiveHourPercentLeft, 78)
+        XCTAssertEqual(snap.weeklyPercentLeft, 91)
+        XCTAssertNotNil(snap.fiveHourResetsAt)
+        XCTAssertNotNil(snap.weeklyResetsAt)
+    }
+
+    func testStatusProbeParseStripsAnsi() throws {
+        let text = "\u{001B}[32mCredits: 10\u{001B}[0m\n5h limit 50% left resets 12:34"
+        let snap = try CodexStatusProbe.parse(text: text)
+        XCTAssertEqual(snap.credits, 10)
+        XCTAssertEqual(snap.fiveHourPercentLeft, 50)
+    }
+
+    func testStatusProbeParseMissingFieldsThrows() {
+        XCTAssertThrowsError(try CodexStatusProbe.parse(text: "hello world"))
+    }
+
+    func testStatusProbeParseEmptyThrows() {
+        XCTAssertThrowsError(try CodexStatusProbe.parse(text: ""))
+    }
+
+    func testStatusProbeParseDataNotAvailableThrows() {
+        XCTAssertThrowsError(try CodexStatusProbe.parse(text: "data not available yet\n"))
+    }
 }
