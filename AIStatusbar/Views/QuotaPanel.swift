@@ -205,7 +205,6 @@ struct ProviderHeaderCard: View {
                 .interpolation(.high)
                 .frame(width: 50, height: 50)
                 .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                .offset(y: 5)
             VStack(alignment: .leading, spacing: 2) {
                 Text(status.displayName)
                     .font(.system(size: 14, weight: .semibold))
