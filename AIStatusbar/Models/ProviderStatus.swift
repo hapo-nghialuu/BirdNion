@@ -14,19 +14,67 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
     let remainingPct: Int
     let subtitle: String?
     let resetDate: Date?
+    /// Full window length in seconds (e.g. 18000 for 5h, 604800 for a week).
+    /// Used with `resetDate` to compute consumption pace. nil when unknown.
+    let windowSeconds: Int?
 
     init(id: UUID = UUID(),
          label: String,
          usedPct: Int,
          remainingPct: Int,
          subtitle: String? = nil,
-         resetDate: Date? = nil) {
+         resetDate: Date? = nil,
+         windowSeconds: Int? = nil) {
         self.id = id
         self.label = label
         self.usedPct = usedPct
         self.remainingPct = remainingPct
         self.subtitle = subtitle
         self.resetDate = resetDate
+        self.windowSeconds = windowSeconds
+    }
+}
+
+/// Linear consumption pace for one window — derived purely from its current
+/// usage, reset time, and total length. "Reserve" is how far below the steady
+/// (linear) burn rate you are; "lasts until reset" projects the current rate to
+/// the window end. No history needed, so it works from the first sample.
+struct WindowPace: Equatable {
+    /// Percentage points you're under the linear pace (>= 0).
+    let reservePct: Int
+    /// Whether the current burn rate leaves budget until the window resets.
+    let lastsUntilReset: Bool
+    /// Human countdown to reset, e.g. "20h 46m" / "2d 3h". nil if unknown.
+    let resetText: String?
+
+    init?(window: QuotaWindow, now: Date = Date()) {
+        guard let reset = window.resetDate, let seconds = window.windowSeconds, seconds > 0 else {
+            return nil
+        }
+        let duration = Double(seconds)
+        let timeUntilReset = max(0, reset.timeIntervalSince(now))
+        let elapsed = min(duration, max(0, duration - timeUntilReset))
+        let actualUsed = Double(max(0, min(100, window.usedPct)))
+
+        if elapsed <= 0 {
+            self.reservePct = 0
+            self.lastsUntilReset = true
+        } else {
+            let expectedUsed = elapsed / duration * 100
+            self.reservePct = max(0, Int((expectedUsed - actualUsed).rounded()))
+            // Project usage to the reset moment at the current burn rate.
+            let projectedAtReset = actualUsed * (duration / elapsed)
+            self.lastsUntilReset = projectedAtReset <= 100
+        }
+        self.resetText = Self.format(timeUntilReset)
+    }
+
+    static func format(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        let days = s / 86400, hours = (s % 86400) / 3600, minutes = (s % 3600) / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
     }
 }
 

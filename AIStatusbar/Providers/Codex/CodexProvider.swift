@@ -100,7 +100,8 @@ final class CodexProvider: QuotaProvider {
             label: label,
             usedPct: used,
             remainingPct: 100 - used,
-            resetDate: Date(timeIntervalSince1970: TimeInterval(w.resetAt)))
+            resetDate: Date(timeIntervalSince1970: TimeInterval(w.resetAt)),
+            windowSeconds: w.limitWindowSeconds)
     }
 
     private func success(_ usage: CodexUsageResponse, credentials: CodexCredentials) async -> ProviderStatus {

@@ -271,10 +271,33 @@ struct ProvidersPane: View {
                 }
             }
             .frame(height: 8)
-            if let sub = w.subtitle, !sub.isEmpty {
-                Text(sub)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+
+            // Pace line: reserve (weekly) on the left, reset countdown on the right.
+            let pace = WindowPace(window: w)
+            if pace != nil || (w.subtitle?.isEmpty == false) {
+                HStack(alignment: .firstTextBaseline) {
+                    if isWeek, let r = pace?.reservePct, r > 0 {
+                        Text("\(r)% dự phòng")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 6)
+                    if let rt = pace?.resetText {
+                        Text("Reset sau \(rt)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                if isWeek, let pace {
+                    Text(pace.lastsUntilReset ? "Đủ dùng đến khi reset" : "Có thể hết trước khi reset")
+                        .font(.system(size: 10))
+                        .foregroundStyle(pace.lastsUntilReset ? Color.secondary : Color.orange)
+                }
+                if let sub = w.subtitle, !sub.isEmpty {
+                    Text(sub)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.horizontal, 14)
