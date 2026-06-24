@@ -120,6 +120,9 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
     /// Plan display name for MiniMax (e.g. "Token Plan Max") — distinct from
     /// `planType` which carries a code (`plus` / `pro`). Surfaced in header.
     let planName: String?
+    /// Number of unused manual-reset credits (Codex). nil when the provider
+    /// doesn't support it or the API didn't return data.
+    let resetCreditsAvailable: Int?
 
     init(id: String,
          displayName: String,
@@ -133,7 +136,8 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
          serviceStatus: String? = nil,
          serviceStatusLevel: String? = nil,
          accountID: String? = nil,
-         planName: String? = nil) {
+         planName: String? = nil,
+         resetCreditsAvailable: Int? = nil) {
         self.id = id
         self.displayName = displayName
         self.windows = windows
@@ -147,5 +151,6 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
         self.serviceStatusLevel = serviceStatusLevel
         self.accountID = accountID
         self.planName = planName
+        self.resetCreditsAvailable = resetCreditsAvailable
     }
 }

@@ -194,6 +194,9 @@ struct ProvidersPane: View {
             if let svc = s?.serviceStatus, !svc.isEmpty {
                 serviceStatusRow(svc, level: s?.serviceStatusLevel)
             }
+            if row.id == "codex", let n = s?.resetCreditsAvailable {
+                infoRow("Reset khả dụng", "\(n) lần")
+            }
             if let err = s?.error {
                 infoRow("Lỗi", err)
             } else {

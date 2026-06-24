@@ -168,10 +168,16 @@ final class CodexProvider: QuotaProvider {
             return failure("Codex chưa có dữ liệu quota")
         }
         // Best-effort side data — never fail the status if these don't resolve.
-        // Run the CLI probe concurrently with the status-page fetch.
+        // Run probes concurrently: status page, codex CLI version, and the
+        // manual-reset credits endpoint.
         async let versionTask = versionProbe()
+        async let resetTask = Self.fetchResetCredits(
+            accessToken: credentials.accessToken,
+            accountId: credentials.accountId,
+            session: session)
         let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
         let version = await versionTask
+        let reset = await resetTask
 
         return ProviderStatus(
             id: id,
@@ -185,7 +191,24 @@ final class CodexProvider: QuotaProvider {
             version: version,
             serviceStatus: service?.description,
             serviceStatusLevel: service?.indicator,
-            accountID: credentials.accountId)
+            accountID: credentials.accountId,
+            resetCreditsAvailable: reset)
+    }
+
+    /// Thin wrapper so the async-let call site stays tidy. Never throws —
+    /// the reset-credits count is best-effort, like `statusProbe`/`versionProbe`.
+    private static func fetchResetCredits(
+        accessToken: String,
+        accountId: String?,
+        session: URLSession) async -> Int?
+    {
+        do {
+            let snap = try await CodexResetCreditsAPI.fetch(
+                accessToken: accessToken, accountId: accountId, session: session)
+            return snap.availableCount
+        } catch {
+            return nil
+        }
     }
 
     /// Reads the same `statusChecksEnabled` preference that SettingsStore binds.

@@ -208,8 +208,18 @@ final class CodexProviderTests: XCTestCase {
 
         let session = URLSession(configuration: makeStubConfig())
         StubURLProtocol.handler = { req in
-            XCTAssertEqual(req.url?.absoluteString, "https://chatgpt.com/backend-api/wham/usage")
-            return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, self.usageJSON)
+            // Two endpoints are called concurrently: usage + reset credits.
+            // Route by URL; the URL assertion is split so a routing mistake fails fast.
+            let url = req.url?.absoluteString ?? ""
+            if url.hasSuffix("/wham/usage") {
+                return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, self.usageJSON)
+            }
+            if url.hasSuffix("/wham/rate-limit-reset-credits") {
+                let body = #"{"credits":[],"available_count":0}"#.data(using: .utf8)!
+                return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, body)
+            }
+            XCTFail("unexpected URL: \(url)")
+            return (HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
         }
         defer { StubURLProtocol.reset() }
 
@@ -295,5 +305,37 @@ final class CodexProviderTests: XCTestCase {
 
     func testStatusProbeParseDataNotAvailableThrows() {
         XCTAssertThrowsError(try CodexStatusProbe.parse(text: "data not available yet\n"))
+    }
+
+    // MARK: - CodexResetCreditsAPI decode
+
+    func testResetCreditsDecode() throws {
+        let now = Date()
+        let f1 = ISO8601DateFormatter(); f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let granted = f1.string(from: now)
+        let json = #"""
+        {"credits":[{"id":"abc","reset_type":"weekly","status":"available",
+        "granted_at":"\#(granted)","expires_at":"\#(granted)","title":"Manual reset"}],
+        "available_count":1}
+        """#.data(using: .utf8)!
+        let snap = try CodexResetCreditsAPI.decode(json, now: now)
+        XCTAssertEqual(snap.availableCount, 1)
+        XCTAssertEqual(snap.credits.count, 1)
+        XCTAssertEqual(snap.credits[0].id, "abc")
+        XCTAssertEqual(snap.credits[0].status, "available")
+        XCTAssertEqual(snap.credits[0].title, "Manual reset")
+    }
+
+    func testResetCreditsDecodeMissingFields() throws {
+        // No `available_count` key still decodes; absent credits array works too.
+        let json = #"{"credits":[],"available_count":0}"#.data(using: .utf8)!
+        let snap = try CodexResetCreditsAPI.decode(json, now: Date())
+        XCTAssertEqual(snap.availableCount, 0)
+        XCTAssertEqual(snap.credits.count, 0)
+    }
+
+    func testResetCreditsDecodeNegativeCountThrows() {
+        let json = #"{"credits":[],"available_count":-1}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try CodexResetCreditsAPI.decode(json, now: Date()))
     }
 }

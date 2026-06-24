@@ -50,6 +50,7 @@
 		C0DE00C4000000000000B0C4 /* CodexBarConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00C5000000000000F0C5 /* CodexBarConfigStore.swift */; };
 		C0DE00C6000000000000B0C6 /* TextParsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00C7000000000000F0C7 /* TextParsing.swift */; };
 		C0DE00C8000000000000B0C8 /* CodexStatusProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00C9000000000000F0C9 /* CodexStatusProbe.swift */; };
+		C0DE00CA000000000000B0CA /* CodexResetCreditsAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00CB000000000000F0CB /* CodexResetCreditsAPI.swift */; };
 		C0DE0005000000000000B003 /* CodexProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0006000000000000F003 /* CodexProvider.swift */; };
 		C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0008000000000000F004 /* CodexProviderTests.swift */; };
 
@@ -115,6 +116,7 @@
 		C0DE00C5000000000000F0C5 /* CodexBarConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/CodexBarConfigStore.swift; sourceTree = "<group>"; };
 		C0DE00C7000000000000F0C7 /* TextParsing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/TextParsing.swift; sourceTree = "<group>"; };
 		C0DE00C9000000000000F0C9 /* CodexStatusProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/CodexStatusProbe.swift; sourceTree = "<group>"; };
+		C0DE00CB000000000000F0CB /* CodexResetCreditsAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/CodexResetCreditsAPI.swift; sourceTree = "<group>"; };
 		C0DE0006000000000000F003 /* CodexProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIStatusbar/Providers/Codex/CodexProvider.swift; sourceTree = "<group>"; };
 
 		EEEE0003000000000000F001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -363,6 +365,7 @@
 				C0DE00C4000000000000B0C4 /* CodexBarConfigStore.swift in Sources */,
 				C0DE00C6000000000000B0C6 /* TextParsing.swift in Sources */,
 				C0DE00C8000000000000B0C8 /* CodexStatusProbe.swift in Sources */,
+				C0DE00CA000000000000B0CA /* CodexResetCreditsAPI.swift in Sources */,
 				C0DE0005000000000000B003 /* CodexProvider.swift in Sources */,
 				FFFF0001000000000000B001 /* AppDelegate.swift in Sources */,
 				FFFF0003000000000000B002 /* ServicesContainer.swift in Sources */,
