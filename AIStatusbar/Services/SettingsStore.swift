@@ -54,6 +54,9 @@ final class SettingsStore: ObservableObject {
     @AppStorage("hidePersonalInfo") var hidePersonalInfo: Bool = false
     @AppStorage("mergeIcons") var mergeIcons: Bool = true
     @AppStorage("switcherShowsIcons") var switcherShowsIcons: Bool = true
+    /// MiniMax API host region: "io" (global) or "com" (mainland China).
+    /// `MiniMaxProvider` reads the same UserDefaults key directly.
+    @AppStorage(MiniMaxRegion.defaultsKey) var minimaxRegion: String = MiniMaxRegion.io.rawValue
 
     var language: Language {
         get { Language(rawValue: appLanguage) ?? .system }

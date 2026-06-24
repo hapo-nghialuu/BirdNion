@@ -1,5 +1,32 @@
 import Foundation
 
+/// MiniMax API host region. "io" is the global host, "com" the mainland China
+/// host. Persisted in UserDefaults under `defaultsKey` (bound by SettingsStore
+/// and read directly by `MiniMaxProvider`, which has no SettingsStore handle).
+enum MiniMaxRegion: String, CaseIterable, Identifiable {
+    case io
+    case com
+
+    static let defaultsKey = "minimaxRegion"
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .io:  "Global (.io)"
+        case .com: "Trung Quốc (.com)"
+        }
+    }
+    var apiHost: String { "api.minimax.\(rawValue)" }
+    /// Token Plan / coding-plan management page for this region.
+    var dashboardURL: URL {
+        URL(string: "https://platform.minimax.\(rawValue)/user-center/payment/coding-plan?cycle_type=3")!
+    }
+
+    static var current: MiniMaxRegion {
+        MiniMaxRegion(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "io") ?? .io
+    }
+}
+
 /// MiniMax Token Plan quota provider.
 ///
 /// Endpoint: `GET https://api.minimax.io/v1/token_plan/remains`
@@ -34,7 +61,10 @@ import Foundation
 /// returns a separate quota bucket for video generation that BOSS does
 /// not want surfaced in the popover).
 final class MiniMaxProvider: QuotaProvider {
-    static let endpoint = URL(string: "https://api.minimax.io/v1/token_plan/remains")!
+    /// Token Plan endpoint for the user's selected region (global .io by default).
+    static func endpoint(region: MiniMaxRegion = .current) -> URL {
+        URL(string: "https://\(region.apiHost)/v1/token_plan/remains")!
+    }
 
     /// Models to filter out of the popover (case-insensitive).
     /// MiniMax returns separate quota buckets per capability; "video"
@@ -84,7 +114,7 @@ final class MiniMaxProvider: QuotaProvider {
         }
         let accountLabel = Self.deriveAccountLabel(override: override(), token: token)
 
-        var req = URLRequest(url: Self.endpoint)
+        var req = URLRequest(url: Self.endpoint())
         req.httpMethod = "GET"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")

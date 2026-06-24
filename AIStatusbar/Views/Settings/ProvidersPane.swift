@@ -11,6 +11,7 @@ import SwiftUI
 struct ProvidersPane: View {
     @EnvironmentObject var keychain: KeychainService
     @EnvironmentObject var quota: QuotaService
+    @EnvironmentObject var settings: SettingsStore
 
     @State private var rows: [ProviderConfig] = []
     @State private var selectedID: String?
@@ -111,6 +112,7 @@ struct ProvidersPane: View {
                     detailInfoGrid(rows[idx])
                     usageSection(rows[idx])
                     settingsSection(idx)
+                    linksSection(rows[idx])
                     if rows[idx].id == "claude" || rows[idx].id == "codex" {
                         claudeConfigButton
                     }
@@ -279,6 +281,79 @@ struct ProvidersPane: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             }
+
+            if row.id == "minimax" {
+                SettingsRowDivider()
+                HStack(spacing: 12) {
+                    Text("Khu vực API")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 8)
+                    Picker("", selection: Binding(
+                        get: { settings.minimaxRegion },
+                        set: { settings.minimaxRegion = $0; Task { await quota.refresh() } }
+                    )) {
+                        ForEach(MiniMaxRegion.allCases) { r in
+                            Text(r.displayName).tag(r.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 150)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    // MARK: - Links / dashboards
+
+    /// External management links for the selected provider. Codex also gets a
+    /// status page + changelog; MiniMax's dashboard follows the chosen region.
+    @ViewBuilder
+    private func linksSection(_ row: ProviderConfig) -> some View {
+        let links = dashboardLinks(for: row.id)
+        if !links.isEmpty {
+            SettingsCard(header: "Liên kết") {
+                ForEach(Array(links.enumerated()), id: \.offset) { i, link in
+                    Button {
+                        NSWorkspace.shared.open(link.url)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: link.icon)
+                                .frame(width: 16)
+                            Text(link.title)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                    if i < links.count - 1 { SettingsRowDivider() }
+                }
+            }
+        }
+    }
+
+    private struct DashboardLink { let title: String; let icon: String; let url: URL }
+
+    private func dashboardLinks(for id: String) -> [DashboardLink] {
+        func u(_ s: String) -> URL? { URL(string: s) }
+        switch id {
+        case "codex":
+            return [
+                u("https://chatgpt.com/codex/settings/usage").map { DashboardLink(title: "Trang sử dụng Codex", icon: "chart.bar", url: $0) },
+                u("https://status.openai.com/").map { DashboardLink(title: "Trạng thái OpenAI", icon: "waveform.path.ecg", url: $0) },
+                u("https://github.com/openai/codex/releases").map { DashboardLink(title: "Changelog", icon: "doc.text", url: $0) },
+            ].compactMap { $0 }
+        case "minimax":
+            return [DashboardLink(title: "Trang Token Plan", icon: "chart.bar", url: MiniMaxRegion.current.dashboardURL)]
+        default:
+            return []
         }
     }
 
