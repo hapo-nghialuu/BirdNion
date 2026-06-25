@@ -87,8 +87,8 @@ struct ProvidersPane: View {
     private var sidebar: some View {
         VStack(spacing: 6) {
             searchField
-            ForEach(visibleRows, id: \.id) { row in
-                sidebarRow(row)
+            ForEach(Array(visibleRows.enumerated()), id: \.element.id) { idx, row in
+                sidebarRow(row, position: idx, total: visibleRows.count)
                 if row.id != visibleRows.last?.id {
                     Divider().padding(.leading, 44)
                 }
@@ -105,6 +105,32 @@ struct ProvidersPane: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
+    }
+
+    /// Reorder `rows` so the dragged id sits at `targetIndex` in the
+    /// currently visible list. Mirrors a Finder list drop: the row
+    /// currently at `targetIndex` shifts down (or up) to make space.
+    /// Posts `.aistatusbarRefresh` so QuotaService rebuilds its provider
+    /// list and the menu-bar popover reorders its tabs.
+    private func moveRow(draggedId: String, toVisibleIndex targetIndex: Int) {
+        guard let fromVisible = visibleRows.firstIndex(where: { $0.id == draggedId }) else { return }
+        let fromReal = rows.firstIndex(where: { $0.id == draggedId }) ?? fromVisible
+        let item = rows.remove(at: fromReal)
+        // visibleRows was recomputed after removal, so re-derive target by id.
+        let visibleIds = visibleRows.map(\.id)
+        let newVisibleIndex = min(max(0, targetIndex), visibleIds.count)
+        let targetId = visibleIds.indices.contains(newVisibleIndex)
+            ? visibleIds[newVisibleIndex]
+            : nil
+        let insertReal: Int
+        if let targetId, let r = rows.firstIndex(where: { $0.id == targetId }) {
+            insertReal = r
+        } else {
+            insertReal = rows.endIndex
+        }
+        rows.insert(item, at: insertReal)
+        saveAll()
+        NotificationCenter.default.post(name: .aistatusbarRefresh, object: nil)
     }
 
     /// Search box at the top of the sidebar. Magnifying glass icon + clear
@@ -144,16 +170,26 @@ struct ProvidersPane: View {
         .padding(.bottom, 2)
     }
 
-    private func sidebarRow(_ row: ProviderConfig) -> some View {
+    private func sidebarRow(_ row: ProviderConfig, position: Int, total: Int) -> some View {
         let isSelected = row.id == selectedID
-        return HStack(spacing: 10) {
+        return HStack(spacing: 8) {
+            // Checkbox toggles this provider's enabled flag in providers.json.
+            // Independent of selection, so users can disable a provider they
+            // don't want to poll without losing its detail panel.
+            Toggle("", isOn: sidebarEnabledBinding(for: row.id))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .controlSize(.small)
+                .help(row.enabled ? "Tắt polling cho nhà cung cấp này"
+                                  : "Bật polling cho nhà cung cấp này")
+
             ProviderLogoView(id: row.id)
                 .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayName(for: row))
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(row.enabled ? .primary : .secondary)
                 Text(statusSubtitle(for: row))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
@@ -173,6 +209,86 @@ struct ProvidersPane: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { selectedID = row.id }
+        // Drag handle: the whole row is draggable. We tag the id as plain
+        // text so a sibling row's drop delegate can match it.
+        .onDrag {
+            NSItemProvider(object: row.id as NSString)
+        } preview: {
+            // Custom preview shows the chip with a slight scale so the user
+            // sees what's moving; default preview is a faded snapshot of
+            // the whole row which is hard to read in a tight sidebar.
+            HStack(spacing: 8) {
+                Toggle("", isOn: .constant(row.enabled))
+                    .toggleStyle(.checkbox).labelsHidden().controlSize(.small)
+                ProviderLogoView(id: row.id).frame(width: 22, height: 22)
+                Text(displayName(for: row))
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor)))
+        }
+        // Drop target: any sibling row can receive the dragged id and
+        // move it to this position. The delegate figures out whether
+        // the drop is "above" or "below" this row.
+        .onDrop(of: [.text], delegate: SidebarRowDropDelegate(
+            targetRow: row,
+            targetPosition: position,
+            draggedProviderId: $draggedRowId,
+            move: moveRow))
+    }
+
+    /// Binding that flips a single row's `enabled` flag and re-saves the
+    /// document. Resolves the index by id each set so toggling a checkbox
+    /// after a search-filter / re-sort still hits the right row.
+    private func sidebarEnabledBinding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { rows.first(where: { $0.id == id })?.enabled ?? false },
+            set: { newValue in
+                guard let idx = rows.firstIndex(where: { $0.id == id }) else { return }
+                rows[idx].enabled = newValue
+                saveAll()
+                // Toggling a provider on/off adds/removes it from the
+                // QuotaService provider list so the menu-bar popover
+                // immediately reflects the change.
+                if newValue {
+                    if let cfg = rows.first(where: { $0.id == id }) {
+                        quota.add(makeProvider(from: cfg))
+                        NotificationCenter.default.post(name: .aistatusbarRefresh, object: nil)
+                    }
+                } else {
+                    quota.remove(id: id)
+                }
+            })
+    }
+
+    /// Tracks which row is currently being dragged (used by the drop
+    /// delegate to know when to activate the row's drop indicator).
+    @State private var draggedRowId: String?
+
+    /// Construct a QuotaProvider instance from a ProviderConfig — mirrors
+    /// ServicesContainer.init's switch. Kept here so toggling a checkbox
+    /// on/off can add/remove providers without a full ServicesContainer
+    /// rebuild.
+    private func makeProvider(from cfg: ProviderConfig) -> QuotaProvider {
+        switch cfg.id {
+        case "minimax": return MiniMaxProvider(keychain: keychain)
+        case "codex":   return CodexProvider()
+        case "hapo":
+            let hapoConfig = HapoHubConfig(
+                id: cfg.id,
+                displayName: cfg.displayName ?? "AIHub",
+                baseURL: cfg.baseURL ?? HapoHubConfig.real.baseURL,
+                authHeaderTemplate: HapoHubConfig.real.authHeaderTemplate,
+                jsonPath: HapoHubConfig.real.jsonPath)
+            return HapoHubFactory.make(session: .shared, config: hapoConfig, keychain: keychain)
+        case "openrouter": return OpenRouterProvider(keychain: keychain)
+        case "deepseek":   return DeepSeekProvider(keychain: keychain)
+        case "zai":        return ZaiProvider(keychain: keychain)
+        case "claude":     return ClaudeProvider()
+        default:           return CodexProvider() // safe fallback; QuotaService skips unknown
+        }
     }
 
     @ViewBuilder
@@ -926,6 +1042,44 @@ struct ProvidersPane: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 2)
+    }
+
+    // MARK: - Drag & drop
+
+    /// Drop delegate that handles reordering the sidebar list when the user
+    /// drags one provider chip onto another. Resolves the dragged provider
+    /// id from the NSItemProvider, then calls `move` with the target row +
+    /// visual position (so the row below can either shift down or stay put
+    /// based on where the cursor lands relative to the row's midline).
+    private struct SidebarRowDropDelegate: DropDelegate {
+        let targetRow: ProviderConfig
+        let targetPosition: Int
+        @Binding var draggedProviderId: String?
+        let move: (String, Int) -> Void
+
+        func dropEntered(info: DropInfo) {
+            // No-op: visual feedback comes from the row background change.
+        }
+
+        func performDrop(info: DropInfo) -> Bool {
+            guard let provider = info.itemProviders(for: [.text]).first else { return false }
+            _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                guard let id = object as? String, id != targetRow.id else { return }
+                DispatchQueue.main.async {
+                    move(id, targetPosition)
+                    draggedProviderId = nil
+                }
+            }
+            return true
+        }
+
+        func validateDrop(info: DropInfo) -> Bool {
+            info.hasItemsConforming(to: [.text])
+        }
+
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            DropProposal(operation: .move)
+        }
     }
 
     // MARK: - Bindings & helpers
