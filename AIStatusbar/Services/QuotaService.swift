@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import UserNotifications
+import os
 
 /// Polls every enabled provider in parallel on a 120s ± 10s loop.
 /// Throwing providers are caught and recorded on the status (no crash).
@@ -35,6 +36,24 @@ final class QuotaService: ObservableObject {
     func remove(id: String) {
         providers.removeAll { $0.id == id }
         statuses.removeAll { $0.id == id }
+    }
+
+    /// Move a provider to a new position in the polling + tab order. The
+    /// move is purely positional — `statuses` is not refetched here, just
+    /// rebuilt from cached entries in the new order so the menu-bar
+    /// popover immediately reflects the change. Callers that want fresh
+    /// data should also post `.aistatusbarRefresh` (the ProvidersPane
+    /// sidebar does this on every reorder).
+    func reorder(id: String, toIndex: Int) {
+        guard let from = providers.firstIndex(where: { $0.id == id }) else { return }
+        let p = providers.remove(at: from)
+        let clamped = max(0, min(toIndex, providers.count))
+        providers.insert(p, at: clamped)
+        // Re-sort cached statuses to match the new providers order. Stale
+        // entries keep their old lastUpdated; that's intentional — the
+        // next refresh will overwrite them anyway.
+        var byId = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
+        statuses = providers.compactMap { byId.removeValue(forKey: $0.id) }
     }
 
     func setEnabled(_ enabled: Bool, for id: String) {
@@ -76,27 +95,49 @@ final class QuotaService: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         let snapshot = providers
-        let newStatuses: [ProviderStatus] = await withTaskGroup(of: ProviderStatus.self) { group in
+        let startedAt = Date()
+        let log = Logger(subsystem: "com.local.birdnion", category: "quota.refresh")
+        log.info("refresh start — providers=\(snapshot.count, privacy: .public)")
+
+        // Publish statuses progressively as each provider completes — so the
+        // menu-bar popover stops showing 'Đang tải…' as soon as the first
+        // provider returns instead of waiting for the slowest one (which
+        // can be Codex at 30s timeout on first cold call).
+        await withTaskGroup(of: (String, ProviderStatus, TimeInterval).self) { group in
             for p in snapshot {
                 group.addTask {
+                    let t0 = Date()
                     do {
-                        return try await p.fetch()
+                        let status = try await p.fetch()
+                        return (p.id, status, Date().timeIntervalSince(t0))
                     } catch {
-                        return ProviderStatus(id: p.id, displayName: p.displayName,
-                                              windows: [], lastUpdated: Date(),
-                                              error: "\(error)")
+                        return (p.id,
+                                ProviderStatus(id: p.id, displayName: p.displayName,
+                                               windows: [], lastUpdated: Date(),
+                                               error: "\(error)"),
+                                Date().timeIntervalSince(t0))
                     }
                 }
             }
-            var results: [ProviderStatus] = []
-            for await s in group { results.append(s) }
-            return results
+            var pending: [String: ProviderStatus] = [:]
+            var timings: [(String, TimeInterval)] = []
+            for await (id, status, elapsed) in group {
+                pending[id] = status
+                timings.append((id, elapsed))
+                // Re-publish on each completion so the popover updates
+                // incrementally (tab appears, then fills in).
+                statuses = providers.compactMap { pending[$0.id] }
+                if QuotaWarnConfig.enabled { evaluateWarnings(statuses) }
+            }
+            // Log slow providers (>2s) so the cause of slow loads is
+            // visible in Console.app without attaching a debugger.
+            let total = Date().timeIntervalSince(startedAt)
+            let sortedByDuration = timings.sorted { $0.1 > $1.1 }
+            for (id, elapsed) in sortedByDuration where elapsed > 2.0 {
+                log.warning("slow provider: \(id, privacy: .public) took \(String(format: "%.2f", elapsed), privacy: .public)s")
+            }
+            log.info("refresh done — total=\(String(format: "%.2f", total), privacy: .public)s slow=\(sortedByDuration.filter { $0.1 > 2.0 }.count, privacy: .public)")
         }
-        // Merge: preserve order of current providers; replace by id
-        var byId = Dictionary(uniqueKeysWithValues: newStatuses.map { ($0.id, $0) })
-        statuses = providers.compactMap { byId.removeValue(forKey: $0.id) }
-
-        if QuotaWarnConfig.enabled { evaluateWarnings(statuses) }
     }
 
     // MARK: - Quota warnings
