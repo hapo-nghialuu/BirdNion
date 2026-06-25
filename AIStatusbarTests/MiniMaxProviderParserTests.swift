@@ -315,6 +315,32 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertNotNil(s.windows[0].resetDate)
     }
 
+    func testParseAllWindows() {
+        // five_hour + seven_day + seven_day_opus + seven_day_sonnet + extra_usage
+        let json = #"""
+        {"five_hour":{"utilization":10},
+        "seven_day":{"utilization":40},
+        "seven_day_opus":{"utilization":55},
+        "seven_day_sonnet":{"utilization":20},
+        "extra_usage":{"is_enabled":true,"monthly_limit":50.0,"used_credits":12.34}}
+        """#.data(using: .utf8)!
+        let s = ClaudeProvider().parse(json, accountLabel: nil)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.count, 4)
+        XCTAssertEqual(s.windows.map(\.label), ["5 giờ", "Tuần", "Opus", "Sonnet"])
+        XCTAssertEqual(s.windows[2].remainingPct, 45)
+        XCTAssertEqual(s.creditsRemaining ?? 0, 37.66, accuracy: 0.001) // 50 - 12.34
+    }
+
+    func testExtraUsageDisabledNoCredits() {
+        let json = #"""
+        {"five_hour":{"utilization":10},
+        "extra_usage":{"is_enabled":false,"monthly_limit":50.0,"used_credits":12.34}}
+        """#.data(using: .utf8)!
+        let s = ClaudeProvider().parse(json, accountLabel: nil)
+        XCTAssertNil(s.creditsRemaining) // disabled → no spend surface
+    }
+
     func testParseEmptyThrowsErrorStatus() {
         let json = #"{}"#.data(using: .utf8)!
         let s = ClaudeProvider().parse(json, accountLabel: nil)
@@ -328,5 +354,35 @@ final class ClaudeProviderTests: XCTestCase {
 
     func testTokenFromKeychainJSONMissing() {
         XCTAssertNil(ClaudeProvider.tokenFromKeychainJSON(Data("{}".utf8)))
+    }
+
+    func testTokenFromKeychainJSONEmptyString() {
+        let json = #"{"claudeAiOauth":{"accessToken":"   "}}"#.data(using: .utf8)!
+        XCTAssertNil(ClaudeProvider.tokenFromKeychainJSON(json))
+    }
+
+    // MARK: - Plan mapping (ClaudePlan.label)
+
+    func testPlanLabelMaxFromRateLimitTier() {
+        XCTAssertEqual(ClaudePlan.label(forSubscriptionType: nil, rateLimitTier: "claude_max_20x"), "Max")
+    }
+
+    func testPlanLabelProFromSubscriptionType() {
+        XCTAssertEqual(ClaudePlan.label(forSubscriptionType: "Claude Pro", rateLimitTier: nil), "Pro")
+    }
+
+    func testPlanLabelTeamAndEnterprise() {
+        XCTAssertEqual(ClaudePlan.label(forSubscriptionType: "Claude Team", rateLimitTier: nil), "Team")
+        XCTAssertEqual(ClaudePlan.label(forSubscriptionType: "Claude Enterprise", rateLimitTier: nil), "Enterprise")
+    }
+
+    func testPlanLabelFallsBackToTier() {
+        // tier wins when subscriptionType doesn't match.
+        XCTAssertEqual(ClaudePlan.label(forSubscriptionType: "anything", rateLimitTier: "max"), "Max")
+    }
+
+    func testPlanLabelUnknownReturnsNil() {
+        XCTAssertNil(ClaudePlan.label(forSubscriptionType: nil, rateLimitTier: nil))
+        XCTAssertNil(ClaudePlan.label(forSubscriptionType: "free", rateLimitTier: "free_tier"))
     }
 }
