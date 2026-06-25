@@ -373,19 +373,19 @@ struct ActionsList: View {
                       isLoading: quota.isRefreshing) {
                 NotificationCenter.default.post(name: .aistatusbarRefresh, object: nil)
             }
-            Divider().padding(.vertical, 1)
+            Divider().padding(.vertical, 2)
             ActionRow(icon: "gearshape", label: "Settings…",
                       shortcut: "⌘,",
                       isLoading: false) {
                 NotificationCenter.default.post(name: .openSettings, object: nil)
             }
-            Divider().padding(.vertical, 1)
+            Divider().padding(.vertical, 2)
             ActionRow(icon: "info.circle", label: "About BirdNion",
                       shortcut: nil,
                       isLoading: false) {
                 AboutPresenter.show()
             }
-            Divider().padding(.vertical, 1)
+            Divider().padding(.vertical, 2)
             ActionRow(icon: "power", label: "Quit BirdNion",
                       shortcut: "⌘Q",
                       isLoading: false) {
@@ -406,19 +406,19 @@ struct ActionRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 ZStack {
                     if isLoading {
                         ProgressView().controlSize(.small).tint(VocabbyTheme.blue)
                     } else {
                         Image(systemName: icon)
-                            .font(.system(size: 11))
+                            .font(.system(size: 13))
                             .foregroundStyle(VocabbyTheme.secondary)
                     }
                 }
-                .frame(width: 14, height: 14)
+                .frame(width: 16, height: 16)
                 Text(label)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(VocabbyTheme.primary)
                 Spacer()
                 if let s = shortcut {
@@ -428,7 +428,7 @@ struct ActionRow: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 3)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
