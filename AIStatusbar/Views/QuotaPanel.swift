@@ -82,11 +82,14 @@ struct QuotaOverview: View {
 /// Tab chip over enabled providers. Layout (left-aligned rows):
 ///   [logo] MiniMax
 ///   [logo] 96% / 95%
-/// Logo = SF Symbol per provider id (sparkles for MiniMax, bolt for
-/// AIHub, circle fallback). Rounded rectangle instead of capsule so
-/// the chip doesn't read as a pill — cornerRadius 8 keeps it modern
-/// without going fully square.
+/// Logo-only chip per provider. Fixed 36×36 so the tab row lines up
+/// regardless of which provider is selected. Active chip gets the brand
+/// blue background; inactive chips sit on a light badge background.
+/// Status info (display name + quota %) used to render in the chip is
+/// now in the provider header card below, so the chips stay compact.
 struct ProviderTabs: View {
+    static let chipSize: CGFloat = 36
+
     let providers: [ProviderStatus]
     @Binding var selectedId: String
 
@@ -105,40 +108,19 @@ struct ProviderTabs: View {
         Button {
             selectedId = p.id
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    providerLogoView(for: p.id)
-                        .frame(width: 22, height: 22)
-                    Text(p.displayName)
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                if let s = chipSuffix(for: p) {
-                    Text(s)
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
-                        .opacity(0.85)
-                        .padding(.leading, 22) // align under the name, past the 22pt logo
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .foregroundStyle(active ? .white : VocabbyTheme.primary)
-            .background(active ? VocabbyTheme.blue : VocabbyTheme.badge)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(alignment: .topTrailing) {
-                if active {
-                    Image("OriginalImage")
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 16, height: 16)
-                        .offset(x: 5, y: -5)
-                }
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(active ? Color.clear : VocabbyTheme.track, lineWidth: 1)
-            )
+            providerLogoView(for: p.id)
+                .frame(width: 22, height: 22)
+                .frame(width: Self.chipSize, height: Self.chipSize)
+                .background(active ? VocabbyTheme.blue : VocabbyTheme.badge)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(active ? Color.clear : VocabbyTheme.track, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
+        .help(p.displayName)
+        .accessibilityLabel(p.displayName)
     }
 
     /// Real brand logo per provider id. Falls back to a SF Symbol circle
@@ -167,22 +149,6 @@ struct ProviderTabs: View {
         default:
             Image(systemName: "circle")
         }
-    }
-
-    /// Single-line quota summary. "lỗi" for error, "X% / Y%" for
-    /// multi-window, just "X%" for single window, nil while loading.
-    /// Labels (5h / tuần) are intentionally omitted — the chip is too
-    /// compact to carry them and the colour-coded bar below already
-    /// distinguishes cadence.
-    private func chipSuffix(for p: ProviderStatus) -> String? {
-        if p.error != nil { return "lỗi" }
-        if p.windows.isEmpty { return nil }
-        if p.windows.count == 1 {
-            return "\(p.windows[0].remainingPct)%"
-        }
-        return p.windows
-            .map { "\($0.remainingPct)%" }
-            .joined(separator: " / ")
     }
 }
 
