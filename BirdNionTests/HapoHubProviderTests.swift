@@ -50,6 +50,7 @@ final class HapoHubProviderTests: XCTestCase {
         let session = URLSession(configuration: cfg)
         let config = HapoHubConfig(id: account, displayName: "Hapo",
                                    baseURL: "https://hapo.example/api",
+                                   meURL: "https://hapo.example/me",
                                    authHeaderTemplate: "Bearer {token}",
                                    jsonPath: "data.quota.remaining")
         StubURLProtocol.handler = { req in
@@ -80,6 +81,7 @@ final class HapoHubProviderTests: XCTestCase {
         let session = URLSession(configuration: cfg)
         let config = HapoHubConfig(id: account, displayName: "Hapo",
                                    baseURL: "https://hapo.example/api",
+                                   meURL: "https://hapo.example/me",
                                    authHeaderTemplate: "Bearer {token}",
                                    jsonPath: "data.quota.remaining")
         StubURLProtocol.handler = { req in

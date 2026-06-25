@@ -36,7 +36,12 @@ final class HapoHubProvider: QuotaProvider {
         return f
     }()
 
-    private static let meURL = URL(string: "https://<HAPO_ME_URL>")!
+    /// Identity endpoint — resolved from `config.meURL` so the source
+    /// doesn't hardcode any hostnames. Lazily built so a missing/invalid
+    /// `HAPO_ME_URL` env doesn't crash the whole process at boot.
+    private var meURL: URL? {
+        URL(string: config.meURL)
+    }
 
     /// User-set accountLabel override from the BirdNion config.
     private func override() -> String? {
@@ -52,6 +57,13 @@ final class HapoHubProvider: QuotaProvider {
     }
 
     func fetch() async throws -> ProviderStatus {
+        // 0. Endpoint sanity. The base URL is resolved at startup from
+        // `HAPO_BASE_URL` env. If the host didn't set it, we fail loud
+        // instead of silently contacting the wrong host.
+        guard !config.baseURL.isEmpty else {
+            return errorStatus("HAPO_BASE_URL chưa được set")
+        }
+
         // 1. Token read + validation.
         //    Single source of truth: `~/.birdnion/settings.json` (via
         //    `BirdNionConfigStore`). No more Keychain fallback — the
@@ -156,7 +168,8 @@ final class HapoHubProvider: QuotaProvider {
     // MARK: - Identity call (best-effort)
 
     private func fetchEmail(token: String) async -> String? {
-        var req = URLRequest(url: Self.meURL)
+        guard let url = meURL else { return nil }
+        var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue(config.authHeaderTemplate.replacingOccurrences(of: "{token}", with: token),

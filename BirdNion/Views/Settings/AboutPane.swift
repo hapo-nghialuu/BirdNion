@@ -62,7 +62,8 @@ struct AboutPane: View {
                              url: projectURL)
                 AboutLinkRow(icon: "envelope",
                              title: "Email",
-                             url: "mailto:support@localhost")
+                             url: ProcessInfo.processInfo.environment["BIRDNION_SUPPORT_EMAIL"]
+                                ?? "mailto:support@localhost")
             }
             .frame(maxWidth: 220)
 

@@ -59,6 +59,7 @@ final class ServicesContainer: ObservableObject {
                     id: cfg.id,
                     displayName: cfg.displayName ?? "AIHub",
                     baseURL: cfg.baseURL ?? HapoHubConfig.real.baseURL,
+                    meURL: HapoHubConfig.real.meURL,
                     authHeaderTemplate: HapoHubConfig.real.authHeaderTemplate,
                     jsonPath: HapoHubConfig.real.jsonPath)
                 result.append(HapoHubFactory.make(

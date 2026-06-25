@@ -82,7 +82,7 @@ enum BirdNionConfigStore {
             Provider(id: "minimax", enabled: false),
             Provider(id: "codex", enabled: false),
             Provider(id: "hapo", enabled: false,
-                     baseURL: "https://<HAPO_BASE_URL>",
+                     baseURL: "",
                      displayName: "AI Hub"),
             Provider(id: "openrouter", enabled: false),
             Provider(id: "deepseek", enabled: false),
