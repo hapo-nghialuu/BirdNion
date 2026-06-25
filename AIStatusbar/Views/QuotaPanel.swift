@@ -224,19 +224,29 @@ struct ProviderHeaderCard: View {
                 .frame(width: 48, height: 48)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
-                Text(status.displayName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
+                HStack(spacing: 6) {
+                    Text(status.displayName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.primary)
+                    if !isPlaceholder && quota.isRefreshing {
+                        // Provider has last-known data; a refresh is in
+                        // flight. Show a small inline spinner so the user
+                        // knows the row is being updated, but keep the
+                        // existing subtitle + quota windows visible.
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(VocabbyTheme.blue)
+                            .frame(width: 10, height: 10)
+                        Text("đang cập nhật")
+                            .font(.system(size: 10))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                }
                 HStack(spacing: 4) {
                     if isPlaceholder {
-                        // Only the provider whose data hasn't arrived yet
-                        // shows the spinner — once its windows or error land
-                        // in `statuses`, switch to the real subtitle even if
-                        // other providers in the popover are still loading.
-                        // The spinner is pinned to 12×12 because SwiftUI's
-                        // macOS ProgressView otherwise stretches to fill its
-                        // HStack slot (rendering a 50pt white disc behind the
-                        // header card — observed in the wild).
+                        // First-time load for this provider — no previous
+                        // data to show. Use a placeholder spinner so the
+                        // popover makes clear which tab is still loading.
                         ProgressView()
                             .controlSize(.small)
                             .tint(VocabbyTheme.blue)
@@ -257,6 +267,7 @@ struct ProviderHeaderCard: View {
             }
             Spacer(minLength: 6)
             MenuBarVisibilityToggle(providerId: status.id, hasError: hasError)
+                .id("menuBarVis.\(status.id)")  // force fresh @State per provider
         }
         // Padding is tighter than the standard vocabbyCard (12pt) so the
         // taller 48pt logo doesn't grow the card height.
