@@ -173,7 +173,13 @@ final class ClaudeProvider: QuotaProvider {
     }
 
     private func failure(_ message: String) -> ProviderStatus {
-        ProviderStatus(id: id, displayName: displayName, windows: [], lastUpdated: Date(), error: message)
+        ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: [],
+            lastUpdated: Date(),
+            error: message,
+            version: Self.detectedClaudeVersion())
     }
 
     // MARK: - Keychain
