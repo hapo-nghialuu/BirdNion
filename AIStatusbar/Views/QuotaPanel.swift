@@ -227,11 +227,14 @@ struct ProviderHeaderCard: View {
                         // shows the spinner — once its windows or error land
                         // in `statuses`, switch to the real subtitle even if
                         // other providers in the popover are still loading.
-                        // (Old code also gated on quota.isRefreshing, which
-                        // stays true until the slowest provider finishes —
-                        // so a fast provider like Codex showed "Đang tải…"
-                        // for as long as the slowest Claude cost scrape.)
-                        ProgressView().controlSize(.mini).tint(VocabbyTheme.blue)
+                        // The spinner is pinned to 12×12 because SwiftUI's
+                        // macOS ProgressView otherwise stretches to fill its
+                        // HStack slot (rendering a 50pt white disc behind the
+                        // header card — observed in the wild).
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(VocabbyTheme.blue)
+                            .frame(width: 12, height: 12)
                         Text("Đang tải…")
                             .font(.system(size: 11).monospacedDigit())
                             .foregroundStyle(VocabbyTheme.secondary)
