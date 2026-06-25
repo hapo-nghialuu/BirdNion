@@ -50,14 +50,50 @@ final class ClaudeProvider: QuotaProvider {
     }
 
     func fetch() async throws -> ProviderStatus {
-        // Service status + cost run concurrently with OAuth so the Cost row
-        // appears even when OAuth fails (matches CodexBar: it shows Cost
-        // "last fetch failed" but still surfaces today's spend via cookies).
-        async let statusAsync = statusProvider()
-        async let costAsync = costProvider()
-        let status = await statusAsync
-        let cost = await costAsync
+        // Resolve which data source the user picked in Settings. CodexBar's
+        // `.auto` falls back across OAuth → Web → CLI when the preferred
+        // source fails; the other modes pin to a single strategy. We honor
+        // `.oauth` (current behavior) by running the in-house path; anything
+        // else routes through CodexBarCore's `ClaudeUsageFetcher` which has
+        // battle-tested OAuth/Web/CLI/API execution + fallback.
+        let source = Self.readUsageDataSource()
 
+        // Service status + (legacy) cost run concurrently regardless of the
+        // chosen data source — they're best-effort UI overlays and must not
+        // block the main quota fetch.
+        async let statusAsync = statusProvider()
+        async let legacyCostAsync = costProvider()
+        let status = await statusAsync
+        let legacyCost = await legacyCostAsync
+
+        switch source {
+        case .oauth:
+            return await fetchOAuth(status: status, cost: legacyCost)
+        default:
+            // For all other modes (auto / web / cli / api) defer to the
+            // CodexBarCore fetcher — it already handles delegation, fallback,
+            // cookie auto-detect, manual cookie header, and CLI rate-limit
+            // gating. We merge the OAuth accountLabel fallback (Keychain)
+            // into the resulting snapshot so the user still sees their
+            // override label even when OAuth didn't run.
+            do {
+                let snapshot = try await fetchViaUsageFetcher(source: source)
+                return Self.materialize(from: snapshot, override: override(), sourceLabel: source.sourceLabel)
+            } catch {
+                // Surface the error + still keep cost + status so the panel
+                // stays informative. Matches CodexBar: a 401 from OAuth with
+                // cookies present still shows the cost row.
+                return failure("Claude: \(error.localizedDescription)",
+                               status: status, cost: legacyCost,
+                               extras: Self.webExtrasFromLastAttempt())
+            }
+        }
+    }
+
+    /// Original OAuth-only fetch path. Preserved unchanged for the default
+    /// `.oauth` mode and for unit tests that drive `parse()` directly.
+    private func fetchOAuth(status: OpenAIServiceStatus?,
+                            cost: ProviderCostSnapshot?) async -> ProviderStatus {
         guard let token = tokenProvider(), !token.isEmpty else {
             return failure("Chưa đăng nhập Claude — đăng nhập bằng Claude Code",
                            status: status, cost: cost)
@@ -101,13 +137,187 @@ final class ClaudeProvider: QuotaProvider {
                 accountID: base.accountID,
                 planName: base.planName,
                 resetCreditsAvailable: base.resetCreditsAvailable,
-                cost: cost)
+                cost: cost,
+                webExtras: base.webExtras)
         case 401, 403:
             return failure("Token Claude hết hạn — đăng nhập lại bằng Claude Code",
                            status: status, cost: cost)
         default:
             return failure("HTTP \(http.statusCode)", status: status, cost: cost)
         }
+    }
+
+    /// Routes through CodexBarCore's `ClaudeUsageFetcher` for non-OAuth
+    /// sources. Reads the cookie source preference + manual cookie header
+    /// from UserDefaults so the Settings pane can drive this transparently.
+    private func fetchViaUsageFetcher(source: ClaudeUsageDataSource) async throws -> ClaudeUsageSnapshot {
+        let cookieSource = Self.readCookieSource()
+        let manualCookie = Self.readManualCookieHeader()
+        let fetcher = ClaudeUsageFetcher(
+            browserDetection: BrowserDetection(),
+            dataSource: source,
+            manualCookieHeader: cookieSource == .manual ? manualCookie : nil,
+            keepCLISessionsAlive: false)
+        return try await fetcher.loadLatestUsage()
+    }
+
+    /// Reads the user-selected data source from UserDefaults. Defaults to
+    /// `.oauth` so existing users (and tests) keep the original behavior.
+    /// `SettingsStore.claudeUsageDataSource` writes the same key.
+    private static func readUsageDataSource() -> ClaudeUsageDataSource {
+        let raw = UserDefaults.standard.string(forKey: "claudeUsageDataSource") ?? ClaudeUsageDataSource.oauth.rawValue
+        return ClaudeUsageDataSource(rawValue: raw) ?? .oauth
+    }
+
+    /// Reads the user-selected cookie source. Defaults to `.auto` so the
+    /// CodexBarCore fetcher does its standard Safari/Chrome auto-detect.
+    /// `SettingsStore.claudeCookieSource` writes the same key.
+    private static func readCookieSource() -> ProviderCookieSource {
+        let raw = UserDefaults.standard.string(forKey: "claudeCookieSource") ?? ProviderCookieSource.auto.rawValue
+        return ProviderCookieSource(rawValue: raw) ?? .auto
+    }
+
+    /// Reads the manual Cookie: header from UserDefaults. Empty when absent.
+    /// Stored plaintext — only the user pastes it, never logged.
+    private static func readManualCookieHeader() -> String? {
+        let raw = UserDefaults.standard.string(forKey: "claudeManualCookieHeader")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (raw?.isEmpty ?? true) ? nil : raw
+    }
+
+    /// Remembers the last successful `ClaudeUsageSnapshot` so the failure
+    /// path can still surface web extras (account email / cost / quota
+    /// fallback) even when the current fetch throws. Captured by the
+    /// `fetchViaUsageFetcher` wrapper; nil at startup.
+    private static var lastSnapshot: ClaudeUsageSnapshot?
+
+    /// Last label of the source that produced `lastSnapshot` — surfaced
+    /// to the UI as "Source: web" / "cli" etc. so the user can confirm which
+    /// path the planner picked. Set in `materialize`, read by `webExtrasFromLastAttempt`.
+    private static var lastUsedSourceLabel: String?
+
+    /// Exposed for the failure-path merge in `fetch()`.
+    static func webExtrasFromLastAttempt() -> ClaudeWebExtras? {
+        lastSnapshot.map { snapshot in
+            ClaudeWebExtras(
+                accountEmail: snapshot.accountEmail,
+                accountOrganization: snapshot.accountOrganization,
+                loginMethod: snapshot.loginMethod,
+                sessionPercentUsed: snapshot.primary.usedPercent,
+                weeklyPercentUsed: snapshot.secondary?.usedPercent,
+                opusPercentUsed: snapshot.opus?.usedPercent,
+                extraRateWindows: snapshot.extraRateWindows.map { named in
+                    ClaudeExtraRateWindow(
+                        id: named.id,
+                        title: named.title,
+                        usedPercent: Int(named.window.usedPercent.rounded()),
+                        resetsAt: named.window.resetsAt,
+                        resetDescription: named.window.resetDescription,
+                        windowMinutes: named.window.windowMinutes)
+                },
+                sourceLabel: Self.lastUsedSourceLabel)
+        }
+    }
+
+    /// Convert a CodexBarCore `ClaudeUsageSnapshot` into our `ProviderStatus`.
+    /// Stamps the current time, attaches the detected CLI version, surfaces
+    /// the user override label, and packs web-only data into `webExtras`.
+    private static func materialize(from snapshot: ClaudeUsageSnapshot,
+                                    override: String?,
+                                    sourceLabel: String) -> ProviderStatus {
+        lastSnapshot = snapshot
+        lastUsedSourceLabel = sourceLabel
+
+        // Build quota windows from snapshot rate windows (primary + secondary + opus).
+        var windows: [QuotaWindow] = []
+        if snapshot.primary.usedPercent > 0 || snapshot.primary.windowMinutes != nil {
+            windows.append(Self.window(label: "5 giờ",
+                                       utilization: snapshot.primary.usedPercent,
+                                       resetsAt: snapshot.primary.resetsAt?.description,
+                                       seconds: 5 * 3600))
+        }
+        if let sec = snapshot.secondary {
+            windows.append(Self.window(label: "Tuần",
+                                       utilization: sec.usedPercent,
+                                       resetsAt: sec.resetsAt?.description,
+                                       seconds: 7 * 24 * 3600))
+        }
+        if let opus = snapshot.opus {
+            windows.append(Self.window(label: "Opus",
+                                       utilization: opus.usedPercent,
+                                       resetsAt: opus.resetsAt?.description,
+                                       seconds: 7 * 24 * 3600))
+        }
+
+        // Plan label from login method (CodexBar maps Max/Pro/Team from
+        // subscriptionType/rateLimitTier — we approximate via loginMethod
+        // hint since we no longer parse the raw OAuth blob in this path).
+        let planName = Self.planName(fromLoginMethod: snapshot.loginMethod)
+
+        // AccountLabel preference: user override > OAuth Keychain email > web email.
+        let keychainEmail = (try? tokenFromKeychainJSON(readKeychainData() ?? Data()))
+            .flatMap { _ in Self.readKeychainData().flatMap { tokenFromKeychainJSON($0) } }
+            .flatMap { _ in KeychainRoot.decode(keychainData: Self.readKeychainData())?.email }
+        let label = override ?? keychainEmail ?? snapshot.accountEmail
+
+        // Build extras bag.
+        let extras = ClaudeWebExtras(
+            accountEmail: snapshot.accountEmail,
+            accountOrganization: snapshot.accountOrganization,
+            loginMethod: snapshot.loginMethod,
+            sessionPercentUsed: snapshot.primary.usedPercent,
+            weeklyPercentUsed: snapshot.secondary?.usedPercent,
+            opusPercentUsed: snapshot.opus?.usedPercent,
+            extraRateWindows: snapshot.extraRateWindows.map { named in
+                ClaudeExtraRateWindow(
+                    id: named.id,
+                    title: named.title,
+                    usedPercent: Int(named.window.usedPercent.rounded()),
+                    resetsAt: named.window.resetsAt,
+                    resetDescription: named.window.resetDescription,
+                    windowMinutes: named.window.windowMinutes)
+            },
+            sourceLabel: snapshot.providerCost?.period)
+
+        return ProviderStatus(
+            id: "claude",
+            displayName: "Claude",
+            windows: windows,
+            lastUpdated: Date(),
+            error: nil,
+            accountLabel: label,
+            creditsRemaining: Self.spendRemainingFromCost(snapshot.providerCost),
+            version: Self.detectedClaudeVersion(),
+            planName: planName,
+            cost: snapshot.providerCost,
+            webExtras: extras)
+    }
+
+    /// If providerCost carries a credit-style (used, limit, currencyCode)
+    /// snapshot, derive the remaining balance for the existing UI cell.
+    private static func spendRemainingFromCost(_ cost: ProviderCostSnapshot?) -> Double? {
+        guard let cost, cost.limit > 0 else { return nil }
+        return max(0, cost.limit - cost.used)
+    }
+
+    /// Approximate the plan label from the loginMethod CodexBar returns.
+    /// The OAuth path uses `ClaudePlan.label` for exact mapping; for
+    /// web/CLI/API we only get a coarse hint like "Claude account" / "SSO",
+    /// so we keep the existing label if any and otherwise leave it nil.
+    private static func planName(fromLoginMethod method: String?) -> String? {
+        guard let method, !method.isEmpty else { return nil }
+        // Try Keychain first — exact mapping.
+        let creds = KeychainRoot.decode(keychainData: Self.readKeychainData())
+        if let exact = ClaudePlan.label(forSubscriptionType: creds?.subscriptionType,
+                                        rateLimitTier: creds?.rateLimitTier) {
+            return exact
+        }
+        // Fallback to a sanitized version of the loginMethod hint.
+        if method.lowercased().contains("max") { return "Max" }
+        if method.lowercased().contains("ultra") { return "Ultra" }
+        if method.lowercased().contains("pro") { return "Pro" }
+        if method.lowercased().contains("team") { return "Team" }
+        return nil
     }
 
     func parse(_ data: Data, accountLabel: String?) -> ProviderStatus {
@@ -195,6 +405,17 @@ final class ClaudeProvider: QuotaProvider {
     private func failure(_ message: String,
                          status: OpenAIServiceStatus?,
                          cost: ProviderCostSnapshot?) -> ProviderStatus {
+        failure(message, status: status, cost: cost, extras: nil)
+    }
+
+    /// Failure path that also preserves the last successful web extras
+    /// (account email / quota fallback percentages) so the panel stays
+    /// informative across transient errors. Used when CodexBarCore throws
+    /// but we have a cached snapshot from the previous attempt.
+    private func failure(_ message: String,
+                         status: OpenAIServiceStatus?,
+                         cost: ProviderCostSnapshot?,
+                         extras: ClaudeWebExtras?) -> ProviderStatus {
         ProviderStatus(
             id: id,
             displayName: displayName,
@@ -204,7 +425,8 @@ final class ClaudeProvider: QuotaProvider {
             version: Self.detectedClaudeVersion(),
             serviceStatus: status?.description,
             serviceStatusLevel: status?.indicator,
-            cost: cost)
+            cost: cost,
+            webExtras: extras)
     }
 
     // MARK: - Keychain
