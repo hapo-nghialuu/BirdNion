@@ -17,6 +17,9 @@ struct ProvidersPane: View {
     @State private var rows: [ProviderConfig] = []
     @State private var selectedID: String?
     @State private var showingClaudeConfig = false
+    /// Search filter for the provider sidebar. Matches display name + id
+    /// case-insensitively; empty string shows all rows.
+    @State private var searchText: String = ""
     /// Codex token cost (today / 30d), scanned lazily when Codex is selected.
     @State private var codexCost: CodexCostSummary?
     /// Claude token cost (today / 30d), scanned lazily when Claude is
@@ -61,11 +64,32 @@ struct ProvidersPane: View {
 
     // MARK: - Sidebar
 
+    /// View order for the sidebar: enabled providers first (preserving the
+    /// user's custom order within each group), then disabled. Search text
+    /// narrows both groups by display name + id (case-insensitive). Matches
+    /// CodexBar's "enabled first" ordering so the user can spot which
+    /// providers are actually polling.
+    private var visibleRows: [ProviderConfig] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let filtered = rows.filter { row in
+            guard !query.isEmpty else { return true }
+            return displayName(for: row).lowercased().contains(query)
+                || row.id.lowercased().contains(query)
+        }
+        // Stable partition: enabled first, then disabled — each preserving
+        // the relative order in `rows` (so user drag-reorder survives sort).
+        let active = filtered.filter { $0.enabled }
+        let inactive = filtered.filter { !$0.enabled }
+        return active + inactive
+    }
+
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            ForEach(rows, id: \.id) { row in
+        VStack(spacing: 6) {
+            searchField
+            ForEach(visibleRows, id: \.id) { row in
                 sidebarRow(row)
-                if row.id != rows.last?.id {
+                if row.id != visibleRows.last?.id {
                     Divider().padding(.leading, 44)
                 }
             }
@@ -81,6 +105,43 @@ struct ProvidersPane: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
+    }
+
+    /// Search box at the top of the sidebar. Magnifying glass icon + clear
+    /// button (×) appear only when there's text. Mirrors CodexBar's
+    /// `ProviderSidebarSearchField` layout but uses plain SwiftUI since
+    /// BirdNion doesn't have the same localization plumbing.
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Tìm nhà cung cấp", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11))
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Xóa")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+        .padding(.horizontal, 6)
+        .padding(.bottom, 2)
     }
 
     private func sidebarRow(_ row: ProviderConfig) -> some View {
