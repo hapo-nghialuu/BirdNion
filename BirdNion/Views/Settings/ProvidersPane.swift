@@ -199,8 +199,12 @@ struct ProvidersPane: View {
                     .foregroundStyle(row.enabled == true ? .primary : .secondary)
                 Text(statusSubtitle(for: row))
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(status(for: row.id)?.error != nil
+                                     ? Color(nsColor: .systemRed)
+                                     : .secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(statusSubtitleDetail(for: row) ?? "")
             }
 
             Spacer(minLength: 6)
@@ -330,12 +334,21 @@ struct ProvidersPane: View {
             }
             Spacer(minLength: 12)
             Button {
-                Task { await quota.refresh() }
+                // Manual reload: re-read `settings.json` to pick up any
+                // changes another pane (or external editor) made, then
+                // rebuild the provider list and trigger a refresh.
+                // Previously this only called `quota.refresh()` which
+                // didn't re-read the file — so saving a token in TokenField
+                // and refreshing from the detail header could show stale
+                // data because the in-memory provider list still pointed at
+                // the pre-save providers.json state.
+                rows = BirdNionConfigStore.allProviders()
+                NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
             .controlSize(.small)
-            .help("Làm mới")
+            .help("Đọc lại settings.json và làm mới quota")
 
             Toggle("", isOn: enabledBinding(idx))
                 .labelsHidden()
@@ -1175,9 +1188,31 @@ struct ProvidersPane: View {
     private func statusSubtitle(for row: BirdNionConfigStore.Provider) -> String {
         if row.enabled != true { return "Đã tắt" }
         guard let s = status(for: row.id) else { return "Chưa tải" }
-        if s.error != nil { return "Lỗi" }
+        if let err = s.error, !err.isEmpty {
+            // Truncate long error messages so the sidebar row stays a single
+            // line. The full message is still reachable via the tooltip
+            // (`statusSubtitleDetail`) and the detail pane.
+            return "Lỗi: \(truncated(err, max: 32))"
+        }
         if let first = s.windows.first { return "Còn \(first.remainingPct)%" }
         return "Đang tải…"
+    }
+
+    /// Full error message for the sidebar row's `.help()` tooltip. Hover
+    /// the row to see the entire message — useful when the truncated pill
+    /// cuts off at "Lỗi: cookie is miss…".
+    private func statusSubtitleDetail(for row: BirdNionConfigStore.Provider) -> String? {
+        guard row.enabled == true,
+              let err = status(for: row.id)?.error,
+              !err.isEmpty else { return nil }
+        return err
+    }
+
+    /// Truncate `s` to `max` characters with an ellipsis suffix when it
+    /// exceeds the limit. Pure string helper.
+    private func truncated(_ s: String, max: Int) -> String {
+        if s.count <= max { return s }
+        return String(s.prefix(max - 1)) + "…"
     }
 
     /// Header subtitle: prefix the CLI version when known (Codex), e.g.
