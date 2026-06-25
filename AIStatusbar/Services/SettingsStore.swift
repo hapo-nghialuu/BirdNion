@@ -68,6 +68,42 @@ final class SettingsStore: ObservableObject {
     /// reads the same UserDefaults key directly.
     @AppStorage(CodexMenuBarMetric.defaultsKey) var codexMenuBarMetric: String = CodexMenuBarMetric.automatic.rawValue
 
+    // MARK: - Claude parity settings (CodexBar parity)
+    //
+    // The keys below are read directly by `ClaudeProvider` (so the fetcher
+    // picks up changes without going through the @Published path) and also
+    // exposed via these AppStorage properties for SwiftUI binding.
+    // Defaults match CodexBar's out-of-the-box behavior so existing users
+    // see no change on first launch after upgrading.
+
+    /// Which data source `ClaudeProvider` should use. CodexBar's `.auto`
+    /// walks OAuth → Web → CLI and stops at the first that returns data;
+    /// the other modes pin to a single strategy. Default `.oauth` matches
+    /// BirdNion's pre-parity behavior (no change for existing users).
+    /// `ClaudeProvider.readUsageDataSource()` reads the same UserDefaults key.
+    @AppStorage("claudeUsageDataSource") var claudeUsageDataSource: String = "oauth"
+    /// Whether `ClaudeUsageFetcher` should auto-detect browser cookies
+    /// (`.auto`), use a user-pasted Cookie: header (`.manual`), or skip
+    /// cookies entirely (`.off`). Default `.auto` matches CodexBar.
+    /// `ClaudeProvider.readCookieSource()` reads the same UserDefaults key.
+    @AppStorage("claudeCookieSource") var claudeCookieSource: String = "auto"
+    /// User-pasted Cookie: header used when `claudeCookieSource == .manual`.
+    /// Stored plaintext in UserDefaults — only the user sees it (paste from
+    /// DevTools), never logged. Cleared by the user via the Settings UI.
+    @AppStorage("claudeManualCookieHeader") var claudeManualCookieHeader: String = ""
+    /// How aggressively the OAuth Keychain reader may prompt for access.
+    /// `.never` suppresses the prompt entirely (CLI/Web only);
+    /// `.onlyOnUserAction` (default) prompts when the user clicks Refresh;
+    /// `.always` prompts on every background fetch. Matches CodexBar's
+    /// `ClaudeOAuthKeychainPromptMode`. `ClaudeProvider` reads via
+    /// `ClaudeOAuthKeychainPromptPreference.current()` (CodexBarCore).
+    @AppStorage("claudeOAuthKeychainPromptMode") var claudeOAuthKeychainPromptMode: String = "onlyOnUserAction"
+    /// Anthropic Admin API key (Admin mode only). Stored in macOS Keychain
+    /// via KeychainService, not UserDefaults. The plain string below is a
+    /// UI bind only — `KeychainService.saveProviderKey` writes it through
+    /// Security framework. Empty by default.
+    @AppStorage("claudeAdminAPIKeyConfigured") var claudeAdminAPIKeyConfigured: Bool = false
+
     var language: Language {
         get { Language(rawValue: appLanguage) ?? .system }
         set { appLanguage = newValue.rawValue }
