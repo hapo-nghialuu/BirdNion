@@ -20,7 +20,8 @@ enum MenuBarIconRenderer {
         case provider(id: String, name: String, percents: [Int])
     }
 
-    /// Build the rotation: the bird first, then one frame per provider.
+    /// Build the rotation: the bird first, then one frame per provider
+    /// that the user hasn't hidden from the menu bar (`MenuBarVisibility`).
     /// Providers with no quota windows (OAuth still loading, or in an
     /// error state) are still included so the brand logo shows up — a
     /// loading Claude chip on the menu bar is more useful than silently
@@ -29,6 +30,9 @@ enum MenuBarIconRenderer {
     static func frames(from statuses: [ProviderStatus]) -> [Frame] {
         var frames: [Frame] = [.bird]
         for status in statuses {
+            // Skip providers the user has hidden from the menu bar. Default
+            // is "shown" so this only excludes explicit hides.
+            guard MenuBarVisibility.isShown(providerId: status.id) else { continue }
             // Codex lets the user pick which window drives the bar; other
             // providers always show all their windows.
             let windows = status.id == "codex"

@@ -54,6 +54,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(openSettings(_:)),
             name: .openSettings, object: nil
         )
+        // Listen for menu-bar visibility toggles so the rotation rebuilds
+        // immediately when the user flips a provider off the bar.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuBarVisibilityDidChange(_:)),
+            name: .menuBarVisibilityChanged, object: nil
+        )
+        // Listen for provider-list changes (reorder / toggle from the
+        // Settings sidebar) so the popover + menu-bar rotation pick up
+        // the new order without an app restart.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(providersDidChange(_:)),
+            name: .aistatusbarProvidersChanged, object: nil
+        )
 
         // Status bar item — variable length so the title text fits; the
         // icon is the bundled bird and the title is the rotating percentage.
@@ -324,6 +337,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = MenuBarIconRenderer.providerLogo(for: id)
             let numbers = percents.map(String.init).joined(separator: "  ")
             button.title = "\(numbers) "
+        }
+    }
+
+    @objc func menuBarVisibilityDidChange(_ notification: Notification) {
+        // Rebuild the rotation with the new visibility state and reset the
+        // frame pointer so the user sees the change immediately.
+        updateFrames(from: services.quotaService.displayStatuses)
+        frameIndex = 0
+        applyCurrentFrame()
+    }
+
+    @objc func providersDidChange(_ notification: Notification) {
+        // Re-read providers.json and rebuild the QuotaService provider list
+        // so popover tabs + menu-bar rotation reflect the new order, then
+        // refresh statuses so the tab data is fresh too.
+        services.rebuildProviders()
+        Task { @MainActor in
+            await services.quotaService.refresh()
+            updateFrames(from: services.quotaService.displayStatuses)
+            frameIndex = 0
+            applyCurrentFrame()
         }
     }
 
