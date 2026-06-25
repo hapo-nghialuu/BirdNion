@@ -273,29 +273,36 @@ struct ProvidersPane: View {
                     SettingsRowDivider()
                     creditsRow(credits)
                 }
-                if row.id == "codex", let cost = codexCost, !cost.isEmpty {
-                    SettingsRowDivider()
-                    costRows(cost)
-                }
-                if row.id == "claude", let cost = s.cost {
-                    SettingsRowDivider()
-                    webCostRow(cost)
-                }
-                if row.id == "claude", let cost = claudeCost, !cost.isEmpty {
-                    SettingsRowDivider()
-                    costRows(cost)
-                }
-                if row.id == "claude", let extras = s.webExtras {
-                    SettingsRowDivider()
-                    webExtrasRows(extras)
-                }
-            } else {
+            } else if s == nil || s?.windows.isEmpty == true {
+                // Empty placeholder only when there's truly no data — cost /
+                // extras below can still render so the panel stays useful
+                // even when OAuth fails.
                 Text(row.enabled ? "Chưa có dữ liệu — bấm làm mới." : "Đang tắt — không có dữ liệu.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
+            }
+            // Provider-specific extras render regardless of OAuth window
+            // presence — cost + account info stay useful even when the
+            // primary fetch fails. Codex ships a local token scanner; Claude
+            // ships both a local token scanner and web extras.
+            if row.id == "codex", let cost = codexCost, !cost.isEmpty {
+                SettingsRowDivider()
+                costRows(cost)
+            }
+            if row.id == "claude", let cost = s?.cost {
+                SettingsRowDivider()
+                webCostRow(cost)
+            }
+            if row.id == "claude", let cost = claudeCost, !cost.isEmpty {
+                SettingsRowDivider()
+                costRows(cost)
+            }
+            if row.id == "claude", let extras = s?.webExtras {
+                SettingsRowDivider()
+                webExtrasRows(extras)
             }
         }
     }
