@@ -487,17 +487,40 @@ final class ClaudeProvider: QuotaProvider {
     /// and pulls today's spend + monthly limit from claude.ai. nil when:
     /// - no claude.ai session cookie is present in any browser,
     /// - the user denied Keychain access (CodexBar's BrowserCookieAccessGate
+    /// Best-effort cost scrape via CodexBarCore's ClaudeWebAPIFetcher.
+    /// Auto-detects browser cookies (Safari/Chrome via SweetCookieKit)
+    /// and pulls today's spend + monthly limit from claude.ai. nil when:
+    /// - no claude.ai session cookie is present in any browser,
+    /// - the user denied Keychain access (CodexBar's BrowserCookieAccessGate
     ///   suppresses further attempts for 6h),
-    /// - the network call or JSON parse failed.
+    /// - the network call or JSON parse failed,
+    /// - the scrape didn't return within 5s (Keychain prompt for cookie
+    ///   decryption may be hanging in the background — we bail so the main
+    ///   quota refresh can still complete).
     /// We never throw — the cost row is optional UI and must not block the
-    /// OAuth quota path.
+    /// OAuth quota path. The 5s race also guarantees that a missed Keychain
+    /// prompt on one fetch doesn't hang subsequent `QuotaService.refresh()`
+    /// cycles for the lifetime of the process.
     static func fetchCost() async -> ProviderCostSnapshot? {
-        do {
-            let detection = BrowserDetection()
-            let data = try await ClaudeWebAPIFetcher.fetchUsage(browserDetection: detection)
-            return data.extraUsageCost
-        } catch {
-            return nil
+        await withTaskGroup(of: ProviderCostSnapshot?.self) { group in
+            group.addTask {
+                do {
+                    let detection = BrowserDetection()
+                    let data = try await ClaudeWebAPIFetcher.fetchUsage(browserDetection: detection)
+                    return data.extraUsageCost
+                } catch {
+                    return nil
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return nil
+            }
+            // First to finish wins; cancel the other so we don't keep
+            // SweetCookieKit's serial cookie fetch running in the background.
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
         }
     }
 
