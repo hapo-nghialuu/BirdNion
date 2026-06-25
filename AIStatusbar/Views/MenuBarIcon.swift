@@ -20,12 +20,15 @@ enum MenuBarIconRenderer {
         case provider(id: String, name: String, percents: [Int])
     }
 
-    /// Build the rotation: the bird first, then every provider that currently
-    /// has at least one quota window. Providers in an error/loading state
-    /// (no windows) are skipped so the bar never shows an empty provider.
+    /// Build the rotation: the bird first, then one frame per provider.
+    /// Providers with no quota windows (OAuth still loading, or in an
+    /// error state) are still included so the brand logo shows up — a
+    /// loading Claude chip on the menu bar is more useful than silently
+    /// dropping the provider until it recovers. Windowed providers show
+    /// their numbers; windowless ones show just the logo.
     static func frames(from statuses: [ProviderStatus]) -> [Frame] {
         var frames: [Frame] = [.bird]
-        for status in statuses where !status.windows.isEmpty {
+        for status in statuses {
             // Codex lets the user pick which window drives the bar; other
             // providers always show all their windows.
             let windows = status.id == "codex"
@@ -60,6 +63,13 @@ enum MenuBarIconRenderer {
                 ?? fallbackLogo(pointSize)
         case "hapo":
             return scaled(NSImage(named: "HapoLogo"), to: pointSize, isTemplate: false)
+                ?? fallbackLogo(pointSize)
+        case "claude":
+            // Anthropic's sun/star logo (claude.svg) is monochrome white in
+            // its template-rendering-intent, so a tint keeps it readable on
+            // both light and dark menu bar backgrounds.
+            return scaled(NSImage(named: "ClaudeLogo"), to: pointSize,
+                          isTemplate: false, tint: .white)
                 ?? fallbackLogo(pointSize)
         case "codex":
             // Codex ships as a monochrome SVG silhouette; tint it white so it
