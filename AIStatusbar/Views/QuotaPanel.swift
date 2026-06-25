@@ -11,59 +11,83 @@ import AppKit
 struct QuotaOverview: View {
     @EnvironmentObject var quota: QuotaService
     @State private var selectedProviderId: String? = nil
+    /// Lazy-scanned Claude usage report (per-day buckets + top model) for
+    /// the 30-day chart in the popover. Only re-scanned when the user
+    /// opens Claude's tab; cached 5 min by `ClaudeCostScanner` itself.
+    @State private var claudeReport: ClaudeUsageReport?
+    @State private var claudeReportTaskId: String?
 
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
-            if quota.statuses.isEmpty {
-                VStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(VocabbyTheme.blue)
-                    Text("Đang tải…")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    // Default selection: first provider (kept across refreshes
-                    // when the same id is still present).
-                    let selected = effectiveSelectedId()
-                    ProviderTabs(
-                        providers: quota.statuses,
-                        selectedId: Binding(
-                            get: { selected },
-                            set: { selectedProviderId = $0 }
-                        )
+            VStack(alignment: .leading, spacing: 4) {
+                let selected = effectiveSelectedId()
+                ProviderTabs(
+                    providers: quota.displayStatuses,
+                    selectedId: Binding(
+                        get: { selected },
+                        set: { selectedProviderId = $0 }
                     )
-                    if let s = quota.statuses.first(where: { $0.id == selected })
-                        ?? quota.statuses.first {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ProviderHeaderCard(status: s)
-                            ProviderCard(status: s)
+                )
+                if let s = quota.displayStatuses.first(where: { $0.id == selected })
+                    ?? quota.displayStatuses.first {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
+                        ProviderCard(status: s)
+                        // Claude-specific: 30-day chart + top-model line.
+                        // Only rendered for the Claude tab so other providers
+                        // don't pull in the local session scan.
+                        if s.id == "claude", let report = claudeReport,
+                           !report.isEmpty {
+                            ClaudeUsageChartCard(report: report)
                         }
                     }
-                    // Spacer pushes the action list to the bottom of the
-                    // popover so cards above hug their content with no gap.
-                    Spacer(minLength: 0)
-                    ActionsList()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                Spacer(minLength: 0)
+                ActionsList()
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
         }
         .onAppear {
             if selectedProviderId == nil,
-               let first = quota.statuses.first {
+               let first = quota.displayStatuses.first {
                 selectedProviderId = first.id
             }
         }
-        .onChange(of: quota.statuses.map(\.id)) { ids in
-            // If the previously-selected provider disappears (toggled off),
-            // fall back to the first remaining one.
+        .onChange(of: selectedProviderId) { id in
+            triggerClaudeReportIfNeeded(providerId: id ?? "")
+        }
+        .onChange(of: quota.displayStatuses.map(\.id)) { ids in
             if let sel = selectedProviderId, !ids.contains(sel) {
                 selectedProviderId = ids.first
+                triggerClaudeReportIfNeeded(providerId: selectedProviderId ?? "")
             } else if selectedProviderId == nil {
                 selectedProviderId = ids.first
+                triggerClaudeReportIfNeeded(providerId: selectedProviderId ?? "")
+            }
+        }
+        .task {
+            triggerClaudeReportIfNeeded(providerId: selectedProviderId ?? effectiveSelectedId())
+        }
+    }
+
+    /// Trigger the Claude 30-day scan only when the user actually views the
+    /// Claude tab. The scanner is cached internally so re-opening Claude
+    /// within 5 min is instant. Switching to another provider cancels any
+    /// in-flight scan via the taskId guard.
+    private func triggerClaudeReportIfNeeded(providerId: String) {
+        guard providerId == "claude" else {
+            claudeReport = nil
+            return
+        }
+        let taskId = UUID().uuidString
+        claudeReportTaskId = taskId
+        Task {
+            let report = await ClaudeCostScanner.usageReport()
+            await MainActor.run {
+                guard claudeReportTaskId == taskId else { return }
+                claudeReport = report
             }
         }
     }
@@ -157,6 +181,11 @@ struct ProviderTabs: View {
 /// Provider info card: name + plan tier + last-updated + status pill.
 struct ProviderHeaderCard: View {
     let status: ProviderStatus
+    /// True when this is a placeholder entry — `statuses` hasn't received
+    /// real data for this provider yet. The card shows a spinner in the
+    /// subtitle area so the user knows the card is loading, but the rest
+    /// of the popover stays interactive.
+    var isPlaceholder: Bool = false
     @EnvironmentObject var quota: QuotaService
 
     private var updatedAgo: String {
@@ -190,20 +219,32 @@ struct ProviderHeaderCard: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                 HStack(spacing: 4) {
-                    if quota.isRefreshing {
+                    if isPlaceholder || quota.isRefreshing {
                         ProgressView().controlSize(.mini).tint(VocabbyTheme.blue)
+                        Text("Đang tải…")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(VocabbyTheme.secondary)
+                    } else {
+                        let subtitleParts = [status.accountLabel, planTier, updatedAgo]
+                            .compactMap { $0 }
+                            .filter { !$0.isEmpty }
+                        Text(subtitleParts.joined(separator: " · "))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .lineLimit(1)
                     }
-                    let subtitleParts = [status.accountLabel, planTier, updatedAgo]
-                        .compactMap { $0 }
-                        .filter { !$0.isEmpty }
-                    Text(subtitleParts.joined(separator: " · "))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(VocabbyTheme.secondary)
-                        .lineLimit(1)
                 }
             }
             Spacer(minLength: 6)
-            StatusPill(ok: !hasError, errorCount: hasError ? 1 : 0)
+            if isPlaceholder {
+                // Replace the OK/error pill with a neutral placeholder so
+                // the user can tell the card exists but hasn't reported yet.
+                Text("—")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            } else {
+                StatusPill(ok: !hasError, errorCount: hasError ? 1 : 0)
+            }
         }
         // Padding is tighter than the standard vocabbyCard (12pt) so the
         // taller 50pt logo doesn't grow the card height.
@@ -487,6 +528,145 @@ struct VocabbyCard: ViewModifier {
 
 extension View {
     func vocabbyCard() -> some View { modifier(VocabbyCard()) }
+}
+
+// MARK: - Claude usage chart
+
+/// 30-day bar chart card sourced from `ClaudeCostScanner.usageReport()`.
+/// Mirrors CodexBar's compact "Today / 30d cost / tokens / latest tokens"
+/// header + a per-day USD bar series. The chart uses USD as the y-axis
+/// (matches the screenshot reference) since token counts vary too wildly
+/// between idle and busy days; tokens go in the top-right summary so
+/// both signals are visible at a glance.
+struct ClaudeUsageChartCard: View {
+    let report: ClaudeUsageReport
+
+    private var maxBarUSD: Double {
+        max(report.daily.map(\.usd).max() ?? 0, 0.01)
+    }
+
+    private var latestDayTokens: Int {
+        report.daily.last(where: { $0.tokens > 0 })?.tokens ?? 0
+    }
+
+    private var todayLabel: String {
+        guard let today = report.daily.last else { return "Hôm nay" }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "vi_VN")
+        f.dateFormat = "d MMM"
+        return "Hôm nay (\(f.string(from: today.date)))"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Top summary row: today vs 30d cost + tokens.
+            HStack(alignment: .top, spacing: 16) {
+                summaryColumn(
+                    label: todayLabel,
+                    amount: report.todayUSD,
+                    tokens: report.todayTokens)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: "30d cost",
+                    amount: report.last30USD,
+                    tokens: report.last30Tokens,
+                    alignTrailing: true)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: "Latest tokens",
+                    amount: nil,
+                    tokens: latestDayTokens,
+                    alignTrailing: true)
+            }
+            barChart
+                .frame(height: 56)
+            if let model = report.topModel {
+                Text("Top model: \(model)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            }
+            Text("Estimated from local Claude logs at API rates; token totals are exact, USD are approximate.")
+                .font(.system(size: 9))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(VocabbyTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 1)
+    }
+
+    @ViewBuilder
+    private func summaryColumn(label: String, amount: Double?, tokens: Int,
+                               alignTrailing: Bool = false) -> some View {
+        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .tracking(0.3)
+            if let amount {
+                Text(formatUSD(amount))
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.primary)
+            }
+            Text(formatTokens(tokens))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+    }
+
+    /// 30 vertical bars, one per day, height proportional to USD. Inactive
+    /// days render as a faint 2pt baseline so the chart doesn't look broken
+    /// when usage is sparse.
+    private var barChart: some View {
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(report.daily) { day in
+                    let heightFraction = day.usd > 0
+                        ? CGFloat(day.usd / maxBarUSD)
+                        : 0
+                    let barHeight = max(geo.size.height * heightFraction, day.usd > 0 ? 3 : 1)
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(barColor(for: day))
+                        .frame(maxWidth: .infinity, maxHeight: geo.size.height, alignment: .bottom)
+                        .frame(height: barHeight, alignment: .bottom)
+                        .help("\(dayLabel(day.date)): \(formatUSD(day.usd)) · \(formatTokens(day.tokens))")
+                }
+            }
+        }
+    }
+
+    private func barColor(for day: ClaudeDailyUsage) -> Color {
+        let last30 = report.daily.last
+        if day.date == last30?.date {
+            // Today gets the brand blue so it stands out from the historical bars.
+            return VocabbyTheme.blue
+        }
+        if day.usd == 0 {
+            return VocabbyTheme.track.opacity(0.6)
+        }
+        return VocabbyTheme.yellow
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "vi_VN")
+        f.dateFormat = "d MMM"
+        return f.string(from: date)
+    }
+
+    private func formatUSD(_ amount: Double) -> String {
+        if amount >= 1000 {
+            return String(format: "$%.0f", amount)
+        }
+        return String(format: "$%.2f", amount)
+    }
+
+    private func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) + " tokens" }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) + " tokens" }
+        return "\(n) tokens"
+    }
 }
 
 // MARK: - Notifications

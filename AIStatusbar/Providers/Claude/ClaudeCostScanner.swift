@@ -15,6 +15,42 @@ struct ClaudeCostSummary: Equatable {
     var isEmpty: Bool { todayTokens == 0 && last30Tokens == 0 }
 }
 
+/// One day's worth of Claude usage rolled up across every session log that
+/// ran in that calendar day (local timezone). Tokens are exact sums of
+/// `message.usage`; USD is the price-table estimate per-model.
+struct ClaudeDailyUsage: Equatable, Identifiable {
+    let date: Date   // startOfDay in local tz
+    let usd: Double
+    let tokens: Int
+    var id: Date { date }
+}
+
+/// Full 30-day usage report: the existing today/last30 totals plus per-day
+/// buckets for the chart and the most-used model across the window. Built
+/// from the same scan pass that produces `ClaudeCostSummary` so there's no
+/// extra I/O cost.
+struct ClaudeUsageReport: Equatable {
+    let todayUSD: Double
+    let todayTokens: Int
+    let last30USD: Double
+    let last30Tokens: Int
+    /// 30 daily buckets, oldest → newest, with one entry per calendar day.
+    /// Days with no activity get zero entries (so the chart can show gaps).
+    let daily: [ClaudeDailyUsage]
+    /// Most-used model across the 30-day window (by token count). nil when
+    /// no model information was logged.
+    let topModel: String?
+
+    var isEmpty: Bool { last30Tokens == 0 }
+
+    /// Convenience initializer for the panel's smaller "today / 30 days" rows
+    /// — strips the chart-only fields.
+    var asSummary: ClaudeCostSummary {
+        ClaudeCostSummary(todayUSD: todayUSD, todayTokens: todayTokens,
+                          last30USD: last30USD, last30Tokens: last30Tokens)
+    }
+}
+
 /// Per-million-token prices (USD) for Anthropic models. Anthropic splits
 /// input into fresh / cache-write / cache-read (Codex only has fresh + cached
 /// read). Updated 2026-06; revisit when Anthropic revises pricing.
@@ -64,11 +100,17 @@ enum ClaudeCostScanner {
     private actor Cache {
         static let shared = Cache()
         private var entry: (at: Date, value: ClaudeCostSummary)?
+        private var fullEntry: (at: Date, value: ClaudeUsageReport)?
         func valid(now: Date, ttl: TimeInterval) -> ClaudeCostSummary? {
             guard let entry, now.timeIntervalSince(entry.at) < ttl else { return nil }
             return entry.value
         }
         func store(_ value: ClaudeCostSummary, at: Date) { entry = (at, value) }
+        func validFullReport(now: Date, ttl: TimeInterval) -> ClaudeUsageReport? {
+            guard let fullEntry, now.timeIntervalSince(fullEntry.at) < ttl else { return nil }
+            return fullEntry.value
+        }
+        func storeFull(_ value: ClaudeUsageReport, at: Date) { fullEntry = (at, value) }
     }
 
     static func defaultProjectsDir() -> URL {
@@ -85,9 +127,33 @@ enum ClaudeCostScanner {
         return value
     }
 
+    /// Same scan as `summary` but returns the full report (per-day buckets +
+    /// top model). Used by the popover chart. The result is cached under the
+    /// same key so a call to `summary` followed by `usageReport` only does
+    /// the file walk once.
+    static func usageReport(projectsDir: URL = defaultProjectsDir(),
+                            now: Date = Date()) async -> ClaudeUsageReport? {
+        if let cached = await Cache.shared.validFullReport(now: now, ttl: cacheTTL) {
+            return cached
+        }
+        let value = await Task.detached(priority: .utility) {
+            scanFull(projectsDir: projectsDir, now: now)
+        }.value
+        if let value { await Cache.shared.storeFull(value, at: now) }
+        return value
+    }
+
     // MARK: - Scanning
 
     static func scan(projectsDir: URL, now: Date) -> ClaudeCostSummary? {
+        scanFull(projectsDir: projectsDir, now: now)?.asSummary
+    }
+
+    /// Walks every session jsonl once and produces both the aggregate totals
+    /// and the per-day bucket array. Buckets are keyed by startOfDay in the
+    /// local calendar so the chart bars line up with "today" / "yesterday"
+    /// labels the UI uses.
+    static func scanFull(projectsDir: URL, now: Date) -> ClaudeUsageReport? {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: projectsDir,
@@ -100,36 +166,75 @@ enum ClaudeCostScanner {
 
         var todayUSD = 0.0, todayTokens = 0
         var monthUSD = 0.0, monthTokens = 0
-        // Track the latest model seen per session for price lookup (sessions
-        // are single-model in practice but a session might start with one
-        // model and switch mid-stream — we use the most recent).
-        var modelPerFile: [URL: String] = [:]
+        // Per-day buckets indexed by startOfDay for O(1) lookup.
+        var buckets: [Date: DailyAccumulator] = [:]
+        // Model vote counts — most-used model across the 30-day window.
+        var modelVotes: [String: Int] = [:]
 
         for case let url as URL in enumerator {
             guard url.pathExtension == "jsonl" else { continue }
-            // Use file modification date as the session date — Claude Code
-            // appends to these files continuously so mtime tracks the latest
-            // activity. Cheaper than parsing every line.
             let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
                 .contentModificationDate) ?? .distantPast
+            // Fast-path skip: if the file hasn't been touched in 30 days, no
+            // individual line inside could have a usable timestamp either.
             guard mtime >= cutoff else { continue }
 
-            let aggregates = scanFile(url)
-            guard !aggregates.isEmpty else { continue }
-            let model = modelPerFile[url] ?? aggregates.model ?? "claude-sonnet"
-            let price = ClaudeModelPrice.price(for: model)
-            let usd = estimatedUSD(aggregates, price: price)
-            let tokens = aggregates.totalTokens
+            for entry in scanFileWithDay(url, cutoff: cutoff, calendar: calendar) {
+                let entryDate = entry.date
+                guard entryDate >= cutoff else { continue }
+                let existing = buckets[entryDate] ?? DailyAccumulator(date: entryDate)
+                existing.usd += entry.usd
+                existing.tokens += entry.tokens
+                buckets[entryDate] = existing
+                modelVotes[entry.model, default: 0] += entry.tokens
 
-            monthUSD += usd
-            monthTokens += tokens
-            if mtime >= startOfToday {
-                todayUSD += usd
-                todayTokens += tokens
+                monthUSD += entry.usd
+                monthTokens += entry.tokens
+                if entryDate >= startOfToday {
+                    todayUSD += entry.usd
+                    todayTokens += entry.tokens
+                }
             }
         }
-        return ClaudeCostSummary(todayUSD: todayUSD, todayTokens: todayTokens,
-                                 last30USD: monthUSD, last30Tokens: monthTokens)
+
+        // Build a contiguous 30-day array so the chart x-axis has a bar per
+        // day even when there's no activity (renders as a zero-height bar).
+        let daily: [ClaudeDailyUsage] = Self.makeDailyBuckets(
+            buckets: buckets, endDay: startOfToday, count: 30)
+
+        // Top model = the one with the highest token count.
+        let topModel = modelVotes.max { $0.value < $1.value }?.key
+        return ClaudeUsageReport(
+            todayUSD: todayUSD, todayTokens: todayTokens,
+            last30USD: monthUSD, last30Tokens: monthTokens,
+            daily: daily, topModel: topModel)
+    }
+
+    /// In-place accumulator so we don't box a struct on every line.
+    private final class DailyAccumulator {
+        let date: Date
+        var usd: Double = 0
+        var tokens: Int = 0
+        init(date: Date) { self.date = date }
+    }
+
+    /// Build a contiguous N-day bucket array (newest → oldest) so the chart
+    /// has a slot for every day even when no activity was logged.
+    private static func makeDailyBuckets(
+        buckets: [Date: DailyAccumulator],
+        endDay: Date,
+        count: Int
+    ) -> [ClaudeDailyUsage] {
+        var result: [ClaudeDailyUsage] = []
+        var cursor = endDay
+        for _ in 0..<count {
+            let entry = buckets[cursor]
+            let usd = entry?.usd ?? 0
+            let tokens = entry?.tokens ?? 0
+            result.append(ClaudeDailyUsage(date: cursor, usd: usd, tokens: tokens))
+            cursor = cursor.addingTimeInterval(-86_400)
+        }
+        return result.reversed()
     }
 
     private static func estimatedUSD(_ a: FileAggregates, price: ClaudeModelPrice) -> Double {
@@ -153,23 +258,87 @@ enum ClaudeCostScanner {
         var isEmpty: Bool { input == 0 && output == 0 }
     }
 
-    /// Walks the jsonl once and sums the last `message.usage` snapshot seen
-    /// per assistant turn (each line overwrites the previous since Claude
-    /// Code streams deltas). Returns the highest cumulative values seen.
+    /// Walks the jsonl once and emits a per-line accumulator for the chart.
+    /// Each entry already has its per-day bucket pre-computed so the caller
+    /// can fold straight into a `[Date: DailyAccumulator]`.
+    private static func scanFileWithDay(_ url: URL,
+                                        cutoff: Date,
+                                        calendar: Calendar) -> [DayEntry] {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return []
+        }
+        var entries: [DayEntry] = []
+        var lines: [String] = []
+        content.enumerateLines { line, _ in lines.append(line) }
+        for line in lines {
+            Self.parseLineIntoDay(line,
+                                  calendar: calendar,
+                                  into: &entries)
+        }
+        return entries
+    }
+
+    /// Per-line JSON parse + bucket — factored out so Swift's type checker
+    /// doesn't have to fold the closure body + the outer for-loop in one
+    /// pass (was hitting the "unable to type-check in reasonable time"
+    /// diagnostic with everything inline).
+    private static func parseLineIntoDay(
+        _ line: String,
+        calendar: Calendar,
+        into entries: inout [DayEntry]
+    ) {
+        guard let data = line.data(using: .utf8) else { return }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        guard let message = obj["message"] as? [String: Any] else { return }
+        guard let usage = message["usage"] as? [String: Any] else { return }
+
+        let input = usage["input_tokens"] as? Int ?? 0
+        let cacheCreation = usage["cache_creation_input_tokens"] as? Int ?? 0
+        let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
+        let output = usage["output_tokens"] as? Int ?? 0
+        let rawModel = (message["model"] as? String) ?? "claude-sonnet"
+
+        // Skip the noisy <synthetic> model placeholder that Claude Code
+        // uses for some internal assistant turns.
+        let priceModel = rawModel == "<synthetic>" ? "claude-sonnet" : rawModel
+        let price = ClaudeModelPrice.price(for: priceModel)
+        let fresh = max(0, input - cacheRead)
+        let usdLine = (Double(fresh) * price.inputPerM
+                      + Double(cacheCreation) * price.cacheWritePerM
+                      + Double(cacheRead) * price.cacheReadPerM
+                      + Double(output) * price.outputPerM) / 1_000_000
+
+        // Bucket by the line's actual timestamp so a long-running session
+        // spread across multiple days lands tokens on the correct bars.
+        let timestampStr = obj["timestamp"] as? String
+        let parsedDate = parseISODate(timestampStr) ?? Date()
+        let day = calendar.startOfDay(for: parsedDate)
+        entries.append(DayEntry(date: day, usd: usdLine,
+                                tokens: input + output,
+                                model: priceModel))
+    }
+
+    /// One assistant turn worth of per-day accounting. Model is tracked so
+    /// the caller can pick the most-used model for the chart subtitle.
+    private struct DayEntry {
+        let date: Date
+        let usd: Double
+        let tokens: Int
+        let model: String
+    }
+
+    /// Legacy file scan (kept for `summary()` callers that don't need
+    /// per-day buckets). Walks the file once and returns the highest
+    /// cumulative token snapshot — old behaviour matches Codex parity tests.
     private static func scanFile(_ url: URL) -> FileAggregates {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else {
             return FileAggregates()
         }
         var agg = FileAggregates()
         content.enumerateLines { line, _ in
-            // Cheap filter: skip lines that clearly aren't assistant messages.
-            // We still need to peek at the model field, so we can't be more
-            // aggressive here.
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
-            // Only assistant turns carry usage (user turns have content but
-            // no `usage` object).
             guard let message = obj["message"] as? [String: Any] else { return }
             if let usage = message["usage"] as? [String: Any] {
                 agg.input += usage["input_tokens"] as? Int ?? 0
@@ -182,5 +351,14 @@ enum ClaudeCostScanner {
             }
         }
         return agg
+    }
+
+    private static func parseISODate(_ s: String?) -> Date? {
+        guard let s, !s.isEmpty else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: s)
     }
 }

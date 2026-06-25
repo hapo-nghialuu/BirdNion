@@ -10,6 +10,21 @@ final class QuotaService: ObservableObject {
     @Published private(set) var statuses: [ProviderStatus] = []
     @Published private(set) var isRefreshing: Bool = false
 
+    /// Always-fully-populated status array used by the popover UI. Contains
+    /// one entry per provider in `providers`, even if a fetch is still
+    /// in-flight — missing entries get a placeholder so the tabs + cards
+    /// render immediately and the user sees a per-card spinner instead of
+    /// the whole popover blocked on a single slow provider.
+    var displayStatuses: [ProviderStatus] {
+        let have = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
+        return providers.compactMap { p in
+            if let s = have[p.id] { return s }
+            return ProviderStatus(
+                id: p.id, displayName: p.displayName,
+                windows: [], lastUpdated: Date())
+        }
+    }
+
     /// Per provider+window warning state: last seen remaining % and the set of
     /// thresholds already fired (so we notify once per crossing, not every poll).
     private var warnState: [String: [String: (last: Int, fired: Set<Int>)]] = [:]

@@ -636,6 +636,46 @@ final class ClaudeCostScannerTests: XCTestCase {
     }
 }
 
+// MARK: - ClaudeUsageReport model
+
+final class ClaudeUsageReportTests: XCTestCase {
+    /// `summary` must equal `report.asSummary` so the existing UI rows keep
+    /// working after the scanner was extended to produce per-day buckets.
+    func testAsSummaryMatchesFields() {
+        let report = ClaudeUsageReport(
+            todayUSD: 1.23, todayTokens: 1000,
+            last30USD: 30.0, last30Tokens: 50_000,
+            daily: [ClaudeDailyUsage(date: Date(timeIntervalSince1970: 1_700_000_000),
+                                     usd: 1.23, tokens: 1000)],
+            topModel: "claude-opus-4-8")
+        let summary = report.asSummary
+        XCTAssertEqual(summary.todayUSD, report.todayUSD, accuracy: 0.001)
+        XCTAssertEqual(summary.todayTokens, report.todayTokens)
+        XCTAssertEqual(summary.last30USD, report.last30USD, accuracy: 0.001)
+        XCTAssertEqual(summary.last30Tokens, report.last30Tokens)
+    }
+
+    func testIsEmptyFlag() {
+        let empty = ClaudeUsageReport(
+            todayUSD: 0, todayTokens: 0,
+            last30USD: 0, last30Tokens: 0,
+            daily: [], topModel: nil)
+        XCTAssertTrue(empty.isEmpty)
+
+        let active = ClaudeUsageReport(
+            todayUSD: 0.01, todayTokens: 10,
+            last30USD: 0.01, last30Tokens: 10,
+            daily: [], topModel: nil)
+        XCTAssertFalse(active.isEmpty)
+    }
+
+    func testDailyIdentifiable() {
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        let day = ClaudeDailyUsage(date: date, usd: 5.0, tokens: 100)
+        XCTAssertEqual(day.id, date)
+    }
+}
+
 // MARK: - SettingsStore Claude parity fields
 
 @MainActor
