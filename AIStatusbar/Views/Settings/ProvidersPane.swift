@@ -19,6 +19,10 @@ struct ProvidersPane: View {
     @State private var showingClaudeConfig = false
     /// Codex token cost (today / 30d), scanned lazily when Codex is selected.
     @State private var codexCost: CodexCostSummary?
+    /// Claude token cost (today / 30d), scanned lazily when Claude is
+    /// selected — mirrors CodexCostScanner but reads Claude Code's local
+    /// session jsonl files (see ClaudeCostScanner.swift).
+    @State private var claudeCost: ClaudeCostSummary?
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -32,9 +36,20 @@ struct ProvidersPane: View {
             if selectedID == nil { selectedID = rows.first?.id }
         }
         .task(id: selectedID) {
-            // Scan local Codex sessions for token cost only while it's selected.
-            guard selectedID == "codex" else { codexCost = nil; return }
-            codexCost = await CodexCostScanner.summary()
+            // Scan local sessions for token cost only while the provider is
+            // selected. Mirrors CodexCostScanner's behavior — cached 5 min
+            // so the panel doesn't re-walk the project tree on every refresh.
+            switch selectedID {
+            case "codex":
+                claudeCost = nil
+                codexCost = await CodexCostScanner.summary()
+            case "claude":
+                codexCost = nil
+                claudeCost = await ClaudeCostScanner.summary()
+            default:
+                codexCost = nil
+                claudeCost = nil
+            }
         }
         .sheet(isPresented: $showingClaudeConfig) {
             ConfigPanel()
@@ -266,6 +281,10 @@ struct ProvidersPane: View {
                     SettingsRowDivider()
                     webCostRow(cost)
                 }
+                if row.id == "claude", let cost = claudeCost, !cost.isEmpty {
+                    SettingsRowDivider()
+                    costRows(cost)
+                }
                 if row.id == "claude", let extras = s.webExtras {
                     SettingsRowDivider()
                     webExtrasRows(extras)
@@ -361,12 +380,23 @@ struct ProvidersPane: View {
         return credits <= 0 ? "Hết" : "\(amount) còn lại"
     }
 
-    /// Token cost rows (Codex). Dollar amounts are estimates (tokens × price
-    /// table), so they're prefixed with "≈"; token counts are exact.
+    /// Token cost rows (Codex + Claude). Dollar amounts are estimates (tokens ×
+    /// price table), so they're prefixed with "≈"; token counts are exact.
+    /// Both `CodexCostSummary` and `ClaudeCostSummary` carry the same 4
+    /// fields, so we forward to a single renderer.
     private func costRows(_ cost: CodexCostSummary) -> some View {
+        costRowsImpl(todayUSD: cost.todayUSD, todayTokens: cost.todayTokens,
+                     last30USD: cost.last30USD, last30Tokens: cost.last30Tokens)
+    }
+    private func costRows(_ cost: ClaudeCostSummary) -> some View {
+        costRowsImpl(todayUSD: cost.todayUSD, todayTokens: cost.todayTokens,
+                     last30USD: cost.last30USD, last30Tokens: cost.last30Tokens)
+    }
+    private func costRowsImpl(todayUSD: Double, todayTokens: Int,
+                              last30USD: Double, last30Tokens: Int) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            costLine("Hôm nay", usd: cost.todayUSD, tokens: cost.todayTokens)
-            costLine("30 ngày", usd: cost.last30USD, tokens: cost.last30Tokens)
+            costLine("Hôm nay", usd: todayUSD, tokens: todayTokens)
+            costLine("30 ngày", usd: last30USD, tokens: last30Tokens)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -529,6 +559,14 @@ struct ProvidersPane: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+            } else if row.id == "claude" {
+                // Claude doesn't take a pasted API token — it uses OAuth
+                // from the Keychain, browser cookies (Web), the `claude`
+                // CLI (PTY), or an Anthropic Admin API key. The 4 pickers
+                // below (Usage source / Cookie source / Manual cookie field
+                // / Keychain prompt mode) live in `settingsSection` siblings;
+                // here we just skip the generic TokenField.
+                EmptyView()
             } else {
                 TokenField(
                     providerID: row.id,
