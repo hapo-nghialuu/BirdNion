@@ -50,8 +50,17 @@ final class ClaudeProvider: QuotaProvider {
     }
 
     func fetch() async throws -> ProviderStatus {
+        // Service status + cost run concurrently with OAuth so the Cost row
+        // appears even when OAuth fails (matches CodexBar: it shows Cost
+        // "last fetch failed" but still surfaces today's spend via cookies).
+        async let statusAsync = statusProvider()
+        async let costAsync = costProvider()
+        let status = await statusAsync
+        let cost = await costAsync
+
         guard let token = tokenProvider(), !token.isEmpty else {
-            return failure("Chưa đăng nhập Claude — đăng nhập bằng Claude Code")
+            return failure("Chưa đăng nhập Claude — đăng nhập bằng Claude Code",
+                           status: status, cost: cost)
         }
 
         var req = URLRequest(url: Self.endpoint)
@@ -68,18 +77,15 @@ final class ClaudeProvider: QuotaProvider {
         do {
             (data, response) = try await session.data(for: req)
         } catch {
-            return failure("Network: \(error.localizedDescription)")
+            return failure("Network: \(error.localizedDescription)",
+                           status: status, cost: cost)
         }
-        guard let http = response as? HTTPURLResponse else { return failure("Response không phải HTTP") }
+        guard let http = response as? HTTPURLResponse else {
+            return failure("Response không phải HTTP", status: status, cost: cost)
+        }
         switch http.statusCode {
         case 200..<300:
             let base = parse(data, accountLabel: override())
-            // Service status + cost are best-effort, like Codex's statusProbe.
-            // Run concurrently so neither blocks the OAuth quota path.
-            async let statusAsync = statusProvider()
-            async let costAsync = costProvider()
-            let status = await statusAsync
-            let cost = await costAsync
             return ProviderStatus(
                 id: base.id,
                 displayName: base.displayName,
@@ -97,9 +103,10 @@ final class ClaudeProvider: QuotaProvider {
                 resetCreditsAvailable: base.resetCreditsAvailable,
                 cost: cost)
         case 401, 403:
-            return failure("Token Claude hết hạn — đăng nhập lại bằng Claude Code")
+            return failure("Token Claude hết hạn — đăng nhập lại bằng Claude Code",
+                           status: status, cost: cost)
         default:
-            return failure("HTTP \(http.statusCode)")
+            return failure("HTTP \(http.statusCode)", status: status, cost: cost)
         }
     }
 
@@ -180,6 +187,24 @@ final class ClaudeProvider: QuotaProvider {
             lastUpdated: Date(),
             error: message,
             version: Self.detectedClaudeVersion())
+    }
+
+    /// Failure path that still surfaces side data (service status + cost).
+    /// Used when OAuth fails but the cookie-based cost scrape succeeded —
+    /// matches CodexBar which shows "last fetch failed" alongside the Cost row.
+    private func failure(_ message: String,
+                         status: OpenAIServiceStatus?,
+                         cost: ProviderCostSnapshot?) -> ProviderStatus {
+        ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: [],
+            lastUpdated: Date(),
+            error: message,
+            version: Self.detectedClaudeVersion(),
+            serviceStatus: status?.description,
+            serviceStatusLevel: status?.indicator,
+            cost: cost)
     }
 
     // MARK: - Keychain
