@@ -266,6 +266,10 @@ struct ProvidersPane: View {
                     SettingsRowDivider()
                     webCostRow(cost)
                 }
+                if row.id == "claude", let extras = s.webExtras {
+                    SettingsRowDivider()
+                    webExtrasRows(extras)
+                }
             } else {
                 Text(row.enabled ? "Chưa có dữ liệu — bấm làm mới." : "Đang tắt — không có dữ liệu.")
                     .font(.system(size: 12))
@@ -368,12 +372,19 @@ struct ProvidersPane: View {
         .padding(.vertical, 10)
     }
 
-    /// Claude cost row, sourced from CodexBarCore's ClaudeWebAPIFetcher
-    /// (scrape claude.ai/settings/billing). The snapshot only carries
-    /// used/limit for the current monthly cycle, so we surface a single
-    /// "Đã dùng: $X / $Y" line — matches CodexBar's compact Claude view.
+    /// Claude cost row, CodexBar parity. Renders a progress bar (used% of
+    /// monthly limit), the dollar amount on the right, a "X% used" line, and
+    /// an optional "Resets in Nd" countdown sourced from `cost.resetsAt`.
+    /// Matches CodexBar's `ProviderCostSection` layout: title + percent +
+    /// spend line + reset countdown.
     private func webCostRow(_ cost: ProviderCostSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let usedPct = cost.limit > 0
+            ? Int(min(100, max(0, (cost.used / cost.limit * 100).rounded())))
+            : 0
+        let remaining = max(0, cost.limit - cost.used)
+        let barColor: Color = usedPct >= 90 ? .red
+            : (usedPct >= 70 ? .orange : VocabbyTheme.blue)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text("CHI PHÍ")
                     .font(.system(size: 11, weight: .semibold))
@@ -383,14 +394,85 @@ struct ProvidersPane: View {
                 Text("\(UsageFormatter.usdString(cost.used)) / \(UsageFormatter.usdString(cost.limit))")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
             }
-            if let period = cost.period {
-                Text(period)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 8)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(barColor)
+                        .frame(width: max(0, geo.size.width * CGFloat(usedPct) / 100), height: 8)
+                }
+            }
+            .frame(height: 8)
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(usedPct)% đã dùng · còn \(UsageFormatter.usdString(remaining))")
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 6)
+                if let reset = cost.resetsAt {
+                    Text("Reset sau \(Self.resetCountdown(to: reset))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                } else if let period = cost.period {
+                    Text(period)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    /// Compact countdown to a future date. Mirrors `WindowPace.format` but
+    /// skips the "< 1m" branch so a sub-minute reset still reads "0m".
+    /// "1d 4h", "4h 12m", "12m", "<1m".
+    static func resetCountdown(to date: Date, now: Date = Date()) -> String {
+        let s = max(0, Int(date.timeIntervalSince(now)))
+        let days = s / 86400, hours = (s % 86400) / 3600, minutes = (s % 3600) / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        return "<1m"
+    }
+
+    /// Claude web/CLI account identity rows. Surfaces email, organization,
+    /// and login method when `webExtras` carries them — replaces CodexBar's
+    /// `ProviderDetailInfoGrid` "Account" + "Auth" rows so the user can
+    /// confirm which Claude.ai account the cookie/CLI session belongs to
+    /// when OAuth is offline.
+    @ViewBuilder
+    private func webExtrasRows(_ extras: ClaudeWebExtras) -> some View {
+        if let email = extras.accountEmail, !email.isEmpty {
+            webInfoRow(label: "EMAIL", value: email)
+        }
+        if let org = extras.accountOrganization, !org.isEmpty {
+            webInfoRow(label: "TỔ CHỨC", value: org)
+        }
+        if let method = extras.loginMethod, !method.isEmpty {
+            webInfoRow(label: "LOGIN", value: method)
+        }
+        if let source = extras.sourceLabel, !source.isEmpty {
+            webInfoRow(label: "NGUỒN", value: source.uppercased())
+        }
+    }
+
+    private func webInfoRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
     }
 
     private func costLine(_ label: String, usd: Double, tokens: Int) -> some View {
@@ -526,7 +608,135 @@ struct ProvidersPane: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             }
+
+            if row.id == "claude" {
+                claudeUsageSourcePicker()
+                claudeCookieSourcePicker()
+                if settings.claudeCookieSource == "manual" {
+                    SettingsRowDivider()
+                    claudeManualCookieField()
+                }
+                claudeOAuthKeychainPromptPicker()
+            }
         }
+    }
+
+    // MARK: - Claude parity pickers
+
+    /// Usage source picker — mirrors CodexBar's `ClaudeUsageDataSource`.
+    /// `.auto` walks OAuth → Web → CLI; `.oauth` pins to OAuth (default);
+    /// `.web` uses cookies only; `.cli` spawns `claude` PTY; `.api` requires
+    /// an Anthropic Admin API key (handled by the field below when picked).
+    @ViewBuilder
+    private func claudeUsageSourcePicker() -> some View {
+        SettingsRowDivider()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Text("Nguồn dữ liệu")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 8)
+                Picker("", selection: Binding(
+                    get: { settings.claudeUsageDataSource },
+                    set: { settings.claudeUsageDataSource = $0; Task { await quota.refresh() } }
+                )) {
+                    ForEach(ClaudeUsageDataSource.allCases) { src in
+                        Text(src.displayName).tag(src.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 170)
+            }
+            Text(sourceSubtitle(for: settings.claudeUsageDataSource))
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func sourceSubtitle(for source: String) -> String {
+        switch source {
+        case "auto": return "Thử OAuth → Web → CLI, lấy cái đầu tiên thành công."
+        case "oauth": return "Dùng OAuth token trong Keychain của Claude Code (mặc định)."
+        case "web": return "Scrape claude.ai qua cookie Safari/Chrome."
+        case "cli": return "Chạy `claude` CLI trong PTY (cần CLI cài đặt)."
+        case "api": return "Anthropic Admin API (cần nhập key bên dưới)."
+        default: return ""
+        }
+    }
+
+    /// Cookie source picker — mirrors CodexBar's `ProviderCookieSource`.
+    @ViewBuilder
+    private func claudeCookieSourcePicker() -> some View {
+        SettingsRowDivider()
+        HStack(spacing: 12) {
+            Text("Cookie Claude")
+                .font(.system(size: 13, weight: .semibold))
+            Spacer(minLength: 8)
+            Picker("", selection: Binding(
+                get: { settings.claudeCookieSource },
+                set: { settings.claudeCookieSource = $0; Task { await quota.refresh() } }
+            )) {
+                ForEach(ProviderCookieSource.allCases) { src in
+                    Text(src.displayName).tag(src.rawValue)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 110)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// Manual Cookie: header field (only visible when source == .manual).
+    /// User pastes the value copied from DevTools → Network → claude.ai
+    /// request headers. Stored plaintext (only the user sees it).
+    @ViewBuilder
+    private func claudeManualCookieField() -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Cookie header thủ công")
+                .font(.system(size: 12, weight: .semibold))
+            SecureField("sessionKey=...; cf_clearance=...", text: Binding(
+                get: { settings.claudeManualCookieHeader },
+                set: { settings.claudeManualCookieHeader = $0 }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 11))
+            Text("Mở claude.ai trong trình duyệt đã đăng nhập → DevTools → Network → sao chép toàn bộ header `Cookie:`.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// Keychain prompt policy picker — mirrors CodexBar's
+    /// `ClaudeOAuthKeychainPromptMode`. `.never` skips OAuth entirely (use
+    /// Web/CLI); `.onlyOnUserAction` prompts only on manual refresh;
+    /// `.always` prompts on every background fetch.
+    @ViewBuilder
+    private func claudeOAuthKeychainPromptPicker() -> some View {
+        SettingsRowDivider()
+        HStack(spacing: 12) {
+            Text("Keychain OAuth")
+                .font(.system(size: 13, weight: .semibold))
+            Spacer(minLength: 8)
+            Picker("", selection: Binding(
+                get: { settings.claudeOAuthKeychainPromptMode },
+                set: { settings.claudeOAuthKeychainPromptMode = $0; Task { await quota.refresh() } }
+            )) {
+                Text("Không bao giờ").tag(ClaudeOAuthKeychainPromptMode.never.rawValue)
+                Text("Chỉ khi bấm").tag(ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue)
+                Text("Luôn hỏi").tag(ClaudeOAuthKeychainPromptMode.always.rawValue)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 130)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     // MARK: - Links / dashboards
