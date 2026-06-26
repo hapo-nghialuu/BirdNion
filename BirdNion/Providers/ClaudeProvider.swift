@@ -94,17 +94,20 @@ final class ClaudeProvider: QuotaProvider {
         // battle-tested OAuth/Web/CLI/API execution + fallback.
         let source = Self.readUsageDataSource()
 
-        // Service status + (legacy) cost run concurrently regardless of the
-        // chosen data source — they're best-effort UI overlays and must not
-        // block the main quota fetch.
-        async let statusAsync = statusProvider()
-        async let legacyCostAsync = costProvider()
-        let status = await statusAsync
-        let legacyCost = await legacyCostAsync
+        // Service status + cost scrape were removed as part of the 2026-06-25
+        // storage refactor. They were best-effort overlays but each had a
+        // UX cost: the cost scrape went through CodexBarCore's
+        // `ClaudeWebAPIFetcher`, which reads browser cookies from the
+        // macOS Keychain — that triggered a confusing "CodexBar Cache"
+        // permission prompt the first time Claude was enabled, even though
+        // BirdNion itself doesn't store anything there. Status page adds
+        // nothing OAuth users care about. The main quota path (OAuth or
+        // CodexBarCore fetcher) below is the only signal users act on.
 
         switch source {
         case .oauth:
-            return await fetchOAuth(status: status, cost: legacyCost)
+            // status + cost are now always nil — see note above.
+            return await fetchOAuth(status: nil, cost: nil)
         default:
             // For all other modes (auto / web / cli / api) defer to the
             // CodexBarCore fetcher — it already handles delegation, fallback,
@@ -116,11 +119,14 @@ final class ClaudeProvider: QuotaProvider {
                 let snapshot = try await fetchViaUsageFetcher(source: source)
                 return Self.materialize(from: snapshot, override: override(), sourceLabel: source.sourceLabel)
             } catch {
-                // Surface the error + still keep cost + status so the panel
-                // stays informative. Matches CodexBar: a 401 from OAuth with
-                // cookies present still shows the cost row.
+                // Surface the error. Status + cost + webExtras are no longer
+                // populated (the 2026-06-25 refactor removed the network
+                // calls that fed them); we still pass `webExtrasFromLastAttempt`
+                // so any cached snapshot from a previous successful fetch is
+                // surfaced — cheap to compute and useful when the user has
+                // toggled Claude on/off repeatedly.
                 return failure("Claude: \(error.localizedDescription)",
-                               status: status, cost: legacyCost,
+                               status: nil, cost: nil,
                                extras: Self.webExtrasFromLastAttempt())
             }
         }
@@ -158,6 +164,10 @@ final class ClaudeProvider: QuotaProvider {
         switch http.statusCode {
         case 200..<300:
             let base = parse(data, accountLabel: override())
+            // Status + cost fields are now always nil (the 2026-06-25
+            // refactor removed the network calls that populated them).
+            // They're kept in the ProviderStatus initializer signature so
+            // the existing tests / consumers compile unchanged.
             return ProviderStatus(
                 id: base.id,
                 displayName: base.displayName,
@@ -168,12 +178,12 @@ final class ClaudeProvider: QuotaProvider {
                 planType: base.planType,
                 creditsRemaining: base.creditsRemaining,
                 version: Self.detectedClaudeVersion(),
-                serviceStatus: status?.description,
-                serviceStatusLevel: status?.indicator,
+                serviceStatus: nil,
+                serviceStatusLevel: nil,
                 accountID: base.accountID,
                 planName: base.planName,
                 resetCreditsAvailable: base.resetCreditsAvailable,
-                cost: cost,
+                cost: nil,
                 webExtras: base.webExtras)
         case 401, 403:
             return failure("Token Claude hết hạn — đăng nhập lại bằng Claude Code",
