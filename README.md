@@ -11,7 +11,7 @@
 [![Homebrew](https://img.shields.io/badge/brew-hapo--nghialuu%2Ftap%2Fbirdnion-orange?style=flat-square)](https://github.com/hapo-nghialuu/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/license-MIT-6e5aff?style=flat-square)](LICENSE)
 
-A focused fork / extension of [CodexBar](https://github.com/steipete/CodexBar)'s "track every AI coding limit" idea, scoped to the **7 providers BOSS actually uses** (MiniMax, Codex, Claude, Hapo AI Hub, OpenRouter, DeepSeek, z.ai). One status item per provider, popover with usage bars + reset countdowns, local token scanner for Claude, full Claude parity. No Dock icon.
+A focused fork / extension of [CodexBar](https://github.com/steipete/CodexBar)'s "track every AI coding limit" idea, scoped to the **7 providers** (MiniMax, Codex, Claude, Hapo AI Hub, OpenRouter, DeepSeek, z.ai). One status item per provider, popover with usage bars + reset countdowns, local token scanner for Claude, full Claude parity. No Dock icon.
 
 ## What you get
 
@@ -182,7 +182,7 @@ See [docs/system-architecture.md](docs/system-architecture.md) for the full data
 
 ## Why a fork / why this exists
 
-[CodexBar](https://github.com/steipete/CodexBar) tracks 53+ providers and is the obvious upstream. BirdNion exists because BOSS uses a small fixed set of 7 providers and wanted:
+[CodexBar](https://github.com/steipete/CodexBar) tracks 53+ providers and is the obvious upstream. BirdNion exists as a focused build for a small fixed set of 7 providers, with:
 - A file-based config (no Keychain prompts) — different from CodexBar's Keychain + `~/Library/Application Support` split.
 - Claude deep-parity on its own (CodexBar's Claude surface is wider but shipped behind more flags).
 - A `Scripts/release.sh` end-to-end pipeline instead of manual steps.

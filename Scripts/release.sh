@@ -14,6 +14,7 @@
 #   5. Zip → ~/Desktop/BirdNion-<version>.zip
 #   6. gh release create/upload v<version> on hapo-nghialuu/BirdNion
 #   7. Update Casks/birdnion.rb (version + sha256), commit + push to same repo
+#   8. Update homebrew-tap/Casks/birdnion.rb, commit + push tap
 #
 # Install after release:
 #   brew install --cask hapo-nghialuu/BirdNion/birdnion
