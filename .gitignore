@@ -18,3 +18,7 @@ xcuserdata/
 
 # Build artifacts outside project tree
 /tmp/aistatusbar-release/
+
+# Local dev-env script (ignored so private hostnames / keys don't ship)
+scripts/dev-env.sh
+

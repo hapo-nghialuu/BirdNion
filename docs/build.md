@@ -179,11 +179,33 @@ one-line empty-state hint and the user opts in via Settings.
 |---|---|---|
 | `minimax` | `https://platform.minimax.io/v1/api/openplatform/coding_plan/remains` | `MINIMAX_CODING_API_KEY` / `MINIMAX_API_KEY` env; region `io` / `com` (mainland CN) via `minimaxRegion` UserDefault |
 | `codex` | (uses ChatGPT backend API via `~/.codex/auth.json` — OAuth by `codex` CLI) | zero-config, no token in BirdNion config |
-| `hapo` | `https://<HAPO_BASE_URL>` (+ `https://<HAPO_ME_URL>` for identity) | `HAPO_API_KEY` env (not yet wired — set via Settings), `baseURL` field overridable per provider entry |
+| `hapo` | (no default — endpoints resolved at runtime from env vars, see below) | `HAPO_BASE_URL` / `HAPO_ME_URL` / `HAPO_AUTH_TEMPLATE` env vars; if missing the row short-circuits with `"HAPO_BASE_URL chưa được set"` |
 | `claude` | `https://api.anthropic.com/api/oauth/usage` (+ `claude.ai/api/*` for cost scrape) | OAuth from `Claude Code-credentials` Keychain (owned by Claude Code app); admin API key path uses BirdNion config |
 | `openrouter` | `https://openrouter.ai/api/v1/credits` | bearer token |
 | `deepseek` | `https://api.deepseek.com/user/balance` | bearer token |
 | `zai` | `https://api.z.ai/api/monitor/usage/quota/limit` (region `global`); `https://open.bigmodel.cn/api/monitor/usage/quota/limit` (region `cn`) | bearer token; region via `zaiRegion` UserDefault |
+
+### Environment variables
+
+BirdNion reads the following env vars at startup (all optional; unset = empty / fallback):
+
+| Variable | Purpose | Fallback |
+|---|---|---|
+| `BIRDNION_CONFIG` | Full path to the config file (overrides path priority below) | none |
+| `XDG_CONFIG_HOME` | Parent dir for the config file (XDG-compliant) | `~/.config` |
+| `MINIMAX_CODING_API_KEY` / `MINIMAX_API_KEY` | MiniMax token (env override) | file entry in BirdNion config |
+| `HAPO_BASE_URL` | Hapo AI Hub weekly budget endpoint | empty → provider short-circuits with `"HAPO_BASE_URL chưa được set"` |
+| `HAPO_ME_URL` | Hapo identity endpoint (`/v1/me`) | empty → identity fetch is skipped (budget still works) |
+| `HAPO_AUTH_TEMPLATE` | `Authorization` header template (must contain `{token}`) | `Bearer {token}` |
+| `BIRDNION_SUPPORT_EMAIL` | `mailto:` link shown in Settings → About | `mailto:support@localhost` |
+
+Set them via shell before launching:
+```bash
+export HAPO_BASE_URL="https://your-hapo-host/v1/budget/week"
+export HAPO_ME_URL="https://your-hapo-host/v1/me"
+export HAPO_AUTH_TEMPLATE="Bearer {token}"
+open /Applications/BirdNion.app
+```
 
 ### File path
 
