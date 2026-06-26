@@ -388,6 +388,14 @@ struct ProvidersPane: View {
             if row.id == "codex", let n = s?.resetCreditsAvailable {
                 infoRow("Reset khả dụng", "\(n) lần")
             }
+            if row.id == "codex", let web = s?.codexWeb {
+                if let cr = web.codeReviewRemainingPercent {
+                    infoRow("Code review", "\(cr)% còn")
+                }
+                if let n = web.creditsHistoryCount {
+                    infoRow("Lịch sử credits", "\(n) mục")
+                }
+            }
             if let err = s?.error {
                 infoRow("Lỗi", err)
             } else {
@@ -809,6 +817,10 @@ struct ProvidersPane: View {
                 .padding(.vertical, 10)
             }
 
+            if row.id == "codex" {
+                codexWebExtrasControls()
+            }
+
             if row.id == "minimax" {
                 SettingsRowDivider()
                 HStack(spacing: 12) {
@@ -988,6 +1000,51 @@ struct ProvidersPane: View {
         case "cli": return "Chỉ `codex app-server` RPC cục bộ — bỏ qua OAuth."
         default: return ""
         }
+    }
+
+    /// OpenAI web extras toggle + cookie source (auto/manual) for Codex.
+    @ViewBuilder
+    private func codexWebExtrasControls() -> some View {
+        SettingsRowDivider()
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: Binding(
+                get: { settings.codexOpenAIWebEnabled },
+                set: { settings.codexOpenAIWebEnabled = $0; Task { await quota.refresh() } }
+            )) {
+                Text("OpenAI web extras").font(.system(size: 13, weight: .semibold))
+            }
+            Text("Quét chatgpt.com (WebView ẩn) lấy code-review %, credits, lịch sử. Nặng pin/mạng — mặc định tắt.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+
+            if settings.codexOpenAIWebEnabled {
+                HStack(spacing: 12) {
+                    Text("Cookie").font(.system(size: 12))
+                    Spacer(minLength: 8)
+                    Picker("", selection: Binding(
+                        get: { settings.codexCookieSource },
+                        set: { settings.codexCookieSource = $0; Task { await quota.refresh() } }
+                    )) {
+                        ForEach(ProviderCookieSource.allCases) { src in
+                            Text(src.displayName).tag(src.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 110)
+                }
+                if settings.codexCookieSource == "manual" {
+                    TextField("Dán Cookie: header từ chatgpt.com", text: Binding(
+                        get: { settings.codexManualCookieHeader },
+                        set: { settings.codexManualCookieHeader = $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     /// Cookie source picker — mirrors CodexBar's `ProviderCookieSource`.

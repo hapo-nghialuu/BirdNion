@@ -124,8 +124,10 @@ final class CodexProvider: QuotaProvider {
     private func cliRPCSuccess(_ usage: CodexCLIUsage,
                                credentials: CodexCredentials?) async -> ProviderStatus {
         async let versionTask = versionProbe()
+        async let webTask = webExtrasIfEnabled(emailHint: usage.email)
         let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
         let version = await versionTask
+        let web = await webTask
         let label = usage.email ?? credentials.map(accountLabel) ?? "Codex"
         let status = ProviderStatus(
             id: id,
@@ -135,12 +137,13 @@ final class CodexProvider: QuotaProvider {
             error: nil,
             accountLabel: label,
             planType: CodexPlanFormatting.displayName(usage.planType),
-            creditsRemaining: usage.credits,
+            creditsRemaining: usage.credits ?? web?.creditsRemaining,
             version: version,
             serviceStatus: service?.description,
             serviceStatusLevel: service?.indicator,
             accountID: credentials?.accountId,
-            sourceLabel: "CLI")
+            sourceLabel: "CLI",
+            codexWeb: web)
         cacheSnapshot(status)
         return status
     }
@@ -246,9 +249,12 @@ final class CodexProvider: QuotaProvider {
             accessToken: credentials.accessToken,
             accountId: credentials.accountId,
             session: session)
+        async let webTask = webExtrasIfEnabled(
+            emailHint: CodexAuthStore.emailFromIDToken(credentials.idToken))
         let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
         let version = await versionTask
         let reset = await resetTask
+        let web = await webTask
 
         let status = ProviderStatus(
             id: id,
@@ -258,15 +264,26 @@ final class CodexProvider: QuotaProvider {
             error: nil,
             accountLabel: accountLabel(credentials),
             planType: CodexPlanFormatting.displayName(usage.planType),
-            creditsRemaining: usage.credits?.balance,
+            // Web dashboard fills credits only when OAuth doesn't provide them.
+            creditsRemaining: usage.credits?.balance ?? web?.creditsRemaining,
             version: version,
             serviceStatus: service?.description,
             serviceStatusLevel: service?.indicator,
             accountID: credentials.accountId,
             resetCreditsAvailable: reset,
-            sourceLabel: "OAuth")
+            sourceLabel: "OAuth",
+            codexWeb: web)
         cacheSnapshot(status)
         return status
+    }
+
+    /// Best-effort OpenAI web-dashboard extras, only when the user enabled them.
+    /// Skipped in tests (an injected `authURL` means a fake account) so unit
+    /// tests never spawn a WKWebView. A manual refresh forces a re-scrape.
+    private func webExtrasIfEnabled(emailHint: String?) async -> CodexWebExtras? {
+        guard authURLOverride == nil else { return nil }
+        return await CodexWebDashboard.extras(
+            email: emailHint, forceRefresh: RefreshInteraction.isManual)
     }
 
     /// Persist the status for the active account so switching accounts shows it

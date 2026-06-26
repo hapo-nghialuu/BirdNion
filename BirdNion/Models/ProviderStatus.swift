@@ -142,6 +142,10 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
     /// path the source selector resolved to. nil for providers that don't
     /// expose a selectable source.
     let sourceLabel: String?
+    /// Optional OpenAI web-dashboard extras for Codex (code-review remaining,
+    /// credits, purchase URL) — populated only when the user enables OpenAI web
+    /// extras. nil otherwise.
+    let codexWeb: CodexWebExtras?
 
     init(id: String,
          displayName: String,
@@ -159,7 +163,8 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
          resetCreditsAvailable: Int? = nil,
          cost: ProviderCostSnapshot? = nil,
          webExtras: ClaudeWebExtras? = nil,
-         sourceLabel: String? = nil) {
+         sourceLabel: String? = nil,
+         codexWeb: CodexWebExtras? = nil) {
         self.id = id
         self.displayName = displayName
         self.windows = windows
@@ -177,6 +182,35 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
         self.cost = cost
         self.webExtras = webExtras
         self.sourceLabel = sourceLabel
+        self.codexWeb = codexWeb
+    }
+}
+
+/// OpenAI web-dashboard extras for Codex, scraped from chatgpt.com when the user
+/// enables "OpenAI web extras". Mirrors the dashboard-only fields CodexBar
+/// surfaces. All optional — a partial scrape still yields what it found.
+struct CodexWebExtras: Codable, Equatable, Sendable {
+    /// Email the dashboard reports as signed in (for account matching).
+    let signedInEmail: String?
+    /// Code-review quota remaining, as a percentage (0...100).
+    let codeReviewRemainingPercent: Int?
+    /// Credit balance from the dashboard (fallback when OAuth/CLI don't carry it).
+    let creditsRemaining: Double?
+    /// Best-effort URL to the credits purchase page.
+    let creditsPurchaseURL: String?
+    /// Number of credit-usage history rows the dashboard returned.
+    let creditsHistoryCount: Int?
+
+    init(signedInEmail: String? = nil,
+         codeReviewRemainingPercent: Int? = nil,
+         creditsRemaining: Double? = nil,
+         creditsPurchaseURL: String? = nil,
+         creditsHistoryCount: Int? = nil) {
+        self.signedInEmail = signedInEmail
+        self.codeReviewRemainingPercent = codeReviewRemainingPercent
+        self.creditsRemaining = creditsRemaining
+        self.creditsPurchaseURL = creditsPurchaseURL
+        self.creditsHistoryCount = creditsHistoryCount
     }
 }
 

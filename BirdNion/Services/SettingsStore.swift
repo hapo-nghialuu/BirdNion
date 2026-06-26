@@ -70,6 +70,13 @@ final class SettingsStore: ObservableObject {
     /// Codex usage source (auto/oauth/cli). `CodexProvider` reads the same key.
     @AppStorage(CodexUsageSource.defaultsKey) var codexUsageSource: String = CodexUsageSource.auto.rawValue
 
+    /// OpenAI web extras for Codex (off by default — loads chatgpt.com in a
+    /// hidden WebView, heavier on battery/network). `CodexWebDashboard` reads
+    /// these keys directly.
+    @AppStorage(CodexWebDashboard.enabledKey) var codexOpenAIWebEnabled: Bool = false
+    @AppStorage(CodexWebDashboard.cookieSourceKey) var codexCookieSource: String = "auto"
+    @AppStorage(CodexWebDashboard.manualCookieKey) var codexManualCookieHeader: String = ""
+
     // MARK: - Claude parity settings (CodexBar parity)
     //
     // The keys below are read directly by `ClaudeProvider` (so the fetcher
