@@ -362,8 +362,8 @@ struct ProvidersPane: View {
         return Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
             infoRow("Trạng thái", row.enabled == true ? "Đang bật" : "Đang tắt")
             if row.id == "codex" {
-                // OAuth-only auth (token read from ~/.codex/auth.json).
-                infoRow("Nguồn", "OAuth")
+                // Which source actually produced the data (OAuth / CLI).
+                infoRow("Nguồn", s?.sourceLabel ?? "OAuth")
             } else if row.id == "claude" {
                 // OAuth token comes from the Claude Code Keychain item.
                 infoRow("Nguồn", "OAuth")
@@ -757,6 +757,33 @@ struct ProvidersPane: View {
 
             if row.id == "codex" {
                 SettingsRowDivider()
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 12) {
+                        Text("Nguồn dữ liệu")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer(minLength: 8)
+                        Picker("", selection: Binding(
+                            get: { settings.codexUsageSource },
+                            set: { settings.codexUsageSource = $0; Task { await quota.refresh() } }
+                        )) {
+                            ForEach(CodexUsageSource.allCases) { src in
+                                Text(src.displayName).tag(src.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 150)
+                    }
+                    Text(codexSourceSubtitle(for: settings.codexUsageSource))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+
+            if row.id == "codex" {
+                SettingsRowDivider()
                 HStack(spacing: 12) {
                     Text("Menu bar hiển thị")
                         .font(.system(size: 13, weight: .semibold))
@@ -950,6 +977,15 @@ struct ProvidersPane: View {
         case "web": return "Scrape claude.ai qua cookie Safari/Chrome."
         case "cli": return "Chạy `claude` CLI trong PTY (cần CLI cài đặt)."
         case "api": return "Anthropic Admin API (cần nhập key bên dưới)."
+        default: return ""
+        }
+    }
+
+    private func codexSourceSubtitle(for source: String) -> String {
+        switch source {
+        case "auto": return "OAuth, fallback sang CLI `codex app-server` khi lỗi (mặc định)."
+        case "oauth": return "Chỉ OAuth (token ~/.codex/auth.json) — không fallback CLI."
+        case "cli": return "Chỉ `codex app-server` RPC cục bộ — bỏ qua OAuth."
         default: return ""
         }
     }

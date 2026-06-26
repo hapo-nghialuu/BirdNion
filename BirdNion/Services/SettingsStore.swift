@@ -67,6 +67,8 @@ final class SettingsStore: ObservableObject {
     /// Which Codex window drives the menu bar percent. `MenuBarIconRenderer`
     /// reads the same UserDefaults key directly.
     @AppStorage(CodexMenuBarMetric.defaultsKey) var codexMenuBarMetric: String = CodexMenuBarMetric.automatic.rawValue
+    /// Codex usage source (auto/oauth/cli). `CodexProvider` reads the same key.
+    @AppStorage(CodexUsageSource.defaultsKey) var codexUsageSource: String = CodexUsageSource.auto.rawValue
 
     // MARK: - Claude parity settings (CodexBar parity)
     //

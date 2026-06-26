@@ -121,6 +121,73 @@ final class CodexProviderTests: XCTestCase {
     // CodexBarCore for CostUsageTokenSnapshot, which would otherwise clash with
     // BirdNion's own Codex types in this file).
 
+    // MARK: - Usage source
+
+    func testUsageSourceDefaultsToAuto() {
+        let key = CodexUsageSource.defaultsKey
+        let previous = UserDefaults.standard.string(forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(CodexUsageSource.current, .auto)
+    }
+
+    func testSourceCLIUsesCLIDirectly() throws {
+        // .cli skips OAuth entirely — the stub session must never be hit.
+        let session = URLSession(configuration: makeStubConfig())
+        StubURLProtocol.handler = { req in
+            XCTFail("OAuth must not be called in .cli mode")
+            return (HTTPURLResponse(url: req.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        defer { StubURLProtocol.reset() }
+
+        let cli = CodexCLIUsage(
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+            planType: "pro", credits: 3, email: "cli@example.com")
+        let p = CodexProvider(session: session, authURL: tempURL(), source: .cli,
+                              statusProbe: { nil }, versionProbe: { nil },
+                              cliUsageProbe: { cli })
+        let exp = expectation(description: "fetch")
+        var status: ProviderStatus?
+        Task { status = try? await p.fetch(); exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(status?.windows.count, 1)
+        XCTAssertEqual(status?.sourceLabel, "CLI")
+        XCTAssertEqual(status?.accountLabel, "cli@example.com")
+        XCTAssertEqual(status?.planType, "Pro 20x")
+    }
+
+    func testSourceOAuthDoesNotFallBackToCLI() throws {
+        let url = tempURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let nowISO = ISO8601DateFormatter().string(from: Date())
+        let auth = #"{"tokens":{"access_token":"at","refresh_token":"rt"},"last_refresh":"\#(nowISO)"}"#
+        try auth.data(using: .utf8)!.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let session = URLSession(configuration: makeStubConfig())
+        StubURLProtocol.handler = { req in
+            (HTTPURLResponse(url: req.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        defer { StubURLProtocol.reset() }
+
+        // CLI probe returns data, but .oauth must ignore it and fail hard.
+        let cli = CodexCLIUsage(windows: [QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)],
+                                planType: nil, credits: nil, email: nil)
+        let p = CodexProvider(session: session, authURL: url, source: .oauth,
+                              statusProbe: { nil }, versionProbe: { nil },
+                              cliUsageProbe: { cli })
+        let exp = expectation(description: "fetch")
+        var status: ProviderStatus?
+        Task { status = try? await p.fetch(); exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+        XCTAssertEqual(status?.windows.count, 0)
+        XCTAssertEqual(status?.error, "HTTP 500")
+    }
+
     // MARK: - CodexCLILaunchGate
 
     func testLaunchGateThrottlesBackgroundAfterFailure() {
@@ -217,6 +284,7 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertNil(status?.error)
         XCTAssertEqual(status?.windows.count, 2)
         XCTAssertEqual(status?.windows[0].label, "5 giờ")
+        XCTAssertEqual(status?.sourceLabel, "OAuth")
     }
 
     func testFetchUnauthorizedNoRefreshToken() throws {

@@ -137,6 +137,11 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
     /// Mirrors CodexBar's `ClaudeUsageSnapshot` minus the quota windows
     /// (which we keep in `windows` for layout consistency across providers).
     let webExtras: ClaudeWebExtras?
+    /// Which data source actually produced this status — e.g. "OAuth" / "CLI"
+    /// for Codex. Surfaced in the providers panel so the user can see which
+    /// path the source selector resolved to. nil for providers that don't
+    /// expose a selectable source.
+    let sourceLabel: String?
 
     init(id: String,
          displayName: String,
@@ -153,7 +158,8 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
          planName: String? = nil,
          resetCreditsAvailable: Int? = nil,
          cost: ProviderCostSnapshot? = nil,
-         webExtras: ClaudeWebExtras? = nil) {
+         webExtras: ClaudeWebExtras? = nil,
+         sourceLabel: String? = nil) {
         self.id = id
         self.displayName = displayName
         self.windows = windows
@@ -170,6 +176,7 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
         self.resetCreditsAvailable = resetCreditsAvailable
         self.cost = cost
         self.webExtras = webExtras
+        self.sourceLabel = sourceLabel
     }
 }
 

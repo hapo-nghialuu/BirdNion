@@ -31,20 +31,37 @@ final class CodexProvider: QuotaProvider {
     /// `UsageFetcher` (`codex app-server`). Injected so tests stay pure — the
     /// default spawns a child process, which tests must not do.
     private let cliUsageProbe: () async -> CodexCLIUsage?
+    /// Explicit usage-source (tests). When nil, resolved per fetch from the
+    /// user's `codexUsageSource` preference so switching sources takes effect
+    /// without rebuilding the provider.
+    private let sourceOverride: CodexUsageSource?
+    private var source: CodexUsageSource { sourceOverride ?? .current }
 
     init(session: URLSession = .shared,
          authURL: URL? = nil,
+         source: CodexUsageSource? = nil,
          statusProbe: @escaping () async -> OpenAIServiceStatus? = { await OpenAIStatusProbe.fetch() },
          versionProbe: @escaping () async -> String? = { await CodexCLI.shared.version() },
          cliUsageProbe: @escaping () async -> CodexCLIUsage? = { await CodexAppServerRPC.fetch() }) {
         self.session = session
         self.authURLOverride = authURL
+        self.sourceOverride = source
         self.statusProbe = statusProbe
         self.versionProbe = versionProbe
         self.cliUsageProbe = cliUsageProbe
     }
 
     func fetch() async throws -> ProviderStatus {
+        // CLI-only source: skip OAuth entirely and read from `codex app-server`.
+        // Credentials are still loaded best-effort for the account label / id.
+        if source == .cli {
+            let credentials = try? CodexAuthStore.load(url: authURL)
+            if let cli = await cliUsageProbe() {
+                return await cliRPCSuccess(cli, credentials: credentials)
+            }
+            return failure("Codex CLI không trả dữ liệu — kiểm tra `codex`")
+        }
+
         var credentials: CodexCredentials
         do {
             credentials = try CodexAuthStore.load(url: authURL)
@@ -84,14 +101,14 @@ final class CodexProvider: QuotaProvider {
                     return await success(usage, credentials: refreshed)
                 }
             }
-            if let cli = await cliUsageProbe() {
+            if source == .auto, let cli = await cliUsageProbe() {
                 return await cliRPCSuccess(cli, credentials: credentials)
             }
             return failure("Token Codex hết hạn — chạy `codex` để đăng nhập lại")
         } catch CodexUsageError.serverError(let code) {
-            // Server down/5xx — try the CLI RPC so the user still sees something
-            // rather than a hard failure.
-            if let cli = await cliUsageProbe() {
+            // Server down/5xx — in auto mode try the CLI RPC so the user still
+            // sees something rather than a hard failure.
+            if source == .auto, let cli = await cliUsageProbe() {
                 return await cliRPCSuccess(cli, credentials: credentials)
             }
             return failure("HTTP \(code)")
@@ -105,23 +122,25 @@ final class CodexProvider: QuotaProvider {
     /// Map a Codex CLI RPC result to a `ProviderStatus` (the OAuth fallback).
     /// Side data (status page, CLI version) is best-effort, like `success`.
     private func cliRPCSuccess(_ usage: CodexCLIUsage,
-                               credentials: CodexCredentials) async -> ProviderStatus {
+                               credentials: CodexCredentials?) async -> ProviderStatus {
         async let versionTask = versionProbe()
         let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
         let version = await versionTask
+        let label = usage.email ?? credentials.map(accountLabel) ?? "Codex"
         return ProviderStatus(
             id: id,
             displayName: displayName,
             windows: usage.windows,
             lastUpdated: Date(),
             error: nil,
-            accountLabel: usage.email ?? accountLabel(credentials),
+            accountLabel: label,
             planType: CodexPlanFormatting.displayName(usage.planType),
             creditsRemaining: usage.credits,
             version: version,
             serviceStatus: service?.description,
             serviceStatusLevel: service?.indicator,
-            accountID: credentials.accountId)
+            accountID: credentials?.accountId,
+            sourceLabel: "CLI")
     }
 
     // MARK: - Mapping
@@ -242,7 +261,8 @@ final class CodexProvider: QuotaProvider {
             serviceStatus: service?.description,
             serviceStatusLevel: service?.indicator,
             accountID: credentials.accountId,
-            resetCreditsAvailable: reset)
+            resetCreditsAvailable: reset,
+            sourceLabel: "OAuth")
     }
 
     /// Thin wrapper so the async-let call site stays tidy. Never throws —
@@ -379,6 +399,31 @@ actor CodexCLI {
         // Normalize to "codex-cli <version>" for display (raw output may be just
         // the version number, or already prefixed).
         return out.lowercased().contains("codex") ? out : "codex-cli \(out)"
+    }
+}
+
+// MARK: - Usage source
+
+/// Which data source `CodexProvider` uses for usage. Mirrors CodexBar's
+/// Codex usage-source picker. `SettingsStore.codexUsageSource` writes the key.
+enum CodexUsageSource: String, CaseIterable, Identifiable {
+    case auto    // OAuth, then the local CLI RPC as fallback (default)
+    case oauth   // OAuth only — no CLI fallback
+    case cli     // local `codex app-server` RPC only — skip OAuth
+
+    static let defaultsKey = "codexUsageSource"
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .auto:  "Tự động"
+        case .oauth: "OAuth"
+        case .cli:   "CLI"
+        }
+    }
+
+    static var current: CodexUsageSource {
+        CodexUsageSource(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .auto
     }
 }
 
