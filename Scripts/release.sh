@@ -12,7 +12,7 @@
 #   3. xcodebuild -quiet build the Release .app
 #   4. Copy build/Release/BirdNion.app → ~/Desktop/BirdNion.app
 #   5. Zip → ~/Desktop/BirdNion-<version>.zip
-#   6. gh release create/upload v<version> on homebrew-tap
+#   6. gh release create/upload v<version> on BirdNion repo
 #   7. Compute zip SHA, update Casks/birdnion.rb, push tap repo
 #
 # Filename uses `BirdNion-<version>.zip` (no `v` prefix) to work around a
@@ -39,7 +39,8 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TAP_REPO="hapo-nghialuu/homebrew-tap"
+ASSET_REPO="hapo-nghialuu/BirdNion"   # where the zip lives (GitHub Releases)
+TAP_REPO="hapo-nghialuu/homebrew-tap"  # where the cask ruby file lives
 ZIP_NAME="BirdNion-${VERSION}.zip"
 DESKTOP="$HOME/Desktop"
 
@@ -134,20 +135,20 @@ echo "    sha256: $ZIP_SHA"
 # 6. Upload to GitHub release
 TAG="v${VERSION}"
 echo "==> gh release ${TAG}"
-if gh release view "$TAG" --repo "$TAP_REPO" >/dev/null 2>&1; then
+if gh release view "$TAG" --repo "$ASSET_REPO" >/dev/null 2>&1; then
   echo "    release $TAG exists — uploading new asset (filename avoids cache)"
-  run gh release upload "$TAG" "$ZIP_PATH" --repo "$TAP_REPO"
+  run gh release upload "$TAG" "$ZIP_PATH" --repo "$ASSET_REPO"
 else
   echo "    creating new release $TAG"
   run gh release create "$TAG" "$ZIP_PATH" \
-    --repo "$TAP_REPO" \
+    --repo "$ASSET_REPO" \
     --title "BirdNion ${TAG}" \
     --notes-file <(git -C "$REPO_ROOT" log --no-merges --pretty=format:"- %s" "$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" 2>/dev/null)
 fi
 
 # Verify the upload actually landed
 if [[ "$DRY_RUN" -eq 0 ]]; then
-  DOWNLOAD_SHA=$(curl -sL "https://github.com/${TAP_REPO}/releases/download/${TAG}/${ZIP_NAME}" | shasum -a 256 | awk '{print $1}')
+  DOWNLOAD_SHA=$(curl -sL "https://github.com/${ASSET_REPO}/releases/download/${TAG}/${ZIP_NAME}" | shasum -a 256 | awk '{print $1}')
   if [[ "$DOWNLOAD_SHA" != "$ZIP_SHA" ]]; then
     echo "Upload SHA mismatch! local=$ZIP_SHA downloaded=$DOWNLOAD_SHA" >&2
     exit 1
@@ -193,7 +194,7 @@ fi
 cat <<EOF
 
 ==> Done.
-  Release:    https://github.com/${TAP_REPO}/releases/tag/${TAG}
+  Release:    https://github.com/${ASSET_REPO}/releases/tag/${TAG}
   Install:    brew install --cask ${TAP_REPO}/birdnion
   Verify:     brew reinstall --cask ${TAP_REPO}/birdnion && xattr -l /Applications/BirdNion.app
 EOF
