@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="docs/images/logo.png" width="128" alt="BirdNion" />
+</div>
+
 # BirdNion 🪶 — every AI quota, in your menu bar.
 
 > Tiny macOS menu-bar app that keeps your AI subscription usage visible. MiniMax, Codex, Claude, Hapo AI Hub, OpenRouter, DeepSeek, z.ai.
