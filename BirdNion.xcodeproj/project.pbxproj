@@ -362,6 +362,14 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXTargetDependency section */
+		CCCC0015000000000000DT01 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AAAA000E000000000000T001 /* BirdNion */;
+			targetProxy = CCCC0011000000000000PXY1 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCLocalSwiftPackageReference section */
 		LSP0001000000000000PR001 /* XCLocalSwiftPackageReference "Vendor/CodexBar" */ = {
 			isa = XCLocalSwiftPackageReference;

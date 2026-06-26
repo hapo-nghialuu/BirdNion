@@ -3,11 +3,11 @@ import AppKit
 
 // MARK: - Quota Overview (CodexBar-style)
 
-/// CodexBar-inspired popover body:
-///   - Top: tabs over enabled providers (MiniMax / Hapo / ...).
-///   - Below tabs: provider info card (name + plan + last updated + status pill).
-///   - Then: per-window quota bars for the selected provider.
-///   - Bottom: action list (Refresh · Settings · About · Quit).
+/// Menu-bar popover body:
+///   - Top: BirdNion identity + manual refresh.
+///   - Provider chips with lowest remaining quota.
+///   - Selected provider metadata and quota summary/details.
+///   - Bottom: app-level actions.
 struct QuotaOverview: View {
     @EnvironmentObject var quota: QuotaService
     @State private var selectedProviderId: String? = nil
@@ -20,7 +20,7 @@ struct QuotaOverview: View {
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 7) {
                 if quota.displayStatuses.isEmpty {
                     // First-run / opt-in state. The bird logo + title + body
                     // + prominent Settings button are all contained in
@@ -33,34 +33,36 @@ struct QuotaOverview: View {
                     // on the hover state.
                     EmptyProvidersState()
                         .frame(maxWidth: .infinity)
-                }
-                let selected = effectiveSelectedId()
-                ProviderTabs(
-                    providers: quota.displayStatuses,
-                    selectedId: Binding(
-                        get: { selected },
-                        set: { selectedProviderId = $0 }
+                } else {
+                    BirdNionHeader(isRefreshing: quota.isRefreshing)
+                    let selected = effectiveSelectedId()
+                    ProviderTabs(
+                        providers: quota.displayStatuses,
+                        selectedId: Binding(
+                            get: { selected },
+                            set: { selectedProviderId = $0 }
+                        )
                     )
-                )
-                if let s = quota.displayStatuses.first(where: { $0.id == selected })
-                    ?? quota.displayStatuses.first {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
-                        ProviderCard(status: s)
-                        // Claude-specific: 30-day chart + top-model line.
-                        // Only rendered for the Claude tab so other providers
-                        // don't pull in the local session scan.
-                        if s.id == "claude", let report = claudeReport,
-                           !report.isEmpty {
-                            ClaudeUsageChartCard(report: report)
+                    if let s = quota.displayStatuses.first(where: { $0.id == selected })
+                        ?? quota.displayStatuses.first {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
+                            ProviderCard(status: s)
+                            // Claude-specific: 30-day chart + top-model line.
+                            // Only rendered for the Claude tab so other providers
+                            // don't pull in the local session scan.
+                            if s.id == "claude", let report = claudeReport,
+                               !report.isEmpty {
+                                ClaudeUsageChartCard(report: report)
+                            }
                         }
                     }
                 }
                 Spacer(minLength: 0)
                 ActionsList()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
         .onAppear {
             if selectedProviderId == nil,
@@ -114,30 +116,79 @@ struct QuotaOverview: View {
     }
 }
 
+// MARK: - App Header
+
+struct BirdNionHeader: View {
+    let isRefreshing: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image("OriginalImage")
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("BirdNion")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(isRefreshing ? "Đang cập nhật" : "Sẵn sàng")
+                    .font(.system(size: 10))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+            } label: {
+                ZStack {
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(VocabbyTheme.blue)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.blue)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isRefreshing)
+            .help("Refresh")
+            .accessibilityLabel("Refresh")
+        }
+    }
+}
+
 // MARK: - Provider Tabs
 
-/// Tab chip over enabled providers. Layout (left-aligned rows):
-///   [logo] MiniMax
-///   [logo] 96% / 95%
-/// Logo-only chip per provider. Fixed 44×44 so the tab row lines up
-/// regardless of which provider is selected AND the hit area is large
-/// enough to click reliably on macOS (36×36 was registering as a
-/// near-miss on slower trackpads). Active chip gets the brand blue
-/// background; inactive chips sit on a light badge background.
-/// Status info (display name + quota %) used to render in the chip is
-/// now in the provider header card below, so the chips stay compact.
+/// Native-feeling segmented provider selector with icon + provider name.
 struct ProviderTabs: View {
-    static let chipSize: CGFloat = 44
+    static let chipHeight: CGFloat = 30
 
     let providers: [ProviderStatus]
     @Binding var selectedId: String
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(providers, id: \.id) { p in
-                chip(for: p)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
+                    chip(for: provider)
+                    if index < providers.count - 1 {
+                        Divider()
+                            .frame(height: 18)
+                    }
+                }
             }
-            Spacer(minLength: 0)
+            .background(VocabbyTheme.segment)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 1)
+            )
         }
     }
 
@@ -147,26 +198,38 @@ struct ProviderTabs: View {
         Button {
             selectedId = p.id
         } label: {
-            providerLogoView(for: p.id)
-                .frame(width: 26, height: 26)
-                .frame(width: Self.chipSize, height: Self.chipSize)
-                .background(active ? VocabbyTheme.blue : VocabbyTheme.badge)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(active ? Color.clear : VocabbyTheme.track, lineWidth: 1)
-                )
+            HStack(spacing: 5) {
+                ProviderLogoMark(id: p.id)
+                    .frame(width: 16, height: 16)
+                Text(p.displayName)
+                    .font(.system(size: 11, weight: active ? .semibold : .regular))
+                    .foregroundStyle(VocabbyTheme.primary)
+                    .lineLimit(1)
+            }
+            .frame(minWidth: 72, minHeight: Self.chipHeight)
+            .padding(.horizontal, 7)
+            .background(active ? VocabbyTheme.selectedSurface : Color.clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())  // whole chip is the click target
         .help(p.displayName)
         .accessibilityLabel(p.displayName)
     }
+}
 
-    /// Real brand logo per provider id. Falls back to a SF Symbol circle
-/// when a provider has no bundled image asset.
+/// Real brand logo per provider id. Falls back to a SF Symbol circle when a
+/// provider has no bundled image asset.
+struct ProviderLogoMark: View {
+    let id: String
+
+    var body: some View {
+        logo
+            .aspectRatio(contentMode: .fit)
+    }
+
     @ViewBuilder
-    private func providerLogoView(for id: String) -> some View {
+    private var logo: some View {
         switch id {
         case "minimax":
             Image("MiniMaxLogo").resizable().interpolation(.high)
@@ -193,14 +256,21 @@ struct ProviderTabs: View {
             Image("ClaudeLogo").resizable().interpolation(.high)
                 .foregroundStyle(VocabbyTheme.claude)
         default:
-            Image(systemName: "circle")
+            Image(systemName: "circle.fill")
+                .foregroundStyle(VocabbyTheme.secondary)
         }
+    }
+}
+
+enum ProviderStatusSummary {
+    static func lowestWindow(_ status: ProviderStatus) -> QuotaWindow? {
+        status.windows.min { $0.remainingPct < $1.remainingPct }
     }
 }
 
 // MARK: - Provider Header Card
 
-/// Provider info card: name + plan tier + last-updated + status pill.
+/// Provider info card: brand mark + account metadata + menu-bar visibility.
 struct ProviderHeaderCard: View {
     let status: ProviderStatus
     /// True when this is a placeholder entry — `statuses` hasn't received
@@ -218,12 +288,28 @@ struct ProviderHeaderCard: View {
         return "\(secs / 3600) giờ trước"
     }
 
-    private var planTier: String {
-        // Heuristic by provider id; expand when more providers are added.
+    private var metadataParts: [String] {
+        var parts: [String] = []
+        if let account = status.accountLabel, !account.isEmpty {
+            parts.append(account)
+        }
+        if let plan = planLabel {
+            parts.append(plan)
+        }
+        if let source = status.sourceLabel, !source.isEmpty {
+            parts.append(source)
+        }
+        parts.append(updatedAgo)
+        return parts
+    }
+
+    private var planLabel: String? {
+        if let name = status.planName, !name.isEmpty { return name }
+        if let type = status.planType, !type.isEmpty { return type }
         switch status.id {
         case "minimax": return "Token Plan"
-        case "hapo":    return "Hapo AI Hub"
-        default:        return ""
+        case "hapo": return "Hapo AI Hub"
+        default: return nil
         }
     }
 
@@ -231,15 +317,19 @@ struct ProviderHeaderCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            Image("ProviderLogo")
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 48, height: 48)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            VStack(alignment: .leading, spacing: 2) {
+            ProviderLogoMark(id: status.id)
+                .frame(width: 24, height: 24)
+                .padding(5)
+                .background(VocabbyTheme.segment)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(VocabbyTheme.border, lineWidth: 1)
+                )
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(status.displayName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     if !isPlaceholder && quota.isRefreshing {
                         // Provider has last-known data; a refresh is in
@@ -268,10 +358,7 @@ struct ProviderHeaderCard: View {
                             .font(.system(size: 11).monospacedDigit())
                             .foregroundStyle(VocabbyTheme.secondary)
                     } else {
-                        let subtitleParts = [status.accountLabel, planTier, updatedAgo]
-                            .compactMap { $0 }
-                            .filter { !$0.isEmpty }
-                        Text(subtitleParts.joined(separator: " · "))
+                        Text(metadataParts.joined(separator: " · "))
                             .font(.system(size: 11).monospacedDigit())
                             .foregroundStyle(VocabbyTheme.secondary)
                             .lineLimit(1)
@@ -285,38 +372,95 @@ struct ProviderHeaderCard: View {
         // Padding is tighter than the standard vocabbyCard (12pt) so the
         // taller 48pt logo doesn't grow the card height.
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(VocabbyTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 1)
+        .padding(.vertical, 7)
+        .background(VocabbyTheme.group)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
     }
 }
 
-// MARK: - Provider Card + Window Row (unchanged from before)
+// MARK: - Provider Card + Window Row
 
 /// Per-provider card: name + windows.
 struct ProviderCard: View {
     let status: ProviderStatus
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 9) {
             if let err = status.error {
-                HStack(spacing: 6) {
+                HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.red)
+                        .font(.system(size: 12))
+                        .foregroundStyle(VocabbyTheme.critical)
                     Text(err)
                         .font(.system(size: 11))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
                 }
+            } else if status.windows.isEmpty {
+                LoadingQuotaSkeleton()
             } else {
+                QuotaSummaryStrip(status: status)
+                Divider()
+                    .overlay(VocabbyTheme.border)
                 ForEach(status.windows) { win in
                     WindowRow(window: win, lastUpdated: status.lastUpdated)
                 }
             }
         }
         .vocabbyCard()
+    }
+}
+
+struct QuotaSummaryStrip: View {
+    let status: ProviderStatus
+
+    private var lowest: QuotaWindow? {
+        ProviderStatusSummary.lowestWindow(status)
+    }
+
+    private var tone: Color {
+        VocabbyTheme.quotaColor(remaining: lowest?.remainingPct ?? 100)
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Quota thấp nhất")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                Text(lowest?.label ?? status.displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.primary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text("\(lowest?.remainingPct ?? 0)%")
+                .font(.system(size: 18, weight: .semibold).monospacedDigit())
+                .foregroundStyle(tone)
+        }
+        .padding(.vertical, 1)
+    }
+}
+
+struct LoadingQuotaSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(VocabbyTheme.track)
+                .frame(width: 124, height: 10)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(VocabbyTheme.track)
+                .frame(height: 8)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(VocabbyTheme.track.opacity(0.75))
+                .frame(width: 180, height: 8)
+        }
+        .padding(.vertical, 2)
+        .accessibilityLabel("Đang tải quota")
     }
 }
 
@@ -328,14 +472,13 @@ struct WindowRow: View {
     /// the API didn't return an explicit reset timestamp.
     let lastUpdated: Date
 
-    private var isBlue: Bool { window.label.contains("Tuần") }
     private var barColor: Color {
-        isBlue ? VocabbyTheme.blue : VocabbyTheme.yellow
+        VocabbyTheme.quotaColor(remaining: window.remainingPct)
     }
 
     private var subtitleText: String {
         if let s = window.subtitle, !s.isEmpty { return s }
-        return "Còn \(window.remainingPct)%"
+        return "Đã dùng \(window.usedPct)%"
     }
 
     private var resetText: String {
@@ -352,45 +495,44 @@ struct WindowRow: View {
         }
         // 3. Last-resort label-based fallback for old providers that don't
         //    surface either resetDate or windowSeconds.
-        if window.label.contains("Tuần") { return "Resets weekly" }
-        if window.label.contains("5 giờ") { return "Resets in 5h" }
+        if window.label.contains("Tuần") { return "Reset hằng tuần" }
+        if window.label.contains("5 giờ") { return "Reset trong 5h" }
         return ""
     }
 
     private static func formatReset(_ date: Date) -> String {
         let secs = Int(date.timeIntervalSinceNow)
-        if secs <= 0 { return "Resets soon" }
+        if secs <= 0 { return "Reset sắp tới" }
         let days = secs / 86_400
         let hours = (secs % 86_400) / 3_600
         let mins = (secs % 3_600) / 60
-        if days > 0 { return "Resets in \(days)d \(hours)h" }
-        if hours > 0 { return "Resets in \(hours)h \(mins)m" }
-        return "Resets in \(mins)m"
+        if days > 0 { return "Reset trong \(days)d \(hours)h" }
+        if hours > 0 { return "Reset trong \(hours)h \(mins)m" }
+        return "Reset trong \(mins)m"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(window.label.uppercased())
+                Text(window.label)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.secondary)
-                    .tracking(0.5)
                 Spacer()
                 Text("\(window.remainingPct)%")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(VocabbyTheme.primary)
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(barColor)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                         .fill(VocabbyTheme.track)
-                        .frame(height: 8)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .frame(height: 5)
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                         .fill(barColor)
-                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 8)
+                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 5)
                 }
             }
-            .frame(height: 8)
+            .frame(height: 5)
             HStack(alignment: .firstTextBaseline) {
                 Text(subtitleText)
                     .font(.system(size: 10))
@@ -409,24 +551,8 @@ struct WindowRow: View {
 /// Vertical action list (icon + label rows). CodexBar-style, matches the
 /// footer menu of the reference app instead of the compact 4-icon row.
 struct ActionsList: View {
-    @EnvironmentObject var quota: QuotaService
-
-    /// When no provider is enabled (first-run), hide `Refresh` — there's
-    /// nothing to refresh yet. The user goes through Settings first to
-    /// opt in, then `Refresh` becomes useful.
-    private var isEmpty: Bool { quota.displayStatuses.isEmpty }
-
     var body: some View {
         VStack(spacing: 0) {
-            if !isEmpty {
-                ActionRow(icon: quota.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise",
-                          label: "Refresh",
-                          shortcut: nil,
-                          isLoading: quota.isRefreshing) {
-                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-                }
-                Divider().padding(.vertical, 2)
-            }
             ActionRow(icon: "gearshape", label: "Settings…",
                       shortcut: "⌘,",
                       isLoading: false) {
@@ -445,8 +571,12 @@ struct ActionsList: View {
                 NSApp.terminate(nil)
             }
         }
-        .background(VocabbyTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(VocabbyTheme.group)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
     }
 }
 
@@ -481,7 +611,7 @@ struct ActionRow: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -515,7 +645,7 @@ struct MenuBarVisibilityToggle: View {
         HStack(spacing: 6) {
             Image(systemName: hasError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(hasError ? Color.red : VocabbyTheme.blue)
+                .foregroundStyle(hasError ? VocabbyTheme.critical : VocabbyTheme.success)
             Toggle("", isOn: $isOn)
                 .toggleStyle(.switch)
                 .controlSize(.small)
@@ -546,7 +676,6 @@ enum AboutPresenter {
         Version \(version) (\(build))
 
         macOS menu bar app for tracking AI provider quota.
-        Bright blue, bright yellow, near-white.
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Đóng")
@@ -558,17 +687,23 @@ enum AboutPresenter {
 
 /// App color palette.
 enum VocabbyTheme {
-    static let background = Color(red: 0.898, green: 0.898, blue: 0.898)   // #E5E5E5
+    // Fixed light macOS-style surfaces. Do not follow Dark Mode here because
+    // the menu-bar popover should stay light and inspectable.
+    static let background = Color(red: 0.949, green: 0.949, blue: 0.953)   // #F2F2F3
     static let card       = Color.white
-    static let primary    = Color(red: 0.122, green: 0.122, blue: 0.180)   // #1F1F2E
-    static let secondary  = Color(red: 0.420, green: 0.447, blue: 0.502)   // #6B7280
-    static let tertiary   = Color(red: 0.620, green: 0.643, blue: 0.690)   // #9EA4AE
-    static let blue       = Color(red: 0.282, green: 0.624, blue: 0.925)   // #489FEC
-    static let blueSoft   = Color(red: 0.576, green: 0.773, blue: 0.992)   // #93C5FD
-    static let yellow     = Color(red: 1.000, green: 0.804, blue: 0.298)   // #FFCD4C
-    static let yellowSoft = Color(red: 1.000, green: 0.902, blue: 0.612)   // #FFE69C
-    static let track      = Color(red: 0.898, green: 0.906, blue: 0.918)   // #E5E7EB
-    static let badge      = Color(red: 0.976, green: 0.980, blue: 0.984)   // #F9FAFB
+    static let group      = Color(red: 0.992, green: 0.992, blue: 0.996)   // #FDFDFE
+    static let segment    = Color(red: 0.925, green: 0.925, blue: 0.933)   // #ECECEF
+    static let primary    = Color(red: 0.114, green: 0.114, blue: 0.122)   // #1D1D1F
+    static let secondary  = Color(red: 0.431, green: 0.431, blue: 0.451)   // #6E6E73
+    static let tertiary   = Color(red: 0.557, green: 0.557, blue: 0.576)   // #8E8E93
+    static let blue       = Color(red: 0.039, green: 0.518, blue: 1.000)   // #0A84FF
+    static let selectedSurface = Color(red: 0.910, green: 0.949, blue: 1.000) // #E8F2FF
+    static let yellow     = Color(red: 1.000, green: 0.624, blue: 0.039)   // #FF9F0A
+    static let success    = Color(red: 0.204, green: 0.780, blue: 0.349)   // #34C759
+    static let critical   = Color(red: 1.000, green: 0.271, blue: 0.227)   // #FF453A
+    static let track      = Color(red: 0.898, green: 0.898, blue: 0.918)   // #E5E5EA
+    static let badge      = Color(red: 0.969, green: 0.969, blue: 0.980)   // #F7F7FA
+    static let border     = Color(red: 0.827, green: 0.827, blue: 0.850)   // #D3D3D9
 
     // Per-provider brand tints for the monochrome template logos.
     // Values mirror CodexBar's ProviderBranding.color.
@@ -588,6 +723,12 @@ enum VocabbyTheme {
         default: return nil
         }
     }
+
+    static func quotaColor(remaining: Int) -> Color {
+        if remaining <= 20 { return critical }
+        if remaining <= 50 { return yellow }
+        return success
+    }
 }
 
 // MARK: - Card modifier
@@ -595,10 +736,13 @@ enum VocabbyTheme {
 struct VocabbyCard: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(12)
-            .background(VocabbyTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 1)
+            .padding(10)
+            .background(VocabbyTheme.group)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 1)
+            )
     }
 }
 
@@ -666,10 +810,7 @@ struct ClaudeUsageChartCard: View {
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(12)
-        .background(VocabbyTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 1)
+        .vocabbyCard()
     }
 
     @ViewBuilder
@@ -772,19 +913,7 @@ extension Notification.Name {
 ///   - Bold title + secondary body (no tinted card)
 ///   - Compact primary CTA
 ///
-/// All text uses explicit `Color(white:)` values rather than system
-/// label colors because `VocabbyTheme.background` is hardcoded to a
-/// light grey (#E5E5E5) — regardless of the user's macOS appearance,
-/// the popover background is always light, so the text MUST also be
-/// dark to stay readable. Using `.labelColor` (which resolves to white
-/// in dark mode) made the title vanish against the grey.
 struct EmptyProvidersState: View {
-    /// Hardcoded dark colors that read against the popover's light
-    /// grey background regardless of system appearance.
-    private let titleColor = Color(white: 0.05)        // near-black, max contrast
-    private let bodyColor = Color(white: 0.30)         // dark grey, readable but softer
-    private let stripeColor = Color(red: 0.25, green: 0.45, blue: 0.95)  // matches VocabbyTheme.blue
-
     var body: some View {
         VStack(spacing: 10) {
             // Bird logo. `OriginalImage` is the same artwork bundled in
@@ -798,20 +927,16 @@ struct EmptyProvidersState: View {
                 .padding(.top, 6)
                 .accessibilityHidden(true)
 
-            // Title + body in a clear, single column. Title uses a hard
-            // dark color (not `Color(nsColor: .labelColor)`) so it's
-            // always readable on the popover's light grey background,
-            // even when macOS is in Dark mode.
             VStack(spacing: 5) {
                 Text("Chưa có nhà cung cấp nào")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(titleColor)
+                    .foregroundStyle(VocabbyTheme.primary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Text("Mở Settings để chọn nhà cung cấp bạn muốn theo dõi quota AI.")
                     .font(.system(size: 12))
-                    .foregroundStyle(bodyColor)
+                    .foregroundStyle(VocabbyTheme.secondary)
                     .multilineTextAlignment(.center)
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)

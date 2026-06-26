@@ -20,6 +20,21 @@ final class QuotaServicePollingTests: XCTestCase {
         let badStatus = svc.statuses.first { $0.id == "b" }
         XCTAssertNotNil(badStatus?.error)
     }
+
+    @MainActor
+    func testForcedRefreshBypassesProviderInterval() async {
+        let provider = CountingProvider(id: "codex", displayName: "Codex")
+        let svc = QuotaService(providers: [provider], interval: 3_600)
+
+        await svc.refresh()
+        XCTAssertEqual(provider.fetchCount, 1)
+
+        await svc.refresh()
+        XCTAssertEqual(provider.fetchCount, 1)
+
+        await svc.refresh(forceProviderIDs: ["codex"])
+        XCTAssertEqual(provider.fetchCount, 2)
+    }
 }
 
 final class QuotaWarnConfigTests: XCTestCase {
@@ -80,5 +95,26 @@ private final class ThrowingProvider: QuotaProvider {
     init(id: String, displayName: String) { self.id = id; self.displayName = displayName }
     func fetch() async throws -> ProviderStatus {
         throw NSError(domain: "test", code: 1)
+    }
+}
+
+private final class CountingProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    private(set) var fetchCount = 0
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        fetchCount += 1
+        let count = fetchCount
+        return ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: [QuotaWindow(label: "5 giờ", usedPct: count, remainingPct: 100 - count)],
+            lastUpdated: Date())
     }
 }

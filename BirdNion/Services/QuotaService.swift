@@ -120,10 +120,12 @@ final class QuotaService: ObservableObject {
         ) { [weak self] _ in
             guard let self else { return }
             // Mark this as a user-initiated refresh so background-only throttles
-            // (e.g. the Codex CLI launch gate) let the retry through.
+            // (e.g. the Codex CLI launch gate) let the retry through. Manual
+            // refreshes also bypass per-provider interval throttles so the
+            // footer/header action always fetches fresh data.
             Task { @MainActor in
                 await RefreshInteraction.$isManual.withValue(true) {
-                    await self.refresh()
+                    await self.refresh(forceProviderIDs: Set(self.providers.map(\.id)))
                 }
             }
         }
@@ -136,7 +138,7 @@ final class QuotaService: ObservableObject {
             Task { @MainActor in
                 self.applyCachedCodexStatus()
                 await RefreshInteraction.$isManual.withValue(true) {
-                    await self.refresh()
+                    await self.refresh(forceProviderIDs: ["codex"])
                 }
             }
         }
@@ -198,7 +200,7 @@ final class QuotaService: ObservableObject {
         rebuildDisplayStatuses()
     }
 
-    func refresh() async {
+    func refresh(forceProviderIDs: Set<String> = []) async {
         isRefreshing = true
         defer { isRefreshing = false }
         let snapshot = providers
@@ -210,6 +212,7 @@ final class QuotaService: ObservableObject {
         // global `interval` is still the loop cadence; this only stops
         // re-polling providers whose own setting says "wait longer".
         let due: [QuotaProvider] = snapshot.filter { p in
+            if forceProviderIDs.contains(p.id) { return true }
             let interval = effectiveInterval(for: p.id)
             guard interval > 0 else { return true }
             guard let last = providerLastFetched[p.id] else { return true }
