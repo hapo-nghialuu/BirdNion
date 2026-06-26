@@ -49,7 +49,43 @@ final class ClaudeProvider: QuotaProvider {
         BirdNionConfigStore.accountLabel(provider: id)
     }
 
+    /// Hard cap on a single Claude fetch. Without this, the inner
+    /// `async let statusAsync = statusProvider()` (HTTP to
+    /// status.anthropic.com) can hang for many minutes when the user's
+    /// network is down or Anthropic's status endpoint is unreachable — the
+    /// TaskGroup waits for ALL tasks to complete before publishing statuses,
+    /// so a stuck Claude blocks MiniMax/Hapo/Codex data from being
+    /// surfaced. 12s is well above the per-provider 6s status timeout +
+    /// 5s cost timeout, leaving headroom for the slowest normal path.
+    private static let fetchTimeout: TimeInterval = 12
+
     func fetch() async throws -> ProviderStatus {
+        // Wrap the entire body in a Task so a hang inside
+        // `statusProvider()` / `costProvider()` / `fetchOAuth()` /
+        // `fetchViaUsageFetcher()` can't block the whole refresh cycle.
+        // The outer `withTaskGroup` in QuotaService waits for every
+        // provider to complete, so a stuck provider stalls the loop and
+        // every other provider's last-known data shows up as stale.
+        try await withThrowingTaskGroup(of: ProviderStatus?.self) { group in
+            group.addTask { [self] in
+                await runFetch()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(Self.fetchTimeout * 1_000_000_000))
+                return nil
+            }
+            // Whichever returns first wins. If the timeout fires first we
+            // cancel the fetch task so it stops blocking the next cycle.
+            let result = try await group.next() ?? nil
+            group.cancelAll()
+            if let result { return result }
+            return failure("Claude: timeout sau \(Int(Self.fetchTimeout))s")
+        }
+    }
+
+    /// Inner fetch — same logic as the previous fetch body, just split
+    /// out so the outer wrapper can apply the timeout.
+    private func runFetch() async -> ProviderStatus {
         // Resolve which data source the user picked in Settings. CodexBar's
         // `.auto` falls back across OAuth → Web → CLI when the preferred
         // source fails; the other modes pin to a single strategy. We honor
