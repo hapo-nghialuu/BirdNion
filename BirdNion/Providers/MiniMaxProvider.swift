@@ -184,14 +184,33 @@ final class MiniMaxProvider: QuotaProvider {
         }
         let multiple = visible.count > 1
         var windows: [QuotaWindow] = []
+        // `resetDate` comes from the API's absolute window-end timestamps,
+        // `end_time` (interval) and `weekly_end_time` (weekly). Both are
+        // MILLISECOND epoch values — verified live 2026-06-26: `end_time`
+        // resolved to ~1.8h from now, matching `remains_time/1000`. Using
+        // the absolute end beats the `*_remains_time` durations because it
+        // doesn't drift with fetch latency. Missing/zero fields fall back
+        // to `lastUpdated + windowSeconds` in `WindowRow.resetText`.
+        func resetDate(fromEpochMs ms: Int?) -> Date? {
+            guard let ms, ms > 0 else { return nil }
+            return Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        }
         for m in visible {
             let prefix = multiple ? "\(m.model_name) " : ""
-            windows.append(QuotaWindow(label: "\(prefix)5 giờ",
-                                       usedPct: 100 - m.current_interval_remaining_percent,
-                                       remainingPct: m.current_interval_remaining_percent))
-            windows.append(QuotaWindow(label: "\(prefix)Tuần",
-                                       usedPct: 100 - m.current_weekly_remaining_percent,
-                                       remainingPct: m.current_weekly_remaining_percent))
+            let intervalReset = resetDate(fromEpochMs: m.end_time)
+            let weeklyReset = resetDate(fromEpochMs: m.weekly_end_time)
+            windows.append(QuotaWindow(
+                label: "\(prefix)5 giờ",
+                usedPct: 100 - m.current_interval_remaining_percent,
+                remainingPct: m.current_interval_remaining_percent,
+                resetDate: intervalReset,
+                windowSeconds: 5 * 3600))
+            windows.append(QuotaWindow(
+                label: "\(prefix)Tuần",
+                usedPct: 100 - m.current_weekly_remaining_percent,
+                remainingPct: m.current_weekly_remaining_percent,
+                resetDate: weeklyReset,
+                windowSeconds: 7 * 24 * 3600))
         }
         return ProviderStatus(id: id, displayName: displayName,
                               windows: windows,
@@ -232,5 +251,11 @@ final class MiniMaxProvider: QuotaProvider {
         let current_weekly_total_count: Int
         let current_weekly_usage_count: Int
         let current_weekly_remaining_percent: Int
+        /// Absolute millisecond-epoch timestamp when the current 5h
+        /// interval window ends. `WindowRow` falls back to
+        /// `lastUpdated + windowSeconds` when missing/zero.
+        let end_time: Int?
+        /// Absolute millisecond-epoch timestamp when the weekly window ends.
+        let weekly_end_time: Int?
     }
 }

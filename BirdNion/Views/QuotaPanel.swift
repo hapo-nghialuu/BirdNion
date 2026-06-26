@@ -312,7 +312,7 @@ struct ProviderCard: View {
                 }
             } else {
                 ForEach(status.windows) { win in
-                    WindowRow(window: win)
+                    WindowRow(window: win, lastUpdated: status.lastUpdated)
                 }
             }
         }
@@ -323,6 +323,10 @@ struct ProviderCard: View {
 /// Single quota window row.
 struct WindowRow: View {
     let window: QuotaWindow
+    /// Fetch timestamp from the parent `ProviderStatus` — used as the
+    /// anchor for the `lastUpdated + windowSeconds` reset estimate when
+    /// the API didn't return an explicit reset timestamp.
+    let lastUpdated: Date
 
     private var isBlue: Bool { window.label.contains("Tuần") }
     private var barColor: Color {
@@ -335,7 +339,19 @@ struct WindowRow: View {
     }
 
     private var resetText: String {
+        // 1. Use the API-provided reset timestamp when available.
         if let d = window.resetDate { return Self.formatReset(d) }
+        // 2. Fall back to `lastUpdated + windowSeconds` — the API didn't
+        //    include a reset timestamp (e.g. Codex OAuth response sometimes
+        //    omits it) but we know the window's nominal length. Computes
+        //    against `lastUpdated` so the countdown tracks when the fetch
+        //    happened rather than the absolute wall-clock at render time.
+        if let secs = window.windowSeconds, secs > 0 {
+            let estimate = lastUpdated.addingTimeInterval(TimeInterval(secs))
+            return Self.formatReset(estimate)
+        }
+        // 3. Last-resort label-based fallback for old providers that don't
+        //    surface either resetDate or windowSeconds.
         if window.label.contains("Tuần") { return "Resets weekly" }
         if window.label.contains("5 giờ") { return "Resets in 5h" }
         return ""
