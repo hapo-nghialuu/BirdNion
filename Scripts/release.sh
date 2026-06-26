@@ -87,12 +87,24 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> xcodebuild"
   run xcodebuild -quiet -project "$REPO_ROOT/BirdNion.xcodeproj" \
       -scheme BirdNion -configuration Release \
-      -destination 'platform=macOS' build
+      -destination 'platform=macOS' \
+      -derivedDataPath "$REPO_ROOT/build/DerivedData" \
+      build
 fi
 
-BUILT_APP="$REPO_ROOT/build/Build/Products/Release/BirdNion.app"
+# xcodebuild normally parks the .app in ~/Library/Developer/Xcode/
+# DerivedData/<hash>/Build/Products/<conf>/<target>.app, but we
+# force -derivedDataPath to a local build/ tree above so the path
+# is stable + grep-friendly. (If a previous run wrote elsewhere,
+# fall back to the canonical DerivedData path so --skip-build still
+# works against an out-of-tree build.)
+BUILT_APP="$REPO_ROOT/build/DerivedData/Build/Products/Release/BirdNion.app"
 if [[ ! -d "$BUILT_APP" ]]; then
-  echo "Build output not found at $BUILT_APP. Run without --skip-build." >&2
+  BUILT_APP=$(find ~/Library/Developer/Xcode/DerivedData \
+                 -name "BirdNion.app" -path "*Release*" -type d 2>/dev/null | head -1)
+fi
+if [[ -z "$BUILT_APP" ]] || [[ ! -d "$BUILT_APP" ]]; then
+  echo "Build output not found. Run without --skip-build." >&2
   exit 1
 fi
 
