@@ -9,6 +9,16 @@
 
 A focused fork / extension of [CodexBar](https://github.com/steipete/CodexBar)'s "track every AI coding limit" idea, scoped to the **7 providers BOSS actually uses** (MiniMax, Codex, Claude, Hapo AI Hub, OpenRouter, DeepSeek, z.ai). One status item per provider, popover with usage bars + reset countdowns, local token scanner for Claude, full Claude parity. No Dock icon.
 
+## What you get
+
+> 🪶 **Một con chim giúp bạn theo dõi AI quota — và cài đặt cho AI tool coding chỉ với 1 lần bấm.**
+
+- 👀 **Theo dõi** — menu-bar icon rotates through your providers, popover shows per-window usage bars (session / weekly / monthly) with reset countdowns. Never start a long task without knowing when the clock resets.
+- 🔌 **Cài đặt 1 lần** — drop a token in Settings → Providers and BirdNion auto-detects CLI sessions for Codex (`~/.codex/auth.json`) and Claude (Keychain `Claude Code-credentials`). No copy-paste the same OAuth URL 5 times.
+- 🧮 **Đếm chi phí** — Claude token usage parsed from `~/.claude/projects/*.jsonl` (today + 30-day) so you know *exactly* what you spent, not just what the API says.
+- 🛡 **Bảo mật** — file-based config, no Keychain, no background disk scan, no third-party telemetry. Tokens live in `~/.birdnion/settings.json` with `chmod 600`.
+- 🪶 **Không gây tiếng ồn** — no Dock icon, no notifications unless you cross a threshold, no waiting on a slow provider (each tab fills in independently).
+
 ## Why
 
 - **Plan around resets.** Per-provider session / weekly / monthly windows with countdowns to the next reset.
