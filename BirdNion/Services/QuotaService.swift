@@ -119,7 +119,13 @@ final class QuotaService: ObservableObject {
             forName: .birdnionRefresh, object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in await self.refresh() }
+            // Mark this as a user-initiated refresh so background-only throttles
+            // (e.g. the Codex CLI launch gate) let the retry through.
+            Task { @MainActor in
+                await RefreshInteraction.$isManual.withValue(true) {
+                    await self.refresh()
+                }
+            }
         }
         loopTask = Task { [weak self] in
             guard let self else { return }

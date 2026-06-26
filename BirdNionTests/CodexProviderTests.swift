@@ -121,6 +121,35 @@ final class CodexProviderTests: XCTestCase {
     // CodexBarCore for CostUsageTokenSnapshot, which would otherwise clash with
     // BirdNion's own Codex types in this file).
 
+    // MARK: - CodexCLILaunchGate
+
+    func testLaunchGateThrottlesBackgroundAfterFailure() {
+        let gate = CodexCLILaunchGate()
+        let bin = "/opt/homebrew/bin/codex"
+        let now = Date()
+        XCTAssertFalse(gate.shouldSkipLaunch(binary: bin, now: now, manual: false))
+        gate.recordFailure(binary: bin, now: now)
+        XCTAssertTrue(gate.shouldSkipLaunch(binary: bin, now: now, manual: false))
+        // A manual refresh always bypasses the throttle.
+        XCTAssertFalse(gate.shouldSkipLaunch(binary: bin, now: now, manual: true))
+        // The throttle clears once the cooldown elapses.
+        let later = now.addingTimeInterval(CodexCLILaunchGate.cooldown + 1)
+        XCTAssertFalse(gate.shouldSkipLaunch(binary: bin, now: later, manual: false))
+    }
+
+    func testLaunchGateClearResets() {
+        let gate = CodexCLILaunchGate()
+        let bin = "/usr/local/bin/codex"
+        gate.recordFailure(binary: bin)
+        XCTAssertTrue(gate.shouldSkipLaunch(binary: bin, manual: false))
+        gate.clearFailure(binary: bin)
+        XCTAssertFalse(gate.shouldSkipLaunch(binary: bin, manual: false))
+    }
+
+    func testRefreshInteractionDefaultsToBackground() {
+        XCTAssertFalse(RefreshInteraction.isManual)
+    }
+
     func testAccountActiveSelectionRoundTrip() {
         let previous = CodexAccountStore.activeID()
         defer { CodexAccountStore.setActive(previous) }

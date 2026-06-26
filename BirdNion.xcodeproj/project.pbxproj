@@ -57,6 +57,7 @@
 		C0DE00C8000000000000B0C8 /* CodexStatusProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00C9000000000000F0C9 /* CodexStatusProbe.swift */; };
 		C0DE00CA000000000000B0CA /* CodexResetCreditsAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00CB000000000000F0CB /* CodexResetCreditsAPI.swift */; };
 		C0DE00CC000000000000B0CC /* CodexAppServerRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00CD000000000000F0CD /* CodexAppServerRPC.swift */; };
+		C0DE00CE000000000000B0CE /* CodexCLILaunchGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE00CF000000000000F0CF /* CodexCLILaunchGate.swift */; };
 		C0DE0005000000000000B003 /* CodexProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0006000000000000F003 /* CodexProvider.swift */; };
 		CPFL0001000000000000B001 /* CodexPlanFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPFL0002000000000000F001 /* CodexPlanFormatting.swift */; };
 		CPFL0003000000000000B002 /* CodexRateWindowNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPFL0004000000000000F002 /* CodexRateWindowNormalizer.swift */; };
@@ -134,6 +135,7 @@
 		C0DE00C9000000000000F0C9 /* CodexStatusProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexStatusProbe.swift; sourceTree = "<group>"; };
 		C0DE00CB000000000000F0CB /* CodexResetCreditsAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexResetCreditsAPI.swift; sourceTree = "<group>"; };
 		C0DE00CD000000000000F0CD /* CodexAppServerRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexAppServerRPC.swift; sourceTree = "<group>"; };
+		C0DE00CF000000000000F0CF /* CodexCLILaunchGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexCLILaunchGate.swift; sourceTree = "<group>"; };
 		C0DE0006000000000000F003 /* CodexProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexProvider.swift; sourceTree = "<group>"; };
 		CPFL0002000000000000F001 /* CodexPlanFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexPlanFormatting.swift; sourceTree = "<group>"; };
 		CPFL0004000000000000F002 /* CodexRateWindowNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexRateWindowNormalizer.swift; sourceTree = "<group>"; };
@@ -418,6 +420,7 @@
 				C0DE00C8000000000000B0C8 /* CodexStatusProbe.swift in Sources */,
 				C0DE00CA000000000000B0CA /* CodexResetCreditsAPI.swift in Sources */,
 				C0DE00CC000000000000B0CC /* CodexAppServerRPC.swift in Sources */,
+				C0DE00CE000000000000B0CE /* CodexCLILaunchGate.swift in Sources */,
 				C0DE0005000000000000B003 /* CodexProvider.swift in Sources */,
 				CPFL0001000000000000B001 /* CodexPlanFormatting.swift in Sources */,
 				CPFL0003000000000000B002 /* CodexRateWindowNormalizer.swift in Sources */,

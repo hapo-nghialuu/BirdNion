@@ -22,6 +22,9 @@ enum CodexAppServerRPC {
     /// BirdNion's model. Best-effort: returns nil on any failure.
     static func fetch(env: [String: String] = ProcessInfo.processInfo.environment) async -> CodexCLIUsage? {
         guard let binary = CodexAccountStore.codexBinary() else { return nil }
+        // After a recent launch failure (e.g. macOS quarantined `codex`), skip
+        // background relaunches for a cooldown; a manual refresh bypasses this.
+        if CodexCLILaunchGate.shared.shouldSkipLaunch(binary: binary) { return nil }
         var environment = env
         // Scope the RPC to the active account's Codex home (system uses ~/.codex).
         environment["CODEX_HOME"] = CodexAccountStore.activeAuthURL()
@@ -32,8 +35,10 @@ enum CodexAppServerRPC {
         do {
             client = try Client(binary: binary, arguments: arguments, environment: environment)
         } catch {
+            CodexCLILaunchGate.shared.recordFailure(binary: binary)
             return nil
         }
+        CodexCLILaunchGate.shared.clearFailure(binary: binary)  // launch succeeded
         defer { client.shutdown() }
         do {
             try await client.initialize(timeout: initializeTimeout)
