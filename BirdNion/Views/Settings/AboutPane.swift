@@ -14,7 +14,7 @@ struct AboutPane: View {
         return L10n.f("about.version", settings.appLanguage, short, build)
     }
 
-    private let projectURL = "https://github.com/hapo-nghialuu/statusbar"
+    private let projectURL = "https://github.com/hapo-nghialuu/BirdNion"
 
     var body: some View {
         VStack(spacing: 12) {
