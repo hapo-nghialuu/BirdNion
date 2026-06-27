@@ -16,12 +16,12 @@ struct AboutLinkRow: View {
                 Image(systemName: icon)
                     .frame(width: 16)
                 Text(title)
-                    .underline(hovering, color: .accentColor)
+                    .underline(hovering, color: SettingsTheme.accent)
                 Spacer()
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
-            .foregroundColor(.accentColor)
+            .foregroundColor(SettingsTheme.accent)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

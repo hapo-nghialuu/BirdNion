@@ -7,14 +7,14 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
+    func title(language: String? = nil) -> String {
         switch self {
-        case .general: "Cài chung"
-        case .providers: "Nhà cung cấp"
-        case .display: "Hiển thị"
-        case .advanced: "Nâng cao"
-        case .about: "Giới thiệu"
-        case .debug: "Debug"
+        case .general: L10n.t("settings.tab.general", language)
+        case .providers: L10n.t("settings.tab.providers", language)
+        case .display: L10n.t("settings.tab.display", language)
+        case .advanced: L10n.t("settings.tab.advanced", language)
+        case .about: L10n.t("settings.tab.about", language)
+        case .debug: L10n.t("settings.tab.debug", language)
         }
     }
 

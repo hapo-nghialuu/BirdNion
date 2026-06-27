@@ -3,6 +3,7 @@ import SwiftUI
 /// Compact config form: 11pt labels, 22pt row height, no labels-on-the-side bloat.
 struct ConfigPanel: View {
     @EnvironmentObject var config: ConfigService
+    @EnvironmentObject var settingsStore: SettingsStore
     @State private var settings: [String: Any] = [:]
     @State private var pendingApiKey: String = ""
     @State private var apiKeyHasValue: Bool = false
@@ -52,7 +53,7 @@ struct ConfigPanel: View {
 
             HStack {
                 Spacer()
-                Button("Lưu", action: save)
+                Button(L10n.t("config.save", settingsStore.appLanguage), action: save)
                     .controlSize(.small)
                     .keyboardShortcut(.defaultAction)
             }
@@ -99,7 +100,7 @@ struct ConfigPanel: View {
                     .font(.system(size: 11).monospaced())
                     .foregroundStyle(.secondary)
             } else {
-                SecureField("Nhập", text: $pendingApiKey)
+                SecureField(L10n.t("config.enter", settingsStore.appLanguage), text: $pendingApiKey)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11))
             }
@@ -153,7 +154,7 @@ struct ConfigPanel: View {
         do {
             if !pendingApiKey.isEmpty {
                 if pendingApiKey.count > 256 {
-                    config.lastError = "API key quá dài (max 256)"
+                    config.lastError = L10n.t("config.keyTooLong", settingsStore.appLanguage)
                     return
                 }
                 // As of the 2026-06-25 storage refactor: the Anthropic API
@@ -176,7 +177,7 @@ struct ConfigPanel: View {
             }
             settings["env"] = env
             try config.saveGlobal(settings)
-            savedBanner = "Đã lưu. Khởi động lại Claude Code để áp dụng."
+            savedBanner = L10n.t("config.saved", settingsStore.appLanguage)
             pendingApiKey = ""
             apiKeyHasValue = true
         } catch let e as ConfigError {

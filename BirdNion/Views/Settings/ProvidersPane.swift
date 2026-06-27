@@ -27,6 +27,8 @@ struct ProvidersPane: View {
     /// session jsonl files (see ClaudeCostScanner.swift).
     @State private var claudeCost: ClaudeCostSummary?
 
+    private var language: String { settings.appLanguage }
+
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             sidebar
@@ -34,6 +36,7 @@ struct ProvidersPane: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(SettingsTheme.background)
         .task {
             // Always reload on first appearance (and on tab re-focus via
             // the parent's `.task(id:)` trigger below). The previous
@@ -64,6 +67,7 @@ struct ProvidersPane: View {
         .sheet(isPresented: $showingClaudeConfig) {
             ConfigPanel()
                 .environmentObject(quota)
+                .environmentObject(settings)
                 .frame(width: 440, height: 320)
         }
     }
@@ -96,7 +100,9 @@ struct ProvidersPane: View {
             ForEach(Array(visibleRows.enumerated()), id: \.element.id) { idx, row in
                 sidebarRow(row, position: idx, total: visibleRows.count)
                 if row.id != visibleRows.last?.id {
-                    Divider().padding(.leading, 44)
+                    Divider()
+                        .overlay(SettingsTheme.border.opacity(0.72))
+                        .padding(.leading, 44)
                 }
             }
             Spacer(minLength: 0)
@@ -104,12 +110,12 @@ struct ProvidersPane: View {
         .padding(.vertical, 6)
         .frame(width: 200, alignment: .top)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(SettingsTheme.card)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
         )
     }
 
@@ -147,18 +153,19 @@ struct ProvidersPane: View {
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTheme.secondary)
                 .accessibilityHidden(true)
-            TextField("Tìm nhà cung cấp", text: $searchText)
+            TextField(L10n.t("provider.search", language), text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
+                .foregroundStyle(SettingsTheme.primary)
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Xóa")
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .accessibilityLabel(L10n.t("provider.clearSearch", language))
                 }
                 .buttonStyle(.plain)
             }
@@ -167,11 +174,11 @@ struct ProvidersPane: View {
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor))
+                .fill(SettingsTheme.control)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
         )
         .padding(.horizontal, 6)
         .padding(.bottom, 2)
@@ -187,8 +194,9 @@ struct ProvidersPane: View {
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .controlSize(.small)
-                .help(row.enabled == true ? "Tắt polling cho nhà cung cấp này"
-                                  : "Bật polling cho nhà cung cấp này")
+                .help(row.enabled == true
+                      ? L10n.t("provider.enableHelp.on", language)
+                      : L10n.t("provider.enableHelp.off", language))
 
             ProviderLogoView(id: row.id)
                 .frame(width: 22, height: 22)
@@ -196,12 +204,12 @@ struct ProvidersPane: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayName(for: row))
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(row.enabled == true ? .primary : .secondary)
+                    .foregroundStyle(row.enabled == true ? SettingsTheme.primary : SettingsTheme.secondary)
                 Text(statusSubtitle(for: row))
                     .font(.system(size: 10))
                     .foregroundStyle(status(for: row.id)?.error != nil
-                                     ? Color(nsColor: .systemRed)
-                                     : .secondary)
+                                     ? SettingsTheme.critical
+                                     : SettingsTheme.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(statusSubtitleDetail(for: row) ?? "")
@@ -215,7 +223,7 @@ struct ProvidersPane: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.14) : .clear)
+                .fill(isSelected ? SettingsTheme.selectedSurface : .clear)
                 .padding(.horizontal, 6)
         )
         .contentShape(Rectangle())
@@ -234,11 +242,12 @@ struct ProvidersPane: View {
                 ProviderLogoView(id: row.id).frame(width: 22, height: 22)
                 Text(displayName(for: row))
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor)))
+                    .fill(SettingsTheme.card))
         }
         // Drop target: any sibling row can receive the dragged id and
         // move it to this position. The delegate figures out whether
@@ -280,9 +289,9 @@ struct ProvidersPane: View {
     @ViewBuilder
     private func statusDot(for row: BirdNionConfigStore.Provider) -> some View {
         let color: Color = {
-            if row.enabled != true { return .secondary.opacity(0.4) }
-            guard let s = status(for: row.id) else { return .secondary.opacity(0.4) }
-            return s.error == nil ? .green : .orange
+            if row.enabled != true { return SettingsTheme.disabled.opacity(0.55) }
+            guard let s = status(for: row.id) else { return SettingsTheme.disabled.opacity(0.55) }
+            return s.error == nil ? SettingsTheme.success : SettingsTheme.warning
         }()
         Circle().fill(color).frame(width: 7, height: 7)
     }
@@ -313,9 +322,9 @@ struct ProvidersPane: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            Text("Chọn một nhà cung cấp")
+            Text(L10n.t("provider.choose", language))
                 .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTheme.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -328,9 +337,10 @@ struct ProvidersPane: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName(for: row))
                     .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
                 Text(headerSubtitle(for: row))
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTheme.secondary)
             }
             Spacer(minLength: 12)
             Button {
@@ -348,7 +358,7 @@ struct ProvidersPane: View {
                 Image(systemName: "arrow.clockwise")
             }
             .controlSize(.small)
-            .help("Đọc lại settings.json và làm mới quota")
+            .help(L10n.t("provider.reloadHelp", language))
 
             Toggle("", isOn: enabledBinding(idx))
                 .labelsHidden()
@@ -360,64 +370,67 @@ struct ProvidersPane: View {
     private func detailInfoGrid(_ row: BirdNionConfigStore.Provider) -> some View {
         let s = status(for: row.id)
         return Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-            infoRow("Trạng thái", row.enabled == true ? "Đang bật" : "Đang tắt")
+            infoRow(
+                L10n.t("provider.status", language),
+                row.enabled == true ? L10n.t("popover.ready", language) : L10n.t("provider.disabled", language)
+            )
             if row.id == "codex" {
                 // Which source actually produced the data (OAuth / CLI).
-                infoRow("Nguồn", s?.sourceLabel ?? "OAuth")
+                infoRow(L10n.t("provider.source", language), s?.sourceLabel ?? "OAuth")
             } else if row.id == "claude" {
                 // OAuth token comes from the Claude Code Keychain item.
-                infoRow("Nguồn", "OAuth")
+                infoRow(L10n.t("provider.source", language), "OAuth")
             }
             if let plan = s?.planType, !plan.isEmpty {
-                infoRow("Gói", plan.capitalized)
+                infoRow(L10n.t("provider.plan", language), plan.capitalized)
             }
             if let name = s?.planName, !name.isEmpty {
                 // Plan display name (MiniMax `current_subscribe_title`) — distinct
                 // from `planType` which carries a code (`plus` / `pro`).
-                infoRow("Tên gói", name)
+                infoRow(L10n.t("provider.planName", language), name)
             }
             if let label = s?.accountLabel, !label.isEmpty {
-                infoRow("Tài khoản", label)
+                infoRow(L10n.t("provider.account", language), label)
             }
             if let version = s?.version, !version.isEmpty {
-                infoRow("Phiên bản", version)
+                infoRow(L10n.t("provider.version", language), version)
             }
             if let svc = s?.serviceStatus, !svc.isEmpty {
                 serviceStatusRow(svc, level: s?.serviceStatusLevel)
             }
             if row.id == "codex", let n = s?.resetCreditsAvailable {
-                infoRow("Reset khả dụng", "\(n) lần")
+                infoRow(L10n.t("provider.resetCredits", language), "\(n)")
             }
             if row.id == "codex", let web = s?.codexWeb {
                 if let cr = web.codeReviewRemainingPercent {
-                    infoRow("Code review", "\(cr)% còn")
+                    infoRow(L10n.t("provider.codeReview", language), L10n.f("provider.remaining", language, cr))
                 }
                 if let n = web.creditsHistoryCount {
-                    infoRow("Lịch sử credits", "\(n) mục")
+                    infoRow(L10n.t("provider.creditsHistory", language), "\(n)")
                 }
                 if let url = web.creditsPurchaseURL, let u = URL(string: url) {
                     GridRow {
-                        Text("Mua credits").gridColumnAlignment(.leading)
-                        Link("Mở trang", destination: u)
+                        Text(L10n.t("provider.buyCredits", language)).gridColumnAlignment(.leading)
+                        Link(L10n.t("provider.openPage", language), destination: u)
                             .font(.system(size: 12))
                     }
                 }
             }
             if let err = s?.error {
-                infoRow("Lỗi", err)
+                infoRow(L10n.languageCode(language) == "vi" ? "Lỗi" : "Error", err)
             } else {
-                infoRow("Cập nhật", updatedSubtitle(for: row.id))
+                infoRow(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
             }
         }
         .font(.system(size: 12))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(SettingsTheme.secondary)
     }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
         GridRow {
             Text(label).gridColumnAlignment(.leading)
             Text(value)
-                .foregroundStyle(.primary)
+                .foregroundStyle(SettingsTheme.primary)
                 .lineLimit(2)
         }
     }
@@ -425,13 +438,13 @@ struct ProvidersPane: View {
     /// Service-status row with a severity dot (green/yellow/orange/red).
     private func serviceStatusRow(_ text: String, level: String?) -> some View {
         GridRow {
-            Text("Tình trạng").gridColumnAlignment(.leading)
+            Text(L10n.t("provider.serviceStatus", language)).gridColumnAlignment(.leading)
             HStack(spacing: 6) {
                 Circle()
                     .fill(serviceStatusColor(level))
                     .frame(width: 7, height: 7)
                 Text(text)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(SettingsTheme.primary)
                     .lineLimit(2)
             }
         }
@@ -439,18 +452,18 @@ struct ProvidersPane: View {
 
     private func serviceStatusColor(_ level: String?) -> Color {
         switch level {
-        case "none": return .green
-        case "minor": return .yellow
-        case "major": return .orange
-        case "critical": return .red
-        default: return .secondary
+        case "none": return SettingsTheme.success
+        case "minor": return SettingsTheme.warning
+        case "major": return SettingsTheme.warning
+        case "critical": return SettingsTheme.critical
+        default: return SettingsTheme.disabled
         }
     }
 
     @ViewBuilder
     private func usageSection(_ row: BirdNionConfigStore.Provider) -> some View {
         let s = status(for: row.id)
-        SettingsCard(header: "Sử dụng") {
+        SettingsCard(header: L10n.t("settings.section.usage", language)) {
             if let s, !s.windows.isEmpty {
                 ForEach(Array(s.windows.enumerated()), id: \.element.id) { i, w in
                     quotaWindowRow(w)
@@ -464,9 +477,11 @@ struct ProvidersPane: View {
                 // Empty placeholder only when there's truly no data — cost /
                 // extras below can still render so the panel stays useful
                 // even when OAuth fails.
-                Text(row.enabled == true ? "Chưa có dữ liệu — bấm làm mới." : "Đang tắt — không có dữ liệu.")
+                Text(row.enabled == true
+                     ? L10n.t("provider.noData.enabled", language)
+                     : L10n.t("provider.noData.disabled", language))
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTheme.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -496,21 +511,22 @@ struct ProvidersPane: View {
 
     private func quotaWindowRow(_ w: QuotaWindow) -> some View {
         let isWeek = w.label.contains("Tuần")
-        let barColor: Color = isWeek ? VocabbyTheme.blue : VocabbyTheme.yellow
+        let barColor = SettingsTheme.quotaColor(remaining: w.remainingPct)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(w.label.uppercased())
+                Text(L10n.windowLabel(w.label, preference: language).uppercased())
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTheme.secondary)
                     .tracking(0.5)
                 Spacer()
                 Text("\(w.remainingPct)%")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(barColor)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.primary.opacity(0.08))
+                        .fill(SettingsTheme.track)
                         .frame(height: 8)
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(barColor)
@@ -524,26 +540,28 @@ struct ProvidersPane: View {
             if pace != nil || (w.subtitle?.isEmpty == false) {
                 HStack(alignment: .firstTextBaseline) {
                     if isWeek, let r = pace?.reservePct, r > 0 {
-                        Text("\(r)% dự phòng")
+                        Text(L10n.f("provider.reserve", language, r))
                             .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(SettingsTheme.tertiary)
                     }
                     Spacer(minLength: 6)
                     if let rt = pace?.resetText {
-                        Text("Reset sau \(rt)")
+                        Text(L10n.f("provider.resetAfter", language, rt))
                             .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(SettingsTheme.tertiary)
                     }
                 }
                 if isWeek, let pace {
-                    Text(pace.lastsUntilReset ? "Đủ dùng đến khi reset" : "Có thể hết trước khi reset")
+                    Text(pace.lastsUntilReset
+                         ? L10n.t("provider.enoughUntilReset", language)
+                         : L10n.t("provider.mayRunOut", language))
                         .font(.system(size: 10))
-                        .foregroundStyle(pace.lastsUntilReset ? Color.secondary : Color.orange)
+                        .foregroundStyle(pace.lastsUntilReset ? SettingsTheme.secondary : SettingsTheme.warning)
                 }
                 if let sub = w.subtitle, !sub.isEmpty {
                     Text(sub)
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(SettingsTheme.tertiary)
                 }
             }
         }
@@ -555,13 +573,14 @@ struct ProvidersPane: View {
     /// reports a credits figure.
     private func creditsRow(_ credits: Double?, unlimited: Bool) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text("CREDITS")
+            Text(L10n.t("provider.credits", language))
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTheme.secondary)
                 .tracking(0.5)
             Spacer()
-            Text(unlimited ? "∞ Không giới hạn" : creditsText(credits ?? 0))
+            Text(unlimited ? L10n.t("provider.unlimited", language) : creditsText(credits ?? 0))
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(SettingsTheme.primary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -571,7 +590,9 @@ struct ProvidersPane: View {
         let amount = credits.truncatingRemainder(dividingBy: 1) == 0
             ? String(Int(credits))
             : String(format: "%.2f", credits)
-        return credits <= 0 ? "Hết" : "\(amount) còn lại"
+        return credits <= 0
+            ? L10n.t("provider.outOfCredits", language)
+            : L10n.f("provider.creditsLeft", language, amount)
     }
 
     /// Token cost rows (Codex + Claude). Dollar amounts are estimates (tokens ×
@@ -589,8 +610,8 @@ struct ProvidersPane: View {
     private func costRowsImpl(todayUSD: Double, todayTokens: Int,
                               last30USD: Double, last30Tokens: Int) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            costLine("Hôm nay", usd: todayUSD, tokens: todayTokens)
-            costLine("30 ngày", usd: last30USD, tokens: last30Tokens)
+            costLine(L10n.t("provider.today", language), usd: todayUSD, tokens: todayTokens)
+            costLine(L10n.t("provider.last30", language), usd: last30USD, tokens: last30Tokens)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -606,22 +627,23 @@ struct ProvidersPane: View {
             ? Int(min(100, max(0, (cost.used / cost.limit * 100).rounded())))
             : 0
         let remaining = max(0, cost.limit - cost.used)
-        let barColor: Color = usedPct >= 90 ? .red
-            : (usedPct >= 70 ? .orange : VocabbyTheme.blue)
+        let barColor: Color = usedPct >= 90 ? SettingsTheme.critical
+            : (usedPct >= 70 ? SettingsTheme.warning : SettingsTheme.accent)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text("CHI PHÍ")
+                Text(L10n.t("provider.cost", language))
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTheme.secondary)
                     .tracking(0.5)
                 Spacer()
                 Text("\(UsageFormatter.usdString(cost.used)) / \(UsageFormatter.usdString(cost.limit))")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(SettingsTheme.primary)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.primary.opacity(0.08))
+                        .fill(SettingsTheme.track)
                         .frame(height: 8)
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(barColor)
@@ -630,18 +652,18 @@ struct ProvidersPane: View {
             }
             .frame(height: 8)
             HStack(alignment: .firstTextBaseline) {
-                Text("\(usedPct)% đã dùng · còn \(UsageFormatter.usdString(remaining))")
+                Text(L10n.f("provider.usedRemaining", language, usedPct, UsageFormatter.usdString(remaining)))
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTheme.secondary)
                 Spacer(minLength: 6)
                 if let reset = cost.resetsAt {
-                    Text("Reset sau \(Self.resetCountdown(to: reset))")
+                    Text(L10n.f("provider.resetAfter", language, Self.resetCountdown(to: reset)))
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(SettingsTheme.tertiary)
                 } else if let period = cost.period {
                     Text(period)
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(SettingsTheme.tertiary)
                 }
             }
         }
@@ -669,16 +691,16 @@ struct ProvidersPane: View {
     @ViewBuilder
     private func webExtrasRows(_ extras: ClaudeWebExtras) -> some View {
         if let email = extras.accountEmail, !email.isEmpty {
-            webInfoRow(label: "EMAIL", value: email)
+            webInfoRow(label: L10n.t("provider.email", language), value: email)
         }
         if let org = extras.accountOrganization, !org.isEmpty {
-            webInfoRow(label: "TỔ CHỨC", value: org)
+            webInfoRow(label: L10n.t("provider.organization", language), value: org)
         }
         if let method = extras.loginMethod, !method.isEmpty {
-            webInfoRow(label: "LOGIN", value: method)
+            webInfoRow(label: L10n.t("provider.login", language), value: method)
         }
         if let source = extras.sourceLabel, !source.isEmpty {
-            webInfoRow(label: "NGUỒN", value: source.uppercased())
+            webInfoRow(label: L10n.t("provider.source", language).uppercased(), value: source.uppercased())
         }
     }
 
@@ -686,14 +708,14 @@ struct ProvidersPane: View {
         HStack(alignment: .firstTextBaseline) {
             Text(label)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTheme.secondary)
                 .tracking(0.5)
             Spacer(minLength: 8)
             Text(value)
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle(.primary)
+                .foregroundStyle(SettingsTheme.primary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
@@ -703,11 +725,12 @@ struct ProvidersPane: View {
         HStack(alignment: .firstTextBaseline) {
             Text(label.uppercased())
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTheme.secondary)
                 .tracking(0.5)
             Spacer()
             Text("≈$\(String(format: "%.2f", usd)) · \(Self.formatTokens(tokens))")
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(SettingsTheme.primary)
         }
     }
 
@@ -723,12 +746,13 @@ struct ProvidersPane: View {
     @ViewBuilder
     private func settingsSection(_ idx: Int) -> some View {
         let row = rows[idx]
-        SettingsCard(header: "Thiết lập") {
+        SettingsCard(header: L10n.t("settings.section.setup", language)) {
             // Account label (applies to all providers)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Nhãn tài khoản")
+                Text(L10n.t("provider.accountLabel", language))
                     .font(.system(size: 13, weight: .semibold))
-                TextField("Tùy chọn — để trống để tự suy ra", text: labelBinding(idx))
+                    .foregroundStyle(SettingsTheme.primary)
+                TextField(L10n.t("provider.accountLabelPlaceholder", language), text: labelBinding(idx))
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
             }
@@ -741,14 +765,15 @@ struct ProvidersPane: View {
             if row.id == "codex" {
                 // Zero-config: just show login status.
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Đăng nhập")
+                    Text(L10n.t("provider.signIn", language))
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
                     Text(codexLoginStatus())
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Text("Đăng nhập bằng lệnh `codex` trong Terminal.")
+                        .foregroundStyle(SettingsTheme.secondary)
+                    Text(L10n.t("provider.codexSignInHint", language))
                         .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(SettingsTheme.tertiary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14)
@@ -774,15 +799,16 @@ struct ProvidersPane: View {
                 SettingsRowDivider()
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 12) {
-                        Text("Nguồn dữ liệu")
+                        Text(L10n.t("provider.dataSource", language))
                             .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.primary)
                         Spacer(minLength: 8)
                         Picker("", selection: Binding(
                             get: { settings.codexUsageSource },
                             set: { settings.codexUsageSource = $0; Task { await quota.refresh() } }
                         )) {
                             ForEach(CodexUsageSource.allCases) { src in
-                                Text(src.displayName).tag(src.rawValue)
+                                Text(codexUsageSourceName(src)).tag(src.rawValue)
                             }
                         }
                         .labelsHidden()
@@ -791,7 +817,7 @@ struct ProvidersPane: View {
                     }
                     Text(codexSourceSubtitle(for: settings.codexUsageSource))
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(SettingsTheme.tertiary)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -800,8 +826,9 @@ struct ProvidersPane: View {
             if row.id == "codex" {
                 SettingsRowDivider()
                 HStack(spacing: 12) {
-                    Text("Menu bar hiển thị")
+                    Text(L10n.t("provider.menuBarMetric", language))
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.codexMenuBarMetric },
@@ -813,7 +840,7 @@ struct ProvidersPane: View {
                         }
                     )) {
                         ForEach(CodexMenuBarMetric.allCases) { m in
-                            Text(m.displayName).tag(m.rawValue)
+                            Text(codexMenuBarMetricName(m)).tag(m.rawValue)
                         }
                     }
                     .labelsHidden()
@@ -831,15 +858,16 @@ struct ProvidersPane: View {
             if row.id == "minimax" {
                 SettingsRowDivider()
                 HStack(spacing: 12) {
-                    Text("Khu vực API")
+                    Text(L10n.t("provider.apiRegion", language))
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.minimaxRegion },
                         set: { settings.minimaxRegion = $0; Task { await quota.refresh() } }
                     )) {
                         ForEach(MiniMaxRegion.allCases) { r in
-                            Text(r.displayName).tag(r.rawValue)
+                            Text(miniMaxRegionName(r)).tag(r.rawValue)
                         }
                     }
                     .labelsHidden()
@@ -853,15 +881,16 @@ struct ProvidersPane: View {
             if row.id == "zai" {
                 SettingsRowDivider()
                 HStack(spacing: 12) {
-                    Text("Khu vực API")
+                    Text(L10n.t("provider.apiRegion", language))
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.zaiRegion },
                         set: { settings.zaiRegion = $0; Task { await quota.refresh() } }
                     )) {
                         ForEach(ZaiRegion.allCases) { r in
-                            Text(r.displayName).tag(r.rawValue)
+                            Text(zaiRegionName(r)).tag(r.rawValue)
                         }
                     }
                     .labelsHidden()
@@ -899,11 +928,12 @@ struct ProvidersPane: View {
         SettingsRowDivider()
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Làm mới mỗi")
+                Text(L10n.t("provider.refreshEvery", language))
                     .font(.system(size: 13, weight: .semibold))
-                Text("Mặc định = theo cài đặt chung (\(globalIntervalLabel))")
+                    .foregroundStyle(SettingsTheme.primary)
+                Text(L10n.f("provider.defaultGlobal", language, globalIntervalLabel))
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(SettingsTheme.tertiary)
             }
             Spacer(minLength: 8)
             Picker("", selection: Binding(
@@ -914,8 +944,8 @@ struct ProvidersPane: View {
                     NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                 }
             )) {
-                ForEach(Self.providerRefreshOptions, id: \.seconds) { opt in
-                    Text(opt.label).tag(opt.seconds)
+                ForEach(Self.providerRefreshOptions, id: \.self) { seconds in
+                    Text(providerRefreshLabel(seconds)).tag(seconds)
                 }
             }
             .labelsHidden()
@@ -928,15 +958,20 @@ struct ProvidersPane: View {
 
     /// Pre-defined options for the per-provider refresh picker. `seconds = 0`
     /// means "use global"; the other values are absolute.
-    private static let providerRefreshOptions: [(seconds: Double, label: String)] = [
-        (0, "Mặc định chung"),
-        (30, "30 giây"),
-        (60, "1 phút"),
-        (120, "2 phút"),
-        (300, "5 phút"),
-        (600, "10 phút"),
-        (1800, "30 phút"),
-    ]
+    private static let providerRefreshOptions: [Double] = [0, 30, 60, 120, 300, 600, 1800]
+
+    private func providerRefreshLabel(_ seconds: Double) -> String {
+        switch seconds {
+        case 0: return L10n.t("refresh.default", language)
+        case 30: return L10n.t("refresh.30s", language)
+        case 60: return L10n.t("refresh.1m", language)
+        case 120: return L10n.t("refresh.2m", language)
+        case 300: return L10n.t("refresh.5m", language)
+        case 600: return L10n.t("refresh.10m", language)
+        case 1800: return L10n.t("refresh.30m", language)
+        default: return L10n.duration(seconds, preference: language)
+        }
+    }
 
     private static func providerRefreshSeconds(_ id: String) -> Double {
         UserDefaults.standard.double(forKey: "refreshInterval.\(id)")
@@ -950,9 +985,55 @@ struct ProvidersPane: View {
     /// subtitle so the user knows what "Mặc định chung" falls back to.
     private var globalIntervalLabel: String {
         let secs = settings.refreshIntervalSeconds
-        if secs >= 3600 { return "\(Int(secs / 3600)) giờ" }
-        if secs >= 60 { return "\(Int(secs / 60)) phút" }
-        return "\(Int(secs)) giây"
+        return L10n.duration(secs, preference: language)
+    }
+
+    private func codexUsageSourceName(_ source: CodexUsageSource) -> String {
+        switch source {
+        case .auto: return L10n.t("source.auto", language)
+        case .oauth: return L10n.t("source.oauth", language)
+        case .cli: return L10n.t("source.cli", language)
+        }
+    }
+
+    private func codexMenuBarMetricName(_ metric: CodexMenuBarMetric) -> String {
+        switch metric {
+        case .automatic: return L10n.t("metric.automatic", language)
+        case .session: return L10n.t("metric.session", language)
+        case .weekly: return L10n.t("metric.weekly", language)
+        }
+    }
+
+    private func miniMaxRegionName(_ region: MiniMaxRegion) -> String {
+        switch region {
+        case .io: return "Global (platform.minimax.io)"
+        case .com: return L10n.t("region.china", language)
+        }
+    }
+
+    private func zaiRegionName(_ region: ZaiRegion) -> String {
+        switch region {
+        case .global: return "Global (api.z.ai)"
+        case .cn: return "BigModel CN (open.bigmodel.cn)"
+        }
+    }
+
+    private func claudeUsageSourceName(_ source: ClaudeUsageDataSource) -> String {
+        switch source {
+        case .auto: return L10n.t("source.auto", language)
+        case .api: return "API (Admin key)"
+        case .oauth: return "OAuth API"
+        case .web: return "Web API (cookies)"
+        case .cli: return "CLI (PTY)"
+        }
+    }
+
+    private func cookieSourceName(_ source: ProviderCookieSource) -> String {
+        switch source {
+        case .auto: return "Auto"
+        case .manual: return L10n.languageCode(language) == "vi" ? "Thủ công" : "Manual"
+        case .off: return L10n.languageCode(language) == "vi" ? "Tắt" : "Off"
+        }
     }
 
     // MARK: - Claude parity pickers
@@ -966,15 +1047,16 @@ struct ProvidersPane: View {
         SettingsRowDivider()
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
-                Text("Nguồn dữ liệu")
+                Text(L10n.t("provider.dataSource", language))
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
                     get: { settings.claudeUsageDataSource },
                     set: { settings.claudeUsageDataSource = $0; Task { await quota.refresh() } }
                 )) {
                     ForEach(ClaudeUsageDataSource.allCases) { src in
-                        Text(src.displayName).tag(src.rawValue)
+                        Text(claudeUsageSourceName(src)).tag(src.rawValue)
                     }
                 }
                 .labelsHidden()
@@ -983,7 +1065,7 @@ struct ProvidersPane: View {
             }
             Text(sourceSubtitle(for: settings.claudeUsageDataSource))
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(SettingsTheme.tertiary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -991,20 +1073,20 @@ struct ProvidersPane: View {
 
     private func sourceSubtitle(for source: String) -> String {
         switch source {
-        case "auto": return "Thử OAuth → Web → CLI, lấy cái đầu tiên thành công."
-        case "oauth": return "Dùng OAuth token trong Keychain của Claude Code (mặc định)."
-        case "web": return "Scrape claude.ai qua cookie Safari/Chrome."
-        case "cli": return "Chạy `claude` CLI trong PTY (cần CLI cài đặt)."
-        case "api": return "Anthropic Admin API (cần nhập key bên dưới)."
+        case "auto": return L10n.t("source.claude.auto.subtitle", language)
+        case "oauth": return L10n.t("source.claude.oauth.subtitle", language)
+        case "web": return L10n.t("source.claude.web.subtitle", language)
+        case "cli": return L10n.t("source.claude.cli.subtitle", language)
+        case "api": return L10n.t("source.claude.api.subtitle", language)
         default: return ""
         }
     }
 
     private func codexSourceSubtitle(for source: String) -> String {
         switch source {
-        case "auto": return "OAuth, fallback sang CLI `codex app-server` khi lỗi (mặc định)."
-        case "oauth": return "Chỉ OAuth (token ~/.codex/auth.json) — không fallback CLI."
-        case "cli": return "Chỉ `codex app-server` RPC cục bộ — bỏ qua OAuth."
+        case "auto": return L10n.t("source.codex.auto.subtitle", language)
+        case "oauth": return L10n.t("source.codex.oauth.subtitle", language)
+        case "cli": return L10n.t("source.codex.cli.subtitle", language)
         default: return ""
         }
     }
@@ -1018,22 +1100,26 @@ struct ProvidersPane: View {
                 get: { settings.codexOpenAIWebEnabled },
                 set: { settings.codexOpenAIWebEnabled = $0; Task { await quota.refresh() } }
             )) {
-                Text("OpenAI web extras").font(.system(size: 13, weight: .semibold))
+                Text(L10n.t("provider.openAIWebExtras", language))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
             }
-            Text("Quét chatgpt.com (WebView ẩn) lấy code-review %, credits, lịch sử. Nặng pin/mạng — mặc định tắt.")
+            Text(L10n.t("provider.openAIWebExtrasHelp", language))
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(SettingsTheme.tertiary)
 
             if settings.codexOpenAIWebEnabled {
                 HStack(spacing: 12) {
-                    Text("Cookie").font(.system(size: 12))
+                    Text(L10n.t("provider.cookie", language))
+                        .font(.system(size: 12))
+                        .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.codexCookieSource },
                         set: { settings.codexCookieSource = $0; Task { await quota.refresh() } }
                     )) {
                         ForEach(ProviderCookieSource.allCases) { src in
-                            Text(src.displayName).tag(src.rawValue)
+                            Text(cookieSourceName(src)).tag(src.rawValue)
                         }
                     }
                     .labelsHidden()
@@ -1041,7 +1127,7 @@ struct ProvidersPane: View {
                     .frame(width: 110)
                 }
                 if settings.codexCookieSource == "manual" {
-                    TextField("Dán Cookie: header từ chatgpt.com", text: Binding(
+                    TextField(L10n.t("provider.cookiePlaceholder", language), text: Binding(
                         get: { settings.codexManualCookieHeader },
                         set: { settings.codexManualCookieHeader = $0 }
                     ))
@@ -1059,15 +1145,16 @@ struct ProvidersPane: View {
     private func claudeCookieSourcePicker() -> some View {
         SettingsRowDivider()
         HStack(spacing: 12) {
-            Text("Cookie Claude")
+            Text(L10n.t("provider.cookieClaude", language))
                 .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
             Spacer(minLength: 8)
             Picker("", selection: Binding(
                 get: { settings.claudeCookieSource },
                 set: { settings.claudeCookieSource = $0; Task { await quota.refresh() } }
             )) {
                 ForEach(ProviderCookieSource.allCases) { src in
-                    Text(src.displayName).tag(src.rawValue)
+                    Text(cookieSourceName(src)).tag(src.rawValue)
                 }
             }
             .labelsHidden()
@@ -1084,17 +1171,18 @@ struct ProvidersPane: View {
     @ViewBuilder
     private func claudeManualCookieField() -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Cookie header thủ công")
+            Text(L10n.t("provider.manualCookie", language))
                 .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
             SecureField("sessionKey=...; cf_clearance=...", text: Binding(
                 get: { settings.claudeManualCookieHeader },
                 set: { settings.claudeManualCookieHeader = $0 }
             ))
             .textFieldStyle(.roundedBorder)
             .font(.system(size: 11))
-            Text("Mở claude.ai trong trình duyệt đã đăng nhập → DevTools → Network → sao chép toàn bộ header `Cookie:`.")
+            Text(L10n.t("provider.manualCookieHelp", language))
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(SettingsTheme.tertiary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1108,16 +1196,17 @@ struct ProvidersPane: View {
     private func claudeOAuthKeychainPromptPicker() -> some View {
         SettingsRowDivider()
         HStack(spacing: 12) {
-            Text("Keychain OAuth")
+            Text(L10n.t("provider.keychainOAuth", language))
                 .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
             Spacer(minLength: 8)
             Picker("", selection: Binding(
                 get: { settings.claudeOAuthKeychainPromptMode },
                 set: { settings.claudeOAuthKeychainPromptMode = $0; Task { await quota.refresh() } }
             )) {
-                Text("Không bao giờ").tag(ClaudeOAuthKeychainPromptMode.never.rawValue)
-                Text("Chỉ khi bấm").tag(ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue)
-                Text("Luôn hỏi").tag(ClaudeOAuthKeychainPromptMode.always.rawValue)
+                Text(L10n.t("prompt.never", language)).tag(ClaudeOAuthKeychainPromptMode.never.rawValue)
+                Text(L10n.t("prompt.onlyOnUserAction", language)).tag(ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue)
+                Text(L10n.t("prompt.always", language)).tag(ClaudeOAuthKeychainPromptMode.always.rawValue)
             }
             .labelsHidden()
             .pickerStyle(.menu)
@@ -1135,7 +1224,7 @@ struct ProvidersPane: View {
     private func linksSection(_ row: BirdNionConfigStore.Provider) -> some View {
         let links = dashboardLinks(for: row.id)
         if !links.isEmpty {
-            SettingsCard(header: "Liên kết") {
+            SettingsCard(header: L10n.t("settings.section.links", language)) {
                 ForEach(Array(links.enumerated()), id: \.offset) { i, link in
                     Button {
                         NSWorkspace.shared.open(link.url)
@@ -1147,8 +1236,9 @@ struct ProvidersPane: View {
                             Spacer()
                             Image(systemName: "arrow.up.right")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(SettingsTheme.tertiary)
                         }
+                        .foregroundStyle(SettingsTheme.primary)
                         .contentShape(Rectangle())
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
@@ -1167,25 +1257,25 @@ struct ProvidersPane: View {
         switch id {
         case "codex":
             return [
-                u("https://chatgpt.com/codex/settings/usage").map { DashboardLink(title: "Trang sử dụng Codex", icon: "chart.bar", url: $0) },
-                u("https://status.openai.com/").map { DashboardLink(title: "Trạng thái OpenAI", icon: "waveform.path.ecg", url: $0) },
-                u("https://github.com/openai/codex/releases").map { DashboardLink(title: "Changelog", icon: "doc.text", url: $0) },
+                u("https://chatgpt.com/codex/settings/usage").map { DashboardLink(title: L10n.t("provider.link.codexUsage", language), icon: "chart.bar", url: $0) },
+                u("https://status.openai.com/").map { DashboardLink(title: L10n.t("provider.link.openAIStatus", language), icon: "waveform.path.ecg", url: $0) },
+                u("https://github.com/openai/codex/releases").map { DashboardLink(title: L10n.t("provider.link.changelog", language), icon: "doc.text", url: $0) },
             ].compactMap { $0 }
         case "minimax":
-            return [DashboardLink(title: "Trang Token Plan", icon: "chart.bar", url: MiniMaxRegion.current.dashboardURL)]
+            return [DashboardLink(title: L10n.t("provider.link.minimaxPlan", language), icon: "chart.bar", url: MiniMaxRegion.current.dashboardURL)]
         case "openrouter":
             return [
-                u("https://openrouter.ai/settings/credits").map { DashboardLink(title: "Tín dụng OpenRouter", icon: "chart.bar", url: $0) },
-                u("https://openrouter.ai/keys").map { DashboardLink(title: "API keys", icon: "key", url: $0) },
+                u("https://openrouter.ai/settings/credits").map { DashboardLink(title: L10n.t("provider.link.openRouterCredits", language), icon: "chart.bar", url: $0) },
+                u("https://openrouter.ai/keys").map { DashboardLink(title: L10n.t("provider.link.apiKeys", language), icon: "key", url: $0) },
             ].compactMap { $0 }
         case "deepseek":
-            return [DashboardLink(title: "Số dư DeepSeek", icon: "chart.bar",
+            return [DashboardLink(title: L10n.t("provider.link.deepSeekBalance", language), icon: "chart.bar",
                                   url: URL(string: "https://platform.deepseek.com/usage")!)]
         case "zai":
-            return [DashboardLink(title: "Coding Plan", icon: "chart.bar",
+            return [DashboardLink(title: L10n.t("provider.link.codingPlan", language), icon: "chart.bar",
                                   url: URL(string: "https://z.ai/manage-apikey/coding-plan/personal/my-plan")!)]
         case "claude":
-            return [DashboardLink(title: "Trạng thái Anthropic", icon: "waveform.path.ecg",
+            return [DashboardLink(title: L10n.t("provider.link.anthropicStatus", language), icon: "waveform.path.ecg",
                                   url: URL(string: "https://status.anthropic.com/")!)]
         default:
             return []
@@ -1198,12 +1288,13 @@ struct ProvidersPane: View {
         } label: {
             HStack {
                 Image(systemName: "doc.text")
-                Text("Cấu hình Claude…")
+                Text(L10n.t("provider.claudeConfig", language))
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(SettingsTheme.tertiary)
             }
+            .foregroundStyle(SettingsTheme.primary)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1286,16 +1377,18 @@ struct ProvidersPane: View {
     }
 
     private func statusSubtitle(for row: BirdNionConfigStore.Provider) -> String {
-        if row.enabled != true { return "Đã tắt" }
-        guard let s = status(for: row.id) else { return "Chưa tải" }
+        if row.enabled != true { return L10n.t("provider.disabled", language) }
+        guard let s = status(for: row.id) else { return L10n.t("provider.notLoaded", language) }
         if let err = s.error, !err.isEmpty {
             // Truncate long error messages so the sidebar row stays a single
             // line. The full message is still reachable via the tooltip
             // (`statusSubtitleDetail`) and the detail pane.
-            return "Lỗi: \(truncated(err, max: 32))"
+            return L10n.f("provider.errorPrefix", language, truncated(err, max: 32))
         }
-        if let first = s.windows.first { return "Còn \(first.remainingPct)%" }
-        return "Đang tải…"
+        if let first = s.windows.first {
+            return L10n.f("provider.remaining", language, first.remainingPct)
+        }
+        return L10n.t("provider.loading", language)
     }
 
     /// Full error message for the sidebar row's `.help()` tooltip. Hover
@@ -1326,22 +1419,18 @@ struct ProvidersPane: View {
     }
 
     private func updatedSubtitle(for id: String) -> String {
-        guard let s = status(for: id) else { return "Chưa tải" }
-        let secs = Int(Date().timeIntervalSince(s.lastUpdated))
-        if secs < 5 { return "vừa cập nhật" }
-        if secs < 60 { return "\(secs) giây trước" }
-        if secs < 3600 { return "\(secs / 60) phút trước" }
-        return "\(secs / 3600) giờ trước"
+        guard let s = status(for: id) else { return L10n.t("provider.notLoaded", language) }
+        return L10n.relativeUpdated(from: s.lastUpdated, preference: language)
     }
 
     private func codexLoginStatus() -> String {
         guard let creds = try? CodexAuthStore.load() else {
-            return "Chưa đăng nhập"
+            return L10n.languageCode(language) == "vi" ? "Chưa đăng nhập" : "Not signed in"
         }
         if let email = CodexAuthStore.emailFromIDToken(creds.idToken) {
-            return "Đã đăng nhập: \(email)"
+            return L10n.languageCode(language) == "vi" ? "Đã đăng nhập: \(email)" : "Signed in: \(email)"
         }
-        return "Đã đăng nhập"
+        return L10n.languageCode(language) == "vi" ? "Đã đăng nhập" : "Signed in"
     }
 
     private func saveAll() {
@@ -1392,7 +1481,7 @@ struct ProviderLogoView: View {
         default:
             Image(systemName: "circle.dotted")
                 .resizable()
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTheme.secondary)
         }
     }
 }
@@ -1402,6 +1491,8 @@ struct ProviderLogoView: View {
 /// Secure token entry + save button for providers that authenticate with a
 /// bearer token (everything except zero-config Codex).
 private struct TokenField: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let providerID: String
     let onSaved: () -> Void
 
@@ -1410,13 +1501,14 @@ private struct TokenField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Token")
+            Text(L10n.t("provider.token", settings.appLanguage))
                 .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
             HStack(spacing: 8) {
-                SecureField("Dán token vào đây", text: $token)
+                SecureField(L10n.t("provider.tokenPlaceholder", settings.appLanguage), text: $token)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12).monospacedDigit())
-                Button("Lưu") {
+                Button(L10n.t("provider.save", settings.appLanguage)) {
                     guard !token.isEmpty else { return }
                     do {
                         // Save to BirdNionConfigStore (the single source of
@@ -1429,10 +1521,10 @@ private struct TokenField: View {
                         entry.apiKey = token
                         try BirdNionConfigStore.save(entry)
                         token = ""
-                        banner = "Đã lưu vào ~/.birdnion/settings.json."
+                        banner = L10n.t("provider.savedSettings", settings.appLanguage)
                         onSaved()
                     } catch {
-                        banner = "Lỗi lưu: \(error.localizedDescription)"
+                        banner = L10n.f("provider.saveError", settings.appLanguage, error.localizedDescription)
                     }
                 }
                 .controlSize(.small)
@@ -1441,7 +1533,7 @@ private struct TokenField: View {
             if let banner {
                 Text(banner)
                     .font(.system(size: 11))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(SettingsTheme.success)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1454,6 +1546,8 @@ private struct TokenField: View {
 /// the global thresholds unless "Customize" is on, mirroring CodexBar's panel.
 /// Overrides are persisted via `QuotaWarnConfig` (UserDefaults).
 private struct QuotaWarningCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let providerID: String
 
     @State private var sessionCustom = false
@@ -1463,13 +1557,13 @@ private struct QuotaWarningCard: View {
 
     var body: some View {
         SettingsCard(
-            header: "Cảnh báo quota",
-            footer: "Dùng ngưỡng chung trừ khi bật tùy chỉnh riêng cho từng cửa sổ."
+            header: L10n.t("settings.section.quotaWarnings", settings.appLanguage),
+            footer: LocalizedStringKey(L10n.t("provider.quotaWarningsFooter", settings.appLanguage))
         ) {
-            windowRow(title: "Phiên (5 giờ)", window: "session",
+            windowRow(title: L10n.t("provider.sessionWindow", settings.appLanguage), window: "session",
                       custom: $sessionCustom, levels: $sessionLevels)
             SettingsRowDivider()
-            windowRow(title: "Tuần", window: "weekly",
+            windowRow(title: L10n.t("provider.weekWindow", settings.appLanguage), window: "weekly",
                       custom: $weeklyCustom, levels: $weeklyLevels)
         }
         .onAppear(perform: load)
@@ -1487,21 +1581,24 @@ private struct QuotaWarningCard: View {
                                                 thresholds: on ? levels.wrappedValue : nil)
                 }
             )) {
-                Text("Tùy chỉnh ngưỡng \(title)")
+                Text(L10n.f("provider.customThresholds", settings.appLanguage, title))
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
             }
             .toggleStyle(.checkbox)
 
             if custom.wrappedValue {
                 HStack(spacing: 16) {
-                    levelStepper("Cảnh báo", levels: levels, index: 0, window: window)
-                    levelStepper("Nguy hiểm", levels: levels, index: 1, window: window)
+                    levelStepper(L10n.t("provider.warning", settings.appLanguage),
+                                 levels: levels, index: 0, window: window)
+                    levelStepper(L10n.t("provider.critical", settings.appLanguage),
+                                 levels: levels, index: 1, window: window)
                 }
             } else {
                 let inherited = QuotaWarnConfig.globalThresholds.map { "\($0)%" }.joined(separator: ", ")
-                Text("Kế thừa: \(inherited)")
+                Text(L10n.f("provider.inherited", settings.appLanguage, inherited))
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(SettingsTheme.tertiary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1521,6 +1618,7 @@ private struct QuotaWarningCard: View {
         ), in: 1...100, step: 5) {
             Text("\(label): \(levels.wrappedValue[index])%")
                 .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(SettingsTheme.primary)
         }
         .fixedSize()
     }
@@ -1547,6 +1645,8 @@ private struct QuotaWarningCard: View {
 /// `codex login` in the browser. Selecting one switches which login the
 /// provider reads.
 private struct CodexAccountsCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
     @State private var accounts: [CodexAccount] = []
     @State private var activeID = "system"
     @State private var busy = false
@@ -1554,8 +1654,8 @@ private struct CodexAccountsCard: View {
 
     var body: some View {
         SettingsCard(
-            header: "Tài khoản",
-            footer: "Mỗi tài khoản đăng nhập riêng. “Thêm tài khoản” mở `codex login` trong trình duyệt; tài khoản hệ thống (~/.codex) không bị ghi đè."
+            header: L10n.t("settings.section.account", settings.appLanguage),
+            footer: LocalizedStringKey(L10n.t("provider.accountsFooter", settings.appLanguage))
         ) {
             ForEach(accounts) { account in
                 accountRow(account)
@@ -1569,30 +1669,35 @@ private struct CodexAccountsCard: View {
     private func accountRow(_ account: CodexAccount) -> some View {
         HStack(spacing: 10) {
             Image(systemName: account.id == activeID ? "largecircle.fill.circle" : "circle")
-                .foregroundStyle(account.id == activeID ? Color.accentColor : Color.secondary)
+                .foregroundStyle(account.id == activeID ? SettingsTheme.accent : SettingsTheme.secondary)
                 .onTapGesture {
                     CodexAccountStore.setActive(account.id)
                     activeID = account.id
                 }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(account.email ?? (account.isSystem ? "Tài khoản hệ thống" : "Tài khoản"))
+                Text(account.email ?? (account.isSystem
+                                       ? L10n.t("provider.systemAccount", settings.appLanguage)
+                                       : L10n.t("provider.accountGeneric", settings.appLanguage)))
                     .font(.system(size: 13, weight: .semibold))
-                Text(account.isSystem ? "Hệ thống · ~/.codex" : "Quản lý bởi app")
+                    .foregroundStyle(SettingsTheme.primary)
+                Text(account.isSystem
+                     ? L10n.t("provider.systemManaged", settings.appLanguage)
+                     : L10n.t("provider.appManaged", settings.appLanguage))
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTheme.secondary)
             }
 
             Spacer(minLength: 6)
 
-            Button("Đăng nhập lại") { Task { await reauth(account.id) } }
+            Button(L10n.t("provider.reauth", settings.appLanguage)) { Task { await reauth(account.id) } }
                 .controlSize(.small)
                 .disabled(busy)
 
             if account.isSystem {
                 // Copy the current ~/.codex login into a managed account so it
                 // survives a later system re-login.
-                Button("Lưu thành managed") { promote() }
+                Button(L10n.t("provider.saveManaged", settings.appLanguage)) { promote() }
                     .controlSize(.small)
                     .disabled(busy || account.email == nil)
             } else {
@@ -1615,7 +1720,7 @@ private struct CodexAccountsCard: View {
             Button { Task { await add() } } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "plus.circle")
-                    Text("Thêm tài khoản")
+                    Text(L10n.t("provider.addAccount", settings.appLanguage))
                 }
             }
             .buttonStyle(.plain)
@@ -1623,9 +1728,9 @@ private struct CodexAccountsCard: View {
 
             if busy {
                 ProgressView().controlSize(.small)
-                Text("Đang chờ đăng nhập trong trình duyệt…")
+                Text(L10n.t("provider.waitingLogin", settings.appLanguage))
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTheme.secondary)
             }
 
             Spacer(minLength: 6)
@@ -1633,7 +1738,7 @@ private struct CodexAccountsCard: View {
             if let errorText {
                 Text(errorText)
                     .font(.system(size: 10))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(SettingsTheme.warning)
                     .lineLimit(1)
             }
         }

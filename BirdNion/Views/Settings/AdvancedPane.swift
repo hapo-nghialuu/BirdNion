@@ -7,22 +7,22 @@ struct AdvancedPane: View {
 
     var body: some View {
         SettingsPage {
-            SettingsCard(header: "Riêng tư") {
+            SettingsCard(header: L10n.t("settings.section.privacy", settings.appLanguage)) {
                 SettingsLabeledRow(
-                    title: "Ẩn thông tin cá nhân",
-                    subtitle: "Che email tài khoản trên chip và popover."
+                    title: L10n.t("settings.hidePersonalInfo.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.hidePersonalInfo.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.hidePersonalInfo).labelsHidden().toggleStyle(.switch)
                 }
             }
 
             SettingsCard(
-                header: "Nhà phát triển",
-                footer: "Khởi động lại app để áp dụng một số thay đổi (ví dụ ngôn ngữ)."
+                header: L10n.t("settings.section.developer", settings.appLanguage),
+                footer: LocalizedStringKey(L10n.t("settings.developer.footer", settings.appLanguage))
             ) {
                 SettingsLabeledRow(
-                    title: "Hiện mục Debug",
-                    subtitle: "Thêm tab Debug để xem log và cache."
+                    title: L10n.t("settings.debugMenu.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.debugMenu.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.debugMenuEnabled).labelsHidden().toggleStyle(.switch)
                 }

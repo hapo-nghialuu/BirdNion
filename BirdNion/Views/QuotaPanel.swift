@@ -119,6 +119,8 @@ struct QuotaOverview: View {
 // MARK: - App Header
 
 struct BirdNionHeader: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let isRefreshing: Bool
 
     var body: some View {
@@ -133,7 +135,9 @@ struct BirdNionHeader: View {
                 Text("BirdNion")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
-                Text(isRefreshing ? "Đang cập nhật" : "Sẵn sàng")
+                Text(isRefreshing
+                     ? L10n.t("popover.updating", settings.appLanguage)
+                     : L10n.t("popover.ready", settings.appLanguage))
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.secondary)
             }
@@ -157,8 +161,8 @@ struct BirdNionHeader: View {
             }
             .buttonStyle(.plain)
             .disabled(isRefreshing)
-            .help("Refresh")
-            .accessibilityLabel("Refresh")
+            .help(L10n.t("popover.refresh", settings.appLanguage))
+            .accessibilityLabel(L10n.t("popover.refresh", settings.appLanguage))
         }
     }
 }
@@ -272,6 +276,8 @@ enum ProviderStatusSummary {
 
 /// Provider info card: brand mark + account metadata + menu-bar visibility.
 struct ProviderHeaderCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let status: ProviderStatus
     /// True when this is a placeholder entry — `statuses` hasn't received
     /// real data for this provider yet. The card shows a spinner in the
@@ -281,11 +287,7 @@ struct ProviderHeaderCard: View {
     @EnvironmentObject var quota: QuotaService
 
     private var updatedAgo: String {
-        let secs = Int(Date().timeIntervalSince(status.lastUpdated))
-        if secs < 5 { return "vừa cập nhật" }
-        if secs < 60 { return "\(secs) giây trước" }
-        if secs < 3600 { return "\(secs / 60) phút trước" }
-        return "\(secs / 3600) giờ trước"
+        L10n.relativeUpdated(from: status.lastUpdated, preference: settings.appLanguage)
     }
 
     private var metadataParts: [String] {
@@ -340,7 +342,7 @@ struct ProviderHeaderCard: View {
                             .controlSize(.small)
                             .tint(VocabbyTheme.blue)
                             .frame(width: 10, height: 10)
-                        Text("đang cập nhật")
+                        Text(L10n.t("popover.updating", settings.appLanguage).lowercased())
                             .font(.system(size: 10))
                             .foregroundStyle(VocabbyTheme.tertiary)
                     }
@@ -354,7 +356,7 @@ struct ProviderHeaderCard: View {
                             .controlSize(.small)
                             .tint(VocabbyTheme.blue)
                             .frame(width: 12, height: 12)
-                        Text("Đang tải…")
+                        Text(L10n.t("provider.loading", settings.appLanguage))
                             .font(.system(size: 11).monospacedDigit())
                             .foregroundStyle(VocabbyTheme.secondary)
                     } else {
@@ -416,6 +418,8 @@ struct ProviderCard: View {
 }
 
 struct QuotaSummaryStrip: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let status: ProviderStatus
 
     private var lowest: QuotaWindow? {
@@ -429,10 +433,10 @@ struct QuotaSummaryStrip: View {
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Quota thấp nhất")
+                Text(L10n.t("popover.lowestQuota", settings.appLanguage))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(VocabbyTheme.secondary)
-                Text(lowest?.label ?? status.displayName)
+                Text(lowest.map { L10n.windowLabel($0.label, preference: settings.appLanguage) } ?? status.displayName)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(VocabbyTheme.primary)
                     .lineLimit(1)
@@ -447,6 +451,8 @@ struct QuotaSummaryStrip: View {
 }
 
 struct LoadingQuotaSkeleton: View {
+    @EnvironmentObject var settings: SettingsStore
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -460,12 +466,14 @@ struct LoadingQuotaSkeleton: View {
                 .frame(width: 180, height: 8)
         }
         .padding(.vertical, 2)
-        .accessibilityLabel("Đang tải quota")
+        .accessibilityLabel(L10n.t("popover.loadingQuota", settings.appLanguage))
     }
 }
 
 /// Single quota window row.
 struct WindowRow: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let window: QuotaWindow
     /// Fetch timestamp from the parent `ProviderStatus` — used as the
     /// anchor for the `lastUpdated + windowSeconds` reset estimate when
@@ -478,12 +486,12 @@ struct WindowRow: View {
 
     private var subtitleText: String {
         if let s = window.subtitle, !s.isEmpty { return s }
-        return "Đã dùng \(window.usedPct)%"
+        return L10n.f("quota.used", settings.appLanguage, window.usedPct)
     }
 
     private var resetText: String {
         // 1. Use the API-provided reset timestamp when available.
-        if let d = window.resetDate { return Self.formatReset(d) }
+        if let d = window.resetDate { return formatReset(d) }
         // 2. Fall back to `lastUpdated + windowSeconds` — the API didn't
         //    include a reset timestamp (e.g. Codex OAuth response sometimes
         //    omits it) but we know the window's nominal length. Computes
@@ -491,30 +499,23 @@ struct WindowRow: View {
         //    happened rather than the absolute wall-clock at render time.
         if let secs = window.windowSeconds, secs > 0 {
             let estimate = lastUpdated.addingTimeInterval(TimeInterval(secs))
-            return Self.formatReset(estimate)
+            return formatReset(estimate)
         }
         // 3. Last-resort label-based fallback for old providers that don't
         //    surface either resetDate or windowSeconds.
-        if window.label.contains("Tuần") { return "Reset hằng tuần" }
-        if window.label.contains("5 giờ") { return "Reset trong 5h" }
+        if window.label.contains("Tuần") { return L10n.t("quota.resetWeekly", settings.appLanguage) }
+        if window.label.contains("5 giờ") { return L10n.t("quota.resetIn5h", settings.appLanguage) }
         return ""
     }
 
-    private static func formatReset(_ date: Date) -> String {
-        let secs = Int(date.timeIntervalSinceNow)
-        if secs <= 0 { return "Reset sắp tới" }
-        let days = secs / 86_400
-        let hours = (secs % 86_400) / 3_600
-        let mins = (secs % 3_600) / 60
-        if days > 0 { return "Reset trong \(days)d \(hours)h" }
-        if hours > 0 { return "Reset trong \(hours)h \(mins)m" }
-        return "Reset trong \(mins)m"
+    private func formatReset(_ date: Date) -> String {
+        L10n.resetCountdown(to: date, preference: settings.appLanguage)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(window.label)
+                Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.secondary)
                 Spacer()
@@ -551,21 +552,23 @@ struct WindowRow: View {
 /// Vertical action list (icon + label rows). CodexBar-style, matches the
 /// footer menu of the reference app instead of the compact 4-icon row.
 struct ActionsList: View {
+    @EnvironmentObject var settings: SettingsStore
+
     var body: some View {
         VStack(spacing: 0) {
-            ActionRow(icon: "gearshape", label: "Settings…",
+            ActionRow(icon: "gearshape", label: L10n.t("popover.settings", settings.appLanguage),
                       shortcut: "⌘,",
                       isLoading: false) {
                 NotificationCenter.default.post(name: .openSettings, object: nil)
             }
             Divider().padding(.vertical, 2)
-            ActionRow(icon: "info.circle", label: "About BirdNion",
+            ActionRow(icon: "info.circle", label: L10n.t("popover.about", settings.appLanguage),
                       shortcut: nil,
                       isLoading: false) {
                 AboutPresenter.show()
             }
             Divider().padding(.vertical, 2)
-            ActionRow(icon: "power", label: "Quit BirdNion",
+            ActionRow(icon: "power", label: L10n.t("popover.quit", settings.appLanguage),
                       shortcut: "⌘Q",
                       isLoading: false) {
                 NSApp.terminate(nil)
@@ -630,6 +633,8 @@ struct ActionRow: View {
 /// (green check when ok, red triangle when in error) so the toggle area
 /// still surfaces status at a glance — this replaces the old OK pill.
 struct MenuBarVisibilityToggle: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let providerId: String
     let hasError: Bool
 
@@ -651,8 +656,8 @@ struct MenuBarVisibilityToggle: View {
                 .controlSize(.small)
                 .labelsHidden()
                 .help(isOn
-                    ? "Provider này đang hiển thị trên menu bar. Tắt để ẩn."
-                    : "Provider này đang ẩn khỏi menu bar. Bật để hiển thị.")
+                    ? L10n.t("popover.visibilityOn", settings.appLanguage)
+                    : L10n.t("popover.visibilityOff", settings.appLanguage))
                 .onChange(of: isOn) { newValue in
                     MenuBarVisibility.setShown(providerId: providerId, to: newValue)
                 }
@@ -675,10 +680,10 @@ enum AboutPresenter {
         alert.informativeText = """
         Version \(version) (\(build))
 
-        macOS menu bar app for tracking AI provider quota.
+        \(L10n.t("popover.aboutInfo"))
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Đóng")
+        alert.addButton(withTitle: L10n.t("button.close"))
         alert.runModal()
     }
 }
@@ -759,6 +764,8 @@ extension View {
 /// between idle and busy days; tokens go in the top-right summary so
 /// both signals are visible at a glance.
 struct ClaudeUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let report: ClaudeUsageReport
 
     private var maxBarUSD: Double {
@@ -770,11 +777,8 @@ struct ClaudeUsageChartCard: View {
     }
 
     private var todayLabel: String {
-        guard let today = report.daily.last else { return "Hôm nay" }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "vi_VN")
-        f.dateFormat = "d MMM"
-        return "Hôm nay (\(f.string(from: today.date)))"
+        guard let today = report.daily.last else { return L10n.t("chart.today", settings.appLanguage) }
+        return L10n.f("chart.todayWithDate", settings.appLanguage, L10n.dayMonth(today.date, preference: settings.appLanguage))
     }
 
     var body: some View {
@@ -787,13 +791,13 @@ struct ClaudeUsageChartCard: View {
                     tokens: report.todayTokens)
                 Spacer(minLength: 8)
                 summaryColumn(
-                    label: "30d cost",
+                    label: L10n.t("chart.last30Cost", settings.appLanguage),
                     amount: report.last30USD,
                     tokens: report.last30Tokens,
                     alignTrailing: true)
                 Spacer(minLength: 8)
                 summaryColumn(
-                    label: "Latest tokens",
+                    label: L10n.t("chart.latestTokens", settings.appLanguage),
                     amount: nil,
                     tokens: latestDayTokens,
                     alignTrailing: true)
@@ -801,11 +805,11 @@ struct ClaudeUsageChartCard: View {
             barChart
                 .frame(height: 56)
             if let model = report.topModel {
-                Text("Top model: \(model)")
+                Text(L10n.f("chart.topModel", settings.appLanguage, model))
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.secondary)
             }
-            Text("Estimated from local Claude logs at API rates; token totals are exact, USD are approximate.")
+            Text(L10n.t("chart.estimate", settings.appLanguage))
                 .font(.system(size: 9))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -866,10 +870,7 @@ struct ClaudeUsageChartCard: View {
     }
 
     private func dayLabel(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "vi_VN")
-        f.dateFormat = "d MMM"
-        return f.string(from: date)
+        L10n.dayMonth(date, preference: settings.appLanguage)
     }
 
     private func formatUSD(_ amount: Double) -> String {
@@ -914,6 +915,8 @@ extension Notification.Name {
 ///   - Compact primary CTA
 ///
 struct EmptyProvidersState: View {
+    @EnvironmentObject var settings: SettingsStore
+
     var body: some View {
         VStack(spacing: 10) {
             // Bird logo. `OriginalImage` is the same artwork bundled in
@@ -928,13 +931,13 @@ struct EmptyProvidersState: View {
                 .accessibilityHidden(true)
 
             VStack(spacing: 5) {
-                Text("Chưa có nhà cung cấp nào")
+                Text(L10n.t("popover.noProviders", settings.appLanguage))
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(VocabbyTheme.primary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Mở Settings để chọn nhà cung cấp bạn muốn theo dõi quota AI.")
+                Text(L10n.t("popover.noProvidersBody", settings.appLanguage))
                     .font(.system(size: 12))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .multilineTextAlignment(.center)
@@ -950,7 +953,7 @@ struct EmptyProvidersState: View {
             Button {
                 NotificationCenter.default.post(name: .openSettings, object: nil)
             } label: {
-                Text("Mở Settings")
+                Text(L10n.t("popover.openSettings", settings.appLanguage))
                     .font(.system(size: 13, weight: .semibold))
                     .padding(.horizontal, 18)
                     .padding(.vertical, 4)

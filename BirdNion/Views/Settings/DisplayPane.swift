@@ -9,12 +9,12 @@ struct DisplayPane: View {
     var body: some View {
         SettingsPage {
             SettingsCard(
-                header: "Menu bar",
-                footer: "Cài đặt này sẽ có hiệu lực khi trình render hỗ trợ multi-icon."
+                header: L10n.t("settings.section.menuBar", settings.appLanguage),
+                footer: LocalizedStringKey(L10n.t("settings.display.footer", settings.appLanguage))
             ) {
                 SettingsLabeledRow(
-                    title: "Gộp icon nhà cung cấp",
-                    subtitle: "Hiện một icon duy nhất xoay vòng giữa các provider."
+                    title: L10n.t("settings.mergeIcons.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.mergeIcons.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.mergeIcons).labelsHidden().toggleStyle(.switch)
                 }
@@ -22,10 +22,10 @@ struct DisplayPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
-                    title: "Switcher có icon",
+                    title: L10n.t("settings.switcherShowsIcons.title", settings.appLanguage),
                     subtitle: settings.mergeIcons
-                        ? "Hiện icon khi chuyển nhà cung cấp từ popover."
-                        : "Bật “Gộp icon” trước."
+                        ? L10n.t("settings.switcherShowsIcons.subtitle.on", settings.appLanguage)
+                        : L10n.t("settings.switcherShowsIcons.subtitle.off", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.switcherShowsIcons)
                         .labelsHidden()

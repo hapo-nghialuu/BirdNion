@@ -1,8 +1,11 @@
 import SwiftUI
 
 /// Custom horizontal tab bar with icon + 2-line label, matching the CodexBar
-/// toolbar style. Selected tab uses `.tint`; others use `.secondary`.
+/// toolbar style. Selected tab uses the fixed Settings palette so it stays
+/// visually aligned with the popover.
 struct SettingsTabBar: View {
+    @EnvironmentObject var settings: SettingsStore
+
     @Binding var selected: SettingsTab
     let tabs: [SettingsTab]
 
@@ -11,6 +14,7 @@ struct SettingsTabBar: View {
             ForEach(tabs) { tab in
                 SettingsTabButton(
                     tab: tab,
+                    language: settings.appLanguage,
                     isSelected: tab == selected,
                     action: { selected = tab }
                 )
@@ -19,11 +23,13 @@ struct SettingsTabBar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .background(SettingsTheme.toolbar)
     }
 }
 
 private struct SettingsTabButton: View {
     let tab: SettingsTab
+    let language: String
     let isSelected: Bool
     let action: () -> Void
 
@@ -34,24 +40,24 @@ private struct SettingsTabButton: View {
             VStack(spacing: 3) {
                 Image(systemName: tab.icon)
                     .font(.system(size: 20, weight: .regular))
-                Text(tab.title)
+                Text(tab.title(language: language))
                     .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            .foregroundStyle(isSelected ? SettingsTheme.accent : SettingsTheme.secondary)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isSelected
-                          ? Color.accentColor.opacity(0.12)
-                          : (hovering ? Color.gray.opacity(0.08) : .clear))
+                          ? SettingsTheme.selectedSurface
+                          : (hovering ? SettingsTheme.hoverSurface : .clear))
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(tab.title)
+        .help(tab.title(language: language))
     }
 }

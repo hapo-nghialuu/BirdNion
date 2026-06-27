@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `statusItem.menu` so a left click still toggles the quota popover; it's
     /// attached only for the duration of a right-click (see `togglePanel`).
     private var statusMenu: NSMenu?
+    private weak var settingsMenuItem: NSMenuItem?
     private var panel: DropdownPanel!
     private var hostingController: NSHostingController<AnyView>!
     private var cancellables = Set<AnyCancellable>()
@@ -86,12 +87,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // shortcut only works while the menu is already open otherwise.
             let menu = NSMenu()
             let settingsItem = NSMenuItem(
-                title: "Settings…",
+                title: L10n.t("popover.settings", services.settings.appLanguage),
                 action: #selector(openSettings(_:)),
                 keyEquivalent: ",")
             settingsItem.keyEquivalentModifierMask = [.command]
             settingsItem.target = self
             menu.addItem(settingsItem)
+            self.settingsMenuItem = settingsItem
             statusMenu = menu
 
             button.image = MenuBarIconRenderer.iconImage()
@@ -110,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PopoverView()
                     .environmentObject(services.quotaService)
                     .environmentObject(services.configService)
+                    .environmentObject(services.settings)
             )
         )
         host.sizingOptions = [.preferredContentSize]
@@ -148,8 +151,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] statuses in self?.updateFrames(from: statuses) }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshLocalizedChrome() }
+            .store(in: &cancellables)
+
         installClickOutsideMonitor()
         installCmdCommaShortcut()
+    }
+
+    private func refreshLocalizedChrome() {
+        settingsMenuItem?.title = L10n.t("popover.settings", services.settings.appLanguage)
     }
 
     // MARK: - Show / hide

@@ -16,11 +16,11 @@ final class SettingsStore: ObservableObject {
         case vietnamese = "vi"
 
         var id: String { rawValue }
-        var displayName: String {
+        func displayName(language: String? = nil) -> String {
             switch self {
-            case .system: "Theo hệ thống"
-            case .english: "English"
-            case .vietnamese: "Tiếng Việt"
+            case .system: L10n.t("language.system", language)
+            case .english: L10n.t("language.english", language)
+            case .vietnamese: L10n.t("language.vietnamese", language)
             }
         }
     }
@@ -33,13 +33,13 @@ final class SettingsStore: ObservableObject {
         case oneHour = 3600
 
         var id: Double { rawValue }
-        var displayName: String {
+        func displayName(language: String? = nil) -> String {
             switch self {
-            case .oneMinute: "1 phút"
-            case .twoMinutes: "2 phút"
-            case .fiveMinutes: "5 phút"
-            case .fifteenMinutes: "15 phút"
-            case .oneHour: "1 giờ"
+            case .oneMinute: L10n.duration(60, preference: language)
+            case .twoMinutes: L10n.duration(120, preference: language)
+            case .fiveMinutes: L10n.duration(300, preference: language)
+            case .fifteenMinutes: L10n.duration(900, preference: language)
+            case .oneHour: L10n.duration(3600, preference: language)
             }
         }
     }
@@ -138,6 +138,7 @@ final class SettingsStore: ObservableObject {
     /// picks it up. macOS applies locale changes at process start, so this
     /// only takes effect after the app restarts (matches CodexBar behavior).
     func applyLanguage() {
+        objectWillChange.send()
         let key = "AppleLanguages"
         if appLanguage.isEmpty {
             UserDefaults.standard.removeObject(forKey: key)

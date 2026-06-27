@@ -8,14 +8,14 @@ struct GeneralPane: View {
 
     var body: some View {
         SettingsPage {
-            SettingsCard(header: "Hệ thống") {
+            SettingsCard(header: L10n.t("settings.section.system", settings.appLanguage)) {
                 SettingsLabeledRow(
-                    title: "Ngôn ngữ",
-                    subtitle: "Khởi động lại app để áp dụng."
+                    title: L10n.t("settings.language.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.language.subtitle", settings.appLanguage)
                 ) {
                     Picker("", selection: $settings.appLanguage) {
                         ForEach(SettingsStore.Language.allCases) { lang in
-                            Text(lang.displayName).tag(lang.rawValue)
+                            Text(lang.displayName(language: settings.appLanguage)).tag(lang.rawValue)
                         }
                     }
                     .labelsHidden()
@@ -29,8 +29,8 @@ struct GeneralPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
-                    title: "Khởi động cùng máy",
-                    subtitle: "Tự mở BirdNion khi đăng nhập."
+                    title: L10n.t("settings.launchAtLogin.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.launchAtLogin.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.launchAtLogin)
                         .labelsHidden()
@@ -41,14 +41,14 @@ struct GeneralPane: View {
                 }
             }
 
-            SettingsCard(header: "Sử dụng") {
+            SettingsCard(header: L10n.t("settings.section.usage", settings.appLanguage)) {
                 SettingsLabeledRow(
-                    title: "Tần suất làm mới",
-                    subtitle: "Mỗi bao lâu app gọi lại nhà cung cấp."
+                    title: L10n.t("settings.refreshFrequency.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.refreshFrequency.subtitle", settings.appLanguage)
                 ) {
                     Picker("", selection: $settings.refreshIntervalSeconds) {
                         ForEach(SettingsStore.RefreshFrequency.allCases) { f in
-                            Text(f.displayName).tag(f.rawValue)
+                            Text(f.displayName(language: settings.appLanguage)).tag(f.rawValue)
                         }
                     }
                     .labelsHidden()
@@ -60,10 +60,10 @@ struct GeneralPane: View {
                 }
             }
 
-            SettingsCard(header: "Tự động") {
+            SettingsCard(header: L10n.t("settings.section.automation", settings.appLanguage)) {
                 SettingsLabeledRow(
-                    title: "Kiểm tra trạng thái",
-                    subtitle: "Poll trang trạng thái của các nhà cung cấp."
+                    title: L10n.t("settings.statusChecks.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.statusChecks.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.statusChecksEnabled).labelsHidden().toggleStyle(.switch)
                 }
@@ -71,8 +71,8 @@ struct GeneralPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
-                    title: "Thông báo phiên 5 giờ",
-                    subtitle: "Báo khi phiên quota chạm 0% và khi khôi phục."
+                    title: L10n.t("settings.sessionNotifications.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.sessionNotifications.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.sessionQuotaNotificationsEnabled).labelsHidden().toggleStyle(.switch)
                 }
@@ -80,8 +80,8 @@ struct GeneralPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
-                    title: "Thông báo cảnh báo quota",
-                    subtitle: "Cảnh báo khi còn dưới ngưỡng đã đặt."
+                    title: L10n.t("settings.quotaWarningNotifications.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.quotaWarningNotifications.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.quotaWarningNotificationsEnabled).labelsHidden().toggleStyle(.switch)
                 }
@@ -90,8 +90,8 @@ struct GeneralPane: View {
                     SettingsRowDivider()
 
                     SettingsLabeledRow(
-                        title: "Ngưỡng cảnh báo",
-                        subtitle: "Báo lần đầu khi % còn lại chạm mức này."
+                        title: L10n.t("settings.warningThreshold.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.warningThreshold.subtitle", settings.appLanguage)
                     ) {
                         Stepper(value: $settings.quotaWarnLevel1, in: 5...95, step: 5) {
                             Text("\(settings.quotaWarnLevel1)%")
@@ -103,8 +103,8 @@ struct GeneralPane: View {
                     SettingsRowDivider()
 
                     SettingsLabeledRow(
-                        title: "Ngưỡng nguy hiểm",
-                        subtitle: "Báo lần nữa khi chạm mức thấp hơn này."
+                        title: L10n.t("settings.criticalThreshold.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.criticalThreshold.subtitle", settings.appLanguage)
                     ) {
                         Stepper(value: $settings.quotaWarnLevel2, in: 1...90, step: 5) {
                             Text("\(settings.quotaWarnLevel2)%")

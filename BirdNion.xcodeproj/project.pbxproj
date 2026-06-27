@@ -36,6 +36,7 @@
 		DDDD001B0000000000B00E /* QuotaPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD001C000000000000F00E /* QuotaPanel.swift */; };
 		DDDD001D0000000000B00F /* ConfigPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD001E000000000000F00F /* ConfigPanel.swift */; };
 		SET0001000000000000B001 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0002000000000000F001 /* SettingsStore.swift */; };
+		L10N0001000000000000B001 /* AppLocalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N0002000000000000F001 /* AppLocalizer.swift */; };
 		FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FR0002000000000000F001 /* BirdNionConfigStore.swift */; };
 
 		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
@@ -119,6 +120,7 @@
 		DDDD001C000000000000F00E /* QuotaPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/QuotaPanel.swift; sourceTree = "<group>"; };
 		DDDD001E000000000000F00F /* ConfigPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/ConfigPanel.swift; sourceTree = "<group>"; };
 		SET0002000000000000F001 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsStore.swift; sourceTree = "<group>"; };
+		L10N0002000000000000F001 /* AppLocalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalizer.swift; sourceTree = "<group>"; };
 		FR0002000000000000F001 /* BirdNionConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BirdNionConfigStore.swift; sourceTree = "<group>"; };
 
 		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 			isa = PBXGroup;
 			children = (
 				FFFF0004000000000000F002 /* ServicesContainer.swift */,
+				L10N0002000000000000F001 /* AppLocalizer.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -414,6 +417,7 @@
 				DDDD001B0000000000B00E /* QuotaPanel.swift in Sources */,
 				DDDD001D0000000000B00F /* ConfigPanel.swift in Sources */,
 				SET0001000000000000B001 /* SettingsStore.swift in Sources */,
+				L10N0001000000000000B001 /* AppLocalizer.swift in Sources */,
 				FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */,
 
 				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,

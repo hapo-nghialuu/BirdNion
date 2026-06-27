@@ -14,6 +14,7 @@ import SwiftUI
 struct PopoverView: View {
     @EnvironmentObject var quota: QuotaService
     @EnvironmentObject var config: ConfigService
+    @EnvironmentObject var settings: SettingsStore
     @State private var section: Section = .quota
 
     enum Section: Hashable {
@@ -82,7 +83,7 @@ struct PopoverView: View {
     private var sectionTitle: String {
         switch section {
         case .quota:  return "Quota"
-        case .config: return "Claude Config"
+        case .config: return L10n.t("provider.claudeConfig", settings.appLanguage)
         }
     }
 }

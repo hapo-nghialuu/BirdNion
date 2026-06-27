@@ -1,4 +1,34 @@
+import AppKit
 import SwiftUI
+
+/// Fixed light palette for the Settings window. The app lives in the menu bar,
+/// so the settings surface should stay close to the popover instead of
+/// inheriting a full black dark-mode appearance from macOS.
+enum SettingsTheme {
+    static let background = Color(red: 0.949, green: 0.949, blue: 0.953)
+    static let toolbar = Color(red: 0.925, green: 0.925, blue: 0.933)
+    static let card = Color(red: 0.992, green: 0.992, blue: 0.996)
+    static let control = Color(red: 0.969, green: 0.969, blue: 0.976)
+    static let selectedSurface = Color(red: 0.910, green: 0.949, blue: 1.000)
+    static let hoverSurface = Color(red: 0.910, green: 0.910, blue: 0.922)
+    static let border = Color(red: 0.820, green: 0.820, blue: 0.840)
+    static let track = Color(red: 0.898, green: 0.898, blue: 0.918)
+    static let primary = Color(red: 0.114, green: 0.114, blue: 0.122)
+    static let secondary = Color(red: 0.431, green: 0.431, blue: 0.451)
+    static let tertiary = Color(red: 0.557, green: 0.557, blue: 0.576)
+    static let accent = Color(red: 0.039, green: 0.518, blue: 1.000)
+    static let success = Color(red: 0.204, green: 0.780, blue: 0.349)
+    static let warning = Color(red: 1.000, green: 0.624, blue: 0.039)
+    static let critical = Color(red: 1.000, green: 0.271, blue: 0.227)
+    static let disabled = Color(red: 0.650, green: 0.650, blue: 0.670)
+
+    static func quotaColor(remaining: Int) -> Color {
+        switch remaining {
+        case 0..<30: return warning
+        default: return success
+        }
+    }
+}
 
 /// Root view rendered inside AppDelegate's settings NSWindow. Hosts the custom
 /// tab bar on top + a scrollable content pane. When `debugMenuEnabled` toggles,
@@ -25,6 +55,7 @@ struct SettingsSceneRoot: View {
         VStack(spacing: 0) {
             SettingsTabBar(selected: $selected, tabs: visibleTabs)
             Divider()
+                .overlay(SettingsTheme.border)
 
             Group {
                 switch selected {
@@ -40,13 +71,39 @@ struct SettingsSceneRoot: View {
         }
         .frame(width: contentWidth, height: 620)
         // Opaque backing so AppKit always has something to clear to.
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(SettingsTheme.background)
+        .overlay(SettingsWindowAppearanceView().frame(width: 0, height: 0))
+        .tint(SettingsTheme.accent)
+        .preferredColorScheme(.light)
         .onAppear {
             if !visibleTabs.contains(selected) { selected = .general }
         }
         .onChange(of: settings.debugMenuEnabled) { _ in
             if !visibleTabs.contains(selected) { selected = .general }
         }
+    }
+}
+
+private struct SettingsWindowAppearanceView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async { apply(to: view) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { apply(to: nsView) }
+    }
+
+    private func apply(to view: NSView) {
+        guard let window = view.window else { return }
+        window.appearance = NSAppearance(named: .aqua)
+        window.backgroundColor = NSColor(
+            calibratedRed: 0.949,
+            green: 0.949,
+            blue: 0.953,
+            alpha: 1
+        )
     }
 }
 
@@ -72,6 +129,7 @@ struct SettingsPage<Content: View>: View {
             .padding(.vertical, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(SettingsTheme.background)
     }
 }
 
@@ -90,17 +148,17 @@ struct SettingsCard<Content: View>: View {
             }
             VStack(spacing: 0) { content() }
                 .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(nsColor: .controlBackgroundColor))
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(SettingsTheme.card)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
                 )
             if let footer {
                 Text(footer)
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(SettingsTheme.tertiary)
                     .padding(.horizontal, 4)
             }
         }
@@ -110,7 +168,9 @@ struct SettingsCard<Content: View>: View {
 /// Thin inset divider between rows inside a `SettingsCard`.
 struct SettingsRowDivider: View {
     var body: some View {
-        Divider().padding(.leading, 14)
+        Divider()
+            .overlay(SettingsTheme.border.opacity(0.72))
+            .padding(.leading, 14)
     }
 }
 
@@ -123,7 +183,7 @@ struct SettingsSectionHeader: View {
     var body: some View {
         Text(title.uppercased())
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(SettingsTheme.secondary)
             .tracking(0.4)
     }
 }
@@ -140,10 +200,11 @@ struct SettingsLabeledRow<Content: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13))
+                    .foregroundStyle(SettingsTheme.primary)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(SettingsTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

@@ -4,13 +4,14 @@ import SwiftUI
 /// Mirrors the centered layout of CodexBar's About tab (minus the Sparkle
 /// auto-update section, which BirdNion doesn't ship).
 struct AboutPane: View {
+    @EnvironmentObject var settings: SettingsStore
     @State private var iconHover = false
 
     private var versionString: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "—"
         let build = info?["CFBundleVersion"] as? String ?? "—"
-        return "phiên bản \(short) (\(build))"
+        return L10n.f("about.version", settings.appLanguage, short, build)
     }
 
     private let projectURL = "https://github.com/hapo-nghialuu/statusbar"
@@ -25,7 +26,7 @@ struct AboutPane: View {
                     .frame(width: 92, height: 92)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .scaleEffect(iconHover ? 1.05 : 1.0)
-                    .shadow(color: iconHover ? Color.accentColor.opacity(0.25) : .black.opacity(0.08),
+                    .shadow(color: iconHover ? SettingsTheme.accent.opacity(0.24) : .black.opacity(0.08),
                             radius: iconHover ? 8 : 2)
             }
             .buttonStyle(.plain)
@@ -34,23 +35,26 @@ struct AboutPane: View {
                     iconHover = hovering
                 }
             }
-            .help("Mở trang dự án trên GitHub")
+            .help(L10n.t("about.openProject", settings.appLanguage))
 
             // Name + version + tagline.
             VStack(spacing: 3) {
                 Text("BirdNion")
                     .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
                 Text(versionString)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Text("Theo dõi quota AI ngay trên menu bar.")
+                    .foregroundStyle(SettingsTheme.secondary)
+                Text(L10n.t("about.tagline", settings.appLanguage))
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(SettingsTheme.tertiary)
                     .multilineTextAlignment(.center)
                     .padding(.top, 2)
             }
 
-            Divider().padding(.horizontal, 80)
+            Divider()
+                .overlay(SettingsTheme.border.opacity(0.72))
+                .padding(.horizontal, 80)
 
             // Project links, centered.
             VStack(alignment: .leading, spacing: 4) {
@@ -71,10 +75,11 @@ struct AboutPane: View {
 
             Text("© 2026 BirdNion · Hapo")
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(SettingsTheme.tertiary)
                 .padding(.bottom, 10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SettingsTheme.background)
     }
 
     /// Prefer the real bundle icon; fall back to the bundled asset.
