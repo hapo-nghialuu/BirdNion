@@ -1344,7 +1344,17 @@ struct ProvidersPane: View {
     private func enabledBinding(_ idx: Int) -> Binding<Bool> {
         Binding(
             get: { rows[idx].enabled == true },
-            set: { rows[idx].enabled = $0; saveAll() }
+            set: {
+                rows[idx].enabled = $0
+                saveAll()
+                // Rebuild QuotaService providers so the menu-bar popover picks
+                // up the enable/disable immediately. The sidebar checkbox already
+                // posts these; the detail-header toggle was missing them, so
+                // enabling a provider here didn't show it in the popover until
+                // an app restart.
+                NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
+                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+            }
         )
     }
 
