@@ -20,7 +20,7 @@ A focused fork / extension of [CodexBar](https://github.com/steipete/CodexBar)'s
 - 👀 **Watch** — menu-bar icon rotates through your providers, popover shows per-window usage bars (session / weekly / monthly) with reset countdowns. Never start a long task without knowing when the clock resets.
 - 🔌 **One-time setup** — drop a token in Settings → Providers and BirdNion auto-detects CLI sessions for Codex (`~/.codex/auth.json`) and Claude (Keychain `Claude Code-credentials`). No copy-pasting the same OAuth URL 5 times.
 - 🧮 **Count the cost** — Claude token usage parsed from `~/.claude/projects/*.jsonl` (today + 30-day) so you know *exactly* what you spent, not just what the API says.
-- 🛡 **Secure** — file-based config, no Keychain, no background disk scan, no third-party telemetry. Tokens live in `~/.birdnion/settings.json` with `chmod 600`.
+- 🛡 **Secure** — file-based config, no Keychain, no background disk scan, no third-party telemetry. Tokens live in `~/.config/birdnion/settings.json` with `chmod 600`.
 - 🪶 **No noise** — no Dock icon, no notifications unless you cross a threshold, no waiting on a slow provider (each tab fills in independently).
 
 ## Why
@@ -28,7 +28,7 @@ A focused fork / extension of [CodexBar](https://github.com/steipete/CodexBar)'s
 - **Plan around resets.** Per-provider session / weekly / monthly windows with countdowns to the next reset.
 - **Cost scans.** Claude token usage parsed from `~/.claude/projects/*.jsonl` (today + 30-day) — exact tokens, approximate USD.
 - **Live status.** Status pages (Anthropic, OpenAI, etc.) surfaced as inline pill + icon overlay.
-- **Privacy-first.** File-based config (`~/.birdnion/settings.json`), no Keychain, no background disk scan, no third-party telemetry.
+- **Privacy-first.** File-based config (`~/.config/birdnion/settings.json`), no Keychain, no background disk scan, no third-party telemetry.
 
 ## Install
 
@@ -118,7 +118,7 @@ The Claude panel matches CodexBar's Claude surface, including:
 
 | Data | Location | Format |
 |---|---|---|
-| API tokens + provider enable flags + per-provider metadata | `~/.birdnion/settings.json` (XDG-compliant) | single JSON file, `chmod 600` |
+| API tokens + provider enable flags + per-provider metadata | `~/.config/birdnion/settings.json` (XDG; legacy `~/.birdnion/settings.json`) | single JSON file, `chmod 600` |
 | Codex OAuth | `~/.codex/auth.json` | owned by `codex` CLI, BirdNion reads only |
 | Claude OAuth | macOS Keychain `service: Claude Code-credentials` | owned by Claude Code app, BirdNion reads only |
 | Per-provider menu-bar visibility | `UserDefaults.menuBarVisibility.<id>` | standard |
@@ -139,7 +139,7 @@ API keys in the Settings UI render masked: `fe_oa_••••4a8`.
 - No background disk scan. BirdNion reads a small, fixed set of locations only when the related feature is enabled (`~/.claude/projects/` for Claude cost, `~/.codex/auth.json` for Codex, browser cookie stores only when the user enables web-mode Claude).
 - No Keychain reads for app config (we're file-based).
 - No outbound telemetry. No analytics SDKs. No third-party network calls except the provider APIs themselves.
-- All provider API tokens live in `~/.birdnion/settings.json` with `chmod 600`.
+- All provider API tokens live in `~/.config/birdnion/settings.json` with `chmod 600`.
 
 ## macOS permissions
 

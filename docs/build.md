@@ -156,7 +156,7 @@ Hiện tại **ad-hoc signed** (`Sign to Run Locally`). Cách bypass Gatekeeper:
 ## Provider tokens & config
 
 > As of the 2026-06-25 storage refactor, all provider tokens + enable flags
-> + metadata live in a single file: `~/.birdnion/settings.json` (XDG-compliant
+> + metadata live in a single file: `~/.config/birdnion/settings.json` (XDG-compliant
 > path priority). There is **no longer any BirdNion-owned Keychain entry** —
 > the previous split between `~/Library/Application Support/BirdNion/providers.json`
 > and the macOS Keychain was consolidated into this one file.
@@ -170,7 +170,7 @@ Hiện tại **ad-hoc signed** (`Sign to Run Locally`). Cách bypass Gatekeeper:
 | Per-provider refresh interval | UserDefaults `refreshInterval.<id>` | (Settings popover picker) |
 | General settings (region, refresh, ...) | UserDefaults (key prefix = bundle id) | (Settings general pane) |
 
-### `~/.birdnion/settings.json` format
+### `~/.config/birdnion/settings.json` format
 
 Array-of-providers shape, mirrors CodexBar's `config.json` schema so
 developers familiar with one app immediately know the other:

@@ -53,9 +53,9 @@ struct ClaudeWebExtras {
 
 | id | Provider | Auth | Source |
 |---|---|---|---|
-| `minimax` | MiniMax | Bearer API key (`~/.birdnion/settings.json`) | `/v1/token_plan/remains` |
+| `minimax` | MiniMax | Bearer API key (`~/.config/birdnion/settings.json`) | `/v1/token_plan/remains` |
 | `codex` | OpenAI Codex | OAuth (read `~/.codex/auth.json`) | `ChatGPT backend API` |
-| `hapo` | Hapo AI Hub | API key (`~/.birdnion/settings.json`) | `<HAPO_BASE_URL>` |
+| `hapo` | Hapo AI Hub | API key (`~/.config/birdnion/settings.json`) | `<HAPO_BASE_URL>` |
 | `claude` | Anthropic Claude | OAuth (`Claude Code-credentials` Keychain entry owned by Claude Code app) + cookie scrape | `api.anthropic.com/api/oauth/usage` + `claude.ai/api/*` |
 | `openrouter` | OpenRouter | Bearer API key | `/auth/key` + `/generation` |
 | `deepseek` | DeepSeek | Bearer API key | `/user/balance` |
@@ -85,7 +85,7 @@ QuotaService.refresh()  (mỗi globalInterval ± 10s, default 120s)
   │
   ├─ Khi mỗi provider return:
   │   - update `statuses[id]` mới
-  │   - publish displayStatuses (giữ order `BirdNionConfigStore` — từ `~/.birdnion/settings.json`)
+  │   - publish displayStatuses (giữ order `BirdNionConfigStore` — từ `~/.config/birdnion/settings.json`)
   │   - log slow providers (>2s)
   │
   └─ Sau khi tất cả xong:
@@ -112,7 +112,7 @@ QuotaService.refresh()  (mỗi globalInterval ± 10s, default 120s)
 > Keychain entry**. The previous split between
 > `~/Library/Application Support/BirdNion/providers.json` and the macOS
 > Keychain (services `BirdNion`) was consolidated into the single
-> `~/.birdnion/settings.json` file. Migration is opt-in: tokens saved
+> `~/.config/birdnion/settings.json` file. Migration is opt-in: tokens saved
 > under the old Keychain service are not auto-migrated; users re-enter
 > them via Settings on first launch.
 
@@ -181,7 +181,7 @@ BirdNion/
     QuotaService.swift               # polling loop, @Published statuses
     SettingsStore.swift               # @AppStorage + UserDefaults
     ServicesContainer.swift          # DI, providers list, makeProviders()
-    BirdNionConfigStore.swift         # single source of truth: ~/.birdnion/settings.json (tokens + enabled + metadata)
+    BirdNionConfigStore.swift         # single source of truth: ~/.config/birdnion/settings.json (tokens + enabled + metadata)
   Models/
     ProviderStatus.swift              # QuotaWindow, ProviderStatus
   Providers/
@@ -219,7 +219,7 @@ Scripts/
 - [x] App icon xuất hiện ở menu bar (blue bird), click mở popover
 - [x] 7 providers configured (4 enabled by default, 3 disabled)
 - [x] Per-provider enable/visibility trong Settings
-- [x] Tokens lưu file `~/.birdnion/settings.json` (0600), không plaintext
+- [x] Tokens lưu file `~/.config/birdnion/settings.json` (0600), không plaintext
 - [x] Quota poll 120s + per-provider override (30s — 30m)
 - [x] Provider tabs với 1-4 windows, progress bar, reset countdown
 - [x] Claude full parity: 4 windows, plan name, extra usage, 30-day chart

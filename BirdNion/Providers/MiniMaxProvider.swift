@@ -115,7 +115,7 @@ final class MiniMaxProvider: QuotaProvider {
     func fetch() async throws -> ProviderStatus {
         // Token resolution order (matches CodexBar): env vars
         // (`MINIMAX_CODING_API_KEY` / `MINIMAX_API_KEY`) → entry in
-        // `~/.birdnion/settings.json`. No more Keychain fallback — the
+        // `~/.config/birdnion/settings.json`. No more Keychain fallback — the
         // 2026-06-25 storage refactor consolidated all secrets into the
         // single config file.
         let token = BirdNionConfigStore.minimaxToken()

@@ -65,7 +65,7 @@ final class HapoHubProvider: QuotaProvider {
         }
 
         // 1. Token read + validation.
-        //    Single source of truth: `~/.birdnion/settings.json` (via
+        //    Single source of truth: `~/.config/birdnion/settings.json` (via
         //    `BirdNionConfigStore`). No more Keychain fallback — the
         //    2026-06-25 storage refactor consolidated all secrets into
         //    the config file.

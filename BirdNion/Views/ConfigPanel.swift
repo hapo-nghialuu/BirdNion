@@ -158,7 +158,7 @@ struct ConfigPanel: View {
                     return
                 }
                 // As of the 2026-06-25 storage refactor: the Anthropic API
-                // key is stored in `~/.birdnion/settings.json` (provider
+                // key is stored in `~/.config/birdnion/settings.json` (provider
                 // entry id `claude`). The previous Keychain + `KEYCHAIN_REF:`
                 // placeholder flow is gone — we now write the actual key
                 // value directly into `~/.claude.json` so Claude CLI picks

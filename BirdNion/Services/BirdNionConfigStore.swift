@@ -4,7 +4,7 @@ import Foundation
 /// enable flags, per-provider metadata (region, base URL, display name,
 /// account label). Replaces the prior split of
 /// `CodexBarConfigStore` + `ProvidersStore` + `KeychainService` so the
-/// file at `~/.birdnion/settings.json` is the only place secrets live.
+/// file at `~/.config/birdnion/settings.json` is the only place secrets live.
 ///
 /// Path priority (mirrors CodexBar's resolution):
 ///   `BIRDNION_CONFIG` env → `XDG_CONFIG_HOME/birdnion/settings.json` →
@@ -26,7 +26,7 @@ enum BirdNionConfigStore {
 
     /// Resolve the config file URL. Test-friendly: home/env/fileManager are
     /// injectable so unit tests can point at a temp directory without
-    /// touching the real `~/.birdnion/`.
+    /// touching the real `~/.config/birdnion/`.
     static func configURL(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                           env: [String: String] = ProcessInfo.processInfo.environment,
                           fileManager: FileManager = .default) -> URL {

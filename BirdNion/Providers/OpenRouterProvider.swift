@@ -30,7 +30,7 @@ final class OpenRouterProvider: QuotaProvider {
 
     func fetch() async throws -> ProviderStatus {
         // Token resolution: single source of truth is
-        // `~/.birdnion/settings.json` (via `BirdNionConfigStore`). The
+        // `~/.config/birdnion/settings.json` (via `BirdNionConfigStore`). The
         // 2026-06-25 storage refactor removed the Keychain / CodexBar
         // config file fallbacks.
         // Env override first (OPENROUTER_API_KEY), then config storage.
