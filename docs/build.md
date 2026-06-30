@@ -94,6 +94,43 @@ Scripts/release.sh 0.5.2
 > endpoint từ `Scripts/dev-env.sh` (gitignored) rồi bake vào Info.plist qua
 > build settings. User chỉ nhập `Token` trong Settings → AIHub.
 
+### Debug/local build có Hapo AI Hub
+
+Debug build cũng phải bake endpoint vào `Info.plist`; khác nhau chỉ là
+`Debug` hay `Release`, không phải cơ chế config. Nếu build từ Xcode hoặc
+`xcodebuild` mà không truyền `HAPO_*`, app vẫn chạy nhưng Hapo sẽ báo:
+`Hapo endpoint chưa được cấu hình trong bản build`.
+
+```bash
+source Scripts/dev-env.sh
+
+xcodebuild build -project BirdNion.xcodeproj -scheme BirdNion \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath build/DerivedData \
+  HAPO_BASE_URL="$HAPO_BASE_URL" \
+  HAPO_ME_URL="$HAPO_ME_URL" \
+  HAPO_AUTH_TEMPLATE="$HAPO_AUTH_TEMPLATE"
+```
+
+App Debug nằm ở:
+
+```bash
+build/DerivedData/Build/Products/Debug/BirdNion.app
+```
+
+Nếu copy app này ra Desktop, endpoint vẫn còn vì đã được bake vào bundle lúc
+build. Verify nhanh trước khi test:
+
+```bash
+plutil -extract HapoBaseURL raw \
+  build/DerivedData/Build/Products/Debug/BirdNion.app/Contents/Info.plist
+```
+
+Output rỗng nghĩa là bản build đó không có Hapo endpoint. Bấm Run trực tiếp
+trong Xcode không tự `source Scripts/dev-env.sh`; cần cấu hình Scheme env vars
+hoặc build bằng lệnh trên.
+
 ### Release flow
 
 ```
@@ -215,7 +252,11 @@ BirdNion reads the following env vars at startup (all optional; unset = empty / 
 | `HAPO_AUTH_TEMPLATE` | `Authorization` header template (must contain `{token}`) | `Bearer {token}` |
 | `BIRDNION_SUPPORT_EMAIL` | `mailto:` link shown in Settings → About | `mailto:support@localhost` |
 
-For local development, env vars can still be set before launching or building:
+For local development, env vars can still be set before launching or building.
+Launching an already-built app with `HAPO_*` only affects that process; a
+copied `.app` keeps working on another machine only when the values were baked
+into `Info.plist` during build:
+
 ```bash
 export HAPO_BASE_URL="https://your-hapo-host/v1/budget/week"
 export HAPO_ME_URL="https://your-hapo-host/v1/me"

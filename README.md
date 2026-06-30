@@ -213,6 +213,28 @@ xcodebuild build -project BirdNion.xcodeproj -scheme BirdNion \
   -configuration Release -destination 'platform=macOS'
 ```
 
+Hapo AI Hub endpoints are intentionally not committed. To use Hapo in a local
+Debug build, source your ignored local env file and pass those values into
+`xcodebuild`:
+
+```bash
+source Scripts/dev-env.sh
+
+xcodebuild build -project BirdNion.xcodeproj -scheme BirdNion \
+  -configuration Debug -destination 'platform=macOS' \
+  -derivedDataPath build/DerivedData \
+  HAPO_BASE_URL="$HAPO_BASE_URL" \
+  HAPO_ME_URL="$HAPO_ME_URL" \
+  HAPO_AUTH_TEMPLATE="$HAPO_AUTH_TEMPLATE"
+```
+
+Verify a built app before testing Hapo:
+
+```bash
+plutil -extract HapoBaseURL raw \
+  build/DerivedData/Build/Products/Debug/BirdNion.app/Contents/Info.plist
+```
+
 BirdNion vendors a trimmed `CodexBarCore` package in `Vendor/CodexBar`; no external `~/Desktop/CodexBar` checkout is required.
 
 ## Release Flow
