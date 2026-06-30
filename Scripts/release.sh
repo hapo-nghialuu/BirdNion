@@ -12,9 +12,10 @@
 #   3. xcodebuild -quiet build the Release .app
 #   4. Copy build/Release/BirdNion.app → ~/Desktop/BirdNion.app
 #   5. Zip → ~/Desktop/BirdNion-<version>.zip
-#   6. gh release create/upload v<version> on hapo-nghialuu/BirdNion
-#   7. Update Casks/birdnion.rb (version + sha256), commit + push to same repo
-#   8. Update homebrew-tap/Casks/birdnion.rb, commit + push tap
+#   6. Commit + push the exact source used for the build
+#   7. gh release create/upload v<version> targeting that source commit
+#   8. Update Casks/birdnion.rb (version + sha256), commit + push to same repo
+#   9. Update homebrew-tap/Casks/birdnion.rb, commit + push tap
 #
 # Install after release:
 #   brew install --cask hapo-nghialuu/BirdNion/birdnion
@@ -48,6 +49,12 @@ TAP_REPO="hapo-nghialuu/homebrew-tap"
 ZIP_NAME="BirdNion-${VERSION}.zip"
 DESKTOP="$HOME/Desktop"
 
+CURRENT_BRANCH=$(git -C "$REPO_ROOT" branch --show-current)
+if [[ "$CURRENT_BRANCH" != "main" ]]; then
+  echo "Release must run from main, current branch: ${CURRENT_BRANCH:-detached HEAD}" >&2
+  exit 1
+fi
+
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Version must be semver (e.g. 0.3.1), got: $VERSION" >&2
   exit 1
@@ -75,9 +82,9 @@ run() {
 
 echo "==> BirdNion release v${VERSION}"
 
-# 1. Working tree must be clean so we don't ship uncommitted changes
-if [[ "$SKIP_BUILD" -eq 0 ]] && ! git -C "$REPO_ROOT" diff --quiet HEAD --; then
-  echo "Working tree has uncommitted changes. Commit/stash first, or pass --skip-build." >&2
+# 1. Working tree must be clean so the release tag represents the built source.
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
+  echo "Working tree has uncommitted changes. Commit/stash first." >&2
   exit 1
 fi
 
@@ -147,20 +154,41 @@ fi
 echo "    zip: $ZIP_PATH"
 echo "    sha256: $ZIP_SHA"
 
-# 6. Upload to GitHub release
+# 6. Commit and push the exact source used for this build before creating its tag.
+echo "==> Publishing release source"
+SOURCE_COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD)
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  git -C "$REPO_ROOT" add \
+    BirdNion/Info.plist \
+    BirdNion.xcodeproj/project.pbxproj
+  if ! git -C "$REPO_ROOT" diff --cached --quiet; then
+    git -C "$REPO_ROOT" commit -m "release: prepare ${VERSION}"
+  fi
+  SOURCE_COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD)
+  git -C "$REPO_ROOT" push origin main
+else
+  echo "  [dry-run] would commit version files and push main"
+fi
+echo "    source: $SOURCE_COMMIT"
+
+# 7. Upload to GitHub release and bind the tag to the published source commit.
 TAG="v${VERSION}"
 echo "==> gh release ${TAG}"
 if gh release view "$TAG" --repo "$ASSET_REPO" >/dev/null 2>&1; then
+  REMOTE_TAG_COMMIT=$(gh api "repos/${ASSET_REPO}/commits/${TAG}" --jq .sha)
+  if [[ "$REMOTE_TAG_COMMIT" != "$SOURCE_COMMIT" ]]; then
+    echo "Release tag mismatch: ${TAG}=$REMOTE_TAG_COMMIT, expected $SOURCE_COMMIT" >&2
+    exit 1
+  fi
   echo "    release $TAG exists — uploading new asset"
   run gh release upload "$TAG" "$ZIP_PATH" --repo "$ASSET_REPO"
 else
   echo "    creating new release $TAG"
   run gh release create "$TAG" "$ZIP_PATH" \
     --repo "$ASSET_REPO" \
+    --target "$SOURCE_COMMIT" \
     --title "BirdNion ${TAG}" \
-    --notes-file <(git -C "$REPO_ROOT" log --no-merges --pretty=format:"- %s" \
-        "$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" \
-        2>/dev/null)
+    --generate-notes
 fi
 
 # Verify upload
@@ -175,7 +203,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   echo "    upload verified: SHA matches"
 fi
 
-# 7. Update Casks/birdnion.rb in this repo, commit + push
+# 8. Update Casks/birdnion.rb in this repo, commit + push
 echo "==> Updating Casks/birdnion.rb"
 CASK="$REPO_ROOT/Casks/birdnion.rb"
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -189,15 +217,12 @@ content = re.sub(r'sha256 "[a-f0-9]{64}"', f'sha256 "{sha}"', content, count=1)
 with open(path, 'w') as f:
     f.write(content)
 PY
-  git -C "$REPO_ROOT" add \
-    Casks/birdnion.rb \
-    BirdNion/Info.plist \
-    BirdNion.xcodeproj/project.pbxproj
-  git -C "$REPO_ROOT" commit -m "chore: bump version to ${VERSION}"
+  git -C "$REPO_ROOT" add Casks/birdnion.rb
+  git -C "$REPO_ROOT" commit -m "build(release): bump cask to ${VERSION}"
   git -C "$REPO_ROOT" push origin main
 fi
 
-# 8. Also update homebrew-tap so `brew tap hapo-nghialuu/tap` picks up the new version
+# 9. Also update homebrew-tap so `brew tap hapo-nghialuu/tap` picks up the new version
 echo "==> Updating homebrew-tap cask"
 TAP_DIR=$(brew --repository "$TAP_REPO" 2>/dev/null || echo "")
 if [[ -z "$TAP_DIR" ]] || [[ ! -d "$TAP_DIR" ]]; then

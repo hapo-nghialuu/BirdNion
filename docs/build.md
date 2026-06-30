@@ -69,26 +69,27 @@ Dùng script tự động (xem [release flow](#release-flow) bên dưới):
 
 ```bash
 Scripts/release.sh 0.5.2
-# 8 bước tự động:
+# 9 bước tự động:
 #   1. Verify clean working tree (bắt buộc — commit hết trước)
 #   2. Bump MARKETING_VERSION + CFBundleShortVersionString
 #   3. xcodebuild Release
 #   4. Copy → ~/Desktop/BirdNion.app
 #   5. Zip + shasum + verify upload
-#   6. gh release create v<ver> + upload zip (hapo-nghialuu/BirdNion)
-#   7. Update Casks/birdnion.rb (version+sha) + commit "chore: bump version to <ver>" + push main
-#   8. Update homebrew-tap Casks/birdnion.rb + push
+#   6. Commit + push đúng source commit đã dùng để build
+#   7. gh release create v<ver> --target <source-commit> + upload zip
+#   8. Update Casks/birdnion.rb (version+sha) + commit + push main
+#   9. Update homebrew-tap Casks/birdnion.rb + push
 ```
 
 > **Prereq:** đang ở `main`, `gh` đã auth (`hapo-nghialuu`), cây git sạch.
 > Build (bước 3) chạy trước mọi thao tác publish nên build lỗi sẽ dừng an toàn.
+> `--skip-build` chỉ bỏ bước compile; không bỏ kiểm tra nhánh `main` và cây git sạch.
 
-> ⚠️ **GitHub push-protection (bước 7 có thể fail):** secret-scanning chặn cặp
+> ⚠️ **GitHub push-protection (bước 6 có thể fail):** secret-scanning chặn cặp
 > client id/secret OAuth **công khai** của Gemini CLI trong `GeminiProvider.swift`.
 > Chúng được **tách chuỗi** (`"GOCSPX" + "-…"`; id tách trước `.apps.googleusercontent.com`)
-> để push qua được — **đừng gộp lại thành 1 literal**, nếu không `git push` (bước 7) sẽ
-> bị từ chối và release để dở (release+asset đã tạo nhưng `main` chưa push). Khi đó:
-> tách lại literal → viết lại các commit chưa push → push → chạy lại bước 8 (tap) thủ công.
+> để push qua được — **đừng gộp lại thành 1 literal**, nếu không `git push` sẽ
+> bị từ chối trước khi tạo release. Khi đó tách lại literal, sửa commit rồi chạy lại script.
 
 > 🔒 **Hapo bảo mật:** endpoint thật không được commit. Release build lấy
 > endpoint từ `Scripts/dev-env.sh` (gitignored) rồi bake vào Info.plist qua
@@ -138,9 +139,11 @@ hoặc build bằng lệnh trên.
 ─────────                   ────────────────────────────────
 build/zip
   │
-  ├─► gh release create vX.Y.Z + upload zip
-  │     │
-  │     └─► Release page (zip available)
+  ├─► commit + push source build
+  │      │
+  │      └─► gh release create vX.Y.Z --target <source-commit> + upload zip
+  │              │
+  │              └─► Release page (zip available)
   │
   └─► update Casks/birdnion.rb:
        version, sha256
