@@ -37,6 +37,51 @@ final class ProviderStatusTests: XCTestCase {
         XCTAssertEqual(d2.error, "boom")
     }
 
+    func testProviderCopyDoesNotLeakVietnameseIntoEnglishUI() {
+        let samples = [
+            "Hapo endpoint chưa được cấu hình trong bản build",
+            "Chưa đăng nhập OpenCode trên trình duyệt",
+            "Không tìm thấy session cookie của MiMo (cần serviceToken)",
+            "Không lấy được dữ liệu từ Cost Explorer và CloudWatch",
+            "File credentials không đọc được",
+            "Hết số dư — cần nạp thêm",
+            "Chưa cấu hình API key Groq",
+            "Không có project Deepgram cho key này",
+            "Antigravity OAuth client chưa được cấu hình",
+            "Response thiếu trường credits",
+            "API key ElevenLabs không hợp lệ",
+            "Không thể phân tích dữ liệu usage OpenCode",
+            "Codex CLI không trả dữ liệu — kiểm tra `codex`",
+            "Token Codex hết hạn — chạy `codex` để đăng nhập lại",
+            "Chưa cài Kiro CLI",
+            "Định dạng tRPC batch không nhận ra",
+            "Không tìm thấy tổ chức Claude cho tài khoản này.",
+            "Chỉ hỗ trợ macOS.",
+        ]
+
+        for sample in samples {
+            let localized = L10n.providerText(sample, preference: SettingsStore.Language.english.rawValue)
+            XCTAssertNil(localized.range(of: #"[À-ỹĐđ]"#, options: .regularExpression), localized)
+        }
+        XCTAssertEqual(
+            L10n.providerText(samples[0], preference: SettingsStore.Language.english.rawValue),
+            "Hapo endpoint is not configured in this build"
+        )
+    }
+
+    func testProviderLabelsLocalizeInBothDirections() {
+        XCTAssertEqual(L10n.windowLabel("Tuần", preference: "en"), "Week")
+        XCTAssertEqual(L10n.windowLabel("5 giờ", preference: "en"), "5 hours")
+        XCTAssertEqual(L10n.windowLabel("Requests (30d)", preference: "vi"), "Yêu cầu (30 ngày)")
+        XCTAssertEqual(L10n.windowLabel("Bonus Credits", preference: "vi"), "Tín dụng thưởng")
+    }
+
+    func testVietnameseTableDoesNotKeepEnglishActionLabels() {
+        XCTAssertEqual(L10n.t("popover.refresh", "vi"), "Làm mới")
+        XCTAssertEqual(L10n.t("popover.settings", "vi"), "Cài đặt…")
+        XCTAssertEqual(L10n.t("chart.latestTokens", "vi"), "Token gần nhất")
+    }
+
     // MARK: - WindowPace (linear reserve / lasts-until-reset)
 
     func testWindowPaceReserveMatchesUnderPace() {

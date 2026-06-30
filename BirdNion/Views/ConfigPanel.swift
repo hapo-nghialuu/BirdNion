@@ -23,7 +23,7 @@ struct ConfigPanel: View {
                 .padding(.bottom, 2)
 
             if let err = loadError ?? config.lastError {
-                Text(err)
+                Text(L10n.providerText(err, preference: settingsStore.appLanguage))
                     .font(.system(size: 10))
                     .foregroundStyle(.red)
                     .padding(.horizontal, 10)

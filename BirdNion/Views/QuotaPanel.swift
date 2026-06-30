@@ -376,10 +376,10 @@ struct ProviderHeaderCard: View {
             parts.append(account)
         }
         if let plan = planLabel {
-            parts.append(plan)
+            parts.append(L10n.providerText(plan, preference: settings.appLanguage))
         }
         if let source = status.sourceLabel, !source.isEmpty {
-            parts.append(source)
+            parts.append(L10n.providerText(source, preference: settings.appLanguage))
         }
         parts.append(updatedAgo)
         return parts
@@ -480,14 +480,16 @@ struct ProviderHeaderCard: View {
                 if !isPlaceholder, let svc = status.serviceStatus, !svc.isEmpty {
                     HStack(spacing: 4) {
                         Circle().fill(serviceColor).frame(width: 6, height: 6)
-                        Text(svc)
+                        Text(L10n.providerText(svc, preference: settings.appLanguage))
                             .font(.system(size: 10))
                             .foregroundStyle(VocabbyTheme.tertiary)
                             .lineLimit(1)
                     }
                 }
                 if !isPlaceholder, !detailParts.isEmpty {
-                    Text(detailParts.joined(separator: " · "))
+                    Text(detailParts
+                        .map { L10n.providerText($0, preference: settings.appLanguage) }
+                        .joined(separator: " · "))
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .lineLimit(1)
@@ -514,6 +516,8 @@ struct ProviderHeaderCard: View {
 
 /// Per-provider card: name + windows.
 struct ProviderCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
     let status: ProviderStatus
 
     var body: some View {
@@ -523,7 +527,7 @@ struct ProviderCard: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(VocabbyTheme.critical)
-                    Text(err)
+                    Text(L10n.providerText(err, preference: settings.appLanguage))
                         .font(.system(size: 11))
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
@@ -611,7 +615,9 @@ struct WindowRow: View {
     }
 
     private var subtitleText: String {
-        if let s = window.subtitle, !s.isEmpty { return s }
+        if let s = window.subtitle, !s.isEmpty {
+            return L10n.providerText(s, preference: settings.appLanguage)
+        }
         return L10n.f("quota.used", settings.appLanguage, window.usedPct)
     }
 

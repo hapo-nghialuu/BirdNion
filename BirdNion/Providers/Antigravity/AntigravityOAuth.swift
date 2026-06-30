@@ -388,7 +388,8 @@ enum AntigravityOAuthLogin {
                                 return
                             }
                             // Send success response before parsing so the browser closes cleanly
-                            let body = "<html><body><p>Bạn có thể đóng tab này.</p></body></html>"
+                            let message = L10n.t("oauth.closeTab")
+                            let body = "<html><body><p>\(message)</p></body></html>"
                             let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
                             let responseData = Data(response.utf8)
                             connection.send(content: responseData, completion: .contentProcessed { _ in

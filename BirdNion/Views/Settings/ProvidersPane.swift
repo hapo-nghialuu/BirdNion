@@ -474,18 +474,21 @@ struct ProvidersPane: View {
             )
             if row.id == "codex" {
                 // Which source actually produced the data (OAuth / CLI).
-                infoRow(L10n.t("provider.source", language), s?.sourceLabel ?? "OAuth")
+                infoRow(L10n.t("provider.source", language),
+                        L10n.providerText(s?.sourceLabel ?? "OAuth", preference: language))
             } else if row.id == "claude" {
                 // OAuth token comes from the Claude Code Keychain item.
                 infoRow(L10n.t("provider.source", language), "OAuth")
             }
             if let plan = s?.planType, !plan.isEmpty {
-                infoRow(L10n.t("provider.plan", language), plan.capitalized)
+                infoRow(L10n.t("provider.plan", language),
+                        L10n.providerText(plan.capitalized, preference: language))
             }
             if let name = s?.planName, !name.isEmpty {
                 // Plan display name (MiniMax `current_subscribe_title`) — distinct
                 // from `planType` which carries a code (`plus` / `pro`).
-                infoRow(L10n.t("provider.planName", language), name)
+                infoRow(L10n.t("provider.planName", language),
+                        L10n.providerText(name, preference: language))
             }
             if let label = s?.accountLabel, !label.isEmpty {
                 infoRow(L10n.t("provider.account", language), label)
@@ -515,7 +518,8 @@ struct ProvidersPane: View {
                 }
             }
             if let err = s?.error {
-                infoRow(L10n.languageCode(language) == "vi" ? "Lỗi" : "Error", err)
+                infoRow(L10n.t("provider.error", language),
+                        L10n.providerText(err, preference: language))
             } else {
                 infoRow(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
             }
@@ -541,7 +545,7 @@ struct ProvidersPane: View {
                 Circle()
                     .fill(serviceStatusColor(level))
                     .frame(width: 7, height: 7)
-                Text(text)
+                Text(L10n.providerText(text, preference: language))
                     .foregroundStyle(SettingsTheme.primary)
                     .lineLimit(2)
             }
@@ -657,7 +661,7 @@ struct ProvidersPane: View {
                         .foregroundStyle(pace.lastsUntilReset ? SettingsTheme.secondary : SettingsTheme.warning)
                 }
                 if let sub = w.subtitle, !sub.isEmpty {
-                    Text(sub)
+                    Text(L10n.providerText(sub, preference: language))
                         .font(.system(size: 10))
                         .foregroundStyle(SettingsTheme.tertiary)
                 }
@@ -1741,7 +1745,7 @@ struct ProvidersPane: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 if let err = kiloOrgError {
-                    Text(err)
+                    Text(L10n.providerText(err, preference: language))
                         .font(.system(size: 11))
                         .foregroundStyle(Color.red)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2143,7 +2147,7 @@ struct ProvidersPane: View {
             // Login with Google + utility buttons
             VStack(alignment: .leading, spacing: 8) {
                 if let err = antigravityLoginError {
-                    Text(err)
+                    Text(L10n.providerText(err, preference: language))
                         .font(.system(size: 11))
                         .foregroundStyle(Color.red)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2296,7 +2300,7 @@ struct ProvidersPane: View {
 
             // Error display
             if let err = copilotLoginError {
-                Text(err)
+                Text(L10n.providerText(err, preference: language))
                     .font(.system(size: 11))
                     .foregroundStyle(Color.red)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2671,7 +2675,8 @@ struct ProvidersPane: View {
             // Truncate long error messages so the sidebar row stays a single
             // line. The full message is still reachable via the tooltip
             // (`statusSubtitleDetail`) and the detail pane.
-            return L10n.f("provider.errorPrefix", language, truncated(err, max: 32))
+            let localized = L10n.providerText(err, preference: language)
+            return L10n.f("provider.errorPrefix", language, truncated(localized, max: 32))
         }
         if let first = s.windows.first {
             return L10n.f("provider.remaining", language, first.remainingPct)
@@ -2686,7 +2691,7 @@ struct ProvidersPane: View {
         guard row.enabled == true,
               let err = status(for: row.id)?.error,
               !err.isEmpty else { return nil }
-        return err
+        return L10n.providerText(err, preference: language)
     }
 
     /// Truncate `s` to `max` characters with an ellipsis suffix when it
@@ -3078,7 +3083,7 @@ private struct CodexAccountsCard: View {
             Spacer(minLength: 6)
 
             if let errorText {
-                Text(errorText)
+                Text(L10n.providerText(errorText, preference: settings.appLanguage))
                     .font(.system(size: 10))
                     .foregroundStyle(SettingsTheme.warning)
                     .lineLimit(1)

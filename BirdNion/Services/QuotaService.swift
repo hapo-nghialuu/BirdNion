@@ -300,8 +300,8 @@ final class QuotaService: ObservableObject {
                                                    thresholds: thresholds, fired: state.fired) {
                     QuotaNotifier.post(
                         id: "\(status.id).\(windowKey).\(t)",
-                        title: "\(status.displayName) • \(w.label)",
-                        body: "Còn \(current)% — dưới ngưỡng \(t)%")
+                        title: "\(status.displayName) • \(L10n.windowLabel(w.label))",
+                        body: L10n.f("notification.quotaBelowThreshold", nil, current, t))
                     state.fired.insert(t)
                 }
                 state.last = current
