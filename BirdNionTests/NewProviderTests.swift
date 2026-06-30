@@ -167,4 +167,21 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNotNil(bad.error)
         XCTAssertTrue(bad.windows.isEmpty)
     }
+
+    /// The cookie filter forwards every pair but only proceeds when `bm_session`
+    /// is present, and tolerates a full "Cookie: …" header line pasted from devtools.
+    func testFreemodelCookieHeaderFilter() {
+        // Plain pair list with the session cookie → forwarded as-is.
+        XCTAssertEqual(
+            FreemodelProvider.filteredCookieHeader(from: "bm_session=abc; other=v"),
+            "bm_session=abc; other=v")
+
+        // A pasted "Cookie:" prefix is stripped so the session is still recognised.
+        XCTAssertEqual(
+            FreemodelProvider.filteredCookieHeader(from: "Cookie: bm_session=abc; other=v"),
+            "bm_session=abc; other=v")
+
+        // No session cookie → rejected (nil), even if other cookies exist.
+        XCTAssertNil(FreemodelProvider.filteredCookieHeader(from: "_ga=1; __stripe_mid=2"))
+    }
 }

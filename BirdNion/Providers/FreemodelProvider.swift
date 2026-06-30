@@ -37,9 +37,16 @@ final class FreemodelProvider: QuotaProvider {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
     private static let requestTimeout: TimeInterval = 15
+    /// `/api/auth/me` only enriches the account label — keep its timeout short so a
+    /// slow/hung email lookup never delays the quota `/api/usage` already returned.
+    private static let accountTimeout: TimeInterval = 5
 
     private let session: URLSession
     private static let log = Logger(subsystem: "com.local.birdnion", category: "provider.freemodel")
+
+    /// Account email cached after the first successful `/api/auth/me`; later polls
+    /// reuse it instead of re-hitting the endpoint.
+    private var cachedEmail: String?
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -61,7 +68,7 @@ final class FreemodelProvider: QuotaProvider {
 
         let usageData: Data
         do {
-            usageData = try await fetchEndpoint(url: Self.usageURL, cookieHeader: cookieHeader)
+            usageData = try await fetchEndpoint(url: Self.usageURL, cookieHeader: cookieHeader, timeout: Self.requestTimeout)
         } catch {
             Self.log.error("fetch: usage network error: \(error.localizedDescription, privacy: .public)")
             return failure("Network: \(error.localizedDescription)")
@@ -81,8 +88,8 @@ final class FreemodelProvider: QuotaProvider {
 
     private func parse(usageData: Data, accountLabel: String?) -> ProviderStatus {
         guard let usage = try? JSONDecoder().decode(UsageResponse.self, from: usageData) else {
-            let snippet = String(data: usageData.prefix(120), encoding: .utf8) ?? "<non-utf8 \(usageData.count)B>"
-            Self.log.error("parse: decode failed — body: \(snippet, privacy: .public)")
+            // Never log the raw body — it may carry account/billing/auth data.
+            Self.log.error("parse: decode failed (bytes=\(usageData.count, privacy: .public))")
             return failure("Response /api/usage không hợp lệ")
         }
 
@@ -122,12 +129,15 @@ final class FreemodelProvider: QuotaProvider {
         if let explicit = BirdNionConfigStore.accountLabel(provider: id), !explicit.isEmpty {
             return explicit
         }
-        guard let data = try? await fetchEndpoint(url: Self.meURL, cookieHeader: cookieHeader),
+        // Resolved once already — reuse it; don't re-hit /api/auth/me every poll.
+        if let cachedEmail { return cachedEmail }
+        guard let data = try? await fetchEndpoint(url: Self.meURL, cookieHeader: cookieHeader, timeout: Self.accountTimeout),
               let me = try? JSONDecoder().decode(MeResponse.self, from: data),
               !me.user.email.isEmpty
         else {
             return nil
         }
+        cachedEmail = me.user.email
         return me.user.email
     }
 
@@ -138,7 +148,11 @@ final class FreemodelProvider: QuotaProvider {
     /// `bm_session` is present. A bare token (no `=`) is wrapped under the
     /// session name.
     static func filteredCookieHeader(from raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Tolerate a full header line pasted from devtools ("Cookie: name=value; …").
+        if trimmed.lowercased().hasPrefix("cookie:") {
+            trimmed = String(trimmed.dropFirst("cookie:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         guard !trimmed.isEmpty else { return nil }
 
         if !trimmed.contains("=") {
@@ -162,10 +176,10 @@ final class FreemodelProvider: QuotaProvider {
 
     // MARK: - Networking
 
-    private func fetchEndpoint(url: URL, cookieHeader: String) async throws -> Data {
+    private func fetchEndpoint(url: URL, cookieHeader: String, timeout: TimeInterval) async throws -> Data {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.timeoutInterval = Self.requestTimeout
+        req.timeoutInterval = timeout
         req.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         req.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
