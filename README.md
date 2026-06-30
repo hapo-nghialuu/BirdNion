@@ -77,7 +77,7 @@ brew info --cask birdnion
 - Open BirdNion from the menu bar.
 - Open Settings -> Providers and enable what you use.
 - Install or sign in to the provider sources you rely on: CLIs, browser sessions, OAuth/device flow, API keys, local app files, or cloud credentials depending on the provider.
-- Optional: set provider account labels, menu-bar visibility, refresh intervals, cookie source, region, AWS auth mode, Kilo org scope, Copilot enterprise host, Hapo Base URL, or provider-specific menu-bar metric.
+- Optional: set provider account labels, menu-bar visibility, refresh intervals, cookie source, region, AWS auth mode, Kilo org scope, Copilot enterprise host, or provider-specific menu-bar metric.
 
 ## Agent Settings Config
 
@@ -87,7 +87,7 @@ What exists today:
 
 - Provider enablement, order, account labels, refresh intervals, and menu-bar visibility.
 - Source selectors for providers that can read from OAuth, CLI, browser cookies, Admin API, or local app state.
-- Provider-specific settings for cookie mode, manual cookie headers, MiniMax/z.ai/Alibaba regions, AWS keys/profile/region, Deepgram Project ID, Kilo organization scope, Copilot enterprise host, Hapo Base URL, and menu-bar metric selection.
+- Provider-specific settings for cookie mode, manual cookie headers, MiniMax/z.ai/Alibaba regions, AWS keys/profile/region, Deepgram Project ID, Kilo organization scope, Copilot enterprise host, and menu-bar metric selection.
 - Local session discovery for agents that own their auth state: Claude Code, Codex CLI, Gemini CLI, Kiro, Cursor, Antigravity, and similar tools.
 
 Planned direction:
@@ -103,7 +103,7 @@ Planned direction:
 - **Codex** - OAuth API from `~/.codex/auth.json`, API-key fallback, local `codex app-server` fallback, service status, version, credits, reset credits, and optional OpenAI web extras.
 - **Claude** - OAuth API, browser cookies, CLI, or Admin API; 5-hour/weekly/Opus/Sonnet windows, local cost scans, web extras, and admin 30-day chart.
 - **MiniMax** - API token, environment token, or cookie fallback for coding-plan usage, plan name, points/subscription, and global/CN region.
-- **Hapo AI Hub** - Config token plus custom Base URL for weekly budget and best-effort `/v1/me` identity.
+- **Hapo AI Hub** - Config token plus build-time endpoint for weekly budget and best-effort `/v1/me` identity.
 - **OpenRouter** - API token for prepaid credits plus optional per-key spending limit.
 - **DeepSeek** - API token for USD/CNY balance with paid/granted split and low-balance warning.
 - **z.ai** - API token with global/CN region for quota limits and computed remaining percentage.

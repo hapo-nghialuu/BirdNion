@@ -1,9 +1,9 @@
 import Foundation
 
-/// Hapo AI Hub adapter config. All non-trivial endpoints are resolved from
-/// environment variables at startup so the source tree doesn't hardcode
-/// any hostnames — the rest of the codebase only ever sees `baseURL` /
-/// `meURL` strings, not where they came from.
+/// Hapo AI Hub adapter config. Endpoint values are supplied outside source
+/// control: local dev may use environment variables, while release builds can
+/// bake the same values into Info.plist via build-setting substitution. The
+/// source tree only carries placeholder keys, not the private hostnames.
 ///
 /// Env vars consumed:
 ///   - `HAPO_BASE_URL`        — full URL for the weekly budget endpoint
@@ -11,10 +11,13 @@ import Foundation
 ///   - `HAPO_AUTH_TEMPLATE`   — `Authorization` header template, must contain
 ///                              the literal `{token}` placeholder
 ///
-/// If an env var is missing, the matching URL field is `""` and the
-/// provider short-circuits with `"HAPO_BASE_URL chưa được set"` /
-/// `"HAPO_ME_URL chưa được set"`. This makes the missing-config state
-/// loud and obvious instead of silently contacting the wrong host.
+/// Bundle keys consumed when env is absent:
+///   - `HapoBaseURL`
+///   - `HapoMeURL`
+///   - `HapoAuthTemplate`
+///
+/// If both env and bundle values are missing, the matching URL field is `""`
+/// and the provider short-circuits with a clear missing-build-config error.
 struct HapoHubConfig: Codable, Equatable {
     let id: String
     let displayName: String
@@ -23,17 +26,17 @@ struct HapoHubConfig: Codable, Equatable {
     let authHeaderTemplate: String
     let jsonPath: String
 
-    /// Real Hapo AI Hub config. Pulled from env vars; no hostnames in
-    /// source. `jsonPath` is unused by the typed decoder but kept for
-    /// legacy compatibility with `MockHapoHubProvider`.
+    /// Real Hapo AI Hub config. Env values win for local development; bundle
+    /// values are used by packaged builds. `jsonPath` is unused by the typed
+    /// decoder but kept for legacy compatibility with `MockHapoHubProvider`.
     static let real = HapoHubConfig(
         id: "hapo",
         displayName: "AIHub",
-        baseURL: envOrEmpty("HAPO_BASE_URL"),
-        meURL: envOrEmpty("HAPO_ME_URL"),
-        authHeaderTemplate: envOrEmpty("HAPO_AUTH_TEMPLATE").isEmpty
+        baseURL: envOrBundle("HAPO_BASE_URL", bundleKey: "HapoBaseURL"),
+        meURL: envOrBundle("HAPO_ME_URL", bundleKey: "HapoMeURL"),
+        authHeaderTemplate: envOrBundle("HAPO_AUTH_TEMPLATE", bundleKey: "HapoAuthTemplate").isEmpty
             ? "Bearer {token}"
-            : envOrEmpty("HAPO_AUTH_TEMPLATE"),
+            : envOrBundle("HAPO_AUTH_TEMPLATE", bundleKey: "HapoAuthTemplate"),
         jsonPath: "usage_percentage"
     )
 
@@ -48,8 +51,16 @@ struct HapoHubConfig: Codable, Equatable {
         jsonPath: "data.quota.remaining"
     )
 
-    private static func envOrEmpty(_ key: String) -> String {
-        ProcessInfo.processInfo.environment[key]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private static func envOrBundle(_ envKey: String, bundleKey: String) -> String {
+        if let value = cleaned(ProcessInfo.processInfo.environment[envKey]) {
+            return value
+        }
+        return cleaned(Bundle.main.object(forInfoDictionaryKey: bundleKey) as? String) ?? ""
+    }
+
+    private static func cleaned(_ raw: String?) -> String? {
+        let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !value.isEmpty, !value.hasPrefix("$(") else { return nil }
+        return value
     }
 }

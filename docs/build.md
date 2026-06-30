@@ -90,10 +90,9 @@ Scripts/release.sh 0.5.2
 > bị từ chối và release để dở (release+asset đã tạo nhưng `main` chưa push). Khi đó:
 > tách lại literal → viết lại các commit chưa push → push → chạy lại bước 8 (tap) thủ công.
 
-> 🔒 **Hapo bảo mật:** URL `provider.hapo.work` chỉ nằm ở `Scripts/dev-env.sh`
-> (gitignored) — **không** bake vào binary/Info.plist, **không** commit. App đọc qua
-> env lúc runtime; app mở từ Finder cần `launchctl setenv`. Có ô "Base URL" trong
-> Settings → AIHub (ghi vào settings.json local) làm override.
+> 🔒 **Hapo bảo mật:** endpoint thật không được commit. Release build lấy
+> endpoint từ `Scripts/dev-env.sh` (gitignored) rồi bake vào Info.plist qua
+> build settings. User chỉ nhập `Token` trong Settings → AIHub.
 
 ### Release flow
 
@@ -182,8 +181,7 @@ developers familiar with one app immediately know the other:
     { "id": "minimax", "apiKey": "sk-…", "enabled": false, "region": "io",
       "baseURL": null, "displayName": null, "accountLabel": null },
     { "id": "hapo",    "apiKey": "…",    "enabled": false,
-      "baseURL": "https://<HAPO_BASE_URL>",
-      "displayName": "AI Hub" }
+      "baseURL": null, "displayName": "AI Hub" }
   ]
 }
 ```
@@ -197,7 +195,7 @@ one-line empty-state hint and the user opts in via Settings.
 |---|---|---|
 | `minimax` | `https://platform.minimax.io/v1/api/openplatform/coding_plan/remains` | `MINIMAX_CODING_API_KEY` / `MINIMAX_API_KEY` env; region `io` / `com` (mainland CN) via `minimaxRegion` UserDefault |
 | `codex` | (uses ChatGPT backend API via `~/.codex/auth.json` — OAuth by `codex` CLI) | zero-config, no token in BirdNion config |
-| `hapo` | (no default — endpoints resolved at runtime from env vars, see below) | `HAPO_BASE_URL` / `HAPO_ME_URL` / `HAPO_AUTH_TEMPLATE` env vars; if missing the row short-circuits with `"HAPO_BASE_URL chưa được set"` |
+| `hapo` | Build-time endpoint from Info.plist (`HapoBaseURL`) | User only enters token; release builds source `Scripts/dev-env.sh` before `xcodebuild` |
 | `claude` | `https://api.anthropic.com/api/oauth/usage` (+ `claude.ai/api/*` for cost scrape) | OAuth from `Claude Code-credentials` Keychain (owned by Claude Code app); admin API key path uses BirdNion config |
 | `openrouter` | `https://openrouter.ai/api/v1/credits` | bearer token |
 | `deepseek` | `https://api.deepseek.com/user/balance` | bearer token |
@@ -212,17 +210,23 @@ BirdNion reads the following env vars at startup (all optional; unset = empty / 
 | `BIRDNION_CONFIG` | Full path to the config file (overrides path priority below) | none |
 | `XDG_CONFIG_HOME` | Parent dir for the config file (XDG-compliant) | `~/.config` |
 | `MINIMAX_CODING_API_KEY` / `MINIMAX_API_KEY` | MiniMax token (env override) | file entry in BirdNion config |
-| `HAPO_BASE_URL` | Hapo AI Hub weekly budget endpoint | empty → provider short-circuits with `"HAPO_BASE_URL chưa được set"` |
-| `HAPO_ME_URL` | Hapo identity endpoint (`/v1/me`) | empty → identity fetch is skipped (budget still works) |
+| `HAPO_BASE_URL` | Hapo AI Hub weekly budget endpoint used by dev/release builds | empty → build has no embedded Hapo endpoint |
+| `HAPO_ME_URL` | Hapo identity endpoint (`/v1/me`) used by dev/release builds | empty → identity fetch is skipped (budget still works) |
 | `HAPO_AUTH_TEMPLATE` | `Authorization` header template (must contain `{token}`) | `Bearer {token}` |
 | `BIRDNION_SUPPORT_EMAIL` | `mailto:` link shown in Settings → About | `mailto:support@localhost` |
 
-Set them via shell before launching:
+For local development, env vars can still be set before launching or building:
 ```bash
 export HAPO_BASE_URL="https://your-hapo-host/v1/budget/week"
 export HAPO_ME_URL="https://your-hapo-host/v1/me"
 export HAPO_AUTH_TEMPLATE="Bearer {token}"
 open /Applications/BirdNion.app
+
+xcodebuild build -project BirdNion.xcodeproj -scheme BirdNion \
+  -configuration Release -destination 'platform=macOS' \
+  HAPO_BASE_URL="$HAPO_BASE_URL" \
+  HAPO_ME_URL="$HAPO_ME_URL" \
+  HAPO_AUTH_TEMPLATE="$HAPO_AUTH_TEMPLATE"
 ```
 
 ### File path
@@ -247,7 +251,7 @@ BIRDNION_CONFIG=/tmp/birdnion-test/settings.json open /Applications/BirdNion.app
 # Check the Hapo endpoint manually (for debugging "Lỗi" status)
 TOKEN=$(jq -r '.providers[] | select(.id=="hapo") | .apiKey' ~/.config/birdnion/settings.json)
 curl -H "Authorization: Bearer $TOKEN" \
-  https://<HAPO_BASE_URL>
+  "$HAPO_BASE_URL"
 
 ## Troubleshooting
 

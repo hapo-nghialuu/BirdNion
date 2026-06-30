@@ -18,6 +18,12 @@
 	<string>0.5.3</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>HapoAuthTemplate</key>
+	<string>$(HAPO_AUTH_TEMPLATE)</string>
+	<key>HapoBaseURL</key>
+	<string>$(HAPO_BASE_URL)</string>
+	<key>HapoMeURL</key>
+	<string>$(HAPO_ME_URL)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>

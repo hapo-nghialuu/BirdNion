@@ -36,9 +36,9 @@ final class HapoHubProvider: QuotaProvider {
         return f
     }()
 
-    /// Identity endpoint — resolved from `config.meURL` so the source
-    /// doesn't hardcode any hostnames. Lazily built so a missing/invalid
-    /// `HAPO_ME_URL` env doesn't crash the whole process at boot.
+    /// Identity endpoint — resolved from `config.meURL` so the source doesn't
+    /// hardcode any hostnames. Lazily built so a missing/invalid build value
+    /// doesn't crash the whole process at boot.
     private var meURL: URL? {
         URL(string: config.meURL)
     }
@@ -57,11 +57,11 @@ final class HapoHubProvider: QuotaProvider {
     }
 
     func fetch() async throws -> ProviderStatus {
-        // 0. Endpoint sanity. The base URL is resolved at startup from
-        // `HAPO_BASE_URL` env. If the host didn't set it, we fail loud
-        // instead of silently contacting the wrong host.
+        // 0. Endpoint sanity. The base URL is resolved at startup from env or
+        // the build-time Info.plist value. If the build didn't provide it, fail
+        // loud instead of silently contacting the wrong host.
         guard !config.baseURL.isEmpty else {
-            return errorStatus("HAPO_BASE_URL chưa được set")
+            return errorStatus("Hapo endpoint chưa được cấu hình trong bản build")
         }
 
         // 1. Token read + validation.

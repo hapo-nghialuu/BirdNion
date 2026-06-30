@@ -60,7 +60,7 @@ final class ServicesContainer: ObservableObject {
                 let hapoConfig = HapoHubConfig(
                     id: cfg.id,
                     displayName: cfg.displayName ?? "AIHub",
-                    baseURL: cfg.baseURL ?? HapoHubConfig.real.baseURL,
+                    baseURL: HapoHubConfig.real.baseURL,
                     meURL: HapoHubConfig.real.meURL,
                     authHeaderTemplate: HapoHubConfig.real.authHeaderTemplate,
                     jsonPath: HapoHubConfig.real.jsonPath)

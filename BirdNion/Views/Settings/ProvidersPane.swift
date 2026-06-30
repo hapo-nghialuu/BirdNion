@@ -1135,38 +1135,6 @@ struct ProvidersPane: View {
                 .padding(.vertical, 10)
             }
 
-            if row.id == "hapo" {
-                let vi = L10n.languageCode(language) == "vi"
-                SettingsRowDivider()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Base URL")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(SettingsTheme.primary)
-                    Text(vi
-                         ? "URL endpoint budget của AI Hub (vd https://…/v1/budget/week). Bắt buộc để lấy dữ liệu."
-                         : "AI Hub budget endpoint URL (e.g. https://…/v1/budget/week). Required to fetch data.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsTheme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    TextField("https://…/v1/budget/week", text: Binding(
-                        get: { rows[idx].baseURL ?? "" },
-                        set: { raw in
-                            let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                            rows[idx].baseURL = v.isEmpty ? nil : v
-                            saveAll()
-                            // baseURL is baked into the provider at build time
-                            // (ServicesContainer), so rebuild — not just refetch.
-                            NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-                        }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-            }
-
             if row.id == "claude" {
                 claudeUsageSourcePicker()
                 claudeCookieSourcePicker()
@@ -2712,8 +2680,11 @@ struct ProvidersPane: View {
         // Persist each row back to BirdNionConfigStore. The store upserts
         // by provider id so callers don't need to worry about the on-disk
         // shape — we just hand off the row we already have.
-        for row in rows {
+        for var row in rows {
             do {
+                if row.id == "hapo" {
+                    row.baseURL = nil
+                }
                 try BirdNionConfigStore.save(row)
                 if row.enabled != true {
                     quota.remove(id: row.id)
@@ -2830,10 +2801,14 @@ private struct TokenField: View {
                         // truth after the 2026-06-25 storage refactor). The
                         // existing provider entry is updated in-place — we
                         // keep the user's earlier choices for enabled /
-                        // accountLabel / baseURL and only swap the apiKey.
+                        // accountLabel / provider-specific metadata and only
+                        // swap the apiKey.
                         var entry = BirdNionConfigStore.provider(id: providerID)
                             ?? BirdNionConfigStore.Provider(id: providerID)
                         entry.apiKey = token
+                        if providerID == "hapo" {
+                            entry.baseURL = nil
+                        }
                         try BirdNionConfigStore.save(entry)
                         token = ""
                         banner = L10n.t("provider.savedSettings", settings.appLanguage)

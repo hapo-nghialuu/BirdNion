@@ -53,6 +53,18 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
+DEV_ENV="$REPO_ROOT/Scripts/dev-env.sh"
+if [[ -f "$DEV_ENV" ]]; then
+  echo "==> Loading local build env"
+  # shellcheck disable=SC1090
+  source "$DEV_ENV"
+fi
+
+if [[ "$SKIP_BUILD" -eq 0 && "$DRY_RUN" -eq 0 && -z "${HAPO_BASE_URL:-}" ]]; then
+  echo "HAPO_BASE_URL is required for release builds. Set it in Scripts/dev-env.sh." >&2
+  exit 1
+fi
+
 run() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '  [dry-run] %s\n' "$*"
@@ -94,6 +106,9 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
       -scheme BirdNion -configuration Release \
       -destination 'platform=macOS' \
       -derivedDataPath "$REPO_ROOT/build/DerivedData" \
+      HAPO_BASE_URL="${HAPO_BASE_URL:-}" \
+      HAPO_ME_URL="${HAPO_ME_URL:-}" \
+      HAPO_AUTH_TEMPLATE="${HAPO_AUTH_TEMPLATE:-Bearer {token}}" \
       build
 fi
 
