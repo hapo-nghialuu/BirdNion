@@ -67,9 +67,17 @@ Do not use `HOMEBREW_NO_REQUIRE_TAP_TRUST=1` as the normal install path. It is a
 ### Update
 
 ```bash
-brew update
-brew upgrade --cask birdnion
-brew info --cask birdnion
+brew update && brew upgrade --cask birdnion
+```
+
+Run `brew update` first (chained with `&&`) so the tap pulls the newest cask —
+`brew upgrade` alone does not refresh a third-party tap and will report
+"already installed" against the stale version.
+
+Verify the installed version:
+
+```bash
+brew list --cask --versions birdnion   # or: brew info --cask birdnion
 ```
 
 ### First run
