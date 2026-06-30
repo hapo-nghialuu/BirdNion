@@ -16,6 +16,11 @@ struct QuotaOverview: View {
     /// opens Claude's tab; cached 5 min by `ClaudeCostScanner` itself.
     @State private var claudeReport: ClaudeUsageReport?
     @State private var claudeReportTaskId: String?
+    /// Lazy-scanned Codex usage report (per-day cost buckets + top model) for
+    /// the 30-day chart. Only scanned when the user opens Codex's tab; cached
+    /// 5 min by `CodexCostScanner` itself.
+    @State private var codexReport: CodexUsageReport?
+    @State private var codexReportTaskId: String?
 
     var body: some View {
         ZStack {
@@ -60,6 +65,12 @@ struct QuotaOverview: View {
                                !admin.daily.isEmpty {
                                 ClaudeAdminUsageChartCard(snapshot: admin)
                             }
+                            // Codex-specific: 30-day cost chart + top-model line,
+                            // scanned only when the Codex tab is open.
+                            if s.id == "codex", let report = codexReport,
+                               !report.isEmpty {
+                                CodexUsageChartCard(report: report)
+                            }
                         }
                     }
                 }
@@ -76,20 +87,26 @@ struct QuotaOverview: View {
             }
         }
         .onChange(of: selectedProviderId) { id in
-            triggerClaudeReportIfNeeded(providerId: id ?? "")
+            triggerReportsIfNeeded(providerId: id ?? "")
         }
         .onChange(of: quota.displayStatuses.map(\.id)) { ids in
             if let sel = selectedProviderId, !ids.contains(sel) {
                 selectedProviderId = ids.first
-                triggerClaudeReportIfNeeded(providerId: selectedProviderId ?? "")
+                triggerReportsIfNeeded(providerId: selectedProviderId ?? "")
             } else if selectedProviderId == nil {
                 selectedProviderId = ids.first
-                triggerClaudeReportIfNeeded(providerId: selectedProviderId ?? "")
+                triggerReportsIfNeeded(providerId: selectedProviderId ?? "")
             }
         }
         .task {
-            triggerClaudeReportIfNeeded(providerId: selectedProviderId ?? effectiveSelectedId())
+            triggerReportsIfNeeded(providerId: selectedProviderId ?? effectiveSelectedId())
         }
+    }
+
+    /// Kick off whichever provider-specific 30-day scan matches the open tab.
+    private func triggerReportsIfNeeded(providerId: String) {
+        triggerClaudeReportIfNeeded(providerId: providerId)
+        triggerCodexReportIfNeeded(providerId: providerId)
     }
 
     /// Trigger the Claude 30-day scan only when the user actually views the
@@ -108,6 +125,24 @@ struct QuotaOverview: View {
             await MainActor.run {
                 guard claudeReportTaskId == taskId else { return }
                 claudeReport = report
+            }
+        }
+    }
+
+    /// Trigger the Codex 30-day scan only when the user views the Codex tab.
+    /// Cached 5 min by `CodexCostScanner`; switching tabs cancels via taskId.
+    private func triggerCodexReportIfNeeded(providerId: String) {
+        guard providerId == "codex" else {
+            codexReport = nil
+            return
+        }
+        let taskId = UUID().uuidString
+        codexReportTaskId = taskId
+        Task {
+            let report = await CodexCostScanner.usageReport()
+            await MainActor.run {
+                guard codexReportTaskId == taskId else { return }
+                codexReport = report
             }
         }
     }
@@ -1056,6 +1091,177 @@ struct ClaudeUsageChartCard: View {
 
     /// Compact token count without the " tokens" suffix, for the dense per-model
     /// breakdown rows (e.g. "628M", "9.1M", "29M").
+    private func formatTokensShort(_ n: Int) -> String {
+        let m = Double(n) / 1_000_000
+        if n >= 10_000_000 { return String(format: "%.0fM", m) }
+        if n >= 1_000_000 { return String(format: "%.1fM", m) }
+        if n >= 1_000 { return String(format: "%.0fK", Double(n) / 1_000) }
+        return "\(n)"
+    }
+}
+
+// MARK: - Codex usage chart
+
+/// 30-day bar chart card sourced from `CodexCostScanner.usageReport()`. Mirrors
+/// `ClaudeUsageChartCard` (Today / 30d cost / latest tokens + per-day cost bars +
+/// hover per-model breakdown) but the numbers are mapped to match CodexBar's own
+/// inline Codex dashboard. Labels are inline VI/EN (no shared L10n keys needed).
+struct CodexUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let report: CodexUsageReport
+    @State private var hoveredDay: CodexDailyUsage?
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
+    private var maxBarUSD: Double {
+        max(report.daily.map(\.usd).max() ?? 0, 0.01)
+    }
+
+    /// Day whose per-model breakdown is shown: the hovered bar, else the most
+    /// recent day with activity.
+    private var detailDay: CodexDailyUsage? {
+        hoveredDay ?? report.daily.last(where: { $0.tokens > 0 })
+    }
+
+    private var latestDayTokens: Int {
+        report.daily.last(where: { $0.tokens > 0 })?.tokens ?? 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Top summary row: today vs 30d cost + tokens.
+            HStack(alignment: .top, spacing: 16) {
+                summaryColumn(
+                    label: vi ? "Hôm nay" : "Today",
+                    amount: report.todayUSD,
+                    tokens: report.todayTokens)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: vi ? "30 ngày" : "30d cost",
+                    amount: report.last30USD,
+                    tokens: report.last30Tokens,
+                    alignTrailing: true)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: vi ? "Token mới nhất" : "Latest tokens",
+                    amount: nil,
+                    tokens: latestDayTokens,
+                    alignTrailing: true)
+            }
+            barChart
+                .frame(height: 56)
+            // Per-model breakdown for the focused day (hovered bar, else the
+            // most recent active day) — mirrors CodexBar's day detail list.
+            if let detail = detailDay {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.primary)
+                    ForEach(detail.models) { m in
+                        HStack(spacing: 8) {
+                            Text(m.name)
+                                .font(.system(size: 10))
+                                .foregroundStyle(VocabbyTheme.secondary)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text("\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
+                                .font(.system(size: 10).monospacedDigit())
+                                .foregroundStyle(VocabbyTheme.tertiary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            // 30-day estimated total + provenance footnote.
+            Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatUSD(report.last30USD))")
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.primary)
+            Text(vi
+                 ? "Ước tính từ log Codex cục bộ cho tài khoản đang chọn."
+                 : "Estimated from local Codex logs for the selected account.")
+                .font(.system(size: 9))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .vocabbyCard()
+    }
+
+    @ViewBuilder
+    private func summaryColumn(label: String, amount: Double?, tokens: Int,
+                               alignTrailing: Bool = false) -> some View {
+        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .tracking(0.3)
+            if let amount {
+                Text(formatUSD(amount))
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.primary)
+            }
+            Text(formatTokens(tokens))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+    }
+
+    /// 30 vertical bars, one per day, height proportional to USD.
+    private var barChart: some View {
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(report.daily) { day in
+                    let heightFraction = day.usd > 0
+                        ? CGFloat(day.usd / maxBarUSD)
+                        : 0
+                    let barHeight = max(geo.size.height * heightFraction, day.usd > 0 ? 3 : 1)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(barColor(for: day))
+                            .frame(height: barHeight)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(hoveredDay?.id == day.id
+                                ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { hoveredDay = day }
+                        else if hoveredDay?.id == day.id { hoveredDay = nil }
+                    }
+                    .help("\(dayLabel(day.date)): \(formatUSD(day.usd)) · \(formatTokens(day.tokens))")
+                }
+            }
+        }
+    }
+
+    private func barColor(for day: CodexDailyUsage) -> Color {
+        if day.date == report.daily.last?.date {
+            return VocabbyTheme.blue
+        }
+        if day.usd == 0 {
+            return VocabbyTheme.track.opacity(0.6)
+        }
+        return VocabbyTheme.yellow
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        L10n.dayMonth(date, preference: settings.appLanguage)
+    }
+
+    private func formatUSD(_ amount: Double) -> String {
+        if amount >= 1000 {
+            return String(format: "$%.0f", amount)
+        }
+        return String(format: "$%.2f", amount)
+    }
+
+    private func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) + " tokens" }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) + " tokens" }
+        return "\(n) tokens"
+    }
+
     private func formatTokensShort(_ n: Int) -> String {
         let m = Double(n) / 1_000_000
         if n >= 10_000_000 { return String(format: "%.0fM", m) }

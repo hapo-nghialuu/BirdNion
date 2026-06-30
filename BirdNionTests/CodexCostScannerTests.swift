@@ -50,4 +50,81 @@ final class CodexCostScannerTests: XCTestCase {
         UserDefaults.standard.set(-5, forKey: key)
         XCTAssertEqual(CodexCostScanner.historyDays, 1)    // clamped low
     }
+
+    // MARK: - Full report (chart)
+
+    private static func dayString(_ date: Date) -> String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = .current
+        df.dateFormat = "yyyy-MM-dd"
+        return df.string(from: date)
+    }
+
+    /// `mapReport` builds a contiguous 30-day series, reads "today" from the most
+    /// recent active day, takes window totals from the snapshot, sorts per-day
+    /// models by cost, and picks the highest-cost top model — matching CodexBar.
+    func testMapsReportDaily() {
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        let snap = CostUsageTokenSnapshot(
+            sessionTokens: 999, sessionCostUSD: 9.99,   // session is ignored by the report
+            last30DaysTokens: 314_000_000,
+            last30DaysCostUSD: 311.01,
+            daily: [
+                .init(date: Self.dayString(yesterday),
+                      inputTokens: nil, outputTokens: nil, totalTokens: 4_000_000,
+                      costUSD: 6.71, modelsUsed: ["gpt-5.5"],
+                      modelBreakdowns: [.init(modelName: "gpt-5.5", costUSD: 6.71, totalTokens: 4_000_000)]),
+                .init(date: Self.dayString(today),
+                      inputTokens: nil, outputTokens: nil, totalTokens: 5_000_000,
+                      costUSD: 3.20, modelsUsed: ["gpt-5.5", "o3"],
+                      modelBreakdowns: [
+                          .init(modelName: "o3", costUSD: 1.20, totalTokens: 2_000_000),
+                          .init(modelName: "gpt-5.5", costUSD: 2.00, totalTokens: 3_000_000),
+                      ]),
+            ],
+            updatedAt: now)
+
+        let r = CodexCostScanner.mapReport(snap, now: now)
+
+        XCTAssertEqual(r.daily.count, 30)
+        XCTAssertFalse(r.isEmpty)
+        // Window totals come straight from the snapshot.
+        XCTAssertEqual(r.last30Tokens, 314_000_000)
+        XCTAssertEqual(r.last30USD, 311.01, accuracy: 0.001)
+        // "Today" = the most recent active day (today's bucket), not the session.
+        XCTAssertEqual(r.todayTokens, 5_000_000)
+        XCTAssertEqual(r.todayUSD, 3.20, accuracy: 0.001)
+        // Newest bucket is today; its per-model rows are sorted by cost desc.
+        let last = r.daily.last!
+        XCTAssertEqual(last.tokens, 5_000_000)
+        XCTAssertEqual(last.models.count, 2)
+        XCTAssertEqual(last.models.first?.name, "gpt-5.5")  // $2.00 > $1.20
+        // Top model across the window by summed cost: gpt-5.5 (6.71+2.00) > o3 (1.20).
+        XCTAssertEqual(r.topModel, "gpt-5.5")
+    }
+
+    /// When the snapshot omits `last30DaysTokens`, the window token total falls
+    /// back to the sum of daily totals (CodexBar parity); no models → nil topModel.
+    func testMapsReportFallbackTokens() {
+        let now = Date()
+        let snap = CostUsageTokenSnapshot(
+            sessionTokens: nil, sessionCostUSD: nil,
+            last30DaysTokens: nil, last30DaysCostUSD: 1.0,
+            daily: [
+                .init(date: Self.dayString(now),
+                      inputTokens: nil, outputTokens: nil, totalTokens: 1_234,
+                      costUSD: 1.0, modelsUsed: nil, modelBreakdowns: nil),
+            ],
+            updatedAt: now)
+
+        let r = CodexCostScanner.mapReport(snap, now: now)
+        XCTAssertEqual(r.daily.count, 30)
+        XCTAssertEqual(r.last30Tokens, 1_234)   // fallback = sum of daily totals
+        XCTAssertNil(r.topModel)                // no model breakdowns logged
+    }
 }
