@@ -13,10 +13,12 @@ final class MiniMaxProviderParserTests: XCTestCase {
         testConfigURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("minimax-test-\(UUID().uuidString)/settings.json")
         setenv("BIRDNION_CONFIG", testConfigURL.path, 1)
+        UserDefaults.standard.removeObject(forKey: MiniMaxRegion.defaultsKey)
     }
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: testConfigURL.deletingLastPathComponent())
+        UserDefaults.standard.removeObject(forKey: MiniMaxRegion.defaultsKey)
         unsetenv("BIRDNION_CONFIG")
         try super.tearDownWithError()
     }
@@ -71,6 +73,57 @@ final class MiniMaxProviderParserTests: XCTestCase {
         XCTAssertEqual(status?.windows[1].label, "Tuần")
         XCTAssertEqual(status?.windows[1].remainingPct, 89)
         XCTAssertEqual(status?.planName, "Token Plan Max")
+    }
+
+    func testChinaRegionUsesAPIHostForTokenPath() throws {
+        try installToken("test-token", for: "minimax")
+        UserDefaults.standard.set(MiniMaxRegion.com.rawValue, forKey: MiniMaxRegion.defaultsKey)
+        let session = URLSession(configuration: makeStubConfig())
+        let p = MiniMaxProvider(session: session)
+        var requestedURLs: [String] = []
+        StubURLProtocol.handler = { req in
+            requestedURLs.append(req.url?.absoluteString ?? "")
+            return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    self.happyJSON)
+        }
+        defer { StubURLProtocol.reset() }
+        let exp = expectation(description: "fetch")
+        var status: ProviderStatus?
+        Task {
+            status = try? await p.fetch()
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2)
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(requestedURLs, ["https://api.minimaxi.com/v1/token_plan/remains"])
+    }
+
+    func testChinaRegionFallsBackAfterTokenPlan404() throws {
+        try installToken("test-token", for: "minimax")
+        UserDefaults.standard.set(MiniMaxRegion.com.rawValue, forKey: MiniMaxRegion.defaultsKey)
+        let session = URLSession(configuration: makeStubConfig())
+        let p = MiniMaxProvider(session: session)
+        var requestedURLs: [String] = []
+        StubURLProtocol.handler = { req in
+            requestedURLs.append(req.url?.absoluteString ?? "")
+            let statusCode = requestedURLs.count == 1 ? 404 : 200
+            let data = statusCode == 404 ? Data() : self.happyJSON
+            return (HTTPURLResponse(url: req.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!,
+                    data)
+        }
+        defer { StubURLProtocol.reset() }
+        let exp = expectation(description: "fetch")
+        var status: ProviderStatus?
+        Task {
+            status = try? await p.fetch()
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2)
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(requestedURLs, [
+            "https://api.minimaxi.com/v1/token_plan/remains",
+            "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+        ])
     }
 
     func testPlanNameFallback() throws {

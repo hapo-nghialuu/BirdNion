@@ -25,13 +25,18 @@ enum MiniMaxRegion: String, CaseIterable, Identifiable {
         case .com: "platform.minimaxi.com"
         }
     }
-    /// Legacy `token_plan/remains` host. Kept for reference only — the
-    /// provider now uses `codingPlanURL` exclusively.
+    /// API host for API-token remains endpoints.
     var apiHost: String {
         switch self {
         case .io:  "api.minimax.io"
         case .com: "api.minimaxi.com"
         }
+    }
+    var tokenPlanRemainsURL: URL {
+        URL(string: "https://\(apiHost)/v1/token_plan/remains")!
+    }
+    var apiCodingPlanRemainsURL: URL {
+        URL(string: "https://\(apiHost)/v1/api/openplatform/coding_plan/remains")!
     }
     /// Token Plan / coding-plan management page for this region.
     var dashboardURL: URL {
@@ -85,6 +90,35 @@ final class MiniMaxProvider: QuotaProvider {
         URL(string: "https://\(region.platformHost)/v1/api/openplatform/coding_plan/remains")!
     }
 
+    /// API-token fetch candidates. Global keeps the current platform endpoint
+    /// first because it is known to return plan metadata there. Mainland China
+    /// uses the API host first; `platform.minimaxi.com/.../remains` returns 404.
+    static func apiTokenEndpoints(region: MiniMaxRegion = .current) -> [URL] {
+        switch region {
+        case .io:
+            return deduplicated([
+                endpoint(region: region),
+                region.tokenPlanRemainsURL,
+                region.apiCodingPlanRemainsURL
+            ])
+        case .com:
+            return deduplicated([
+                region.tokenPlanRemainsURL,
+                region.apiCodingPlanRemainsURL,
+                endpoint(region: region)
+            ])
+        }
+    }
+
+    private static func deduplicated(_ urls: [URL]) -> [URL] {
+        var seen: Set<String> = []
+        var result: [URL] = []
+        for url in urls where seen.insert(url.absoluteString).inserted {
+            result.append(url)
+        }
+        return result
+    }
+
     /// Models to filter out of the popover (case-insensitive).
     /// MiniMax returns separate quota buckets per capability; "video"
     /// is tracked but BOSS doesn't surface it.
@@ -131,11 +165,58 @@ final class MiniMaxProvider: QuotaProvider {
     private func fetchWithAPIToken(_ token: String) async -> ProviderStatus {
         let accountLabel = Self.deriveAccountLabel(override: override(), token: token)
         let region = MiniMaxRegion.current
+        let endpoints = Self.apiTokenEndpoints(region: region)
+        var lastError: String?
+        var credentialError: String?
 
-        var req = URLRequest(url: Self.endpoint(region: region))
+        for (index, endpoint) in endpoints.enumerated() {
+            let isLast = index == endpoints.count - 1
+            let attempt = await fetchAPITokenData(token: token, url: endpoint)
+            if let data = attempt.data {
+                let status = parse(data, accountLabel: accountLabel)
+                if let error = status.error {
+                    if Self.isCredentialError(error) {
+                        credentialError = error
+                    }
+                    if Self.shouldTryNextAPIEndpoint(afterParseError: error), !isLast {
+                        lastError = error
+                        continue
+                    }
+                }
+                return status
+            }
+
+            if let error = attempt.error {
+                lastError = error
+                if Self.isCredentialError(error) {
+                    credentialError = error
+                }
+                if !attempt.shouldTryNext || isLast {
+                    return ProviderStatus(id: id, displayName: displayName, windows: [],
+                                          lastUpdated: Date(),
+                                          error: credentialError ?? error)
+                }
+            }
+        }
+
+        return ProviderStatus(id: id, displayName: displayName, windows: [],
+                              lastUpdated: Date(),
+                              error: credentialError ?? lastError ?? "Không lấy được quota")
+    }
+
+    private struct APIAttempt {
+        let data: Data?
+        let error: String?
+        let shouldTryNext: Bool
+    }
+
+    private func fetchAPITokenData(token: String, url: URL) async -> APIAttempt {
+        var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("BirdNion", forHTTPHeaderField: "MM-API-Source")
         req.timeoutInterval = 15
 
         let data: Data
@@ -143,23 +224,41 @@ final class MiniMaxProvider: QuotaProvider {
         do {
             let (d, r) = try await session.data(for: req)
             guard let h = r as? HTTPURLResponse else {
-                return ProviderStatus(id: id, displayName: displayName, windows: [],
-                                      lastUpdated: Date(), error: "Response không phải HTTP")
+                return APIAttempt(data: nil, error: "Response không phải HTTP", shouldTryNext: false)
             }
             data = d
             httpResponse = h
         } catch {
-            return ProviderStatus(id: id, displayName: displayName, windows: [],
-                                  lastUpdated: Date(),
-                                  error: "Network: \(error.localizedDescription)")
+            return APIAttempt(data: nil,
+                              error: "Network: \(error.localizedDescription)",
+                              shouldTryNext: true)
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            return ProviderStatus(id: id, displayName: displayName, windows: [],
-                                  lastUpdated: Date(),
-                                  error: "HTTP \(httpResponse.statusCode)")
+            return APIAttempt(data: nil,
+                              error: "HTTP \(httpResponse.statusCode)",
+                              shouldTryNext: Self.shouldTryNextAPIEndpoint(statusCode: httpResponse.statusCode))
         }
-        return parse(data, accountLabel: accountLabel)
+        return APIAttempt(data: data, error: nil, shouldTryNext: false)
+    }
+
+    private static func shouldTryNextAPIEndpoint(statusCode: Int) -> Bool {
+        statusCode == 401 || statusCode == 403 || statusCode == 404 || statusCode == 405
+    }
+
+    private static func shouldTryNextAPIEndpoint(afterParseError error: String) -> Bool {
+        let normalized = error.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.contains("response thiếu trường")
+            || normalized.contains("invalid api key")
+            || normalized.contains("invalid credentials")
+    }
+
+    private static func isCredentialError(_ error: String) -> Bool {
+        let normalized = error.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.contains("invalid api key")
+            || normalized.contains("invalid credentials")
+            || normalized == "http 401"
+            || normalized == "http 403"
     }
 
     // MARK: - Cookie / web fallback path
