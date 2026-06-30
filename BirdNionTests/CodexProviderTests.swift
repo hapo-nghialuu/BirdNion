@@ -311,7 +311,7 @@ final class CodexProviderTests: XCTestCase {
 
     // MARK: - fetch()
 
-    func testFetchHappyPath() throws {
+    func testFetchHappyPath() async throws {
         let url = tempURL()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let nowISO = ISO8601DateFormatter().string(from: Date())
@@ -338,14 +338,11 @@ final class CodexProviderTests: XCTestCase {
 
         let p = CodexProvider(session: session, authURL: url,
                               statusProbe: { nil }, versionProbe: { nil })
-        let exp = expectation(description: "fetch")
-        var status: ProviderStatus?
-        Task { status = try? await p.fetch(); exp.fulfill() }
-        wait(for: [exp], timeout: 2)
-        XCTAssertNil(status?.error)
-        XCTAssertEqual(status?.windows.count, 2)
-        XCTAssertEqual(status?.windows[0].label, "5 giờ")
-        XCTAssertEqual(status?.sourceLabel, "OAuth")
+        let status = try await p.fetch()
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.count, 2)
+        XCTAssertEqual(status.windows[0].label, "5 giờ")
+        XCTAssertEqual(status.sourceLabel, "OAuth")
     }
 
     func testFetchUnauthorizedNoRefreshToken() throws {
@@ -376,7 +373,7 @@ final class CodexProviderTests: XCTestCase {
 
     // MARK: - CLI RPC fallback (codex app-server)
 
-    func testFetchFallsBackToCLIOnServerError() throws {
+    func testFetchFallsBackToCLIOnServerError() async throws {
         let url = tempURL()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let nowISO = ISO8601DateFormatter().string(from: Date())
@@ -397,16 +394,13 @@ final class CodexProviderTests: XCTestCase {
         let p = CodexProvider(session: session, authURL: url,
                               statusProbe: { nil }, versionProbe: { nil },
                               cliUsageProbe: { cli })
-        let exp = expectation(description: "fetch")
-        var status: ProviderStatus?
-        Task { status = try? await p.fetch(); exp.fulfill() }
-        wait(for: [exp], timeout: 2)
-        XCTAssertNil(status?.error)
-        XCTAssertEqual(status?.windows.count, 1)
-        XCTAssertEqual(status?.windows.first?.label, "5 giờ")
-        XCTAssertEqual(status?.planType, "Pro 20x")   // CodexPlanFormatting applied
-        XCTAssertEqual(status?.creditsRemaining, 5)
-        XCTAssertEqual(status?.accountLabel, "rpc@example.com")
+        let status = try await p.fetch()
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.count, 1)
+        XCTAssertEqual(status.windows.first?.label, "5 giờ")
+        XCTAssertEqual(status.planType, "Pro 20x")   // CodexPlanFormatting applied
+        XCTAssertEqual(status.creditsRemaining, 5)
+        XCTAssertEqual(status.accountLabel, "rpc@example.com")
     }
 
     func testFetchUnauthorizedFallsBackToCLI() throws {
