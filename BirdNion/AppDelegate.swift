@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Pixels the panel is nudged up toward the menu bar from its anchor.
     private let topNudge: CGFloat = 10
 
-    // Menu bar frame: either the bird, or one provider percent frame when
+    // Menu bar frames: either the bird, or provider percent frames when
     // enabled in Display settings.
     private var frames: [MenuBarIconRenderer.Frame] = [.bird]
     private var frameIndex: Int = 0
@@ -295,12 +295,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hidePanel()
     }
 
-    // MARK: - Menu bar frame
+    // MARK: - Menu bar frames
 
-    /// Retained as a fallback if future settings re-enable multiple frames.
+    /// How long each provider frame is shown before advancing.
     private let frameDuration: TimeInterval = 5.0
 
-    /// Recompute the menu-bar frame from the latest statuses. With the percent
+    /// Recompute the menu-bar frames from the latest statuses. With the percent
     /// setting off, or with no active quota data, this resolves to the bird.
     private func updateFrames(from statuses: [ProviderStatus]) {
         frames = MenuBarIconRenderer.frames(from: statuses)

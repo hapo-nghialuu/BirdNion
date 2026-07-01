@@ -118,7 +118,7 @@ final class ServicesContainer: ObservableObject {
     /// Rebuild the QuotaService provider list from the current
     /// `BirdNionConfigStore` on disk. Called by AppDelegate after the user
     /// reorders / toggles in the Settings sidebar so the popover tabs +
-    /// menu-bar percent candidate pick up the new order immediately (no app
+    /// menu-bar percent rotation pick up the new order immediately (no app
     /// restart needed).
     func rebuildProviders() {
         quotaService.setProviders(Self.makeProviders())

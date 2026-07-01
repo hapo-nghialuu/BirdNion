@@ -169,7 +169,7 @@ BirdNion/
   Views/
     PopoverView.swift                # container
     QuotaPanel.swift                 # tabs + provider card + actions
-    MenuBarIcon.swift                # status bar bird/lowest-percent renderer
+    MenuBarIcon.swift                # status bar bird/provider-percent renderer
     MenuBarVisibility.swift          # UserDefaults-backed show/hide
     Settings/
       ProvidersPane.swift            # sidebar + detail
@@ -242,7 +242,7 @@ Scripts/
 | Local CodexBarCore SPM (path-based) | Tận dụng `ClaudeWebAPIFetcher` + `RateWindow` battle-tested |
 | Seed pending with old statuses on refresh | User không thấy flash empty khi provider fetch chậm |
 | Per-provider refresh interval | Provider chậm/rate-limited poll ít hơn, user tự chỉnh |
-| Menu-bar visibility toggle per provider | User loại provider không quan tâm khỏi ứng viên % thấp nhất |
+| Menu-bar visibility toggle per provider | User loại provider không quan tâm khỏi chuỗi % trên menu bar |
 | Cask filename: `BirdNion-${version}.zip` (no v prefix) | GitHub release-asset upload cache trả 404 BlobNotFound với `v${version}.zip` |
 
 ## 10. Open questions / future

@@ -137,7 +137,7 @@ final class NewProviderTests: XCTestCase {
             [.bird])
     }
 
-    func testMenuBarFramesShowOnlyLowestActiveProviderPercent() {
+    func testMenuBarFramesRotateThroughActiveProviderPercents() {
         let codex = ProviderStatus(
             id: "codex", displayName: "Codex",
             windows: [QuotaWindow(label: "5 hours", usedPct: 7, remainingPct: 93)],
@@ -149,7 +149,10 @@ final class NewProviderTests: XCTestCase {
 
         XCTAssertEqual(
             MenuBarIconRenderer.frames(from: [codex, hapo], showPercent: true, visibility: { _ in true }),
-            [.provider(id: "hapo", name: "AI Hub", percents: [76], text: nil)])
+            [
+                .provider(id: "codex", name: "Codex", percents: [93], text: nil),
+                .provider(id: "hapo", name: "AI Hub", percents: [76], text: nil),
+            ])
     }
 
     /// Kilo org list comes back as a tRPC batch whose `json` is a DIRECT array

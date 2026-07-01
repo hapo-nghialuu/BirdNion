@@ -1,10 +1,10 @@
 import Foundation
 
-/// Per-provider opt-in for showing in the macOS menu bar percent slot. Backed
+/// Per-provider opt-in for showing in the macOS menu bar percent rotation. Backed
 /// by UserDefaults so the choice survives an app restart without growing
 /// the providers.json schema (which already carries provider enabled +
 /// accountLabel). Default is "shown" so every provider in providers.json can
-/// be considered for the lowest-quota menu-bar percent until the user hides one.
+/// be included in the menu-bar percent sequence until the user hides one.
 ///
 /// Toggle fires `Notification.Name.menuBarVisibilityChanged` so the
 /// AppDelegate can rebuild its frame list on the main thread without

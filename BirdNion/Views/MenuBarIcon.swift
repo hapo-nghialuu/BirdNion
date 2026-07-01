@@ -5,8 +5,8 @@ import AppKit
 /// it needs.
 ///
 /// The default frame is the bird logo. When the user enables menu-bar
-/// percentages, the single provider with the lowest active quota is shown
-/// instead; provider frames are not rotated sequentially.
+/// percentages, provider quota frames are returned in provider order so the
+/// status item can rotate through them.
 enum MenuBarIconRenderer {
     static let assetName = "MenuBarIcon"
 
@@ -28,7 +28,7 @@ enum MenuBarIconRenderer {
             .joined(separator: "  ")
     }
 
-    /// Build the displayed frame. With the global setting off, or with no
+    /// Build the displayed frames. With the global setting off, or with no
     /// active quota windows, the menu bar stays as the bird logo only.
     static func frames(
         from statuses: [ProviderStatus],
@@ -36,40 +36,35 @@ enum MenuBarIconRenderer {
         visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
     ) -> [Frame] {
         guard showPercent else { return [.bird] }
-        guard let frame = lowestQuotaFrame(from: statuses, visibility: visibility) else { return [.bird] }
-        return [frame]
+        let frames = providerFrames(from: statuses, visibility: visibility)
+        return frames.isEmpty ? [.bird] : frames
     }
 
-    static func lowestQuotaFrame(
+    static func providerFrames(
         from statuses: [ProviderStatus],
         visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
-    ) -> Frame? {
-        statuses.compactMap { menuBarCandidate(from: $0, visibility: visibility) }
-            .min { lhs, rhs in lhs.lowestRemaining < rhs.lowestRemaining }
-            .map(\.frame)
+    ) -> [Frame] {
+        statuses.compactMap { menuBarFrame(from: $0, visibility: visibility) }
     }
 
-    private static func menuBarCandidate(
+    private static func menuBarFrame(
         from status: ProviderStatus,
         visibility: (String) -> Bool
-    ) -> (frame: Frame, lowestRemaining: Int)? {
+    ) -> Frame? {
         guard visibility(status.id) else { return nil }
         let windows = status.id == "codex"
             ? CodexMenuBarMetric.current.filter(status.windows)
             : MenuBarMetricStore.filter(status.windows, id: status.id)
-        guard let lowest = windows.map(\.remainingPct).min() else { return nil }
+        guard !windows.isEmpty else { return nil }
         let text: String? = status.id == "kiro"
             ? kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
             : nil
         if text == "" { return nil }
-        return (
-            .provider(
-                id: status.id,
-                name: status.displayName,
-                percents: windows.map { $0.remainingPct },
-                text: text
-            ),
-            lowest
+        return .provider(
+            id: status.id,
+            name: status.displayName,
+            percents: windows.map { $0.remainingPct },
+            text: text
         )
     }
 

@@ -400,7 +400,7 @@ struct ProvidersPane: View {
                 rows[idx].enabled = newValue
                 saveAll()
                 // Rebuild providers via ServicesContainer so the menu-bar
-                // popover + percent candidate pick up the new state. Use the
+                // popover + percent rotation pick up the new state. Use the
                 // notification path so the rebuild happens on the main
                 // thread via AppDelegate (single source of truth).
                 NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)

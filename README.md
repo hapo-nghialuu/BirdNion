@@ -20,7 +20,7 @@ BirdNion is inspired by [CodexBar](https://github.com/steipete/CodexBar). It reu
 - **Plan around resets.** Per-provider 5-hour, weekly, monthly, credit, and budget windows with reset countdowns.
 - **See spend and cost.** Claude local JSONL scans, Claude Admin API charts, Codex credits, OpenRouter balances, Bedrock budgets, and provider-specific cost/credit summaries where available.
 - **Configure agent sources.** Pick OAuth, CLI, browser cookies, API keys, AWS credentials, local app files, or provider apps from Settings per provider.
-- **Keep the menu bar quiet.** The bar shows the bird logo by default, or an optional lowest-active-quota percent with the matching provider logo.
+- **Keep the menu bar quiet.** The bar shows the bird logo by default, or optional rotating provider quota percents when enabled.
 - **Privacy-first.** BirdNion reuses existing sessions and explicit config. It does not store passwords or crawl your disk.
 
 ## Install
@@ -136,13 +136,13 @@ Open to more providers when they fit the existing `QuotaProvider` model.
 
 ## Icon & Screenshot
 
-The menu-bar icon is the BirdNion bird by default. When "Show percent in menu bar" is enabled, the bar shows the lowest active quota percent with that provider's logo.
+The menu-bar icon is the BirdNion bird by default. When "Show percent in menu bar" is enabled, the bar rotates through active provider quota percents with each provider's logo.
 
 ![BirdNion preview](docs/social.png)
 
 ## Features
 
-- Optional lowest-provider menu-bar percent with provider toggles and drag-to-reorder Settings.
+- Optional rotating provider menu-bar percents with provider toggles and drag-to-reorder Settings.
 - Provider-specific usage meters with reset countdowns.
 - Progressive refresh: each provider publishes as soon as its fetch completes.
 - Last-known data stays visible while refreshes are in flight.

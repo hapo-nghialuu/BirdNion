@@ -23,7 +23,7 @@ BirdNion (fork/evolution của ai-statusbar) — macOS menu-bar app tracking AI 
 - [x] `MenuBarExtra` shell (NSPopover-style DropdownPanel) + popover
 - [x] `QuotaPanel` (CodexBar-style two-tab layout: tabs + provider content)
 - [x] `ProviderRow` + `QuotaBar` (progress % with reset countdown)
-- [x] Icon menu bar shows bird by default, or the lowest active provider percent when enabled
+- [x] Icon menu bar shows bird by default, or rotates through active provider percents when enabled
 - [x] `ProvidersPane` settings: per-provider token entry, live animated sidebar reorder via drag-drop
 - [x] Search box + active-first sort in settings sidebar
 - [x] Per-provider refresh interval picker (Mặc định chung / 30s / 1m / 2m / 5m / 10m / 30m)

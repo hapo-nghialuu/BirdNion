@@ -54,7 +54,7 @@ final class QuotaService: ObservableObject {
     /// user reorders or toggles providers in the Settings sidebar so the
     /// Replace the entire provider list with `newProviders`. Used after the
     /// user reorders or toggles providers in the Settings sidebar so the
-    /// popover tabs + menu-bar percent candidate pick up the new arrangement
+    /// popover tabs + menu-bar percent rotation pick up the new arrangement
     /// without an app restart. **Cached statuses are preserved** across
     /// this call — we only drop entries for providers that are no longer
     /// in the list. Clearing `statuses` entirely would leave every pill
