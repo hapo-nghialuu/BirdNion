@@ -56,9 +56,7 @@ enum MenuBarIconRenderer {
             ? CodexMenuBarMetric.current.filter(status.windows)
             : MenuBarMetricStore.filter(status.windows, id: status.id)
         guard !windows.isEmpty else { return nil }
-        let text: String? = status.id == "kiro"
-            ? kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
-            : nil
+        let text = providerDisplayText(status: status, windows: windows)
         if text == "" { return nil }
         return .provider(
             id: status.id,
@@ -66,6 +64,34 @@ enum MenuBarIconRenderer {
             percents: windows.map { $0.remainingPct },
             text: text
         )
+    }
+
+    private static func providerDisplayText(status: ProviderStatus, windows: [QuotaWindow]) -> String? {
+        switch status.id {
+        case "hapo":
+            return hapoDisplayText(windows: windows)
+        case "kiro":
+            return kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
+        default:
+            return nil
+        }
+    }
+
+    private static func hapoDisplayText(windows: [QuotaWindow]) -> String? {
+        guard let window = windows.first,
+              let amount = remainingBudgetText(from: window.subtitle) else {
+            return nil
+        }
+        return "\(amount) \(percentTitle(for: [window.remainingPct]))"
+    }
+
+    private static func remainingBudgetText(from subtitle: String?) -> String? {
+        guard let subtitle else { return nil }
+        let amount = subtitle
+            .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return amount?.isEmpty == false ? amount : nil
     }
 
     // MARK: - Kiro menu-bar display mode

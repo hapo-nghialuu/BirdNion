@@ -155,6 +155,20 @@ final class NewProviderTests: XCTestCase {
             ])
     }
 
+    func testHapoMenuBarFrameShowsMoneyBeforePercent() {
+        let hapo = ProviderStatus(
+            id: "hapo", displayName: "AI Hub",
+            windows: [QuotaWindow(label: "Week",
+                                  usedPct: 27,
+                                  remainingPct: 73,
+                                  subtitle: "$14.60 / $20.00")],
+            lastUpdated: Date())
+
+        XCTAssertEqual(
+            MenuBarIconRenderer.frames(from: [hapo], showPercent: true, visibility: { _ in true }),
+            [.provider(id: "hapo", name: "AI Hub", percents: [73], text: "$14.60 73%")])
+    }
+
     /// Kilo org list comes back as a tRPC batch whose `json` is a DIRECT array
     /// of orgs (not `{organizations:[...]}`). The REST profile shape is also
     /// accepted as a fallback.
