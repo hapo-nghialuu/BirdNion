@@ -115,6 +115,12 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(MenuBarIconRenderer.kiroDisplayText(status: s2, mode: .overageCostWhenExhausted), "10")
     }
 
+    func testMenuBarPercentTitleIncludesUnit() {
+        XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [76]), "76%")
+        XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [93, 82]), "93%  82%")
+        XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [-4, 120]), "0%  100%")
+    }
+
     /// Kilo org list comes back as a tRPC batch whose `json` is a DIRECT array
     /// of orgs (not `{organizations:[...]}`). The REST profile shape is also
     /// accepted as a fallback.

@@ -330,8 +330,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Render the current frame on the status bar button. The bird frame is
-    /// image-only; a provider frame shows its quota numbers (no unit) with
-    /// the provider's logo to their right.
+    /// image-only; a provider frame shows its quota percentages with the
+    /// provider's logo to their right.
     private func applyCurrentFrame() {
         guard let button = statusItem?.button else { return }
         let frame = frames.indices.contains(frameIndex) ? frames[frameIndex] : .bird
@@ -341,7 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = MenuBarIconRenderer.iconImage()
             button.title = ""
         case let .provider(id, _, percents, text):
-            // Numbers on the left, brand logo on the right. A trailing space
+            // Percentages on the left, brand logo on the right. A trailing space
             // keeps the last number off the logo; two spaces separate the
             // two quota numbers so they read as distinct values.
             button.imagePosition = .imageRight
@@ -350,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Display-mode override (Kiro). Empty string = hidden → logo only.
                 button.title = text.isEmpty ? "" : "\(text) "
             } else {
-                let numbers = percents.map(String.init).joined(separator: "  ")
+                let numbers = MenuBarIconRenderer.percentTitle(for: percents)
                 button.title = "\(numbers) "
             }
         }

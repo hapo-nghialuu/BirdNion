@@ -5,8 +5,8 @@ import AppKit
 /// images it needs.
 ///
 /// The rotation is: the bird logo alone first, then one frame per provider
-/// that has quota data. A provider frame shows that provider's quota numbers
-/// (no unit) with the provider's brand logo drawn to their right.
+/// that has quota data. A provider frame shows that provider's quota percentages
+/// with the provider's brand logo drawn to their right.
 enum MenuBarIconRenderer {
     static let assetName = "MenuBarIcon"
 
@@ -14,12 +14,18 @@ enum MenuBarIconRenderer {
     enum Frame: Equatable {
         /// Just the bird, no text.
         case bird
-        /// A provider: `percents` are its windows' `remainingPct` in order
-        /// (shown without a "%" unit); `id` selects the brand logo drawn to
-        /// the right of the numbers. `text`, when non-nil, replaces the joined
-        /// percents entirely (Kiro's display-mode picker uses this to show
-        /// credits / used÷total / overage instead of percent).
+        /// A provider: `percents` are its windows' `remainingPct` in order;
+        /// `id` selects the brand logo drawn to the right of the percentages.
+        /// `text`, when non-nil, replaces the joined percents entirely (Kiro's
+        /// display-mode picker uses this to show credits / used÷total / overage
+        /// instead of percent).
         case provider(id: String, name: String, percents: [Int], text: String?)
+    }
+
+    static func percentTitle(for percents: [Int]) -> String {
+        percents
+            .map { value in "\(max(0, min(100, value)))%" }
+            .joined(separator: "  ")
     }
 
     /// Build the rotation: the bird first, then one frame per provider

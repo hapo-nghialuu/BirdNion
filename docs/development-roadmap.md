@@ -45,7 +45,7 @@ BirdNion (fork/evolution của ai-statusbar) — macOS menu-bar app tracking AI 
 
 ## ✅ Phase 4 — Verify & polish
 - [x] `xcodebuild` build clean (Debug + Release)
-- [x] 108 unit tests passing
+- [x] 109 unit tests passing
 - [x] Per-provider loading state (placeholder + spinner)
 - [x] Ad-hoc signed, Gatekeeper auto-strip via Homebrew cask postflight
 - [x] Edge cases handled: OAuth 401, no cookies, missing CLI, slow providers
