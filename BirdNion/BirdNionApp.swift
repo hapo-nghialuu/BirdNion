@@ -16,11 +16,18 @@ struct BirdNionApp: App {
     }
 
     var body: some Scene {
+        WindowGroup("BirdNionLifecycleKeepalive") {
+            HiddenWindowView()
+        }
+        .defaultSize(width: 20, height: 20)
+        .windowStyle(.hiddenTitleBar)
+
         Settings {
             SettingsSceneRoot()
                 .environmentObject(settings)
                 .environmentObject(config)
                 .environmentObject(quota)
         }
+        .defaultSize(width: 720, height: 620)
     }
 }

@@ -71,6 +71,7 @@
 		L10N0001000000000000B001 /* AppLocalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N0002000000000000F001 /* AppLocalizer.swift */; };
 		FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FR0002000000000000F001 /* BirdNionConfigStore.swift */; };
 
+		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
 		SET0005000000000000B003 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0006000000000000F003 /* SettingsTab.swift */; };
 		SET0007000000000000B004 /* SettingsTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0008000000000000F004 /* SettingsTabBar.swift */; };
 		SET0009000000000000B005 /* SettingsSceneRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET000A000000000000F005 /* SettingsSceneRoot.swift */; };
@@ -189,6 +190,7 @@
 		L10N0002000000000000F001 /* AppLocalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalizer.swift; sourceTree = "<group>"; };
 		FR0002000000000000F001 /* BirdNionConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BirdNionConfigStore.swift; sourceTree = "<group>"; };
 
+		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
 		SET0006000000000000F003 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsTab.swift; sourceTree = "<group>"; };
 		SET0008000000000000F004 /* SettingsTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsTabBar.swift; sourceTree = "<group>"; };
 		SET000A000000000000F005 /* SettingsSceneRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsSceneRoot.swift; sourceTree = "<group>"; };
@@ -537,6 +539,7 @@
 				L10N0001000000000000B001 /* AppLocalizer.swift in Sources */,
 				FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */,
 
+				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,
 				SET0005000000000000B003 /* SettingsTab.swift in Sources */,
 				SET0007000000000000B004 /* SettingsTabBar.swift in Sources */,
 				SET0009000000000000B005 /* SettingsSceneRoot.swift in Sources */,

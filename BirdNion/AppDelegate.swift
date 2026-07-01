@@ -388,13 +388,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openSettings(_ sender: AnyObject?) {
         // Dismiss the transient popover, bring the app forward, then ask the
-        // responder chain to show SwiftUI's native Settings scene. This avoids
-        // keeping a hidden WindowGroup alive just to access the openSettings
-        // environment action.
+        // invisible keep-alive scene to call SwiftUI's openSettings action.
         hidePanel()
         NSApp.activate(ignoringOtherApps: true)
-        if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: sender) {
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: sender)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
         }
     }
 
