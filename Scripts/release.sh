@@ -18,7 +18,10 @@
 #   9. Update homebrew-tap/Casks/birdnion.rb, commit + push tap
 #
 # Install after release:
-#   brew install --cask hapo-nghialuu/BirdNion/birdnion
+#   brew install --cask hapo-nghialuu/tap/birdnion
+#
+# Upgrade after release:
+#   brew update && brew upgrade --cask birdnion
 #
 # Filename uses `BirdNion-<version>.zip` (no `v` prefix) to work around a
 # GitHub release-asset upload cache that returns BlobNotFound for
@@ -284,7 +287,7 @@ cat <<EOF
 
 ==> Done.
   Release:  https://github.com/${ASSET_REPO}/releases/tag/${TAG}
-  Install:  brew tap hapo-nghialuu/tap && brew install --cask birdnion
-  Upgrade:  brew upgrade birdnion
+  Install:  brew install --cask hapo-nghialuu/tap/birdnion
+  Upgrade:  brew update && brew upgrade --cask birdnion
   Verify:   brew reinstall --cask birdnion && xattr -l /Applications/BirdNion.app
 EOF
