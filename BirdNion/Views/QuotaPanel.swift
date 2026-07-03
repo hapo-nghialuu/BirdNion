@@ -1124,7 +1124,7 @@ enum VocabbyTheme {
     static let critical   = Color(red: 215 / 255, green: 0 / 255, blue: 21 / 255)    // #D70015
     static let criticalSurface = Color(red: 255 / 255, green: 232 / 255, blue: 234 / 255) // #FFE8EA
     static let track      = Color(red: 227 / 255, green: 230 / 255, blue: 234 / 255) // #E3E6EA
-    static let chartBar   = Color(red: 89 / 255, green: 97 / 255, blue: 109 / 255)  // #59616D
+    static let chartBar   = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255) // #469BE9
     static let badge      = group
     static let border     = Color(red: 215 / 255, green: 220 / 255, blue: 226 / 255) // #D7DCE2
     static let disabled   = Color(red: 154 / 255, green: 163 / 255, blue: 173 / 255) // #9AA3AD
@@ -1202,8 +1202,8 @@ enum VocabbyTheme {
     }
 
     static func activityChartBarColor(isCurrent: Bool, hasActivity: Bool) -> Color {
-        if !hasActivity { return track.opacity(0.6) }
-        return isCurrent ? blue : chartBar.opacity(0.74)
+        if !hasActivity { return selectedSurface.opacity(0.76) }
+        return isCurrent ? blue : chartBar.opacity(0.72)
     }
 }
 
