@@ -66,10 +66,16 @@
 		DDDD00130000000000B00A /* PopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD0014000000000000F00A /* PopoverView.swift */; };
 		DDDD00150000000000B00B /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD0016000000000000F00B /* MenuBarIcon.swift */; };
 		DDDD001B0000000000B00E /* QuotaPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD001C000000000000F00E /* QuotaPanel.swift */; };
-		DDDD001D0000000000B00F /* ConfigPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD001E000000000000F00F /* ConfigPanel.swift */; };
 		SET0001000000000000B001 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0002000000000000F001 /* SettingsStore.swift */; };
 		L10N0001000000000000B001 /* AppLocalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N0002000000000000F001 /* AppLocalizer.swift */; };
 		FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FR0002000000000000F001 /* BirdNionConfigStore.swift */; };
+		CCBK0001000000000000B001 /* ClaudeCodeBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCBK0002000000000000F001 /* ClaudeCodeBackend.swift */; };
+		CCMF0001000000000000B001 /* ClaudeCodeModelsFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCMF0002000000000000F001 /* ClaudeCodeModelsFetcher.swift */; };
+		CCCW0001000000000000B001 /* ClaudeCodeConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCW0002000000000000F001 /* ClaudeCodeConfigWriter.swift */; };
+		CCPN0001000000000000B001 /* ClaudeCodePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPN0002000000000000F001 /* ClaudeCodePane.swift */; };
+		CCPB0001000000000000B001 /* ClaudeCodePowerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPB0002000000000000F001 /* ClaudeCodePowerButton.swift */; };
+		CCXF0001000000000000B001 /* ClaudeCodeCustomProfileForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCXF0002000000000000F001 /* ClaudeCodeCustomProfileForm.swift */; };
+		CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCTS0002000000000000F001 /* ClaudeCodeTests.swift */; };
 
 		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
 		SET0005000000000000B003 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0006000000000000F003 /* SettingsTab.swift */; };
@@ -185,10 +191,16 @@
 		DDDD0014000000000000F00A /* PopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/PopoverView.swift; sourceTree = "<group>"; };
 		DDDD0016000000000000F00B /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/MenuBarIcon.swift; sourceTree = "<group>"; };
 		DDDD001C000000000000F00E /* QuotaPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/QuotaPanel.swift; sourceTree = "<group>"; };
-		DDDD001E000000000000F00F /* ConfigPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/ConfigPanel.swift; sourceTree = "<group>"; };
 		SET0002000000000000F001 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsStore.swift; sourceTree = "<group>"; };
 		L10N0002000000000000F001 /* AppLocalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalizer.swift; sourceTree = "<group>"; };
 		FR0002000000000000F001 /* BirdNionConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BirdNionConfigStore.swift; sourceTree = "<group>"; };
+		CCBK0002000000000000F001 /* ClaudeCodeBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeCodeBackend.swift; sourceTree = "<group>"; };
+		CCMF0002000000000000F001 /* ClaudeCodeModelsFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeCodeModelsFetcher.swift; sourceTree = "<group>"; };
+		CCCW0002000000000000F001 /* ClaudeCodeConfigWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ClaudeCodeConfigWriter.swift; sourceTree = "<group>"; };
+		CCPN0002000000000000F001 /* ClaudeCodePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodePane.swift; sourceTree = "<group>"; };
+		CCPB0002000000000000F001 /* ClaudeCodePowerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/ClaudeCodePowerButton.swift; sourceTree = "<group>"; };
+		CCXF0002000000000000F001 /* ClaudeCodeCustomProfileForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodeCustomProfileForm.swift; sourceTree = "<group>"; };
+		CCTS0002000000000000F001 /* ClaudeCodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ClaudeCodeTests.swift; sourceTree = "<group>"; };
 
 		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
 		SET0006000000000000F003 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsTab.swift; sourceTree = "<group>"; };
@@ -262,6 +274,7 @@
 				CWDT0001000000000000B001 /* CodexWebDashboardTests.swift in Sources */,
 				CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */,
 				NPT00001000000000000B01 /* NewProviderTests.swift in Sources */,
+				CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -534,10 +547,15 @@
 				DDDD00170000000000B00C /* QuotaBar.swift in Sources */,
 				DDDD00190000000000B00D /* ProviderRow.swift in Sources */,
 				DDDD001B0000000000B00E /* QuotaPanel.swift in Sources */,
-				DDDD001D0000000000B00F /* ConfigPanel.swift in Sources */,
 				SET0001000000000000B001 /* SettingsStore.swift in Sources */,
 				L10N0001000000000000B001 /* AppLocalizer.swift in Sources */,
 				FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */,
+				CCBK0001000000000000B001 /* ClaudeCodeBackend.swift in Sources */,
+				CCMF0001000000000000B001 /* ClaudeCodeModelsFetcher.swift in Sources */,
+				CCCW0001000000000000B001 /* ClaudeCodeConfigWriter.swift in Sources */,
+				CCPN0001000000000000B001 /* ClaudeCodePane.swift in Sources */,
+				CCPB0001000000000000B001 /* ClaudeCodePowerButton.swift in Sources */,
+				CCXF0001000000000000B001 /* ClaudeCodeCustomProfileForm.swift in Sources */,
 
 				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,
 				SET0005000000000000B003 /* SettingsTab.swift in Sources */,

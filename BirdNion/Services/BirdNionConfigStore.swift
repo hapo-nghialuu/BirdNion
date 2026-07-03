@@ -50,6 +50,45 @@ enum BirdNionConfigStore {
     struct Config: Codable {
         var version: Int?
         var providers: [Provider]?
+        /// User-defined Claude Code backends (Settings → "Claude Code" → Custom).
+        var claudeCodeProfiles: [ClaudeCodeProfile]?
+    }
+
+    /// One user-defined Claude Code backend. Unlike the built-in provider
+    /// presets (which derive their base URL from `ClaudeCodeBackend`), a profile
+    /// carries everything explicitly so any Anthropic-compatible endpoint shape
+    /// can be expressed: the token env-key can be `ANTHROPIC_API_KEY` or
+    /// `ANTHROPIC_AUTH_TOKEN`, an optional top-level `apiKeyHelper`, and an
+    /// arbitrary list of extra env pairs (e.g. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`).
+    struct ClaudeCodeProfile: Codable, Equatable, Identifiable {
+        var id: String
+        var name: String
+        var baseURL: String
+        var token: String
+        /// Which env var receives the token: "ANTHROPIC_AUTH_TOKEN" (default) or
+        /// "ANTHROPIC_API_KEY".
+        var tokenEnvKey: String
+        /// Optional top-level `apiKeyHelper` shell command (sibling of `env`).
+        var apiKeyHelper: String?
+        var haikuModel: String?
+        var sonnetModel: String?
+        var opusModel: String?
+        /// Last selected Claude Code target for this custom profile:
+        /// "global" or "project". Optional keeps older config files valid.
+        var claudeCodeScope: String?
+        /// Last selected project directory path for this profile when using
+        /// project scope. Preserved even when the current scope is global so
+        /// switching back to project can restore the previous folder.
+        var claudeCodeProjectPath: String?
+        /// Arbitrary extra env pairs merged verbatim into the `env` block.
+        var extraEnv: [ClaudeCodeEnvPair]?
+    }
+
+    /// A single key=value env entry for a `ClaudeCodeProfile`.
+    struct ClaudeCodeEnvPair: Codable, Equatable, Identifiable {
+        var id: String
+        var key: String
+        var value: String
     }
 
     /// One provider's configuration. Fields are all optional so partial
@@ -73,6 +112,24 @@ enum BirdNionConfigStore {
         var accountLabel: String?
         /// Reserved for future use (e.g. Claude cookie paste from DevTools).
         var cookieHeader: String?
+
+        /// Claude Code env config (Settings → "Claude Code" tab). The chosen
+        /// model ids per tier are written to `ANTHROPIC_DEFAULT_*_MODEL` in the
+        /// Claude Code `settings.json`. Persisted per provider so the popover
+        /// quick-apply button knows this provider is fully configured and can
+        /// re-apply without reopening the config screen. Nil = not yet chosen.
+        var claudeHaikuModel: String?
+        var claudeSonnetModel: String?
+        var claudeOpusModel: String?
+        /// Maps to `CLAUDE_CODE_DISABLE_1M_CONTEXT` ("1" when true). Nil/false = unset.
+        var claudeDisable1M: Bool?
+        /// Last selected Claude Code target for this provider: "global" or
+        /// "project". Stored per provider so the popover quick action matches
+        /// what the user chose in Settings for that provider.
+        var claudeCodeScope: String?
+        /// Last selected project directory path for this provider. Preserved
+        /// across global/project toggles and independent from other providers.
+        var claudeCodeProjectPath: String?
 
         /// Default value used when a provider entry has no `enabled` flag.
         /// First-run user-revision (2026-06-25): opt-in, so default off.
@@ -202,6 +259,32 @@ enum BirdNionConfigStore {
     static func remove(provider id: String, url: URL = configURL()) throws {
         var config = read(url: url) ?? Config(version: 1, providers: [])
         config.providers?.removeAll { $0.id == id }
+        try writeConfig(config, url: url)
+    }
+
+    // MARK: - Claude Code custom profiles
+
+    static func claudeCodeProfiles(url: URL = configURL()) -> [ClaudeCodeProfile] {
+        read(url: url)?.claudeCodeProfiles ?? []
+    }
+
+    /// Upsert one custom profile by id (atomic write, preserves providers).
+    static func saveClaudeCodeProfile(_ profile: ClaudeCodeProfile, url: URL = configURL()) throws {
+        var config = read(url: url) ?? Config(version: 1, providers: [])
+        var profiles = config.claudeCodeProfiles ?? []
+        if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
+            profiles[index] = profile
+        } else {
+            profiles.append(profile)
+        }
+        config.claudeCodeProfiles = profiles
+        config.version = config.version ?? 1
+        try writeConfig(config, url: url)
+    }
+
+    static func removeClaudeCodeProfile(id: String, url: URL = configURL()) throws {
+        var config = read(url: url) ?? Config(version: 1, providers: [])
+        config.claudeCodeProfiles?.removeAll { $0.id == id }
         try writeConfig(config, url: url)
     }
 

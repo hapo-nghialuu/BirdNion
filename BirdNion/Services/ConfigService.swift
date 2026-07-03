@@ -38,8 +38,20 @@ final class ConfigService: ObservableObject {
         return h.appendingPathComponent(".claude/settings.json")
     }
 
+    /// Claude Code per-project settings path: `<projectDir>/.claude/settings.json`.
+    /// Note: this is the shared project settings file — ensure it is git-ignored
+    /// if the repo is shared, since it will carry the provider token.
+    nonisolated static func projectSettingsURL(projectDir: URL) -> URL {
+        projectDir.appendingPathComponent(".claude/settings.json")
+    }
+
     func loadGlobal() throws -> [String: Any] {
-        let url = activePath
+        try load(at: activePath)
+    }
+
+    /// Read and JSON-parse a Claude Code settings file at an arbitrary path
+    /// (global or per-project). Missing file → empty dict (first save creates it).
+    func load(at url: URL) throws -> [String: Any] {
         let resolved = url.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: resolved.path) else {
             // Treat missing as empty; first save will create the file.
@@ -60,8 +72,20 @@ final class ConfigService: ObservableObject {
     }
 
     func saveGlobal(_ settings: [String: Any]) throws {
-        let url = activePath.resolvingSymlinksInPath()
+        try save(settings, at: activePath)
+    }
+
+    /// Write a Claude Code settings file at an arbitrary path (global or
+    /// per-project) with 3-deep `.bak` ring rotation and atomic replace. The
+    /// parent `.claude` directory is created if missing (per-project first save).
+    func save(_ settings: [String: Any], at target: URL) throws {
+        let url = target.resolvingSymlinksInPath()
         let parent = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        } catch {
+            throw ConfigError.ioError("create dir: \(error)")
+        }
         // Validate .bak parses before rotation
         let bak = parent.appendingPathComponent("settings.json.bak")
         if FileManager.default.fileExists(atPath: bak.path) {
@@ -94,8 +118,10 @@ final class ConfigService: ObservableObject {
         // Write new content
         let data: Data
         do {
+            // `.withoutEscapingSlashes` keeps URLs readable ("https://…" not
+            // "https:\/\/…"), matching how Claude Code writes its own settings.
             data = try JSONSerialization.data(withJSONObject: settings,
-                                              options: [.prettyPrinted, .sortedKeys])
+                                              options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         } catch {
             throw ConfigError.invalidJSON("\(error)")
         }

@@ -49,7 +49,8 @@ struct SettingsSceneRoot: View {
     /// because a window that re-fits its content on every re-render (e.g. each
     /// QuotaService publish) drives NSHostingView's autoresizing constraints
     /// into an NSISEngine recursion that crashes the whole app.
-    private let contentWidth: CGFloat = 720   // 600 + 20% for the wider provider roster
+    private let contentWidth: CGFloat = 780   // roomier for the Claude Code two-pane layout
+    private let contentHeight: CGFloat = 720   // taller so the Claude Code form isn't clipped
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +62,7 @@ struct SettingsSceneRoot: View {
                 switch selected {
                 case .general: GeneralPane()
                 case .providers: ProvidersPane()
+                case .claudeCode: ClaudeCodePane()
                 case .display: DisplayPane()
                 case .advanced: AdvancedPane()
                 case .about: AboutPane()
@@ -69,7 +71,7 @@ struct SettingsSceneRoot: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: contentWidth, height: 620)
+        .frame(width: contentWidth, height: contentHeight)
         // Opaque backing so AppKit always has something to clear to.
         .background(SettingsTheme.background)
         .overlay(SettingsWindowAppearanceView().frame(width: 0, height: 0))
@@ -81,7 +83,20 @@ struct SettingsSceneRoot: View {
         .onChange(of: settings.debugMenuEnabled) { _ in
             if !visibleTabs.contains(selected) { selected = .general }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openClaudeCodeTab)) { _ in
+            if visibleTabs.contains(.claudeCode) { selected = .claudeCode }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openProvidersTab)) { _ in
+            selected = .providers
+        }
     }
+}
+
+extension Notification.Name {
+    /// Posted to route the Settings window to the "Claude Code" tab. The
+    /// popover quick-apply button uses this when a provider still needs its
+    /// models configured before it can be applied.
+    static let openClaudeCodeTab = Notification.Name("birdnion.openClaudeCodeTab")
 }
 
 private struct SettingsWindowAppearanceView: NSViewRepresentable {
@@ -118,6 +133,7 @@ private struct SettingsWindowAppearanceView: NSViewRepresentable {
 /// Scrollable settings page — a vertical stack of `SettingsCard`s on the
 /// window background. Use in place of `Form` at the root of each pane.
 struct SettingsPage<Content: View>: View {
+    var maxContentWidth: CGFloat? = nil
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -127,7 +143,8 @@ struct SettingsPage<Content: View>: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: maxContentWidth ?? .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: maxContentWidth == nil ? .leading : .top)
         }
         .background(SettingsTheme.background)
     }
@@ -155,6 +172,7 @@ struct SettingsCard<Content: View>: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
                 )
+                .shadow(color: Color.black.opacity(0.025), radius: 2, x: 0, y: 1)
             if let footer {
                 Text(footer)
                     .font(.system(size: 11))
@@ -214,5 +232,7 @@ struct SettingsLabeledRow<Content: View>: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
     }
 }

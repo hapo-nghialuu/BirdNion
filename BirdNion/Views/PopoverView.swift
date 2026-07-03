@@ -13,12 +13,11 @@ import SwiftUI
 /// would miss it on a cold press).
 struct PopoverView: View {
     @EnvironmentObject var quota: QuotaService
-    @EnvironmentObject var config: ConfigService
     @EnvironmentObject var settings: SettingsStore
     @State private var section: Section = .quota
 
     enum Section: Hashable {
-        case quota, config
+        case quota
     }
 
     var body: some View {
@@ -31,7 +30,6 @@ struct PopoverView: View {
             Group {
                 switch section {
                 case .quota:  QuotaOverview()
-                case .config: ConfigPanel()
                 }
             }
         }
@@ -83,7 +81,6 @@ struct PopoverView: View {
     private var sectionTitle: String {
         switch section {
         case .quota:  return "Quota"
-        case .config: return L10n.t("provider.claudeConfig", settings.appLanguage)
         }
     }
 }

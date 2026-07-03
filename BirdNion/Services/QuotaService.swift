@@ -255,7 +255,12 @@ final class QuotaService: ObservableObject {
             var timings: [(String, TimeInterval)] = []
             var firstCompletionAt: Date?
             for await (id, status, elapsed) in group {
-                pending[id] = status
+                let previous = pending[id]
+                if status.error != nil, previous?.isRenderableSnapshot == true {
+                    log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
+                } else {
+                    pending[id] = status
+                }
                 providerLastFetched[id] = Date()
                 timings.append((id, elapsed))
                 if firstCompletionAt == nil { firstCompletionAt = Date() }
@@ -308,6 +313,29 @@ final class QuotaService: ObservableObject {
                 warnState[status.id, default: [:]][windowKey] = state
             }
         }
+    }
+}
+
+private extension ProviderStatus {
+    /// A previous non-error snapshot that has meaningful UI content. When a
+    /// follow-up refresh times out, keep this around so the popover does not
+    /// collapse quota rows or chart payloads into an error-only card.
+    var isRenderableSnapshot: Bool {
+        guard error == nil else { return false }
+        return !windows.isEmpty
+            || cost != nil
+            || webExtras != nil
+            || codexWeb != nil
+            || claudeAdminUsage != nil
+            || kiroMenu != nil
+            || creditsRemaining != nil
+            || creditsUnlimited
+            || resetCreditsAvailable != nil
+            || planType != nil
+            || planName != nil
+            || accountLabel != nil
+            || version != nil
+            || serviceStatus != nil
     }
 }
 

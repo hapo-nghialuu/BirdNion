@@ -6,10 +6,10 @@ import SwiftUI
 ///
 /// As of the 2026-06-25 storage refactor: providers no longer take a
 /// `KeychainService` — each one reads its own token from
-/// `BirdNionConfigStore` directly. `ConfigService` (Claude settings.json)
-/// stays as-is; the Anthropic API key it manages now also lives in
-/// `BirdNionConfigStore` (via `ConfigPanel` writes), so there is no longer
-/// a per-app `KeychainService` instance.
+/// `BirdNionConfigStore` directly, so there is no longer a per-app
+/// `KeychainService` instance. `ConfigService` reads/writes the Claude Code
+/// `settings.json`; the "Claude Code" Settings tab (`ClaudeCodePane` via
+/// `ClaudeCodeConfigWriter`) writes the provider-backed `env` block through it.
 @MainActor
 final class ServicesContainer: ObservableObject {
     let configService: ConfigService

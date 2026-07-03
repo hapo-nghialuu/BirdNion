@@ -47,6 +47,7 @@ private struct SettingsTabButton: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
+            .frame(minWidth: 70, minHeight: 48)
             .foregroundStyle(isSelected ? SettingsTheme.accent : SettingsTheme.secondary)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -55,9 +56,14 @@ private struct SettingsTabButton: View {
                           : (hovering ? SettingsTheme.hoverSurface : .clear))
             )
             .contentShape(Rectangle())
+            .animation(.easeOut(duration: 0.16), value: hovering)
+            .animation(.easeOut(duration: 0.16), value: isSelected)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .pointingHandCursor()
         .help(tab.title(language: language))
+        .accessibilityLabel(tab.title(language: language))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

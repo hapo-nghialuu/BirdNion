@@ -18,7 +18,6 @@ struct ProvidersPane: View {
 
     @State private var rows: [BirdNionConfigStore.Provider] = []
     @State private var selectedID: String?
-    @State private var showingClaudeConfig = false
     /// Search filter for the provider sidebar. Matches display name + id
     /// case-insensitively; empty string shows all rows.
     @State private var searchText: String = ""
@@ -102,12 +101,6 @@ struct ProvidersPane: View {
         .task(id: copilotReloadTick) {
             copilotStore = CopilotAccountStore.load()
         }
-        .sheet(isPresented: $showingClaudeConfig) {
-            ConfigPanel()
-                .environmentObject(quota)
-                .environmentObject(settings)
-                .frame(width: 440, height: 320)
-        }
     }
 
     // MARK: - Sidebar
@@ -159,7 +152,7 @@ struct ProvidersPane: View {
             }
         }
         .padding(.vertical, 6)
-        .frame(width: 212, alignment: .top)
+        .frame(width: 240, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(SettingsTheme.card)
@@ -249,6 +242,7 @@ struct ProvidersPane: View {
                         .accessibilityLabel(L10n.t("provider.clearSearch", language))
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
             }
         }
         .padding(.horizontal, 8)
@@ -319,7 +313,9 @@ struct ProvidersPane: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isDropTarget
                       ? SettingsTheme.accent.opacity(0.12)
-                      : (isSelected ? SettingsTheme.selectedSurface : .clear))
+                      : (isSelected
+                         ? SettingsTheme.selectedSurface
+                         : (isHovered ? SettingsTheme.hoverSurface.opacity(0.62) : .clear)))
                 .padding(.horizontal, 6)
         )
         .overlay(
@@ -332,6 +328,7 @@ struct ProvidersPane: View {
         .opacity(isDragged ? 0.42 : 1)
         .scaleEffect(isDragged ? 0.985 : 1)
         .onTapGesture { selectedID = row.id }
+        .pointingHandCursor()
         .onHover { hovering in
             if hovering {
                 hoveredRowId = row.id
@@ -452,131 +449,144 @@ struct ProvidersPane: View {
                     QuotaWarningCard(providerID: rows[idx].id)
                         .id(rows[idx].id)
                     linksSection(rows[idx])
-                    if rows[idx].id == "claude" || rows[idx].id == "codex" {
-                        claudeConfigButton
-                    }
                 }
-                .frame(maxWidth: 440, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Fill the window height so the ScrollView scrolls tall provider
+            // details (e.g. Codex) instead of overflowing past the bottom edge.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
-            Text(L10n.t("provider.choose", language))
-                .font(.system(size: 13))
-                .foregroundStyle(SettingsTheme.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            SettingsCard {
+                Text(L10n.t("provider.choose", language))
+                    .font(.system(size: 13))
+                    .foregroundStyle(SettingsTheme.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
+                    .padding(20)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
     private func detailHeader(_ idx: Int) -> some View {
         let row = rows[idx]
-        return HStack(alignment: .center, spacing: 12) {
-            ProviderLogoView(id: row.id)
-                .frame(width: 30, height: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayName(for: row))
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
-                Text(headerSubtitle(for: row))
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsTheme.secondary)
-            }
-            Spacer(minLength: 12)
-            Button {
-                // Manual reload: re-read `settings.json` to pick up any
-                // changes another pane (or external editor) made, then
-                // rebuild the provider list and trigger a refresh.
-                // Previously this only called `quota.refresh()` which
-                // didn't re-read the file — so saving a token in TokenField
-                // and refreshing from the detail header could show stale
-                // data because the in-memory provider list still pointed at
-                // the pre-save providers.json state.
-                rows = BirdNionConfigStore.allProviders()
-                NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-            } label: {
-                // Swap the reload glyph for a spinner while a refresh is in
-                // flight so clicking gives immediate visual feedback (the
-                // header subtitle also flips to "Đang cập nhật").
-                ZStack {
-                    if quota.isRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
+        return SettingsCard {
+            HStack(alignment: .center, spacing: 12) {
+                ProviderLogoView(id: row.id)
+                    .frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName(for: row))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
+                    Text(headerSubtitle(for: row))
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 12)
+                Button {
+                    // Manual reload: re-read `settings.json` to pick up any
+                    // changes another pane (or external editor) made, then
+                    // rebuild the provider list and trigger a refresh.
+                    // Previously this only called `quota.refresh()` which
+                    // didn't re-read the file — so saving a token in TokenField
+                    // and refreshing from the detail header could show stale
+                    // data because the in-memory provider list still pointed at
+                    // the pre-save providers.json state.
+                    rows = BirdNionConfigStore.allProviders()
+                    NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
+                } label: {
+                    // Swap the reload glyph for a spinner while a refresh is in
+                    // flight so clicking gives immediate visual feedback (the
+                    // header subtitle also flips to "Đang cập nhật").
+                    ZStack {
+                        if quota.isRefreshing {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
                     }
                 }
-            }
-            .controlSize(.small)
-            .disabled(quota.isRefreshing)
-            .help(L10n.t("provider.reloadHelp", language))
-
-            Toggle("", isOn: enabledBinding(idx))
-                .labelsHidden()
-                .toggleStyle(.switch)
                 .controlSize(.small)
+                .disabled(quota.isRefreshing)
+                .pointingHandCursor(enabled: !quota.isRefreshing)
+                .help(L10n.t("provider.reloadHelp", language))
+
+                Toggle("", isOn: enabledBinding(idx))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
         }
     }
 
     private func detailInfoGrid(_ row: BirdNionConfigStore.Provider) -> some View {
         let s = status(for: row.id)
-        return Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-            infoRow(
-                L10n.t("provider.status", language),
-                row.enabled == true ? L10n.t("popover.ready", language) : L10n.t("provider.disabled", language)
-            )
-            if row.id == "codex" {
-                // Which source actually produced the data (OAuth / CLI).
-                infoRow(L10n.t("provider.source", language),
-                        L10n.providerText(s?.sourceLabel ?? "OAuth", preference: language))
-            } else if row.id == "claude" {
-                // OAuth token comes from the Claude Code Keychain item.
-                infoRow(L10n.t("provider.source", language), "OAuth")
-            }
-            if let plan = s?.planType, !plan.isEmpty {
-                infoRow(L10n.t("provider.plan", language),
-                        L10n.providerText(plan.capitalized, preference: language))
-            }
-            if let name = s?.planName, !name.isEmpty {
-                // Plan display name (MiniMax `current_subscribe_title`) — distinct
-                // from `planType` which carries a code (`plus` / `pro`).
-                infoRow(L10n.t("provider.planName", language),
-                        L10n.providerText(name, preference: language))
-            }
-            if let label = s?.accountLabel, !label.isEmpty {
-                infoRow(L10n.t("provider.account", language), label)
-            }
-            if let version = s?.version, !version.isEmpty {
-                infoRow(L10n.t("provider.version", language), version)
-            }
-            if let svc = s?.serviceStatus, !svc.isEmpty {
-                serviceStatusRow(svc, level: s?.serviceStatusLevel)
-            }
-            if row.id == "codex", let n = s?.resetCreditsAvailable {
-                infoRow(L10n.t("provider.resetCredits", language), "\(n)")
-            }
-            if row.id == "codex", let web = s?.codexWeb {
-                if let cr = web.codeReviewRemainingPercent {
-                    infoRow(L10n.t("provider.codeReview", language), L10n.f("provider.remaining", language, cr))
+        return SettingsCard {
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                infoRow(
+                    L10n.t("provider.status", language),
+                    row.enabled == true ? L10n.t("popover.ready", language) : L10n.t("provider.disabled", language)
+                )
+                if row.id == "codex" {
+                    // Which source actually produced the data (OAuth / CLI).
+                    infoRow(L10n.t("provider.source", language),
+                            L10n.providerText(s?.sourceLabel ?? "OAuth", preference: language))
+                } else if row.id == "claude" {
+                    // OAuth token comes from the Claude Code Keychain item.
+                    infoRow(L10n.t("provider.source", language), "OAuth")
                 }
-                if let n = web.creditsHistoryCount {
-                    infoRow(L10n.t("provider.creditsHistory", language), "\(n)")
+                if let plan = s?.planType, !plan.isEmpty {
+                    infoRow(L10n.t("provider.plan", language),
+                            L10n.providerText(plan.capitalized, preference: language))
                 }
-                if let url = web.creditsPurchaseURL, let u = URL(string: url) {
-                    GridRow {
-                        Text(L10n.t("provider.buyCredits", language)).gridColumnAlignment(.leading)
-                        Link(L10n.t("provider.openPage", language), destination: u)
-                            .font(.system(size: 12))
+                if let name = s?.planName, !name.isEmpty {
+                    // Plan display name (MiniMax `current_subscribe_title`) — distinct
+                    // from `planType` which carries a code (`plus` / `pro`).
+                    infoRow(L10n.t("provider.planName", language),
+                            L10n.providerText(name, preference: language))
+                }
+                if let label = s?.accountLabel, !label.isEmpty {
+                    infoRow(L10n.t("provider.account", language), label)
+                }
+                if let version = s?.version, !version.isEmpty {
+                    infoRow(L10n.t("provider.version", language), version)
+                }
+                if let svc = s?.serviceStatus, !svc.isEmpty {
+                    serviceStatusRow(svc, level: s?.serviceStatusLevel)
+                }
+                if row.id == "codex", let n = s?.resetCreditsAvailable {
+                    infoRow(L10n.t("provider.resetCredits", language), "\(n)")
+                }
+                if row.id == "codex", let web = s?.codexWeb {
+                    if let cr = web.codeReviewRemainingPercent {
+                        infoRow(L10n.t("provider.codeReview", language), L10n.f("provider.remaining", language, cr))
+                    }
+                    if let n = web.creditsHistoryCount {
+                        infoRow(L10n.t("provider.creditsHistory", language), "\(n)")
+                    }
+                    if let url = web.creditsPurchaseURL, let u = URL(string: url) {
+                        GridRow {
+                            Text(L10n.t("provider.buyCredits", language)).gridColumnAlignment(.leading)
+                            Link(L10n.t("provider.openPage", language), destination: u)
+                                .font(.system(size: 12))
+                        }
                     }
                 }
+                if let err = s?.error {
+                    infoRow(L10n.t("provider.error", language),
+                            L10n.providerText(err, preference: language))
+                } else {
+                    infoRow(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
+                }
             }
-            if let err = s?.error {
-                infoRow(L10n.t("provider.error", language),
-                        L10n.providerText(err, preference: language))
-            } else {
-                infoRow(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
-            }
+            .font(.system(size: 12))
+            .foregroundStyle(SettingsTheme.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
         }
-        .font(.system(size: 12))
-        .foregroundStyle(SettingsTheme.secondary)
     }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
@@ -1662,6 +1672,7 @@ struct ProvidersPane: View {
                         Image(systemName: "trash").foregroundStyle(SettingsTheme.tertiary)
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                 }
             }
 
@@ -2144,6 +2155,7 @@ struct ProvidersPane: View {
                                 Task { await quota.refresh() }
                             }
                             .buttonStyle(.plain)
+                            .pointingHandCursor()
                             .font(.system(size: 11))
                             .foregroundStyle(SettingsTheme.accent)
                         }
@@ -2157,6 +2169,7 @@ struct ProvidersPane: View {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.tertiary)
                         }
                         .buttonStyle(.plain)
+                        .pointingHandCursor()
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -2245,6 +2258,7 @@ struct ProvidersPane: View {
                         NSWorkspace.shared.open(AntigravityOAuthStore.fileURL)
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     .font(.system(size: 11))
                     .foregroundStyle(SettingsTheme.accent)
 
@@ -2252,6 +2266,7 @@ struct ProvidersPane: View {
                         antigravityReloadTick += 1
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     .font(.system(size: 11))
                     .foregroundStyle(SettingsTheme.accent)
                 }
@@ -2308,6 +2323,7 @@ struct ProvidersPane: View {
                                 NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                             }
                             .buttonStyle(.plain)
+                            .pointingHandCursor()
                             .font(.system(size: 11))
                             .foregroundStyle(SettingsTheme.accent)
                         }
@@ -2321,6 +2337,7 @@ struct ProvidersPane: View {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.tertiary)
                         }
                         .buttonStyle(.plain)
+                        .pointingHandCursor()
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -2422,6 +2439,7 @@ struct ProvidersPane: View {
                         NSWorkspace.shared.open(CopilotAccountStore.fileURL)
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     .font(.system(size: 11))
                     .foregroundStyle(SettingsTheme.accent)
 
@@ -2429,6 +2447,7 @@ struct ProvidersPane: View {
                         copilotReloadTick += 1
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     .font(.system(size: 11))
                     .foregroundStyle(SettingsTheme.accent)
                 }
@@ -2492,6 +2511,7 @@ struct ProvidersPane: View {
                         .padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     if i < links.count - 1 { SettingsRowDivider() }
                 }
             }
@@ -2591,24 +2611,6 @@ struct ProvidersPane: View {
         }
     }
 
-    private var claudeConfigButton: some View {
-        Button {
-            showingClaudeConfig = true
-        } label: {
-            HStack {
-                Image(systemName: "doc.text")
-                Text(L10n.t("provider.claudeConfig", language))
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.tertiary)
-            }
-            .foregroundStyle(SettingsTheme.primary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 2)
-    }
 
     // MARK: - Drag & drop
 
@@ -3147,6 +3149,7 @@ private struct CodexAccountsCard: View {
                 }
             }
             .buttonStyle(.plain)
+            .pointingHandCursor(enabled: !busy)
             .disabled(busy)
 
             if busy {

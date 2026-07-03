@@ -28,6 +28,7 @@ struct DebugPane: View {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
                     .controlSize(.small)
+                    .pointingHandCursor()
                 }
             }
         }

@@ -21,6 +21,7 @@ struct QuotaOverview: View {
     /// 5 min by `CodexCostScanner` itself.
     @State private var codexReport: CodexUsageReport?
     @State private var codexReportTaskId: String?
+    @State private var claudeCodeTargetRevision = 0
 
     var body: some View {
         ZStack {
@@ -53,6 +54,12 @@ struct QuotaOverview: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
                             ProviderCard(status: s)
+                            // Claude Code backend: round quick-apply / setup button,
+                            // shown only for providers with a key that can back Claude Code.
+                            if ClaudeCodeQuickApplyButton.shouldShow(providerID: s.id) {
+                                ClaudeCodeQuickApplyButton(providerID: s.id)
+                                    .id("\(s.id)-\(claudeCodeTargetRevision)")
+                            }
                             // Claude-specific: 30-day chart + top-model line.
                             // Only rendered for the Claude tab so other providers
                             // don't pull in the local session scan.
@@ -101,6 +108,9 @@ struct QuotaOverview: View {
         .task {
             triggerReportsIfNeeded(providerId: selectedProviderId ?? effectiveSelectedId())
         }
+        .onReceive(NotificationCenter.default.publisher(for: .claudeCodeTargetChanged)) { _ in
+            claudeCodeTargetRevision += 1
+        }
     }
 
     /// Kick off whichever provider-specific 30-day scan matches the open tab.
@@ -111,13 +121,11 @@ struct QuotaOverview: View {
 
     /// Trigger the Claude 30-day scan only when the user actually views the
     /// Claude tab. The scanner is cached internally so re-opening Claude
-    /// within 5 min is instant. Switching to another provider cancels any
-    /// in-flight scan via the taskId guard.
+    /// within 5 min is instant. Keep the previous report in memory when the
+    /// user switches away so the chart is still visible while the next scan
+    /// refreshes it.
     private func triggerClaudeReportIfNeeded(providerId: String) {
-        guard providerId == "claude" else {
-            claudeReport = nil
-            return
-        }
+        guard providerId == "claude" else { return }
         let taskId = UUID().uuidString
         claudeReportTaskId = taskId
         Task {
@@ -751,6 +759,221 @@ struct ActionRow: View {
         }
         .buttonStyle(.plain)
         .disabled(isLoading)
+    }
+}
+
+// MARK: - Claude Code quick-apply
+
+/// Big power button in the popover, tied to the currently-selected provider
+/// tab. Hidden unless the provider has an API key and can back Claude Code.
+/// ON when `~/.claude/settings.json` already points Claude Code at this
+/// provider; tapping toggles it (apply / deactivate). If the provider still
+/// needs its 3 models, a tap opens Settings on the "Claude Code" tab instead.
+struct ClaudeCodeQuickApplyButton: View {
+    @EnvironmentObject var config: ConfigService
+    @EnvironmentObject var settings: SettingsStore
+    let providerID: String
+
+    @State private var busy = false
+
+    /// Whether the popover should render the button for this provider.
+    static func shouldShow(providerID: String) -> Bool {
+        guard ClaudeCodeBackend.isSupported(providerID) else { return false }
+        let key = BirdNionConfigStore.apiKey(provider: providerID)
+        return (key?.isEmpty == false)
+    }
+
+    var body: some View {
+        let provider = BirdNionConfigStore.provider(id: providerID)
+        let scope = provider.flatMap(currentScope)
+        let configured = provider.map { ClaudeCodeConfigWriter.isFullyConfigured($0) && scope != nil } ?? false
+        let sync: ClaudeCodeConfigWriter.SyncState = (configured && provider != nil && scope != nil)
+            ? ClaudeCodeConfigWriter.syncState(forProvider: provider!, scope: scope!, using: config)
+            : .off
+        let state: ClaudeCodePowerButton.PowerState = powerState(configured: configured, sync: sync)
+        let lang = settings.appLanguage
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "terminal")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(stateColor(state))
+                .frame(width: 30, height: 30)
+                .background(stateColor(state).opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(L10n.t("claudeCode.quickCard.title", lang))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.primary)
+                    HStack(spacing: 3) {
+                        Image(systemName: stateIcon(state))
+                            .font(.system(size: 9, weight: .bold))
+                        Text(stateLabel(state, lang: lang))
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(stateColor(state))
+                }
+                Text(subtitle(state: state, provider: provider))
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+                Text(targetLabel(provider))
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            ClaudeCodePowerButton(
+                state: state,
+                subtitle: "",
+                diameter: 58,
+                busy: busy,
+                subtitleColor: VocabbyTheme.primary,
+                showsSubtitle: false,
+                action: { tap(state: state, provider: provider, scope: scope) }
+            )
+            .help(subtitle(state: state, provider: provider))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(VocabbyTheme.group)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
+    }
+
+    private func powerState(configured: Bool,
+                            sync: ClaudeCodeConfigWriter.SyncState) -> ClaudeCodePowerButton.PowerState {
+        guard configured else { return .needsSetup }
+        switch sync {
+        case .synced: return .on
+        case .stale: return .stale
+        case .off: return .off
+        }
+    }
+
+    private func subtitle(state: ClaudeCodePowerButton.PowerState,
+                          provider: BirdNionConfigStore.Provider?) -> String {
+        let lang = settings.appLanguage
+        switch state {
+        case .on: return L10n.f("claudeCode.power.on", lang, name(provider))
+        case .off: return L10n.t("claudeCode.power.off", lang)
+        case .stale: return L10n.t("claudeCode.power.stale", lang)
+        case .needsSetup:
+            if provider.map(needsProjectPath) == true {
+                return L10n.t("claudeCode.project.none", lang)
+            }
+            return L10n.t("claudeCode.quickApply.setup", lang)
+        }
+    }
+
+    private func stateLabel(_ state: ClaudeCodePowerButton.PowerState, lang: String) -> String {
+        switch state {
+        case .on: return L10n.t("claudeCode.state.on", lang)
+        case .off: return L10n.t("claudeCode.state.off", lang)
+        case .stale: return L10n.t("claudeCode.state.stale", lang)
+        case .needsSetup: return L10n.t("claudeCode.state.setup", lang)
+        }
+    }
+
+    private func stateIcon(_ state: ClaudeCodePowerButton.PowerState) -> String {
+        switch state {
+        case .on: return "checkmark.circle.fill"
+        case .off: return "power.circle"
+        case .stale: return "arrow.triangle.2.circlepath.circle.fill"
+        case .needsSetup: return "exclamationmark.circle.fill"
+        }
+    }
+
+    private func stateColor(_ state: ClaudeCodePowerButton.PowerState) -> Color {
+        switch state {
+        case .on: return VocabbyTheme.success
+        case .off: return VocabbyTheme.secondary
+        case .stale, .needsSetup: return VocabbyTheme.yellow
+        }
+    }
+
+    private func currentScope(for provider: BirdNionConfigStore.Provider)
+    -> ClaudeCodeConfigWriter.Scope? {
+        guard provider.claudeCodeScope == "project" else { return .global }
+        guard let path = cleaned(provider.claudeCodeProjectPath) else { return nil }
+        return .project(URL(fileURLWithPath: path))
+    }
+
+    private func needsProjectPath(_ provider: BirdNionConfigStore.Provider) -> Bool {
+        provider.claudeCodeScope == "project" && cleaned(provider.claudeCodeProjectPath) == nil
+    }
+
+    private func targetLabel(_ provider: BirdNionConfigStore.Provider?) -> String {
+        let lang = settings.appLanguage
+        guard let provider else { return L10n.t("claudeCode.quickCard.globalTarget", lang) }
+        guard provider.claudeCodeScope == "project" else {
+            return L10n.t("claudeCode.quickCard.globalTarget", lang)
+        }
+        guard let path = cleaned(provider.claudeCodeProjectPath) else {
+            return L10n.t("claudeCode.quickCard.projectTargetMissing", lang)
+        }
+        let target = ConfigService.projectSettingsURL(projectDir: URL(fileURLWithPath: path))
+        return L10n.f("claudeCode.quickCard.projectTarget", lang, displayPath(target.path))
+    }
+
+    private func displayPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home { return "~" }
+        guard path.hasPrefix(home + "/") else { return path }
+        return "~" + String(path.dropFirst(home.count))
+    }
+
+    private func cleaned(_ value: String?) -> String? {
+        guard let t = value?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+        return t
+    }
+
+    private func tap(state: ClaudeCodePowerButton.PowerState,
+                     provider: BirdNionConfigStore.Provider?,
+                     scope: ClaudeCodeConfigWriter.Scope?) {
+        guard let p = provider, let scope else { openSettings(); return }
+        if state == .needsSetup { openSettings(); return }
+        busy = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            do {
+                if state == .on {
+                    try ClaudeCodeConfigWriter.deactivate(scope: scope, using: config)
+                } else {
+                    // .off or .stale → merge current values in place (patches the
+                    // changed key, keeps everything else; never clears the block).
+                    try ClaudeCodeConfigWriter.apply(provider: p, scope: scope, using: config)
+                }
+            } catch {
+                // Failure leaves the file unchanged; the button reverts to its
+                // real state on the next render.
+            }
+            busy = false  // re-render re-reads settings.json → reflects new state
+        }
+    }
+
+    /// Not configured: jump to Settings → Claude Code tab to finish setup.
+    private func openSettings() {
+        NotificationCenter.default.post(name: .openSettings, object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            NotificationCenter.default.post(name: .openClaudeCodeTab, object: nil)
+        }
+    }
+
+    private func name(_ p: BirdNionConfigStore.Provider?) -> String {
+        switch providerID {
+        case "hapo": return p?.displayName ?? "Hapo AI Hub"
+        case "minimax": return "MiniMax"
+        case "deepseek": return "DeepSeek"
+        case "zai": return "z.ai"
+        default: return p?.displayName ?? providerID
+        }
     }
 }
 

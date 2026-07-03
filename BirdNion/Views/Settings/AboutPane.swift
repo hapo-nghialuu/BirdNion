@@ -17,69 +17,67 @@ struct AboutPane: View {
     private let projectURL = "https://github.com/hapo-nghialuu/BirdNion"
 
     var body: some View {
-        VStack(spacing: 12) {
-            Spacer(minLength: 8)
+        SettingsPage(maxContentWidth: 430) {
+            SettingsCard {
+                VStack(spacing: 14) {
+                    Button(action: openProjectHome) {
+                        appIcon
+                            .frame(width: 92, height: 92)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .scaleEffect(iconHover ? 1.04 : 1.0)
+                            .shadow(color: iconHover ? SettingsTheme.accent.opacity(0.22) : .black.opacity(0.08),
+                                    radius: iconHover ? 8 : 2)
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .onHover { hovering in
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                            iconHover = hovering
+                        }
+                    }
+                    .help(L10n.t("about.openProject", settings.appLanguage))
+                    .accessibilityLabel(L10n.t("about.openProject", settings.appLanguage))
 
-            // Interactive app icon → opens the project page.
-            Button(action: openProjectHome) {
-                appIcon
-                    .frame(width: 92, height: 92)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .scaleEffect(iconHover ? 1.05 : 1.0)
-                    .shadow(color: iconHover ? SettingsTheme.accent.opacity(0.24) : .black.opacity(0.08),
-                            radius: iconHover ? 8 : 2)
-            }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                    iconHover = hovering
+                    VStack(spacing: 4) {
+                        Text("BirdNion")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.primary)
+                        Text(versionString)
+                            .font(.system(size: 11))
+                            .foregroundStyle(SettingsTheme.secondary)
+                        Text(L10n.t("about.tagline", settings.appLanguage))
+                            .font(.system(size: 11))
+                            .foregroundStyle(SettingsTheme.tertiary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    SettingsRowDivider()
+                        .padding(.leading, 0)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        AboutLinkRow(icon: "chevron.left.slash.chevron.right",
+                                     title: "GitHub",
+                                     url: projectURL)
+                        AboutLinkRow(icon: "globe",
+                                     title: "Website",
+                                     url: projectURL)
+                        AboutLinkRow(icon: "envelope",
+                                     title: "Email",
+                                     url: ProcessInfo.processInfo.environment["BIRDNION_SUPPORT_EMAIL"]
+                                        ?? "mailto:support@localhost")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 24)
             }
-            .help(L10n.t("about.openProject", settings.appLanguage))
-
-            // Name + version + tagline.
-            VStack(spacing: 3) {
-                Text("BirdNion")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
-                Text(versionString)
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsTheme.secondary)
-                Text(L10n.t("about.tagline", settings.appLanguage))
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsTheme.tertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 2)
-            }
-
-            Divider()
-                .overlay(SettingsTheme.border.opacity(0.72))
-                .padding(.horizontal, 80)
-
-            // Project links, centered.
-            VStack(alignment: .leading, spacing: 4) {
-                AboutLinkRow(icon: "chevron.left.slash.chevron.right",
-                             title: "GitHub",
-                             url: projectURL)
-                AboutLinkRow(icon: "globe",
-                             title: "Website",
-                             url: projectURL)
-                AboutLinkRow(icon: "envelope",
-                             title: "Email",
-                             url: ProcessInfo.processInfo.environment["BIRDNION_SUPPORT_EMAIL"]
-                                ?? "mailto:support@localhost")
-            }
-            .frame(maxWidth: 220)
-
-            Spacer()
 
             Text("© 2026 BirdNion · Hapo")
                 .font(.system(size: 10))
                 .foregroundStyle(SettingsTheme.tertiary)
-                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SettingsTheme.background)
     }
 
     /// Prefer the real bundle icon; fall back to the bundled asset.

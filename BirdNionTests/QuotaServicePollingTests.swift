@@ -22,6 +22,22 @@ final class QuotaServicePollingTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshKeepsPreviousGoodStatusWhenProviderReturnsError() async {
+        let provider = GoodThenErrorProvider(id: "claude", displayName: "Claude")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 80)
+
+        await svc.refresh(forceProviderIDs: ["claude"])
+
+        let status = svc.statuses.first
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(status?.windows.first?.remainingPct, 80)
+        XCTAssertEqual(svc.displayStatuses.first?.windows.first?.remainingPct, 80)
+    }
+
+    @MainActor
     func testForcedRefreshBypassesProviderInterval() async {
         let provider = CountingProvider(id: "codex", displayName: "Codex")
         let svc = QuotaService(providers: [provider], interval: 3_600)
@@ -116,5 +132,33 @@ private final class CountingProvider: QuotaProvider {
             displayName: displayName,
             windows: [QuotaWindow(label: "5 giờ", usedPct: count, remainingPct: 100 - count)],
             lastUpdated: Date())
+    }
+}
+
+private final class GoodThenErrorProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    private var fetchCount = 0
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        fetchCount += 1
+        if fetchCount == 1 {
+            return ProviderStatus(
+                id: id,
+                displayName: displayName,
+                windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+                lastUpdated: Date())
+        }
+        return ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: [],
+            lastUpdated: Date(),
+            error: "\(displayName): timeout")
     }
 }

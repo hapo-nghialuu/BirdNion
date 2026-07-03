@@ -14,17 +14,29 @@ struct AboutLinkRow: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.accent)
                     .frame(width: 16)
                 Text(title)
-                    .underline(hovering, color: SettingsTheme.accent)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(SettingsTheme.primary)
                 Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.tertiary)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
-            .foregroundColor(SettingsTheme.accent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(hovering ? SettingsTheme.hoverSurface.opacity(0.75) : Color.clear)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .pointingHandCursor()
+        .animation(.easeOut(duration: 0.14), value: hovering)
     }
 }
