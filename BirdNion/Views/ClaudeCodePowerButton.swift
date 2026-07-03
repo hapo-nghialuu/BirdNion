@@ -41,7 +41,7 @@ struct ClaudeCodePowerButton: View {
                     // Badge dot for states that need the user's attention.
                     if (state == .needsSetup || state == .stale) && !busy {
                         Circle()
-                            .fill(VocabbyTheme.warningFill)
+                            .fill(attentionBadgeColor)
                             .frame(width: 16, height: 16)
                             .offset(x: diameter * 0.34, y: -diameter * 0.34)
                     }
@@ -65,6 +65,14 @@ struct ClaudeCodePowerButton: View {
     }
 
     private static let glow = VocabbyTheme.brandBlue
+
+    private var attentionBadgeColor: Color {
+        switch state {
+        case .needsSetup: return VocabbyTheme.blue
+        case .stale: return VocabbyTheme.warningFill
+        case .on, .off: return VocabbyTheme.secondary
+        }
+    }
 
     private var gradient: LinearGradient {
         switch state {

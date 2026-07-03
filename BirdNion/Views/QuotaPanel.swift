@@ -553,6 +553,17 @@ struct ProviderCard: View {
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(VocabbyTheme.criticalSurface.opacity(0.7))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(VocabbyTheme.critical.opacity(0.16), lineWidth: 1)
+                )
             } else if status.windows.isEmpty {
                 LoadingQuotaSkeleton()
             } else {
@@ -911,7 +922,8 @@ struct ClaudeCodeQuickApplyButton: View {
         switch state {
         case .on: return VocabbyTheme.success
         case .off: return VocabbyTheme.secondary
-        case .stale, .needsSetup: return VocabbyTheme.yellow
+        case .stale: return VocabbyTheme.warningFill
+        case .needsSetup: return VocabbyTheme.blue
         }
     }
 
@@ -1023,16 +1035,42 @@ struct MenuBarVisibilityToggle: View {
             Image(systemName: hasError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(hasError ? VocabbyTheme.critical : VocabbyTheme.success)
-            Toggle("", isOn: $isOn)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .labelsHidden()
-                .help(isOn
-                    ? L10n.t("popover.visibilityOn", settings.appLanguage)
-                    : L10n.t("popover.visibilityOff", settings.appLanguage))
-                .onChange(of: isOn) { newValue in
-                    MenuBarVisibility.setShown(providerId: providerId, to: newValue)
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    isOn.toggle()
                 }
+                MenuBarVisibility.setShown(providerId: providerId, to: isOn)
+            } label: {
+                ZStack {
+                    Capsule()
+                        .fill(isOn ? VocabbyTheme.blue : VocabbyTheme.track)
+                    Capsule()
+                        .strokeBorder(isOn ? VocabbyTheme.blue.opacity(0.45) : VocabbyTheme.border,
+                                      lineWidth: 1)
+                    HStack {
+                        if isOn { Spacer(minLength: 0) }
+                        Circle()
+                            .fill(VocabbyTheme.card)
+                            .frame(width: 12, height: 12)
+                            .shadow(color: VocabbyTheme.brandNavy.opacity(isOn ? 0.18 : 0.10),
+                                    radius: 1, x: 0, y: 1)
+                        if !isOn { Spacer(minLength: 0) }
+                    }
+                    .padding(2)
+                }
+                .frame(width: 30, height: 16)
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .pointingHandCursor()
+            .help(isOn
+                ? L10n.t("popover.visibilityOn", settings.appLanguage)
+                : L10n.t("popover.visibilityOff", settings.appLanguage))
+            .accessibilityLabel(L10n.t("popover.menuBarVisibility", settings.appLanguage))
+            .accessibilityValue(isOn
+                                ? L10n.t("popover.visibilityOn", settings.appLanguage)
+                                : L10n.t("popover.visibilityOff", settings.appLanguage))
+            .accessibilityAddTraits(isOn ? [.isSelected] : [])
         }
     }
 }

@@ -615,7 +615,8 @@ struct ClaudeCodePane: View {
         switch state {
         case .on: return SettingsTheme.success
         case .off: return SettingsTheme.secondary
-        case .stale, .needsSetup: return SettingsTheme.warning
+        case .stale: return SettingsTheme.warning
+        case .needsSetup: return SettingsTheme.accent
         }
     }
 
