@@ -285,6 +285,33 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertNotNil(after["permissions"])  // top-level still preserved
     }
 
+    @MainActor
+    func testRemoveEnvSettingsRemovesOnlyEnvAndHelper() throws {
+        let home = tempDir()
+        let config = ConfigService(homeOverride: home)
+        let url = config.activePath
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try """
+        {"env":{"ANTHROPIC_AUTH_TOKEN":"old"},"apiKeyHelper":"echo token","permissions":{"defaultMode":"plan"}}
+        """.data(using: .utf8)!.write(to: url)
+
+        XCTAssertTrue(try ClaudeCodeConfigWriter.removeEnvSettings(scope: .global, using: config))
+
+        let root = try readJSON(url)
+        XCTAssertNil(root["env"])
+        XCTAssertNil(root["apiKeyHelper"])
+        XCTAssertNotNil(root["permissions"])
+    }
+
+    @MainActor
+    func testRemoveEnvSettingsDoesNotCreateMissingFile() throws {
+        let config = ConfigService(homeOverride: tempDir())
+
+        XCTAssertFalse(try ClaudeCodeConfigWriter.removeEnvSettings(scope: .global, using: config))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: config.activePath.path))
+    }
+
     // MARK: - custom profiles
 
     private func freeModelProfile() -> BirdNionConfigStore.ClaudeCodeProfile {

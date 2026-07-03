@@ -106,6 +106,24 @@ enum ClaudeCodeConfigWriter {
         try config.save(settings, at: url)
     }
 
+    /// Remove the Claude Code env settings from the selected target without
+    /// creating a settings file when none exists. Other top-level settings are
+    /// preserved.
+    @MainActor
+    static func removeEnvSettings(scope: Scope, using config: ConfigService) throws -> Bool {
+        let url = targetURL(scope: scope, config: config)
+        let resolved = url.resolvingSymlinksInPath()
+        guard FileManager.default.fileExists(atPath: resolved.path) else { return false }
+
+        var settings = try config.load(at: url)
+        let hadEnv = settings.removeValue(forKey: "env") != nil
+        let hadHelper = settings.removeValue(forKey: "apiKeyHelper") != nil
+        guard hadEnv || hadHelper else { return false }
+
+        try config.save(settings, at: url)
+        return true
+    }
+
     // MARK: - Sync state (drift detection)
 
     /// Whether the settings file for a scope points at this config and whether

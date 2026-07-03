@@ -34,6 +34,7 @@ struct ClaudeCodePane: View {
     @State private var busy = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    @State private var showingRemoveEnvConfirmation = false
 
     private enum ScopeChoice: String, CaseIterable, Identifiable {
         case global, project
@@ -78,6 +79,15 @@ struct ClaudeCodePane: View {
         .onChange(of: selectedID) { _ in loadSelection() }
         .onChange(of: selectedProfileID) { _ in loadProfileSelection() }
         .onChange(of: workingProfile) { newValue in persistWorkingProfile(newValue) }
+        .alert(L10n.t("claudeCode.removeEnv.confirmTitle", lang),
+               isPresented: $showingRemoveEnvConfirmation) {
+            Button(L10n.t("claudeCode.removeEnv.confirmButton", lang), role: .destructive) {
+                removeCurrentEnvSettings()
+            }
+            Button(L10n.t("ccx.pasteJSON.cancel", lang), role: .cancel) {}
+        } message: {
+            Text(L10n.f("claudeCode.removeEnv.confirmMessage", lang, visibleTargetPath()))
+        }
     }
 
     /// Auto-save custom-profile edits as the user types, and reflect the change
@@ -257,6 +267,8 @@ struct ClaudeCodePane: View {
                         projectRow
                     }
                     SettingsRowDivider()
+                    removeEnvRow
+                    SettingsRowDivider()
                     infoRow(L10n.t("claudeCode.token", lang),
                             L10n.f("claudeCode.token.using", lang, providerName(p)) + " · " + masked(p.apiKey))
                     SettingsRowDivider()
@@ -315,6 +327,8 @@ struct ClaudeCodePane: View {
                         SettingsRowDivider()
                         projectRow
                     }
+                    SettingsRowDivider()
+                    removeEnvRow
                 }
 
                 HStack {
@@ -615,6 +629,21 @@ struct ClaudeCodePane: View {
         return targetLabel(currentScope())
     }
 
+    private func removableScope() -> ClaudeCodeConfigWriter.Scope? {
+        if scope == .project {
+            guard let dir = projectDir else { return nil }
+            return .project(dir)
+        }
+        return .global
+    }
+
+    private func visibleTargetPath() -> String {
+        guard let sc = removableScope() else {
+            return L10n.t("claudeCode.project.none", lang)
+        }
+        return ClaudeCodeConfigWriter.targetURL(scope: sc, config: config).path
+    }
+
     private func targetLabel(_ sc: ClaudeCodeConfigWriter.Scope) -> String {
         switch sc {
         case .global:
@@ -668,6 +697,22 @@ struct ClaudeCodePane: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    private var removeEnvRow: some View {
+        SettingsLabeledRow(
+            title: L10n.t("claudeCode.removeEnv.title", lang),
+            subtitle: L10n.f("claudeCode.removeEnv.subtitle", lang, visibleTargetPath())
+        ) {
+            Button(role: .destructive) {
+                showingRemoveEnvConfirmation = true
+            } label: {
+                Label(L10n.t("claudeCode.removeEnv.button", lang), systemImage: "trash")
+            }
+            .controlSize(.small)
+            .disabled(removableScope() == nil || busy)
+            .pointingHandCursor()
+        }
     }
 
     private var modelHeaderRow: some View {
@@ -896,6 +941,29 @@ struct ClaudeCodePane: View {
                 reloadProviders()
             } catch let e as ClaudeCodeConfigWriter.WriteError {
                 errorMessage = e.message
+            } catch let e as ConfigError {
+                errorMessage = e.message
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func removeCurrentEnvSettings() {
+        guard let sc = removableScope() else { return }
+        let target = ClaudeCodeConfigWriter.targetURL(scope: sc, config: config)
+        errorMessage = nil
+        statusMessage = nil
+        busy = true
+        Task { @MainActor in
+            do {
+                let removed = try ClaudeCodeConfigWriter.removeEnvSettings(scope: sc, using: config)
+                statusMessage = removed
+                    ? L10n.f("claudeCode.removeEnv.done", lang, target.path)
+                    : L10n.t("claudeCode.removeEnv.none", lang)
+                reloadProviders()
+                reloadProfiles()
             } catch let e as ConfigError {
                 errorMessage = e.message
             } catch {
