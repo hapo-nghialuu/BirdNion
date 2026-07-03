@@ -202,7 +202,9 @@ struct ClaudeCodePane: View {
             selectedID = p.id
         } label: {
             HStack(spacing: 8) {
-                ProviderLogoMark(id: p.id).frame(width: 18, height: 18)
+                ProviderLogoMark(id: p.id,
+                                 tint: active ? SettingsTheme.accent : SettingsTheme.secondary)
+                    .frame(width: 18, height: 18)
                 Text(providerName(p))
                     .font(.system(size: 13, weight: active ? .semibold : .regular))
                     .foregroundStyle(SettingsTheme.primary)
@@ -488,7 +490,7 @@ struct ClaudeCodePane: View {
                 diameter: 76,
                 action: { powerTap(draft, state: state, scope: sc) },
                 accessory: AnyView(HStack(spacing: 9) {
-                    ProviderLogoMark(id: p.id)
+                    ProviderLogoMark(id: p.id, tint: SettingsTheme.accent)
                         .frame(width: 18, height: 18)
                     Text(providerName(p))
                         .font(.system(size: 12, weight: .semibold))

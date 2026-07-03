@@ -251,7 +251,7 @@ struct ProviderTabs: View {
             selectedId = p.id
         } label: {
             HStack(spacing: 5) {
-                ProviderLogoMark(id: p.id)
+                ProviderLogoMark(id: p.id, tint: active ? VocabbyTheme.blue : VocabbyTheme.secondary)
                     .frame(width: 16, height: 16)
                 Text(p.displayName)
                     .font(.system(size: 11, weight: active ? .semibold : .regular))
@@ -270,10 +270,16 @@ struct ProviderTabs: View {
     }
 }
 
-/// Real brand logo per provider id. Falls back to a SF Symbol circle when a
-/// provider has no bundled image asset.
+/// Provider logo per provider id. Pass `tint` when the surrounding surface
+/// needs a single app colour instead of per-provider brand colours.
 struct ProviderLogoMark: View {
     let id: String
+    let tint: Color?
+
+    init(id: String, tint: Color? = nil) {
+        self.id = id
+        self.tint = tint
+    }
 
     var body: some View {
         logo
@@ -284,72 +290,79 @@ struct ProviderLogoMark: View {
     private var logo: some View {
         switch id {
         case "minimax":
-            Image("MiniMaxLogo").resizable().interpolation(.high)
+            logo("MiniMaxLogo")
         case "codex":
             // Codex's SVG declares itself a template image so it can be
             // recoloured by .foregroundStyle(). The chip's parent stack
             // sometimes wins over the inherited tint, leaving the logo
             // rendered against the chip background as an empty disc.
             // Pass a fixed dark tint explicitly so the mark always shows.
-            Image("CodexLogo").resizable().interpolation(.high)
-                .colorMultiply(VocabbyTheme.primary)
+            logo("CodexLogo", brand: VocabbyTheme.primary)
         case "hapo":
-            Image("HapoLogo").resizable().interpolation(.high)
+            logo("HapoLogo")
         case "openrouter":
-            Image("OpenRouterLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.openRouter)
+            logo("OpenRouterLogo", brand: VocabbyTheme.openRouter)
         case "deepseek":
-            Image("DeepSeekLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.deepSeek)
+            logo("DeepSeekLogo", brand: VocabbyTheme.deepSeek)
         case "zai":
-            Image("ZaiLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.zai)
+            logo("ZaiLogo", brand: VocabbyTheme.zai)
         case "claude":
-            Image("ClaudeLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.claude)
+            logo("ClaudeLogo", brand: VocabbyTheme.claude)
         case "elevenlabs":
-            Image("ElevenLabsLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.elevenLabs)
+            logo("ElevenLabsLogo", brand: VocabbyTheme.elevenLabs)
         case "deepgram":
-            Image("DeepgramLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.deepgram)
+            logo("DeepgramLogo", brand: VocabbyTheme.deepgram)
         case "groq":
-            Image("GroqLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.groq)
+            logo("GroqLogo", brand: VocabbyTheme.groq)
         case "copilot":
-            Image("CopilotLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.copilot)
+            logo("CopilotLogo", brand: VocabbyTheme.copilot)
         case "kilo":
-            Image("KiloLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.kilo)
+            logo("KiloLogo", brand: VocabbyTheme.kilo)
         case "commandcode":
-            Image("CommandCodeLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.commandCode)
+            logo("CommandCodeLogo", brand: VocabbyTheme.commandCode)
         case "freemodel":
-            Image("FreemodelLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.freemodel)
+            logo("FreemodelLogo", brand: VocabbyTheme.freemodel)
         case "mimo":
-            Image("MiMoLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.mimo)
+            logo("MiMoLogo", brand: VocabbyTheme.mimo)
         case "alibaba":
-            Image("AlibabaLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.alibaba)
+            logo("AlibabaLogo", brand: VocabbyTheme.alibaba)
         case "cursor":
-            Image("CursorLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.cursor)
+            logo("CursorLogo", brand: VocabbyTheme.cursor)
         case "gemini":
-            Image("GeminiLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.gemini)
+            logo("GeminiLogo", brand: VocabbyTheme.gemini)
         case "kiro":
-            Image("KiroLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.kiro)
+            logo("KiroLogo", brand: VocabbyTheme.kiro)
         case "opencode":
-            Image("OpenCodeLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.openCode)
+            logo("OpenCodeLogo", brand: VocabbyTheme.openCode)
         case "opencodego":
-            Image("OpenCodeGoLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.openCode)
+            logo("OpenCodeGoLogo", brand: VocabbyTheme.openCode)
         case "antigravity":
-            Image("AntigravityLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.antigravity)
+            logo("AntigravityLogo", brand: VocabbyTheme.antigravity)
         case "bedrock":
-            Image("BedrockLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.bedrock)
+            logo("BedrockLogo", brand: VocabbyTheme.bedrock)
         default:
             Image(systemName: "circle.fill")
-                .foregroundStyle(VocabbyTheme.secondary)
+                .foregroundStyle(tint ?? VocabbyTheme.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func logo(_ name: String, brand: Color? = nil) -> some View {
+        if let tint {
+            Image(name)
+                .renderingMode(.template)
+                .resizable()
+                .interpolation(.high)
+                .foregroundStyle(tint)
+        } else if let brand {
+            Image(name)
+                .resizable()
+                .interpolation(.high)
+                .foregroundStyle(brand)
+        } else {
+            Image(name)
+                .resizable()
+                .interpolation(.high)
         }
     }
 }
@@ -438,7 +451,7 @@ struct ProviderHeaderCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            ProviderLogoMark(id: status.id)
+            ProviderLogoMark(id: status.id, tint: VocabbyTheme.blue)
                 .frame(width: 24, height: 24)
                 .padding(5)
                 .background(VocabbyTheme.segment)
@@ -1066,13 +1079,14 @@ enum VocabbyTheme {
     static let selectedSurface = Color(red: 231 / 255, green: 241 / 255, blue: 255 / 255) // #E7F1FF
     static let hoverSurface = Color(red: 231 / 255, green: 234 / 255, blue: 240 / 255) // #E7EAF0
     static let yellow     = Color(red: 168 / 255, green: 75 / 255, blue: 0 / 255)    // #A84B00 warning text
-    static let warningFill = Color(red: 216 / 255, green: 144 / 255, blue: 0 / 255)  // #D89000
+    static let warningFill = Color(red: 184 / 255, green: 106 / 255, blue: 0 / 255)  // #B86A00
     static let warningSurface = Color(red: 255 / 255, green: 241 / 255, blue: 214 / 255) // #FFF1D6
     static let success    = Color(red: 21 / 255, green: 128 / 255, blue: 61 / 255)   // #15803D
     static let successSurface = Color(red: 234 / 255, green: 247 / 255, blue: 239 / 255) // #EAF7EF
     static let critical   = Color(red: 215 / 255, green: 0 / 255, blue: 21 / 255)    // #D70015
     static let criticalSurface = Color(red: 255 / 255, green: 232 / 255, blue: 234 / 255) // #FFE8EA
     static let track      = Color(red: 227 / 255, green: 230 / 255, blue: 234 / 255) // #E3E6EA
+    static let chartBar   = Color(red: 89 / 255, green: 97 / 255, blue: 109 / 255)  // #59616D
     static let badge      = group
     static let border     = Color(red: 215 / 255, green: 220 / 255, blue: 226 / 255) // #D7DCE2
     static let disabled   = Color(red: 154 / 255, green: 163 / 255, blue: 173 / 255) // #9AA3AD
@@ -1141,6 +1155,17 @@ enum VocabbyTheme {
         if remaining <= 20 { return critical }
         if remaining <= 50 { return warningFill }
         return success
+    }
+
+    static func usedFillColor(usedPercent: Int) -> Color {
+        if usedPercent >= 90 { return critical }
+        if usedPercent >= 70 { return warningFill }
+        return success
+    }
+
+    static func activityChartBarColor(isCurrent: Bool, hasActivity: Bool) -> Color {
+        if !hasActivity { return track.opacity(0.6) }
+        return isCurrent ? blue : chartBar.opacity(0.74)
     }
 }
 
@@ -1308,15 +1333,10 @@ struct ClaudeUsageChartCard: View {
     }
 
     private func barColor(for day: ClaudeDailyUsage) -> Color {
-        let last30 = report.daily.last
-        if day.date == last30?.date {
-            // Today gets the brand blue so it stands out from the historical bars.
-            return VocabbyTheme.brandBlue
-        }
-        if day.usd == 0 {
-            return VocabbyTheme.track.opacity(0.6)
-        }
-        return VocabbyTheme.warningFill
+        VocabbyTheme.activityChartBarColor(
+            isCurrent: day.date == report.daily.last?.date,
+            hasActivity: day.usd > 0
+        )
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -1483,13 +1503,10 @@ struct CodexUsageChartCard: View {
     }
 
     private func barColor(for day: CodexDailyUsage) -> Color {
-        if day.date == report.daily.last?.date {
-            return VocabbyTheme.brandBlue
-        }
-        if day.usd == 0 {
-            return VocabbyTheme.track.opacity(0.6)
-        }
-        return VocabbyTheme.warningFill
+        VocabbyTheme.activityChartBarColor(
+            isCurrent: day.date == report.daily.last?.date,
+            hasActivity: day.usd > 0
+        )
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -1586,8 +1603,10 @@ struct ClaudeAdminUsageChartCard: View {
                     let fraction = day.costUSD > 0 ? CGFloat(day.costUSD / maxBarUSD) : 0
                     let barHeight = max(geo.size.height * fraction, day.costUSD > 0 ? 3 : 1)
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(day.id == snapshot.daily.last?.id ? VocabbyTheme.brandBlue
-                              : (day.costUSD == 0 ? VocabbyTheme.track.opacity(0.6) : VocabbyTheme.warningFill))
+                        .fill(VocabbyTheme.activityChartBarColor(
+                            isCurrent: day.id == snapshot.daily.last?.id,
+                            hasActivity: day.costUSD > 0
+                        ))
                         .frame(maxWidth: .infinity, maxHeight: geo.size.height, alignment: .bottom)
                         .frame(height: barHeight, alignment: .bottom)
                         .help("\(day.day): \(formatUSD(day.costUSD)) · \(formatTokens(day.totalTokens))")

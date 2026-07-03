@@ -275,18 +275,14 @@ struct ProvidersPane: View {
                 .help(L10n.t("provider.reorderHelp", language))
                 .accessibilityLabel(L10n.t("provider.reorderHelp", language))
 
-            // Checkbox toggles this provider's enabled flag in providers.json.
-            // Independent of selection, so users can disable a provider they
-            // don't want to poll without losing its detail panel.
-            Toggle("", isOn: sidebarEnabledBinding(for: row.id))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .controlSize(.small)
+            // Custom checkbox so the sidebar follows BirdNion's accent instead
+            // of the user's macOS accent colour.
+            sidebarCheckbox(for: row)
                 .help(row.enabled == true
                       ? L10n.t("provider.enableHelp.on", language)
                       : L10n.t("provider.enableHelp.off", language))
 
-            ProviderLogoView(id: row.id)
+            ProviderLogoView(id: row.id, tint: sidebarLogoTint(for: row, selected: isSelected))
                 .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -361,9 +357,9 @@ struct ProvidersPane: View {
             // sees what's moving; default preview is a faded snapshot of
             // the whole row which is hard to read in a tight sidebar.
             HStack(spacing: 8) {
-                Toggle("", isOn: .constant(row.enabled == true))
-                    .toggleStyle(.checkbox).labelsHidden().controlSize(.small)
-                ProviderLogoView(id: row.id).frame(width: 22, height: 22)
+                checkboxGlyph(isOn: row.enabled == true)
+                ProviderLogoView(id: row.id, tint: sidebarLogoTint(for: row, selected: false))
+                    .frame(width: 22, height: 22)
                 Text(displayName(for: row))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
@@ -386,23 +382,39 @@ struct ProvidersPane: View {
         .animation(.easeOut(duration: 0.12), value: isDragged)
     }
 
-    /// Binding that flips a single row's `enabled` flag and re-saves the
-    /// document. Resolves the index by id each set so toggling a checkbox
-    /// after a search-filter / re-sort still hits the right row.
-    private func sidebarEnabledBinding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { rows.first(where: { $0.id == id })?.enabled == true },
-            set: { newValue in
-                guard let idx = rows.firstIndex(where: { $0.id == id }) else { return }
-                rows[idx].enabled = newValue
-                saveAll()
-                // Rebuild providers via ServicesContainer so the menu-bar
-                // popover + percent rotation pick up the new state. Use the
-                // notification path so the rebuild happens on the main
-                // thread via AppDelegate (single source of truth).
-                NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-            })
+    private func setProviderEnabled(id: String, enabled: Bool) {
+        guard let idx = rows.firstIndex(where: { $0.id == id }) else { return }
+        rows[idx].enabled = enabled
+        saveAll()
+        // Rebuild providers via ServicesContainer so the menu-bar popover +
+        // percent rotation pick up the new state. Use the notification path so
+        // the rebuild happens on the main thread via AppDelegate.
+        NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
+        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+    }
+
+    private func sidebarCheckbox(for row: BirdNionConfigStore.Provider) -> some View {
+        Button {
+            setProviderEnabled(id: row.id, enabled: row.enabled != true)
+        } label: {
+            checkboxGlyph(isOn: row.enabled == true)
+        }
+        .buttonStyle(.plain)
+        .frame(width: 16, height: 22)
+        .contentShape(Rectangle())
+        .pointingHandCursor()
+        .accessibilityLabel(row.enabled == true
+                            ? L10n.t("provider.enableHelp.on", language)
+                            : L10n.t("provider.enableHelp.off", language))
+    }
+
+    private func checkboxGlyph(isOn: Bool) -> some View {
+        SettingsCheckboxGlyph(isOn: isOn)
+    }
+
+    private func sidebarLogoTint(for row: BirdNionConfigStore.Provider, selected: Bool) -> Color {
+        if row.enabled != true { return SettingsTheme.disabled.opacity(0.82) }
+        return selected ? SettingsTheme.accent : SettingsTheme.secondary
     }
 
     /// Tracks which row is currently being dragged (used by the drop
@@ -472,7 +484,7 @@ struct ProvidersPane: View {
         let row = rows[idx]
         return SettingsCard {
             HStack(alignment: .center, spacing: 12) {
-                ProviderLogoView(id: row.id)
+                ProviderLogoView(id: row.id, tint: row.enabled == true ? SettingsTheme.accent : SettingsTheme.disabled)
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(displayName(for: row))
@@ -791,8 +803,7 @@ struct ProvidersPane: View {
             ? Int(min(100, max(0, (cost.used / cost.limit * 100).rounded())))
             : 0
         let remaining = max(0, cost.limit - cost.used)
-        let barColor: Color = usedPct >= 90 ? SettingsTheme.critical
-            : (usedPct >= 70 ? SettingsTheme.warningFill : SettingsTheme.accent)
+        let barColor = SettingsTheme.usedFillColor(usedPercent: usedPct)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.t("provider.cost", language))
@@ -2839,72 +2850,85 @@ struct ProvidersPane: View {
 /// bundled asset matches. Mirrors `QuotaPanel.providerLogoView`.
 struct ProviderLogoView: View {
     let id: String
+    let tint: Color?
+
+    init(id: String, tint: Color? = nil) {
+        self.id = id
+        self.tint = tint
+    }
 
     var body: some View {
         switch id {
         case "minimax":
-            Image("MiniMaxLogo").resizable().interpolation(.high)
+            logo("MiniMaxLogo")
         case "hapo":
-            Image("HapoLogo").resizable().interpolation(.high)
+            logo("HapoLogo")
         case "codex":
-            Image("CodexLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.codex)
+            logo("CodexLogo", brand: VocabbyTheme.codex)
         case "openrouter":
-            Image("OpenRouterLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.openRouter)
+            logo("OpenRouterLogo", brand: VocabbyTheme.openRouter)
         case "deepseek":
-            Image("DeepSeekLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.deepSeek)
+            logo("DeepSeekLogo", brand: VocabbyTheme.deepSeek)
         case "zai":
-            Image("ZaiLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.zai)
+            logo("ZaiLogo", brand: VocabbyTheme.zai)
         case "claude":
-            Image("ClaudeLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.claude)
+            logo("ClaudeLogo", brand: VocabbyTheme.claude)
         case "elevenlabs":
-            Image("ElevenLabsLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.elevenLabs)
+            logo("ElevenLabsLogo", brand: VocabbyTheme.elevenLabs)
         case "deepgram":
-            Image("DeepgramLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.deepgram)
+            logo("DeepgramLogo", brand: VocabbyTheme.deepgram)
         case "groq":
-            Image("GroqLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.groq)
+            logo("GroqLogo", brand: VocabbyTheme.groq)
         case "copilot":
-            Image("CopilotLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.copilot)
+            logo("CopilotLogo", brand: VocabbyTheme.copilot)
         case "kilo":
-            Image("KiloLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.kilo)
+            logo("KiloLogo", brand: VocabbyTheme.kilo)
         case "commandcode":
-            Image("CommandCodeLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.commandCode)
+            logo("CommandCodeLogo", brand: VocabbyTheme.commandCode)
         case "freemodel":
-            Image("FreemodelLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.freemodel)
+            logo("FreemodelLogo", brand: VocabbyTheme.freemodel)
         case "mimo":
-            Image("MiMoLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.mimo)
+            logo("MiMoLogo", brand: VocabbyTheme.mimo)
         case "alibaba":
-            Image("AlibabaLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.alibaba)
+            logo("AlibabaLogo", brand: VocabbyTheme.alibaba)
         case "cursor":
-            Image("CursorLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.cursor)
+            logo("CursorLogo", brand: VocabbyTheme.cursor)
         case "gemini":
-            Image("GeminiLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.gemini)
+            logo("GeminiLogo", brand: VocabbyTheme.gemini)
         case "kiro":
-            Image("KiroLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.kiro)
+            logo("KiroLogo", brand: VocabbyTheme.kiro)
         case "opencode":
-            Image("OpenCodeLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.openCode)
+            logo("OpenCodeLogo", brand: VocabbyTheme.openCode)
         case "opencodego":
-            Image("OpenCodeGoLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.openCode)
+            logo("OpenCodeGoLogo", brand: VocabbyTheme.openCode)
         case "antigravity":
-            Image("AntigravityLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.antigravity)
+            logo("AntigravityLogo", brand: VocabbyTheme.antigravity)
         case "bedrock":
-            Image("BedrockLogo").resizable().interpolation(.high).foregroundStyle(VocabbyTheme.bedrock)
+            logo("BedrockLogo", brand: VocabbyTheme.bedrock)
         default:
             Image(systemName: "circle.dotted")
                 .resizable()
-                .foregroundStyle(SettingsTheme.secondary)
+                .foregroundStyle(tint ?? SettingsTheme.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func logo(_ name: String, brand: Color? = nil) -> some View {
+        if let tint {
+            Image(name)
+                .renderingMode(.template)
+                .resizable()
+                .interpolation(.high)
+                .foregroundStyle(tint)
+        } else if let brand {
+            Image(name)
+                .resizable()
+                .interpolation(.high)
+                .foregroundStyle(brand)
+        } else {
+            Image(name)
+                .resizable()
+                .interpolation(.high)
         }
     }
 }
@@ -2969,6 +2993,17 @@ private struct TokenField: View {
 
 // MARK: - Quota warning card
 
+private struct SettingsCheckboxGlyph: View {
+    let isOn: Bool
+
+    var body: some View {
+        Image(systemName: isOn ? "checkmark.square.fill" : "square")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(isOn ? SettingsTheme.accent : SettingsTheme.tertiary)
+            .frame(width: 16, height: 22)
+    }
+}
+
 /// Per-provider quota-warning thresholds. Each window (session/weekly) inherits
 /// the global thresholds unless "Customize" is on, mirroring CodexBar's panel.
 /// Overrides are persisted via `QuotaWarnConfig` (UserDefaults).
@@ -3000,19 +3035,22 @@ private struct QuotaWarningCard: View {
     private func windowRow(title: String, window: String,
                            custom: Binding<Bool>, levels: Binding<[Int]>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: Binding(
-                get: { custom.wrappedValue },
-                set: { on in
-                    custom.wrappedValue = on
-                    QuotaWarnConfig.setOverride(provider: providerID, window: window,
-                                                thresholds: on ? levels.wrappedValue : nil)
+            Button {
+                let nextValue = !custom.wrappedValue
+                custom.wrappedValue = nextValue
+                QuotaWarnConfig.setOverride(provider: providerID, window: window,
+                                            thresholds: nextValue ? levels.wrappedValue : nil)
+            } label: {
+                HStack(spacing: 8) {
+                    SettingsCheckboxGlyph(isOn: custom.wrappedValue)
+                    Text(L10n.f("provider.customThresholds", settings.appLanguage, title))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
                 }
-            )) {
-                Text(L10n.f("provider.customThresholds", settings.appLanguage, title))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
             }
-            .toggleStyle(.checkbox)
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .pointingHandCursor()
 
             if custom.wrappedValue {
                 HStack(spacing: 16) {

@@ -33,6 +33,10 @@ enum SettingsTheme {
     static func quotaFillColor(remaining: Int) -> Color {
         VocabbyTheme.quotaFillColor(remaining: remaining)
     }
+
+    static func usedFillColor(usedPercent: Int) -> Color {
+        VocabbyTheme.usedFillColor(usedPercent: usedPercent)
+    }
 }
 
 /// Root view rendered inside AppDelegate's settings NSWindow. Hosts the custom

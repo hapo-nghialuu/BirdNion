@@ -74,8 +74,7 @@ struct ClaudeCodePowerButton: View {
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         case .off:
             return LinearGradient(
-                colors: [Color(red: 0.34, green: 0.38, blue: 0.46),
-                         Color(red: 0.20, green: 0.23, blue: 0.30)],
+                colors: [VocabbyTheme.secondary, VocabbyTheme.brandNavy],
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         case .stale:
             // Amber: active but the written values are out of date.
@@ -84,8 +83,7 @@ struct ClaudeCodePowerButton: View {
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         case .needsSetup:
             return LinearGradient(
-                colors: [Color(red: 0.28, green: 0.30, blue: 0.37),
-                         VocabbyTheme.brandNavy],
+                colors: [VocabbyTheme.secondary.opacity(0.84), VocabbyTheme.brandNavy],
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         }
     }
