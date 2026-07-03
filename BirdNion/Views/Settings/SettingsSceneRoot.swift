@@ -5,28 +5,33 @@ import SwiftUI
 /// so the settings surface should stay close to the popover instead of
 /// inheriting a full black dark-mode appearance from macOS.
 enum SettingsTheme {
-    static let background = Color(red: 0.949, green: 0.949, blue: 0.953)
-    static let toolbar = Color(red: 0.925, green: 0.925, blue: 0.933)
-    static let card = Color(red: 0.992, green: 0.992, blue: 0.996)
-    static let control = Color(red: 0.969, green: 0.969, blue: 0.976)
-    static let selectedSurface = Color(red: 0.910, green: 0.949, blue: 1.000)
-    static let hoverSurface = Color(red: 0.910, green: 0.910, blue: 0.922)
-    static let border = Color(red: 0.820, green: 0.820, blue: 0.840)
-    static let track = Color(red: 0.898, green: 0.898, blue: 0.918)
-    static let primary = Color(red: 0.114, green: 0.114, blue: 0.122)
-    static let secondary = Color(red: 0.431, green: 0.431, blue: 0.451)
-    static let tertiary = Color(red: 0.557, green: 0.557, blue: 0.576)
-    static let accent = Color(red: 0.039, green: 0.518, blue: 1.000)
-    static let success = Color(red: 21 / 255, green: 128 / 255, blue: 61 / 255)
-    static let warning = Color(red: 1.000, green: 0.624, blue: 0.039)
-    static let critical = Color(red: 1.000, green: 0.271, blue: 0.227)
-    static let disabled = Color(red: 0.650, green: 0.650, blue: 0.670)
+    static let background = VocabbyTheme.background
+    static let toolbar = VocabbyTheme.segment
+    static let card = VocabbyTheme.card
+    static let control = VocabbyTheme.group
+    static let selectedSurface = VocabbyTheme.selectedSurface
+    static let hoverSurface = VocabbyTheme.hoverSurface
+    static let border = VocabbyTheme.border
+    static let track = VocabbyTheme.track
+    static let primary = VocabbyTheme.primary
+    static let secondary = VocabbyTheme.secondary
+    static let tertiary = VocabbyTheme.tertiary
+    static let accent = VocabbyTheme.blue
+    static let success = VocabbyTheme.success
+    static let successSurface = VocabbyTheme.successSurface
+    static let warning = VocabbyTheme.yellow
+    static let warningFill = VocabbyTheme.warningFill
+    static let warningSurface = VocabbyTheme.warningSurface
+    static let critical = VocabbyTheme.critical
+    static let criticalSurface = VocabbyTheme.criticalSurface
+    static let disabled = VocabbyTheme.disabled
 
     static func quotaColor(remaining: Int) -> Color {
-        switch remaining {
-        case 0..<30: return warning
-        default: return success
-        }
+        VocabbyTheme.quotaColor(remaining: remaining)
+    }
+
+    static func quotaFillColor(remaining: Int) -> Color {
+        VocabbyTheme.quotaFillColor(remaining: remaining)
     }
 }
 
@@ -114,9 +119,9 @@ private struct SettingsWindowAppearanceView: NSViewRepresentable {
         guard let window = view.window else { return }
         window.appearance = NSAppearance(named: .aqua)
         window.backgroundColor = NSColor(
-            calibratedRed: 0.949,
-            green: 0.949,
-            blue: 0.953,
+            calibratedRed: 244 / 255,
+            green: 245 / 255,
+            blue: 247 / 255,
             alpha: 1
         )
     }

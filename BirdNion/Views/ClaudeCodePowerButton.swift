@@ -41,7 +41,7 @@ struct ClaudeCodePowerButton: View {
                     // Badge dot for states that need the user's attention.
                     if (state == .needsSetup || state == .stale) && !busy {
                         Circle()
-                            .fill(Color(red: 1.0, green: 0.62, blue: 0.04))
+                            .fill(VocabbyTheme.warningFill)
                             .frame(width: 16, height: 16)
                             .offset(x: diameter * 0.34, y: -diameter * 0.34)
                     }
@@ -64,14 +64,13 @@ struct ClaudeCodePowerButton: View {
         }
     }
 
-    private static let glow = Color(red: 0.10, green: 0.50, blue: 1.0)
+    private static let glow = VocabbyTheme.brandBlue
 
     private var gradient: LinearGradient {
         switch state {
         case .on:
             return LinearGradient(
-                colors: [Color(red: 0.29, green: 0.66, blue: 1.0),
-                         Color(red: 0.03, green: 0.40, blue: 0.88)],
+                colors: [VocabbyTheme.brandBlue, VocabbyTheme.blue],
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         case .off:
             return LinearGradient(
@@ -81,13 +80,12 @@ struct ClaudeCodePowerButton: View {
         case .stale:
             // Amber: active but the written values are out of date.
             return LinearGradient(
-                colors: [Color(red: 1.0, green: 0.72, blue: 0.20),
-                         Color(red: 0.90, green: 0.52, blue: 0.02)],
+                colors: [VocabbyTheme.warningFill, VocabbyTheme.yellow],
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         case .needsSetup:
             return LinearGradient(
                 colors: [Color(red: 0.28, green: 0.30, blue: 0.37),
-                         Color(red: 0.17, green: 0.18, blue: 0.24)],
+                         VocabbyTheme.brandNavy],
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         }
     }

@@ -430,7 +430,7 @@ struct ProviderHeaderCard: View {
     /// statuspage severity ("none"/"minor"/"major"/"critical").
     private var serviceColor: Color {
         switch status.serviceStatusLevel {
-        case "minor": return VocabbyTheme.yellow
+        case "minor": return VocabbyTheme.warningFill
         case "major", "critical": return VocabbyTheme.critical
         default: return VocabbyTheme.success
         }
@@ -618,7 +618,11 @@ struct WindowRow: View {
     /// the API didn't return an explicit reset timestamp.
     let lastUpdated: Date
 
-    private var barColor: Color {
+    private var barFillColor: Color {
+        VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
+    }
+
+    private var percentTextColor: Color {
         VocabbyTheme.quotaColor(remaining: window.remainingPct)
     }
 
@@ -661,7 +665,7 @@ struct WindowRow: View {
                 Spacer()
                 Text("\(window.remainingPct)%")
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(barColor)
+                    .foregroundStyle(percentTextColor)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -669,7 +673,7 @@ struct WindowRow: View {
                         .fill(VocabbyTheme.track)
                         .frame(height: 5)
                     RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                        .fill(barColor)
+                        .fill(barFillColor)
                         .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 5)
                 }
             }
@@ -1048,22 +1052,30 @@ enum AboutPresenter {
 /// App color palette.
 enum VocabbyTheme {
     // Fixed light macOS-style surfaces. Do not follow Dark Mode here because
-    // the menu-bar popover should stay light and inspectable.
-    static let background = Color(red: 0.949, green: 0.949, blue: 0.953)   // #F2F2F3
-    static let card       = Color.white
-    static let group      = Color(red: 0.992, green: 0.992, blue: 0.996)   // #FDFDFE
-    static let segment    = Color(red: 0.925, green: 0.925, blue: 0.933)   // #ECECEF
-    static let primary    = Color(red: 0.114, green: 0.114, blue: 0.122)   // #1D1D1F
-    static let secondary  = Color(red: 0.431, green: 0.431, blue: 0.451)   // #6E6E73
-    static let tertiary   = Color(red: 0.557, green: 0.557, blue: 0.576)   // #8E8E93
-    static let blue       = Color(red: 0.039, green: 0.518, blue: 1.000)   // #0A84FF
-    static let selectedSurface = Color(red: 0.910, green: 0.949, blue: 1.000) // #E8F2FF
-    static let yellow     = Color(red: 1.000, green: 0.624, blue: 0.039)   // #FF9F0A
-    static let success    = Color(red: 21 / 255, green: 128 / 255, blue: 61 / 255) // #15803D
-    static let critical   = Color(red: 1.000, green: 0.271, blue: 0.227)   // #FF453A
-    static let track      = Color(red: 0.898, green: 0.898, blue: 0.918)   // #E5E5EA
-    static let badge      = Color(red: 0.969, green: 0.969, blue: 0.980)   // #F7F7FA
-    static let border     = Color(red: 0.827, green: 0.827, blue: 0.850)   // #D3D3D9
+    // the menu-bar popover should stay light, dense, and inspectable.
+    static let brandNavy  = Color(red: 31 / 255, green: 36 / 255, blue: 51 / 255)   // #1F2433
+    static let brandBlue  = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255) // #469BE9
+    static let background = Color(red: 244 / 255, green: 245 / 255, blue: 247 / 255) // #F4F5F7
+    static let card       = Color(red: 254 / 255, green: 254 / 255, blue: 255 / 255) // #FEFEFF
+    static let group      = Color(red: 250 / 255, green: 251 / 255, blue: 252 / 255) // #FAFBFC
+    static let segment    = Color(red: 238 / 255, green: 240 / 255, blue: 244 / 255) // #EEF0F4
+    static let primary    = Color(red: 28 / 255, green: 31 / 255, blue: 38 / 255)    // #1C1F26
+    static let secondary  = Color(red: 89 / 255, green: 97 / 255, blue: 109 / 255)   // #59616D
+    static let tertiary   = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255) // #6B7280
+    static let blue       = Color(red: 0 / 255, green: 87 / 255, blue: 184 / 255)    // #0057B8 action
+    static let selectedSurface = Color(red: 231 / 255, green: 241 / 255, blue: 255 / 255) // #E7F1FF
+    static let hoverSurface = Color(red: 231 / 255, green: 234 / 255, blue: 240 / 255) // #E7EAF0
+    static let yellow     = Color(red: 168 / 255, green: 75 / 255, blue: 0 / 255)    // #A84B00 warning text
+    static let warningFill = Color(red: 216 / 255, green: 144 / 255, blue: 0 / 255)  // #D89000
+    static let warningSurface = Color(red: 255 / 255, green: 241 / 255, blue: 214 / 255) // #FFF1D6
+    static let success    = Color(red: 21 / 255, green: 128 / 255, blue: 61 / 255)   // #15803D
+    static let successSurface = Color(red: 234 / 255, green: 247 / 255, blue: 239 / 255) // #EAF7EF
+    static let critical   = Color(red: 215 / 255, green: 0 / 255, blue: 21 / 255)    // #D70015
+    static let criticalSurface = Color(red: 255 / 255, green: 232 / 255, blue: 234 / 255) // #FFE8EA
+    static let track      = Color(red: 227 / 255, green: 230 / 255, blue: 234 / 255) // #E3E6EA
+    static let badge      = group
+    static let border     = Color(red: 215 / 255, green: 220 / 255, blue: 226 / 255) // #D7DCE2
+    static let disabled   = Color(red: 154 / 255, green: 163 / 255, blue: 173 / 255) // #9AA3AD
 
     // Per-provider brand tints for the monochrome template logos.
     // Values mirror CodexBar's ProviderBranding.color exactly (see
@@ -1122,6 +1134,12 @@ enum VocabbyTheme {
     static func quotaColor(remaining: Int) -> Color {
         if remaining <= 20 { return critical }
         if remaining <= 50 { return yellow }
+        return success
+    }
+
+    static func quotaFillColor(remaining: Int) -> Color {
+        if remaining <= 20 { return critical }
+        if remaining <= 50 { return warningFill }
         return success
     }
 }
@@ -1293,12 +1311,12 @@ struct ClaudeUsageChartCard: View {
         let last30 = report.daily.last
         if day.date == last30?.date {
             // Today gets the brand blue so it stands out from the historical bars.
-            return VocabbyTheme.blue
+            return VocabbyTheme.brandBlue
         }
         if day.usd == 0 {
             return VocabbyTheme.track.opacity(0.6)
         }
-        return VocabbyTheme.yellow
+        return VocabbyTheme.warningFill
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -1466,12 +1484,12 @@ struct CodexUsageChartCard: View {
 
     private func barColor(for day: CodexDailyUsage) -> Color {
         if day.date == report.daily.last?.date {
-            return VocabbyTheme.blue
+            return VocabbyTheme.brandBlue
         }
         if day.usd == 0 {
             return VocabbyTheme.track.opacity(0.6)
         }
-        return VocabbyTheme.yellow
+        return VocabbyTheme.warningFill
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -1568,8 +1586,8 @@ struct ClaudeAdminUsageChartCard: View {
                     let fraction = day.costUSD > 0 ? CGFloat(day.costUSD / maxBarUSD) : 0
                     let barHeight = max(geo.size.height * fraction, day.costUSD > 0 ? 3 : 1)
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(day.id == snapshot.daily.last?.id ? VocabbyTheme.blue
-                              : (day.costUSD == 0 ? VocabbyTheme.track.opacity(0.6) : VocabbyTheme.yellow))
+                        .fill(day.id == snapshot.daily.last?.id ? VocabbyTheme.brandBlue
+                              : (day.costUSD == 0 ? VocabbyTheme.track.opacity(0.6) : VocabbyTheme.warningFill))
                         .frame(maxWidth: .infinity, maxHeight: geo.size.height, alignment: .bottom)
                         .frame(height: barHeight, alignment: .bottom)
                         .help("\(day.day): \(formatUSD(day.costUSD)) · \(formatTokens(day.totalTokens))")

@@ -421,7 +421,7 @@ struct ProvidersPane: View {
         let color: Color = {
             if row.enabled != true { return SettingsTheme.disabled.opacity(0.55) }
             guard let s = status(for: row.id) else { return SettingsTheme.disabled.opacity(0.55) }
-            return s.error == nil ? SettingsTheme.success : SettingsTheme.warning
+            return s.error == nil ? SettingsTheme.success : SettingsTheme.warningFill
         }()
         Circle().fill(color).frame(width: 7, height: 7)
     }
@@ -616,8 +616,8 @@ struct ProvidersPane: View {
     private func serviceStatusColor(_ level: String?) -> Color {
         switch level {
         case "none": return SettingsTheme.success
-        case "minor": return SettingsTheme.warning
-        case "major": return SettingsTheme.warning
+        case "minor": return SettingsTheme.warningFill
+        case "major": return SettingsTheme.warningFill
         case "critical": return SettingsTheme.critical
         default: return SettingsTheme.disabled
         }
@@ -674,7 +674,8 @@ struct ProvidersPane: View {
 
     private func quotaWindowRow(_ w: QuotaWindow) -> some View {
         let isWeek = w.label.contains("Tuần")
-        let barColor = SettingsTheme.quotaColor(remaining: w.remainingPct)
+        let barTextColor = SettingsTheme.quotaColor(remaining: w.remainingPct)
+        let barFillColor = SettingsTheme.quotaFillColor(remaining: w.remainingPct)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.windowLabel(w.label, preference: language).uppercased())
@@ -684,7 +685,7 @@ struct ProvidersPane: View {
                 Spacer()
                 Text("\(w.remainingPct)%")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(barColor)
+                    .foregroundStyle(barTextColor)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -692,7 +693,7 @@ struct ProvidersPane: View {
                         .fill(SettingsTheme.track)
                         .frame(height: 8)
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(barColor)
+                        .fill(barFillColor)
                         .frame(width: max(0, geo.size.width * CGFloat(w.remainingPct) / 100), height: 8)
                 }
             }
@@ -791,7 +792,7 @@ struct ProvidersPane: View {
             : 0
         let remaining = max(0, cost.limit - cost.used)
         let barColor: Color = usedPct >= 90 ? SettingsTheme.critical
-            : (usedPct >= 70 ? SettingsTheme.warning : SettingsTheme.accent)
+            : (usedPct >= 70 ? SettingsTheme.warningFill : SettingsTheme.accent)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.t("provider.cost", language))
@@ -875,7 +876,8 @@ struct ProvidersPane: View {
     /// Compact progress row for a named extra rate window (Daily Routines, etc.).
     private func extraRateWindowRow(_ w: ClaudeExtraRateWindow) -> some View {
         let remaining = max(0, 100 - w.usedPercent)
-        let barColor = SettingsTheme.quotaColor(remaining: remaining)
+        let barTextColor = SettingsTheme.quotaColor(remaining: remaining)
+        let barFillColor = SettingsTheme.quotaFillColor(remaining: remaining)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text(w.title.uppercased())
@@ -885,7 +887,7 @@ struct ProvidersPane: View {
                 Spacer()
                 Text("\(remaining)%")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(barColor)
+                    .foregroundStyle(barTextColor)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -893,7 +895,7 @@ struct ProvidersPane: View {
                         .fill(SettingsTheme.track)
                         .frame(height: 8)
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(barColor)
+                        .fill(barFillColor)
                         .frame(width: max(0, geo.size.width * CGFloat(remaining) / 100), height: 8)
                 }
             }
@@ -1809,7 +1811,7 @@ struct ProvidersPane: View {
                 if let err = kiloOrgError {
                     Text(L10n.providerText(err, preference: language))
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.red)
+                        .foregroundStyle(SettingsTheme.critical)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Button {
@@ -2213,7 +2215,7 @@ struct ProvidersPane: View {
                 if let err = antigravityLoginError {
                     Text(L10n.providerText(err, preference: language))
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.red)
+                        .foregroundStyle(SettingsTheme.critical)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 8) {
@@ -2370,7 +2372,7 @@ struct ProvidersPane: View {
             if let err = copilotLoginError {
                 Text(L10n.providerText(err, preference: language))
                     .font(.system(size: 11))
-                    .foregroundStyle(Color.red)
+                    .foregroundStyle(SettingsTheme.critical)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
@@ -2846,7 +2848,7 @@ struct ProviderLogoView: View {
             Image("HapoLogo").resizable().interpolation(.high)
         case "codex":
             Image("CodexLogo").resizable().interpolation(.high)
-                .foregroundStyle(VocabbyTheme.blue)
+                .foregroundStyle(VocabbyTheme.codex)
         case "openrouter":
             Image("OpenRouterLogo").resizable().interpolation(.high)
                 .foregroundStyle(VocabbyTheme.openRouter)
