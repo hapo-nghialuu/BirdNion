@@ -4,6 +4,8 @@
 
 mod claude_scanner;
 mod codex_scanner;
+mod config;
+mod providers;
 mod usage;
 
 use tauri::menu::{Menu, MenuItem};
@@ -24,13 +26,21 @@ fn codex_usage_report() -> Option<usage::UsageReport> {
     codex_scanner::usage_report()
 }
 
+/// Quota status for every provider enabled in settings.json, fetched
+/// concurrently. Ports still in progress return an explanatory error status.
+#[tauri::command]
+async fn provider_statuses() -> Vec<providers::ProviderStatus> {
+    providers::fetch_all().await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             claude_usage_report,
-            codex_usage_report
+            codex_usage_report,
+            provider_statuses
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Mở BirdNion", true, None::<&str>)?;

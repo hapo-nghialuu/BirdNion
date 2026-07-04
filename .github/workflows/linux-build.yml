@@ -1,0 +1,62 @@
+name: linux-build
+
+# Builds the Tauri Linux port on real Ubuntu: cargo tests + .deb/.rpm/AppImage
+# bundles as artifacts. This is the ground-truth check that the port actually
+# compiles and links against webkit2gtk/appindicator on the target platform.
+on:
+  push:
+    branches: [main]
+    paths: ["linux/**", ".github/workflows/linux-build.yml"]
+  pull_request:
+    paths: ["linux/**", ".github/workflows/linux-build.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: linux/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: linux/src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Type-check frontend
+        run: npx tsc --noEmit
+
+      - name: Build bundles (.deb / .rpm / AppImage)
+        run: npm run tauri build
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: birdnion-linux-bundles
+          path: |
+            linux/src-tauri/target/release/bundle/deb/*.deb
+            linux/src-tauri/target/release/bundle/rpm/*.rpm
+            linux/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: warn

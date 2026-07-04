@@ -22,3 +22,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 walkdir = "2"
+# rustls thay vì openssl để build Linux không cần libssl-dev.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+futures = "0.3"
+# kiro.rs: CLI-output parsing (ANSI strip + usage regexes).
+regex = "1"
+# bedrock.rs: AWS SigV4 request signing.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"

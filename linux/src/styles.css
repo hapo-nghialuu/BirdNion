@@ -67,6 +67,80 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* --- Provider tabs --------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 0;
+  background: #eef0f4;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow-x: auto;
+  margin-bottom: 8px;
+}
+
+.tab {
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  padding: 7px 10px;
+  color: var(--primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab.active { background: #e7f1ff; font-weight: 600; color: var(--blue); }
+
+/* --- Provider card ---------------------------------------------------- */
+
+.provider-head { margin-bottom: 8px; }
+.provider-name { font-size: 13px; font-weight: 600; }
+.provider-meta { font-size: 10px; color: var(--tertiary); }
+
+.provider-error {
+  font-size: 11px;
+  color: #d70015;
+  background: #ffe8ea;
+  border: 1px solid rgba(215, 0, 21, 0.16);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+
+.window-row { margin-top: 9px; }
+
+.window-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.window-label { font-size: 11px; font-weight: 600; color: var(--secondary); }
+
+.window-pct { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.window-pct.ok { color: #15803d; }
+.window-pct.warning { color: #a84b00; }
+.window-pct.critical { color: #d70015; }
+
+.window-track {
+  height: 5px;
+  border-radius: 2.5px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.window-fill { height: 100%; border-radius: 2.5px; }
+.window-fill.ok { background: #15803d; }
+.window-fill.warning { background: #b86a00; }
+.window-fill.critical { background: #d70015; }
+
+.window-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.window-subtitle { font-size: 10px; color: var(--tertiary); }
+
 /* --- Period picker ------------------------------------------------- */
 
 .period-picker { display: flex; gap: 4px; margin-bottom: 8px; }
@@ -120,6 +194,7 @@ body {
 .bar-seg.claude { background: var(--claude); }
 .bar-seg.codex { background: var(--codex); }
 .bar-seg.solo { border-radius: 2px; }
+.bar-seg.mono { background: var(--chart-bar); opacity: 0.72; }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
 
 .legend { display: flex; gap: 12px; margin-bottom: 6px; }
