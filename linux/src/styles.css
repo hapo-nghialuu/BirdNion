@@ -91,6 +91,8 @@ body {
 
 .tab.active { background: #e7f1ff; font-weight: 600; color: var(--blue); }
 
+.lang-toggle { margin-left: auto; color: var(--tertiary); font-size: 10px; }
+
 /* --- Provider card ---------------------------------------------------- */
 
 .provider-head { margin-bottom: 8px; }

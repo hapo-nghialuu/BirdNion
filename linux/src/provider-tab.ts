@@ -1,6 +1,8 @@
 // Per-provider quota view — port of the macOS ProviderCard: quota windows
 // with remaining-% bars, error banner, account metadata line.
 
+import { t } from "./i18n";
+
 export type QuotaWindow = {
   label: string;
   usedPct: number;
@@ -43,12 +45,13 @@ function windowRow(win: QuotaWindow): HTMLElement {
   track.append(fill);
   row.append(head, track);
   const foot = el("div", "window-foot");
-  foot.append(el("span", "window-subtitle", win.subtitle ?? `Đã dùng ${win.usedPct}%`));
+  foot.append(el("span", "window-subtitle",
+    win.subtitle ?? t("usedPct", { n: win.usedPct })));
   if (win.resetsAt) {
     const mins = Math.max(0, Math.round((win.resetsAt * 1000 - Date.now()) / 60000));
-    const label = mins >= 1440 ? `reset sau ${Math.round(mins / 1440)} ngày`
-      : mins >= 60 ? `reset sau ${Math.round(mins / 60)} giờ`
-      : `reset sau ${mins} phút`;
+    const label = mins >= 1440 ? t("resetInDays", { n: Math.round(mins / 1440) })
+      : mins >= 60 ? t("resetInHours", { n: Math.round(mins / 60) })
+      : t("resetInMins", { n: mins });
     foot.append(el("span", "window-subtitle", label));
   }
   row.append(foot);
@@ -69,7 +72,7 @@ export function providerCard(status: ProviderStatus): HTMLElement {
   if (status.error) {
     card.append(el("div", "provider-error", status.error));
   } else if (status.windows.length === 0) {
-    card.append(el("div", "footnote", "Không có dữ liệu quota."));
+    card.append(el("div", "footnote", t("noQuota")));
   } else {
     for (const win of status.windows) card.append(windowRow(win));
   }

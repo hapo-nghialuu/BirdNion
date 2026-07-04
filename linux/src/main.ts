@@ -3,6 +3,7 @@ import { combine, UsageReport } from "./usage";
 import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
 import { providerCard, ProviderStatus } from "./provider-tab";
 import { sourceChartCard } from "./source-chart";
+import { t, currentLang, setLang } from "./i18n";
 
 const TAB_KEY = "birdnion.selectedTab";
 const REFRESH_MS = 120_000;
@@ -41,6 +42,13 @@ function tabsStrip(): HTMLElement {
   };
   addTab("all", "⊞ All");
   for (const s of state.statuses) addTab(s.id, s.displayName);
+  // Language toggle pinned to the right edge of the strip.
+  const lang = el("button", "tab lang-toggle", currentLang().toUpperCase());
+  lang.addEventListener("click", () => {
+    setLang(currentLang() === "vi" ? "en" : "vi");
+    render();
+  });
+  strip.append(lang);
   return strip;
 }
 
@@ -55,8 +63,7 @@ function render() {
 
   if (state.tab === "all") {
     if (!state.claude && !state.codex) {
-      app.append(el("div", "empty",
-        "Không tìm thấy log Claude Code (~/.claude) hoặc Codex (~/.codex)."));
+      app.append(el("div", "empty", t("noLogs")));
       return;
     }
     const combined = combine(state.claude, state.codex);
@@ -93,7 +100,7 @@ async function load() {
 
 window.addEventListener("DOMContentLoaded", () => {
   load().catch((err) => {
-    document.querySelector("#app")!.textContent = `Lỗi khi tải: ${err}`;
+    document.querySelector("#app")!.textContent = `${t("loadError")}: ${err}`;
   });
   setInterval(() => void load().catch(() => {}), REFRESH_MS);
 });

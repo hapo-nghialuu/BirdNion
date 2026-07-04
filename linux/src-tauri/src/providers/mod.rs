@@ -3,12 +3,17 @@
 //! exposes `async fn fetch(cfg: &config::Provider) -> ProviderStatus`; the
 //! registry dispatches by id and runs all enabled providers concurrently.
 
+pub mod antigravity;
 pub mod bedrock;
+pub mod claude;
+pub mod codex;
 pub mod deepgram;
 pub mod deepseek;
 pub mod elevenlabs;
+pub mod gemini;
 pub mod groq;
 pub mod hapo;
+pub mod kilo;
 pub mod kiro;
 pub mod minimax;
 pub mod openrouter;
@@ -101,6 +106,11 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         "groq" => groq::fetch(cfg).await,
         "kiro" => kiro::fetch(cfg).await,
         "bedrock" => bedrock::fetch(cfg).await,
+        "codex" => codex::fetch(cfg).await,
+        "claude" => claude::fetch(cfg).await,
+        "gemini" => gemini::fetch(cfg).await,
+        "kilo" => kilo::fetch(cfg).await,
+        "antigravity" => antigravity::fetch(cfg).await,
         other => ProviderStatus::failure(
             other,
             &display_name(cfg),

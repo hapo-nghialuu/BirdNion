@@ -7,6 +7,7 @@ import {
   Combined, CombinedDay, HourlyUsage,
   usd, tokens, tokensShort, dayLabel,
 } from "./usage";
+import { t, currentLang } from "./i18n";
 
 const PERIOD_KEY = "birdnion.allChartDays";
 const PERIODS = [1, 7, 30, 90]; // 1 = the 24h hourly view
@@ -60,9 +61,9 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const today = combined.daily[combined.daily.length - 1];
 
     const summary = el("div", "summary-row");
-    summary.append(summaryColumn("Hôm nay", combined.todayUsd, combined.todayTokens));
+    summary.append(summaryColumn(t("today"), combined.todayUsd, combined.todayTokens));
     summary.append(summaryColumn(
-      is24h ? "24h" : `${period} ngày`,
+      is24h ? "24h" : `${period} ${t("days")}`,
       is24h ? claude24Usd + (today?.codexUsd ?? 0) : wUsd,
       is24h ? claude24Tokens + (today?.codexTokens ?? 0) : wTokens,
       true));
@@ -72,7 +73,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const picker = el("div", "period-picker");
     for (const days of PERIODS) {
       const pill = el("button", `pill${period === days ? " active" : ""}`,
-        days === 1 ? "24h" : `${days} ngày`);
+        days === 1 ? "24h" : `${days} ${t("days")}`);
       pill.addEventListener("click", () => {
         period = days;
         localStorage.setItem(PERIOD_KEY, String(days));
@@ -88,10 +89,9 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       const legend = el("div", "legend");
       legend.append(
         legendDot("claude", `Claude ${usd(claude24Usd)}`),
-        legendDot("codex", `Codex (hôm nay) ${usd(today?.codexUsd ?? 0)}`));
+        legendDot("codex", `${t("codexToday")} ${usd(today?.codexUsd ?? 0)}`));
       card.append(legend, detail);
-      card.append(el("div", "footnote",
-        "Cột giờ chỉ gồm Claude — log Codex chỉ ghi theo ngày."));
+      card.append(el("div", "footnote", t("hourBarsNote")));
     } else {
       card.append(stackedBarChart(windowDaily, detail));
       const legend = el("div", "legend");
@@ -101,9 +101,8 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       card.append(legend, detail);
       const lastActive = [...windowDaily].reverse().find((d) => d.active);
       if (lastActive) showDayDetail(detail, lastActive);
-      card.append(el("div", "est-total", `Ước tính ${period} ngày: ${usd(wUsd)}`));
-      card.append(el("div", "footnote",
-        "Ước tính từ log cục bộ của Claude Code CLI và Codex."));
+      card.append(el("div", "est-total", `${t("estTotal", { n: period })}: ${usd(wUsd)}`));
+      card.append(el("div", "footnote", t("estFootnote")));
     }
   };
   render();
@@ -178,9 +177,9 @@ function hourChart(hourly: HourlyUsage[], detail: HTMLElement): HTMLElement {
 export function heatmapCard(combined: Combined): HTMLElement {
   const card = el("section", "card");
   const head = el("div", "heatmap-head");
-  head.append(el("span", "summary-label", "Hoạt động 90 ngày"));
+  head.append(el("span", "summary-label", t("activity90")));
   head.append(el("span", "heatmap-total",
-    `${usd(combined.totalUsd)} · ${combined.activeDays} ngày active`));
+    `${usd(combined.totalUsd)} · ${combined.activeDays} ${t("activeDays")}`));
   card.append(head);
 
   const body = el("div", "heatmap-body");
@@ -191,7 +190,9 @@ export function heatmapCard(combined: Combined): HTMLElement {
 }
 
 function weekdayLabels(): HTMLElement {
-  const labels = ["T2", "", "T4", "", "T6", "", "CN"];
+  const labels = currentLang() === "vi"
+    ? ["T2", "", "T4", "", "T6", "", "CN"]
+    : ["Mon", "", "Wed", "", "Fri", "", "Sun"];
   const col = el("div", "weekday-labels");
   for (const label of labels) col.append(el("div", "weekday-label", label));
   return col;
@@ -236,7 +237,7 @@ function heatGrid(combined: Combined, detail: HTMLElement): HTMLElement {
         else {
           detail.textContent = "";
           detail.append(el("div", "day-detail-head",
-            `${dayLabel(day.date)} · Không có hoạt động.`));
+            `${dayLabel(day.date)} · ${t("noActivity")}`));
         }
       });
       col.append(cell);
@@ -262,10 +263,10 @@ function statsColumn(combined: Combined): HTMLElement {
     box.append(el("div", "summary-label", label), el("div", "stat-value", value));
     return box;
   };
-  col.append(stat("Ngày cao nhất", combined.peakDate
+  col.append(stat(t("peakDay"), combined.peakDate
     ? `${usd(combined.peakUsd)} · ${dayLabel(combined.peakDate)}` : "—"));
-  col.append(stat("TB/ngày active", usd(combined.avgActiveUsd)));
-  col.append(stat("Streak", `${combined.streakDays} ngày`));
+  col.append(stat(t("avgActive"), usd(combined.avgActiveUsd)));
+  col.append(stat("Streak", `${combined.streakDays} ${t("streakUnit")}`));
   return col;
 }
 
@@ -273,7 +274,7 @@ function statsColumn(combined: Combined): HTMLElement {
 
 export function topModelsCard(combined: Combined): HTMLElement {
   const card = el("section", "card");
-  card.append(el("div", "summary-label", "Model dùng nhiều (90 ngày)"));
+  card.append(el("div", "summary-label", t("topModels")));
   const max = Math.max(...combined.topModels.map((m) => m.usd), 0.01);
   for (const model of combined.topModels) {
     const row = el("div", "model-row");

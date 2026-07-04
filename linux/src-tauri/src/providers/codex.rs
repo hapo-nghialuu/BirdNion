@@ -1,0 +1,544 @@
+//! Codex (OpenAI/ChatGPT) quota provider — port of `CodexProvider.swift` +
+//! `CodexAuth.swift` (OAuth path only; the CLI/`codex app-server` RPC
+//! fallback and the web-dashboard/status-page extras are macOS-only side
+//! data and are intentionally not ported).
+//!
+//! Reads OAuth tokens from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`),
+//! refreshes proactively when stale (>8 days since last_refresh, matching
+//! Codex CLI), persists the rotated token back to auth.json, and maps the
+//! ChatGPT backend usage response's primary (~5h) / secondary (weekly)
+//! windows plus any `additional_rate_limits` (e.g. GPT-5.3-Codex-Spark).
+
+use serde_json::Value;
+use std::path::PathBuf;
+
+use crate::config;
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+
+const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
+const REFRESH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const EIGHT_DAYS_SECS: i64 = 8 * 24 * 60 * 60;
+
+#[derive(Clone, Debug, PartialEq)]
+struct Credentials {
+    access_token: String,
+    refresh_token: String,
+    id_token: Option<String>,
+    account_id: Option<String>,
+    last_refresh: Option<i64>,
+}
+
+impl Credentials {
+    fn needs_refresh(&self, now: i64) -> bool {
+        match self.last_refresh {
+            Some(t) => now - t > EIGHT_DAYS_SECS,
+            None => true,
+        }
+    }
+}
+
+fn auth_file_path() -> PathBuf {
+    let codex_home = std::env::var("CODEX_HOME").ok().filter(|s| !s.trim().is_empty());
+    let root = match codex_home {
+        Some(h) => PathBuf::from(h),
+        None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex"),
+    };
+    root.join("auth.json")
+}
+
+/// Pure parse of `~/.codex/auth.json` contents (unit-tested). Supports the
+/// OPENAI_API_KEY fallback mode (no OAuth tokens) and the standard
+/// `tokens.{access_token,refresh_token,id_token,account_id}` shape.
+fn parse_auth_json(contents: &str) -> Result<Credentials, String> {
+    let json: Value = serde_json::from_str(contents).map_err(|e| format!("JSON: {e}"))?;
+
+    if let Some(api_key) = json.get("OPENAI_API_KEY").and_then(Value::as_str) {
+        let trimmed = api_key.trim();
+        if !trimmed.is_empty() {
+            return Ok(Credentials {
+                access_token: trimmed.to_string(),
+                refresh_token: String::new(),
+                id_token: None,
+                account_id: None,
+                last_refresh: None,
+            });
+        }
+    }
+
+    let tokens = json.get("tokens").ok_or_else(|| "missing tokens".to_string())?;
+    let access_token = tokens
+        .get("access_token")
+        .or_else(|| tokens.get("accessToken"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "missing access_token".to_string())?
+        .to_string();
+
+    let refresh_token = tokens
+        .get("refresh_token")
+        .or_else(|| tokens.get("refreshToken"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let id_token = tokens
+        .get("id_token")
+        .or_else(|| tokens.get("idToken"))
+        .and_then(Value::as_str)
+        .map(String::from);
+    let account_id = tokens
+        .get("account_id")
+        .or_else(|| tokens.get("accountId"))
+        .and_then(Value::as_str)
+        .map(String::from);
+    let last_refresh = json.get("last_refresh").and_then(Value::as_str).and_then(parse_iso8601);
+
+    Ok(Credentials { access_token, refresh_token, id_token, account_id, last_refresh })
+}
+
+fn parse_iso8601(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp())
+}
+
+/// Best-effort email from the OAuth `id_token` JWT payload. Never panics.
+fn email_from_id_token(id_token: Option<&str>) -> Option<String> {
+    let token = id_token?;
+    let mut parts = token.split('.');
+    parts.next()?;
+    let payload_b64 = parts.next()?;
+    let payload = decode_base64url(payload_b64)?;
+    let json: Value = serde_json::from_slice(&payload).ok()?;
+    if let Some(email) = json.get("email").and_then(Value::as_str) {
+        return Some(email.to_string());
+    }
+    json.get("https://api.openai.com/profile")
+        .and_then(|p| p.get("email"))
+        .and_then(Value::as_str)
+        .map(String::from)
+}
+
+fn decode_base64url(s: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let mut padded = s.replace('-', "+").replace('_', "/");
+    while padded.len() % 4 != 0 {
+        padded.push('=');
+    }
+    base64::engine::general_purpose::STANDARD.decode(padded).ok()
+}
+
+/// Writes refreshed tokens back to auth.json, preserving other keys. Mirrors
+/// `CodexAuthStore.save` (0600 perms via a staged file + atomic rename).
+fn save_auth_json(path: &std::path::Path, creds: &Credentials) -> std::io::Result<()> {
+    let mut json: serde_json::Map<String, Value> = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+
+    let mut tokens = json.get("tokens").and_then(Value::as_object).cloned().unwrap_or_default();
+    tokens.insert("access_token".into(), Value::String(creds.access_token.clone()));
+    tokens.insert("refresh_token".into(), Value::String(creds.refresh_token.clone()));
+    if let Some(id_token) = &creds.id_token {
+        tokens.insert("id_token".into(), Value::String(id_token.clone()));
+    }
+    if let Some(account_id) = &creds.account_id {
+        tokens.insert("account_id".into(), Value::String(account_id.clone()));
+    }
+    json.insert("tokens".into(), Value::Object(tokens));
+    json.insert("last_refresh".into(), Value::String(chrono::Utc::now().to_rfc3339()));
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let data = serde_json::to_vec_pretty(&Value::Object(json))?;
+    let staged = path.with_extension(format!("birdnion-{}.tmp", std::process::id()));
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&staged)?;
+        f.write_all(&data)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&staged, path)
+}
+
+async fn refresh_token(refresh_token: &str) -> Result<(String, Option<String>, Option<String>), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("client: {e}"))?;
+    let body = serde_json::json!({
+        "client_id": REFRESH_CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "scope": "openid profile email",
+    });
+    let resp = client
+        .post(REFRESH_URL)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network: {e}"))?;
+    if resp.status().as_u16() != 200 {
+        return Err(format!("refresh HTTP {}", resp.status().as_u16()));
+    }
+    let json: Value = resp.json().await.map_err(|e| format!("JSON: {e}"))?;
+    let access_token = json.get("access_token").and_then(Value::as_str).unwrap_or_default().to_string();
+    if access_token.is_empty() {
+        return Err("refresh response missing access_token".to_string());
+    }
+    let new_refresh = json.get("refresh_token").and_then(Value::as_str).map(String::from);
+    let id_token = json.get("id_token").and_then(Value::as_str).map(String::from);
+    Ok((access_token, new_refresh, id_token))
+}
+
+async fn fetch_usage(client: &reqwest::Client, access_token: &str, account_id: Option<&str>) -> Result<Value, UsageError> {
+    let mut req = client
+        .get(USAGE_URL)
+        .bearer_auth(access_token)
+        .header("User-Agent", "BirdNion")
+        .header("Accept", "application/json");
+    if let Some(id) = account_id.filter(|s| !s.is_empty()) {
+        req = req.header("ChatGPT-Account-Id", id);
+    }
+    let resp = req.send().await.map_err(|e| UsageError::Network(e.to_string()))?;
+    match resp.status().as_u16() {
+        200..=299 => resp.json::<Value>().await.map_err(|e| UsageError::Invalid(e.to_string())),
+        401 | 403 => Err(UsageError::Unauthorized),
+        code => Err(UsageError::Server(code)),
+    }
+}
+
+enum UsageError {
+    Unauthorized,
+    Server(u16),
+    Invalid(String),
+    Network(String),
+}
+
+pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
+    let name = display_name(cfg);
+    let path = auth_file_path();
+
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Codex — chạy `codex` để đăng nhập"),
+    };
+    let mut creds = match parse_auth_json(&contents) {
+        Ok(c) => c,
+        Err(_) => return ProviderStatus::failure(&cfg.id, &name, "Không đọc được auth.json"),
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    if creds.needs_refresh(now) && !creds.refresh_token.is_empty() {
+        if let Ok((access, refresh, id_token)) = refresh_token(&creds.refresh_token).await {
+            creds.access_token = access;
+            creds.refresh_token = refresh.unwrap_or(creds.refresh_token);
+            creds.id_token = id_token.or(creds.id_token);
+            creds.last_refresh = Some(now);
+            let _ = save_auth_json(&path, &creds);
+        }
+    }
+
+    let client = shared_client();
+    match fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
+        Ok(body) => build_success(&cfg.id, &name, &body, &creds),
+        Err(UsageError::Unauthorized) => {
+            if !creds.refresh_token.is_empty() {
+                if let Ok((access, refresh, id_token)) = refresh_token(&creds.refresh_token).await {
+                    creds.access_token = access;
+                    creds.refresh_token = refresh.unwrap_or(creds.refresh_token);
+                    creds.id_token = id_token.or(creds.id_token);
+                    creds.last_refresh = Some(now);
+                    let _ = save_auth_json(&path, &creds);
+                    if let Ok(body) = fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
+                        return build_success(&cfg.id, &name, &body, &creds);
+                    }
+                }
+            }
+            ProviderStatus::failure(&cfg.id, &name, "Token Codex hết hạn — chạy `codex` để đăng nhập lại")
+        }
+        Err(UsageError::Server(code)) => ProviderStatus::failure(&cfg.id, &name, format!("HTTP {code}")),
+        Err(UsageError::Invalid(e)) => ProviderStatus::failure(&cfg.id, &name, format!("Response không hợp lệ: {e}")),
+        Err(UsageError::Network(e)) => ProviderStatus::failure(&cfg.id, &name, format!("Network: {e}")),
+    }
+}
+
+fn build_success(id: &str, name: &str, body: &Value, creds: &Credentials) -> ProviderStatus {
+    let windows = map_windows(body);
+    if windows.is_empty() {
+        return ProviderStatus::failure(id, name, "Codex chưa có dữ liệu quota");
+    }
+    let account_label = email_from_id_token(creds.id_token.as_deref()).unwrap_or_else(|| "Codex".to_string());
+    let credits_remaining = body
+        .get("credits")
+        .and_then(|c| c.get("balance"))
+        .and_then(Value::as_f64);
+    ProviderStatus {
+        id: id.to_string(),
+        display_name: name.to_string(),
+        windows,
+        last_updated: chrono::Utc::now().timestamp(),
+        error: None,
+        account_label: Some(account_label),
+        credits_remaining,
+    }
+}
+
+struct Window {
+    used_percent: i64,
+    reset_at: i64,
+    limit_window_seconds: i64,
+}
+
+fn parse_window(v: &Value) -> Option<Window> {
+    Some(Window {
+        used_percent: v.get("used_percent").and_then(Value::as_i64)?,
+        reset_at: v.get("reset_at").and_then(Value::as_i64).unwrap_or(0),
+        limit_window_seconds: v.get("limit_window_seconds").and_then(Value::as_i64).unwrap_or(0),
+    })
+}
+
+fn clamp_window(w: Window) -> Window {
+    Window { used_percent: w.used_percent.clamp(0, 100), ..w }
+}
+
+enum WindowRole {
+    Session,
+    Weekly,
+    Unknown,
+}
+
+fn window_role(w: &Window) -> WindowRole {
+    match w.limit_window_seconds / 60 {
+        300 => WindowRole::Session,
+        10080 => WindowRole::Weekly,
+        _ => WindowRole::Unknown,
+    }
+}
+
+/// Normalizes primary/secondary windows into (session, weekly) regardless of
+/// which API slot they arrived in — mirrors `CodexRateWindowNormalizer`.
+fn normalize(primary: Option<Window>, secondary: Option<Window>) -> (Option<Window>, Option<Window>) {
+    match (primary, secondary) {
+        (Some(p), Some(s)) => match (window_role(&p), window_role(&s)) {
+            (WindowRole::Weekly, WindowRole::Session) | (WindowRole::Weekly, WindowRole::Unknown) => {
+                (Some(clamp_window(s)), Some(clamp_window(p)))
+            }
+            _ => (Some(clamp_window(p)), Some(clamp_window(s))),
+        },
+        (Some(p), None) => match window_role(&p) {
+            WindowRole::Weekly => (None, Some(clamp_window(p))),
+            _ => (Some(clamp_window(p)), None),
+        },
+        (None, Some(s)) => match window_role(&s) {
+            WindowRole::Weekly => (None, Some(clamp_window(s))),
+            _ => (Some(clamp_window(s)), None),
+        },
+        (None, None) => (None, None),
+    }
+}
+
+fn to_quota_window(w: Window, label: &str) -> QuotaWindow {
+    QuotaWindow {
+        label: label.to_string(),
+        used_pct: w.used_percent as i32,
+        remaining_pct: (100 - w.used_percent) as i32,
+        subtitle: None,
+        resets_at: if w.reset_at > 0 { Some(w.reset_at) } else { None },
+    }
+}
+
+/// Pure payload → windows mapping (unit-tested). Primary → "5 giờ", secondary
+/// → "Tuần", plus `additional_rate_limits` (Spark 5h/Weekly, or one window per
+/// other model-specific entry).
+fn map_windows(body: &Value) -> Vec<QuotaWindow> {
+    let rate_limit = body.get("rate_limit");
+    let primary = rate_limit.and_then(|r| r.get("primary_window")).and_then(parse_window);
+    let secondary = rate_limit.and_then(|r| r.get("secondary_window")).and_then(parse_window);
+    let (session, weekly) = normalize(primary, secondary);
+
+    let mut windows = Vec::new();
+    if let Some(w) = session {
+        windows.push(to_quota_window(w, "5 giờ"));
+    }
+    if let Some(w) = weekly {
+        windows.push(to_quota_window(w, "Tuần"));
+    }
+    windows.extend(additional_windows(body.get("additional_rate_limits")));
+    windows
+}
+
+fn additional_windows(entries: Option<&Value>) -> Vec<QuotaWindow> {
+    let Some(entries) = entries.and_then(Value::as_array) else { return Vec::new() };
+    let mut used_labels = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for entry in entries {
+        let metered_feature = entry.get("metered_feature").and_then(Value::as_str).unwrap_or("");
+        let limit_name = entry.get("limit_name").and_then(Value::as_str).unwrap_or("");
+        let is_spark = metered_feature.to_lowercase().contains("spark") || limit_name.to_lowercase().contains("spark");
+        let rate_limit = entry.get("rate_limit");
+        let primary = rate_limit.and_then(|r| r.get("primary_window")).and_then(parse_window);
+        let secondary = rate_limit.and_then(|r| r.get("secondary_window")).and_then(parse_window);
+
+        if is_spark {
+            if let Some(p) = primary {
+                if used_labels.insert("Codex Spark 5 giờ") {
+                    out.push(to_quota_window(p, "Codex Spark 5 giờ"));
+                }
+            }
+            if let Some(s) = secondary {
+                if used_labels.insert("Codex Spark Tuần") {
+                    out.push(to_quota_window(s, "Codex Spark Tuần"));
+                }
+            }
+            continue;
+        }
+
+        let Some(w) = primary.or(secondary) else { continue };
+        let raw_label = if !metered_feature.is_empty() {
+            metered_feature
+        } else if !limit_name.is_empty() {
+            limit_name
+        } else {
+            "Codex"
+        };
+        let label = title_case(raw_label);
+        if used_labels.insert(Box::leak(label.clone().into_boxed_str()) as &str) {
+            out.push(to_quota_window(w, &label));
+        }
+    }
+    out
+}
+
+fn title_case(raw: &str) -> String {
+    raw.split(|c: char| c == '_' || c == '-' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let lower = w.to_lowercase();
+            let mut chars = lower.chars();
+            match chars.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_auth_json_oauth_tokens() {
+        let raw = r#"{"tokens":{"access_token":"at","refresh_token":"rt","id_token":"idt","account_id":"acc"},"last_refresh":"2026-06-01T00:00:00Z"}"#;
+        let creds = parse_auth_json(raw).unwrap();
+        assert_eq!(creds.access_token, "at");
+        assert_eq!(creds.account_id.as_deref(), Some("acc"));
+        assert!(creds.last_refresh.is_some());
+    }
+
+    #[test]
+    fn parses_auth_json_api_key_mode() {
+        let raw = r#"{"OPENAI_API_KEY":"sk-test-123"}"#;
+        let creds = parse_auth_json(raw).unwrap();
+        assert_eq!(creds.access_token, "sk-test-123");
+        assert!(creds.refresh_token.is_empty());
+    }
+
+    #[test]
+    fn malformed_auth_json_is_error() {
+        assert!(parse_auth_json("not json").is_err());
+        assert!(parse_auth_json(r#"{"tokens":{}}"#).is_err());
+    }
+
+    #[test]
+    fn needs_refresh_when_stale() {
+        let now = 10_000_000i64;
+        let fresh = Credentials {
+            access_token: "a".into(), refresh_token: "r".into(), id_token: None, account_id: None,
+            last_refresh: Some(now - 3600),
+        };
+        assert!(!fresh.needs_refresh(now));
+        let stale = Credentials {
+            access_token: "a".into(), refresh_token: "r".into(), id_token: None, account_id: None,
+            last_refresh: Some(now - EIGHT_DAYS_SECS - 1),
+        };
+        assert!(stale.needs_refresh(now));
+        let never = Credentials {
+            access_token: "a".into(), refresh_token: "r".into(), id_token: None, account_id: None,
+            last_refresh: None,
+        };
+        assert!(never.needs_refresh(now));
+    }
+
+    #[test]
+    fn maps_primary_and_secondary_windows() {
+        let body = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 42, "reset_at": 1_800_000_000, "limit_window_seconds": 300 * 60},
+                "secondary_window": {"used_percent": 10, "reset_at": 1_800_500_000, "limit_window_seconds": 10080 * 60},
+            }
+        });
+        let windows = map_windows(&body);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].label, "5 giờ");
+        assert_eq!(windows[0].used_pct, 42);
+        assert_eq!(windows[1].label, "Tuần");
+        assert_eq!(windows[1].used_pct, 10);
+    }
+
+    #[test]
+    fn normalizer_swaps_when_api_reports_weekly_as_primary() {
+        let body = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 5, "reset_at": 1, "limit_window_seconds": 10080 * 60},
+                "secondary_window": {"used_percent": 90, "reset_at": 2, "limit_window_seconds": 300 * 60},
+            }
+        });
+        let windows = map_windows(&body);
+        assert_eq!(windows[0].label, "5 giờ");
+        assert_eq!(windows[0].used_pct, 90);
+        assert_eq!(windows[1].label, "Tuần");
+        assert_eq!(windows[1].used_pct, 5);
+    }
+
+    #[test]
+    fn maps_spark_additional_rate_limits() {
+        let body = json!({
+            "rate_limit": {"primary_window": {"used_percent": 1, "reset_at": 1, "limit_window_seconds": 300 * 60}},
+            "additional_rate_limits": [
+                {
+                    "metered_feature": "codex-spark",
+                    "rate_limit": {
+                        "primary_window": {"used_percent": 20, "reset_at": 1, "limit_window_seconds": 300 * 60},
+                        "secondary_window": {"used_percent": 30, "reset_at": 2, "limit_window_seconds": 10080 * 60},
+                    }
+                }
+            ]
+        });
+        let windows = map_windows(&body);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[1].label, "Codex Spark 5 giờ");
+        assert_eq!(windows[2].label, "Codex Spark Tuần");
+    }
+
+    #[test]
+    fn empty_windows_payload_returns_no_windows() {
+        assert!(map_windows(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn credentials_missing_access_token_errors() {
+        let raw = r#"{"tokens":{"refresh_token":"rt"}}"#;
+        assert!(parse_auth_json(raw).is_err());
+    }
+}

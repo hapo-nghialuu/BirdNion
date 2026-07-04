@@ -3,6 +3,7 @@
 // per-model breakdown, estimated-total footer.
 
 import { DailyUsage, UsageReport, usd, tokens, tokensShort, dayLabel } from "./usage";
+import { t } from "./i18n";
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -37,9 +38,9 @@ export function sourceChartCard(report: UsageReport, source: "claude" | "codex")
   const latestActive = [...daily30].reverse().find((d) => d.tokens > 0);
 
   const summary = el("div", "summary-row");
-  summary.append(summaryColumn("Hôm nay", report.todayUsd, report.todayTokens));
-  summary.append(summaryColumn("30 ngày", report.last30Usd, report.last30Tokens, true));
-  summary.append(summaryColumn("Token mới nhất", null, latestActive?.tokens ?? 0, true));
+  summary.append(summaryColumn(t("today"), report.todayUsd, report.todayTokens));
+  summary.append(summaryColumn(`30 ${t("days")}`, report.last30Usd, report.last30Tokens, true));
+  summary.append(summaryColumn(t("latestTokens"), null, latestActive?.tokens ?? 0, true));
   card.append(summary);
 
   const detail = el("div", "day-detail");
@@ -61,12 +62,11 @@ export function sourceChartCard(report: UsageReport, source: "claude" | "codex")
   card.append(chart, detail);
   if (latestActive) showDetail(detail, latestActive);
 
-  card.append(el("div", "est-total", `Ước tính 30 ngày: ${usd(report.last30Usd)}`));
+  card.append(el("div", "est-total", `${t("estTotal", { n: 30 })}: ${usd(report.last30Usd)}`));
   if (report.topModel) {
-    card.append(el("div", "footnote", `Model dùng nhiều: ${report.topModel}`));
+    card.append(el("div", "footnote", `${t("topModel")}: ${report.topModel}`));
   }
-  card.append(el("div", "footnote", source === "claude"
-    ? "Ước tính từ log Claude Code cục bộ."
-    : "Ước tính từ log Codex cục bộ."));
+  card.append(el("div", "footnote",
+    t(source === "claude" ? "claudeFootnote" : "codexFootnote")));
   return card;
 }
