@@ -4,6 +4,7 @@ import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
 import { providerCard, ProviderStatus } from "./provider-tab";
 import { sourceChartCard } from "./source-chart";
 import { t, currentLang, setLang } from "./i18n";
+import { settingsTab } from "./settings-tab";
 
 const TAB_KEY = "birdnion.selectedTab";
 const REFRESH_MS = 120_000;
@@ -42,13 +43,14 @@ function tabsStrip(): HTMLElement {
   };
   addTab("all", "⊞ All");
   for (const s of state.statuses) addTab(s.id, s.displayName);
-  // Language toggle pinned to the right edge of the strip.
+  // Language toggle + Settings pinned to the right edge of the strip.
   const lang = el("button", "tab lang-toggle", currentLang().toUpperCase());
   lang.addEventListener("click", () => {
     setLang(currentLang() === "vi" ? "en" : "vi");
     render();
   });
   strip.append(lang);
+  addTab("settings", "⚙");
   return strip;
 }
 
@@ -56,10 +58,19 @@ function render() {
   const app = document.querySelector("#app")!;
   app.textContent = "";
   // Fall back to All when the remembered provider tab disappeared.
-  if (state.tab !== "all" && !state.statuses.some((s) => s.id === state.tab)) {
+  if (state.tab !== "all" && state.tab !== "settings"
+      && !state.statuses.some((s) => s.id === state.tab)) {
     state.tab = "all";
   }
   app.append(tabsStrip());
+
+  if (state.tab === "settings") {
+    // Async view: mount a placeholder, then swap in the loaded form.
+    const placeholder = el("div", "loading", "…");
+    app.append(placeholder);
+    void settingsTab(() => void load()).then((view) => placeholder.replaceWith(view));
+    return;
+  }
 
   if (state.tab === "all") {
     if (!state.claude && !state.codex) {

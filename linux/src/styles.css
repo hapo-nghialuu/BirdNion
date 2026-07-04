@@ -93,6 +93,54 @@ body {
 
 .lang-toggle { margin-left: auto; color: var(--tertiary); font-size: 10px; }
 
+/* --- Settings --------------------------------------------------------- */
+
+.settings {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--track);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.settings-input {
+  flex: 1;
+  font-size: 10px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--group, #fafbfc);
+  min-width: 60px;
+}
+
+.save-button {
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 87, 184, 0.35);
+  background: #e7f1ff;
+  color: var(--blue);
+  cursor: pointer;
+}
+
 /* --- Provider card ---------------------------------------------------- */
 
 .provider-head { margin-bottom: 8px; }

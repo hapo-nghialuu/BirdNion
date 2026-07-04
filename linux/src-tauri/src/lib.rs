@@ -33,6 +33,19 @@ async fn provider_statuses() -> Vec<providers::ProviderStatus> {
     providers::fetch_all().await
 }
 
+/// Full settings.json content for the Settings view (local app — keys stay
+/// on this machine, same plaintext-by-design store as macOS).
+#[tauri::command]
+fn get_settings() -> config::Settings {
+    config::load()
+}
+
+/// Persist the whole settings document (atomic write, 0600).
+#[tauri::command]
+fn save_settings(settings: config::Settings) -> Result<(), String> {
+    config::save(&settings)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -40,7 +53,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             claude_usage_report,
             codex_usage_report,
-            provider_statuses
+            provider_statuses,
+            get_settings,
+            save_settings
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Mở BirdNion", true, None::<&str>)?;

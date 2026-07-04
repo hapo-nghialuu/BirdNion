@@ -47,6 +47,31 @@ pub struct Provider {
     /// Bedrock: optional monthly budget (USD) for the spend window.
     #[serde(default)]
     pub budget: Option<f64>,
+    /// Cookie-based providers: "auto" (default, read browser cookie stores),
+    /// "manual" (use `manual_cookie`), or "off".
+    #[serde(default)]
+    pub cookie_source: Option<String>,
+    /// Cookie-based providers: raw Cookie header value pasted by the user.
+    #[serde(default)]
+    pub manual_cookie: Option<String>,
+}
+
+/// Persist settings atomically with owner-only permissions (0600), matching
+/// the macOS store — the file holds API keys in plaintext by design.
+pub fn save(settings: &Settings) -> Result<(), String> {
+    let path = config_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
 pub fn config_path() -> PathBuf {
