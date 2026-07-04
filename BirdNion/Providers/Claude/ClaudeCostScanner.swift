@@ -86,12 +86,27 @@ struct ClaudeModelPrice {
     let cacheReadPerM: Double
     let outputPerM: Double
 
-    /// Per-model prices mirroring CodexBar's `CostUsagePricing` (opus-4-x,
-    /// sonnet-4-x, haiku-4-x). Returns nil for non-Claude models (e.g. MiniMax
-    /// routed through Claude Code) so their tokens are still counted but cost
-    /// $0 — exactly how CodexBar's chart behaves.
-    static func price(for model: String) -> ClaudeModelPrice? {
+    /// Per-model prices mirroring CodexBar's `CostUsagePricing` for Claude
+    /// models, plus the provider-backed Claude Code models BirdNion can write
+    /// into settings.json. Unknown models still count tokens but cost $0.
+    static func price(for model: String, inputSideTokens: Int = 0) -> ClaudeModelPrice? {
         let m = model.lowercased()
+        // Fable 5 — $10/$50 per-M. Cache pricing follows Anthropic's current
+        // 1.25x write / 0.1x read ratios because local logs split those fields.
+        if m.contains("fable-5") {
+            return ClaudeModelPrice(inputPerM: 10.0, cacheWritePerM: 12.5,
+                                    cacheReadPerM: 1.0, outputPerM: 50.0)
+        }
+        // MiniMax-M3 Standard: <=512k input-side tokens is $0.30/$1.20/$0.06,
+        // >512k doubles. MiniMax only documents a cache-read discount for M3,
+        // so cache writes are priced as fresh input.
+        if m.contains("minimax-m3") {
+            let over512k = inputSideTokens > 512_000
+            let input = over512k ? 0.60 : 0.30
+            return ClaudeModelPrice(inputPerM: input, cacheWritePerM: input,
+                                    cacheReadPerM: over512k ? 0.12 : 0.06,
+                                    outputPerM: over512k ? 2.40 : 1.20)
+        }
         // Opus 4.x — $5 / $6.25 / $0.50 / $25 per-M (NOT the old Opus-3 $15/$75).
         if m.contains("opus") {
             return ClaudeModelPrice(inputPerM: 5.0, cacheWritePerM: 6.25,
@@ -437,7 +452,8 @@ enum ClaudeCostScanner {
         // Anthropic's `input_tokens` is already the fresh (uncached) count, so
         // it is priced directly (no cacheRead subtraction).
         let usdLine: Double
-        if let price = ClaudeModelPrice.price(for: rawModel) {
+        let inputSideTokens = input + cacheCreation + cacheRead
+        if let price = ClaudeModelPrice.price(for: rawModel, inputSideTokens: inputSideTokens) {
             usdLine = (Double(input) * price.inputPerM
                       + Double(cacheCreation) * price.cacheWritePerM
                       + Double(cacheRead) * price.cacheReadPerM

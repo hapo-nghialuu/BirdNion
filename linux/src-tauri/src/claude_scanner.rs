@@ -7,6 +7,8 @@
 //! - keep-last dedup by `messageId:requestId` (same assistant message is
 //!   logged in both the parent session and subagent files)
 //! - Vertex AI lines skipped; unknown models count tokens but cost $0
+//! - provider-backed Claude Code models with public pricing (Fable 5,
+//!   MiniMax-M3) are priced instead of falling through to $0
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
 use serde_json::Value;
@@ -27,8 +29,21 @@ struct Price {
     output: f64,
 }
 
-fn price_for(model: &str) -> Option<Price> {
+fn price_for(model: &str, input_side_tokens: i64) -> Option<Price> {
     let m = model.to_lowercase();
+    if m.contains("fable-5") {
+        return Some(Price { input: 10.0, cache_write: 12.5, cache_read: 1.0, output: 50.0 });
+    }
+    if m.contains("minimax-m3") {
+        let over512k = input_side_tokens > 512_000;
+        let input = if over512k { 0.60 } else { 0.30 };
+        return Some(Price {
+            input,
+            cache_write: input,
+            cache_read: if over512k { 0.12 } else { 0.06 },
+            output: if over512k { 2.40 } else { 1.20 },
+        });
+    }
     // Opus 4.x — $5/$6.25/$0.50/$25 per-M (NOT the old Opus-3 $15/$75).
     if m.contains("opus") {
         return Some(Price { input: 5.0, cache_write: 6.25, cache_read: 0.50, output: 25.0 });
@@ -283,7 +298,8 @@ fn parse_line(line: &str, now: DateTime<Local>) -> Option<Entry> {
 
     // Anthropic's `input_tokens` is already the fresh (uncached) count, so
     // it is priced directly (no cache-read subtraction).
-    let usd = match price_for(&raw_model) {
+    let input_side_tokens = input + cache_creation + cache_read;
+    let usd = match price_for(&raw_model, input_side_tokens) {
         Some(p) => {
             (input as f64 * p.input
                 + cache_creation as f64 * p.cache_write
