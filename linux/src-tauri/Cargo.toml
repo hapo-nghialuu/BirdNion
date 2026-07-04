@@ -39,3 +39,7 @@ rookie = "0.5"
 # Pinned to the same major version rookie's rusqlite dep uses, else cargo
 # fails to resolve two versions of the native sqlite3 `links` library.
 rusqlite = { version = "0.31", features = ["bundled"] }
+# Quota warnings via the OS notification daemon (libnotify/D-Bus on Linux).
+tauri-plugin-notification = "2"
+# Launch-at-login (XDG autostart .desktop on Linux, systemd-free).
+tauri-plugin-autostart = "2"

@@ -2,25 +2,49 @@
 
 Bản port Linux/Ubuntu của BirdNion — tray app theo dõi usage/cost các AI provider.
 Stack: Tauri v2 (Rust core + web UI vanilla TS). Dùng chung schema config
-`~/.config/birdnion/settings.json` với bản macOS.
+`~/.config/birdnion/settings.json` với bản macOS (copy 1 file config chạy được cả 2 OS).
 
-## Trạng thái
+## Tính năng (parity với macOS)
 
-- [x] Phase 0 — skeleton: tray icon (Show/Quit), window 420pt, đóng window = ẩn xuống tray
-- [x] Phase 1 (một phần) — Claude Code CLI cost scanner (`src-tauri/src/claude_scanner.rs`,
-      port 1:1 từ `BirdNion/Providers/Claude/ClaudeCostScanner.swift`: dedup, pricing,
-      daily 90d + totals 30d + hourly 24h) + UI overview cơ bản
-- [ ] Codex cost scanner (parse `~/.codex/sessions` rollout jsonl)
-- [ ] Tab All đầy đủ (stacked chart, heatmap, top models, period picker)
-- [ ] Providers API-key (10) → CLI/OAuth (5) → cookie-based (8, dùng crate `rookie`)
-- [ ] Notifications (libnotify), autostart, i18n vi/en, đóng gói .deb/AppImage
+- [x] Tray icon (Show/Quit, tooltip % quota động), đóng window = ẩn xuống tray
+- [x] Tab **All**: tổng cost Claude Code CLI + Codex — period picker 24h/7/30/90 ngày,
+      stacked bars theo nguồn, heatmap 90 ngày clickable (peak/avg/streak), top models
+- [x] Cost scanner: Claude (`claude_scanner.rs`, port 1:1 semantics) +
+      Codex (`codex_scanner.rs`, parse rollout jsonl + bảng giá CodexBar, lệch <3%)
+- [x] **23/23 providers**: 10 API-key (openrouter, deepseek, zai, minimax, hapo,
+      elevenlabs, deepgram, groq, kiro, bedrock-SigV4) + 5 CLI/OAuth (codex, claude,
+      gemini, kilo, antigravity) + 8 cookie-based qua `rookie` (opencode, opencodego,
+      commandcode, cursor, mimo, alibaba, freemodel, copilot)
+- [x] Tab per-provider: quota windows + reset countdown + chart 30 ngày (Claude/Codex)
+- [x] Settings: bật/tắt provider, API key, cookie thủ công, autostart — ghi settings.json (0600)
+- [x] Notifications cảnh báo quota ≤20% (libnotify), i18n vi/en
+- [x] CI: GitHub Actions build .deb/.rpm/AppImage trên ubuntu-22.04 + cargo test
+
+## Chưa có / khác biệt so với macOS
+
+- Claude Admin API org dashboard, Codex web dashboard extras: chưa port
+- Copilot Device Flow login: dùng accounts file từ máy macOS hoặc token thủ công
+- Cookie: cần trình duyệt Chrome/Chromium/Brave/Edge/Firefox trên Linux (gnome-keyring);
+  Safari không tồn tại — có ô "cookie thủ công" trong Settings làm fallback
+- Menu-bar percent rotation → tray tooltip (GNOME/KDE không hỗ trợ text cạnh icon tray)
 
 ## Dev
 
 ```bash
 npm install
-npm run tauri dev        # chạy app (macOS/Linux đều được)
-cd src-tauri && cargo test   # test logic scanner
+npm run tauri dev            # chạy app (macOS/Linux)
+cd src-tauri && cargo test   # 135 unit tests
 ```
 
-Build Linux thật cần Ubuntu với `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev`.
+Build Ubuntu thật: CI `.github/workflows/linux-build.yml` hoặc máy Ubuntu với
+`libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`.
+
+## Kiến trúc
+
+- `src-tauri/src/claude_scanner.rs` / `codex_scanner.rs` — cost scanners (90d daily,
+  strict 30d totals, 24h hourly)
+- `src-tauri/src/config.rs` — settings.json reader/writer (schema chung macOS)
+- `src-tauri/src/providers/` — 23 provider + `browser_cookies.rs` (rookie) +
+  registry `mod.rs` fetch concurrent
+- `src/` — web UI: `all-tab.ts` (chart/heatmap/models), `provider-tab.ts` (quota),
+  `settings-tab.ts`, `i18n.ts` (vi/en), `usage.ts` (combine + format)

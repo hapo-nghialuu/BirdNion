@@ -11,6 +11,8 @@ mod usage;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
+use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_notification::NotificationExt as _;
 
 /// Claude Code CLI usage rolled up from local session logs.
 /// None (→ null) when no projects root exists on this machine.
@@ -46,22 +48,68 @@ fn save_settings(settings: config::Settings) -> Result<(), String> {
     config::save(&settings)
 }
 
+/// OS notification (quota warnings) — the JS side owns the threshold logic,
+/// mirroring the macOS QuotaNotifier's fire-once-per-crossing behavior.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
+/// Launch-at-login toggle (XDG autostart entry on Linux).
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+/// Tray tooltip mirror of the macOS menu-bar percent readout — the JS side
+/// pushes "Claude 78% · Codex 95%"-style summaries after each refresh.
+#[tauri::command]
+fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             claude_usage_report,
             codex_usage_report,
             provider_statuses,
             get_settings,
-            save_settings
+            save_settings,
+            notify,
+            set_autostart,
+            get_autostart,
+            set_tray_tooltip
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Mở BirdNion", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Thoát", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .show_menu_on_left_click(true)

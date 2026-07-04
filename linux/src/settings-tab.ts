@@ -105,6 +105,22 @@ export async function settingsTab(onSaved: () => void): Promise<HTMLElement> {
     container.append(row);
   }
 
+  // Launch-at-login (XDG autostart entry via tauri-plugin-autostart).
+  const autostartRow = el("div", "settings-row");
+  const autostartHead = el("label", "settings-head");
+  const autostartCheck = document.createElement("input");
+  autostartCheck.type = "checkbox";
+  autostartCheck.checked = await invoke<boolean>("get_autostart").catch(() => false);
+  autostartCheck.addEventListener("change", () => {
+    void invoke("set_autostart", { enabled: autostartCheck.checked }).catch(() => {
+      autostartCheck.checked = !autostartCheck.checked;
+    });
+  });
+  autostartHead.append(autostartCheck,
+    el("span", "provider-name", vi ? "Khởi động cùng hệ thống" : "Launch at login"));
+  autostartRow.append(autostartHead);
+  container.append(autostartRow);
+
   const save = el("button", "save-button", vi ? "Lưu cài đặt" : "Save settings");
   save.addEventListener("click", async () => {
     save.textContent = "…";

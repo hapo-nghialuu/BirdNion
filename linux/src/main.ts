@@ -97,6 +97,39 @@ function render() {
   }
 }
 
+/** Fire an OS notification once per threshold crossing (macOS QuotaNotifier
+ * parity): 20% remaining warns, resets once back above 25%. */
+const warned = new Set<string>();
+function checkQuotaWarnings(statuses: ProviderStatus[]) {
+  for (const s of statuses) {
+    for (const w of s.windows) {
+      const key = `${s.id}:${w.label}`;
+      if (w.remainingPct <= 20 && !warned.has(key)) {
+        warned.add(key);
+        void invoke("notify", {
+          title: `BirdNion — ${s.displayName}`,
+          body: `${w.label}: còn ${w.remainingPct}% quota.`,
+        }).catch(() => {});
+      } else if (w.remainingPct > 25) {
+        warned.delete(key);
+      }
+    }
+  }
+}
+
+/** Mirror the macOS menu-bar percent readout into the tray tooltip. */
+function updateTrayTooltip(statuses: ProviderStatus[]) {
+  const parts = statuses
+    .filter((s) => !s.error && s.windows.length > 0)
+    .map((s) => {
+      const lowest = s.windows.reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
+      return `${s.displayName} ${lowest.remainingPct}%`;
+    });
+  void invoke("set_tray_tooltip", {
+    tooltip: parts.length ? parts.join(" · ") : "BirdNion",
+  }).catch(() => {});
+}
+
 async function load() {
   const [claude, codex, statuses] = await Promise.all([
     invoke<UsageReport | null>("claude_usage_report").catch(() => null),
@@ -106,6 +139,8 @@ async function load() {
   state.claude = claude;
   state.codex = codex;
   state.statuses = statuses;
+  checkQuotaWarnings(statuses);
+  updateTrayTooltip(statuses);
   render();
 }
 
