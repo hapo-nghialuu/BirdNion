@@ -34,19 +34,21 @@ struct CodexDailyUsage: Equatable, Identifiable {
     var id: Date { date }
 }
 
-/// Full 30-day report for the Codex usage chart. Mirrors `ClaudeUsageReport`
-/// but the values are mapped to match CodexBar's own inline dashboard exactly:
+/// Full report for the Codex usage chart. Mirrors `ClaudeUsageReport` but the
+/// values are mapped to match CodexBar's own inline dashboard exactly:
 /// "today" is the most recent **active** day's cost (not the live session), the
-/// 30-day token total falls back to the sum of daily totals, the bars are daily
-/// cost, and the top model is the highest-cost one.
+/// bars are daily cost, and the top model is the highest-cost one. The daily
+/// window spans `CodexCostScanner.chartWindowDays` (90) for the combined
+/// heatmap; the `last30*` totals stay strictly 30-day.
 struct CodexUsageReport: Equatable {
     /// Most recent active day's estimated cost + exact tokens (CodexBar "Today").
     let todayUSD: Double
     let todayTokens: Int
-    /// Window totals (default 30 days).
+    /// Strict 30-day totals (summed from the trailing 30 daily buckets).
     let last30USD: Double
     let last30Tokens: Int
-    /// 30 daily buckets, oldest → newest; idle days render as a zero-height bar.
+    /// `chartWindowDays` daily buckets, oldest → newest; idle days render as a
+    /// zero-height bar.
     let daily: [CodexDailyUsage]
     /// Highest-cost model across the window (shortened). nil when none logged.
     let topModel: String?
@@ -65,6 +67,10 @@ struct CodexUsageReport: Equatable {
 enum CodexCostScanner {
     private static let cacheTTL: TimeInterval = 300
     static let historyDaysKey = "codexCostHistoryDays"
+    /// Daily-bucket window for `usageReport` (feeds the 90-day heatmap on the
+    /// All tab). Independent of the user-configurable `historyDays`, which
+    /// only drives `summary()`.
+    static let chartWindowDays = 90
 
     /// Rolling history window in days (1...365). Defaults to 30 when unset.
     /// `SettingsStore` writes the same key.
@@ -118,8 +124,8 @@ enum CodexCostScanner {
 
     // MARK: - Full report (chart)
 
-    /// Cached, off-main full report: window totals + 30-day per-day series for
-    /// the usage chart. Returns nil only when the scan throws.
+    /// Cached, off-main full report: 30-day totals + 90-day per-day series for
+    /// the usage chart/heatmap. Returns nil only when the scan throws.
     static func usageReport(now: Date = Date()) async -> CodexUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
         let codexHome = CodexAccountStore.activeAuthURL().deletingLastPathComponent().path
@@ -127,7 +133,7 @@ enum CodexCostScanner {
             provider: .codex,
             now: now,
             codexHomePath: codexHome,
-            historyDays: historyDays)
+            historyDays: chartWindowDays)
         else { return nil }
         let value = mapReport(snapshot, now: now)
         await Cache.shared.storeReport(value, at: now)
@@ -142,9 +148,14 @@ enum CodexCostScanner {
     static func mapReport(_ snapshot: CostUsageTokenSnapshot, now: Date = Date()) -> CodexUsageReport {
         let calendar = Calendar.current
         let startOfToday = calendar.startOfDay(for: now)
+        // First day of the strict-30 window (today counts as day 30).
+        let last30Start = calendar.date(byAdding: .day, value: -29, to: startOfToday)
+            ?? startOfToday.addingTimeInterval(-29 * 86_400)
 
         var buckets: [Date: DailyAccumulator] = [:]
-        // Summed cost+tokens per model across the window → top model + tie-break.
+        // Summed cost+tokens per model over the trailing 30 days → top model.
+        // Gated to 30d (not the full 90d bucket window) so the Codex tab's
+        // top-model line keeps its pre-heatmap value.
         var modelTotals: [String: (cost: Double, tokens: Int)] = [:]
 
         for entry in snapshot.daily {
@@ -158,6 +169,7 @@ enum CodexCostScanner {
                 m.usd += mb.costUSD ?? 0
                 m.tokens += mb.totalTokens ?? 0
                 acc.models[mb.modelName] = m
+                guard day >= last30Start else { continue }
                 var total = modelTotals[mb.modelName] ?? (cost: 0, tokens: 0)
                 total.cost += mb.costUSD ?? 0
                 total.tokens += mb.totalTokens ?? 0
@@ -166,9 +178,11 @@ enum CodexCostScanner {
             buckets[day] = acc
         }
 
-        let daily = makeDailyBuckets(buckets: buckets, endDay: startOfToday, count: 30)
-        let latest = daily.last(where: { $0.tokens > 0 })
-        let fallbackTokens = snapshot.daily.compactMap(\.totalTokens).reduce(0, +)
+        let daily = makeDailyBuckets(buckets: buckets, endDay: startOfToday, count: chartWindowDays)
+        // Strict 30-day slice for the totals + "today" — the wider window only
+        // exists for the heatmap, the Codex tab numbers must not move with it.
+        let last30 = daily.suffix(30)
+        let latest = last30.last(where: { $0.tokens > 0 })
         let topModel = modelTotals.max {
             $0.value.cost == $1.value.cost
                 ? $0.value.tokens < $1.value.tokens
@@ -178,8 +192,8 @@ enum CodexCostScanner {
         return CodexUsageReport(
             todayUSD: latest?.usd ?? 0,
             todayTokens: latest?.tokens ?? 0,
-            last30USD: snapshot.last30DaysCostUSD ?? 0,
-            last30Tokens: snapshot.last30DaysTokens ?? fallbackTokens,
+            last30USD: last30.map(\.usd).reduce(0, +),
+            last30Tokens: last30.map(\.tokens).reduce(0, +),
             daily: daily,
             topModel: topModel.map(shortModelName))
     }

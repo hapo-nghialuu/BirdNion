@@ -10,7 +10,11 @@ import AppKit
 ///   - Bottom: app-level actions.
 struct QuotaOverview: View {
     @EnvironmentObject var quota: QuotaService
-    @State private var selectedProviderId: String? = nil
+    /// Persisted so re-opening the popover lands on the tab the user last
+    /// chose — either the "all" pseudo-tab or a provider id.
+    private static let selectedTabKey = "popover.selectedTab"
+    @State private var selectedProviderId: String? =
+        UserDefaults.standard.string(forKey: QuotaOverview.selectedTabKey)
     /// Lazy-scanned Claude usage report (per-day buckets + top model) for
     /// the 30-day chart in the popover. Only re-scanned when the user
     /// opens Claude's tab; cached 5 min by `ClaudeCostScanner` itself.
@@ -46,10 +50,20 @@ struct QuotaOverview: View {
                         providers: quota.displayStatuses,
                         selectedId: Binding(
                             get: { selected },
-                            set: { selectedProviderId = $0 }
-                        )
+                            set: {
+                                selectedProviderId = $0
+                                UserDefaults.standard.set($0, forKey: Self.selectedTabKey)
+                            }
+                        ),
+                        showAllTab: hasLocalCostSources
                     )
-                    if let s = quota.displayStatuses.first(where: { $0.id == selected })
+                    if selected == "all" {
+                        // Combined Claude CLI + Codex overview (no real
+                        // ProviderStatus behind it — reports only).
+                        VStack(alignment: .leading, spacing: 8) {
+                            AllUsageOverview(claude: claudeReport, codex: codexReport)
+                        }
+                    } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
                         VStack(alignment: .leading, spacing: 8) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
@@ -97,10 +111,15 @@ struct QuotaOverview: View {
             triggerReportsIfNeeded(providerId: id ?? "")
         }
         .onChange(of: quota.displayStatuses.map(\.id)) { ids in
-            if let sel = selectedProviderId, !ids.contains(sel) {
-                selectedProviderId = ids.first
-                triggerReportsIfNeeded(providerId: selectedProviderId ?? "")
-            } else if selectedProviderId == nil {
+            // "all" stays valid as long as one local-cost source is enabled;
+            // anything else must still be a live provider id.
+            let selectionValid: Bool
+            switch selectedProviderId {
+            case "all": selectionValid = ids.contains("claude") || ids.contains("codex")
+            case let sel?: selectionValid = ids.contains(sel)
+            case nil: selectionValid = false
+            }
+            if !selectionValid {
                 selectedProviderId = ids.first
                 triggerReportsIfNeeded(providerId: selectedProviderId ?? "")
             }
@@ -125,7 +144,12 @@ struct QuotaOverview: View {
     /// user switches away so the chart is still visible while the next scan
     /// refreshes it.
     private func triggerClaudeReportIfNeeded(providerId: String) {
-        guard providerId == "claude" else { return }
+        // The All tab needs the Claude scan too — but only when the Claude
+        // provider is actually enabled (disabled sources stay out of the mix).
+        let wantsClaude = providerId == "claude"
+            || (providerId == "all"
+                && quota.displayStatuses.contains(where: { $0.id == "claude" }))
+        guard wantsClaude else { return }
         let taskId = UUID().uuidString
         claudeReportTaskId = taskId
         Task {
@@ -140,7 +164,10 @@ struct QuotaOverview: View {
     /// Trigger the Codex 30-day scan only when the user views the Codex tab.
     /// Cached 5 min by `CodexCostScanner`; switching tabs cancels via taskId.
     private func triggerCodexReportIfNeeded(providerId: String) {
-        guard providerId == "codex" else {
+        let wantsCodex = providerId == "codex"
+            || (providerId == "all"
+                && quota.displayStatuses.contains(where: { $0.id == "codex" }))
+        guard wantsCodex else {
             codexReport = nil
             return
         }
@@ -155,8 +182,15 @@ struct QuotaOverview: View {
         }
     }
 
+    /// The All tab only exists when at least one local-cost source (Claude
+    /// Code CLI or Codex) is enabled.
+    private var hasLocalCostSources: Bool {
+        quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" }
+    }
+
     private func effectiveSelectedId() -> String {
-        if let sel = selectedProviderId,
+        if selectedProviderId == "all", hasLocalCostSources { return "all" }
+        if let sel = selectedProviderId, sel != "all",
            quota.displayStatuses.contains(where: { $0.id == sel }) {
             return sel
         }
@@ -223,10 +257,19 @@ struct ProviderTabs: View {
 
     let providers: [ProviderStatus]
     @Binding var selectedId: String
+    /// Renders the combined "All" pseudo-tab ahead of the provider chips.
+    var showAllTab: Bool = false
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
+                if showAllTab {
+                    allChip
+                    if !providers.isEmpty {
+                        Divider()
+                            .frame(height: 18)
+                    }
+                }
                 ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
                     chip(for: provider)
                     if index < providers.count - 1 {
@@ -244,24 +287,41 @@ struct ProviderTabs: View {
         }
     }
 
+    /// Combined-overview pseudo-tab (sentinel id "all") — no ProviderStatus
+    /// behind it, so it renders its own chip instead of `chip(for:)`.
+    /// Icon-only, like the provider chips; the name lives in the tooltip.
+    private var allChip: some View {
+        let active = selectedId == "all"
+        return Button {
+            selectedId = "all"
+        } label: {
+            Image(systemName: "square.grid.2x2.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(active ? VocabbyTheme.blue : VocabbyTheme.secondary)
+                .frame(width: 18, height: 18)
+                .frame(minWidth: 40, minHeight: Self.chipHeight)
+                .background(active ? VocabbyTheme.selectedSurface : Color.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .help("All")
+        .accessibilityLabel("All")
+    }
+
     @ViewBuilder
     private func chip(for p: ProviderStatus) -> some View {
         let active = p.id == selectedId
+        // Icon-only chip: the provider name moved into the tooltip /
+        // accessibility label so the strip fits more providers.
         Button {
             selectedId = p.id
         } label: {
-            HStack(spacing: 5) {
-                ProviderLogoMark(id: p.id, tint: active ? VocabbyTheme.blue : VocabbyTheme.secondary)
-                    .frame(width: 16, height: 16)
-                Text(p.displayName)
-                    .font(.system(size: 11, weight: active ? .semibold : .regular))
-                    .foregroundStyle(VocabbyTheme.primary)
-                    .lineLimit(1)
-            }
-            .frame(minWidth: 72, minHeight: Self.chipHeight)
-            .padding(.horizontal, 7)
-            .background(active ? VocabbyTheme.selectedSurface : Color.clear)
-            .contentShape(Rectangle())
+            ProviderLogoMark(id: p.id, tint: active ? VocabbyTheme.blue : VocabbyTheme.secondary)
+                .frame(width: 18, height: 18)
+                .frame(minWidth: 40, minHeight: Self.chipHeight)
+                .background(active ? VocabbyTheme.selectedSurface : Color.clear)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())  // whole chip is the click target
@@ -1205,6 +1265,16 @@ enum VocabbyTheme {
         if !hasActivity { return selectedSurface.opacity(0.76) }
         return isCurrent ? blue : chartBar.opacity(0.72)
     }
+
+    /// Heatmap cell fill for the All tab's activity grid: 0 → idle track,
+    /// then four intensity steps of the chart blue.
+    static func heatColor(fraction: Double) -> Color {
+        guard fraction > 0 else { return track }
+        if fraction <= 0.25 { return chartBar.opacity(0.3) }
+        if fraction <= 0.5 { return chartBar.opacity(0.5) }
+        if fraction <= 0.75 { return chartBar.opacity(0.75) }
+        return blue
+    }
 }
 
 // MARK: - Card modifier
@@ -1242,22 +1312,26 @@ struct ClaudeUsageChartCard: View {
     /// and the column highlight.
     @State private var hoveredDay: ClaudeDailyUsage?
 
+    /// This card keeps its 30-day scope; the report's wider (90-day) window
+    /// only exists for the All tab's heatmap.
+    private var daily30: [ClaudeDailyUsage] { Array(report.daily.suffix(30)) }
+
     private var maxBarUSD: Double {
-        max(report.daily.map(\.usd).max() ?? 0, 0.01)
+        max(daily30.map(\.usd).max() ?? 0, 0.01)
     }
 
     /// Day whose per-model breakdown is shown: the hovered bar, else the most
     /// recent day with activity.
     private var detailDay: ClaudeDailyUsage? {
-        hoveredDay ?? report.daily.last(where: { $0.tokens > 0 })
+        hoveredDay ?? daily30.last(where: { $0.tokens > 0 })
     }
 
     private var latestDayTokens: Int {
-        report.daily.last(where: { $0.tokens > 0 })?.tokens ?? 0
+        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
     }
 
     private var todayLabel: String {
-        guard let today = report.daily.last else { return L10n.t("chart.today", settings.appLanguage) }
+        guard let today = daily30.last else { return L10n.t("chart.today", settings.appLanguage) }
         return L10n.f("chart.todayWithDate", settings.appLanguage, L10n.dayMonth(today.date, preference: settings.appLanguage))
     }
 
@@ -1343,7 +1417,7 @@ struct ClaudeUsageChartCard: View {
     private var barChart: some View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
-                ForEach(report.daily) { day in
+                ForEach(daily30) { day in
                     let heightFraction = day.usd > 0
                         ? CGFloat(day.usd / maxBarUSD)
                         : 0
@@ -1372,7 +1446,7 @@ struct ClaudeUsageChartCard: View {
 
     private func barColor(for day: ClaudeDailyUsage) -> Color {
         VocabbyTheme.activityChartBarColor(
-            isCurrent: day.date == report.daily.last?.date,
+            isCurrent: day.date == daily30.last?.date,
             hasActivity: day.usd > 0
         )
     }
@@ -1382,26 +1456,17 @@ struct ClaudeUsageChartCard: View {
     }
 
     private func formatUSD(_ amount: Double) -> String {
-        if amount >= 1000 {
-            return String(format: "$%.0f", amount)
-        }
-        return String(format: "$%.2f", amount)
+        AllUsageFormat.usd(amount)
     }
 
     private func formatTokens(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) + " tokens" }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) + " tokens" }
-        return "\(n) tokens"
+        AllUsageFormat.tokens(n)
     }
 
     /// Compact token count without the " tokens" suffix, for the dense per-model
     /// breakdown rows (e.g. "628M", "9.1M", "29M").
     private func formatTokensShort(_ n: Int) -> String {
-        let m = Double(n) / 1_000_000
-        if n >= 10_000_000 { return String(format: "%.0fM", m) }
-        if n >= 1_000_000 { return String(format: "%.1fM", m) }
-        if n >= 1_000 { return String(format: "%.0fK", Double(n) / 1_000) }
-        return "\(n)"
+        AllUsageFormat.tokensShort(n)
     }
 }
 
@@ -1419,18 +1484,22 @@ struct CodexUsageChartCard: View {
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
+    /// This card keeps its 30-day scope; the report's wider (90-day) window
+    /// only exists for the All tab's heatmap.
+    private var daily30: [CodexDailyUsage] { Array(report.daily.suffix(30)) }
+
     private var maxBarUSD: Double {
-        max(report.daily.map(\.usd).max() ?? 0, 0.01)
+        max(daily30.map(\.usd).max() ?? 0, 0.01)
     }
 
     /// Day whose per-model breakdown is shown: the hovered bar, else the most
     /// recent day with activity.
     private var detailDay: CodexDailyUsage? {
-        hoveredDay ?? report.daily.last(where: { $0.tokens > 0 })
+        hoveredDay ?? daily30.last(where: { $0.tokens > 0 })
     }
 
     private var latestDayTokens: Int {
-        report.daily.last(where: { $0.tokens > 0 })?.tokens ?? 0
+        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
     }
 
     var body: some View {
@@ -1515,7 +1584,7 @@ struct CodexUsageChartCard: View {
     private var barChart: some View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
-                ForEach(report.daily) { day in
+                ForEach(daily30) { day in
                     let heightFraction = day.usd > 0
                         ? CGFloat(day.usd / maxBarUSD)
                         : 0
@@ -1542,7 +1611,7 @@ struct CodexUsageChartCard: View {
 
     private func barColor(for day: CodexDailyUsage) -> Color {
         VocabbyTheme.activityChartBarColor(
-            isCurrent: day.date == report.daily.last?.date,
+            isCurrent: day.date == daily30.last?.date,
             hasActivity: day.usd > 0
         )
     }
@@ -1552,24 +1621,15 @@ struct CodexUsageChartCard: View {
     }
 
     private func formatUSD(_ amount: Double) -> String {
-        if amount >= 1000 {
-            return String(format: "$%.0f", amount)
-        }
-        return String(format: "$%.2f", amount)
+        AllUsageFormat.usd(amount)
     }
 
     private func formatTokens(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) + " tokens" }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) + " tokens" }
-        return "\(n) tokens"
+        AllUsageFormat.tokens(n)
     }
 
     private func formatTokensShort(_ n: Int) -> String {
-        let m = Double(n) / 1_000_000
-        if n >= 10_000_000 { return String(format: "%.0fM", m) }
-        if n >= 1_000_000 { return String(format: "%.1fM", m) }
-        if n >= 1_000 { return String(format: "%.0fK", Double(n) / 1_000) }
-        return "\(n)"
+        AllUsageFormat.tokensShort(n)
     }
 }
 
@@ -1654,13 +1714,11 @@ struct ClaudeAdminUsageChartCard: View {
     }
 
     private func formatUSD(_ amount: Double) -> String {
-        amount >= 1000 ? String(format: "$%.0f", amount) : String(format: "$%.2f", amount)
+        AllUsageFormat.usd(amount)
     }
 
     private func formatTokens(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) + " tokens" }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) + " tokens" }
-        return "\(n) tokens"
+        AllUsageFormat.tokens(n)
     }
 }
 

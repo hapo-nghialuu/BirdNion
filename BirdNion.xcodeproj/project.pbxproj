@@ -66,6 +66,8 @@
 		DDDD00130000000000B00A /* PopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD0014000000000000F00A /* PopoverView.swift */; };
 		DDDD00150000000000B00B /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD0016000000000000F00B /* MenuBarIcon.swift */; };
 		DDDD001B0000000000B00E /* QuotaPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD001C000000000000F00E /* QuotaPanel.swift */; };
+		ALLV0001000000000000B001 /* AllUsageOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = ALLV0002000000000000F001 /* AllUsageOverview.swift */; };
+		CURT0001000000000000B001 /* CombinedUsageReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURT0002000000000000F001 /* CombinedUsageReportTests.swift */; };
 		SET0001000000000000B001 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0002000000000000F001 /* SettingsStore.swift */; };
 		L10N0001000000000000B001 /* AppLocalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N0002000000000000F001 /* AppLocalizer.swift */; };
 		FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FR0002000000000000F001 /* BirdNionConfigStore.swift */; };
@@ -191,6 +193,8 @@
 		DDDD0014000000000000F00A /* PopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/PopoverView.swift; sourceTree = "<group>"; };
 		DDDD0016000000000000F00B /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/MenuBarIcon.swift; sourceTree = "<group>"; };
 		DDDD001C000000000000F00E /* QuotaPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/QuotaPanel.swift; sourceTree = "<group>"; };
+		ALLV0002000000000000F001 /* AllUsageOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/AllUsageOverview.swift; sourceTree = "<group>"; };
+		CURT0002000000000000F001 /* CombinedUsageReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CombinedUsageReportTests.swift; sourceTree = "<group>"; };
 		SET0002000000000000F001 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsStore.swift; sourceTree = "<group>"; };
 		L10N0002000000000000F001 /* AppLocalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalizer.swift; sourceTree = "<group>"; };
 		FR0002000000000000F001 /* BirdNionConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BirdNionConfigStore.swift; sourceTree = "<group>"; };
@@ -271,6 +275,7 @@
 				CCCC000D000000000000B007 /* StubURLProtocol.swift in Sources */,
 				C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */,
 				CCST0001000000000000B001 /* CodexCostScannerTests.swift in Sources */,
+				CURT0001000000000000B001 /* CombinedUsageReportTests.swift in Sources */,
 				CWDT0001000000000000B001 /* CodexWebDashboardTests.swift in Sources */,
 				CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */,
 				NPT00001000000000000B01 /* NewProviderTests.swift in Sources */,
@@ -547,6 +552,7 @@
 				DDDD00170000000000B00C /* QuotaBar.swift in Sources */,
 				DDDD00190000000000B00D /* ProviderRow.swift in Sources */,
 				DDDD001B0000000000B00E /* QuotaPanel.swift in Sources */,
+				ALLV0001000000000000B001 /* AllUsageOverview.swift in Sources */,
 				SET0001000000000000B001 /* SettingsStore.swift in Sources */,
 				L10N0001000000000000B001 /* AppLocalizer.swift in Sources */,
 				FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */,

@@ -61,9 +61,10 @@ final class CodexCostScannerTests: XCTestCase {
         return df.string(from: date)
     }
 
-    /// `mapReport` builds a contiguous 30-day series, reads "today" from the most
-    /// recent active day, takes window totals from the snapshot, sorts per-day
-    /// models by cost, and picks the highest-cost top model — matching CodexBar.
+    /// `mapReport` builds a contiguous 90-day series (heatmap window), reads
+    /// "today" from the most recent active day, sums the strict-30-day totals
+    /// from the trailing buckets, sorts per-day models by cost, and picks the
+    /// highest-cost top model — matching CodexBar.
     func testMapsReportDaily() {
         let cal = Calendar.current
         let now = Date()
@@ -91,11 +92,12 @@ final class CodexCostScannerTests: XCTestCase {
 
         let r = CodexCostScanner.mapReport(snap, now: now)
 
-        XCTAssertEqual(r.daily.count, 30)
+        XCTAssertEqual(r.daily.count, CodexCostScanner.chartWindowDays)
         XCTAssertFalse(r.isEmpty)
-        // Window totals come straight from the snapshot.
-        XCTAssertEqual(r.last30Tokens, 314_000_000)
-        XCTAssertEqual(r.last30USD, 311.01, accuracy: 0.001)
+        // Strict 30-day totals are summed from the trailing daily buckets
+        // (the snapshot's own last30 fields span the 90-day fetch window).
+        XCTAssertEqual(r.last30Tokens, 9_000_000)
+        XCTAssertEqual(r.last30USD, 9.91, accuracy: 0.001)
         // "Today" = the most recent active day (today's bucket), not the session.
         XCTAssertEqual(r.todayTokens, 5_000_000)
         XCTAssertEqual(r.todayUSD, 3.20, accuracy: 0.001)
@@ -108,13 +110,13 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertEqual(r.topModel, "gpt-5.5")
     }
 
-    /// When the snapshot omits `last30DaysTokens`, the window token total falls
-    /// back to the sum of daily totals (CodexBar parity); no models → nil topModel.
+    /// Totals are summed from the daily buckets even when the snapshot omits
+    /// its own window fields; no models → nil topModel.
     func testMapsReportFallbackTokens() {
         let now = Date()
         let snap = CostUsageTokenSnapshot(
             sessionTokens: nil, sessionCostUSD: nil,
-            last30DaysTokens: nil, last30DaysCostUSD: 1.0,
+            last30DaysTokens: nil, last30DaysCostUSD: nil,
             daily: [
                 .init(date: Self.dayString(now),
                       inputTokens: nil, outputTokens: nil, totalTokens: 1_234,
@@ -123,8 +125,9 @@ final class CodexCostScannerTests: XCTestCase {
             updatedAt: now)
 
         let r = CodexCostScanner.mapReport(snap, now: now)
-        XCTAssertEqual(r.daily.count, 30)
-        XCTAssertEqual(r.last30Tokens, 1_234)   // fallback = sum of daily totals
+        XCTAssertEqual(r.daily.count, CodexCostScanner.chartWindowDays)
+        XCTAssertEqual(r.last30Tokens, 1_234)   // summed from daily buckets
+        XCTAssertEqual(r.last30USD, 1.0, accuracy: 0.001)
         XCTAssertNil(r.topModel)                // no model breakdowns logged
     }
 }
