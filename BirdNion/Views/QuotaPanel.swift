@@ -61,7 +61,11 @@ struct QuotaOverview: View {
                         // Combined Claude CLI + Codex overview (no real
                         // ProviderStatus behind it — reports only).
                         VStack(alignment: .leading, spacing: 8) {
-                            AllUsageOverview(claude: claudeReport, codex: codexReport)
+                            AllUsageOverview(
+                                claude: claudeReport,
+                                codex: codexReport,
+                                claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
+                                codexEnabled: quota.displayStatuses.contains { $0.id == "codex" })
                         }
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
@@ -121,8 +125,14 @@ struct QuotaOverview: View {
             }
             if !selectionValid {
                 selectedProviderId = ids.first
-                triggerReportsIfNeeded(providerId: selectedProviderId ?? "")
             }
+            // (Re)kick the scans for the now-effective tab regardless: on
+            // first open the provider list can arrive AFTER the `.task`
+            // trigger ran against an empty list — the guards inside the
+            // trigger functions then skipped every scan and the All tab sat
+            // on its skeleton until the user switched tabs. Re-running here
+            // is cheap (scanners cache for 5 min).
+            triggerReportsIfNeeded(providerId: effectiveSelectedId())
         }
         .task {
             triggerReportsIfNeeded(providerId: selectedProviderId ?? effectiveSelectedId())

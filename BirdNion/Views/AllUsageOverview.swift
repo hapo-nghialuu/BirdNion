@@ -202,8 +202,20 @@ struct AllUsageOverview: View {
 
     let claude: ClaudeUsageReport?
     let codex: CodexUsageReport?
+    /// Which sources are enabled in Settings — a disabled source's nil
+    /// report means "not applicable", not "still scanning".
+    var claudeEnabled: Bool = true
+    var codexEnabled: Bool = true
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
+    /// Enabled sources whose scan hasn't landed yet.
+    private var pendingSources: [String] {
+        var pending: [String] = []
+        if claudeEnabled, claude == nil { pending.append("Claude") }
+        if codexEnabled, codex == nil { pending.append("Codex") }
+        return pending
+    }
 
     var body: some View {
         if claude == nil && codex == nil {
@@ -211,7 +223,21 @@ struct AllUsageOverview: View {
             VStack(alignment: .leading, spacing: 9) { LoadingQuotaSkeleton() }
                 .vocabbyCard()
         } else {
+            // Render whatever already landed; the other source folds in when
+            // its scan finishes (the hint below says one is still running).
             let report = CombinedUsageReport.build(claude: claude, codex: codex)
+            if !pendingSources.isEmpty {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(VocabbyTheme.blue)
+                        .frame(width: 10, height: 10)
+                    Text((vi ? "Đang quét " : "Scanning ")
+                         + pendingSources.joined(separator: ", ") + "…")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
             if report.isEmpty {
                 Text(vi ? "Chưa có dữ liệu sử dụng trong 90 ngày qua."
                         : "No usage recorded in the last 90 days.")
