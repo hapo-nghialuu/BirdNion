@@ -33,3 +33,9 @@ sha2 = "0.10"
 hex = "0.4"
 # codex.rs / gemini.rs: decode the JWT id_token payload segment (email/hd claims).
 base64 = "0.22"
+# browser_cookies.rs: read Chrome/Chromium/Brave/Edge/Firefox cookie stores cross-platform.
+rookie = "0.5"
+# cursor.rs: read the Cursor app's local SQLite state DB (bundled = no libsqlite3-dev on Linux CI).
+# Pinned to the same major version rookie's rusqlite dep uses, else cargo
+# fails to resolve two versions of the native sqlite3 `links` library.
+rusqlite = { version = "0.31", features = ["bundled"] }

@@ -1,0 +1,81 @@
+//! Shared browser-cookie helper for the cookie-based quota providers
+//! (OpenCode, OpenCodeGo, CommandCode, Cursor, MiMo, Alibaba, Freemodel,
+//! Copilot budget scrape). Ports `ProviderCookieReader` from the macOS app
+//! using the `rookie` crate for cross-platform (Chrome/Chromium/Brave/Edge/
+//! Firefox) cookie-store extraction — including Linux keyring decryption.
+//!
+//! `cfg.cookie_source` controls the resolution strategy:
+//!   - "manual" → use `cfg.manual_cookie` verbatim.
+//!   - "off"    → error immediately (user disabled cookie-based auth).
+//!   - anything else (default "auto") → scan browsers in a fixed order and
+//!     return the first non-empty cookie set for the given domains.
+//!
+//! `rookie` calls hit disk (SQLite files, OS keyrings) and are blocking —
+//! callers MUST invoke `cookie_header` from a `spawn_blocking` context.
+
+use crate::config;
+
+/// Order mirrors the Swift `ProviderCookieReader`'s default browser scan —
+/// Chrome-family first, Firefox last (it's the slowest / needs profile scan).
+const BROWSER_ORDER: &[&str] = &["chrome", "chromium", "brave", "edge", "firefox"];
+
+/// Resolve the `Cookie:` header value for the given domains, honoring the
+/// provider's configured cookie source. Blocking — see module docs.
+pub fn cookie_header(domains: &[&str], cfg: &config::Provider) -> Result<String, String> {
+    match cfg.cookie_source.as_deref() {
+        Some("manual") => {
+            let manual = cfg.manual_cookie.as_deref().unwrap_or("").trim();
+            if manual.is_empty() {
+                Err("Chưa dán cookie thủ công".to_string())
+            } else {
+                Ok(manual.to_string())
+            }
+        }
+        Some("off") => Err("Đã tắt nguồn cookie".to_string()),
+        _ => auto_cookie_header(domains),
+    }
+}
+
+/// Scans supported browsers in order, returning the first non-empty cookie
+/// set found for `domains`. Only a genuine per-browser error (not "no
+/// cookies") is surfaced if every browser fails to produce cookies.
+fn auto_cookie_header(domains: &[&str]) -> Result<String, String> {
+    let domain_list: Vec<String> = domains.iter().map(|d| d.to_string()).collect();
+    let mut last_error: Option<String> = None;
+
+    for browser in BROWSER_ORDER {
+        let result = read_browser(browser, domain_list.clone());
+        match result {
+            Ok(cookies) if !cookies.is_empty() => {
+                let header = cookies
+                    .iter()
+                    .map(|c| format!("{}={}", c.name, c.value))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if !header.is_empty() {
+                    return Ok(header);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => last_error = Some(e),
+        }
+    }
+
+    match last_error {
+        Some(e) => Err(format!("Không đọc được cookie trình duyệt: {e}")),
+        None => Err("Không tìm thấy cookie đăng nhập trong trình duyệt".to_string()),
+    }
+}
+
+fn read_browser(browser: &str, domains: Vec<String>) -> Result<Vec<rookie::enums::Cookie>, String> {
+    let domains = Some(domains);
+    let result = match browser {
+        "chrome" => rookie::chrome(domains),
+        "chromium" => rookie::chromium(domains),
+        "brave" => rookie::brave(domains),
+        "edge" => rookie::edge(domains),
+        "firefox" => rookie::firefox(domains),
+        other => return Err(format!("Trình duyệt không hỗ trợ: {other}")),
+    };
+    result.map_err(|e| e.to_string())
+}

@@ -3,19 +3,28 @@
 //! exposes `async fn fetch(cfg: &config::Provider) -> ProviderStatus`; the
 //! registry dispatches by id and runs all enabled providers concurrently.
 
+pub mod alibaba;
 pub mod antigravity;
 pub mod bedrock;
+pub mod browser_cookies;
 pub mod claude;
 pub mod codex;
+pub mod commandcode;
+pub mod copilot;
+pub mod cursor;
 pub mod deepgram;
 pub mod deepseek;
 pub mod elevenlabs;
+pub mod freemodel;
 pub mod gemini;
 pub mod groq;
 pub mod hapo;
 pub mod kilo;
 pub mod kiro;
+pub mod mimo;
 pub mod minimax;
+pub mod opencode;
+pub mod opencodego;
 pub mod openrouter;
 pub mod zai;
 
@@ -87,6 +96,13 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "codex" => "Codex",
         "copilot" => "Copilot",
         "kilo" => "Kilo",
+        "opencode" => "OpenCode",
+        "opencodego" => "OpenCode Go",
+        "commandcode" => "Command Code",
+        "cursor" => "Cursor",
+        "mimo" => "Xiaomi MiMo",
+        "alibaba" => "Alibaba / Qwen",
+        "freemodel" => "FreeModel",
         other => other,
     }
     .to_string()
@@ -111,6 +127,14 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         "gemini" => gemini::fetch(cfg).await,
         "kilo" => kilo::fetch(cfg).await,
         "antigravity" => antigravity::fetch(cfg).await,
+        "opencode" => opencode::fetch(cfg).await,
+        "opencodego" => opencodego::fetch(cfg).await,
+        "commandcode" => commandcode::fetch(cfg).await,
+        "cursor" => cursor::fetch(cfg).await,
+        "mimo" => mimo::fetch(cfg).await,
+        "alibaba" => alibaba::fetch(cfg).await,
+        "freemodel" => freemodel::fetch(cfg).await,
+        "copilot" => copilot::fetch(cfg).await,
         other => ProviderStatus::failure(
             other,
             &display_name(cfg),
