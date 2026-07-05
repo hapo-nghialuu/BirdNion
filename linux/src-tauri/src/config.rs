@@ -54,6 +54,10 @@ pub struct Provider {
     /// Cookie-based providers: raw Cookie header value pasted by the user.
     #[serde(default)]
     pub manual_cookie: Option<String>,
+    /// Claude: Anthropic Admin API key for the org usage/cost dashboard
+    /// (`/v1/organizations/...`). Separate from `api_key` (OAuth token file).
+    #[serde(default)]
+    pub admin_api_key: Option<String>,
 }
 
 /// Persist settings atomically with owner-only permissions (0600), matching

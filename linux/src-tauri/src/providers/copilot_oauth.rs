@@ -4,15 +4,15 @@
 //! macOS's Device Flow login writes (read back by `providers::copilot`).
 //!
 //! Flow: POST `login/device/code` → {user_code, verification_uri, device_code,
-//! interval}; poll `login/oauth/access_token` honoring `interval`/`slow_down`
-//! until the user approves, denies, or the request expires.
+//! interval}; the JS side drives the poll loop (a single `login_poll` call per
+//! tick, respecting `interval`/`slow_down`) against `login/oauth/access_token`
+//! until the user approves, denies, or the code expires.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const CLIENT_ID: &str = "Iv1.b507a08c87ecfe98"; // VS Code public Client ID
 const SCOPE: &str = "read:user";
-const POLL_TIMEOUT_SECS: u64 = 300; // ~5 minutes, matches the task's server-side cap.
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -55,7 +55,29 @@ pub async fn start(host: &str) -> Result<DeviceCode, String> {
     parse_device_code(&body)
 }
 
-enum PollOutcome {
+/// One poll tick's classification — distinct outcomes so the JS retry loop
+/// can decide what to do next instead of treating everything as an error.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum PollResult {
+    /// User hasn't approved yet — caller should wait `interval` seconds and
+    /// poll again.
+    Pending,
+    /// GitHub asked for a longer interval — caller should add 5s and retry.
+    SlowDown,
+    /// Login succeeded; account was persisted. `label` is the saved account
+    /// label (GitHub login, or a token fragment when `/user` lookup failed).
+    Success { label: String },
+    /// User denied the request on GitHub's device page.
+    Denied,
+    /// The device code expired before the user approved.
+    Expired,
+}
+
+/// Pure parse of one `login/oauth/access_token` poll response body into a
+/// (non-persisting) classification. `Success` here carries the raw token —
+/// `poll` wraps this with the account-save side effect.
+enum RawPollOutcome {
     Pending,
     SlowDown,
     Success(String),
@@ -64,21 +86,20 @@ enum PollOutcome {
     Unexpected,
 }
 
-/// Pure parse of one `login/oauth/access_token` poll response.
-fn parse_poll_response(body: &str) -> PollOutcome {
-    let Ok(v) = serde_json::from_str::<Value>(body) else { return PollOutcome::Unexpected };
+fn parse_poll_response(body: &str) -> RawPollOutcome {
+    let Ok(v) = serde_json::from_str::<Value>(body) else { return RawPollOutcome::Unexpected };
     if let Some(error) = v.get("error").and_then(Value::as_str) {
         return match error {
-            "authorization_pending" => PollOutcome::Pending,
-            "slow_down" => PollOutcome::SlowDown,
-            "expired_token" => PollOutcome::Expired,
-            "access_denied" => PollOutcome::Denied,
-            _ => PollOutcome::Unexpected,
+            "authorization_pending" => RawPollOutcome::Pending,
+            "slow_down" => RawPollOutcome::SlowDown,
+            "expired_token" => RawPollOutcome::Expired,
+            "access_denied" => RawPollOutcome::Denied,
+            _ => RawPollOutcome::Unexpected,
         };
     }
     match v.get("access_token").and_then(Value::as_str) {
-        Some(token) if !token.is_empty() => PollOutcome::Success(token.to_string()),
-        _ => PollOutcome::Unexpected,
+        Some(token) if !token.is_empty() => RawPollOutcome::Success(token.to_string()),
+        _ => RawPollOutcome::Unexpected,
     }
 }
 
@@ -99,52 +120,40 @@ async fn fetch_login(client: &reqwest::Client, host: &str, token: &str) -> Optio
     v.get("login").and_then(Value::as_str).map(String::from)
 }
 
-/// Polls until success/denial/expiry or the hard server-side timeout. On
-/// success, persists the account to copilot-accounts.json and returns the
-/// account label used.
-pub async fn poll_and_save(host: &str, device_code: &str, interval: i64) -> Result<String, String> {
+/// Single poll tick against `login/oauth/access_token`. On success, persists
+/// the account to copilot-accounts.json before returning `Success`. The
+/// caller (JS) owns the retry loop: sleep `interval` (or +5s on `SlowDown`)
+/// between calls, stop on `Success`/`Denied`/`Expired`.
+pub async fn poll(host: &str, device_code: &str) -> Result<PollResult, String> {
     let client = reqwest::Client::new();
     let url = format!("https://{host}/login/oauth/access_token");
-    let mut current_interval = interval.max(1);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(POLL_TIMEOUT_SECS);
+    let resp = client
+        .post(&url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", CLIENT_ID),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Network: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Máy chủ trả về lỗi HTTP {}.", resp.status().as_u16()));
+    }
+    let body = resp.text().await.map_err(|e| format!("Network: {e}"))?;
 
-    loop {
-        if std::time::Instant::now() >= deadline {
-            return Err("Hết thời gian chờ xác thực. Vui lòng thử lại.".to_string());
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(current_interval as u64)).await;
-
-        let resp = client
-            .post(&url)
-            .header("Accept", "application/json")
-            .form(&[
-                ("client_id", CLIENT_ID),
-                ("device_code", device_code),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-            ])
-            .send()
-            .await
-            .map_err(|e| format!("Network: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("Máy chủ trả về lỗi HTTP {}.", resp.status().as_u16()));
-        }
-        let body = resp.text().await.map_err(|e| format!("Network: {e}"))?;
-
-        match parse_poll_response(&body) {
-            PollOutcome::Pending => continue,
-            PollOutcome::SlowDown => {
-                current_interval += 5;
-                continue;
-            }
-            PollOutcome::Expired => return Err("Hết thời gian chờ xác thực. Vui lòng thử lại.".to_string()),
-            PollOutcome::Denied => return Err("Yêu cầu đăng nhập bị từ chối.".to_string()),
-            PollOutcome::Unexpected => return Err("Phản hồi từ máy chủ không đúng định dạng.".to_string()),
-            PollOutcome::Success(token) => {
-                let login = fetch_login(&client, host, &token).await;
-                let label = login.clone().unwrap_or_else(|| token.chars().take(8).collect());
-                save_account(&label, login.as_deref(), &token)?;
-                return Ok(label);
-            }
+    match parse_poll_response(&body) {
+        RawPollOutcome::Pending => Ok(PollResult::Pending),
+        RawPollOutcome::SlowDown => Ok(PollResult::SlowDown),
+        RawPollOutcome::Expired => Ok(PollResult::Expired),
+        RawPollOutcome::Denied => Ok(PollResult::Denied),
+        RawPollOutcome::Unexpected => Err("Phản hồi từ máy chủ không đúng định dạng.".to_string()),
+        RawPollOutcome::Success(token) => {
+            let login = fetch_login(&client, host, &token).await;
+            let label = login.clone().unwrap_or_else(|| token.chars().take(8).collect());
+            save_account(&label, login.as_deref(), &token)?;
+            Ok(PollResult::Success { label })
         }
     }
 }
@@ -178,16 +187,7 @@ fn save_account(label: &str, login: Option<&str>, token: &str) -> Result<(), Str
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-
-    if let Some(existing) = store.accounts.iter_mut().find(|a| a.label == label) {
-        existing.token = token.to_string();
-        existing.login = login.map(String::from);
-    } else {
-        store.accounts.push(AccountEntry { label: label.to_string(), login: login.map(String::from), token: token.to_string() });
-    }
-    if store.active_label.is_none() {
-        store.active_label = Some(label.to_string());
-    }
+    merge_account(&mut store, label, login, token);
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -201,6 +201,23 @@ fn save_account(label: &str, login: Option<&str>, token: &str) -> Result<(), Str
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
     }
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+/// Pure store mutation (unit-tested): add-or-update by label, default the
+/// active label to the first-ever account — mirrors
+/// `CopilotAccountStore.addAccount` (Swift updates in place; active label is
+/// set by the caller there, but the Linux login flow always wants the newly
+/// logged-in account made active on first login).
+fn merge_account(store: &mut AccountStore, label: &str, login: Option<&str>, token: &str) {
+    if let Some(existing) = store.accounts.iter_mut().find(|a| a.label == label) {
+        existing.token = token.to_string();
+        existing.login = login.map(String::from);
+    } else {
+        store.accounts.push(AccountEntry { label: label.to_string(), login: login.map(String::from), token: token.to_string() });
+    }
+    if store.active_label.is_none() {
+        store.active_label = Some(label.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -224,27 +241,45 @@ mod tests {
 
     #[test]
     fn poll_response_pending_and_slow_down() {
-        assert!(matches!(parse_poll_response(r#"{"error":"authorization_pending"}"#), PollOutcome::Pending));
-        assert!(matches!(parse_poll_response(r#"{"error":"slow_down"}"#), PollOutcome::SlowDown));
+        assert!(matches!(parse_poll_response(r#"{"error":"authorization_pending"}"#), RawPollOutcome::Pending));
+        assert!(matches!(parse_poll_response(r#"{"error":"slow_down"}"#), RawPollOutcome::SlowDown));
     }
 
     #[test]
     fn poll_response_denied_and_expired() {
-        assert!(matches!(parse_poll_response(r#"{"error":"access_denied"}"#), PollOutcome::Denied));
-        assert!(matches!(parse_poll_response(r#"{"error":"expired_token"}"#), PollOutcome::Expired));
+        assert!(matches!(parse_poll_response(r#"{"error":"access_denied"}"#), RawPollOutcome::Denied));
+        assert!(matches!(parse_poll_response(r#"{"error":"expired_token"}"#), RawPollOutcome::Expired));
     }
 
     #[test]
     fn poll_response_success_extracts_token() {
         match parse_poll_response(r#"{"access_token":"ghu_abc123","token_type":"bearer"}"#) {
-            PollOutcome::Success(t) => assert_eq!(t, "ghu_abc123"),
+            RawPollOutcome::Success(t) => assert_eq!(t, "ghu_abc123"),
             _ => panic!("expected success"),
         }
     }
 
     #[test]
     fn poll_response_unexpected_shape() {
-        assert!(matches!(parse_poll_response("not json"), PollOutcome::Unexpected));
-        assert!(matches!(parse_poll_response(r#"{"foo":"bar"}"#), PollOutcome::Unexpected));
+        assert!(matches!(parse_poll_response("not json"), RawPollOutcome::Unexpected));
+        assert!(matches!(parse_poll_response(r#"{"foo":"bar"}"#), RawPollOutcome::Unexpected));
+    }
+
+    #[test]
+    fn merge_account_adds_new_and_sets_active_label() {
+        let mut store = AccountStore::default();
+        merge_account(&mut store, "octocat", Some("octocat"), "ghu_1");
+        assert_eq!(store.accounts.len(), 1);
+        assert_eq!(store.active_label.as_deref(), Some("octocat"));
+        assert_eq!(store.accounts[0].token, "ghu_1");
+    }
+
+    #[test]
+    fn merge_account_updates_existing_by_label_without_touching_active_label() {
+        let mut store = AccountStore { active_label: Some("other".into()), accounts: vec![AccountEntry { label: "octocat".into(), login: Some("octocat".into()), token: "old".into() }] };
+        merge_account(&mut store, "octocat", Some("octocat"), "new");
+        assert_eq!(store.accounts.len(), 1);
+        assert_eq!(store.accounts[0].token, "new");
+        assert_eq!(store.active_label.as_deref(), Some("other"));
     }
 }

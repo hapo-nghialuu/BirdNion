@@ -21,6 +21,7 @@ type ProviderCfg = {
   budget?: number | null;
   cookieSource?: string | null;
   manualCookie?: string | null;
+  adminApiKey?: string | null;
 };
 
 type Settings = { version: number; providers: ProviderCfg[] };
@@ -56,25 +57,37 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 }
 
 type DeviceCode = { userCode: string; verificationUri: string; deviceCode: string; interval: number };
+type PollResult =
+  | { kind: "pending" }
+  | { kind: "slowDown" }
+  | { kind: "success"; label: string }
+  | { kind: "denied" }
+  | { kind: "expired" };
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** GitHub Copilot Device Flow login row — port of the macOS Settings'
  * "Sign in to Copilot" flow: request a device code, show it plus the
- * verification URL, then poll until the user approves it in the browser. */
+ * verification URL, then poll (JS-driven loop honoring `interval`/`slowDown`)
+ * until the user approves it in the browser. */
 function copilotDeviceLoginRow(vi: boolean, onLoggedIn: (label: string) => void): HTMLElement {
   const row = el("div", "settings-row");
-  const button = el("button", "save-button", vi ? "Đăng nhập Copilot" : "Sign in to Copilot");
+  const button = el("button", "save-button", vi ? "Đăng nhập GitHub" : "Sign in with GitHub");
   const status = el("div", "window-subtitle");
   row.append(button, status);
 
   button.addEventListener("click", async () => {
     button.setAttribute("disabled", "true");
+    status.textContent = "";
     status.textContent = vi ? "Đang lấy mã đăng nhập…" : "Requesting device code…";
     try {
-      const code = await invoke<DeviceCode>("copilot_device_start");
+      const code = await invoke<DeviceCode>("copilot_login_start");
       status.textContent = "";
       const codeText = el("span", "provider-name", code.userCode);
       const link = document.createElement("a");
       link.href = code.verificationUri;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
       link.textContent = code.verificationUri;
       link.addEventListener("click", (ev) => {
         ev.preventDefault();
@@ -86,12 +99,24 @@ function copilotDeviceLoginRow(vi: boolean, onLoggedIn: (label: string) => void)
       );
       void openUrl(code.verificationUri).catch(() => {});
 
-      const label = await invoke<string>("copilot_device_poll", {
-        deviceCode: code.deviceCode,
-        interval: code.interval,
-      });
-      status.textContent = vi ? `Đã đăng nhập: ${label}` : `Signed in: ${label}`;
-      onLoggedIn(label);
+      let interval = Math.max(1, code.interval);
+      for (;;) {
+        await sleep(interval * 1000);
+        const result = await invoke<PollResult>("copilot_login_poll", { deviceCode: code.deviceCode });
+        if (result.kind === "pending") continue;
+        if (result.kind === "slowDown") { interval += 5; continue; }
+        if (result.kind === "success") {
+          status.textContent = vi ? `Đã đăng nhập: ${result.label}` : `Signed in: ${result.label}`;
+          onLoggedIn(result.label);
+          break;
+        }
+        if (result.kind === "denied") {
+          status.textContent = vi ? "Yêu cầu đăng nhập bị từ chối." : "Login request was denied.";
+          break;
+        }
+        status.textContent = vi ? "Hết thời gian chờ xác thực." : "Login request expired.";
+        break;
+      }
     } catch (err) {
       status.textContent = `${vi ? "Lỗi" : "Error"}: ${err}`;
     } finally {
@@ -149,6 +174,15 @@ export async function settingsTab(onSaved: () => void): Promise<HTMLElement> {
           : ((cfg.manualCookie = null), (cfg.cookieSource = null));
       });
       row.append(cookie);
+    }
+    if (id === "claude") {
+      const adminKey = document.createElement("input");
+      adminKey.type = "password";
+      adminKey.placeholder = vi ? "Admin API key (tuỳ chọn, dashboard tổ chức)" : "Admin API key (optional, org dashboard)";
+      adminKey.value = cfg.adminApiKey ?? "";
+      adminKey.className = "settings-input";
+      adminKey.addEventListener("change", () => { cfg.adminApiKey = adminKey.value.trim() || null; });
+      row.append(adminKey);
     }
     container.append(row);
 

@@ -6,7 +6,7 @@
 //! admin key is configured.
 //!
 //! Key resolution: `ANTHROPIC_ADMIN_KEY` / `ANTHROPIC_ADMIN_API_KEY` env vars,
-//! then the Claude provider's `apiKey` config field (mirrors the Swift
+//! then the Claude provider's `adminApiKey` config field (mirrors the Swift
 //! Settings-UI-layered-on-env resolution, minus Keychain).
 
 use serde::Serialize;
@@ -75,8 +75,9 @@ pub struct ClaudeAdminSnapshot {
     pub top_cost_items: Vec<CostBreakdown>,
 }
 
-/// Admin key resolution: env vars first, then the provider config's apiKey
-/// field (mirrors `ClaudeAdminAPISettingsReader.apiKey` + the Settings-layer).
+/// Admin key resolution: env vars first, then the provider config's
+/// `adminApiKey` field (mirrors `ClaudeAdminAPISettingsReader.apiKey` + the
+/// Settings-layer).
 pub fn admin_api_key(cfg: &config::Provider) -> Option<String> {
     for key in ["ANTHROPIC_ADMIN_KEY", "ANTHROPIC_ADMIN_API_KEY"] {
         if let Ok(v) = std::env::var(key) {
@@ -85,7 +86,7 @@ pub fn admin_api_key(cfg: &config::Provider) -> Option<String> {
             }
         }
     }
-    cfg.api_key.as_deref().and_then(clean_key)
+    cfg.admin_api_key.as_deref().and_then(clean_key)
 }
 
 fn clean_key(raw: &str) -> Option<String> {
@@ -377,7 +378,7 @@ mod tests {
 
     #[test]
     fn admin_api_key_prefers_provider_field_when_no_env() {
-        let cfg = config::Provider { id: "claude".into(), api_key: Some("sk-ant-admin-cfg".into()), ..Default::default() };
+        let cfg = config::Provider { id: "claude".into(), admin_api_key: Some("sk-ant-admin-cfg".into()), ..Default::default() };
         assert_eq!(admin_api_key(&cfg), Some("sk-ant-admin-cfg".to_string()));
     }
 

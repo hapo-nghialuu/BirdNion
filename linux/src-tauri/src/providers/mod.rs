@@ -12,7 +12,7 @@ pub mod claude_admin;
 pub mod codex;
 pub mod commandcode;
 pub mod copilot;
-pub mod copilot_device;
+pub mod copilot_oauth;
 pub mod cursor;
 pub mod deepgram;
 pub mod deepseek;

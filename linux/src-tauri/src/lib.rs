@@ -35,27 +35,31 @@ async fn provider_statuses() -> Vec<providers::ProviderStatus> {
     providers::fetch_all().await
 }
 
-/// Anthropic Admin API org usage/cost snapshot for the enabled `claude`
-/// provider entry (Admin API key via env or config, separate from the OAuth
-/// token). `null` when no admin key is configured or the fetch fails.
+/// Claude Admin API org usage/cost dashboard (30-day). None when no admin
+/// key is configured (env vars or the Claude row's `adminApiKey` field) or
+/// the fetch fails — the Claude tab simply omits the extra card.
 #[tauri::command]
 async fn claude_admin_usage() -> Option<providers::claude_admin::ClaudeAdminSnapshot> {
-    let cfg = config::enabled_providers().into_iter().find(|p| p.id == "claude")?;
-    providers::claude_admin::fetch_snapshot(&cfg).await
+    let claude_cfg = config::load()
+        .providers
+        .into_iter()
+        .find(|p| p.id == "claude")
+        .unwrap_or_else(|| config::Provider { id: "claude".to_string(), ..Default::default() });
+    providers::claude_admin::fetch_snapshot(&claude_cfg).await
 }
 
-/// Starts a GitHub Copilot Device Flow login, returning the user code and
-/// verification URL for the web UI to display.
+/// Starts a GitHub Device Flow login for Copilot: requests a user code the
+/// user enters at the returned verification URL.
 #[tauri::command]
-async fn copilot_device_start() -> Result<providers::copilot_device::DeviceCode, String> {
-    providers::copilot_device::start("github.com").await
+async fn copilot_login_start() -> Result<providers::copilot_oauth::DeviceCode, String> {
+    providers::copilot_oauth::start("github.com").await
 }
 
-/// Polls the Device Flow until the user approves/denies (or it expires),
-/// persisting the resulting account on success and returning its label.
+/// Single poll tick against the device-flow token endpoint. The caller (JS)
+/// drives the retry loop, sleeping `interval` seconds between calls.
 #[tauri::command]
-async fn copilot_device_poll(device_code: String, interval: i64) -> Result<String, String> {
-    providers::copilot_device::poll_and_save("github.com", &device_code, interval).await
+async fn copilot_login_poll(device_code: String) -> Result<providers::copilot_oauth::PollResult, String> {
+    providers::copilot_oauth::poll("github.com", &device_code).await
 }
 
 /// Full settings.json content for the Settings view (local app — keys stay
@@ -122,8 +126,8 @@ pub fn run() {
             codex_usage_report,
             provider_statuses,
             claude_admin_usage,
-            copilot_device_start,
-            copilot_device_poll,
+            copilot_login_start,
+            copilot_login_poll,
             get_settings,
             save_settings,
             notify,
