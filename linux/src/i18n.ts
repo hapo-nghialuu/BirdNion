@@ -49,6 +49,30 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   claudeFootnote: { vi: "Ước tính từ log Claude Code cục bộ.", en: "Estimated from local Claude Code logs." },
   codexFootnote: { vi: "Ước tính từ log Codex cục bộ.", en: "Estimated from local Codex logs." },
   loadError: { vi: "Lỗi khi tải", en: "Load error" },
+
+  // Claude Code quick-apply
+  ccTitle: { vi: "Claude Code", en: "Claude Code" },
+  ccStateOn: { vi: "Bật", en: "On" },
+  ccStateOff: { vi: "Tắt", en: "Off" },
+  ccStateStale: { vi: "Lệch", en: "Stale" },
+  ccStateSetup: { vi: "Cần cấu hình", en: "Needs setup" },
+  ccPowerOn: { vi: "Đang dùng {name} cho Claude Code", en: "Claude Code is using {name}" },
+  ccPowerOff: { vi: "Bấm để áp dụng cho Claude Code", en: "Tap to apply to Claude Code" },
+  ccPowerStale: { vi: "Giá trị đã thay đổi — bấm để cập nhật", en: "Values changed — tap to update" },
+  ccNeedSetup: { vi: "Chưa cấu hình đủ model cho Claude Code", en: "Claude Code models not fully configured" },
+  ccGlobalTarget: { vi: "~/.claude/settings.json", en: "~/.claude/settings.json" },
+  ccProjectNone: { vi: "Chưa chọn thư mục project", en: "No project folder chosen" },
+  ccApplied: { vi: "Đã áp dụng", en: "Applied" },
+  ccDeactivated: { vi: "Đã tắt", en: "Deactivated" },
+  ccError: { vi: "Lỗi", en: "Error" },
+  ccScope: { vi: "Phạm vi", en: "Scope" },
+  ccScopeGlobal: { vi: "Toàn cục", en: "Global" },
+  ccScopeProject: { vi: "Project", en: "Project" },
+  ccProjectPath: { vi: "Đường dẫn project", en: "Project path" },
+  ccModelHaiku: { vi: "Model Haiku", en: "Haiku model" },
+  ccModelSonnet: { vi: "Model Sonnet", en: "Sonnet model" },
+  ccModelOpus: { vi: "Model Opus", en: "Opus model" },
+  ccDisable1M: { vi: "Tắt ngữ cảnh 1M token", en: "Disable 1M-token context" },
 };
 
 /** t("estTotal", {n: 30}) — placeholder substitution via {name}. */

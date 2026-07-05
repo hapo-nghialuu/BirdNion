@@ -1,7 +1,9 @@
 // Per-provider quota view — port of the macOS ProviderCard: quota windows
 // with remaining-% bars, error banner, account metadata line.
 
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "./i18n";
+import { claudeCodeCard, shouldShowClaudeCode } from "./claude-code";
 
 export type QuotaWindow = {
   label: string;
@@ -77,4 +79,25 @@ export function providerCard(status: ProviderStatus): HTMLElement {
     for (const win of status.windows) card.append(windowRow(win));
   }
   return card;
+}
+
+/** Claude Code quick-apply card for the provider tab, shown only when the
+ * provider can back Claude Code and already has an API key configured
+ * (mirrors the Swift `shouldShow` gate). `onOpenSettings` jumps to the
+ * Settings tab when the provider still needs its models configured. */
+export async function claudeCodeQuickApplyCard(
+  status: ProviderStatus,
+  onOpenSettings?: () => void,
+): Promise<HTMLElement | null> {
+  if (!shouldShowClaudeCode(status.id, await providerApiKey(status.id))) return null;
+  return claudeCodeCard(status.id, status.displayName, onOpenSettings);
+}
+
+async function providerApiKey(providerId: string): Promise<string | null> {
+  try {
+    const settings = await invoke<{ providers: { id: string; apiKey?: string | null }[] }>("get_settings");
+    return settings.providers.find((p) => p.id === providerId)?.apiKey ?? null;
+  } catch {
+    return null;
+  }
 }

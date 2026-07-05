@@ -58,6 +58,26 @@ pub struct Provider {
     /// (`/v1/organizations/...`). Separate from `api_key` (OAuth token file).
     #[serde(default)]
     pub admin_api_key: Option<String>,
+
+    /// Claude Code env config (Settings → "Claude Code"). Chosen model ids per
+    /// tier are written to `ANTHROPIC_DEFAULT_*_MODEL` in the Claude Code
+    /// `settings.json`. Mirrors the macOS `BirdNionConfigStore.Provider` field
+    /// names exactly so the shared settings.json stays compatible both ways.
+    #[serde(default)]
+    pub claude_haiku_model: Option<String>,
+    #[serde(default)]
+    pub claude_sonnet_model: Option<String>,
+    #[serde(default)]
+    pub claude_opus_model: Option<String>,
+    /// Maps to `CLAUDE_CODE_DISABLE_1M_CONTEXT` ("1" when true). Nil/false = unset.
+    #[serde(default, rename = "claudeDisable1M")]
+    pub claude_disable_1m: Option<bool>,
+    /// Last selected Claude Code target for this provider: "global" or "project".
+    #[serde(default)]
+    pub claude_code_scope: Option<String>,
+    /// Last selected project directory path for this provider.
+    #[serde(default)]
+    pub claude_code_project_path: Option<String>,
 }
 
 /// Persist settings atomically with owner-only permissions (0600), matching
@@ -116,6 +136,17 @@ pub fn enabled_providers() -> Vec<Provider> {
         .filter(|p| p.enabled.unwrap_or(false))
         .collect()
 }
+
+/// Find a single provider entry by id, or a blank default when not present
+/// (mirrors macOS's "nil = not yet configured" fallback).
+pub fn find_provider(id: &str) -> Provider {
+    load()
+        .providers
+        .into_iter()
+        .find(|p| p.id == id)
+        .unwrap_or_else(|| Provider { id: id.to_string(), ..Default::default() })
+}
+
 
 /// API key resolution: env override first (same variable names as macOS),
 /// then the config file.

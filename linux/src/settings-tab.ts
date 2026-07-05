@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t, currentLang } from "./i18n";
+import { claudeCodeSettingsSection } from "./claude-code-settings";
 
 type ProviderCfg = {
   id: string;
@@ -22,6 +23,12 @@ type ProviderCfg = {
   cookieSource?: string | null;
   manualCookie?: string | null;
   adminApiKey?: string | null;
+  claudeHaikuModel?: string | null;
+  claudeSonnetModel?: string | null;
+  claudeOpusModel?: string | null;
+  claudeDisable1M?: boolean | null;
+  claudeCodeScope?: string | null;
+  claudeCodeProjectPath?: string | null;
 };
 
 type Settings = { version: number; providers: ProviderCfg[] };
@@ -185,6 +192,9 @@ export async function settingsTab(onSaved: () => void): Promise<HTMLElement> {
       row.append(adminKey);
     }
     container.append(row);
+
+    const ccSection = claudeCodeSettingsSection(cfg);
+    if (ccSection) container.append(ccSection);
 
     if (id === "copilot") {
       container.append(copilotDeviceLoginRow(vi, (label) => { cfg.accountLabel = label; }));

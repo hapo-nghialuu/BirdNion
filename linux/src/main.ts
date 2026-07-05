@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { combine, UsageReport } from "./usage";
 import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
-import { providerCard, ProviderStatus } from "./provider-tab";
+import { providerCard, claudeCodeQuickApplyCard, ProviderStatus } from "./provider-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { t, currentLang, setLang } from "./i18n";
@@ -90,6 +90,11 @@ function render() {
   const status = state.statuses.find((s) => s.id === state.tab);
   if (status) {
     app.append(providerCard(status));
+    void claudeCodeQuickApplyCard(status, () => {
+      state.tab = "settings";
+      localStorage.setItem(TAB_KEY, "settings");
+      render();
+    }).then((card) => { if (card) app.querySelector(".card")?.after(card); });
   }
   // Claude/Codex tabs also show their own local 30-day cost chart, matching
   // the macOS per-provider chart cards.

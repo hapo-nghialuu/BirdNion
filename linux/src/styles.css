@@ -356,6 +356,82 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* --- Claude Code quick-apply ------------------------------------------ */
+
+.cc-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.cc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.cc-title { font-size: 12px; font-weight: 600; }
+
+.cc-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.cc-badge.cc-on { background: #e6f6ec; color: #15803d; }
+.cc-badge.cc-off { background: #eef0f4; color: var(--secondary); }
+.cc-badge.cc-stale { background: #fff3d9; color: #a84b00; }
+.cc-badge.cc-needsSetup { background: #e7f1ff; color: var(--blue); }
+
+.cc-subtitle { font-size: 11px; color: var(--secondary); margin-bottom: 3px; }
+
+.cc-target {
+  font-size: 10px;
+  color: var(--tertiary);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cc-toggle {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 87, 184, 0.35);
+  background: #e7f1ff;
+  color: var(--blue);
+  cursor: pointer;
+}
+
+.cc-toggle:disabled { opacity: 0.6; cursor: default; }
+
+/* --- Claude Code settings section -------------------------------------- */
+
+.cc-settings-section {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--track);
+}
+
+.cc-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.cc-settings-row label {
+  min-width: 110px;
+  font-size: 10px;
+  color: var(--secondary);
+}
+
 /* --- Top models ------------------------------------------------------ */
 
 .model-row { margin-top: 8px; }

@@ -2,6 +2,7 @@
 //! usage-report commands the web UI calls. The window hides on close so the
 //! app lives in the tray, mirroring the macOS menu-bar behavior.
 
+mod claude_code;
 mod claude_scanner;
 mod codex_scanner;
 mod config;
@@ -46,6 +47,94 @@ async fn claude_admin_usage() -> Option<providers::claude_admin::ClaudeAdminSnap
         .find(|p| p.id == "claude")
         .unwrap_or_else(|| config::Provider { id: "claude".to_string(), ..Default::default() });
     providers::claude_admin::fetch_snapshot(&claude_cfg).await
+}
+
+/// Claude Code quick-apply state for a provider: on/off/stale/needsSetup +
+/// the settings.json path it targets. Drives the power-button card in the
+/// provider tab and the "Claude Code" Settings pane.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeCodeState {
+    state: &'static str,
+    target_path: Option<String>,
+}
+
+fn claude_code_state_for(provider_id: &str) -> ClaudeCodeState {
+    let provider = config::find_provider(provider_id);
+    let scope = claude_code::current_scope(&provider);
+    let configured = scope.is_some() && claude_code::is_fully_configured(provider_id, &provider);
+    let (sync, target) = match (&scope, configured) {
+        (Some(sc), true) => {
+            let spec = claude_code::spec_for_provider(provider_id, &provider);
+            let sync = spec
+                .as_ref()
+                .map(|s| claude_code::sync_state(s, sc))
+                .unwrap_or(claude_code::SyncState::Off);
+            (sync, Some(claude_code::target_path(sc).to_string_lossy().to_string()))
+        }
+        (Some(sc), false) => (claude_code::SyncState::Off, Some(claude_code::target_path(sc).to_string_lossy().to_string())),
+        (None, _) => (claude_code::SyncState::Off, None),
+    };
+    let power = claude_code::power_state(configured, sync);
+    let state = match power {
+        claude_code::PowerState::On => "on",
+        claude_code::PowerState::Off => "off",
+        claude_code::PowerState::Stale => "stale",
+        claude_code::PowerState::NeedsSetup => "needsSetup",
+    };
+    ClaudeCodeState { state, target_path: target }
+}
+
+/// Claude Code quick-apply state for a provider (on/off/stale/needsSetup) +
+/// the settings.json path it would write to.
+#[tauri::command]
+fn claude_code_state(provider_id: String) -> ClaudeCodeState {
+    claude_code_state_for(&provider_id)
+}
+
+/// Merge this provider's Claude Code env into its currently-selected scope
+/// (global or project). Fails with a Vietnamese message mirroring the macOS
+/// `WriteError` when the provider isn't ready.
+#[tauri::command]
+fn claude_code_apply(provider_id: String) -> Result<ClaudeCodeState, String> {
+    let provider = config::find_provider(&provider_id);
+    if !claude_code::is_supported(&provider_id) {
+        return Err("Provider không hỗ trợ làm backend Claude Code".to_string());
+    }
+    let scope = claude_code::current_scope(&provider)
+        .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+    let spec = claude_code::spec_for_provider(&provider_id, &provider).ok_or_else(|| {
+        if provider.api_key.as_deref().unwrap_or("").trim().is_empty() {
+            "Provider chưa có API key".to_string()
+        } else {
+            "Chưa chọn đủ 3 model (Haiku/Sonnet/Opus)".to_string()
+        }
+    })?;
+    claude_code::apply(&spec, &scope)?;
+    Ok(claude_code_state_for(&provider_id))
+}
+
+/// Turn Claude Code's backing OFF for this provider's currently-selected
+/// scope: clears the managed `env`/`apiKeyHelper` block, leaves the rest of
+/// settings.json intact.
+#[tauri::command]
+fn claude_code_deactivate(provider_id: String) -> Result<ClaudeCodeState, String> {
+    let provider = config::find_provider(&provider_id);
+    let scope = claude_code::current_scope(&provider)
+        .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+    claude_code::deactivate(&scope)?;
+    Ok(claude_code_state_for(&provider_id))
+}
+
+/// Remove the Claude Code env block from this provider's currently-selected
+/// scope without creating a settings file when none exists. Returns whether
+/// anything was actually removed.
+#[tauri::command]
+fn claude_code_remove_env(provider_id: String) -> Result<bool, String> {
+    let provider = config::find_provider(&provider_id);
+    let scope = claude_code::current_scope(&provider)
+        .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+    claude_code::remove_env_settings(&scope)
 }
 
 /// Starts a GitHub Device Flow login for Copilot: requests a user code the
@@ -126,6 +215,10 @@ pub fn run() {
             codex_usage_report,
             provider_statuses,
             claude_admin_usage,
+            claude_code_state,
+            claude_code_apply,
+            claude_code_deactivate,
+            claude_code_remove_env,
             copilot_login_start,
             copilot_login_poll,
             get_settings,
