@@ -20,11 +20,16 @@ Stack: Tauri v2 (Rust core + web UI vanilla TS). Dùng chung schema config
 - [x] Notifications cảnh báo quota ≤20% (libnotify), i18n vi/en
 - [x] CI: GitHub Actions build .deb/.rpm/AppImage trên ubuntu-22.04 + cargo test
 
-## Chưa có / khác biệt so với macOS
+- [x] Claude Admin API org dashboard (card 30 ngày trên tab Claude khi có admin key)
+- [x] Copilot Device Flow login ngay trong Settings (mã + link GitHub + polling)
+- [x] MiniMax cookie fallback, Codex web enrichment (credits/email qua cookie chatgpt.com),
+      Antigravity agy warm-spawn + OAuth remote fallback
 
-- Claude Admin API org dashboard, Codex web dashboard extras: chưa port
-- Copilot Device Flow login: dùng accounts file từ máy macOS hoặc token thủ công
-- Cookie: cần trình duyệt Chrome/Chromium/Brave/Edge/Firefox trên Linux (gnome-keyring);
+## Khác biệt đã biết so với macOS
+
+- Codex "code review %" không port được (macOS lấy qua DOM scrape WKWebView headful —
+  không có tương đương headless; đã ghi chú trong codex.rs)
+- Cookie: cần Chrome/Chromium/Brave/Edge/Firefox trên Linux (gnome-keyring);
   Safari không tồn tại — có ô "cookie thủ công" trong Settings làm fallback
 - Menu-bar percent rotation → tray tooltip (GNOME/KDE không hỗ trợ text cạnh icon tray)
 

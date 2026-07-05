@@ -1,18 +1,29 @@
 //! Codex (OpenAI/ChatGPT) quota provider — port of `CodexProvider.swift` +
 //! `CodexAuth.swift` (OAuth path only; the CLI/`codex app-server` RPC
-//! fallback and the web-dashboard/status-page extras are macOS-only side
-//! data and are intentionally not ported).
+//! fallback is macOS-only side data and is intentionally not ported).
 //!
 //! Reads OAuth tokens from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`),
 //! refreshes proactively when stale (>8 days since last_refresh, matching
 //! Codex CLI), persists the rotated token back to auth.json, and maps the
 //! ChatGPT backend usage response's primary (~5h) / secondary (weekly)
 //! windows plus any `additional_rate_limits` (e.g. GPT-5.3-Codex-Spark).
+//!
+//! Best-effort chatgpt.com web-dashboard enrichment (port of the JSON-API
+//! part of `CodexWebDashboard.swift`/`OpenAIDashboardFetcher.fetchDashboardUsageAPI`):
+//! hits the *same* `wham/usage` endpoint using a browser session cookie for
+//! `chatgpt.com` instead of the OAuth bearer token. This covers the
+//! `credits_remaining` + rate-limit windows the Swift dashboard preflight
+//! gets over plain JSON. Note: Swift's "Code review remaining %" is parsed
+//! from the *rendered* dashboard page body via a hidden WKWebView (regex over
+//! DOM text, see `OpenAIDashboardParser.parseCodeReviewRemainingPercent`) —
+//! there is no headless/JSON equivalent, so that field is intentionally not
+//! ported here. Cookie-fallback failures never break the primary OAuth status.
 
 use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::config;
+use crate::providers::browser_cookies;
 use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -222,13 +233,43 @@ enum UsageError {
     Network(String),
 }
 
+/// Best-effort chatgpt.com web-dashboard enrichment: hits the same
+/// `wham/usage` JSON endpoint using a browser session cookie for
+/// `chatgpt.com` (mirrors `OpenAIDashboardFetcher.fetchDashboardUsageAPI`'s
+/// cookie-authenticated preflight). Returns `None` on any failure — this must
+/// never break the primary OAuth status.
+async fn fetch_cookie_enrichment(cfg: &config::Provider) -> Option<Value> {
+    let cfg_clone = cfg.clone();
+    let cookie_header = tauri::async_runtime::spawn_blocking(move || browser_cookies::cookie_header(&["chatgpt.com"], &cfg_clone))
+        .await
+        .ok()?
+        .ok()?;
+    if cookie_header.trim().is_empty() {
+        return None;
+    }
+    let client = shared_client();
+    let resp = client
+        .get(USAGE_URL)
+        .header("Cookie", &cookie_header)
+        .header("Accept", "application/json")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("User-Agent", "BirdNion")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<Value>().await.ok()
+}
+
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     let path = auth_file_path();
 
     let contents = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(_) => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Codex — chạy `codex` để đăng nhập"),
+        Err(_) => return fetch_cookie_fallback(cfg, &name).await,
     };
     let mut creds = match parse_auth_json(&contents) {
         Ok(c) => c,
@@ -248,7 +289,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 
     let client = shared_client();
     match fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
-        Ok(body) => build_success(&cfg.id, &name, &body, &creds),
+        Ok(body) => build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref()).await,
         Err(UsageError::Unauthorized) => {
             if !creds.refresh_token.is_empty() {
                 if let Ok((access, refresh, id_token)) = refresh_token(&creds.refresh_token).await {
@@ -258,7 +299,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
                     creds.last_refresh = Some(now);
                     let _ = save_auth_json(&path, &creds);
                     if let Ok(body) = fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
-                        return build_success(&cfg.id, &name, &body, &creds);
+                        return build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref()).await;
                     }
                 }
             }
@@ -270,16 +311,45 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     }
 }
 
-fn build_success(id: &str, name: &str, body: &Value, creds: &Credentials) -> ProviderStatus {
+/// No usable OAuth session (`auth.json` missing) → try the cookie-authenticated
+/// dashboard enrichment as a standalone best-effort status instead of failing
+/// outright, mirroring how the Swift extras path can surface data independent
+/// of the CLI login state.
+async fn fetch_cookie_fallback(cfg: &config::Provider, name: &str) -> ProviderStatus {
+    let Some(body) = fetch_cookie_enrichment(cfg).await else {
+        return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Codex — chạy `codex` để đăng nhập");
+    };
+    let windows = map_windows(&body);
+    if windows.is_empty() {
+        return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Codex — chạy `codex` để đăng nhập");
+    }
+    let credits_remaining = credits_balance(&body);
+    let label = cfg.account_label.clone().unwrap_or_else(|| "cookie".to_string());
+    ProviderStatus {
+        id: cfg.id.clone(),
+        display_name: name.to_string(),
+        windows,
+        last_updated: chrono::Utc::now().timestamp(),
+        error: None,
+        account_label: Some(label),
+        credits_remaining,
+    }
+}
+
+fn credits_balance(body: &Value) -> Option<f64> {
+    body.get("credits").and_then(|c| c.get("balance")).and_then(Value::as_f64)
+}
+
+async fn build_success(id: &str, name: &str, body: &Value, creds: &Credentials, cookie_enrichment: Option<&Value>) -> ProviderStatus {
     let windows = map_windows(body);
     if windows.is_empty() {
         return ProviderStatus::failure(id, name, "Codex chưa có dữ liệu quota");
     }
     let account_label = email_from_id_token(creds.id_token.as_deref()).unwrap_or_else(|| "Codex".to_string());
-    let credits_remaining = body
-        .get("credits")
-        .and_then(|c| c.get("balance"))
-        .and_then(Value::as_f64);
+    // OAuth's own `wham/usage` response is the source of truth; the cookie
+    // enrichment only fills in `credits_remaining` when OAuth omitted it
+    // (e.g. plans where credits are absent from the bearer-token response).
+    let credits_remaining = credits_balance(body).or_else(|| cookie_enrichment.and_then(credits_balance));
     ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
@@ -540,5 +610,33 @@ mod tests {
     fn credentials_missing_access_token_errors() {
         let raw = r#"{"tokens":{"refresh_token":"rt"}}"#;
         assert!(parse_auth_json(raw).is_err());
+    }
+
+    #[test]
+    fn credits_balance_reads_dashboard_payload_shape() {
+        let body = json!({"credits": {"has_credits": true, "unlimited": false, "balance": 12.5}});
+        assert_eq!(credits_balance(&body), Some(12.5));
+    }
+
+    #[test]
+    fn credits_balance_missing_or_malformed_is_none() {
+        assert_eq!(credits_balance(&json!({})), None);
+        assert_eq!(credits_balance(&json!({"credits": {"unlimited": true}})), None);
+    }
+
+    #[test]
+    fn cookie_dashboard_payload_maps_windows_and_credits() {
+        // Same `wham/usage` shape as the OAuth path, just fetched via cookie auth.
+        let body = json!({
+            "rate_limit": {
+                "primary_window": {"used_percent": 15, "reset_at": 100, "limit_window_seconds": 300 * 60},
+                "secondary_window": {"used_percent": 40, "reset_at": 200, "limit_window_seconds": 10080 * 60},
+            },
+            "credits": {"has_credits": true, "unlimited": false, "balance": 3.25}
+        });
+        let windows = map_windows(&body);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].used_pct, 15);
+        assert_eq!(credits_balance(&body), Some(3.25));
     }
 }

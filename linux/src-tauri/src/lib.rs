@@ -35,6 +35,29 @@ async fn provider_statuses() -> Vec<providers::ProviderStatus> {
     providers::fetch_all().await
 }
 
+/// Anthropic Admin API org usage/cost snapshot for the enabled `claude`
+/// provider entry (Admin API key via env or config, separate from the OAuth
+/// token). `null` when no admin key is configured or the fetch fails.
+#[tauri::command]
+async fn claude_admin_usage() -> Option<providers::claude_admin::ClaudeAdminSnapshot> {
+    let cfg = config::enabled_providers().into_iter().find(|p| p.id == "claude")?;
+    providers::claude_admin::fetch_snapshot(&cfg).await
+}
+
+/// Starts a GitHub Copilot Device Flow login, returning the user code and
+/// verification URL for the web UI to display.
+#[tauri::command]
+async fn copilot_device_start() -> Result<providers::copilot_device::DeviceCode, String> {
+    providers::copilot_device::start("github.com").await
+}
+
+/// Polls the Device Flow until the user approves/denies (or it expires),
+/// persisting the resulting account on success and returning its label.
+#[tauri::command]
+async fn copilot_device_poll(device_code: String, interval: i64) -> Result<String, String> {
+    providers::copilot_device::poll_and_save("github.com", &device_code, interval).await
+}
+
 /// Full settings.json content for the Settings view (local app — keys stay
 /// on this machine, same plaintext-by-design store as macOS).
 #[tauri::command]
@@ -98,6 +121,9 @@ pub fn run() {
             claude_usage_report,
             codex_usage_report,
             provider_statuses,
+            claude_admin_usage,
+            copilot_device_start,
+            copilot_device_poll,
             get_settings,
             save_settings,
             notify,

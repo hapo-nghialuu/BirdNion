@@ -1,6 +1,6 @@
-//! MiniMax Token Plan quota provider — port of `MiniMaxProvider.swift`
-//! (API-token path only; the Swift cookie/browser fallback is macOS-specific
-//! and out of scope on Linux — no API token means a clear error instead).
+//! MiniMax Token Plan quota provider — port of `MiniMaxProvider.swift`.
+//! When no API token is configured, falls back to a browser session cookie
+//! for the region's platform domain (mirrors Swift's `fetchWithCookie`).
 //!
 //! Endpoint: `GET https://<host>/v1/api/openplatform/coding_plan/remains`
 //! (region `io` = `platform.minimax.io` default, `com` = `platform.minimaxi.com`
@@ -24,6 +24,7 @@
 use serde_json::Value;
 
 use crate::config;
+use crate::providers::browser_cookies;
 use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
 
 const EXCLUDED_MODELS: &[&str] = &["video"];
@@ -67,12 +68,22 @@ fn is_credential_error(error: &str) -> bool {
     normalized.contains("invalid api key") || normalized.contains("invalid credentials") || normalized == "http 401" || normalized == "http 403"
 }
 
+/// Cookie-domain candidates in try-order, mirroring Swift's region-preference
+/// fallback so users don't have to flip the region picker for cookie auth.
+fn cookie_domains(region: &str) -> Vec<&'static str> {
+    if region == "com" {
+        vec!["platform.minimaxi.com", "platform.minimax.io"]
+    } else {
+        vec!["platform.minimax.io", "platform.minimaxi.com"]
+    }
+}
+
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     let envtok = std::env::var("MINIMAX_CODING_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let token = envtok.or_else(|| config::api_key(cfg));
     let Some(token) = token else {
-        return ProviderStatus::failure(&cfg.id, &name, "Chưa cấu hình token và không tìm thấy cookie trình duyệt");
+        return fetch_with_cookie(cfg, &name).await;
     };
     let account_label = cfg
         .account_label
@@ -143,6 +154,51 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     }
 
     ProviderStatus::failure(&cfg.id, &name, credential_error.or(last_error).unwrap_or_else(|| "Không lấy được quota".to_string()))
+}
+
+/// No API token configured → try a browser session cookie for the region's
+/// platform domain (mirrors Swift's `fetchWithCookie`). The same
+/// `coding_plan/remains` JSON envelope is hit with the cookie header. Only
+/// the original "no token/no cookie" error is surfaced when cookies also fail.
+async fn fetch_with_cookie(cfg: &config::Provider, name: &str) -> ProviderStatus {
+    let region = cfg.region.as_deref().unwrap_or("io").to_string();
+    let domains = cookie_domains(&region);
+    let cfg_clone = cfg.clone();
+    let cookie_header = match tauri::async_runtime::spawn_blocking(move || browser_cookies::cookie_header(&domains, &cfg_clone)).await {
+        Ok(Ok(h)) if !h.trim().is_empty() => h,
+        _ => return ProviderStatus::failure(&cfg.id, name, "Chưa cấu hình token và không tìm thấy cookie trình duyệt"),
+    };
+
+    let url = endpoint_url(&region);
+    let client = shared_client();
+    let resp = client
+        .get(&url)
+        .header("Cookie", &cookie_header)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Origin", format!("https://{}", platform_host(&region)))
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => return ProviderStatus::failure(&cfg.id, name, format!("Network (cookie): {e}")),
+    };
+    if !resp.status().is_success() {
+        return ProviderStatus::failure(&cfg.id, name, format!("HTTP {} (cookie)", resp.status().as_u16()));
+    }
+    let body: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return ProviderStatus::failure(&cfg.id, name, "Response thiếu trường"),
+    };
+    let label = cfg.account_label.clone().unwrap_or_else(|| "cookie".to_string());
+    parse_remains(&cfg.id, name, &label, &body)
+}
+
+/// Same endpoint the API-token path prefers first for the region — cookie
+/// auth only needs the one canonical `coding_plan/remains` URL.
+fn endpoint_url(region: &str) -> String {
+    format!("https://{}/v1/api/openplatform/coding_plan/remains", platform_host(region))
 }
 
 /// Pure payload → status mapping (unit-tested).
@@ -272,5 +328,17 @@ mod tests {
     fn missing_base_resp_is_error() {
         let s = parse_remains("minimax", "MiniMax", "x", &json!({}));
         assert!(s.error.is_some());
+    }
+
+    #[test]
+    fn cookie_domains_prefers_region_specific_domain_first() {
+        assert_eq!(cookie_domains("io"), vec!["platform.minimax.io", "platform.minimaxi.com"]);
+        assert_eq!(cookie_domains("com"), vec!["platform.minimaxi.com", "platform.minimax.io"]);
+    }
+
+    #[test]
+    fn endpoint_url_uses_platform_host_for_region() {
+        assert_eq!(endpoint_url("io"), "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains");
+        assert_eq!(endpoint_url("com"), "https://platform.minimaxi.com/v1/api/openplatform/coding_plan/remains");
     }
 }

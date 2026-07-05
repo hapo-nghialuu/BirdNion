@@ -43,3 +43,6 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tauri-plugin-notification = "2"
 # Launch-at-login (XDG autostart .desktop on Linux, systemd-free).
 tauri-plugin-autostart = "2"
+# copilot_device.rs: Device Flow poll interval sleep (tokio is already the
+# runtime Tauri uses internally; declared directly here only for `time::sleep`).
+tokio = { version = "1", features = ["time"] }

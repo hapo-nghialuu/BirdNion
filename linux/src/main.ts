@@ -3,6 +3,7 @@ import { combine, UsageReport } from "./usage";
 import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
 import { providerCard, ProviderStatus } from "./provider-tab";
 import { sourceChartCard } from "./source-chart";
+import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { t, currentLang, setLang } from "./i18n";
 import { settingsTab } from "./settings-tab";
 
@@ -13,6 +14,7 @@ type State = {
   claude: UsageReport | null;
   codex: UsageReport | null;
   statuses: ProviderStatus[];
+  claudeAdmin: ClaudeAdminSnapshot | null;
   tab: string; // "all" | provider id
 };
 
@@ -20,6 +22,7 @@ const state: State = {
   claude: null,
   codex: null,
   statuses: [],
+  claudeAdmin: null,
   tab: localStorage.getItem(TAB_KEY) || "all",
 };
 
@@ -92,6 +95,7 @@ function render() {
   // the macOS per-provider chart cards.
   if (state.tab === "claude" && state.claude) {
     app.append(sourceChartCard(state.claude, "claude"));
+    if (state.claudeAdmin) app.append(adminChartCard(state.claudeAdmin));
   } else if (state.tab === "codex" && state.codex) {
     app.append(sourceChartCard(state.codex, "codex"));
   }
@@ -131,14 +135,16 @@ function updateTrayTooltip(statuses: ProviderStatus[]) {
 }
 
 async function load() {
-  const [claude, codex, statuses] = await Promise.all([
+  const [claude, codex, statuses, claudeAdmin] = await Promise.all([
     invoke<UsageReport | null>("claude_usage_report").catch(() => null),
     invoke<UsageReport | null>("codex_usage_report").catch(() => null),
     invoke<ProviderStatus[]>("provider_statuses").catch(() => [] as ProviderStatus[]),
+    invoke<ClaudeAdminSnapshot | null>("claude_admin_usage").catch(() => null),
   ]);
   state.claude = claude;
   state.codex = codex;
   state.statuses = statuses;
+  state.claudeAdmin = claudeAdmin;
   checkQuotaWarnings(statuses);
   updateTrayTooltip(statuses);
   render();

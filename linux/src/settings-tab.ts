@@ -3,6 +3,7 @@
 // macOS, so the two apps can share one config).
 
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { t, currentLang } from "./i18n";
 
 type ProviderCfg = {
@@ -54,6 +55,53 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   return node;
 }
 
+type DeviceCode = { userCode: string; verificationUri: string; deviceCode: string; interval: number };
+
+/** GitHub Copilot Device Flow login row — port of the macOS Settings'
+ * "Sign in to Copilot" flow: request a device code, show it plus the
+ * verification URL, then poll until the user approves it in the browser. */
+function copilotDeviceLoginRow(vi: boolean, onLoggedIn: (label: string) => void): HTMLElement {
+  const row = el("div", "settings-row");
+  const button = el("button", "save-button", vi ? "Đăng nhập Copilot" : "Sign in to Copilot");
+  const status = el("div", "window-subtitle");
+  row.append(button, status);
+
+  button.addEventListener("click", async () => {
+    button.setAttribute("disabled", "true");
+    status.textContent = vi ? "Đang lấy mã đăng nhập…" : "Requesting device code…";
+    try {
+      const code = await invoke<DeviceCode>("copilot_device_start");
+      status.textContent = "";
+      const codeText = el("span", "provider-name", code.userCode);
+      const link = document.createElement("a");
+      link.href = code.verificationUri;
+      link.textContent = code.verificationUri;
+      link.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        void openUrl(code.verificationUri).catch(() => {});
+      });
+      status.append(
+        el("span", "", vi ? "Mã: " : "Code: "), codeText,
+        el("span", "", " · "), link,
+      );
+      void openUrl(code.verificationUri).catch(() => {});
+
+      const label = await invoke<string>("copilot_device_poll", {
+        deviceCode: code.deviceCode,
+        interval: code.interval,
+      });
+      status.textContent = vi ? `Đã đăng nhập: ${label}` : `Signed in: ${label}`;
+      onLoggedIn(label);
+    } catch (err) {
+      status.textContent = `${vi ? "Lỗi" : "Error"}: ${err}`;
+    } finally {
+      button.removeAttribute("disabled");
+    }
+  });
+
+  return row;
+}
+
 export async function settingsTab(onSaved: () => void): Promise<HTMLElement> {
   const container = el("div", "settings");
   const settings = await invoke<Settings>("get_settings");
@@ -103,6 +151,10 @@ export async function settingsTab(onSaved: () => void): Promise<HTMLElement> {
       row.append(cookie);
     }
     container.append(row);
+
+    if (id === "copilot") {
+      container.append(copilotDeviceLoginRow(vi, (label) => { cfg.accountLabel = label; }));
+    }
   }
 
   // Launch-at-login (XDG autostart entry via tauri-plugin-autostart).
