@@ -145,11 +145,60 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     }
 }
 
-/// Fetch every enabled provider concurrently, preserving config order.
-pub async fn fetch_all() -> Vec<ProviderStatus> {
-    let providers = config::enabled_providers();
+/// Fetch enabled providers concurrently, optionally restricted to `ids`.
+/// `None` fetches every enabled provider; `Some(ids)` only fetches providers
+/// whose id is in the set, preserving config order. Used by the JS poller so
+/// a provider with a longer refresh-interval override can be skipped on
+/// cycles where it isn't due yet.
+pub async fn fetch_filtered(ids: Option<&[String]>) -> Vec<ProviderStatus> {
+    let providers = filter_enabled(config::enabled_providers(), ids);
     let futures = providers.iter().map(fetch);
     futures::future::join_all(futures).await
+}
+
+/// Keep only providers whose id is in `ids`, or all of them when `ids` is
+/// `None`. Extracted for unit testing without a network round-trip.
+fn filter_enabled(providers: Vec<config::Provider>, ids: Option<&[String]>) -> Vec<config::Provider> {
+    match ids {
+        None => providers,
+        Some(ids) => providers
+            .into_iter()
+            .filter(|p| ids.iter().any(|id| id == &p.id))
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(id: &str) -> config::Provider {
+        config::Provider { id: id.to_string(), ..Default::default() }
+    }
+
+    #[test]
+    fn filter_enabled_none_keeps_all() {
+        let providers = vec![provider("claude"), provider("codex"), provider("zai")];
+        let result = filter_enabled(providers, None);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn filter_enabled_some_keeps_only_matching_ids_in_order() {
+        let providers = vec![provider("claude"), provider("codex"), provider("zai")];
+        let ids = vec!["zai".to_string(), "claude".to_string()];
+        let result = filter_enabled(providers, Some(&ids));
+        let got: Vec<&str> = result.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(got, vec!["claude", "zai"]);
+    }
+
+    #[test]
+    fn filter_enabled_empty_ids_keeps_none() {
+        let providers = vec![provider("claude"), provider("codex")];
+        let ids: Vec<String> = vec![];
+        let result = filter_enabled(providers, Some(&ids));
+        assert!(result.is_empty());
+    }
 }
 
 pub fn shared_client() -> reqwest::Client {

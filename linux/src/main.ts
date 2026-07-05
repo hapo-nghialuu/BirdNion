@@ -6,9 +6,17 @@ import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { t, currentLang, setLang } from "./i18n";
 import { settingsTab } from "./settings-tab";
+import { getPollSeconds } from "./settings-about";
 
 const TAB_KEY = "birdnion.selectedTab";
-const REFRESH_MS = 120_000;
+/** How often the tick loop runs; each provider is only re-fetched once its
+ * own effective interval (override or global) has elapsed — see
+ * `dueProviderIds`. 10s gives per-provider overrides reasonable resolution
+ * without the fixed-cost cadence of the global setting driving every tick. */
+const TICK_MS = 10_000;
+
+type ProviderCfg = { id: string; enabled?: boolean | null; refreshInterval?: number | null; showInTray?: boolean | null };
+type Settings = { version: number; providers: ProviderCfg[] };
 
 type State = {
   claude: UsageReport | null;
@@ -25,6 +33,28 @@ const state: State = {
   claudeAdmin: null,
   tab: localStorage.getItem(TAB_KEY) || "all",
 };
+
+/** Per-provider last-fetch timestamps (ms), used to honor `refreshInterval`
+ * overrides independent of the global polling cadence. */
+const lastFetched = new Map<string, number>();
+
+/** Provider ids due for a fetch this tick: providers whose own
+ * `refreshInterval` (or the global interval when unset/0) has elapsed since
+ * their last fetch. Mirrors macOS `QuotaService.effectiveInterval`. */
+async function dueProviderIds(): Promise<string[] | undefined> {
+  const settings = await invoke<Settings>("get_settings").catch(() => null);
+  if (!settings) return undefined;
+  const globalMs = getPollSeconds() * 1000;
+  const now = Date.now();
+  const due: string[] = [];
+  for (const p of settings.providers) {
+    if (p.enabled !== true) continue;
+    const intervalMs = p.refreshInterval && p.refreshInterval > 0 ? p.refreshInterval * 1000 : globalMs;
+    const last = lastFetched.get(p.id);
+    if (last === undefined || now - last >= intervalMs) due.push(p.id);
+  }
+  return due;
+}
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -126,10 +156,12 @@ function checkQuotaWarnings(statuses: ProviderStatus[]) {
   }
 }
 
-/** Mirror the macOS menu-bar percent readout into the tray tooltip. */
-function updateTrayTooltip(statuses: ProviderStatus[]) {
+/** Mirror the macOS menu-bar percent readout into the tray tooltip.
+ * Providers with `showInTray === false` are skipped, mirroring macOS
+ * `MenuBarVisibility`. */
+function updateTrayTooltip(statuses: ProviderStatus[], hidden: Set<string>) {
   const parts = statuses
-    .filter((s) => !s.error && s.windows.length > 0)
+    .filter((s) => !hidden.has(s.id) && !s.error && s.windows.length > 0)
     .map((s) => {
       const lowest = s.windows.reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
       return `${s.displayName} ${lowest.remainingPct}%`;
@@ -139,25 +171,71 @@ function updateTrayTooltip(statuses: ProviderStatus[]) {
   }).catch(() => {});
 }
 
+/** Merge freshly fetched statuses over the cached ones by id, preserving the
+ * existing order/entries for providers not due this tick. */
+function mergeStatuses(cached: ProviderStatus[], fresh: ProviderStatus[]): ProviderStatus[] {
+  const byId = new Map(cached.map((s) => [s.id, s]));
+  for (const s of fresh) byId.set(s.id, s);
+  // Fresh entries not already present (new providers) are appended.
+  const order = [...cached.map((s) => s.id)];
+  for (const s of fresh) if (!order.includes(s.id)) order.push(s.id);
+  return order.map((id) => byId.get(id)!).filter(Boolean);
+}
+
+async function fetchTrayHidden(): Promise<Set<string>> {
+  const settings = await invoke<Settings>("get_settings").catch(() => null);
+  if (!settings) return new Set();
+  return new Set(settings.providers.filter((p) => p.showInTray === false).map((p) => p.id));
+}
+
+/** Initial full load (all enabled providers) plus the local usage reports. */
 async function load() {
   const [claude, codex, statuses, claudeAdmin] = await Promise.all([
     invoke<UsageReport | null>("claude_usage_report").catch(() => null),
     invoke<UsageReport | null>("codex_usage_report").catch(() => null),
-    invoke<ProviderStatus[]>("provider_statuses").catch(() => [] as ProviderStatus[]),
+    invoke<ProviderStatus[]>("provider_statuses", { ids: null }).catch(() => [] as ProviderStatus[]),
     invoke<ClaudeAdminSnapshot | null>("claude_admin_usage").catch(() => null),
   ]);
+  const now = Date.now();
+  for (const s of statuses) lastFetched.set(s.id, now);
   state.claude = claude;
   state.codex = codex;
   state.statuses = statuses;
   state.claudeAdmin = claudeAdmin;
   checkQuotaWarnings(statuses);
-  updateTrayTooltip(statuses);
+  updateTrayTooltip(statuses, await fetchTrayHidden());
   render();
 }
+
+/** Tick: only re-fetch providers whose own effective interval elapsed,
+ * merging fresh results over the cached state so unaffected tabs don't
+ * flicker back to "loading". */
+async function tick() {
+  const ids = await dueProviderIds();
+  if (!ids || ids.length === 0) return;
+  const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
+  const now = Date.now();
+  for (const s of fresh) lastFetched.set(s.id, now);
+  state.statuses = mergeStatuses(state.statuses, fresh);
+  checkQuotaWarnings(state.statuses);
+  updateTrayTooltip(state.statuses, await fetchTrayHidden());
+  render();
+}
+
+/** Ctrl+, switches to the Settings tab (in-window only — no global OS
+ * shortcut, since Wayland global-shortcut support is inconsistent). */
+window.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey && ev.key === ",") {
+    ev.preventDefault();
+    state.tab = "settings";
+    localStorage.setItem(TAB_KEY, "settings");
+    render();
+  }
+});
 
 window.addEventListener("DOMContentLoaded", () => {
   load().catch((err) => {
     document.querySelector("#app")!.textContent = `${t("loadError")}: ${err}`;
   });
-  setInterval(() => void load().catch(() => {}), REFRESH_MS);
+  setInterval(() => void tick().catch(() => {}), TICK_MS);
 });

@@ -26,6 +26,14 @@ pub struct Provider {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub region: Option<String>,
+    /// Per-provider refresh cadence override in seconds. 0/None = use the
+    /// global interval (mirrors macOS `refreshInterval.<id>` UserDefaults).
+    #[serde(default)]
+    pub refresh_interval: Option<u64>,
+    /// Whether this provider is included in the tray tooltip rotation.
+    /// Default true (mirrors macOS `menuBarVisibility.<id>`, default shown).
+    #[serde(default)]
+    pub show_in_tray: Option<bool>,
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]

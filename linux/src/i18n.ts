@@ -73,6 +73,36 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   ccModelSonnet: { vi: "Model Sonnet", en: "Sonnet model" },
   ccModelOpus: { vi: "Model Opus", en: "Opus model" },
   ccDisable1M: { vi: "Tắt ngữ cảnh 1M token", en: "Disable 1M-token context" },
+
+  // Settings — provider list, polling, about
+  settingsProvidersLabel: {
+    vi: "Providers (lưu vào ~/.config/birdnion/settings.json)",
+    en: "Providers (saved to ~/.config/birdnion/settings.json)",
+  },
+  settingsMoveUp: { vi: "Chuyển lên", en: "Move up" },
+  settingsMoveDown: { vi: "Chuyển xuống", en: "Move down" },
+  settingsRefreshInterval: { vi: "Chu kỳ riêng (giây)", en: "Refresh interval (sec)" },
+  settingsShowInTray: { vi: "Hiện trên tray", en: "Show in tray" },
+  settingsRegion: { vi: "Khu vực", en: "Region" },
+  settingsGlobalPolling: { vi: "Chu kỳ làm mới chung", en: "Global refresh interval" },
+  settingsGlobalPollingSubtitle: {
+    vi: "Áp dụng cho mọi provider không có chu kỳ riêng (30–1800 giây).",
+    en: "Applies to providers without their own interval (30-1800 sec).",
+  },
+  settingsSeconds: { vi: "giây", en: "sec" },
+  settingsAbout: { vi: "Giới thiệu", en: "About" },
+  settingsVersion: { vi: "Phiên bản", en: "Version" },
+  settingsRepo: { vi: "Kho mã nguồn trên GitHub", en: "GitHub repository" },
+  settingsApiKey: { vi: "API key", en: "API key" },
+  settingsManualCookie: { vi: "Cookie thủ công (tuỳ chọn)", en: "Manual cookie (optional)" },
+  settingsAdminApiKey: {
+    vi: "Admin API key (tuỳ chọn, dashboard tổ chức)",
+    en: "Admin API key (optional, org dashboard)",
+  },
+  settingsLaunchAtLogin: { vi: "Khởi động cùng hệ thống", en: "Launch at login" },
+  settingsSave: { vi: "Lưu cài đặt", en: "Save settings" },
+  settingsSaved: { vi: "Đã lưu ✓", en: "Saved ✓" },
+  settingsSignInGithub: { vi: "Đăng nhập GitHub", en: "Sign in with GitHub" },
 };
 
 /** t("estTotal", {n: 30}) — placeholder substitution via {name}. */

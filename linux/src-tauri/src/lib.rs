@@ -29,11 +29,14 @@ fn codex_usage_report() -> Option<usage::UsageReport> {
     codex_scanner::usage_report()
 }
 
-/// Quota status for every provider enabled in settings.json, fetched
-/// concurrently. Ports still in progress return an explanatory error status.
+/// Quota status for providers enabled in settings.json, fetched concurrently.
+/// When `ids` is provided, only those provider ids are fetched (used by the
+/// JS poller to honor per-provider refresh-interval overrides); omitting it
+/// fetches every enabled provider. Ports still in progress return an
+/// explanatory error status.
 #[tauri::command]
-async fn provider_statuses() -> Vec<providers::ProviderStatus> {
-    providers::fetch_all().await
+async fn provider_statuses(ids: Option<Vec<String>>) -> Vec<providers::ProviderStatus> {
+    providers::fetch_filtered(ids.as_deref()).await
 }
 
 /// Claude Admin API org usage/cost dashboard (30-day). None when no admin
