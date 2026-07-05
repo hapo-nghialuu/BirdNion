@@ -302,9 +302,8 @@ fn parse_page(text: &str, zen_balance: Option<f64>) -> Option<ProviderStatus> {
         display_name: String::new(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
-        account_label: None,
         credits_remaining: zen_balance,
+        ..Default::default()
     })
 }
 
@@ -314,9 +313,8 @@ fn zen_only_status(id: &str, name: &str, zen_usd: f64) -> ProviderStatus {
         display_name: name.to_string(),
         windows: Vec::new(),
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
-        account_label: None,
         credits_remaining: Some(zen_usd),
+        ..Default::default()
     }
 }
 

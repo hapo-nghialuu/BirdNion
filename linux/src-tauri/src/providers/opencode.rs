@@ -422,9 +422,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
         display_name: name.to_string(),
         windows,
         last_updated: now,
-        error: None,
-        account_label: None,
-        credits_remaining: None,
+        ..Default::default()
     }
 }
 

@@ -255,9 +255,8 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         display_name: name,
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label,
-        credits_remaining: None,
+        ..Default::default()
     }
 }
 

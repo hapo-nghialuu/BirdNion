@@ -4,6 +4,7 @@
 
 mod claude_code;
 mod claude_scanner;
+mod codex_accounts;
 mod codex_scanner;
 mod config;
 mod providers;
@@ -140,6 +141,44 @@ fn claude_code_remove_env(provider_id: String) -> Result<bool, String> {
     claude_code::remove_env_settings(&scope)
 }
 
+/// Every Codex login the app knows about (system + managed accounts) plus
+/// the currently active id. Drives the account-list row in Settings.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexAccountsState {
+    accounts: Vec<codex_accounts::CodexAccount>,
+    active_id: String,
+}
+
+#[tauri::command]
+fn codex_accounts_list() -> CodexAccountsState {
+    CodexAccountsState { accounts: codex_accounts::all_accounts(), active_id: codex_accounts::active_id() }
+}
+
+/// "Lưu account hiện tại" — copies the current system `~/.codex/auth.json`
+/// into a new managed account so it survives future re-logins of the system
+/// account. Mirrors `CodexAccountStore.promoteSystem()`.
+#[tauri::command]
+fn codex_account_save_current() -> Result<CodexAccountsState, String> {
+    codex_accounts::promote_system()?;
+    Ok(codex_accounts_list())
+}
+
+/// Switches the active Codex account the provider/scanner read from.
+#[tauri::command]
+fn codex_account_switch(id: String) -> Result<CodexAccountsState, String> {
+    codex_accounts::set_active(&id)?;
+    Ok(codex_accounts_list())
+}
+
+/// Removes a managed Codex account (no-op for "system"). Falls the active
+/// selection back to "system" if the removed account was active.
+#[tauri::command]
+fn codex_account_remove(id: String) -> Result<CodexAccountsState, String> {
+    codex_accounts::remove(&id)?;
+    Ok(codex_accounts_list())
+}
+
 /// Starts a GitHub Device Flow login for Copilot: requests a user code the
 /// user enters at the returned verification URL.
 #[tauri::command]
@@ -222,6 +261,10 @@ pub fn run() {
             claude_code_apply,
             claude_code_deactivate,
             claude_code_remove_env,
+            codex_accounts_list,
+            codex_account_save_current,
+            codex_account_switch,
+            codex_account_remove,
             copilot_login_start,
             copilot_login_poll,
             get_settings,

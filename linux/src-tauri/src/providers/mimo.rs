@@ -181,9 +181,8 @@ fn parse_status(
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
-        account_label: None,
         credits_remaining: Some(balance),
+        ..Default::default()
     })
 }
 

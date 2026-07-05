@@ -199,9 +199,9 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
         display_name: name.to_string(),
         windows,
         last_updated: now,
-        error: None,
         account_label: Some(account_label_final),
         credits_remaining: credit_snap.remaining,
+        ..Default::default()
     }
 }
 

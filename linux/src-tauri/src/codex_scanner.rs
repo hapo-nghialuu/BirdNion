@@ -113,13 +113,17 @@ fn cost_usd(model: &str, input: i64, cached: i64, output: i64) -> f64 {
     non_cached as f64 * ir + cached as f64 * cr + output.max(0) as f64 * or
 }
 
-/// Session roots: `$CODEX_HOME` (or `~/.codex`) `sessions` + `archived_sessions`.
+/// Session roots under the active Codex account's home (system `~/.codex`/
+/// `$CODEX_HOME`, or a managed account's private home) — so cost tracking
+/// follows account switches the same way the quota provider does. Managed
+/// account homes don't have session logs (only `auth.json` is copied), so
+/// this naturally falls back to an empty/no-op scan for those; the system
+/// account keeps working exactly as before.
 pub fn default_roots() -> Vec<PathBuf> {
-    let home = std::env::var("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex")
-        });
+    let home = crate::codex_accounts::active_auth_path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex"));
     vec![home.join("sessions"), home.join("archived_sessions")]
 }
 

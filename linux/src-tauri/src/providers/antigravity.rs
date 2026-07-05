@@ -336,9 +336,8 @@ fn build_status(cfg: &config::Provider, name: &str, windows: Vec<QuotaWindow>, e
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(account_label),
-        credits_remaining: None,
+        ..Default::default()
     }
 }
 
@@ -565,9 +564,8 @@ async fn fetch_via_oauth(cfg: &config::Provider, name: &str) -> Option<ProviderS
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(account_label),
-        credits_remaining: None,
+        ..Default::default()
     })
 }
 

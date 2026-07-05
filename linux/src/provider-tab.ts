@@ -21,6 +21,13 @@ export type ProviderStatus = {
   error?: string;
   accountLabel?: string;
   creditsRemaining?: number;
+  /** Codex web-dashboard extras (best-effort cookie enrichment) — port of
+   * macOS `CodexWebExtras`. `codeReviewRemainingPercent` is never populated
+   * on Linux (see provider backend docs). */
+  signedInEmail?: string;
+  codeReviewRemainingPercent?: number;
+  creditsPurchaseUrl?: string;
+  creditsHistoryCount?: number;
 };
 
 function el(tag: string, className: string, text?: string): HTMLElement {
@@ -60,16 +67,39 @@ function windowRow(win: QuotaWindow): HTMLElement {
   return row;
 }
 
+/** Codex web-dashboard extras not surfaced as quota windows — port of the
+ * macOS `detailParts` second metadata line. Empty for providers/sources
+ * that leave these fields undefined. */
+function extrasParts(status: ProviderStatus): string[] {
+  const parts: string[] = [];
+  if (status.id === "codex" && status.creditsRemaining !== undefined) {
+    parts.push(`$${status.creditsRemaining.toFixed(2)} credits`);
+  }
+  if (status.codeReviewRemainingPercent !== undefined) {
+    parts.push(`Code review ${status.codeReviewRemainingPercent}%`);
+  }
+  if (status.creditsHistoryCount !== undefined) {
+    parts.push(t("creditsHistoryCount", { n: status.creditsHistoryCount }));
+  }
+  return parts;
+}
+
 export function providerCard(status: ProviderStatus): HTMLElement {
   const card = el("section", "card");
   const head = el("div", "provider-head");
   head.append(el("div", "provider-name", status.displayName));
   const meta: string[] = [];
   if (status.accountLabel) meta.push(status.accountLabel);
+  else if (status.signedInEmail) meta.push(status.signedInEmail);
   const updated = new Date(status.lastUpdated * 1000);
   meta.push(`cập nhật ${updated.getHours()}:${String(updated.getMinutes()).padStart(2, "0")}`);
   head.append(el("div", "provider-meta", meta.join(" · ")));
   card.append(head);
+
+  const extras = extrasParts(status);
+  if (extras.length > 0) {
+    card.append(el("div", "provider-extras", extras.join(" · ")));
+  }
 
   if (status.error) {
     card.append(el("div", "provider-error", status.error));

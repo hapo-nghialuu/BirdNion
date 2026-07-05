@@ -102,9 +102,7 @@ fn parse_status(id: &str, name: &str, body: &str) -> Result<ProviderStatus, Stri
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
-        account_label: None,
-        credits_remaining: None,
+        ..Default::default()
     })
 }
 

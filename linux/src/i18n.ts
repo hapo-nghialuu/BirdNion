@@ -41,6 +41,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     en: "No Claude Code (~/.claude) or Codex (~/.codex) logs found.",
   },
   noQuota: { vi: "Không có dữ liệu quota.", en: "No quota data." },
+  creditsHistoryCount: { vi: "{n} giao dịch credit", en: "{n} credit events" },
   usedPct: { vi: "Đã dùng {n}%", en: "{n}% used" },
   updatedAt: { vi: "cập nhật", en: "updated" },
   resetInDays: { vi: "reset sau {n} ngày", en: "resets in {n}d" },
@@ -103,6 +104,21 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   settingsSave: { vi: "Lưu cài đặt", en: "Save settings" },
   settingsSaved: { vi: "Đã lưu ✓", en: "Saved ✓" },
   settingsSignInGithub: { vi: "Đăng nhập GitHub", en: "Sign in with GitHub" },
+  settingsClaudeSource: { vi: "Nguồn dữ liệu", en: "Data source" },
+  claudeSourceAuto: { vi: "Tự động", en: "Auto" },
+  claudeSourceOauth: { vi: "OAuth (Claude Code)", en: "OAuth (Claude Code)" },
+  claudeSourceWeb: { vi: "Cookie trình duyệt (claude.ai)", en: "Browser cookie (claude.ai)" },
+  claudeSourceCli: { vi: "CLI (không hỗ trợ trên Linux)", en: "CLI (not supported on Linux)" },
+  claudeSourceApi: { vi: "Admin API", en: "Admin API" },
+
+  // Codex account management
+  codexAccountsLabel: { vi: "Tài khoản Codex", en: "Codex accounts" },
+  codexAccountSystem: { vi: "Hệ thống (~/.codex)", en: "System (~/.codex)" },
+  codexAccountActive: { vi: "Đang dùng", en: "Active" },
+  codexAccountSwitch: { vi: "Dùng", en: "Use" },
+  codexAccountRemove: { vi: "Xoá", en: "Remove" },
+  codexAccountSaveCurrent: { vi: "Lưu account hiện tại", en: "Save current account" },
+  codexAccountLoadError: { vi: "Không tải được danh sách account", en: "Failed to load accounts" },
 };
 
 /** t("estTotal", {n: 30}) — placeholder substitution via {name}. */

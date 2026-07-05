@@ -279,9 +279,8 @@ pub fn parse_usage(stripped: &str, account_email: Option<&str>) -> Result<Provid
             display_name: "Kiro".into(),
             windows: vec![QuotaWindow { label: "Credits".into(), used_pct: 0, remaining_pct: 100, subtitle: None, resets_at: None }],
             last_updated: chrono::Utc::now().timestamp(),
-            error: None,
             account_label: account_email.map(String::from),
-            credits_remaining: None,
+            ..Default::default()
         });
     }
 
@@ -348,9 +347,9 @@ pub fn parse_usage(stripped: &str, account_email: Option<&str>) -> Result<Provid
         display_name: "Kiro".into(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: account_email.map(String::from),
         credits_remaining: Some(credits_total - credits_used),
+        ..Default::default()
     })
 }
 

@@ -85,9 +85,9 @@ pub fn parse_balance(id: &str, name: &str, account_label: &str, body: &Value) ->
         display_name: name.to_string(),
         windows: vec![window],
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(account_label.to_string()),
         credits_remaining: Some(amount),
+        ..Default::default()
     }
 }
 

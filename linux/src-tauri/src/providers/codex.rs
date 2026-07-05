@@ -22,6 +22,7 @@
 use serde_json::Value;
 use std::path::PathBuf;
 
+use crate::codex_accounts;
 use crate::config;
 use crate::providers::browser_cookies;
 use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
@@ -49,13 +50,10 @@ impl Credentials {
     }
 }
 
+/// Resolves through the active Codex account (system `~/.codex`/`$CODEX_HOME`,
+/// or a managed account's private home) — mirrors `activeAuthURL()`.
 fn auth_file_path() -> PathBuf {
-    let codex_home = std::env::var("CODEX_HOME").ok().filter(|s| !s.trim().is_empty());
-    let root = match codex_home {
-        Some(h) => PathBuf::from(h),
-        None => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex"),
-    };
-    root.join("auth.json")
+    codex_accounts::active_auth_path()
 }
 
 /// Pure parse of `~/.codex/auth.json` contents (unit-tested). Supports the
@@ -324,20 +322,53 @@ async fn fetch_cookie_fallback(cfg: &config::Provider, name: &str) -> ProviderSt
         return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Codex — chạy `codex` để đăng nhập");
     }
     let credits_remaining = credits_balance(&body);
-    let label = cfg.account_label.clone().unwrap_or_else(|| "cookie".to_string());
+    let extras = dashboard_extras(&body);
+    let label = extras
+        .signed_in_email
+        .clone()
+        .or_else(|| cfg.account_label.clone())
+        .unwrap_or_else(|| "cookie".to_string());
     ProviderStatus {
         id: cfg.id.clone(),
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(label),
         credits_remaining,
+        signed_in_email: extras.signed_in_email,
+        credits_purchase_url: extras.credits_purchase_url,
+        credits_history_count: extras.credits_history_count,
+        ..Default::default()
     }
 }
 
 fn credits_balance(body: &Value) -> Option<f64> {
     body.get("credits").and_then(|c| c.get("balance")).and_then(Value::as_f64)
+}
+
+/// Pure dashboard-extras mapping from a `wham/usage` payload — port of the
+/// JSON-derivable subset of `CodexWebDashboard.map(_:)`. `codeReviewRemainingPercent`
+/// has no equivalent here (see module docs) and is always left `None`.
+struct DashboardExtras {
+    signed_in_email: Option<String>,
+    credits_purchase_url: Option<String>,
+    credits_history_count: Option<i32>,
+}
+
+fn dashboard_extras(body: &Value) -> DashboardExtras {
+    let credits = body.get("credits");
+    DashboardExtras {
+        signed_in_email: body.get("email").and_then(Value::as_str).map(String::from),
+        credits_purchase_url: credits
+            .and_then(|c| c.get("purchase_url").or_else(|| c.get("purchase_url_web")))
+            .and_then(Value::as_str)
+            .map(String::from),
+        credits_history_count: credits
+            .and_then(|c| c.get("credit_events").or_else(|| c.get("events")))
+            .and_then(Value::as_array)
+            .filter(|events| !events.is_empty())
+            .map(|events| events.len() as i32),
+    }
 }
 
 async fn build_success(id: &str, name: &str, body: &Value, creds: &Credentials, cookie_enrichment: Option<&Value>) -> ProviderStatus {
@@ -347,17 +378,31 @@ async fn build_success(id: &str, name: &str, body: &Value, creds: &Credentials, 
     }
     let account_label = email_from_id_token(creds.id_token.as_deref()).unwrap_or_else(|| "Codex".to_string());
     // OAuth's own `wham/usage` response is the source of truth; the cookie
-    // enrichment only fills in `credits_remaining` when OAuth omitted it
+    // enrichment only fills in credits/extras when OAuth omitted them
     // (e.g. plans where credits are absent from the bearer-token response).
+    let extras = dashboard_extras(body);
+    let cookie_extras = cookie_enrichment.map(dashboard_extras);
     let credits_remaining = credits_balance(body).or_else(|| cookie_enrichment.and_then(credits_balance));
+    let signed_in_email = extras
+        .signed_in_email
+        .or_else(|| cookie_extras.as_ref().and_then(|e| e.signed_in_email.clone()));
+    let credits_purchase_url = extras
+        .credits_purchase_url
+        .or_else(|| cookie_extras.as_ref().and_then(|e| e.credits_purchase_url.clone()));
+    let credits_history_count = extras
+        .credits_history_count
+        .or_else(|| cookie_extras.as_ref().and_then(|e| e.credits_history_count));
     ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(account_label),
         credits_remaining,
+        signed_in_email,
+        credits_purchase_url,
+        credits_history_count,
+        ..Default::default()
     }
 }
 
@@ -638,5 +683,35 @@ mod tests {
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].used_pct, 15);
         assert_eq!(credits_balance(&body), Some(3.25));
+    }
+
+    #[test]
+    fn dashboard_extras_reads_email_and_purchase_url() {
+        let body = json!({
+            "email": "user@example.com",
+            "credits": {
+                "balance": 3.25,
+                "purchase_url": "https://platform.openai.com/settings/organization/billing",
+                "credit_events": [{"amount": 5.0}, {"amount": -1.75}]
+            }
+        });
+        let extras = dashboard_extras(&body);
+        assert_eq!(extras.signed_in_email, Some("user@example.com".to_string()));
+        assert_eq!(
+            extras.credits_purchase_url,
+            Some("https://platform.openai.com/settings/organization/billing".to_string())
+        );
+        assert_eq!(extras.credits_history_count, Some(2));
+    }
+
+    #[test]
+    fn dashboard_extras_missing_fields_are_none() {
+        let extras = dashboard_extras(&json!({}));
+        assert!(extras.signed_in_email.is_none());
+        assert!(extras.credits_purchase_url.is_none());
+        assert!(extras.credits_history_count.is_none());
+
+        let extras_empty_events = dashboard_extras(&json!({"credits": {"credit_events": []}}));
+        assert!(extras_empty_events.credits_history_count.is_none());
     }
 }

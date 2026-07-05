@@ -12,6 +12,11 @@ pub struct Settings {
     pub version: u32,
     #[serde(default)]
     pub providers: Vec<Provider>,
+    /// Active Codex account id ("system" or a managed account UUID). Linux
+    /// equivalent of the macOS `UserDefaults` key `activeCodexAccount` — kept
+    /// here since there is no UserDefaults on Linux.
+    #[serde(default)]
+    pub active_codex_account: Option<String>,
 }
 
 /// One provider entry. All fields except `id` are optional in the file —
@@ -66,6 +71,12 @@ pub struct Provider {
     /// (`/v1/organizations/...`). Separate from `api_key` (OAuth token file).
     #[serde(default)]
     pub admin_api_key: Option<String>,
+    /// Claude: primary data source — "auto" (default), "oauth", "web"
+    /// (claude.ai cookie), "cli" (not ported on Linux), or "api" (Admin API).
+    /// Mirrors macOS `ClaudeUsageDataSource` / `UserDefaults` key
+    /// `claudeUsageDataSource`.
+    #[serde(default)]
+    pub source: Option<String>,
 
     /// Claude Code env config (Settings → "Claude Code"). Chosen model ids per
     /// tier are written to `ANTHROPIC_DEFAULT_*_MODEL` in the Claude Code

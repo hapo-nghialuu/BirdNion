@@ -131,9 +131,7 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
         display_name: name,
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
-        account_label: None,
-        credits_remaining: None,
+        ..Default::default()
     }
 }
 

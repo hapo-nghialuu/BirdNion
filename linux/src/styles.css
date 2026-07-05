@@ -186,10 +186,27 @@ body {
   width: 68px;
 }
 
+.settings-input-wide { width: 190px; }
+
 .settings-section {
   margin-top: 14px;
   padding-top: 10px;
   border-top: 1px solid var(--track);
+}
+
+.settings-codex-accounts {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.codex-account-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+
+.codex-account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
 }
 
 /* --- Provider card ---------------------------------------------------- */
@@ -197,6 +214,7 @@ body {
 .provider-head { margin-bottom: 8px; }
 .provider-name { font-size: 13px; font-weight: 600; }
 .provider-meta { font-size: 10px; color: var(--tertiary); }
+.provider-extras { font-size: 10px; color: var(--tertiary); margin-bottom: 6px; }
 
 .provider-error {
   font-size: 11px;

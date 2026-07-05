@@ -272,9 +272,8 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(account_label.to_string()),
-        credits_remaining: None,
+        ..Default::default()
     }
 }
 

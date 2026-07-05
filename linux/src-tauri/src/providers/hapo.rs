@@ -118,9 +118,7 @@ pub fn parse_budget(id: &str, name: &str, body: &Value) -> ProviderStatus {
             resets_at,
         }],
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
-        account_label: None,
-        credits_remaining: None,
+        ..Default::default()
     }
 }
 

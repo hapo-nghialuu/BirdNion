@@ -244,7 +244,7 @@ fn parse_status(id: &str, name: &str, body: &str, account_label: Option<String>)
         last_updated: chrono::Utc::now().timestamp(),
         error,
         account_label,
-        credits_remaining: None,
+        ..Default::default()
     })
 }
 

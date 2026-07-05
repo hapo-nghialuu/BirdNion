@@ -46,7 +46,7 @@ pub struct QuotaWindow {
     pub resets_at: Option<i64>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatus {
     pub id: String,
@@ -60,6 +60,19 @@ pub struct ProviderStatus {
     pub account_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credits_remaining: Option<f64>,
+    /// Codex web-dashboard extras (best-effort cookie enrichment) — port of
+    /// `CodexWebExtras`. `code_review_remaining_percent` is intentionally
+    /// never populated on Linux: Swift parses it from a *rendered* dashboard
+    /// page via regex-over-DOM (WKWebView), which has no headless/JSON
+    /// equivalent here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_in_email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_review_remaining_percent: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credits_purchase_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credits_history_count: Option<i32>,
 }
 
 impl ProviderStatus {
@@ -70,8 +83,7 @@ impl ProviderStatus {
             windows: Vec::new(),
             last_updated: chrono::Utc::now().timestamp(),
             error: Some(message.into()),
-            account_label: None,
-            credits_remaining: None,
+            ..Default::default()
         }
     }
 }

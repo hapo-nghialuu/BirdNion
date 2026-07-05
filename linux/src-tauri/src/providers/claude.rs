@@ -1,18 +1,26 @@
-//! Claude (Anthropic) OAuth quota provider — port of `ClaudeOAuth.swift` +
-//! `ClaudeUsageModels.swift` (OAuth source only; the cookie/web source and
-//! Admin API are not ported, and the macOS-Keychain fallback is dropped —
-//! Linux has no Keychain).
+//! Claude (Anthropic) quota provider — port of `ClaudeUsageOrchestrator.swift`.
+//! `cfg.source` selects the data source (mirrors macOS `ClaudeUsageDataSource`
+//! / `UserDefaults` key `claudeUsageDataSource`), default `"oauth"`:
+//!   - `"oauth"` (default) — `ClaudeOAuth.swift` port: `~/.claude/.credentials.json`
+//!     (or env token), refreshed against `platform.claude.com`, usage from
+//!     `api.anthropic.com/api/oauth/usage`.
+//!   - `"web"` — `ClaudeWebAPIFetcher.swift` port (portable subset): browser
+//!     `sessionKey` cookie for claude.ai, `/api/organizations` +
+//!     `/api/organizations/{id}/usage`. Account-info/overage-spend-limit
+//!     enrichment calls are intentionally not ported (best-effort extras,
+//!     out of scope per YAGNI).
+//!   - `"api"` — Admin API org snapshot (`claude_admin.rs`), mapped onto the
+//!     30-day cost total as a single window.
+//!   - `"cli"` — no PTY/CLI-session equivalent on Linux; always fails with a
+//!     explanatory message.
+//!   - `"auto"` — try oauth, then fall back to web.
 //!
-//! Token resolution: `CLAUDE_CODE_OAUTH_TOKEN` / `CODEXBAR_CLAUDE_OAUTH_TOKEN`
-//! env vars, then `~/.claude/.credentials.json`. Expired tokens with a refresh
-//! token are refreshed in-memory (never persisted) against
-//! `https://platform.claude.com/v1/oauth/token`, then the usage windows are
-//! fetched from `https://api.anthropic.com/api/oauth/usage`.
+//! The macOS-Keychain fallback is dropped — Linux has no Keychain.
 
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{browser_cookies, claude_admin, display_name, ProviderStatus, QuotaWindow};
 
 const REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -175,17 +183,152 @@ async fn fetch_usage(access_token: &str) -> Result<Value, String> {
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
+    match cfg.source.as_deref().unwrap_or("oauth") {
+        "web" => fetch_web(cfg, &name).await,
+        "api" => fetch_admin_api(cfg, &name).await,
+        "cli" => ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trên Linux"),
+        "auto" => {
+            let status = fetch_oauth(cfg, &name).await;
+            if status.error.is_some() {
+                fetch_web(cfg, &name).await
+            } else {
+                status
+            }
+        }
+        _ => fetch_oauth(cfg, &name).await,
+    }
+}
+
+async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
     let Some(creds) = load_with_auto_refresh().await else {
-        return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Claude — đăng nhập bằng Claude Code");
+        return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Claude — đăng nhập bằng Claude Code");
     };
     if creds.access_token.is_empty() {
-        return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Claude — đăng nhập bằng Claude Code");
+        return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Claude — đăng nhập bằng Claude Code");
     }
     let body = match fetch_usage(&creds.access_token).await {
         Ok(b) => b,
-        Err(e) => return ProviderStatus::failure(&cfg.id, &name, e),
+        Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
     };
-    build_status(&cfg.id, &name, &body, creds.subscription_type.as_deref())
+    build_status(&cfg.id, name, &body, creds.subscription_type.as_deref())
+}
+
+/// Admin API "source" — maps the 30-day org cost snapshot onto a single
+/// spend window (there is no per-rate-limit data in the Admin API).
+async fn fetch_admin_api(cfg: &config::Provider, name: &str) -> ProviderStatus {
+    match claude_admin::fetch_snapshot(cfg).await {
+        Some(snap) => ProviderStatus {
+            id: cfg.id.clone(),
+            display_name: name.to_string(),
+            windows: vec![QuotaWindow {
+                label: "Chi phí 30 ngày".into(),
+                used_pct: 0,
+                remaining_pct: 100,
+                subtitle: Some(format!("${:.2}", snap.last30_days.cost_usd)),
+                resets_at: None,
+            }],
+            last_updated: chrono::Utc::now().timestamp(),
+            account_label: Some("Claude Admin API".to_string()),
+            ..Default::default()
+        },
+        None => ProviderStatus::failure(
+            cfg.id.as_str(),
+            name,
+            "Chưa cấu hình Admin API key hoặc không lấy được dữ liệu",
+        ),
+    }
+}
+
+const CLAUDE_AI_BASE: &str = "https://claude.ai/api";
+
+/// "web" source — port of the portable subset of `ClaudeWebAPIFetcher.swift`:
+/// organizations lookup + usage windows via a browser `sessionKey` cookie.
+/// Account-info / overage-spend-limit enrichment is intentionally not ported.
+async fn fetch_web(cfg: &config::Provider, name: &str) -> ProviderStatus {
+    let cfg_clone = cfg.clone();
+    let raw_header = match tauri::async_runtime::spawn_blocking(move || {
+        browser_cookies::cookie_header(&["claude.ai"], &cfg_clone)
+    })
+    .await
+    {
+        Ok(Ok(h)) => h,
+        Ok(Err(e)) => return ProviderStatus::failure(&cfg.id, name, e),
+        Err(_) => return ProviderStatus::failure(&cfg.id, name, "Lỗi nội bộ khi đọc cookie"),
+    };
+    let Some(session_key) = session_key_from_header(&raw_header) else {
+        return ProviderStatus::failure(&cfg.id, name, "Không tìm thấy session cookie claude.ai trong trình duyệt.");
+    };
+
+    let client = crate::providers::shared_client();
+    let cookie = format!("sessionKey={session_key}");
+
+    let orgs_body = match fetch_web_json(&client, &format!("{CLAUDE_AI_BASE}/organizations"), &cookie).await {
+        Ok(b) => b,
+        Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
+    };
+    let Some(org_id) = pick_organization_id(&orgs_body) else {
+        return ProviderStatus::failure(&cfg.id, name, "Không tìm thấy tổ chức Claude cho tài khoản này.");
+    };
+
+    let usage_body =
+        match fetch_web_json(&client, &format!("{CLAUDE_AI_BASE}/organizations/{org_id}/usage"), &cookie).await {
+            Ok(b) => b,
+            Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
+        };
+
+    build_status(&cfg.id, name, &usage_body, None)
+}
+
+async fn fetch_web_json(client: &reqwest::Client, url: &str, cookie: &str) -> Result<Value, String> {
+    let resp = client
+        .get(url)
+        .header("Cookie", cookie)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Network: {e}"))?;
+    match resp.status().as_u16() {
+        200..=299 => resp.json::<Value>().await.map_err(|e| format!("JSON: {e}")),
+        401 | 403 => Err("Phiên đăng nhập hết hạn — vui lòng đăng nhập lại claude.ai.".to_string()),
+        code => Err(format!("Claude API lỗi HTTP {code}.")),
+    }
+}
+
+/// Pure: extracts a `sk-ant-`-prefixed `sessionKey` value from a raw
+/// `Cookie:` header string (as returned by `browser_cookies::cookie_header`).
+/// Mirrors `ClaudeWebCookieReader.findSessionKey`.
+fn session_key_from_header(header: &str) -> Option<String> {
+    header.split(';').find_map(|part| {
+        let (raw_name, raw_value) = part.split_once('=')?;
+        if raw_name.trim() != "sessionKey" {
+            return None;
+        }
+        let value = raw_value.trim();
+        value.starts_with("sk-ant-").then(|| value.to_string())
+    })
+}
+
+/// Pure: picks the org with chat capability, else the first non-API-only
+/// org, else the first org at all. Mirrors `parseOrganizationResponse`.
+fn pick_organization_id(body: &Value) -> Option<String> {
+    let orgs = body.as_array()?;
+    let has_chat = |o: &&Value| {
+        o.get("capabilities")
+            .and_then(Value::as_array)
+            .map(|caps| caps.iter().any(|c| c.as_str().map(|s| s.eq_ignore_ascii_case("chat")).unwrap_or(false)))
+            .unwrap_or(false)
+    };
+    let is_api_only = |o: &&Value| {
+        o.get("capabilities")
+            .and_then(Value::as_array)
+            .map(|caps| {
+                !caps.is_empty()
+                    && caps.iter().all(|c| c.as_str().map(|s| s.eq_ignore_ascii_case("api")).unwrap_or(false))
+            })
+            .unwrap_or(false)
+    };
+    let selected = orgs.iter().find(has_chat).or_else(|| orgs.iter().find(|o| !is_api_only(o))).or_else(|| orgs.first());
+    selected?.get("uuid").and_then(Value::as_str).map(String::from)
 }
 
 struct RateWindow {
@@ -259,9 +402,9 @@ fn build_status(id: &str, name: &str, body: &Value, subscription_type: Option<&s
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(account_label),
         credits_remaining,
+        ..Default::default()
     }
 }
 
@@ -395,5 +538,34 @@ mod tests {
         let s = build_status("claude", "Claude", &json!({}), None);
         assert!(s.windows.is_empty());
         assert_eq!(s.account_label.as_deref(), Some("Claude account"));
+    }
+
+    #[test]
+    fn session_key_from_header_requires_sk_ant_prefix() {
+        let header = "other=1; sessionKey=sk-ant-abc123; foo=bar";
+        assert_eq!(session_key_from_header(header), Some("sk-ant-abc123".to_string()));
+        assert_eq!(session_key_from_header("sessionKey=not-a-real-key"), None);
+        assert_eq!(session_key_from_header("unrelated=xyz"), None);
+    }
+
+    #[test]
+    fn pick_organization_id_prefers_chat_capability() {
+        let body = json!([
+            {"uuid": "org-api", "capabilities": ["api"]},
+            {"uuid": "org-chat", "capabilities": ["chat", "api"]}
+        ]);
+        assert_eq!(pick_organization_id(&body), Some("org-chat".to_string()));
+    }
+
+    #[test]
+    fn pick_organization_id_falls_back_to_first_non_api_only_then_first() {
+        let no_chat = json!([{"uuid": "org-api", "capabilities": ["api"]}, {"uuid": "org-plain"}]);
+        assert_eq!(pick_organization_id(&no_chat), Some("org-plain".to_string()));
+
+        let all_api_only = json!([{"uuid": "org-api", "capabilities": ["api"]}]);
+        assert_eq!(pick_organization_id(&all_api_only), Some("org-api".to_string()));
+
+        assert_eq!(pick_organization_id(&json!([])), None);
+        assert_eq!(pick_organization_id(&json!({})), None);
     }
 }

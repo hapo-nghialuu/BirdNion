@@ -303,9 +303,8 @@ fn parse_status(id: &str, name: &str, usage_summary_json: &str, request_usage_js
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(membership_label(summary.membership_type.as_deref())),
-        credits_remaining: None,
+        ..Default::default()
     })
 }
 

@@ -81,9 +81,9 @@ pub fn parse_credits(
             resets_at: None,
         }],
         last_updated: chrono::Utc::now().timestamp(),
-        error: None,
         account_label: Some(account_label.to_string()),
         credits_remaining: Some(remaining),
+        ..Default::default()
     })
 }
 

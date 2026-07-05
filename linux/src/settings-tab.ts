@@ -6,10 +6,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { t, currentLang } from "./i18n";
 import { claudeCodeSettingsSection } from "./claude-code-settings";
 import {
-  reorderControls, refreshIntervalInput, trayVisibilityToggle, regionSelect,
+  reorderControls, refreshIntervalInput, trayVisibilityToggle, regionSelect, claudeSourceSelect,
 } from "./settings-provider-row";
 import { globalPollingSection, aboutSection } from "./settings-about";
 import { copilotDeviceLoginRow } from "./settings-copilot-login";
+import { codexAccountsSection } from "./settings-codex-accounts";
 
 type ProviderCfg = {
   id: string;
@@ -35,6 +36,7 @@ type ProviderCfg = {
   claudeDisable1M?: boolean | null;
   claudeCodeScope?: string | null;
   claudeCodeProjectPath?: string | null;
+  source?: string | null;
 };
 
 type Settings = { version: number; providers: ProviderCfg[] };
@@ -134,6 +136,7 @@ function renderProviderRow(
   extrasRow.append(refreshIntervalInput(cfg), trayVisibilityToggle(cfg));
   const region = regionSelect(cfg);
   if (region) extrasRow.append(region);
+  if (id === "claude") extrasRow.append(claudeSourceSelect(cfg));
   wrap.append(extrasRow);
 
   const ccSection = claudeCodeSettingsSection(cfg);
@@ -141,6 +144,9 @@ function renderProviderRow(
 
   if (id === "copilot") {
     wrap.append(copilotDeviceLoginRow(vi, (label) => { cfg.accountLabel = label; }));
+  }
+  if (id === "codex") {
+    wrap.append(codexAccountsSection());
   }
   return wrap;
 }

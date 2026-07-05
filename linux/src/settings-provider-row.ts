@@ -11,7 +11,17 @@ export type ProviderRowCfg = {
   refreshInterval?: number | null;
   showInTray?: boolean | null;
   region?: string | null;
+  source?: string | null;
 };
+
+/** Claude data-source options, mirroring macOS `ClaudeUsageDataSource`. */
+const CLAUDE_SOURCE_OPTIONS: { value: string; labelKey: string }[] = [
+  { value: "auto", labelKey: "claudeSourceAuto" },
+  { value: "oauth", labelKey: "claudeSourceOauth" },
+  { value: "web", labelKey: "claudeSourceWeb" },
+  { value: "cli", labelKey: "claudeSourceCli" },
+  { value: "api", labelKey: "claudeSourceApi" },
+];
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -127,6 +137,25 @@ export function regionSelect(cfg: ProviderRowCfg): HTMLElement | null {
   }
   select.value = cfg.region ?? options[0].value;
   select.addEventListener("change", () => { cfg.region = select.value; });
+  wrap.append(select);
+  return wrap;
+}
+
+/** Claude data-source `<select>` (auto/oauth/web/cli/api) — mirrors macOS
+ * `ClaudeUsageDataSource` / `UserDefaults` key `claudeUsageDataSource`. */
+export function claudeSourceSelect(cfg: ProviderRowCfg): HTMLElement {
+  const wrap = el("label", "settings-inline-field");
+  wrap.append(el("span", "settings-inline-label", t("settingsClaudeSource")));
+  const select = document.createElement("select");
+  select.className = "settings-input settings-input-narrow settings-input-wide";
+  for (const opt of CLAUDE_SOURCE_OPTIONS) {
+    const optionEl = document.createElement("option");
+    optionEl.value = opt.value;
+    optionEl.textContent = t(opt.labelKey);
+    select.append(optionEl);
+  }
+  select.value = cfg.source ?? "oauth";
+  select.addEventListener("change", () => { cfg.source = select.value === "oauth" ? null : select.value; });
   wrap.append(select);
   return wrap;
 }
