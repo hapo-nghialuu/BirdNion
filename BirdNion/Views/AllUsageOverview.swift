@@ -10,6 +10,10 @@ struct CombinedDailyUsage: Equatable, Identifiable {
     let claudeTokens: Int
     let codexUSD: Double
     let codexTokens: Int
+    /// Per-model split for this day (both sources, cost-sorted). Feeds the
+    /// chart hover / heatmap pinned-day breakdown so "Claude" isn't a single
+    /// opaque line. Defaulted so call sites without model data still compile.
+    var models: [CombinedModelCost] = []
 
     var usd: Double { claudeUSD + codexUSD }
     var tokens: Int { claudeTokens + codexTokens }
@@ -68,22 +72,41 @@ struct CombinedUsageReport: Equatable {
 
         // Re-normalize both sources onto startOfDay keys before merging —
         // Claude's older buckets were built with -86 400 s steps, which can
-        // drift one hour off across a DST transition.
+        // drift one hour off across a DST transition. Per-day model splits
+        // are collected in the same pass for the day-detail breakdown.
         var claudeDays: [Date: (usd: Double, tokens: Int)] = [:]
+        var claudeDayModels: [Date: [String: (usd: Double, tokens: Int)]] = [:]
         for d in claude?.daily ?? [] {
             let day = calendar.startOfDay(for: d.date)
             var v = claudeDays[day] ?? (0, 0)
             v.usd += d.usd
             v.tokens += d.tokens
             claudeDays[day] = v
+            var byModel = claudeDayModels[day] ?? [:]
+            for m in d.models {
+                var mv = byModel[m.name] ?? (0, 0)
+                mv.usd += m.usd
+                mv.tokens += m.tokens
+                byModel[m.name] = mv
+            }
+            claudeDayModels[day] = byModel
         }
         var codexDays: [Date: (usd: Double, tokens: Int)] = [:]
+        var codexDayModels: [Date: [String: (usd: Double, tokens: Int)]] = [:]
         for d in codex?.daily ?? [] {
             let day = calendar.startOfDay(for: d.date)
             var v = codexDays[day] ?? (0, 0)
             v.usd += d.usd
             v.tokens += d.tokens
             codexDays[day] = v
+            var byModel = codexDayModels[day] ?? [:]
+            for m in d.models {
+                var mv = byModel[m.name] ?? (0, 0)
+                mv.usd += m.usd
+                mv.tokens += m.tokens
+                byModel[m.name] = mv
+            }
+            codexDayModels[day] = byModel
         }
 
         var daily: [CombinedDailyUsage] = []
@@ -95,7 +118,10 @@ struct CombinedUsageReport: Equatable {
             daily.append(CombinedDailyUsage(
                 date: day,
                 claudeUSD: c.usd, claudeTokens: c.tokens,
-                codexUSD: x.usd, codexTokens: x.tokens))
+                codexUSD: x.usd, codexTokens: x.tokens,
+                models: mergedModelCosts(
+                    claude: claudeDayModels[day] ?? [:],
+                    codex: codexDayModels[day] ?? [:])))
         }
 
         let today = daily.last
@@ -117,36 +143,27 @@ struct CombinedUsageReport: Equatable {
             }
         }
 
-        // Merge per-day model splits per source, then interleave by cost.
+        // Window-wide model totals fold the per-day splits collected above.
         var claudeModels: [String: (usd: Double, tokens: Int)] = [:]
-        for d in claude?.daily ?? [] {
-            for m in d.models {
-                var v = claudeModels[m.name] ?? (0, 0)
+        for byModel in claudeDayModels.values {
+            for (name, m) in byModel {
+                var v = claudeModels[name] ?? (0, 0)
                 v.usd += m.usd
                 v.tokens += m.tokens
-                claudeModels[m.name] = v
+                claudeModels[name] = v
             }
         }
         var codexModels: [String: (usd: Double, tokens: Int)] = [:]
-        for d in codex?.daily ?? [] {
-            for m in d.models {
-                var v = codexModels[m.name] ?? (0, 0)
+        for byModel in codexDayModels.values {
+            for (name, m) in byModel {
+                var v = codexModels[name] ?? (0, 0)
                 v.usd += m.usd
                 v.tokens += m.tokens
-                codexModels[m.name] = v
+                codexModels[name] = v
             }
         }
-        var merged: [CombinedModelCost] = claudeModels.map {
-            CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "claude")
-        }
-        merged += codexModels.map {
-            CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "codex")
-        }
-        merged.removeAll { $0.usd <= 0 && $0.tokens <= 0 }
-        merged.sort {
-            $0.usd == $1.usd ? $0.tokens > $1.tokens : $0.usd > $1.usd
-        }
-        let topModels = Array(merged.prefix(6))
+        let topModels = Array(
+            mergedModelCosts(claude: claudeModels, codex: codexModels).prefix(6))
 
         return CombinedUsageReport(
             todayUSD: today?.usd ?? 0,
@@ -162,6 +179,25 @@ struct CombinedUsageReport: Equatable {
             avgPerActiveDayUSD: active.isEmpty ? 0 : totalUSD / Double(active.count),
             activeDays: active.count,
             streakDays: streak)
+    }
+
+    /// Folds per-source model accumulators into one cost-sorted list, dropping
+    /// zero rows. Shared by the per-day split and the window-wide top models.
+    private static func mergedModelCosts(
+        claude: [String: (usd: Double, tokens: Int)],
+        codex: [String: (usd: Double, tokens: Int)]
+    ) -> [CombinedModelCost] {
+        var merged: [CombinedModelCost] = claude.map {
+            CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "claude")
+        }
+        merged += codex.map {
+            CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "codex")
+        }
+        merged.removeAll { $0.usd <= 0 && $0.tokens <= 0 }
+        merged.sort {
+            $0.usd == $1.usd ? $0.tokens > $1.tokens : $0.usd > $1.usd
+        }
+        return merged
     }
 }
 
@@ -502,16 +538,52 @@ struct CombinedChartCard: View {
             Text("\(dayLabel(detail.date)) · \(AllUsageFormat.usd(detail.usd)) · \(AllUsageFormat.tokens(detail.tokens))")
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.primary)
-            if detail.claudeUSD > 0 || detail.claudeTokens > 0 {
-                sourceRow(color: VocabbyTheme.claude, label: "Claude",
-                          usd: detail.claudeUSD, tokens: detail.claudeTokens)
-            }
-            if detail.codexUSD > 0 || detail.codexTokens > 0 {
-                sourceRow(color: VocabbyTheme.codex, label: "Codex",
-                          usd: detail.codexUSD, tokens: detail.codexTokens)
-            }
+            DaySourceModelRows(day: detail)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        L10n.dayMonth(date, preference: settings.appLanguage)
+    }
+}
+
+/// Source rows (Claude/Codex day totals) plus indented per-model sub-rows —
+/// shared by the chart hover detail and the heatmap pinned-day detail so the
+/// breakdown names the actual models instead of one opaque "Claude" line.
+private struct DaySourceModelRows: View {
+    let day: CombinedDailyUsage
+
+    var body: some View {
+        if day.claudeUSD > 0 || day.claudeTokens > 0 {
+            sourceRow(color: VocabbyTheme.claude, label: "Claude",
+                      usd: day.claudeUSD, tokens: day.claudeTokens)
+            modelRows("claude")
+        }
+        if day.codexUSD > 0 || day.codexTokens > 0 {
+            sourceRow(color: VocabbyTheme.codex, label: "Codex",
+                      usd: day.codexUSD, tokens: day.codexTokens)
+            modelRows("codex")
+        }
+    }
+
+    /// One indented line per model under its source row. Scanner daily
+    /// buckets cap at the top 5 models/day, so the list stays short.
+    @ViewBuilder
+    private func modelRows(_ source: String) -> some View {
+        ForEach(day.models.filter { $0.source == source }) { m in
+            HStack(spacing: 8) {
+                Text(AllUsageFormat.shortName(m.name))
+                    .font(.system(size: 9))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("\(AllUsageFormat.usd(m.usd)) · \(AllUsageFormat.tokensShort(m.tokens))")
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+            .padding(.leading, 14)
+        }
     }
 
     private func sourceRow(color: Color, label: String, usd: Double, tokens: Int) -> some View {
@@ -525,10 +597,6 @@ struct CombinedChartCard: View {
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
-    }
-
-    private func dayLabel(_ date: Date) -> String {
-        L10n.dayMonth(date, preference: settings.appLanguage)
     }
 }
 
@@ -602,14 +670,7 @@ struct CombinedHeatmapCard: View {
             Text("\(L10n.dayMonth(day.date, preference: settings.appLanguage)) · \(AllUsageFormat.usd(day.usd)) · \(AllUsageFormat.tokens(day.tokens))")
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.primary)
-            if day.claudeUSD > 0 || day.claudeTokens > 0 {
-                sourceRow(color: VocabbyTheme.claude, label: "Claude",
-                          usd: day.claudeUSD, tokens: day.claudeTokens)
-            }
-            if day.codexUSD > 0 || day.codexTokens > 0 {
-                sourceRow(color: VocabbyTheme.codex, label: "Codex",
-                          usd: day.codexUSD, tokens: day.codexTokens)
-            }
+            DaySourceModelRows(day: day)
             if !day.isActive {
                 Text(vi ? "Không có hoạt động." : "No activity.")
                     .font(.system(size: 10))
@@ -617,19 +678,6 @@ struct CombinedHeatmapCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func sourceRow(color: Color, label: String, usd: Double, tokens: Int) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label)
-                .font(.system(size: 10))
-                .foregroundStyle(VocabbyTheme.secondary)
-            Spacer(minLength: 8)
-            Text("\(AllUsageFormat.usd(usd)) · \(AllUsageFormat.tokensShort(tokens))")
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(VocabbyTheme.tertiary)
-        }
     }
 
     private var weekdayLabels: some View {

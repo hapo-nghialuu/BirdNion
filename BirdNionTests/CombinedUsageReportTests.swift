@@ -220,4 +220,35 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(r.topModels[1].usd, 5, accuracy: 0.001)   // 2 + 3 summed
         XCTAssertEqual(r.topModels[1].tokens, 50)
     }
+
+    func testDailyBucketsCarryPerDayModelSplit() {
+        let claude = claudeReport(daily: [
+            claudeDay(0, usd: 3, tokens: 30, models: [
+                ClaudeDailyModel(name: "claude-opus-4-8", usd: 2, tokens: 20),
+                ClaudeDailyModel(name: "claude-sonnet-5", usd: 1, tokens: 10),
+            ]),
+            claudeDay(-1, usd: 4, tokens: 40,
+                      models: [ClaudeDailyModel(name: "claude-opus-4-8", usd: 4, tokens: 40)]),
+        ])
+        let codex = codexReport(daily: [
+            codexDay(0, usd: 8, tokens: 80,
+                     models: [CodexDailyModel(name: "gpt-5.5", usd: 8, tokens: 80)]),
+        ])
+
+        let r = CombinedUsageReport.build(claude: claude, codex: codex,
+                                          calendar: calendar, now: now)
+
+        // Today: both sources, cost-sorted (codex 8 > opus 2 > sonnet 1).
+        let today = r.daily.last!
+        XCTAssertEqual(today.models.map(\.name),
+                       ["gpt-5.5", "claude-opus-4-8", "claude-sonnet-5"])
+        XCTAssertEqual(today.models.map(\.source), ["codex", "claude", "claude"])
+        XCTAssertEqual(today.models[1].usd, 2, accuracy: 0.001)
+        // Yesterday: Claude only — the day's split stays per-day, not window-wide.
+        let yesterday = r.daily[r.daily.count - 2]
+        XCTAssertEqual(yesterday.models.map(\.name), ["claude-opus-4-8"])
+        XCTAssertEqual(yesterday.models[0].usd, 4, accuracy: 0.001)
+        // Idle days carry no model rows.
+        XCTAssertTrue(r.daily[0].models.isEmpty)
+    }
 }
