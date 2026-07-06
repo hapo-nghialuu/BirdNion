@@ -546,7 +546,10 @@ struct CombinedHeatmapCard: View {
     /// the grid. Click the same cell again to dismiss.
     @State private var selectedDay: CombinedDailyUsage?
 
-    private static let cellSize: CGFloat = 11
+    // 14pt cells make ~14 week columns span ≈222pt so the grid fills the
+    // fixed 420pt popover row instead of leaving a large hole between the
+    // grid and the right-pinned stats column.
+    private static let cellSize: CGFloat = 14
     private static let cellGap: CGFloat = 2
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
