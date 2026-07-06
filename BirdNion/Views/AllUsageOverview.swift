@@ -358,9 +358,9 @@ struct CombinedChartCard: View {
             .frame(height: 56)
             // Legend doubles as the per-source split for the chosen period.
             HStack(spacing: 12) {
-                legendDot(color: VocabbyTheme.claude,
+                legendDot(color: VocabbyTheme.chartClaude,
                           label: "Claude \(AllUsageFormat.usd(is24h ? claude24USD : windowTotals.claudeUSD))")
-                legendDot(color: VocabbyTheme.codex,
+                legendDot(color: VocabbyTheme.chartCodex,
                           label: (is24h ? (vi ? "Codex (hôm nay) " : "Codex (today) ") : "Codex ")
                               + AllUsageFormat.usd(is24h ? codexTodayUSD : windowTotals.codexUSD))
             }
@@ -465,9 +465,9 @@ struct CombinedChartCard: View {
                         Spacer(minLength: 0)
                         VStack(spacing: 0) {
                             if day.usd > 0 {
-                                Rectangle().fill(VocabbyTheme.claude)
+                                Rectangle().fill(VocabbyTheme.chartClaude)
                                     .frame(height: claudeHeight)
-                                Rectangle().fill(VocabbyTheme.codex)
+                                Rectangle().fill(VocabbyTheme.chartCodex)
                                     .frame(height: barHeight - claudeHeight)
                             } else {
                                 Rectangle()
@@ -502,7 +502,7 @@ struct CombinedChartCard: View {
                         Spacer(minLength: 0)
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(hour.usd > 0
-                                  ? VocabbyTheme.claude
+                                  ? VocabbyTheme.chartClaude
                                   : VocabbyTheme.selectedSurface.opacity(0.76))
                             .frame(height: barHeight)
                     }
@@ -556,12 +556,12 @@ private struct DaySourceModelRows: View {
 
     var body: some View {
         if day.claudeUSD > 0 || day.claudeTokens > 0 {
-            sourceRow(color: VocabbyTheme.claude, label: "Claude",
+            sourceRow(color: VocabbyTheme.chartClaude, label: "Claude",
                       usd: day.claudeUSD, tokens: day.claudeTokens)
             modelRows("claude")
         }
         if day.codexUSD > 0 || day.codexTokens > 0 {
-            sourceRow(color: VocabbyTheme.codex, label: "Codex",
+            sourceRow(color: VocabbyTheme.chartCodex, label: "Codex",
                       usd: day.codexUSD, tokens: day.codexTokens)
             modelRows("codex")
         }
@@ -823,7 +823,7 @@ struct CombinedTopModelsCard: View {
     }
 
     private func color(for model: CombinedModelCost) -> Color {
-        model.source == "claude" ? VocabbyTheme.claude : VocabbyTheme.codex
+        model.source == "claude" ? VocabbyTheme.chartClaude : VocabbyTheme.chartCodex
     }
 }
 

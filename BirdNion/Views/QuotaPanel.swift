@@ -1195,6 +1195,11 @@ enum VocabbyTheme {
     static let criticalSurface = Color(red: 255 / 255, green: 232 / 255, blue: 234 / 255) // #FFE8EA
     static let track      = Color(red: 227 / 255, green: 230 / 255, blue: 234 / 255) // #E3E6EA
     static let chartBar   = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255) // #469BE9
+    // All-tab chart series colours — deliberately distinct from the brand
+    // tints below (which keep coloring the provider logos): Codex blue,
+    // Claude amber-yellow for a clearer stacked-bar split.
+    static let chartCodex  = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255)  // #469BE9
+    static let chartClaude = Color(red: 204 / 255, green: 124 / 255, blue: 94 / 255)  // #CC7C5E (brand orange)
     static let badge      = group
     static let border     = Color(red: 215 / 255, green: 220 / 255, blue: 226 / 255) // #D7DCE2
     static let disabled   = Color(red: 154 / 255, green: 163 / 255, blue: 173 / 255) // #9AA3AD
@@ -1271,9 +1276,15 @@ enum VocabbyTheme {
         return success
     }
 
-    static func activityChartBarColor(isCurrent: Bool, hasActivity: Bool) -> Color {
+    /// Daily-bar fill shared by the per-provider chart cards. `tint` colors
+    /// normal active days (at 72%), `currentTint` marks today's bar — the
+    /// defaults keep the original blue scheme; the Claude card passes its
+    /// brand orange.
+    static func activityChartBarColor(isCurrent: Bool, hasActivity: Bool,
+                                      tint: Color = chartBar,
+                                      currentTint: Color = blue) -> Color {
         if !hasActivity { return selectedSurface.opacity(0.76) }
-        return isCurrent ? blue : chartBar.opacity(0.72)
+        return isCurrent ? currentTint : tint.opacity(0.72)
     }
 
     /// Heatmap cell fill for the All tab's activity grid: 0 → idle track,
@@ -1457,7 +1468,9 @@ struct ClaudeUsageChartCard: View {
     private func barColor(for day: ClaudeDailyUsage) -> Color {
         VocabbyTheme.activityChartBarColor(
             isCurrent: day.date == daily30.last?.date,
-            hasActivity: day.usd > 0
+            hasActivity: day.usd > 0,
+            tint: VocabbyTheme.chartClaude,
+            currentTint: VocabbyTheme.chartClaude
         )
     }
 
