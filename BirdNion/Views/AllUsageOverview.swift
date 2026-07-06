@@ -781,7 +781,10 @@ struct CombinedTopModelsCard: View {
     let report: CombinedUsageReport
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    private var maxUSD: Double { max(report.topModels.map(\.usd).max() ?? 0, 0.01) }
+    /// Bars show each model's share of the WINDOW total (not of the largest
+    /// model, which would always render the top row at 100%). The 90-day
+    /// combined total is the denominator so the widths read as "% of spend".
+    private var totalUSD: Double { max(report.totalUSD, 0.01) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -811,7 +814,7 @@ struct CombinedTopModelsCard: View {
                         GeometryReader { geo in
                             RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                                 .fill(color(for: model))
-                                .frame(width: max(2, geo.size.width * CGFloat(model.usd / maxUSD)),
+                                .frame(width: max(2, geo.size.width * CGFloat(model.usd / totalUSD)),
                                        height: 3)
                         }
                         .frame(height: 3)
