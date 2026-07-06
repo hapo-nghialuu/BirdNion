@@ -11,7 +11,14 @@ import UniformTypeIdentifiers
 /// zero-config (login status from ~/.codex/auth.json); the other providers
 /// take a token.
 struct ProvidersPane: View {
-    private static let providerDragType = UTType(exportedAs: "com.local.birdnion.provider-reorder")
+    /// Drag payload type for provider reordering. Uses the system plain-text
+    /// type: a custom UTType would need a UTExportedTypeDeclarations entry in
+    /// Info.plist or macOS silently rejects the drop (validateDrop /
+    /// hasItemsConforming never match, so onDrop stays inert). The payload is
+    /// never read on drop — delegates track the dragged row via
+    /// `draggedRowId` — so plain text is sufficient and external text drags
+    /// are still rejected by the `draggedProviderId != nil` guard.
+    private static let providerDragType = UTType.plainText
 
     @EnvironmentObject var quota: QuotaService
     @EnvironmentObject var settings: SettingsStore
@@ -68,6 +75,14 @@ struct ProvidersPane: View {
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SettingsTheme.background)
+        // Catch-all: a reorder drag released anywhere in the pane that isn't
+        // a row or divider (search field, detail panel, padding) still
+        // commits the current preview order and clears the ghosted row —
+        // otherwise the dragged row stays faded until the next drag starts.
+        .onDrop(of: [Self.providerDragType], delegate: SidebarDropCompletionDelegate(
+            draggedProviderId: $draggedRowId,
+            dropTargetRowId: $dropTargetRowId,
+            finish: finishRowMove))
         .task {
             // Always reload on first appearance (and on tab re-focus via
             // the parent's `.task(id:)` trigger below). The previous
@@ -335,7 +350,7 @@ struct ProvidersPane: View {
         // The grip communicates reorder affordance, while the whole row stays
         // draggable so users do not need to hit a narrow handle precisely.
         .onDrag {
-            // A system drag released outside the sidebar does not call our
+            // A system drag released outside the app window does not call any
             // drop delegate. Restore that stale preview before a new drag.
             if draggedRowId != nil, let dragStartRows {
                 rows = dragStartRows
@@ -343,15 +358,7 @@ struct ProvidersPane: View {
             dragStartRows = rows
             draggedRowId = row.id
             dropTargetRowId = nil
-            let provider = NSItemProvider()
-            provider.registerDataRepresentation(
-                forTypeIdentifier: Self.providerDragType.identifier,
-                visibility: .ownProcess
-            ) { completion in
-                completion(row.id.data(using: .utf8), nil)
-                return nil
-            }
-            return provider
+            return NSItemProvider(object: row.id as NSString)
         } preview: {
             // Custom preview shows the chip with a slight scale so the user
             // sees what's moving; default preview is a faded snapshot of
