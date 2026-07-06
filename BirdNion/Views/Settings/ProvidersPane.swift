@@ -1039,7 +1039,15 @@ struct ProvidersPane: View {
             } else {
                 TokenField(
                     providerID: row.id,
-                    onSaved: { Task { await quota.refresh() } }
+                    onSaved: {
+                        // TokenField writes apiKey straight to disk, bypassing
+                        // `rows`. Reload so the next saveAll() (enable toggle,
+                        // drag reorder, label edit — all write the whole rows
+                        // array) doesn't clobber the just-saved token with the
+                        // stale in-memory entry.
+                        rows = BirdNionConfigStore.allProviders()
+                        Task { await quota.refresh() }
+                    }
                 )
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -2837,6 +2845,16 @@ struct ProvidersPane: View {
             var copy = row
             if copy.id == "hapo" {
                 copy.baseURL = nil
+            }
+            // Credential guard: TokenField (and other panes) write apiKey /
+            // secretKey straight to disk, so a `rows` snapshot loaded before
+            // that save carries nil and this wholesale write would wipe the
+            // stored credential. No UI path clears a credential through
+            // `rows`, so nil here always means "stale", never "remove".
+            if copy.apiKey == nil || copy.secretKey == nil {
+                let disk = BirdNionConfigStore.provider(id: copy.id)
+                copy.apiKey = copy.apiKey ?? disk?.apiKey
+                copy.secretKey = copy.secretKey ?? disk?.secretKey
             }
             return copy
         }
