@@ -1,6 +1,10 @@
 # Development Roadmap
 
-BirdNion (fork/evolution của ai-statusbar) — macOS menu-bar app tracking AI quota.
+BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
+- **macOS** (SwiftUI, `BirdNion/`) — bản gốc, đầy đủ tính năng nhất
+- **Linux** (Tauri v2 Rust+TS, `linux/`) — dùng chung schema `~/.config/birdnion/settings.json`
+
+**Chính sách nền tảng:** tính năng data-layer/UX mới land trên macOS trước, sync sang Linux trong cùng phase (mục "Linux sync" mỗi phase). Windows sẽ build từ codebase Tauri khi Phase 8.
 
 ## ✅ Phase 0 — Bootstrap
 - [x] Scout codebase + research CodexBar / MiniMax quota
@@ -67,28 +71,42 @@ BirdNion (fork/evolution của ai-statusbar) — macOS menu-bar app tracking AI 
 - [x] Codex multi-account + Claude source picker
 - [x] Claude Code backend switcher (profiles ghi `~/.claude/settings.json`)
 - [x] Settings parity CodexBar: manual refresh, refresh-on-open, hotkey toàn cục, sound/overlay warning, Disable Keychain, storage footprint, update check + channel
-- [x] Linux port (Tauri v2, `linux/`) — full 23-provider parity
+- [x] **Linux port** (Tauri v2, `linux/`): 23/23 providers, tab All + heatmap, cost scanner Rust (lệch <3%), cookie qua rookie, Copilot Device Flow, Claude Admin dashboard, notification libnotify, i18n vi/en, CI build .deb/.rpm/AppImage + 162 cargo tests
+
+### Trạng thái parity 2 nền tảng (2026-07-07)
+
+| Mảng | macOS | Linux |
+|---|---|---|
+| 23 providers + tab All + heatmap | ✅ | ✅ |
+| Cost scanner Claude/Codex | ✅ | ✅ (Rust, lệch <3%) |
+| CI tự động | ❌ | ✅ (GitHub Actions) |
+| Settings parity mới (manual refresh, hotkey, update check, storage) | ✅ v0.8.6 | ❌ chưa sync |
+| Per-model breakdown theo ngày (All tab) | ✅ | ❌ chưa sync |
+| Top-models bar theo % tổng + màu chart mới | ✅ | ❌ chưa sync |
+| Claude Code backend switcher | ✅ | ✅ (quick-apply) |
+| Distribution | brew tap | .deb/.rpm/AppImage từ CI |
 
 ## 🎯 Phase 7 — Reliability first (NOW, 0–1 tháng, $0)
 Ưu tiên số 1: app không được hỏng ngầm. Mọi thứ phía dưới vô nghĩa nếu provider chết lặng lẽ.
-- [ ] Provider self-test: nút "Kiểm tra" per-provider trong Settings (fetch 1 lần, báo pass/fail + lý do)
-- [ ] Phân loại lỗi rõ ràng: cookie hết hạn vs API đổi schema vs mạng — hiển thị hướng khắc phục thay vì error thô
-- [ ] Notification khi một provider chuyển từ OK → lỗi liên tục >N lần (đừng để user tự phát hiện)
-- [ ] CI (GitHub Actions, free tier): build + full unit tests mỗi push; parse-test bằng fixture JSON cho các provider chính
-- [ ] Nâng cấp update check thành semi-auto: nút "Cập nhật" chạy `brew upgrade --cask birdnion` (hoặc tải dmg + mở) — không cần Sparkle/Developer ID
+- [ ] [both] Provider self-test: nút "Kiểm tra" per-provider trong Settings (fetch 1 lần, báo pass/fail + lý do)
+- [ ] [both] Phân loại lỗi rõ ràng: cookie hết hạn vs API đổi schema vs mạng — hiển thị hướng khắc phục thay vì error thô
+- [ ] [both] Notification khi một provider chuyển từ OK → lỗi liên tục >N lần (đừng để user tự phát hiện)
+- [ ] [macOS] CI GitHub Actions: build + full unit tests mỗi push (Linux đã có — chỉ macOS thiếu)
+- [ ] [macOS] Update semi-auto: nút "Cập nhật" chạy `brew upgrade --cask birdnion` — không cần Sparkle/Developer ID
+- [ ] [Linux] **Sync đợt tính năng v0.8.x**: Settings parity (manual refresh, update check GitHub, storage footprint), per-model breakdown tab All, top-models % tổng + màu chart mới
 
 ## 🚀 Phase 8 — AI spend cockpit (NEXT, 1–3 tháng, $0)
 Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
-- [ ] Budget per-provider + tổng: đặt ngân sách tháng, cảnh báo pace "sẽ vượt $X trước ngày Y" (mở rộng `WindowPace`)
-- [ ] Digest tuần qua notification: tổng chi, top model, streak (dữ liệu scanner có sẵn)
-- [ ] Export CSV/JSON chi phí theo ngày/model (đối soát nội bộ)
-- [ ] Claude Code switcher từ popover (không cần mở Settings) — tính năng khác biệt nhất so với CodexBar
-- [ ] Windows port từ codebase Tauri (`linux/` đã có; chủ yếu path/credential khác biệt)
+- [ ] [both] Budget per-provider + tổng: đặt ngân sách tháng, cảnh báo pace "sẽ vượt $X trước ngày Y" (macOS mở rộng `WindowPace`; Linux port cùng logic sang Rust)
+- [ ] [both] Digest tuần qua notification: tổng chi, top model, streak (dữ liệu scanner có sẵn)
+- [ ] [both] Export CSV/JSON chi phí theo ngày/model (đối soát nội bộ)
+- [ ] [macOS] Claude Code switcher từ popover (không cần mở Settings) — tính năng khác biệt nhất so với CodexBar; Linux sync sau khi UX chốt
+- [ ] [Windows] Port từ codebase Tauri `linux/`: tray Windows, đường dẫn `%APPDATA%`, cookie qua rookie (đã hỗ trợ Windows), CI msi/exe
 
 ## 🌐 Phase 9 — Audience expansion (LATER, 3–6 tháng)
 Chọn một hướng khi Phase 7–8 xong:
-- [ ] **Team/nội bộ Hapo**: dashboard org (Claude Admin API + Kilo orgs đã có), tổng hợp chi phí nhiều máy, báo cáo
-- [ ] **Public/OSS**: landing page, README tiếng Anh đầy đủ, screenshots, launch HN/Product Hunt
+- [ ] **Team/nội bộ Hapo**: dashboard org (Claude Admin API + Kilo orgs đã có), tổng hợp chi phí nhiều máy (cả macOS lẫn Linux ghi chung schema → sync file là đủ), báo cáo
+- [ ] **Public/OSS**: landing page, README tiếng Anh đầy đủ, screenshots cả 2 OS, launch HN/Product Hunt (điểm bán: cross-platform, thứ CodexBar không có)
 
 ## 💰 Blocked on budget (làm ngay khi có $99/năm Apple Developer)
 - [ ] Developer ID + notarization → cài đặt không cần strip quarantine, mở rộng được tệp người dùng không kỹ thuật
@@ -105,6 +123,7 @@ Chọn một hướng khi Phase 7–8 xong:
 - KHÔNG thêm provider mới trừ khi có nhu cầu thật (mỗi provider = gánh bảo trì dài hạn)
 - KHÔNG monetization khi chưa có khối người dùng
 - Parity với CodexBar coi như XONG — không đuổi theo tiếp
+- Linux không được tụt quá 1 phase so với macOS (mục "Linux sync" là bắt buộc trước khi đóng phase)
 
 ## Recent milestones
 
