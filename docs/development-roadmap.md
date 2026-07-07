@@ -92,9 +92,10 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 - [x] [macOS] Phân loại lỗi rõ ràng: cookie hết hạn vs API đổi schema vs mạng — hiển thị hướng khắc phục thay vì error thô (`ProviderErrorClassifier`, raw giữ ở tooltip)
 - [x] [macOS] Notification khi một provider chuyển từ OK → lỗi liên tục ≥3 lần fetch (1 lần/đợt, re-arm khi hồi, flag riêng default ON)
 - [ ] [Linux] Sync 3 mục reliability trên (classifier Rust + UI + libnotify)
-- [ ] [macOS] CI GitHub Actions: build + full unit tests mỗi push (Linux đã có — chỉ macOS thiếu)
 - [ ] [macOS] Update semi-auto: nút "Cập nhật" chạy `brew upgrade --cask birdnion` — không cần Sparkle/Developer ID
 - [ ] [Linux] **Sync đợt tính năng v0.8.x**: Settings parity (manual refresh, update check GitHub, storage footprint), per-model breakdown tab All, top-models % tổng + màu chart mới
+
+> CI GitHub Actions cho macOS: **bỏ khỏi Phase 7** (quyết định 2026-07-07). Verify bằng `xcodebuild test` local khi cần.
 
 ## 🚀 Phase 8 — AI spend cockpit (NEXT, 1–3 tháng, $0)
 Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
