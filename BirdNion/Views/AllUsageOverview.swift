@@ -614,10 +614,7 @@ struct CombinedHeatmapCard: View {
     /// the grid. Click the same cell again to dismiss.
     @State private var selectedDay: CombinedDailyUsage?
 
-    // 14pt cells make ~14 week columns span ≈222pt so the grid fills the
-    // fixed 420pt popover row instead of leaving a large hole between the
-    // grid and the right-pinned stats column.
-    private static let cellSize: CGFloat = 14
+    private static let cellSize: CGFloat = 11
     private static let cellGap: CGFloat = 2
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
@@ -649,11 +646,16 @@ struct CombinedHeatmapCard: View {
                     .font(.system(size: 9).monospacedDigit())
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
+            // Stats sit right next to the grid (leading-aligned) instead of
+            // being pinned to the trailing edge — the leftover width of the
+            // fixed 420pt popover row collects at the right border, which
+            // reads better than a hole in the middle of the card.
             HStack(alignment: .top, spacing: 10) {
                 weekdayLabels
                 grid
-                Spacer(minLength: 8)
                 statsColumn
+                    .padding(.leading, 8)
+                Spacer(minLength: 0)
             }
             if let day = selectedDay {
                 dayDetail(day)
