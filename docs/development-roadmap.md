@@ -80,9 +80,10 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 | 23 providers + tab All + heatmap | ✅ | ✅ |
 | Cost scanner Claude/Codex | ✅ | ✅ (Rust, lệch <3%) |
 | CI tự động | ❌ | ✅ (GitHub Actions) |
-| Settings parity mới (manual refresh, hotkey, update check, storage) | ✅ v0.8.6 | ❌ chưa sync |
-| Per-model breakdown theo ngày (All tab) | ✅ | ❌ chưa sync |
-| Top-models bar theo % tổng + màu chart mới | ✅ | ❌ chưa sync |
+| Settings parity (manual refresh, update check, storage) | ✅ v0.8.6 | ✅ (hotkey macOS-only) |
+| Per-model breakdown theo ngày (All tab) | ✅ | ❌ (Phase 8) |
+| Top-models bar theo % tổng + màu chart mới | ✅ | ✅ |
+| Reliability (classifier, self-test, failure notify) | ✅ | ✅ |
 | Claude Code backend switcher | ✅ | ✅ (quick-apply) |
 | Distribution | brew tap | .deb/.rpm/AppImage từ CI |
 
@@ -91,11 +92,14 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 - [x] [macOS] Provider self-test: nút "Kiểm tra" per-provider trong Settings (fetch 1 lần, báo pass/fail + lý do) — `specs/provider-reliability`, 2026-07-07
 - [x] [macOS] Phân loại lỗi rõ ràng: cookie hết hạn vs API đổi schema vs mạng — hiển thị hướng khắc phục thay vì error thô (`ProviderErrorClassifier`, raw giữ ở tooltip)
 - [x] [macOS] Notification khi một provider chuyển từ OK → lỗi liên tục ≥3 lần fetch (1 lần/đợt, re-arm khi hồi, flag riêng default ON)
-- [ ] [Linux] Sync 3 mục reliability trên (classifier Rust + UI + libnotify)
-- [ ] [macOS] Update semi-auto: nút "Cập nhật" chạy `brew upgrade --cask birdnion` — không cần Sparkle/Developer ID
-- [ ] [Linux] **Sync đợt tính năng v0.8.x**: Settings parity (manual refresh, update check GitHub, storage footprint), per-model breakdown tab All, top-models % tổng + màu chart mới
+- [x] [Linux] Sync 3 mục reliability trên (classifier Rust 19 tests + self-test + libnotify episode) — 2026-07-07
+- [x] [macOS] Update semi-auto: nút "Cập nhật ngay" chạy `brew upgrade --cask birdnion` qua Terminal — không cần Sparkle/Developer ID
+- [x] [Linux] **Sync đợt tính năng v0.8.x**: manual refresh + Refresh-now, refresh-on-open, update check GitHub (semver Rust), storage footprint, màu chart Codex xanh, top-models chia theo tổng; bump version Linux → 0.8.6
+
+**Phase 7 hoàn tất (2026-07-07).** Next: Phase 8.
 
 > CI GitHub Actions cho macOS: **bỏ khỏi Phase 7** (quyết định 2026-07-07). Verify bằng `xcodebuild test` local khi cần.
+> Còn thiếu 2 nền tảng: [Linux] per-model breakdown trong day-detail tab All (nền `CombinedDay` chưa có model list per-day) — dời sang Phase 8 cùng nhóm spend cockpit.
 
 ## 🚀 Phase 8 — AI spend cockpit (NEXT, 1–3 tháng, $0)
 Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
