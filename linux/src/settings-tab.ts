@@ -151,7 +151,7 @@ function renderProviderRow(
   return wrap;
 }
 
-export async function settingsTab(onSaved: () => void): Promise<HTMLElement> {
+export async function settingsTab(onSaved: () => void, onRefreshNow: () => void): Promise<HTMLElement> {
   const container = el("div", "settings");
   const settings = await invoke<Settings>("get_settings");
   const vi = currentLang() === "vi";
@@ -174,7 +174,7 @@ export async function settingsTab(onSaved: () => void): Promise<HTMLElement> {
   };
   renderList();
 
-  container.append(globalPollingSection());
+  container.append(globalPollingSection(onRefreshNow));
 
   // Launch-at-login (XDG autostart entry via tauri-plugin-autostart).
   const autostartRow = el("div", "settings-row");

@@ -6,7 +6,8 @@ import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { t, currentLang, setLang } from "./i18n";
 import { settingsTab } from "./settings-tab";
-import { getPollSeconds } from "./settings-about";
+import { getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled } from "./settings-about";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const TAB_KEY = "birdnion.selectedTab";
 /** How often the tick loop runs; each provider is only re-fetched once its
@@ -40,8 +41,12 @@ const lastFetched = new Map<string, number>();
 
 /** Provider ids due for a fetch this tick: providers whose own
  * `refreshInterval` (or the global interval when unset/0) has elapsed since
- * their last fetch. Mirrors macOS `QuotaService.effectiveInterval`. */
+ * their last fetch. Mirrors macOS `QuotaService.effectiveInterval`. Returns
+ * `[]` when the global interval is in manual mode (0) — manual mode disables
+ * ALL background auto-fetching regardless of per-provider overrides,
+ * mirroring macOS `RefreshFrequency.manual`. */
 async function dueProviderIds(): Promise<string[] | undefined> {
+  if (isManualRefresh()) return [];
   const settings = await invoke<Settings>("get_settings").catch(() => null);
   if (!settings) return undefined;
   const globalMs = getPollSeconds() * 1000;
@@ -101,7 +106,7 @@ function render() {
     // Async view: mount a placeholder, then swap in the loaded form.
     const placeholder = el("div", "loading", "…");
     app.append(placeholder);
-    void settingsTab(() => void load()).then((view) => placeholder.replaceWith(view));
+    void settingsTab(() => void load(), () => void refreshNow()).then((view) => placeholder.replaceWith(view));
     return;
   }
 
@@ -266,6 +271,13 @@ async function tick() {
   render();
 }
 
+/** Explicit "Refresh now" action (settings button / manual mode's only
+ * fetch path): re-runs the same full fetch as the initial `load()`, so it
+ * works regardless of the current global-interval mode. */
+async function refreshNow() {
+  await load();
+}
+
 /** Ctrl+, switches to the Settings tab (in-window only — no global OS
  * shortcut, since Wayland global-shortcut support is inconsistent). */
 window.addEventListener("keydown", (ev) => {
@@ -275,6 +287,12 @@ window.addEventListener("keydown", (ev) => {
     localStorage.setItem(TAB_KEY, "settings");
     render();
   }
+});
+
+/** Refresh-on-open: re-fetch all providers whenever the window regains focus
+ * (mirrors macOS `refreshOnMenuOpen`), gated by the settings toggle. */
+void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+  if (focused && isRefreshOnOpenEnabled()) void refreshNow().catch(() => {});
 });
 
 window.addEventListener("DOMContentLoaded", () => {

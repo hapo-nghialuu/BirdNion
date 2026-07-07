@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "./i18n";
 import { claudeCodeCard, shouldShowClaudeCode } from "./claude-code";
+import { isProviderStorageEnabled } from "./settings-about";
 
 export type QuotaWindow = {
   label: string;
@@ -154,6 +155,17 @@ export function providerCard(status: ProviderStatus): HTMLElement {
   } else {
     for (const win of status.windows) card.append(windowRow(win));
   }
+
+  if (isProviderStorageEnabled()) {
+    const storageRow = el("div", "provider-storage");
+    card.append(storageRow);
+    void invoke<number>("provider_storage", { id: status.id })
+      .then((bytes) => invoke<string>("format_storage_bytes", { bytes }).then((formatted) => {
+        if (bytes > 0) storageRow.textContent = `${t("providerStorageLabel")}: ${formatted}`;
+      }))
+      .catch(() => {});
+  }
+
   return card;
 }
 

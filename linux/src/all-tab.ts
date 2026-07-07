@@ -275,7 +275,10 @@ function statsColumn(combined: Combined): HTMLElement {
 export function topModelsCard(combined: Combined): HTMLElement {
   const card = el("section", "card");
   card.append(el("div", "summary-label", t("topModels")));
-  const max = Math.max(...combined.topModels.map((m) => m.usd), 0.01);
+  // Denominator is the 90-day window TOTAL (not the top model's own USD), so
+  // bar width reflects each model's actual share of spend — macOS parity
+  // fix (previously divided by max, so the top row was always ~100%).
+  const total = Math.max(combined.totalUsd, 0.01);
   for (const model of combined.topModels) {
     const row = el("div", "model-row");
     const head = el("div", "model-head");
@@ -285,7 +288,7 @@ export function topModelsCard(combined: Combined): HTMLElement {
       `${usd(model.usd)} · ${tokensShort(model.tokens)}`));
     const track = el("div", "model-track");
     const fill = el("div", `model-fill ${model.source}`);
-    fill.style.width = `${Math.max((model.usd / max) * 100, 1)}%`;
+    fill.style.width = `${Math.max((model.usd / total) * 100, 1)}%`;
     track.append(fill);
     row.append(head, track);
     card.append(row);

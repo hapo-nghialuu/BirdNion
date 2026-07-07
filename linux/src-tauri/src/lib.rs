@@ -8,6 +8,8 @@ mod codex_accounts;
 mod codex_scanner;
 mod config;
 mod providers;
+mod storage;
+mod updater;
 mod usage;
 
 use tauri::menu::{Menu, MenuItem};
@@ -301,7 +303,10 @@ pub fn run() {
             notify,
             set_autostart,
             get_autostart,
-            set_tray_tooltip
+            set_tray_tooltip,
+            updater::check_update,
+            storage::provider_storage,
+            storage::format_storage_bytes
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Mở BirdNion", true, None::<&str>)?;
