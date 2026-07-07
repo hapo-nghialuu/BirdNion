@@ -81,7 +81,7 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 | Cost scanner Claude/Codex | ✅ | ✅ (Rust, lệch <3%) |
 | CI tự động | ❌ | ✅ (GitHub Actions) |
 | Settings parity (manual refresh, update check, storage) | ✅ v0.8.6 | ✅ (hotkey macOS-only) |
-| Per-model breakdown theo ngày (All tab) | ✅ | ❌ (Phase 8) |
+| Per-model breakdown theo ngày (All tab) | ✅ | ✅ |
 | Top-models bar theo % tổng + màu chart mới | ✅ | ✅ |
 | Reliability (classifier, self-test, failure notify) | ✅ | ✅ |
 | Claude Code backend switcher | ✅ | ✅ (quick-apply) |
@@ -99,7 +99,7 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 **Phase 7 hoàn tất (2026-07-07).** Next: Phase 8.
 
 > CI GitHub Actions cho macOS: **bỏ khỏi Phase 7** (quyết định 2026-07-07). Verify bằng `xcodebuild test` local khi cần.
-> Còn thiếu 2 nền tảng: [Linux] per-model breakdown trong day-detail tab All (nền `CombinedDay` chưa có model list per-day) — dời sang Phase 8 cùng nhóm spend cockpit.
+> macOS ↔ Linux đạt **full feature parity** (2026-07-07) — chỉ còn global hotkey là macOS-only (Linux tray không hỗ trợ).
 
 ## 🚀 Phase 8 — AI spend cockpit (NEXT, 1–3 tháng, $0)
 Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
