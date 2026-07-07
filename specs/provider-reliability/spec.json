@@ -1,0 +1,199 @@
+{
+  "feature_name": "provider-reliability",
+  "created_at": "2026-07-07T04:30:56Z",
+  "updated_at": "2026-07-07T12:10:39+07:00",
+  "language": "en",
+  "status": "done",
+  "phase": "tasks",
+  "current_phase": "review",
+  "priority": "P1",
+  "effort": "M",
+  "tags": [
+    "macos",
+    "reliability",
+    "providers",
+    "notifications",
+    "self-test"
+  ],
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "scope_lock": {
+    "source": "macOS-first reliability core (roadmap Phase 7 items 1-3): per-provider self-test button, actionable error classification with remediation hints, failure-transition notification after >=3 consecutive failing cycles.",
+    "in_scope": [
+      "Pure Swift error classification: ProviderErrorKind enum + classify(rawError:) function over existing error strings/HTTP codes, unit-testable",
+      "Per-group short remediation hint (en+vi) shown instead of raw error string",
+      "Per-provider self-test button in Settings -> Providers detail pane: single fetch via existing provider fetch path, inline pass/fail + classified reason",
+      "Classified message shown in sidebar row subtitle AND detail info grid; raw error kept available via tooltip/help",
+      "Failure-transition notification via existing QuotaNotifier when a provider goes OK -> failing for >=3 consecutive refresh cycles; fire once per failure episode; reset on recovery",
+      "New localization strings in AppLocalizer (en+vi tables)"
+    ],
+    "out_of_scope": [
+      "Linux/Tauri sync (separate roadmap item)",
+      "Windows port",
+      "Redesign of the existing quota-warning threshold system (QuotaWarnConfig)",
+      "New network layer or new provider fetch path",
+      "New third-party dependencies",
+      "CI GitHub Actions setup (Phase 7 item 4)",
+      "Semi-auto brew update button (Phase 7 item 5)",
+      "Retry/backoff logic or auto-recovery beyond notification",
+      "Changing ProviderStatus error invariant or provider fetch signatures"
+    ],
+    "expansion_policy": "requires-user-approval"
+  },
+  "dependencies": {
+    "blockedBy": [],
+    "blocks": []
+  },
+  "task_files": [
+    "tasks/task-R0-01-error-classifier-foundation.md",
+    "tasks/task-R1-01-remediation-hints-localization.md",
+    "tasks/task-R2-01-providers-pane-classified-display.md",
+    "tasks/task-R2-02-self-test-button.md",
+    "tasks/task-R3-01-failure-transition-notification.md",
+    "tasks/task-R4-01-integration-reachability.md"
+  ],
+  "task_registry": {
+    "tasks/task-R0-01-error-classifier-foundation.md": {
+      "id": "R0-01",
+      "title": "Provider error classifier foundation (ProviderErrorKind + classify)",
+      "status": "done",
+      "dependencies": [],
+      "blocker": null,
+      "started_at": "2026-07-07T11:55:49+07:00",
+      "completed_at": "2026-07-07T11:58:55+07:00",
+      "last_updated_at": "2026-07-07T11:58:55+07:00"
+    },
+    "tasks/task-R1-01-remediation-hints-localization.md": {
+      "id": "R1-01",
+      "title": "Remediation hints + localization (en+vi) for each error kind",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R0-01-error-classifier-foundation.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-07T11:59:20+07:00",
+      "completed_at": "2026-07-07T12:01:10+07:00",
+      "last_updated_at": "2026-07-07T12:01:10+07:00"
+    },
+    "tasks/task-R2-01-providers-pane-classified-display.md": {
+      "id": "R2-01",
+      "title": "Show classified message in sidebar row + detail info grid, raw in tooltip",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R0-01-error-classifier-foundation.md",
+        "tasks/task-R1-01-remediation-hints-localization.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-07T12:01:10+07:00",
+      "completed_at": "2026-07-07T12:03:19+07:00",
+      "last_updated_at": "2026-07-07T12:03:19+07:00"
+    },
+    "tasks/task-R2-02-self-test-button.md": {
+      "id": "R2-02",
+      "title": "Per-provider self-test button (single fetch, inline pass/fail + reason; disabled-provider safe path R2.9)",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R0-01-error-classifier-foundation.md",
+        "tasks/task-R1-01-remediation-hints-localization.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-07T12:03:19+07:00",
+      "completed_at": "2026-07-07T12:06:11+07:00",
+      "last_updated_at": "2026-07-07T12:06:11+07:00"
+    },
+    "tasks/task-R3-01-failure-transition-notification.md": {
+      "id": "R3-01",
+      "title": "Failure-transition notification after >=3 consecutive failing cycles",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R0-01-error-classifier-foundation.md",
+        "tasks/task-R1-01-remediation-hints-localization.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-07T12:06:11+07:00",
+      "completed_at": "2026-07-07T12:09:16+07:00",
+      "last_updated_at": "2026-07-07T12:09:16+07:00"
+    },
+    "tasks/task-R4-01-integration-reachability.md": {
+      "id": "R4-01",
+      "title": "Integration + reachability: wire classifier into all surfaces, full test pass",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R2-01-providers-pane-classified-display.md",
+        "tasks/task-R2-02-self-test-button.md",
+        "tasks/task-R3-01-failure-transition-notification.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-07T12:09:16+07:00",
+      "completed_at": "2026-07-07T12:10:39+07:00",
+      "last_updated_at": "2026-07-07T12:10:39+07:00"
+    }
+  },
+  "blocker": null,
+  "progress": {
+    "init": "done",
+    "requirements": "done",
+    "research": "done",
+    "design": "done",
+    "tasks": "done",
+    "code": "pending",
+    "test": "pending",
+    "review": "done",
+    "develop": "done"
+  },
+  "timestamps": {
+    "init": "2026-07-07T04:30:56Z",
+    "requirements_done": "2026-07-07T04:34:10Z",
+    "research_done": "2026-07-07T04:33:05Z",
+    "design_done": "2026-07-07T04:37:20Z",
+    "tasks_done": "2026-07-07T04:41:37Z",
+    "code_done": null,
+    "test_done": null,
+    "review_done": "2026-07-07T04:53:43Z",
+    "validation_done": "2026-07-07T04:53:43Z",
+    "develop_done": "2026-07-07T12:10:39+07:00"
+  },
+  "design_context": {
+    "discovery_mode": "light",
+    "discovery_reason": "Extension of an existing subsystem (QuotaService refresh loop + ProvidersPane) using known patterns; no new deps, no schema/auth/transport change, reuses existing provider fetch path and QuotaNotifier. Classification is a pure function.",
+    "execution_tier": "standard",
+    "validation_recommended": true
+  },
+  "validation": {
+    "status": "completed",
+    "session_count": 1,
+    "questions_asked": 1,
+    "last_validated_at": "2026-07-07T04:53:43Z",
+    "mode": "red-team+validate",
+    "red_team_findings": {
+      "total": 10,
+      "accepted": 8,
+      "rejected": 2
+    },
+    "reports": [
+      "reports/red-team-report.md",
+      "reports/validate-log.md"
+    ]
+  },
+  "translation": {
+    "enabled": false,
+    "language": null,
+    "language_code": null,
+    "dir": null,
+    "sync": "always",
+    "last_synced_at": null
+  },
+  "ready_for_implementation": true
+}

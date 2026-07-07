@@ -51,6 +51,88 @@ final class QuotaServicePollingTests: XCTestCase {
         await svc.refresh(forceProviderIDs: ["codex"])
         XCTAssertEqual(provider.fetchCount, 2)
     }
+
+    // MARK: - Failure-transition episodes (R3)
+
+    /// Fire exactly once at the 3rd consecutive failing fetch, stay silent on
+    /// the 4th, reset + re-arm on recovery, and a fresh episode bumps the seq
+    /// (per-episode-unique notification id, Finding 3).
+    @MainActor
+    func testFailureEpisodeFiresOnceAtThresholdAndReArms() {
+        let svc = QuotaService(providers: [], interval: 0.1)
+
+        svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "HTTP 401")
+        svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "HTTP 401")
+        var st = svc.failureEpisodeState(for: "p")
+        XCTAssertEqual(st?.consecutive, 2)
+        XCTAssertEqual(st?.notified, false)   // not before the 3rd
+
+        svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "HTTP 401")
+        st = svc.failureEpisodeState(for: "p")
+        XCTAssertEqual(st?.consecutive, 3)
+        XCTAssertEqual(st?.notified, true)    // fired at the 3rd
+        XCTAssertEqual(st?.episodeSeq, 1)
+
+        svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "HTTP 401")
+        st = svc.failureEpisodeState(for: "p")
+        XCTAssertEqual(st?.notified, true)    // no re-fire on the 4th
+        XCTAssertEqual(st?.episodeSeq, 1)     // same episode, same seq
+
+        // Recovery resets + re-arms, seq preserved.
+        svc.evaluateFailureEpisode(id: "p", displayName: "P", error: nil)
+        st = svc.failureEpisodeState(for: "p")
+        XCTAssertEqual(st?.consecutive, 0)
+        XCTAssertEqual(st?.notified, false)
+        XCTAssertEqual(st?.episodeSeq, 1)
+
+        // Second episode notifies again with a NEW seq.
+        for _ in 0..<3 {
+            svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "timeout sau 12s")
+        }
+        st = svc.failureEpisodeState(for: "p")
+        XCTAssertEqual(st?.notified, true)
+        XCTAssertEqual(st?.episodeSeq, 2)
+    }
+
+    /// Disabled flag: the counter still tracks, but `notified` stays false
+    /// (nothing posted, episodeSeq unchanged).
+    @MainActor
+    func testFailureEpisodeRespectsDisabledFlag() {
+        UserDefaults.standard.set(false, forKey: "providerFailureNotificationsEnabled")
+        defer { UserDefaults.standard.removeObject(forKey: "providerFailureNotificationsEnabled") }
+
+        let svc = QuotaService(providers: [], interval: 0.1)
+        for _ in 0..<4 {
+            svc.evaluateFailureEpisode(id: "q", displayName: "Q", error: "HTTP 500")
+        }
+        let st = svc.failureEpisodeState(for: "q")
+        XCTAssertEqual(st?.consecutive, 4)
+        XCTAssertEqual(st?.notified, false)
+        XCTAssertEqual(st?.episodeSeq, 0)
+    }
+
+    /// R3.5: the counter counts even while the published status keeps a
+    /// preserved stale GOOD snapshot (the awaited fetch result drives it).
+    @MainActor
+    func testFailureCounterRunsDespitePreservedStaleSnapshot() async {
+        let provider = GoodThenErrorProvider(id: "claude", displayName: "Claude")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()                                    // fetch 1: good
+        XCTAssertEqual(svc.failureEpisodeState(for: "claude")?.consecutive, 0)
+
+        await svc.refresh(forceProviderIDs: ["claude"])        // fetch 2: error, snapshot preserved
+        // Published status still shows the good snapshot…
+        XCTAssertNil(svc.statuses.first?.error)
+        // …but the failure counter advanced from the awaited result.
+        XCTAssertEqual(svc.failureEpisodeState(for: "claude")?.consecutive, 1)
+
+        await svc.refresh(forceProviderIDs: ["claude"])        // fetch 3: error
+        await svc.refresh(forceProviderIDs: ["claude"])        // fetch 4: error → threshold
+        let st = svc.failureEpisodeState(for: "claude")
+        XCTAssertEqual(st?.consecutive, 3)
+        XCTAssertEqual(st?.notified, true)
+    }
 }
 
 final class QuotaWarnConfigTests: XCTestCase {

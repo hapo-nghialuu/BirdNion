@@ -262,6 +262,11 @@ final class QuotaService: ObservableObject {
             var firstCompletionAt: Date?
             for await (id, status, elapsed) in group {
                 let previous = pending[id]
+                // Failure-episode bookkeeping reads the AWAITED status only —
+                // `pending`/`statuses` may keep a preserved stale good
+                // snapshot that would mask an ongoing failure (R3.5).
+                evaluateFailureEpisode(id: id, displayName: status.displayName,
+                                       error: status.error)
                 if status.error != nil, previous?.isRenderableSnapshot == true {
                     log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
                 } else {
@@ -319,6 +324,54 @@ final class QuotaService: ObservableObject {
                 warnState[status.id, default: [:]][windowKey] = state
             }
         }
+    }
+
+    // MARK: - Failure-transition notification (R3)
+
+    /// Per-provider failure-episode state, SEPARATE from `warnState` — the
+    /// quota-threshold system is untouched. `consecutive` counts consecutive
+    /// failing FETCHES (skipped/throttled cycles never reach the evaluator);
+    /// `notified` prevents re-notifying within one episode; `episodeSeq`
+    /// makes each episode's notification id unique so macOS doesn't dedup a
+    /// later episode against an earlier one.
+    private var failureEpisode: [String: (consecutive: Int, notified: Bool, episodeSeq: Int)] = [:]
+    private static let failureNotifyThreshold = 3
+
+    /// Dedicated flag, default ON — reliability alerts must work out of the
+    /// box and are NOT coupled to the quota-warning master toggle
+    /// (`QuotaWarnConfig.enabled`, default off).
+    static var failureNotificationsEnabled: Bool {
+        UserDefaults.standard.object(forKey: "providerFailureNotificationsEnabled") as? Bool ?? true
+    }
+
+    /// Called once per FETCHED provider per refresh cycle with the awaited
+    /// fetch result. Fires exactly one notification at the Nth consecutive
+    /// failure, stays silent while the episode continues, and re-arms on
+    /// recovery (a fresh episode notifies again under a new id).
+    func evaluateFailureEpisode(id: String, displayName: String, error: String?) {
+        var st = failureEpisode[id] ?? (consecutive: 0, notified: false, episodeSeq: 0)
+        guard let error, !error.isEmpty else {
+            failureEpisode[id] = (consecutive: 0, notified: false, episodeSeq: st.episodeSeq)
+            return
+        }
+        st.consecutive += 1
+        if st.consecutive >= Self.failureNotifyThreshold, !st.notified, Self.failureNotificationsEnabled {
+            st.episodeSeq += 1
+            let kind = classify(rawError: error) ?? .unknown
+            QuotaNotifier.post(
+                id: "\(id).failing.\(st.episodeSeq)",
+                title: displayName,
+                body: L10n.f("notification.providerFailing", nil,
+                             L10n.t(kind.titleKey), L10n.t(kind.hintKey)))
+            st.notified = true
+        }
+        failureEpisode[id] = st
+    }
+
+    /// Test seam: expose the episode tuple so unit tests can assert
+    /// consecutive/notified/episodeSeq transitions without a notifier mock.
+    func failureEpisodeState(for id: String) -> (consecutive: Int, notified: Bool, episodeSeq: Int)? {
+        failureEpisode[id]
     }
 }
 

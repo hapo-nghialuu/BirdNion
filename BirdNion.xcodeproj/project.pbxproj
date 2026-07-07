@@ -61,6 +61,8 @@
 		SCK00003000000000000BF02 /* SweetCookieKit in Frameworks */ = {isa = PBXBuildFile; productRef = SCK00002000000000000PD02 /* SweetCookieKit */; };
 		KBS00003000000000000BF03 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = KBS00002000000000000PD03 /* KeyboardShortcuts */; };
 		UPD0001000000000000B001 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD0002000000000000F001 /* UpdateChecker.swift */; };
+		PEC0001000000000000B001 /* ProviderErrorClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEC0002000000000000F001 /* ProviderErrorClassifier.swift */; };
+		PECT0001000000000000B001 /* ProviderErrorClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PECT0002000000000000F001 /* ProviderErrorClassifierTests.swift */; };
 		STG0001000000000000B001 /* ProviderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = STG0002000000000000F001 /* ProviderStorage.swift */; };
 		UPDT0001000000000000B001 /* UpdateCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPDT0002000000000000F001 /* UpdateCheckerTests.swift */; };
 		DDDD000B0000000000B006 /* HapoHubConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD000C000000000000F006 /* HapoHubConfig.swift */; };
@@ -200,6 +202,8 @@
 		ALLV0002000000000000F001 /* AllUsageOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/AllUsageOverview.swift; sourceTree = "<group>"; };
 		CURT0002000000000000F001 /* CombinedUsageReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CombinedUsageReportTests.swift; sourceTree = "<group>"; };
 		UPD0002000000000000F001 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/UpdateChecker.swift; sourceTree = "<group>"; };
+		PEC0002000000000000F001 /* ProviderErrorClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProviderErrorClassifier.swift; sourceTree = "<group>"; };
+		PECT0002000000000000F001 /* ProviderErrorClassifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ProviderErrorClassifierTests.swift; sourceTree = "<group>"; };
 		STG0002000000000000F001 /* ProviderStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProviderStorage.swift; sourceTree = "<group>"; };
 		UPDT0002000000000000F001 /* UpdateCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/UpdateCheckerTests.swift; sourceTree = "<group>"; };
 		SET0002000000000000F001 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsStore.swift; sourceTree = "<group>"; };
@@ -285,6 +289,7 @@
 				CCST0001000000000000B001 /* CodexCostScannerTests.swift in Sources */,
 				CURT0001000000000000B001 /* CombinedUsageReportTests.swift in Sources */,
 				UPDT0001000000000000B001 /* UpdateCheckerTests.swift in Sources */,
+				PECT0001000000000000B001 /* ProviderErrorClassifierTests.swift in Sources */,
 				CWDT0001000000000000B001 /* CodexWebDashboardTests.swift in Sources */,
 				CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */,
 				NPT00001000000000000B01 /* NewProviderTests.swift in Sources */,
@@ -541,6 +546,7 @@
 				DDDD0003000000000000B002 /* ConfigService.swift in Sources */,
 				DDDD0005000000000000B003 /* QuotaService.swift in Sources */,
 				UPD0001000000000000B001 /* UpdateChecker.swift in Sources */,
+				PEC0001000000000000B001 /* ProviderErrorClassifier.swift in Sources */,
 				STG0001000000000000B001 /* ProviderStorage.swift in Sources */,
 				DDDD0009000000000000B005 /* MiniMaxProvider.swift in Sources */,
 				DDDD00E1000000000000B0E0 /* OpenRouterProvider.swift in Sources */,

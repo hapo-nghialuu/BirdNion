@@ -97,6 +97,8 @@ struct ProvidersPane: View {
             if selectedID == nil { selectedID = rows.first?.id }
         }
         .task(id: selectedID) {
+            // Stale self-test results don't carry across provider switches.
+            selfTestState = [:]
             // Scan local sessions for token cost only while the provider is
             // selected. Mirrors CodexCostScanner's behavior — cached 5 min
             // so the panel doesn't re-walk the project tree on every refresh.
@@ -437,6 +439,76 @@ struct ProvidersPane: View {
     @State private var hoveredRowId: String?
     @State private var dragStartRows: [BirdNionConfigStore.Provider]?
 
+    // MARK: - Self-test (R2-02)
+
+    /// Per-provider one-shot probe lifecycle for the detail-header button.
+    enum SelfTestState: Equatable {
+        case idle, running, pass
+        case fail(kind: ProviderErrorKind, raw: String)
+    }
+
+    @State private var selfTestState: [String: SelfTestState] = [:]
+
+    /// One fetch through the provider's real path (R2.5) — never
+    /// QuotaService.refresh(). A disabled provider has no live instance in
+    /// `quota.providers`; fail fast instead of entering `.running` (R2.9).
+    private func runSelfTest(id: String) {
+        guard let provider = quota.providers.first(where: { $0.id == id }) else {
+            selfTestState[id] = .fail(kind: .unknown, raw: L10n.t("provider.selfTest.disabled", language))
+            return
+        }
+        guard selfTestState[id] != .running else { return }
+        selfTestState[id] = .running
+        Task {
+            do {
+                let status = try await provider.fetch()
+                if let err = status.error, !err.isEmpty {
+                    selfTestState[id] = .fail(kind: classify(rawError: err) ?? .unknown, raw: err)
+                } else {
+                    selfTestState[id] = .pass
+                }
+            } catch {
+                let raw = "\(error)"
+                selfTestState[id] = .fail(kind: classify(rawError: raw) ?? .unknown, raw: raw)
+            }
+        }
+    }
+
+    /// Inline label next to the self-test button; nothing when idle.
+    @ViewBuilder
+    private func selfTestResult(for id: String) -> some View {
+        switch selfTestState[id] ?? .idle {
+        case .idle:
+            EmptyView()
+        case .running:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text(L10n.t("provider.selfTest.running", language))
+                    .font(.system(size: 10))
+                    .foregroundStyle(SettingsTheme.secondary)
+            }
+        case .pass:
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(SettingsTheme.success)
+                Text(L10n.t("provider.selfTest.pass", language))
+                    .font(.system(size: 10))
+                    .foregroundStyle(SettingsTheme.success)
+            }
+        case .fail(let kind, let raw):
+            HStack(spacing: 4) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(SettingsTheme.critical)
+                Text("\(L10n.t("provider.selfTest.fail", language)) — \(L10n.t(kind.hintKey, language))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(SettingsTheme.critical)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .help(raw)
+        }
+    }
+
     // makeProvider was moved to `ServicesContainer.makeProviders(keychain:)`
 // so the same factory powers init() and the live rebuild path triggered
 // by .birdnionProvidersChanged.
@@ -496,7 +568,8 @@ struct ProvidersPane: View {
     private func detailHeader(_ idx: Int) -> some View {
         let row = rows[idx]
         return SettingsCard {
-            HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center, spacing: 12) {
                 ProviderLogoView(id: row.id, tint: row.enabled == true ? SettingsTheme.accent : SettingsTheme.disabled)
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
@@ -509,6 +582,14 @@ struct ProvidersPane: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 12)
+                // One-shot probe through the provider's real fetch path;
+                // result renders inline below the header row.
+                Button(L10n.t("provider.selfTest", language)) {
+                    runSelfTest(id: row.id)
+                }
+                .controlSize(.small)
+                .disabled(selfTestState[row.id] == .running)
+                .pointingHandCursor(enabled: selfTestState[row.id] != .running)
                 Button {
                     // Manual reload: re-read `settings.json` to pick up any
                     // changes another pane (or external editor) made, then
@@ -541,6 +622,10 @@ struct ProvidersPane: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.small)
+                }
+                if selfTestState[row.id] != nil, selfTestState[row.id] != .idle {
+                    selfTestResult(for: row.id)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -601,8 +686,16 @@ struct ProvidersPane: View {
                     }
                 }
                 if let err = s?.error {
-                    infoRow(L10n.t("provider.error", language),
-                            L10n.providerText(err, preference: language))
+                    // Classified remediation hint instead of the raw string;
+                    // raw stays on hover. For `unknown` the hint would be a
+                    // dead-end ("see details" with no details anywhere), so
+                    // show the raw error inline instead (R1.3).
+                    let kind = classify(rawError: err) ?? .unknown
+                    errorRow(
+                        value: kind == .unknown
+                            ? L10n.providerText(err, preference: language)
+                            : classifiedMessage(for: err),
+                        rawError: err)
                 } else {
                     infoRow(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
                 }
@@ -627,6 +720,18 @@ struct ProvidersPane: View {
             Text(value)
                 .foregroundStyle(SettingsTheme.primary)
                 .lineLimit(2)
+        }
+    }
+
+    /// Error info row: classified message as the value, raw error string on
+    /// hover so the detail is always reachable (R2.3).
+    private func errorRow(value: String, rawError: String) -> some View {
+        GridRow {
+            Text(L10n.t("provider.error", language)).gridColumnAlignment(.leading)
+            Text(value)
+                .foregroundStyle(SettingsTheme.primary)
+                .lineLimit(2)
+                .help(L10n.providerText(rawError, preference: language))
         }
     }
 
@@ -2801,16 +2906,24 @@ struct ProvidersPane: View {
         if row.enabled != true { return L10n.t("provider.disabled", language) }
         guard let s = status(for: row.id) else { return L10n.t("provider.notLoaded", language) }
         if let err = s.error, !err.isEmpty {
-            // Truncate long error messages so the sidebar row stays a single
-            // line. The full message is still reachable via the tooltip
+            // Show the classified remediation hint instead of the raw error —
+            // the raw string stays reachable via the row tooltip
             // (`statusSubtitleDetail`) and the detail pane.
-            let localized = L10n.providerText(err, preference: language)
-            return L10n.f("provider.errorPrefix", language, truncated(localized, max: 32))
+            return L10n.f("provider.errorPrefix", language,
+                          truncated(classifiedMessage(for: err), max: 32))
         }
         if let first = s.windows.first {
             return L10n.f("provider.remaining", language, first.remainingPct)
         }
         return L10n.t("provider.loading", language)
+    }
+
+    /// Actionable, localized message for a raw provider error: classify into
+    /// a `ProviderErrorKind` and resolve its remediation hint. Single seam
+    /// shared by the sidebar subtitle and the detail grid (R2.1/R2.2).
+    private func classifiedMessage(for rawError: String) -> String {
+        let kind = classify(rawError: rawError) ?? .unknown
+        return L10n.t(kind.hintKey, language)
     }
 
     /// Full error message for the sidebar row's `.help()` tooltip. Hover
