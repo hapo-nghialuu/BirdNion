@@ -40,6 +40,33 @@ async fn provider_statuses(ids: Option<Vec<String>>) -> Vec<providers::ProviderS
     providers::fetch_filtered(ids.as_deref()).await
 }
 
+/// Classifies a raw provider error string into a `ProviderErrorKind` key
+/// suffix (e.g. "cookieExpiredOrMissing") so the frontend can build i18n
+/// keys `providerError.<suffix>.title` / `.hint` without duplicating the
+/// classification logic. `None` when there is nothing to classify.
+#[tauri::command]
+fn classify_provider_error(raw: Option<String>) -> Option<String> {
+    providers::error_classifier::classify(raw.as_deref())
+        .map(|kind| kind.key_suffix().to_string())
+}
+
+/// Runs a single self-test fetch for one provider (never the whole refresh
+/// loop). Returns a failure status keyed to `provider.selfTest.disabled`
+/// when the provider is disabled or not found in settings.json.
+#[tauri::command]
+async fn test_provider(id: String) -> providers::ProviderStatus {
+    let cfg = config::load().providers.into_iter().find(|p| p.id == id);
+    match cfg {
+        Some(cfg) if cfg.enabled.unwrap_or(false) => providers::fetch(&cfg).await,
+        Some(cfg) => providers::ProviderStatus::failure(
+            &id,
+            &providers::display_name(&cfg),
+            "provider.selfTest.disabled",
+        ),
+        None => providers::ProviderStatus::failure(&id, &id, "provider.selfTest.disabled"),
+    }
+}
+
 /// Claude Admin API org usage/cost dashboard (30-day). None when no admin
 /// key is configured (env vars or the Claude row's `adminApiKey` field) or
 /// the fetch fails — the Claude tab simply omits the extra card.
@@ -256,6 +283,8 @@ pub fn run() {
             claude_usage_report,
             codex_usage_report,
             provider_statuses,
+            classify_provider_error,
+            test_provider,
             claude_admin_usage,
             claude_code_state,
             claude_code_apply,

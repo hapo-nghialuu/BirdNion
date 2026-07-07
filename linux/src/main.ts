@@ -156,6 +156,48 @@ function checkQuotaWarnings(statuses: ProviderStatus[]) {
   }
 }
 
+/** Dedicated flag, default ON — reliability alerts must work out of the box
+ * and are NOT coupled to the quota-warning path above. */
+const FAILURE_NOTIFY_KEY = "providerFailureNotificationsEnabled";
+function failureNotificationsEnabled(): boolean {
+  return localStorage.getItem(FAILURE_NOTIFY_KEY) !== "false";
+}
+
+/** Per-provider failure-episode state, SEPARATE from `warned` — port of
+ * macOS `QuotaService.evaluateFailureEpisode`. `consecutive` counts
+ * consecutive failing FETCHES (only providers actually fetched this tick
+ * are evaluated); `notified` prevents re-notifying within one episode. */
+const failureEpisode = new Map<string, { consecutive: number; notified: boolean }>();
+const FAILURE_NOTIFY_THRESHOLD = 3;
+
+/** Called once per FETCHED provider per poll with the awaited fetch result.
+ * Fires exactly one notification at the Nth consecutive failure, stays
+ * silent while the episode continues, and re-arms on recovery (a fresh
+ * episode notifies again). */
+function evaluateFailureEpisodes(fetched: ProviderStatus[]) {
+  for (const s of fetched) {
+    const st = failureEpisode.get(s.id) ?? { consecutive: 0, notified: false };
+    if (!s.error) {
+      failureEpisode.set(s.id, { consecutive: 0, notified: false });
+      continue;
+    }
+    st.consecutive += 1;
+    if (st.consecutive >= FAILURE_NOTIFY_THRESHOLD && !st.notified && failureNotificationsEnabled()) {
+      st.notified = true;
+      void classifyAndNotifyFailure(s);
+    }
+    failureEpisode.set(s.id, st);
+  }
+}
+
+async function classifyAndNotifyFailure(s: ProviderStatus) {
+  const suffix = (await invoke<string | null>("classify_provider_error", { raw: s.error }).catch(() => null)) ?? "unknown";
+  await invoke("notify", {
+    title: s.displayName,
+    body: `${t(`providerError.${suffix}.title`)} — ${t(`providerError.${suffix}.hint`)}`,
+  }).catch(() => {});
+}
+
 /** Mirror the macOS menu-bar percent readout into the tray tooltip.
  * Providers with `showInTray === false` are skipped, mirroring macOS
  * `MenuBarVisibility`. */
@@ -203,6 +245,7 @@ async function load() {
   state.statuses = statuses;
   state.claudeAdmin = claudeAdmin;
   checkQuotaWarnings(statuses);
+  evaluateFailureEpisodes(statuses);
   updateTrayTooltip(statuses, await fetchTrayHidden());
   render();
 }
@@ -218,6 +261,7 @@ async function tick() {
   for (const s of fresh) lastFetched.set(s.id, now);
   state.statuses = mergeStatuses(state.statuses, fresh);
   checkQuotaWarnings(state.statuses);
+  evaluateFailureEpisodes(fresh);
   updateTrayTooltip(state.statuses, await fetchTrayHidden());
   render();
 }

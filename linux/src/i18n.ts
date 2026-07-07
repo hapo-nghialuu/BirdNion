@@ -119,6 +119,42 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   codexAccountRemove: { vi: "Xoá", en: "Remove" },
   codexAccountSaveCurrent: { vi: "Lưu account hiện tại", en: "Save current account" },
   codexAccountLoadError: { vi: "Không tải được danh sách account", en: "Failed to load accounts" },
+
+  // Provider error classification (mirrors macOS ProviderErrorClassifier)
+  "providerError.cookieExpiredOrMissing.title": { vi: "Cookie hết hạn", en: "Cookie expired" },
+  "providerError.cookieExpiredOrMissing.hint": {
+    vi: "Cookie hết hạn — đăng nhập lại trình duyệt",
+    en: "Cookie expired — sign in again in your browser",
+  },
+  "providerError.tokenInvalidOrMissing.title": { vi: "Token không hợp lệ", en: "Invalid token" },
+  "providerError.tokenInvalidOrMissing.hint": {
+    vi: "Token sai — dán lại API key",
+    en: "Invalid token — re-paste your API key",
+  },
+  "providerError.apiSchemaChanged.title": { vi: "Phản hồi lạ", en: "Unexpected response" },
+  "providerError.apiSchemaChanged.hint": {
+    vi: "Phản hồi lạ — có thể cần cập nhật app",
+    en: "Unexpected response — the app may need an update",
+  },
+  "providerError.networkUnreachableOrTimeout.title": { vi: "Lỗi mạng", en: "Network error" },
+  "providerError.networkUnreachableOrTimeout.hint": {
+    vi: "Mất mạng hoặc quá thời gian — kiểm tra kết nối",
+    en: "Network down or timed out — check your connection",
+  },
+  "providerError.rateLimited.title": { vi: "Bị giới hạn tần suất", en: "Rate limited" },
+  "providerError.rateLimited.hint": {
+    vi: "Bị giới hạn tần suất — đợi rồi thử lại",
+    en: "Rate limited — wait and retry",
+  },
+  "providerError.unknown.title": { vi: "Lỗi không xác định", en: "Unknown error" },
+  "providerError.unknown.hint": { vi: "Lỗi không xác định — xem chi tiết", en: "Unknown error — see details" },
+
+  // Self-test
+  "provider.selfTest": { vi: "Kiểm tra", en: "Self-test" },
+  "provider.selfTest.running": { vi: "Đang kiểm tra…", en: "Testing…" },
+  "provider.selfTest.pass": { vi: "Đạt", en: "Passed" },
+  "provider.selfTest.fail": { vi: "Lỗi", en: "Failed" },
+  "provider.selfTest.disabled": { vi: "Bật provider để kiểm tra", en: "Enable the provider to test" },
 };
 
 /** t("estTotal", {n: 30}) — placeholder substitution via {name}. */

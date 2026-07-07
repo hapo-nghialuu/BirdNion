@@ -17,6 +17,7 @@ pub mod cursor;
 pub mod deepgram;
 pub mod deepseek;
 pub mod elevenlabs;
+pub mod error_classifier;
 pub mod freemodel;
 pub mod gemini;
 pub mod groq;

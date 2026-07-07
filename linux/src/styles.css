@@ -212,9 +212,11 @@ body {
 /* --- Provider card ---------------------------------------------------- */
 
 .provider-head { margin-bottom: 8px; }
+.provider-name-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .provider-name { font-size: 13px; font-weight: 600; }
 .provider-meta { font-size: 10px; color: var(--tertiary); }
 .provider-extras { font-size: 10px; color: var(--tertiary); margin-bottom: 6px; }
+.self-test-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 
 .provider-error {
   font-size: 11px;
@@ -259,6 +261,19 @@ body {
 }
 
 .window-subtitle { font-size: 10px; color: var(--tertiary); }
+
+/* --- Self-test ---------------------------------------------------------- */
+
+.self-test-btn { font-size: 10px; padding: 3px 8px; }
+
+.self-test-result {
+  font-size: 10px;
+  margin-top: 4px;
+}
+
+.self-test-result.running { color: var(--tertiary); }
+.self-test-result.pass { color: #15803d; }
+.self-test-result.fail { color: #d70015; }
 
 /* --- Period picker ------------------------------------------------- */
 

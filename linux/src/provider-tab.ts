@@ -84,10 +84,56 @@ function extrasParts(status: ProviderStatus): string[] {
   return parts;
 }
 
+/** One-shot probe button through the provider's real fetch path (never the
+ * whole refresh loop) — port of the macOS detail-header self-test button.
+ * Runs `test_provider`, then classifies any error for an inline hint; the
+ * raw error is available on hover via the `title` attribute. */
+function selfTestWidget(providerId: string): HTMLElement {
+  const wrap = el("span", "self-test-wrap");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "self-test-btn";
+  button.textContent = t("provider.selfTest");
+  const result = el("div", "self-test-result");
+
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    result.className = "self-test-result running";
+    result.textContent = t("provider.selfTest.running");
+    result.removeAttribute("title");
+    void invoke<ProviderStatus>("test_provider", { id: providerId })
+      .then(async (status) => {
+        if (status.error) {
+          const suffix = (await invoke<string | null>("classify_provider_error", { raw: status.error })) ?? "unknown";
+          result.className = "self-test-result fail";
+          result.textContent = `${t("provider.selfTest.fail")} — ${t(`providerError.${suffix}.hint`)}`;
+          result.title = status.error;
+        } else {
+          result.className = "self-test-result pass";
+          result.textContent = t("provider.selfTest.pass");
+        }
+      })
+      .catch((err) => {
+        result.className = "self-test-result fail";
+        result.textContent = `${t("provider.selfTest.fail")} — ${String(err)}`;
+      })
+      .finally(() => {
+        button.disabled = false;
+      });
+  });
+
+  wrap.append(button, result);
+  return wrap;
+}
+
 export function providerCard(status: ProviderStatus): HTMLElement {
   const card = el("section", "card");
   const head = el("div", "provider-head");
-  head.append(el("div", "provider-name", status.displayName));
+  const nameRow = el("div", "provider-name-row");
+  nameRow.append(el("div", "provider-name", status.displayName));
+  nameRow.append(selfTestWidget(status.id));
+  head.append(nameRow);
   const meta: string[] = [];
   if (status.accountLabel) meta.push(status.accountLabel);
   else if (status.signedInEmail) meta.push(status.signedInEmail);
