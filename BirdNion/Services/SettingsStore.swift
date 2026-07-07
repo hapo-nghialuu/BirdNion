@@ -33,6 +33,10 @@ final class SettingsStore: ObservableObject {
     }
 
     enum RefreshFrequency: Double, CaseIterable, Identifiable {
+        /// 0 = manual: the background poll loop idles and only the popover's
+        /// refresh button (or refresh-on-open) fetches. Matches CodexBar's
+        /// `RefreshFrequency.manual`.
+        case manual = 0
         case oneMinute = 60
         case twoMinutes = 120
         case fiveMinutes = 300
@@ -42,6 +46,7 @@ final class SettingsStore: ObservableObject {
         var id: Double { rawValue }
         func displayName(language: String? = nil) -> String {
             switch self {
+            case .manual: L10n.t("settings.refresh.manual", language)
             case .oneMinute: L10n.duration(60, preference: language)
             case .twoMinutes: L10n.duration(120, preference: language)
             case .fiveMinutes: L10n.duration(300, preference: language)
@@ -62,6 +67,26 @@ final class SettingsStore: ObservableObject {
     /// critical. `QuotaWarnConfig` reads the same keys; providers may override.
     @AppStorage(QuotaWarnConfig.level1Key) var quotaWarnLevel1: Int = 50
     @AppStorage(QuotaWarnConfig.level2Key) var quotaWarnLevel2: Int = 20
+    /// Delivery options for quota warnings: notification sound + a brief
+    /// on-screen overlay. `QuotaWarnConfig` reads the same keys.
+    @AppStorage(QuotaWarnConfig.soundKey) var quotaWarningSoundEnabled: Bool = true
+    @AppStorage(QuotaWarnConfig.alertKey) var quotaWarningOnScreenAlertEnabled: Bool = false
+    /// Refresh every provider each time the menu-bar popover opens (CodexBar's
+    /// `refreshAllProvidersOnMenuOpen`). `AppDelegate.showPanel()` reads this.
+    @AppStorage("refreshOnMenuOpen") var refreshOnMenuOpen: Bool = false
+    /// Debug: skip every macOS Keychain read. Key intentionally matches
+    /// CodexBarCore's `KeychainAccessGate`, so the vendored cookie/web paths
+    /// honor the same toggle for free; `ClaudeOAuth.readKeychainData` checks
+    /// it too and falls back to the CLI credentials file.
+    @AppStorage("debugDisableKeychainAccess") var debugDisableKeychainAccess: Bool = false
+    /// Show each provider's on-disk data size in the Providers detail pane.
+    /// `ProviderStorageScanner` only scans while this is on.
+    @AppStorage("providerStorageFootprintsEnabled") var providerStorageFootprintsEnabled: Bool = false
+    /// GitHub-releases update check (About pane). Auto-check runs at launch,
+    /// throttled to once a day by `UpdateChecker`.
+    @AppStorage("updateAutoCheckEnabled") var updateAutoCheckEnabled: Bool = true
+    /// "stable" hides GitHub prereleases; "beta" includes them.
+    @AppStorage("updateChannel") var updateChannel: String = "stable"
     @AppStorage("hidePersonalInfo") var hidePersonalInfo: Bool = false
     @AppStorage(MenuBarPercentDisplay.defaultsKey) var showPercentInMenuBar: Bool = false
     @AppStorage("mergeIcons") var mergeIcons: Bool = true

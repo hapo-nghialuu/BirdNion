@@ -26,6 +26,24 @@ struct AdvancedPane: View {
                 ) {
                     Toggle("", isOn: $settings.debugMenuEnabled).labelsHidden().toggleStyle(.switch)
                 }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.disableKeychain.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.disableKeychain.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.debugDisableKeychainAccess).labelsHidden().toggleStyle(.switch)
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.storageFootprint.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.storageFootprint.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.providerStorageFootprintsEnabled).labelsHidden().toggleStyle(.switch)
+                }
             }
         }
     }

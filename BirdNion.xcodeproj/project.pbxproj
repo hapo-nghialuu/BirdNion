@@ -59,6 +59,10 @@
 		MV0001000000000000B001 /* MenuBarVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = MV0002000000000000F001 /* MenuBarVisibility.swift */; };
 		LSP0003000000000000BF001 /* CodexBarCore in Frameworks */ = {isa = PBXBuildFile; productRef = LSP0002000000000000PD001 /* CodexBarCore */; };
 		SCK00003000000000000BF02 /* SweetCookieKit in Frameworks */ = {isa = PBXBuildFile; productRef = SCK00002000000000000PD02 /* SweetCookieKit */; };
+		KBS00003000000000000BF03 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = KBS00002000000000000PD03 /* KeyboardShortcuts */; };
+		UPD0001000000000000B001 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD0002000000000000F001 /* UpdateChecker.swift */; };
+		STG0001000000000000B001 /* ProviderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = STG0002000000000000F001 /* ProviderStorage.swift */; };
+		UPDT0001000000000000B001 /* UpdateCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPDT0002000000000000F001 /* UpdateCheckerTests.swift */; };
 		DDDD000B0000000000B006 /* HapoHubConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD000C000000000000F006 /* HapoHubConfig.swift */; };
 		DDDD000D0000000000B007 /* HapoHubProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD000E000000000000F007 /* HapoHubProvider.swift */; };
 		DDDD000F0000000000B008 /* MockHapoHubProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD0010000000000000F008 /* MockHapoHubProvider.swift */; };
@@ -195,6 +199,9 @@
 		DDDD001C000000000000F00E /* QuotaPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/QuotaPanel.swift; sourceTree = "<group>"; };
 		ALLV0002000000000000F001 /* AllUsageOverview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/AllUsageOverview.swift; sourceTree = "<group>"; };
 		CURT0002000000000000F001 /* CombinedUsageReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CombinedUsageReportTests.swift; sourceTree = "<group>"; };
+		UPD0002000000000000F001 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/UpdateChecker.swift; sourceTree = "<group>"; };
+		STG0002000000000000F001 /* ProviderStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProviderStorage.swift; sourceTree = "<group>"; };
+		UPDT0002000000000000F001 /* UpdateCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/UpdateCheckerTests.swift; sourceTree = "<group>"; };
 		SET0002000000000000F001 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsStore.swift; sourceTree = "<group>"; };
 		L10N0002000000000000F001 /* AppLocalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalizer.swift; sourceTree = "<group>"; };
 		FR0002000000000000F001 /* BirdNionConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BirdNionConfigStore.swift; sourceTree = "<group>"; };
@@ -247,6 +254,7 @@
 			files = (
 			LSP0003000000000000BF001 /* CodexBarCore in Frameworks */,
 			SCK00003000000000000BF02 /* SweetCookieKit in Frameworks */,
+			KBS00003000000000000BF03 /* KeyboardShortcuts in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -276,6 +284,7 @@
 				C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */,
 				CCST0001000000000000B001 /* CodexCostScannerTests.swift in Sources */,
 				CURT0001000000000000B001 /* CombinedUsageReportTests.swift in Sources */,
+				UPDT0001000000000000B001 /* UpdateCheckerTests.swift in Sources */,
 				CWDT0001000000000000B001 /* CodexWebDashboardTests.swift in Sources */,
 				CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */,
 				NPT00001000000000000B01 /* NewProviderTests.swift in Sources */,
@@ -389,6 +398,7 @@
 			packageProductDependencies = (
 				LSP0002000000000000PD001 /* CodexBarCore */,
 				SCK00002000000000000PD02 /* SweetCookieKit */,
+				KBS00002000000000000PD03 /* KeyboardShortcuts */,
 			);
 			productName = BirdNion;
 			productReference = AAAA0003000000000000F002 /* BirdNion.app */;
@@ -445,6 +455,7 @@
 			packageReferences = (
 				LSP0001000000000000PR001 /* XCLocalSwiftPackageReference "../CodexBar" */,
 				SCK00001000000000000PR02 /* XCRemoteSwiftPackageReference "SweetCookieKit" */,
+				KBS00001000000000000PR03 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 			);
 			projectDirPath = "";
 			projectRoot = "";
@@ -479,6 +490,14 @@
 				minimumVersion = 0.4.1;
 			};
 		};
+		KBS00001000000000000PR03 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sindresorhus/KeyboardShortcuts";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -490,6 +509,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = SCK00001000000000000PR02 /* XCRemoteSwiftPackageReference "SweetCookieKit" */;
 			productName = SweetCookieKit;
+		};
+		KBS00002000000000000PD03 /* KeyboardShortcuts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = KBS00001000000000000PR03 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
+			productName = KeyboardShortcuts;
 		};
 /* End XCSwiftPackageProductDependency section */
 
@@ -516,6 +540,8 @@
 				BBBB0003000000000000B002 /* QuotaProvider.swift in Sources */,
 				DDDD0003000000000000B002 /* ConfigService.swift in Sources */,
 				DDDD0005000000000000B003 /* QuotaService.swift in Sources */,
+				UPD0001000000000000B001 /* UpdateChecker.swift in Sources */,
+				STG0001000000000000B001 /* ProviderStorage.swift in Sources */,
 				DDDD0009000000000000B005 /* MiniMaxProvider.swift in Sources */,
 				DDDD00E1000000000000B0E0 /* OpenRouterProvider.swift in Sources */,
 				DDDD00E2000000000000B0E0 /* DeepSeekProvider.swift in Sources */,

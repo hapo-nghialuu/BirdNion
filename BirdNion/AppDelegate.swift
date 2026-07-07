@@ -1,6 +1,13 @@
 import AppKit
-import SwiftUI
 import Combine
+import KeyboardShortcuts
+import SwiftUI
+
+extension KeyboardShortcuts.Name {
+    /// Global hotkey that toggles the quota popover (recorded in
+    /// Settings → General). No default — the user opts in.
+    static let openPopover = Self("openPopover")
+}
 
 /// Borderless panel used as the menu-bar dropdown. Unlike NSPopover it draws
 /// no triangular arrow and can be positioned freely. It must be allowed to
@@ -161,6 +168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         installClickOutsideMonitor()
         installCmdCommaShortcut()
+
+        // Global hotkey (Settings → General → Phím tắt). KeyUp so the
+        // recorded chord doesn't leak a stray keyDown into the popover.
+        KeyboardShortcuts.onKeyUp(for: .openPopover) { [weak self] in
+            self?.togglePanel(nil)
+        }
+
+        // Daily GitHub-releases update check (About pane toggle gates it).
+        UpdateChecker.shared.checkOnLaunchIfDue()
     }
 
     private func refreshLocalizedChrome() {
@@ -219,6 +235,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             display: true
         )
         panel.makeKeyAndOrderFront(nil)
+
+        // Optional CodexBar-parity behavior: force-refresh every provider on
+        // open. Guarded so an already-running cycle isn't doubled.
+        if services.settings.refreshOnMenuOpen, !services.quotaService.isRefreshing {
+            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+        }
     }
 
     private func hidePanel() {

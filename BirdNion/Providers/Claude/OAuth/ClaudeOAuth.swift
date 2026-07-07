@@ -173,7 +173,11 @@ enum ClaudeOAuthStore {
 
     /// Reads the raw `Claude Code-credentials` keychain blob via Security
     /// framework. May trigger a macOS access prompt the first time.
+    /// The Advanced-pane debug toggle (key shared with CodexBarCore's
+    /// KeychainAccessGate) suppresses the read entirely — callers then fall
+    /// back to the CLI credentials file.
     static func readKeychainData() -> Data? {
+        guard !UserDefaults.standard.bool(forKey: "debugDisableKeychainAccess") else { return nil }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,

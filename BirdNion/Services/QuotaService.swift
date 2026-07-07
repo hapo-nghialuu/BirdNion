@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 import UserNotifications
 import os
 
@@ -146,10 +147,15 @@ final class QuotaService: ObservableObject {
             guard let self else { return }
             await self.refresh()
             while !Task.isCancelled {
+                // Manual mode (interval <= 0): idle in short sleeps so a later
+                // setting change is picked up, but never auto-fetch — only the
+                // .birdnionRefresh path (button / refresh-on-open) fetches.
+                let base = self.interval
                 let jitter = Double.random(in: -10...10)
-                let delay = max(60.0, self.interval + jitter)
+                let delay = base <= 0 ? 60.0 : max(60.0, base + jitter)
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 if Task.isCancelled { break }
+                if self.interval <= 0 { continue }
                 await self.refresh()
             }
         }
@@ -348,9 +354,22 @@ enum QuotaWarnConfig {
     static let level1Key = "quotaWarnLevel1"   // first (warning) level, default 50
     static let level2Key = "quotaWarnLevel2"   // second (critical) level, default 20
     static let enabledKey = "quotaWarningNotificationsEnabled"
+    /// Delivery options (SettingsStore exposes the same keys): notification
+    /// sound (default on, matching the pre-existing behavior) and a brief
+    /// on-screen overlay (default off, CodexBar parity).
+    static let soundKey = "quotaWarningSoundEnabled"
+    static let alertKey = "quotaWarningOnScreenAlertEnabled"
 
     static var enabled: Bool {
         UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? false
+    }
+
+    static var soundEnabled: Bool {
+        UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true
+    }
+
+    static var onScreenAlertEnabled: Bool {
+        UserDefaults.standard.bool(forKey: alertKey)
     }
 
     static var globalThresholds: [Int] {
@@ -408,9 +427,81 @@ enum QuotaNotifier {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
-            content.sound = .default
+            content.sound = QuotaWarnConfig.soundEnabled ? .default : nil
             let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
             center.add(request)
         }
+        if QuotaWarnConfig.onScreenAlertEnabled {
+            Task { @MainActor in
+                QuotaAlertOverlay.shared.show(title: title, message: body)
+            }
+        }
+    }
+}
+
+// MARK: - On-screen alert overlay
+
+/// Brief centered on-screen alert for quota warnings — a floating,
+/// non-activating, click-through panel that auto-dismisses. Trimmed-down
+/// port of CodexBar's `QuotaWarningAlertOverlayController`.
+@MainActor
+final class QuotaAlertOverlay {
+    static let shared = QuotaAlertOverlay()
+
+    private var panel: NSPanel?
+    private var dismissTask: Task<Void, Never>?
+    private static let displayDuration: TimeInterval = 4.5
+
+    func show(title: String, message: String) {
+        dismiss()
+
+        let content = VStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+            Text(message)
+                .font(.system(size: 12))
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 18)
+        .frame(maxWidth: 420)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+        let hosting = NSHostingView(rootView: content)
+        hosting.frame.size = hosting.fittingSize
+
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .statusBar
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient]
+        panel.contentView = hosting
+        if let screen = NSScreen.main {
+            let frame = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(
+                x: frame.midX - hosting.fittingSize.width / 2,
+                y: frame.midY - hosting.fittingSize.height / 2))
+        }
+        panel.orderFrontRegardless()
+        self.panel = panel
+
+        dismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.displayDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.dismiss()
+        }
+    }
+
+    private func dismiss() {
+        dismissTask?.cancel()
+        dismissTask = nil
+        panel?.orderOut(nil)
+        panel = nil
     }
 }

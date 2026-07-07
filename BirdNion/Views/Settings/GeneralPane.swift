@@ -1,3 +1,4 @@
+import KeyboardShortcuts
 import SwiftUI
 
 /// General settings: language, launch at login, refresh cadence, status/notification toggles.
@@ -41,7 +42,12 @@ struct GeneralPane: View {
                 }
             }
 
-            SettingsCard(header: L10n.t("settings.section.usage", settings.appLanguage)) {
+            SettingsCard(
+                header: L10n.t("settings.section.usage", settings.appLanguage),
+                footer: settings.refreshIntervalSeconds <= 0
+                    ? LocalizedStringKey(L10n.t("settings.manualRefreshHint", settings.appLanguage))
+                    : nil
+            ) {
                 SettingsLabeledRow(
                     title: L10n.t("settings.refreshFrequency.title", settings.appLanguage),
                     subtitle: L10n.t("settings.refreshFrequency.subtitle", settings.appLanguage)
@@ -57,6 +63,15 @@ struct GeneralPane: View {
                     .onChange(of: settings.refreshIntervalSeconds) { _ in
                         settings.pushRefreshInterval()
                     }
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.refreshOnOpen.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.refreshOnOpen.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.refreshOnMenuOpen).labelsHidden().toggleStyle(.switch)
                 }
             }
 
@@ -112,8 +127,61 @@ struct GeneralPane: View {
                         }
                         .fixedSize()
                     }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.warningSound.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.warningSound.subtitle", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.quotaWarningSoundEnabled).labelsHidden().toggleStyle(.switch)
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.warningAlert.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.warningAlert.subtitle", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.quotaWarningOnScreenAlertEnabled).labelsHidden().toggleStyle(.switch)
+                    }
                 }
             }
+
+            SettingsCard(header: L10n.t("settings.section.shortcut", settings.appLanguage)) {
+                SettingsLabeledRow(
+                    title: L10n.t("settings.hotkey.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.hotkey.subtitle", settings.appLanguage)
+                ) {
+                    OpenPopoverShortcutRecorder()
+                        .frame(width: 160)
+                }
+            }
+
+            SettingsCard {
+                HStack {
+                    Spacer()
+                    Button(L10n.t("settings.quitApp", settings.appLanguage)) {
+                        NSApp.terminate(nil)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
         }
+    }
+}
+
+/// Global-hotkey recorder for the "open popover" shortcut. Wraps the
+/// KeyboardShortcuts Cocoa recorder — the SwiftUI `Recorder` view needs the
+/// package's own localization bundle context, and the Cocoa one matches
+/// CodexBar's usage (`OpenMenuShortcutRecorder`).
+private struct OpenPopoverShortcutRecorder: NSViewRepresentable {
+    func makeNSView(context: Context) -> KeyboardShortcuts.RecorderCocoa {
+        KeyboardShortcuts.RecorderCocoa(for: .openPopover)
+    }
+
+    func updateNSView(_ nsView: KeyboardShortcuts.RecorderCocoa, context: Context) {
+        nsView.shortcutName = .openPopover
     }
 }

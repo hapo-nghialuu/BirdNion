@@ -22,6 +22,8 @@ struct ProvidersPane: View {
 
     @EnvironmentObject var quota: QuotaService
     @EnvironmentObject var settings: SettingsStore
+    /// On-disk footprint cache for the "Dung lượng" info row (Advanced toggle).
+    @ObservedObject private var storageScanner = ProviderStorageScanner.shared
 
     @State private var rows: [BirdNionConfigStore.Provider] = []
     @State private var selectedID: String?
@@ -108,6 +110,10 @@ struct ProvidersPane: View {
             default:
                 codexCost = nil
                 claudeCost = nil
+            }
+            // On-disk footprint for the storage row (Advanced toggle).
+            if settings.providerStorageFootprintsEnabled, let id = selectedID {
+                storageScanner.refreshIfStale(id: id)
             }
         }
         .task(id: antigravityReloadTick) {
@@ -600,6 +606,13 @@ struct ProvidersPane: View {
                 } else {
                     infoRow(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
                 }
+                // On-disk data size (Settings → Advanced toggle). Only for
+                // providers with known local dirs; scan runs off-main via
+                // ProviderStorageScanner with a 5-minute cache.
+                if settings.providerStorageFootprintsEnabled,
+                   !ProviderStoragePaths.candidatePaths(for: row.id).isEmpty {
+                    infoRow(L10n.t("provider.storage", language), storageText(for: row.id))
+                }
             }
             .font(.system(size: 12))
             .foregroundStyle(SettingsTheme.secondary)
@@ -615,6 +628,16 @@ struct ProvidersPane: View {
                 .foregroundStyle(SettingsTheme.primary)
                 .lineLimit(2)
         }
+    }
+
+    /// Value for the storage info row: scanned size, "no local data" when the
+    /// dirs don't exist, or an ellipsis while the first scan runs.
+    private func storageText(for id: String) -> String {
+        guard let footprint = storageScanner.footprints[id] else { return "…" }
+        guard !footprint.existingPaths.isEmpty else {
+            return L10n.t("provider.storage.none", language)
+        }
+        return ProviderStorageScanner.formatBytes(footprint.totalBytes)
     }
 
     /// Service-status row with a severity dot (green/yellow/orange/red).
