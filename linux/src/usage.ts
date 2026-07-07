@@ -14,6 +14,8 @@ export type UsageReport = {
   topModel: string | null;
 };
 
+export type CombinedModel = { name: string; usd: number; tokens: number; source: "claude" | "codex" };
+
 export type CombinedDay = {
   date: string;
   claudeUsd: number;
@@ -23,9 +25,11 @@ export type CombinedDay = {
   usd: number;
   tokens: number;
   active: boolean;
+  /** Per-model split for this day (both sources, cost-sorted). Feeds the
+   * day-detail breakdown so "Claude" isn't a single opaque line. Approximate:
+   * each scanner only records the top 5 models per day. */
+  models: CombinedModel[];
 };
-
-export type CombinedModel = { name: string; usd: number; tokens: number; source: "claude" | "codex" };
 
 export type Combined = {
   daily: CombinedDay[]; // 90 days, oldest → newest
@@ -56,7 +60,7 @@ export function combine(claude: UsageReport | null, codex: UsageReport | null): 
         day = {
           date: d.date,
           claudeUsd: 0, claudeTokens: 0, codexUsd: 0, codexTokens: 0,
-          usd: 0, tokens: 0, active: false,
+          usd: 0, tokens: 0, active: false, models: [],
         };
         byDate.set(d.date, day);
         dates.push(d.date);
@@ -66,11 +70,19 @@ export function combine(claude: UsageReport | null, codex: UsageReport | null): 
       day.usd = day.claudeUsd + day.codexUsd;
       day.tokens = day.claudeTokens + day.codexTokens;
       day.active = day.usd > 0 || day.tokens > 0;
+      // Fold this source's per-day model split into the day, merged by name.
+      for (const m of d.models) {
+        const existing = day.models.find((x) => x.source === source && x.name === m.name);
+        if (existing) { existing.usd += m.usd; existing.tokens += m.tokens; }
+        else { day.models.push({ name: m.name, usd: m.usd, tokens: m.tokens, source }); }
+      }
     }
   };
   seed(claude, "claude");
   seed(codex, "codex");
   const daily = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  // Cost-sort each day's models so the detail lists the biggest spend first.
+  for (const d of daily) d.models.sort((a, b) => (b.usd - a.usd) || (b.tokens - a.tokens));
 
   const today = daily[daily.length - 1];
   const totalUsd = daily.reduce((s, d) => s + d.usd, 0);

@@ -115,9 +115,23 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
     `${dayLabel(day.date)} · ${usd(day.usd)} · ${tokens(day.tokens)}`));
   if (day.claudeUsd > 0 || day.claudeTokens > 0) {
     detail.append(sourceRow("claude", "Claude", day.claudeUsd, day.claudeTokens));
+    appendModelRows(detail, day, "claude");
   }
   if (day.codexUsd > 0 || day.codexTokens > 0) {
     detail.append(sourceRow("codex", "Codex", day.codexUsd, day.codexTokens));
+    appendModelRows(detail, day, "codex");
+  }
+}
+
+/** Indented per-model lines under a source row (top 5/day from the scanner),
+ * so "Claude" isn't one opaque figure — mirrors the macOS DaySourceModelRows. */
+function appendModelRows(detail: HTMLElement, day: CombinedDay, source: "claude" | "codex") {
+  for (const m of day.models.filter((x) => x.source === source)) {
+    const row = el("div", "model-row");
+    row.append(
+      el("span", "model-name", m.name),
+      el("span", "model-amount", `${usd(m.usd)} · ${tokensShort(m.tokens)}`));
+    detail.append(row);
   }
 }
 
