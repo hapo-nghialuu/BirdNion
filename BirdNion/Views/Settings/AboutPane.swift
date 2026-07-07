@@ -159,6 +159,13 @@ struct AboutPane: View {
                 Text(L10n.f("about.updateAvailable", settings.appLanguage, version))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(SettingsTheme.accent)
+                // Semi-auto: open Terminal running the brew upgrade so the
+                // user sees progress and the cask can replace the running
+                // bundle. No Sparkle / Developer ID needed.
+                Button(L10n.t("about.updateNow", settings.appLanguage)) {
+                    runBrewUpgrade()
+                }
+                .controlSize(.small)
                 Button(L10n.t("about.openRelease", settings.appLanguage)) {
                     NSWorkspace.shared.open(url)
                 }
@@ -183,6 +190,22 @@ struct AboutPane: View {
                 .resizable()
                 .interpolation(.high)
         }
+    }
+
+    /// Opens Terminal running the Homebrew cask upgrade. Terminal (not an
+    /// in-process Process) so the user sees download/replace progress and the
+    /// cask can swap the running bundle; the new version applies on relaunch.
+    private func runBrewUpgrade() {
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "brew upgrade --cask birdnion"
+        end tell
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        try? process.run()
     }
 
     private func openProjectHome() {
