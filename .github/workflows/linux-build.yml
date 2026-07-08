@@ -3,9 +3,13 @@ name: linux-build
 # Builds the Tauri Linux port on real Ubuntu: cargo tests + .deb/.rpm/AppImage
 # bundles as artifacts. This is the ground-truth check that the port actually
 # compiles and links against webkit2gtk/appindicator on the target platform.
+#
+# Runs on feature-branch pushes and PRs only — never on main. Code reaches
+# main through a PR, so it was already built there; release bundles come from
+# linux-release.yml on v* tags.
 on:
   push:
-    branches: [main]
+    branches-ignore: [main]
     paths: ["linux/**", ".github/workflows/linux-build.yml"]
   pull_request:
     paths: ["linux/**", ".github/workflows/linux-build.yml"]
