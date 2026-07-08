@@ -39,6 +39,17 @@ cd src-tauri && cargo test   # 162 unit tests
 Build Ubuntu thật: CI `.github/workflows/linux-build.yml` hoặc máy Ubuntu với
 `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`.
 
+## Cài đặt (không cần build)
+
+Tải `.deb`/`.rpm`/`.AppImage` từ [GitHub Releases](https://github.com/hapo-nghialuu/BirdNion/releases)
+(CI `linux-release.yml` tự build và đính kèm khi push tag `v*`):
+
+```bash
+sudo apt install ./BirdNion_<version>_amd64.deb   # Ubuntu/Debian
+# hoặc: sudo dnf install ./BirdNion-<version>-1.x86_64.rpm
+# hoặc: chmod +x BirdNion_<version>_amd64.AppImage && ./BirdNion_...AppImage
+```
+
 ## Kiến trúc
 
 - `src-tauri/src/claude_scanner.rs` / `codex_scanner.rs` — cost scanners (90d daily,

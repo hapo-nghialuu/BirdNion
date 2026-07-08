@@ -1,0 +1,70 @@
+name: linux-release
+
+# Publishes Linux bundles (.deb/.rpm/AppImage) to the GitHub Release for tag
+# v<version>. Triggered by the tag that Scripts/release.sh creates via
+# `gh release create`, so one release carries both the macOS zip and the
+# Linux bundles. Kept separate from linux-build.yml because its `paths`
+# filter does not evaluate reliably on tag pushes.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches tauri.conf.json version
+        if: github.ref_type == 'tag'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CONF_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$TAG_VERSION" != "$CONF_VERSION" ]; then
+            echo "Tag v$TAG_VERSION does not match tauri.conf.json version $CONF_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: linux/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: linux/src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build bundles (.deb / .rpm / AppImage)
+        run: npm run tauri build
+
+      - name: Upload bundles to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            linux/src-tauri/target/release/bundle/deb/*.deb
+            linux/src-tauri/target/release/bundle/rpm/*.rpm
+            linux/src-tauri/target/release/bundle/appimage/*.AppImage
+          fail_on_unmatched_files: true
