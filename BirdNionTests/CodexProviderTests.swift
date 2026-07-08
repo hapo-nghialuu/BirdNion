@@ -248,6 +248,29 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertEqual(result.map(\.id), ["system", "2", "4"])
     }
 
+    func testReconcilePrefersSwitchedManagedOverSystemMirror() {
+        let system = CodexAccount(id: "system", email: "a@x.com", isSystem: true, homePath: nil)
+        let managed = [
+            CodexAccount(id: "1", email: "a@x.com", isSystem: false, homePath: "/h1"),
+            CodexAccount(id: "2", email: "b@x.com", isSystem: false, homePath: "/h2"),
+        ]
+        // Preferred managed account mirrors the system login → managed row
+        // wins, system mirror hidden.
+        XCTAssertEqual(
+            CodexAccountStore.reconcile(system: system, managed: managed, preferManagedID: "1")
+                .map(\.id),
+            ["1", "2"])
+        // No preference → original behavior (system wins, dup hidden).
+        XCTAssertEqual(
+            CodexAccountStore.reconcile(system: system, managed: managed).map(\.id),
+            ["system", "2"])
+        // Preference only applies when the emails actually mirror each other.
+        XCTAssertEqual(
+            CodexAccountStore.reconcile(system: system, managed: managed, preferManagedID: "2")
+                .map(\.id),
+            ["system", "2"])
+    }
+
     func testSnapshotStoreRoundTrip() {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-snap-\(UUID().uuidString).json")

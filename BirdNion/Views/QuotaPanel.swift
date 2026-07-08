@@ -72,10 +72,6 @@ struct QuotaOverview: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
                             ProviderCard(status: s)
-                            // Codex-specific: account list (hover reveal) + CLI switch.
-                            if s.id == "codex" {
-                                CodexAccountsPopoverSection()
-                            }
                             // Claude Code backend: round quick-apply / setup button,
                             // shown only for providers with a key that can back Claude Code.
                             if ClaudeCodeQuickApplyButton.shouldShow(providerID: s.id) {
@@ -99,6 +95,11 @@ struct QuotaOverview: View {
                             if s.id == "codex", let report = codexReport,
                                !report.isEmpty {
                                 CodexUsageChartCard(report: report)
+                            }
+                            // Codex-specific: account list (click to reveal) +
+                            // CLI switch. Below the chart per user preference.
+                            if s.id == "codex" {
+                                CodexAccountsPopoverSection()
                             }
                         }
                     }
@@ -894,9 +895,12 @@ struct CodexAccountsPopoverSection: View {
     }
 
     private func reload() {
-        accounts = CodexAccountStore.allAccounts()
-        activeID = CodexAccountStore.activeID()
+        // preferManagedID keeps the switched-in managed account listed after
+        // a CLI switch (the system row becomes its mirror and is hidden), so
+        // the selection marker and "In CLI" badge stay attached to real rows.
         cliID = CodexAccountStore.cliSwitchedID()
+        accounts = CodexAccountStore.allAccounts(preferManagedID: cliID)
+        activeID = CodexAccountStore.activeID()
     }
 
     private func addAccount() async {
@@ -1849,8 +1853,8 @@ struct CodexUsageChartCard: View {
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.primary)
             Text(vi
-                 ? "Ước tính từ log Codex cục bộ cho tài khoản đang chọn."
-                 : "Estimated from local Codex logs for the selected account.")
+                 ? "Ước tính từ log phiên Codex CLI cục bộ trên máy này."
+                 : "Estimated from this machine's local Codex CLI session logs.")
                 .font(.system(size: 9))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -61,8 +61,9 @@ struct CodexUsageReport: Equatable {
 /// Delegates to CodexBarCore's `CostUsageFetcher`, which scans the full set of
 /// local Codex log sources (native `~/.codex/sessions` + `archived_sessions`,
 /// plus supported pi sessions), uses `turn_context` model markers as the
-/// authoritative model bucket, and prices each model. Scoped to the active
-/// account's `CODEX_HOME`. Results are cached briefly so toggling the Settings
+/// authoritative model bucket, and prices each model. Always scans the system
+/// `~/.codex` home — the only place the CLI writes session logs, whichever
+/// login is installed. Results are cached briefly so toggling the Settings
 /// pane doesn't rescan on every open.
 enum CodexCostScanner {
     private static let cacheTTL: TimeInterval = 300
@@ -100,7 +101,12 @@ enum CodexCostScanner {
     /// readable log sources).
     static func summary(now: Date = Date()) async -> CodexCostSummary? {
         if let cached = await Cache.shared.valid(now: now, ttl: cacheTTL) { return cached }
-        let codexHome = CodexAccountStore.activeAuthURL().deletingLastPathComponent().path
+        // Always scan the real CLI home (~/.codex): every terminal `codex`
+        // session logs there regardless of which login is installed, and
+        // managed homes only ever hold auth.json (no session history). Scoping
+        // to the viewed account made freshly-added accounts show an empty
+        // chart and zero out the All-tab Codex column.
+        let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
         guard let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,
@@ -128,7 +134,9 @@ enum CodexCostScanner {
     /// the usage chart/heatmap. Returns nil only when the scan throws.
     static func usageReport(now: Date = Date()) async -> CodexUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
-        let codexHome = CodexAccountStore.activeAuthURL().deletingLastPathComponent().path
+        // Same as `summary()`: the machine-wide ~/.codex is the only place
+        // session logs actually accumulate.
+        let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
         guard let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,

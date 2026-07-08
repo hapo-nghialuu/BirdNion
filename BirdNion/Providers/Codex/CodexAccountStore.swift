@@ -92,16 +92,35 @@ enum CodexAccountStore {
         }
     }
 
-    static func allAccounts() -> [CodexAccount] {
+    /// `preferManagedID`: pass `cliSwitchedID()` so that, after a CLI switch,
+    /// the managed account installed at `~/.codex` is listed instead of the
+    /// system row (which at that point is just a byte-for-byte mirror of it —
+    /// listing the mirror would hide the row carrying the selection marker
+    /// and the "In CLI" badge).
+    static func allAccounts(preferManagedID: String? = nil) -> [CodexAccount] {
         let system = CodexAccount(id: "system", email: emailOf(url: systemAuthURL()),
                                   isSystem: true, homePath: nil)
-        return reconcile(system: system, managed: managedAccounts())
+        return reconcile(system: system, managed: managedAccounts(), preferManagedID: preferManagedID)
     }
 
     /// Pure reconciliation: hide a managed account whose email matches an
     /// already-listed one (e.g. the system login) so the same identity isn't
     /// shown twice. Accounts with an unknown email are always kept.
-    static func reconcile(system: CodexAccount, managed: [CodexAccount]) -> [CodexAccount] {
+    /// When `preferManagedID` names a managed account whose email mirrors the
+    /// system login, the managed row wins and the system mirror is hidden.
+    static func reconcile(system: CodexAccount, managed: [CodexAccount],
+                          preferManagedID: String? = nil) -> [CodexAccount] {
+        if let preferred = managed.first(where: { $0.id == preferManagedID }),
+           let preferredEmail = preferred.email?.lowercased(),
+           preferredEmail == system.email?.lowercased() {
+            var seenEmails: Set<String> = [preferredEmail]
+            let rest = managed.filter { account in
+                guard account.id != preferred.id else { return false }
+                guard let email = account.email?.lowercased() else { return true }
+                return seenEmails.insert(email).inserted
+            }
+            return [preferred] + rest
+        }
         var seenEmails = Set<String>()
         if let email = system.email?.lowercased() { seenEmails.insert(email) }
         let deduped = managed.filter { account in
