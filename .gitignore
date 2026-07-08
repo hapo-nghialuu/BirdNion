@@ -32,3 +32,9 @@ Scripts/dev-env.sh
 # Vendored SwiftPM package build artifacts / local state
 Vendor/CodexBar/.build/
 Vendor/CodexBar/.swiftpm/
+
+# CafeKit / Ecosystem
+specs/_shared/
+!plans/templates/
+.cafekit-backup/
+.cafekit.lock
