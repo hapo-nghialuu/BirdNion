@@ -124,8 +124,12 @@ enum CodexAccountStore {
         let home = homeDir(forAccount: id)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         let dest = home.appendingPathComponent("auth.json")
-        try? FileManager.default.removeItem(at: dest)
-        try FileManager.default.copyItem(at: systemAuth, to: dest)
+        // Read + atomic 0600 write (not `copyItem`) so the managed copy's
+        // permissions never depend on whatever the external `codex` CLI left
+        // on the source file — every managed credential stays owner-only,
+        // matching the contract every other write path in this file follows.
+        let data = try Data(contentsOf: systemAuth)
+        try CodexAuthStore.writePrivateFile(data, to: dest)
         let account = CodexAccount(id: id, email: emailOf(url: dest),
                                    isSystem: false, homePath: home.path)
         persist(managedAccounts() + [account])
@@ -235,5 +239,139 @@ enum CodexAccountStore {
             process.waitUntilExit()
             return process.terminationStatus == 0
         }.value
+    }
+
+    // MARK: - CLI switch (install a managed account into ~/.codex)
+
+    /// UserDefaults key tracking which managed account is currently installed
+    /// at `~/.codex/auth.json`. Absent/`nil` means the CLI still holds the
+    /// original/system login.
+    static let cliSwitchedKey = "codexCLISwitchedAccount"
+
+    enum CLISwitchError: LocalizedError {
+        case accountNotFound
+        var errorDescription: String? {
+            switch self {
+            case .accountNotFound: "Không tìm thấy tài khoản đã chọn."
+            }
+        }
+    }
+
+    static func cliSwitchedID() -> String? {
+        UserDefaults.standard.string(forKey: cliSwitchedKey)
+    }
+
+    private static func setCLISwitchedID(_ id: String?) {
+        if let id {
+            UserDefaults.standard.set(id, forKey: cliSwitchedKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: cliSwitchedKey)
+        }
+    }
+
+    /// One-time pristine backup of the original `~/.codex/auth.json`, written
+    /// only on the very first CLI overwrite.
+    static func systemBackupURL() -> URL {
+        systemAuthURL().deletingLastPathComponent().appendingPathComponent("auth.json.birdnion-orig")
+    }
+
+    private static func modificationDate(of url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    // MARK: Pure decisions (no file I/O — unit-testable)
+
+    /// `true` when the CLI file is strictly newer than the managed copy (or
+    /// the managed copy is missing), so a sync-back is warranted. Copying an
+    /// equal-or-older file is skipped, making repeated reconciles idempotent.
+    static func shouldSyncBack(cliModifiedAt: Date?, managedModifiedAt: Date?) -> Bool {
+        guard let cli = cliModifiedAt else { return false }
+        guard let managed = managedModifiedAt else { return true }
+        return cli > managed
+    }
+
+    /// `true` when the original system login's email isn't already among the
+    /// managed accounts, meaning it must be promoted before being overwritten.
+    static func needsPromoteBeforeOverwrite(systemEmail: String?, managedEmails: [String]) -> Bool {
+        guard let systemEmail else { return true }
+        let lowered = Set(managedEmails.map { $0.lowercased() })
+        return !lowered.contains(systemEmail.lowercased())
+    }
+
+    /// Drives the Switch button's disabled state: for a managed account, the
+    /// selection must equal the tracked CLI id; for the system account,
+    /// nothing must currently be switched in.
+    static func isAlreadyCLIIdentity(selectedID: String, trackedID: String?) -> Bool {
+        selectedID == "system" ? trackedID == nil : selectedID == trackedID
+    }
+
+    // MARK: File-mutating wrappers (atomic 0600 via CodexAuthStore)
+
+    /// Installs the managed account `id`'s login into `~/.codex/auth.json`.
+    /// On the first overwrite (tracked id is nil), backs up the original
+    /// system login once and promotes it to a managed account if its email
+    /// isn't already managed, per the canonical promote-before-overwrite rule.
+    static func switchCLI(to id: String) throws {
+        guard !isAlreadyCLIIdentity(selectedID: id, trackedID: cliSwitchedID()) else { return }
+        guard let account = managedAccounts().first(where: { $0.id == id }),
+              let home = account.homePath
+        else {
+            throw CLISwitchError.accountNotFound
+        }
+        let managedAuthURL = URL(fileURLWithPath: home).appendingPathComponent("auth.json")
+
+        // No original system login to preserve (e.g. a machine that only
+        // ever used app-managed accounts, never `codex login` in a
+        // terminal) — nothing to back up or promote, just install.
+        let hasSystemLogin = FileManager.default.fileExists(atPath: systemAuthURL().path)
+        if hasSystemLogin, cliSwitchedID() == nil {
+            if !FileManager.default.fileExists(atPath: systemBackupURL().path) {
+                let original = try Data(contentsOf: systemAuthURL())
+                try CodexAuthStore.writePrivateFile(original, to: systemBackupURL())
+            }
+            let systemEmail = emailOf(url: systemAuthURL())
+            let managedEmails = managedAccounts().compactMap(\.email)
+            if needsPromoteBeforeOverwrite(systemEmail: systemEmail, managedEmails: managedEmails) {
+                _ = try? promoteSystem()
+            }
+        }
+
+        let managedData = try Data(contentsOf: managedAuthURL)
+        try FileManager.default.createDirectory(
+            at: systemAuthURL().deletingLastPathComponent(), withIntermediateDirectories: true)
+        try CodexAuthStore.writePrivateFile(managedData, to: systemAuthURL())
+        setCLISwitchedID(id)
+    }
+
+    /// Restores `~/.codex/auth.json` from the pristine backup and clears the
+    /// tracked id. No-op when no switch has ever happened (no backup exists).
+    static func restoreSystemCLI() throws {
+        let backup = systemBackupURL()
+        guard FileManager.default.fileExists(atPath: backup.path) else { return }
+        let data = try Data(contentsOf: backup)
+        try CodexAuthStore.writePrivateFile(data, to: systemAuthURL())
+        setCLISwitchedID(nil)
+    }
+
+    /// Copies `~/.codex/auth.json` back into the tracked managed account's
+    /// home when the CLI has rotated its token since the last sync, so the
+    /// managed copy never goes stale. Best-effort: any failure is swallowed.
+    @discardableResult
+    static func reconcileCLISyncBack() -> Bool {
+        guard let id = cliSwitchedID(), id != "system" else { return false }
+        guard let account = managedAccounts().first(where: { $0.id == id }),
+              let home = account.homePath
+        else { return false }
+        let managedAuthURL = URL(fileURLWithPath: home).appendingPathComponent("auth.json")
+        let cliModified = modificationDate(of: systemAuthURL())
+        let managedModified = modificationDate(of: managedAuthURL)
+        guard shouldSyncBack(cliModifiedAt: cliModified, managedModifiedAt: managedModified) else { return false }
+        guard let data = try? Data(contentsOf: systemAuthURL()) else { return false }
+        do {
+            try CodexAuthStore.writePrivateFile(data, to: managedAuthURL)
+            return true
+        } catch {
+            return false
+        }
     }
 }

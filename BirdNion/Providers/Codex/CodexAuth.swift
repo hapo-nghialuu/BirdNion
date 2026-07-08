@@ -114,7 +114,10 @@ enum CodexAuthStore {
 
     // MARK: - Helpers
 
-    private static func writePrivateFile(_ data: Data, to url: URL) throws {
+    /// Atomic private-file write (staged `O_EXCL` + `fchmod 0600` + `rename`).
+    /// Exposed (not `private`) so `CodexAccountStore` can reuse it for CLI
+    /// switch / restore / sync-back copies without duplicating the logic.
+    static func writePrivateFile(_ data: Data, to url: URL) throws {
         let staged = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).birdnion-\(UUID().uuidString)")
         let fd = staged.path.withCString { open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600)) }

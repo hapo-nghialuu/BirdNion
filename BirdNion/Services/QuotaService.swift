@@ -226,6 +226,13 @@ final class QuotaService: ObservableObject {
         }
         log.info("refresh start — due=\(due.count, privacy: .public)/\(snapshot.count, privacy: .public)")
 
+        // Token-rotation sync-back: reconcile the managed account's cached
+        // auth.json copy against ~/.codex/auth.json on the existing refresh
+        // cadence (no new polling loop). Best-effort — swallows errors.
+        if due.contains(where: { $0.id == "codex" }) {
+            _ = CodexAccountStore.reconcileCLISyncBack()
+        }
+
         // Publish statuses progressively as each provider completes — so the
         // menu-bar popover stops showing 'Đang tải…' as soon as the first
         // provider returns instead of waiting for the slowest one (which

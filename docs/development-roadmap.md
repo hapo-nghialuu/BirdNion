@@ -68,7 +68,7 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 ## ✅ Phase 6 — Provider expansion + All tab (shipped v0.4.0 → v0.8.x)
 - [x] 15 provider mới port từ CodexBar (tổng ~23: Groq, Copilot, Kilo, Cursor, Gemini, Kiro, Bedrock, Antigravity, cookie-based…)
 - [x] Tab "All": gộp Claude CLI + Codex — chart stacked 24h/7/30/90 ngày, heatmap 90 ngày, top models, per-model breakdown theo ngày
-- [x] Codex multi-account + Claude source picker
+- [x] Codex multi-account (popover view-switching + CLI account switcher) + Claude source picker
 - [x] Claude Code backend switcher (profiles ghi `~/.claude/settings.json`)
 - [x] Settings parity CodexBar: manual refresh, refresh-on-open, hotkey toàn cục, sound/overlay warning, Disable Keychain, storage footprint, update check + channel
 - [x] **Linux port** (Tauri v2, `linux/`): 23/23 providers, tab All + heatmap, cost scanner Rust (lệch <3%), cookie qua rookie, Copilot Device Flow, Claude Admin dashboard, notification libnotify, i18n vi/en, CI build .deb/.rpm/AppImage + 162 cargo tests

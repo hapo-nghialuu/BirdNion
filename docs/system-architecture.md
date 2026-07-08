@@ -72,6 +72,21 @@ struct ClaudeWebExtras {
 - **5-min timeout** on cost scrape (`withTaskGroup` race) so a missed Keychain prompt doesn't hang
 - **Per-provider override interval**: stored in UserDefaults, filters slow providers out of cycles
 
+### 3.4 Codex account switching
+
+Popover Accounts row (`CodexAccountsPopoverSection` trong `QuotaPanel.swift`) cho phép:
+- Hover để xem danh sách tài khoản (system + managed `~/Library/Application Support/BirdNion/codex-accounts/<uuid>/`)
+- Click để xem quota tài khoản khác (snapshot swap via `.birdnionCodexAccountChanged`)
+- "Add account…" chạy `codex login` với `CODEX_HOME` riêng
+
+**CLI account switcher** (`CodexAccountStore.swift`): Switch button copy managed account vào `~/.codex/auth.json` để terminal `codex` dùng, với bảo mật:
+- One-time pristine backup tại `~/.codex/auth.json.birdnion-orig` (lần đầu overwrite)
+- Promote-before-overwrite: system account tự thêm vào managed nếu chưa tracked
+- Atomic writes 0600 qua `CodexAuthStore` (staged file + `fchmod` + `rename`)
+- Token-rotation sync-back: mỗi refresh, so sánh mtime CLI vs managed copy, auto-sync nếu CLI mới hơn (idempotent)
+
+Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account id hiện đang ở CLI; `nil` = system account gốc.
+
 ## 4. Luồng quota
 
 ```

@@ -72,6 +72,10 @@ struct QuotaOverview: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
                             ProviderCard(status: s)
+                            // Codex-specific: account list (hover reveal) + CLI switch.
+                            if s.id == "codex" {
+                                CodexAccountsPopoverSection()
+                            }
                             // Claude Code backend: round quick-apply / setup button,
                             // shown only for providers with a key that can back Claude Code.
                             if ClaudeCodeQuickApplyButton.shouldShow(providerID: s.id) {
@@ -646,6 +650,276 @@ struct ProviderCard: View {
             }
         }
         .vocabbyCard()
+    }
+}
+
+// MARK: - Codex accounts (popover)
+
+/// Popover-native Codex account switcher: a compact "Accounts" row that
+/// reveals the signed-in accounts on hover. Selecting one calls
+/// `CodexAccountStore.setActive(id)`, which drives the existing
+/// `.birdnionCodexAccountChanged` snapshot-then-refetch flow in
+/// `QuotaService` so the quota card swaps to that account. Mirrors
+/// `ProvidersPane.CodexAccountsCard` but scoped for the popover surface.
+struct CodexAccountsPopoverSection: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    @State private var accounts: [CodexAccount] = []
+    @State private var activeID = "system"
+    @State private var cliID: String?
+    @State private var revealed = false
+    @State private var busy = false
+    @State private var errorText: String?
+
+    var body: some View {
+        // Click (not hover) toggles the account list — hover-reveal collapsed
+        // the moment the pointer drifted off the card, which made the Switch
+        // card unreachable and felt jumpy.
+        VStack(alignment: .leading, spacing: 0) {
+            collapsedRow
+            if revealed {
+                Divider()
+                    .overlay(VocabbyTheme.border)
+                    .padding(.vertical, 6)
+                ForEach(accounts) { account in
+                    accountRow(account)
+                }
+                addAccountRow
+                switchRow
+            }
+        }
+        .vocabbyCard()
+        .onAppear(perform: reload)
+    }
+
+    private var collapsedRow: some View {
+        // Mirrors the quick-apply card header: framed icon + title/subtitle,
+        // so the collapsed state carries real info (which account's quota is
+        // on screen) instead of a thin label with dead space.
+        let lang = settings.appLanguage
+        let active = accounts.first(where: { $0.id == activeID })
+        let activeLabel = active?.email
+            ?? L10n.t(active?.isSystem == true ? "provider.systemAccount" : "provider.accountGeneric", lang)
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.blue)
+                .frame(width: 30, height: 30)
+                .background(VocabbyTheme.blue.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("popover.accounts", lang))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(activeLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            Text("\(accounts.count)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(VocabbyTheme.segment))
+            Image(systemName: revealed ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+        // No extra padding: `.vocabbyCard()` already pads the whole section
+        // by 10pt — stacking row padding on top was doubling the whitespace.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            revealed.toggle()
+            if revealed { reload() }
+        }
+        .pointingHandCursor()
+    }
+
+    private func accountRow(_ account: CodexAccount) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: account.id == activeID ? "largecircle.fill.circle" : "circle")
+                .font(.system(size: 14))
+                .foregroundStyle(account.id == activeID ? VocabbyTheme.blue : VocabbyTheme.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.email ?? (account.isSystem
+                                       ? L10n.t("provider.systemAccount", settings.appLanguage)
+                                       : L10n.t("provider.accountGeneric", settings.appLanguage)))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.primary)
+                    .lineLimit(1)
+                Text(account.isSystem
+                     ? L10n.t("provider.systemManaged", settings.appLanguage)
+                     : L10n.t("provider.appManaged", settings.appLanguage))
+                    .font(.system(size: 10))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            }
+            Spacer(minLength: 6)
+            if isCLIIdentity(account) {
+                Text(L10n.t("popover.cliActive", settings.appLanguage))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.blue)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(VocabbyTheme.blue.opacity(0.12))
+                    )
+            }
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            CodexAccountStore.setActive(account.id)
+            activeID = account.id
+        }
+    }
+
+    /// Whether `account` is the one currently installed in the Codex CLI —
+    /// distinct from `activeID` (which account's quota is being *viewed*).
+    private func isCLIIdentity(_ account: CodexAccount) -> Bool {
+        account.id == "system" ? cliID == nil : account.id == cliID
+    }
+
+    private var addAccountRow: some View {
+        HStack(spacing: 7) {
+            if busy {
+                ProgressView().controlSize(.small)
+                Text(L10n.t("provider.waitingLogin", settings.appLanguage))
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            } else {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 12))
+                Text(L10n.t("provider.addAccount", settings.appLanguage))
+                    .font(.system(size: 12))
+            }
+        }
+        .foregroundStyle(VocabbyTheme.blue)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !busy else { return }
+            Task { await addAccount() }
+        }
+        .pointingHandCursor(enabled: !busy)
+    }
+
+    /// CLI switch card, styled after `ClaudeCodeQuickApplyButton`: terminal
+    /// icon + title/state chip/hint lines on the left, round power button on
+    /// the right. Power ON = the selected account is already installed in the
+    /// CLI (tap is a no-op); OFF = tapping installs it (or restores the
+    /// original system login when the system account is selected).
+    private var switchRow: some View {
+        let lang = settings.appLanguage
+        let alreadyInCLI = CodexAccountStore.isAlreadyCLIIdentity(selectedID: activeID, trackedID: cliID)
+        let tint = alreadyInCLI ? VocabbyTheme.success : VocabbyTheme.blue
+        let selected = accounts.first(where: { $0.id == activeID })
+        let selectedLabel = selected?.email
+            ?? L10n.t(selected?.isSystem == true ? "provider.systemAccount" : "provider.accountGeneric", lang)
+        let hint = alreadyInCLI
+            ? L10n.t("popover.cliAlready", lang)
+            : (activeID == "system"
+               ? L10n.t("popover.restoreCLI", lang)
+               : L10n.f("popover.cliCard.switchTo", lang, selectedLabel))
+
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "terminal")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(L10n.t("popover.cliCard.title", lang))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.primary)
+                    HStack(spacing: 3) {
+                        Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "power.circle")
+                            .font(.system(size: 9, weight: .bold))
+                        Text(L10n.t(alreadyInCLI ? "popover.cliActive" : "popover.ready", lang))
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(tint)
+                }
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let errorText {
+                    Text(L10n.f("popover.switchFailed", lang, errorText))
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .lineLimit(1)
+                } else {
+                    Text("~/.codex/auth.json")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            ClaudeCodePowerButton(
+                state: alreadyInCLI ? .on : .off,
+                subtitle: "",
+                diameter: 58,
+                busy: busy,
+                showsSubtitle: false,
+                action: {
+                    guard !alreadyInCLI else { return }
+                    Task { await switchCLI() }
+                }
+            )
+            .help(hint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(VocabbyTheme.group)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
+        .padding(.top, 6)
+    }
+
+    private func reload() {
+        accounts = CodexAccountStore.allAccounts()
+        activeID = CodexAccountStore.activeID()
+        cliID = CodexAccountStore.cliSwitchedID()
+    }
+
+    private func addAccount() async {
+        busy = true
+        defer { busy = false }
+        _ = try? await CodexAccountStore.addAccount()
+        reload()
+    }
+
+    private func switchCLI() async {
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            if activeID == "system" {
+                try CodexAccountStore.restoreSystemCLI()
+            } else {
+                try CodexAccountStore.switchCLI(to: activeID)
+            }
+            cliID = CodexAccountStore.cliSwitchedID()
+        } catch {
+            errorText = error.localizedDescription
+        }
     }
 }
 

@@ -298,6 +298,51 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertTrue(CodexAccountStore.allAccounts().contains { $0.id == "system" && $0.isSystem })
     }
 
+    // MARK: - CLI switch: pure decisions
+    // Round-trip file mutation (switchCLI/restoreSystemCLI/reconcileCLISyncBack)
+    // is intentionally NOT exercised here: those functions operate on the
+    // real ~/.codex/auth.json with no injectable URL, and an automated test
+    // must never overwrite a developer's live Codex CLI login. Verified
+    // manually per task-R2-01/R4-01 evidence instead.
+
+    func testShouldSyncBack() {
+        XCTAssertFalse(CodexAccountStore.shouldSyncBack(cliModifiedAt: nil, managedModifiedAt: nil))
+        XCTAssertFalse(CodexAccountStore.shouldSyncBack(cliModifiedAt: nil, managedModifiedAt: Date()))
+        let now = Date()
+        let earlier = now.addingTimeInterval(-60)
+        XCTAssertTrue(CodexAccountStore.shouldSyncBack(cliModifiedAt: now, managedModifiedAt: earlier))
+        XCTAssertFalse(CodexAccountStore.shouldSyncBack(cliModifiedAt: earlier, managedModifiedAt: now))
+        XCTAssertFalse(CodexAccountStore.shouldSyncBack(cliModifiedAt: now, managedModifiedAt: now))
+        XCTAssertTrue(CodexAccountStore.shouldSyncBack(cliModifiedAt: now, managedModifiedAt: nil))
+    }
+
+    func testNeedsPromoteBeforeOverwrite() {
+        XCTAssertTrue(CodexAccountStore.needsPromoteBeforeOverwrite(systemEmail: nil, managedEmails: []))
+        XCTAssertTrue(CodexAccountStore.needsPromoteBeforeOverwrite(systemEmail: "a@x.com", managedEmails: ["b@x.com"]))
+        XCTAssertFalse(CodexAccountStore.needsPromoteBeforeOverwrite(systemEmail: "a@x.com", managedEmails: ["A@X.com"]))
+    }
+
+    func testIsAlreadyCLIIdentity() {
+        XCTAssertTrue(CodexAccountStore.isAlreadyCLIIdentity(selectedID: "1", trackedID: "1"))
+        XCTAssertFalse(CodexAccountStore.isAlreadyCLIIdentity(selectedID: "1", trackedID: "2"))
+        XCTAssertTrue(CodexAccountStore.isAlreadyCLIIdentity(selectedID: "system", trackedID: nil))
+        XCTAssertFalse(CodexAccountStore.isAlreadyCLIIdentity(selectedID: "system", trackedID: "1"))
+    }
+
+    func testSwitchCLINoOpWhenAlreadyIdentity() {
+        // Selecting the system account while nothing is tracked (the default
+        // state) must be a no-op and must not throw, since isAlreadyCLIIdentity
+        // short-circuits before any file I/O.
+        let previous = CodexAccountStore.cliSwitchedID()
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: CodexAccountStore.cliSwitchedKey) }
+            else { UserDefaults.standard.removeObject(forKey: CodexAccountStore.cliSwitchedKey) }
+        }
+        UserDefaults.standard.removeObject(forKey: CodexAccountStore.cliSwitchedKey)
+        XCTAssertNoThrow(try CodexAccountStore.switchCLI(to: "system"))
+        XCTAssertNil(CodexAccountStore.cliSwitchedID())
+    }
+
     func testMenuBarMetricFilter() {
         let session = QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)
         let weekly = QuotaWindow(label: "Tuần", usedPct: 7, remainingPct: 93)
