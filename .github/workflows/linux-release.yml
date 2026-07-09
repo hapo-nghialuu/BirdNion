@@ -20,9 +20,9 @@ jobs:
       run:
         working-directory: linux
     env:
-      # Tag pushes use the pushed tag; manual dispatch uses the `tag` input
-      # and builds from the dispatched ref (the Linux 0.8.6 code landed after
-      # tag v0.8.6 was cut, so backfilling must build from a newer ref).
+      # Manual dispatch uses the `tag` input and builds from the dispatched
+      # ref. Keep the tag-push branch in the expression so re-enabling
+      # automatic tag builds later is only a trigger change.
       RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
