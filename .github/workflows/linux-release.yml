@@ -1,13 +1,9 @@
 name: linux-release
 
-# Publishes Linux bundles (.deb/.rpm/AppImage) to the GitHub Release for tag
-# v<version>. Triggered by the tag that Scripts/release.sh creates via
-# `gh release create`, so one release carries both the macOS zip and the
-# Linux bundles. Kept separate from linux-build.yml because its `paths`
-# filter does not evaluate reliably on tag pushes.
+# Publishes Linux bundles (.deb/.rpm/AppImage) to the GitHub Release.
+# Temporarily manual-only: automatic tag-triggered Linux release builds are
+# disabled until the Linux packaging lane is re-enabled.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:

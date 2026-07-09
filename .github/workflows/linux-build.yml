@@ -4,15 +4,9 @@ name: linux-build
 # bundles as artifacts. This is the ground-truth check that the port actually
 # compiles and links against webkit2gtk/appindicator on the target platform.
 #
-# Runs on feature-branch pushes and PRs only — never on main. Code reaches
-# main through a PR, so it was already built there; release bundles come from
-# linux-release.yml on v* tags.
+# Temporarily manual-only: automatic Linux builds are disabled until the
+# Linux packaging lane is re-enabled.
 on:
-  push:
-    branches-ignore: [main]
-    paths: ["linux/**", ".github/workflows/linux-build.yml"]
-  pull_request:
-    paths: ["linux/**", ".github/workflows/linux-build.yml"]
   workflow_dispatch:
 
 jobs:
