@@ -671,7 +671,10 @@ struct CodexAccountsPopoverSection: View {
     @State private var revealed = false
     @State private var busy = false
     @State private var addAccountErrorText: String?
+    @State private var accountActionErrorText: String?
     @State private var switchErrorText: String?
+    @State private var accountPendingRemoval: CodexAccount?
+    @State private var showingRemoveConfirmation = false
 
     var body: some View {
         // Click (not hover) toggles the account list — hover-reveal collapsed
@@ -686,12 +689,33 @@ struct CodexAccountsPopoverSection: View {
                 ForEach(accounts) { account in
                     accountRow(account)
                 }
+                if let accountActionErrorText {
+                    Text(L10n.f("provider.removeAccountFailed", settings.appLanguage, accountActionErrorText))
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .lineLimit(2)
+                        .padding(.vertical, 4)
+                }
                 addAccountRow
                 switchRow
             }
         }
         .vocabbyCard()
         .onAppear(perform: reload)
+        .confirmationDialog(
+            removeConfirmationTitle,
+            isPresented: $showingRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(removeConfirmationButtonTitle, role: .destructive) {
+                if let accountPendingRemoval {
+                    removeAccount(accountPendingRemoval)
+                }
+            }
+            Button(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage), role: .cancel) {}
+        } message: {
+            Text(removeConfirmationMessage)
+        }
     }
 
     private var collapsedRow: some View {
@@ -744,7 +768,8 @@ struct CodexAccountsPopoverSection: View {
     }
 
     private func accountRow(_ account: CodexAccount) -> some View {
-        HStack(spacing: 10) {
+        let quota = accountQuotaBadge(for: account)
+        return HStack(spacing: 10) {
             Image(systemName: account.id == activeID ? "largecircle.fill.circle" : "circle")
                 .font(.system(size: 14))
                 .foregroundStyle(account.id == activeID ? VocabbyTheme.blue : VocabbyTheme.secondary)
@@ -762,6 +787,18 @@ struct CodexAccountsPopoverSection: View {
                     .foregroundStyle(VocabbyTheme.secondary)
             }
             Spacer(minLength: 6)
+            Text(quota.text)
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .foregroundStyle(quota.color)
+                .lineLimit(1)
+                .accessibilityLabel(quota.help)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(quota.surface)
+                )
+                .help(quota.help)
             if isCLIIdentity(account) {
                 Text(L10n.t("popover.cliActive", settings.appLanguage))
                     .font(.system(size: 9, weight: .semibold))
@@ -772,6 +809,36 @@ struct CodexAccountsPopoverSection: View {
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(VocabbyTheme.blue.opacity(0.12))
                     )
+            } else {
+                Button {
+                    Task { await switchCLI(to: account) }
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.blue)
+                        .frame(width: 20, height: 20)
+                        .background(
+                            Circle()
+                                .fill(VocabbyTheme.blue.opacity(0.10))
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(switchHelp(for: account))
+                .accessibilityLabel(switchHelp(for: account))
+                .disabled(busy)
+            }
+            if canRemove(account) {
+                Button(role: .destructive) {
+                    confirmRemove(account)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help(removeHelp(for: account))
+                .disabled(busy)
             }
         }
         .padding(.vertical, 5)
@@ -782,10 +849,96 @@ struct CodexAccountsPopoverSection: View {
         }
     }
 
+    private struct AccountQuotaBadge {
+        let text: String
+        let color: Color
+        let surface: Color
+        let help: String
+    }
+
+    private func accountQuotaBadge(for account: CodexAccount) -> AccountQuotaBadge {
+        guard let snapshot = CodexAccountSnapshotStore.shared.snapshot(forAccount: account.id),
+              let lowest = ProviderStatusSummary.lowestWindow(snapshot)
+        else {
+            return AccountQuotaBadge(
+                text: "—",
+                color: VocabbyTheme.tertiary,
+                surface: VocabbyTheme.segment,
+                help: L10n.t("popover.accountQuotaMissing", settings.appLanguage)
+            )
+        }
+
+        let label = L10n.windowLabel(lowest.label, preference: settings.appLanguage)
+        let color = VocabbyTheme.quotaColor(remaining: lowest.remainingPct)
+        return AccountQuotaBadge(
+            text: "\(label) \(lowest.remainingPct)%",
+            color: color,
+            surface: quotaBadgeSurface(remaining: lowest.remainingPct),
+            help: L10n.f("popover.accountQuotaHelp", settings.appLanguage, label, lowest.remainingPct)
+        )
+    }
+
+    private func quotaBadgeSurface(remaining: Int) -> Color {
+        if remaining <= 20 { return VocabbyTheme.criticalSurface }
+        if remaining <= 50 { return VocabbyTheme.warningSurface }
+        return VocabbyTheme.successSurface
+    }
+
     /// Whether `account` is the one currently installed in the Codex CLI —
     /// distinct from `activeID` (which account's quota is being *viewed*).
     private func isCLIIdentity(_ account: CodexAccount) -> Bool {
         account.id == "system" ? cliID == nil : account.id == cliID
+    }
+
+    private func canRemove(_ account: CodexAccount) -> Bool {
+        !account.isSystem || accounts.count > 1
+    }
+
+    private func accountLabel(_ account: CodexAccount) -> String {
+        account.email ?? L10n.t(account.isSystem ? "provider.systemAccount" : "provider.accountGeneric",
+                                settings.appLanguage)
+    }
+
+    private var removeConfirmationTitle: String {
+        guard let accountPendingRemoval else {
+            return L10n.t("provider.removeAccount", settings.appLanguage)
+        }
+        return L10n.f("provider.removeAccountTitle", settings.appLanguage, accountLabel(accountPendingRemoval))
+    }
+
+    private var removeConfirmationButtonTitle: String {
+        guard let accountPendingRemoval, accountPendingRemoval.isSystem else {
+            return L10n.t("provider.removeAccount", settings.appLanguage)
+        }
+        return L10n.t("provider.removeSystemAccount", settings.appLanguage)
+    }
+
+    private var removeConfirmationMessage: String {
+        guard let accountPendingRemoval else { return "" }
+        return L10n.t(accountPendingRemoval.isSystem
+                     ? "provider.removeSystemAccountMessage"
+                     : "provider.removeAccountMessage",
+                     settings.appLanguage)
+    }
+
+    private func removeHelp(for account: CodexAccount) -> String {
+        L10n.t(account.isSystem ? "provider.removeSystemAccount" : "provider.removeAccount",
+               settings.appLanguage)
+    }
+
+    private func switchHelp(for account: CodexAccount) -> String {
+        if isCLIIdentity(account) {
+            return L10n.t("popover.cliAlready", settings.appLanguage)
+        }
+        if account.isSystem {
+            return L10n.t("popover.restoreCLI", settings.appLanguage)
+        }
+        return L10n.f("popover.cliCard.switchTo", settings.appLanguage, accountLabel(account))
+    }
+
+    private func confirmRemove(_ account: CodexAccount) {
+        accountPendingRemoval = account
+        showingRemoveConfirmation = true
     }
 
     private var addAccountRow: some View {
@@ -820,11 +973,10 @@ struct CodexAccountsPopoverSection: View {
         .pointingHandCursor(enabled: !busy)
     }
 
-    /// CLI switch card, styled after `ClaudeCodeQuickApplyButton`: terminal
-    /// icon + title/state chip/hint lines on the left, round power button on
-    /// the right. Power ON = the selected account is already installed in the
-    /// CLI (tap is a no-op); OFF = tapping installs it (or restores the
-    /// original system login when the system account is selected).
+    /// CLI switch card: terminal context on the left, explicit account-switch
+    /// button on the right. The action installs the selected account into the
+    /// CLI (or restores the original system login when the system account is
+    /// selected), so the control must not look like an app power toggle.
     private var switchRow: some View {
         let lang = settings.appLanguage
         let alreadyInCLI = CodexAccountStore.isAlreadyCLIIdentity(selectedID: activeID, trackedID: cliID)
@@ -852,9 +1004,9 @@ struct CodexAccountsPopoverSection: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     HStack(spacing: 3) {
-                        Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "power.circle")
+                        Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath.circle.fill")
                             .font(.system(size: 9, weight: .bold))
-                        Text(L10n.t(alreadyInCLI ? "popover.cliActive" : "popover.ready", lang))
+                        Text(L10n.t(alreadyInCLI ? "popover.cliActive" : "popover.switchReady", lang))
                             .font(.system(size: 10, weight: .semibold))
                     }
                     .foregroundStyle(tint)
@@ -879,18 +1031,39 @@ struct CodexAccountsPopoverSection: View {
 
             Spacer(minLength: 8)
 
-            ClaudeCodePowerButton(
-                state: alreadyInCLI ? .on : .off,
-                subtitle: "",
-                diameter: 58,
-                busy: busy,
-                showsSubtitle: false,
-                action: {
-                    guard !alreadyInCLI else { return }
-                    Task { await switchCLI() }
+            Button {
+                guard !alreadyInCLI else { return }
+                Task { await switchCLI() }
+            } label: {
+                HStack(spacing: 6) {
+                    if busy && !alreadyInCLI {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(tint)
+                    } else {
+                        Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    Text(switchButtonTitle(alreadyInCLI: alreadyInCLI, lang: lang))
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
                 }
-            )
+                .foregroundStyle(tint)
+                .frame(width: 112, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(alreadyInCLI ? VocabbyTheme.successSurface : VocabbyTheme.selectedSurface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(tint.opacity(0.22), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(busy || alreadyInCLI)
             .help(hint)
+            .accessibilityLabel(hint)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -903,6 +1076,16 @@ struct CodexAccountsPopoverSection: View {
         .padding(.top, 6)
     }
 
+    private func switchButtonTitle(alreadyInCLI: Bool, lang: String) -> String {
+        if alreadyInCLI {
+            return L10n.t("popover.cliActiveShort", lang)
+        }
+        if activeID == "system" {
+            return L10n.t("popover.restoreCLIButton", lang)
+        }
+        return L10n.t("popover.switchAccountButton", lang)
+    }
+
     private func reload() {
         // preferManagedID keeps the switched-in managed account listed after
         // a CLI switch (the system row becomes its mirror and is hidden), so
@@ -910,11 +1093,16 @@ struct CodexAccountsPopoverSection: View {
         cliID = CodexAccountStore.cliSwitchedID()
         accounts = CodexAccountStore.allAccounts(preferManagedID: cliID)
         activeID = CodexAccountStore.activeID()
+        if !accounts.contains(where: { $0.id == activeID }), let first = accounts.first {
+            CodexAccountStore.setActive(first.id)
+            activeID = first.id
+        }
     }
 
     private func addAccount() async {
         busy = true
         addAccountErrorText = nil
+        accountActionErrorText = nil
         defer { busy = false }
         do {
             _ = try await CodexAccountStore.addAccount()
@@ -924,20 +1112,36 @@ struct CodexAccountsPopoverSection: View {
         }
     }
 
-    private func switchCLI() async {
+    private func switchCLI(to account: CodexAccount? = nil) async {
+        let targetID = account?.id ?? activeID
         busy = true
         switchErrorText = nil
+        accountActionErrorText = nil
         defer { busy = false }
         do {
-            if activeID == "system" {
+            if targetID == "system" {
                 try CodexAccountStore.restoreSystemCLI()
             } else {
-                try CodexAccountStore.switchCLI(to: activeID)
+                try CodexAccountStore.switchCLI(to: targetID)
             }
+            CodexAccountStore.setActive(targetID)
+            activeID = targetID
             cliID = CodexAccountStore.cliSwitchedID()
+            reload()
         } catch {
             switchErrorText = error.localizedDescription
         }
+    }
+
+    private func removeAccount(_ account: CodexAccount) {
+        accountActionErrorText = nil
+        do {
+            try CodexAccountStore.remove(account: account, from: accounts)
+            reload()
+        } catch {
+            accountActionErrorText = error.localizedDescription
+        }
+        accountPendingRemoval = nil
     }
 }
 

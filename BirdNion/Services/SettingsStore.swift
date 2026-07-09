@@ -93,6 +93,14 @@ final class SettingsStore: ObservableObject {
     @AppStorage("switcherShowsIcons") var switcherShowsIcons: Bool = true
     /// MiniMax API host region: "io" (global) or "com" (mainland China).
     /// `MiniMaxProvider` reads the same UserDefaults key directly.
+    /// Codex 5h-window auto-prime: opt-in scheduled `codex exec` that starts
+    /// the rate-limit clock at a predictable time. `codexAutoPrimeMinutes` is
+    /// minutes-since-midnight (0..1439; default 535 = 08:55). `LastRun` is the
+    /// dedup cursor (epoch seconds, 0 = never) — `CodexQuotaPrimer` reads/writes
+    /// these same keys directly via `UserDefaults.standard`.
+    @AppStorage("codexAutoPrimeEnabled") var codexAutoPrimeEnabled: Bool = false
+    @AppStorage("codexAutoPrimeMinutes") var codexAutoPrimeMinutes: Int = 535
+    @AppStorage("codexAutoPrimeLastRun") var codexAutoPrimeLastRun: Double = 0
     @AppStorage(MiniMaxRegion.defaultsKey) var minimaxRegion: String = MiniMaxRegion.io.rawValue
     /// Z.ai / GLM API host region (global vs BigModel CN). `ZaiProvider` reads
     /// the same UserDefaults key directly.

@@ -98,9 +98,55 @@ enum CodexAccountStore {
     /// listing the mirror would hide the row carrying the selection marker
     /// and the "In CLI" badge).
     static func allAccounts(preferManagedID: String? = nil) -> [CodexAccount] {
-        let system = CodexAccount(id: "system", email: emailOf(url: systemAuthURL()),
-                                  isSystem: true, homePath: nil)
-        return reconcile(system: system, managed: managedAccounts(), preferManagedID: preferManagedID)
+        visibleAccounts(system: CodexAccount(id: "system", email: emailOf(url: systemAuthURL()),
+                                             isSystem: true, homePath: nil),
+                        managed: managedAccounts(),
+                        preferManagedID: preferManagedID)
+    }
+
+    static func visibleAccounts(system: CodexAccount, managed: [CodexAccount],
+                                preferManagedID: String? = nil) -> [CodexAccount] {
+        if system.email == nil, !managed.isEmpty { return managed }
+        return reconcile(system: system, managed: managed, preferManagedID: preferManagedID)
+    }
+
+    static func fallbackActiveID(afterRemoving removedID: String, from accounts: [CodexAccount]) -> String {
+        accounts.first(where: { $0.id != removedID })?.id ?? "system"
+    }
+
+    private static func selectedFallback(afterRemoving removedID: String) -> String {
+        fallbackActiveID(afterRemoving: removedID, from: allAccounts())
+    }
+
+    private static func removedSystemAuthBackupURL(now: Date = Date()) -> URL {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let stamp = formatter.string(from: now).replacingOccurrences(of: ":", with: "-")
+        return systemAuthURL().deletingLastPathComponent()
+            .appendingPathComponent("auth.json.birdnion-removed-\(stamp)")
+    }
+
+    private static func removeSystemLogin() throws {
+        let auth = systemAuthURL()
+        let fallback = selectedFallback(afterRemoving: "system")
+        if FileManager.default.fileExists(atPath: auth.path) {
+            var backup = removedSystemAuthBackupURL()
+            if FileManager.default.fileExists(atPath: backup.path) {
+                backup = auth.deletingLastPathComponent()
+                    .appendingPathComponent("auth.json.birdnion-removed-\(UUID().uuidString)")
+            }
+            try FileManager.default.moveItem(at: auth, to: backup)
+        }
+        setCLISwitchedID(nil)
+        if activeID() == "system" { setActive(fallback) }
+    }
+
+    static func remove(account: CodexAccount, from visibleAccounts: [CodexAccount]) throws {
+        if account.isSystem {
+            try removeSystemLogin()
+        } else {
+            remove(id: account.id, visibleAccounts: visibleAccounts)
+        }
     }
 
     /// Pure reconciliation: hide a managed account whose email matches an
@@ -219,12 +265,21 @@ enum CodexAccountStore {
     }
 
     static func remove(id: String) {
+        remove(id: id, visibleAccounts: allAccounts())
+    }
+
+    private static func remove(id: String, visibleAccounts: [CodexAccount]) {
         guard id != "system" else { return }
+        let fallback = fallbackActiveID(afterRemoving: id, from: visibleAccounts)
+        if cliSwitchedID() == id {
+            try? restoreSystemCLI()
+            if cliSwitchedID() == id { setCLISwitchedID(nil) }
+        }
         if let account = managedAccounts().first(where: { $0.id == id }), let home = account.homePath {
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: home))
         }
         persist(managedAccounts().filter { $0.id != id })
-        if activeID() == id { setActive("system") }
+        if activeID() == id { setActive(fallback) }
     }
 
     // MARK: - codex login
@@ -520,5 +575,98 @@ enum CodexAccountStore {
         } catch {
             return false
         }
+    }
+}
+
+// MARK: - Codex 5h-window auto-prime
+
+/// Opt-in scheduled "prime" of the Codex 5-hour rate-limit window: sends one
+/// trivial, harmless `codex exec` request at a user-chosen time each day so
+/// the window's reset cycle starts predictably (the window only begins
+/// counting from the first request). Targets whichever login is currently
+/// installed at `~/.codex/auth.json` — the same identity `CodexAccountStore`
+/// manages above. Settings are the three `SettingsStore` keys
+/// `codexAutoPrimeEnabled`/`codexAutoPrimeMinutes`/`codexAutoPrimeLastRun`.
+enum CodexQuotaPrimer {
+    private static let enabledKey = "codexAutoPrimeEnabled"
+    private static let minutesKey = "codexAutoPrimeMinutes"
+    private static let lastRunKey = "codexAutoPrimeLastRun"
+
+    // MARK: Pure decision (no I/O, no ambient Date())
+
+    /// `true` only when: enabled, the 5h window is idle (not yet used today),
+    /// the scheduled time has arrived or passed, and no prime has happened
+    /// yet on this calendar day. The same rule serves both "prime on time"
+    /// and "catch-up after a missed/asleep schedule" — whichever tick first
+    /// satisfies "past scheduled + not primed today" fires the prime.
+    static func shouldPrime(now: Date,
+                            lastRun: Double,
+                            scheduledMinutes: Int,
+                            windowUsedPct: Int?,
+                            enabled: Bool) -> Bool {
+        guard enabled else { return false }
+        if let usedPct = windowUsedPct, usedPct > 0 { return false }
+        let calendar = Calendar.current
+        let comps = calendar.dateComponents([.hour, .minute], from: now)
+        let nowMinutes = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+        guard nowMinutes >= scheduledMinutes else { return false }
+        if lastRun > 0, calendar.isDate(Date(timeIntervalSince1970: lastRun), inSameDayAs: now) {
+            return false
+        }
+        return true
+    }
+
+    // MARK: Executor
+
+    /// Spawns a trivial, read-only, non-interactive `codex exec` against the
+    /// currently installed `~/.codex` login (no `CODEX_HOME` override) — just
+    /// enough to start the 5h clock. Never uses a dangerous bypass flag.
+    /// Missing binary is a silent no-op (no stamp, no crash, returns `false`).
+    /// Best-effort: any spawn failure is swallowed and still stamps `lastRun`
+    /// so a broken `codex` install doesn't retry every refresh cycle for the
+    /// rest of the day. Never logs token/credential/response content.
+    /// Returns `true` only when the process actually ran and exited cleanly
+    /// (`terminationStatus == 0`) — the wiring layer uses this to decide
+    /// whether to surface the "primed" notification.
+    @discardableResult
+    static func prime(now: Date) async -> Bool {
+        guard let binary = CodexAccountStore.codexBinary() else { return false }
+        let succeeded = await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: binary)
+            process.arguments = ["exec", "-s", "read-only", "--skip-git-repo-check", "say ok"]
+            process.environment = CodexAccountStore.loginEnvironment(homePath: nil, binaryPath: binary)
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            do {
+                try process.run()
+            } catch {
+                return false
+            }
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        }.value
+        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: lastRunKey)
+        return succeeded
+    }
+
+    // MARK: Wiring entry (called once per codex refresh cycle)
+
+    /// Reads the current settings + the codex 5h window's `usedPct`, decides
+    /// via `shouldPrime`, and awaits `prime()` when true. No-op (including no
+    /// UserDefaults read side effects beyond the three keys) when disabled.
+    /// Returns `true` only when a prime was attempted AND succeeded, so the
+    /// caller (`QuotaService`) can post the optional "primed HH:mm" notification.
+    @discardableResult
+    static func tick(windowUsedPct: Int?, now: Date) async -> Bool {
+        let defaults = UserDefaults.standard
+        let enabled = defaults.bool(forKey: enabledKey)
+        guard enabled else { return false }
+        let scheduledMinutes = defaults.object(forKey: minutesKey) as? Int ?? 535
+        let lastRun = defaults.double(forKey: lastRunKey)
+        guard shouldPrime(now: now, lastRun: lastRun, scheduledMinutes: scheduledMinutes,
+                          windowUsedPct: windowUsedPct, enabled: enabled)
+        else { return false }
+        return await prime(now: now)
     }
 }

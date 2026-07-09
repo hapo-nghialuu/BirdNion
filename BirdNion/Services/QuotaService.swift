@@ -35,6 +35,13 @@ final class QuotaService: ObservableObject {
     private var interval: TimeInterval
     private var loopTask: Task<Void, Never>?
 
+    /// HH:mm formatter for the Codex auto-prime notification body.
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
     init(providers: [QuotaProvider] = [], interval: TimeInterval = 120) {
         self.providers = providers
         self.interval = interval
@@ -231,6 +238,22 @@ final class QuotaService: ObservableObject {
         // cadence (no new polling loop). Best-effort — swallows errors.
         if due.contains(where: { $0.id == "codex" }) {
             _ = CodexAccountStore.reconcileCLISyncBack()
+
+            // Codex 5h auto-prime: reuses this same cadence (no new
+            // Timer/polling loop) so a missed/asleep schedule catches up on
+            // the next awake refresh. Read the current codex 5h `usedPct`
+            // from the last-known status so `tick` can skip while the window
+            // is already active.
+            let codexUsedPct = statuses.first(where: { $0.id == "codex" })?
+                .windows.first(where: { $0.label == "5 giờ" })?.usedPct
+            let now = Date()
+            if await CodexQuotaPrimer.tick(windowUsedPct: codexUsedPct, now: now) {
+                let time = Self.timeFormatter.string(from: now)
+                QuotaNotifier.post(
+                    id: "codex.autoPrime",
+                    title: L10n.t("notification.codexPrimed.title"),
+                    body: L10n.f("notification.codexPrimed.body", nil, time))
+            }
         }
 
         // Publish statuses progressively as each provider completes — so the

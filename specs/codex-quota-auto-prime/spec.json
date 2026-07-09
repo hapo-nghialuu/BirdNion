@@ -1,0 +1,155 @@
+{
+  "feature_name": "codex-quota-auto-prime",
+  "created_at": "2026-07-09T08:54:36+0700",
+  "updated_at": "2026-07-09T11:40:00+0700",
+  "language": "en",
+  "status": "in_progress",
+  "phase": "tasks",
+  "current_phase": "tasks",
+  "priority": "P2",
+  "effort": "S",
+  "tags": [
+    "codex",
+    "quota",
+    "menu-bar",
+    "opt-in"
+  ],
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "scope_lock": {
+    "source": "Add an opt-in feature that automatically primes the Codex 5-hour rate-limit window by sending one small `codex exec` request on a schedule, so the window reset cycle aligns with the user's working hours.",
+    "in_scope": [
+      "SettingsStore keys: codexAutoPrimeEnabled (Bool=false), codexAutoPrimeMinutes (Int=535), codexAutoPrimeLastRun (Double=0)",
+      "Settings UI toggle + hour/minute time control in the Codex provider detail (ProvidersPane)",
+      "CodexQuotaPrimer type hosted in existing CodexAccountStore.swift: pure shouldPrime(...), prime() async, tick()",
+      "Wire tick() into QuotaService.refresh(...) codex path (reuse existing cadence, no new Timer)",
+      "Optional local notification 'primed HH:mm' via existing QuotaNotifier/UserNotifications",
+      "vi + en L10n strings",
+      "Unit tests for pure shouldPrime(...) in BirdNionTests/CodexProviderTests.swift"
+    ],
+    "out_of_scope": [
+      "Redeem/POST of Codex reset-credit",
+      "Priming multiple accounts simultaneously",
+      "Waking a sleeping machine",
+      "Changes to the codex-account-switcher feature",
+      "New third-party dependencies or new .swift files where an existing file can host the type",
+      "Changing ProviderStatus / QuotaProvider signatures"
+    ],
+    "expansion_policy": "requires-user-approval"
+  },
+  "dependencies": {
+    "blockedBy": [],
+    "blocks": []
+  },
+  "task_files": [
+    "tasks/task-R1-01-settings-and-codex-ui.md",
+    "tasks/task-R2-01-primer-engine-and-tests.md",
+    "tasks/task-R3-01-quota-service-wiring-and-notification.md",
+    "tasks/task-R4-01-integration-build-test.md"
+  ],
+  "task_registry": {
+    "tasks/task-R1-01-settings-and-codex-ui.md": {
+      "id": "R1-01",
+      "title": "Settings keys & Codex auto-prime UI",
+      "status": "done",
+      "dependencies": [],
+      "blocker": null,
+      "started_at": "2026-07-09T09:10:00+0700",
+      "completed_at": "2026-07-09T09:20:00+0700",
+      "last_updated_at": "2026-07-09T09:20:00+0700"
+    },
+    "tasks/task-R2-01-primer-engine-and-tests.md": {
+      "id": "R2-01",
+      "title": "CodexQuotaPrimer engine (pure decision + executor) & unit tests",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R1-01-settings-and-codex-ui.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-09T09:25:00+0700",
+      "completed_at": "2026-07-09T09:44:00+0700",
+      "last_updated_at": "2026-07-09T09:44:00+0700"
+    },
+    "tasks/task-R3-01-quota-service-wiring-and-notification.md": {
+      "id": "R3-01",
+      "title": "QuotaService wiring + optional prime notification",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R2-01-primer-engine-and-tests.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-09T09:46:00+0700",
+      "completed_at": "2026-07-09T10:16:00+0700",
+      "last_updated_at": "2026-07-09T10:16:00+0700"
+    },
+    "tasks/task-R4-01-integration-build-test.md": {
+      "id": "R4-01",
+      "title": "Integration, reachability & full build/test",
+      "status": "done",
+      "dependencies": [
+        "tasks/task-R1-01-settings-and-codex-ui.md",
+        "tasks/task-R2-01-primer-engine-and-tests.md",
+        "tasks/task-R3-01-quota-service-wiring-and-notification.md"
+      ],
+      "blocker": null,
+      "started_at": "2026-07-09T10:17:00+0700",
+      "completed_at": "2026-07-09T10:45:00+0700",
+      "last_updated_at": "2026-07-09T10:45:00+0700"
+    }
+  },
+  "blocker": null,
+  "progress": {
+    "init": "done",
+    "requirements": "done",
+    "research": "done",
+    "design": "done",
+    "tasks": "done",
+    "code": "done",
+    "test": "done",
+    "review": "done"
+  },
+  "timestamps": {
+    "init": "2026-07-09T08:54:36+0700",
+    "requirements_done": "2026-07-09T08:56:10+0700",
+    "research_done": "2026-07-09T08:55:20+0700",
+    "design_done": "2026-07-09T08:58:40+0700",
+    "tasks_done": "2026-07-09T09:02:00+0700",
+    "code_done": "2026-07-09T10:45:00+0700",
+    "test_done": "2026-07-09T10:45:00+0700",
+    "review_done": "2026-07-09T11:40:00+0700",
+    "validation_done": null
+  },
+  "design_context": {
+    "discovery_mode": "light",
+    "discovery_reason": "Extension of an existing subsystem with clearly identified integration points; no new schema/auth/migration.",
+    "execution_tier": "standard",
+    "validation_recommended": false
+  },
+  "validation": {
+    "status": "not-run",
+    "session_count": 0,
+    "questions_asked": 0,
+    "last_validated_at": null
+  },
+  "translation": {
+    "enabled": false,
+    "language": null,
+    "language_code": null,
+    "dir": null,
+    "sync": "always",
+    "last_synced_at": null
+  },
+  "ready_for_implementation": true
+}

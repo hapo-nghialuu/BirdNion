@@ -271,6 +271,22 @@ final class CodexProviderTests: XCTestCase {
             ["system", "2"])
     }
 
+    func testVisibleAccountsHidesEmptySystemWhenManagedAccountsExist() {
+        let system = CodexAccount(id: "system", email: nil, isSystem: true, homePath: nil)
+        let managed = [CodexAccount(id: "1", email: "a@x.com", isSystem: false, homePath: "/h1")]
+        XCTAssertEqual(CodexAccountStore.visibleAccounts(system: system, managed: managed).map(\.id), ["1"])
+    }
+
+    func testFallbackActiveIDAfterRemovingUsesNextVisibleAccount() {
+        let accounts = [
+            CodexAccount(id: "system", email: "a@x.com", isSystem: true, homePath: nil),
+            CodexAccount(id: "1", email: "b@x.com", isSystem: false, homePath: "/h1"),
+        ]
+        XCTAssertEqual(CodexAccountStore.fallbackActiveID(afterRemoving: "system", from: accounts), "1")
+        XCTAssertEqual(CodexAccountStore.fallbackActiveID(afterRemoving: "1", from: accounts), "system")
+        XCTAssertEqual(CodexAccountStore.fallbackActiveID(afterRemoving: "only", from: []), "system")
+    }
+
     func testSnapshotStoreRoundTrip() {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-snap-\(UUID().uuidString).json")
@@ -397,6 +413,54 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertEqual(CodexAccountStore.firstAbsolutePath(from: "codex not found\n/usr/local/bin/codex\n"),
                        "/usr/local/bin/codex")
         XCTAssertNil(CodexAccountStore.firstAbsolutePath(from: "codex: aliased to codex\n"))
+    }
+
+    // MARK: - CodexQuotaPrimer.shouldPrime (pure decision, R2)
+
+    private func makeDate(hour: Int, minute: Int, day: Int = 9) -> Date {
+        var c = DateComponents()
+        c.year = 2026; c.month = 7; c.day = day; c.hour = hour; c.minute = minute
+        return Calendar.current.date(from: c)!
+    }
+
+    func testShouldPrimeOnTimeAndIdle() {
+        let now = makeDate(hour: 9, minute: 0)
+        XCTAssertTrue(CodexQuotaPrimer.shouldPrime(
+            now: now, lastRun: 0, scheduledMinutes: 535, windowUsedPct: nil, enabled: true))
+    }
+
+    func testShouldPrimeFalseWhenWindowActive() {
+        let now = makeDate(hour: 9, minute: 0)
+        XCTAssertFalse(CodexQuotaPrimer.shouldPrime(
+            now: now, lastRun: 0, scheduledMinutes: 535, windowUsedPct: 1, enabled: true))
+    }
+
+    func testShouldPrimeFalseWhenAlreadyPrimedToday() {
+        let now = makeDate(hour: 9, minute: 0)
+        let lastRunToday = makeDate(hour: 8, minute: 55).timeIntervalSince1970
+        XCTAssertFalse(CodexQuotaPrimer.shouldPrime(
+            now: now, lastRun: lastRunToday, scheduledMinutes: 535, windowUsedPct: nil, enabled: true))
+    }
+
+    func testShouldPrimeFalseBeforeScheduledTime() {
+        let now = makeDate(hour: 8, minute: 0)
+        XCTAssertFalse(CodexQuotaPrimer.shouldPrime(
+            now: now, lastRun: 0, scheduledMinutes: 535, windowUsedPct: nil, enabled: true))
+    }
+
+    func testShouldPrimeCatchUpPastScheduledNotYetPrimed() {
+        // Missed the exact scheduled minute (e.g. machine was asleep) — the
+        // first awake tick after the scheduled time still primes once.
+        let now = makeDate(hour: 14, minute: 30)
+        let lastRunYesterday = makeDate(hour: 9, minute: 0, day: 8).timeIntervalSince1970
+        XCTAssertTrue(CodexQuotaPrimer.shouldPrime(
+            now: now, lastRun: lastRunYesterday, scheduledMinutes: 535, windowUsedPct: nil, enabled: true))
+    }
+
+    func testShouldPrimeFalseWhenDisabled() {
+        let now = makeDate(hour: 9, minute: 0)
+        XCTAssertFalse(CodexQuotaPrimer.shouldPrime(
+            now: now, lastRun: 0, scheduledMinutes: 535, windowUsedPct: nil, enabled: false))
     }
 
     func testMenuBarMetricFilter() {

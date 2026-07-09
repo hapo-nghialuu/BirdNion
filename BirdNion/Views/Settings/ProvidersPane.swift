@@ -536,6 +536,7 @@ struct ProvidersPane: View {
                     settingsSection(idx)
                     if rows[idx].id == "codex" {
                         CodexAccountsCard()
+                        CodexAutoPrimeCard()
                     }
                     if rows[idx].id == "antigravity" {
                         antigravityOAuthAccountsSection()
@@ -3277,6 +3278,8 @@ private struct CodexAccountsCard: View {
     @State private var activeID = "system"
     @State private var busy = false
     @State private var errorText: String?
+    @State private var accountPendingRemoval: CodexAccount?
+    @State private var showingRemoveConfirmation = false
 
     var body: some View {
         SettingsCard(
@@ -3290,6 +3293,20 @@ private struct CodexAccountsCard: View {
             addRow
         }
         .onAppear(perform: reload)
+        .confirmationDialog(
+            removeConfirmationTitle,
+            isPresented: $showingRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(removeConfirmationButtonTitle, role: .destructive) {
+                if let accountPendingRemoval {
+                    remove(accountPendingRemoval)
+                }
+            }
+            Button(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage), role: .cancel) {}
+        } message: {
+            Text(removeConfirmationMessage)
+        }
     }
 
     private func accountRow(_ account: CodexAccount) -> some View {
@@ -3326,10 +3343,11 @@ private struct CodexAccountsCard: View {
                 Button(L10n.t("provider.saveManaged", settings.appLanguage)) { promote() }
                     .controlSize(.small)
                     .disabled(busy || account.email == nil)
-            } else {
+            }
+
+            if canRemove(account) {
                 Button(role: .destructive) {
-                    CodexAccountStore.remove(id: account.id)
-                    reload()
+                    confirmRemove(account)
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -3376,6 +3394,46 @@ private struct CodexAccountsCard: View {
     private func reload() {
         accounts = CodexAccountStore.allAccounts()
         activeID = CodexAccountStore.activeID()
+        if !accounts.contains(where: { $0.id == activeID }), let first = accounts.first {
+            CodexAccountStore.setActive(first.id)
+            activeID = first.id
+        }
+    }
+
+    private func canRemove(_ account: CodexAccount) -> Bool {
+        !account.isSystem || accounts.count > 1
+    }
+
+    private func accountLabel(_ account: CodexAccount) -> String {
+        account.email ?? L10n.t(account.isSystem ? "provider.systemAccount" : "provider.accountGeneric",
+                                settings.appLanguage)
+    }
+
+    private var removeConfirmationTitle: String {
+        guard let accountPendingRemoval else {
+            return L10n.t("provider.removeAccount", settings.appLanguage)
+        }
+        return L10n.f("provider.removeAccountTitle", settings.appLanguage, accountLabel(accountPendingRemoval))
+    }
+
+    private var removeConfirmationButtonTitle: String {
+        guard let accountPendingRemoval, accountPendingRemoval.isSystem else {
+            return L10n.t("provider.removeAccount", settings.appLanguage)
+        }
+        return L10n.t("provider.removeSystemAccount", settings.appLanguage)
+    }
+
+    private var removeConfirmationMessage: String {
+        guard let accountPendingRemoval else { return "" }
+        return L10n.t(accountPendingRemoval.isSystem
+                     ? "provider.removeSystemAccountMessage"
+                     : "provider.removeAccountMessage",
+                     settings.appLanguage)
+    }
+
+    private func confirmRemove(_ account: CodexAccount) {
+        accountPendingRemoval = account
+        showingRemoveConfirmation = true
     }
 
     private func add() async {
@@ -3396,5 +3454,68 @@ private struct CodexAccountsCard: View {
         errorText = nil
         do { _ = try CodexAccountStore.promoteSystem(); reload() }
         catch { errorText = error.localizedDescription }
+    }
+
+    private func remove(_ account: CodexAccount) {
+        errorText = nil
+        do {
+            try CodexAccountStore.remove(account: account, from: accounts)
+            reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+        accountPendingRemoval = nil
+    }
+}
+
+// MARK: - Codex auto-prime card
+
+/// Opt-in schedule that auto-activates the Codex 5h rate-limit window (via a
+/// trivial `codex exec` request) at a fixed time each day, so the reset cycle
+/// aligns with the user's working hours. The actual decision/execution lives
+/// in `CodexQuotaPrimer` (`CodexAccountStore.swift`); this card only edits the
+/// three `SettingsStore` `@AppStorage` keys it reads.
+private struct CodexAutoPrimeCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    /// Bridges the `Int` minutes-since-midnight setting to a `DatePicker`'s
+    /// `Date`. The calendar day is irrelevant — only hour/minute are read.
+    private var timeBinding: Binding<Date> {
+        Binding(
+            get: {
+                var c = DateComponents()
+                c.hour = settings.codexAutoPrimeMinutes / 60
+                c.minute = settings.codexAutoPrimeMinutes % 60
+                return Calendar.current.date(from: c) ?? Date()
+            },
+            set: { newDate in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                settings.codexAutoPrimeMinutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+            }
+        )
+    }
+
+    var body: some View {
+        SettingsCard(header: L10n.t("settings.codex.autoPrime.title", settings.appLanguage)) {
+            SettingsLabeledRow(
+                title: L10n.t("settings.codex.autoPrime.toggle", settings.appLanguage),
+                subtitle: L10n.t("settings.codex.autoPrime.toggleSubtitle", settings.appLanguage)
+            ) {
+                Toggle("", isOn: $settings.codexAutoPrimeEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+
+            SettingsRowDivider()
+
+            SettingsLabeledRow(
+                title: L10n.t("settings.codex.autoPrime.time", settings.appLanguage),
+                subtitle: L10n.t("settings.codex.autoPrime.timeSubtitle", settings.appLanguage)
+            ) {
+                DatePicker("", selection: timeBinding, displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                    .disabled(!settings.codexAutoPrimeEnabled)
+            }
+        }
     }
 }
