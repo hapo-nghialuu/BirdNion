@@ -670,7 +670,8 @@ struct CodexAccountsPopoverSection: View {
     @State private var cliID: String?
     @State private var revealed = false
     @State private var busy = false
-    @State private var errorText: String?
+    @State private var addAccountErrorText: String?
+    @State private var switchErrorText: String?
 
     var body: some View {
         // Click (not hover) toggles the account list — hover-reveal collapsed
@@ -788,17 +789,25 @@ struct CodexAccountsPopoverSection: View {
     }
 
     private var addAccountRow: some View {
-        HStack(spacing: 7) {
-            if busy {
-                ProgressView().controlSize(.small)
-                Text(L10n.t("provider.waitingLogin", settings.appLanguage))
-                    .font(.system(size: 11))
-                    .foregroundStyle(VocabbyTheme.secondary)
-            } else {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 12))
-                Text(L10n.t("provider.addAccount", settings.appLanguage))
-                    .font(.system(size: 12))
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                if busy {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.t("provider.waitingLogin", settings.appLanguage))
+                        .font(.system(size: 11))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                } else {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 12))
+                    Text(L10n.t("provider.addAccount", settings.appLanguage))
+                        .font(.system(size: 12))
+                }
+            }
+            if let addAccountErrorText {
+                Text(L10n.f("provider.addAccountFailed", settings.appLanguage, addAccountErrorText))
+                    .font(.system(size: 10))
+                    .foregroundStyle(VocabbyTheme.critical)
+                    .lineLimit(2)
             }
         }
         .foregroundStyle(VocabbyTheme.blue)
@@ -855,8 +864,8 @@ struct CodexAccountsPopoverSection: View {
                     .foregroundStyle(VocabbyTheme.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let errorText {
-                    Text(L10n.f("popover.switchFailed", lang, errorText))
+                if let switchErrorText {
+                    Text(L10n.f("popover.switchFailed", lang, switchErrorText))
                         .font(.system(size: 10))
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(1)
@@ -905,14 +914,19 @@ struct CodexAccountsPopoverSection: View {
 
     private func addAccount() async {
         busy = true
+        addAccountErrorText = nil
         defer { busy = false }
-        _ = try? await CodexAccountStore.addAccount()
-        reload()
+        do {
+            _ = try await CodexAccountStore.addAccount()
+            reload()
+        } catch {
+            addAccountErrorText = error.localizedDescription
+        }
     }
 
     private func switchCLI() async {
         busy = true
-        errorText = nil
+        switchErrorText = nil
         defer { busy = false }
         do {
             if activeID == "system" {
@@ -922,7 +936,7 @@ struct CodexAccountsPopoverSection: View {
             }
             cliID = CodexAccountStore.cliSwitchedID()
         } catch {
-            errorText = error.localizedDescription
+            switchErrorText = error.localizedDescription
         }
     }
 }

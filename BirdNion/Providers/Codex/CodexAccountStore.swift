@@ -180,10 +180,11 @@ enum CodexAccountStore {
         let home = homeDir(forAccount: id)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
 
-        let ok = await runLogin(homePath: home.path)
+        let result = await runLogin(homePath: home.path)
         let authURL = home.appendingPathComponent("auth.json")
-        guard ok, FileManager.default.fileExists(atPath: authURL.path) else {
+        guard result == .success, FileManager.default.fileExists(atPath: authURL.path) else {
             try? FileManager.default.removeItem(at: home)
+            if result == .codexNotFound { throw AccountError.codexNotFound }
             throw AccountError.loginFailed
         }
         let account = CodexAccount(id: id, email: emailOf(url: authURL),
@@ -202,7 +203,10 @@ enum CodexAccountStore {
         } else {
             throw AccountError.loginFailed
         }
-        guard await runLogin(homePath: homePath) else { throw AccountError.loginFailed }
+        let result = await runLogin(homePath: homePath)
+        guard result == .success else {
+            throw result == .codexNotFound ? AccountError.codexNotFound : AccountError.loginFailed
+        }
         // Refresh the cached email for managed accounts.
         if id != "system" {
             var accounts = managedAccounts()
@@ -227,36 +231,160 @@ enum CodexAccountStore {
 
     /// Path to the `codex` executable, if installed.
     static func codexBinary() -> String? {
-        let candidates = [
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            NSHomeDirectory() + "/.codex/bin/codex",
-            "/usr/bin/codex",
-        ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+        for candidate in orderedCodexBinaryCandidates() where isUsableCodexBinary(candidate) {
+            return candidate
+        }
+        if let shellPath = shellResolvedCodexBinary(), isUsableCodexBinary(shellPath) {
+            return shellPath
+        }
+        return nil
     }
 
-    /// Runs `codex login` with `CODEX_HOME` pointed at `homePath`. Returns true
-    /// if the process exits cleanly. The CLI opens a browser; this awaits its
-    /// completion off the main thread.
-    private static func runLogin(homePath: String) async -> Bool {
-        guard let binary = codexBinary() else { return false }
+    static func orderedCodexBinaryCandidates(home: String = NSHomeDirectory(),
+                                             architecture: String = currentArchitecture()) -> [String] {
+        let brewCandidates = architecture == "x86_64"
+            ? ["/usr/local/bin/codex", "/opt/homebrew/bin/codex"]
+            : ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
+        let homeCandidates = [
+            "\(home)/.codex/bin/codex",
+            "\(home)/.local/bin/codex",
+            "\(home)/.npm-global/bin/codex",
+            "\(home)/.cargo/bin/codex",
+        ]
+        return uniqueStrings(brewCandidates + homeCandidates + nvmCodexCandidates(home: home) + ["/usr/bin/codex"])
+    }
+
+    static func loginSearchPath(binaryPath: String?,
+                                inheritedPath: String? = ProcessInfo.processInfo.environment["PATH"],
+                                home: String = NSHomeDirectory()) -> String {
+        var paths: [String] = []
+        if let binaryPath {
+            paths.append(URL(fileURLWithPath: binaryPath).deletingLastPathComponent().path)
+        }
+        paths += [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "\(home)/.codex/bin",
+            "\(home)/.local/bin",
+            "\(home)/.npm-global/bin",
+            "\(home)/.cargo/bin",
+        ]
+        paths += nvmCodexCandidates(home: home).map {
+            URL(fileURLWithPath: $0).deletingLastPathComponent().path
+        }
+        if let inheritedPath, !inheritedPath.isEmpty {
+            paths += inheritedPath.split(separator: ":").map(String.init)
+        }
+        paths += ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        return uniqueStrings(paths).joined(separator: ":")
+    }
+
+    static func firstAbsolutePath(from output: String) -> String? {
+        output
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.hasPrefix("/") }
+    }
+
+    private static func currentArchitecture() -> String {
+        #if arch(x86_64)
+        return "x86_64"
+        #elseif arch(arm64)
+        return "arm64"
+        #else
+        return "unknown"
+        #endif
+    }
+
+    private static func uniqueStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { value in
+            !value.isEmpty && seen.insert(value).inserted
+        }
+    }
+
+    private static func nvmCodexCandidates(home: String) -> [String] {
+        let root = URL(fileURLWithPath: home)
+            .appendingPathComponent(".nvm/versions/node", isDirectory: true)
+        guard let versions = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { return [] }
+        return versions
+            .map { $0.appendingPathComponent("bin/codex").path }
+            .sorted(by: >)
+    }
+
+    private static func shellResolvedCodexBinary() -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "command -v codex"]
+        process.environment = [
+            "HOME": NSHomeDirectory(),
+            "PATH": loginSearchPath(binaryPath: nil),
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return firstAbsolutePath(from: String(data: data, encoding: .utf8) ?? "")
+    }
+
+    static func loginEnvironment(homePath: String?, binaryPath: String) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        if let homePath { env["CODEX_HOME"] = homePath }
+        env["PATH"] = loginSearchPath(binaryPath: binaryPath, inheritedPath: env["PATH"])
+        if env["BROWSER"] == nil || env["BROWSER"]?.isEmpty == true {
+            env["BROWSER"] = "/usr/bin/open"
+        }
+        return env
+    }
+
+    private static func isUsableCodexBinary(_ path: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: path) else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--version"]
+        process.environment = loginEnvironment(homePath: nil, binaryPath: path)
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
+    /// Runs `codex login` with `CODEX_HOME` pointed at `homePath`. The CLI
+    /// opens a browser; this awaits its completion off the main thread.
+    private enum LoginResult: Equatable { case success, codexNotFound, failed }
+
+    private static func runLogin(homePath: String) async -> LoginResult {
         return await Task.detached(priority: .userInitiated) {
+            guard let binary = codexBinary() else { return .codexNotFound }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: binary)
             process.arguments = ["login"]
-            var env = ProcessInfo.processInfo.environment
-            env["CODEX_HOME"] = homePath
-            process.environment = env
+            process.environment = loginEnvironment(homePath: homePath, binaryPath: binary)
             process.standardOutput = Pipe()
             process.standardError = Pipe()
             do {
                 try process.run()
             } catch {
-                return false
+                return .failed
             }
             process.waitUntilExit()
-            return process.terminationStatus == 0
+            return process.terminationStatus == 0 ? .success : .failed
         }.value
     }
 

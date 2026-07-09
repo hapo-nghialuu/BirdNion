@@ -366,6 +366,39 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertNil(CodexAccountStore.cliSwitchedID())
     }
 
+    func testCodexBinaryCandidatesPreferIntelHomebrewOnIntelArchitecture() {
+        let paths = CodexAccountStore.orderedCodexBinaryCandidates(
+            home: "/Users/tester", architecture: "x86_64")
+        XCTAssertLessThan(paths.firstIndex(of: "/usr/local/bin/codex")!,
+                          paths.firstIndex(of: "/opt/homebrew/bin/codex")!)
+    }
+
+    func testCodexBinaryCandidatesPreferAppleSiliconHomebrewOnArmArchitecture() {
+        let paths = CodexAccountStore.orderedCodexBinaryCandidates(
+            home: "/Users/tester", architecture: "arm64")
+        XCTAssertLessThan(paths.firstIndex(of: "/opt/homebrew/bin/codex")!,
+                          paths.firstIndex(of: "/usr/local/bin/codex")!)
+    }
+
+    func testLoginSearchPathAddsBinaryDirectoryAndCommonToolDirs() {
+        let path = CodexAccountStore.loginSearchPath(
+            binaryPath: "/custom/bin/codex",
+            inheritedPath: "/usr/bin:/bin",
+            home: "/Users/tester")
+        let parts = path.split(separator: ":").map(String.init)
+        XCTAssertEqual(parts.first, "/custom/bin")
+        XCTAssertTrue(parts.contains("/usr/local/bin"))
+        XCTAssertTrue(parts.contains("/opt/homebrew/bin"))
+        XCTAssertTrue(parts.contains("/Users/tester/.local/bin"))
+        XCTAssertEqual(parts.filter { $0 == "/usr/bin" }.count, 1)
+    }
+
+    func testFirstAbsolutePathFromShellOutput() {
+        XCTAssertEqual(CodexAccountStore.firstAbsolutePath(from: "codex not found\n/usr/local/bin/codex\n"),
+                       "/usr/local/bin/codex")
+        XCTAssertNil(CodexAccountStore.firstAbsolutePath(from: "codex: aliased to codex\n"))
+    }
+
     func testMenuBarMetricFilter() {
         let session = QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)
         let weekly = QuotaWindow(label: "Tuần", usedPct: 7, remainingPct: 93)
