@@ -701,20 +701,87 @@ struct CodexAccountsPopoverSection: View {
             }
         }
         .vocabbyCard()
+        .overlay {
+            if showingRemoveConfirmation, accountPendingRemoval != nil {
+                removeConfirmationOverlay
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.14), value: showingRemoveConfirmation)
         .onAppear(perform: reload)
-        .confirmationDialog(
-            removeConfirmationTitle,
-            isPresented: $showingRemoveConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button(removeConfirmationButtonTitle, role: .destructive) {
-                if let accountPendingRemoval {
-                    removeAccount(accountPendingRemoval)
+    }
+
+    private var removeConfirmationOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.42)
+                .contentShape(Rectangle())
+                .onTapGesture {}
+
+            VStack(spacing: 10) {
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 54, height: 54)
+
+                VStack(spacing: 4) {
+                    Text(removeConfirmationTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Text(removeConfirmationMessage)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.88))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(spacing: 7) {
+                    Button(role: .destructive) {
+                        if let accountPendingRemoval {
+                            removeAccount(accountPendingRemoval)
+                        }
+                    } label: {
+                        Text(removeConfirmationButtonTitle)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.critical)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.white.opacity(0.26))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+
+                    Button {
+                        dismissRemoveConfirmation()
+                    } label: {
+                        Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.white.opacity(0.26))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
                 }
             }
-            Button(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage), role: .cancel) {}
-        } message: {
-            Text(removeConfirmationMessage)
+            .padding(16)
+            .frame(width: 260)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.black.opacity(0.72))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.35), radius: 16, y: 6)
         }
     }
 
@@ -794,21 +861,26 @@ struct CodexAccountsPopoverSection: View {
                 .accessibilityLabel(quota.help)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
+                .frame(minWidth: 34)
                 .background(
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(quota.surface)
                 )
                 .help(quota.help)
             if isCLIIdentity(account) {
-                Text(L10n.t("popover.cliActive", settings.appLanguage))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.blue)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(VocabbyTheme.blue.opacity(0.12))
-                    )
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text(L10n.t("popover.accountSelected", settings.appLanguage))
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundStyle(VocabbyTheme.success)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(VocabbyTheme.successSurface)
+                )
             } else {
                 Button {
                     Task { await switchCLI(to: account) }
@@ -871,7 +943,7 @@ struct CodexAccountsPopoverSection: View {
         let label = L10n.windowLabel(lowest.label, preference: settings.appLanguage)
         let color = VocabbyTheme.quotaColor(remaining: lowest.remainingPct)
         return AccountQuotaBadge(
-            text: "\(label) \(lowest.remainingPct)%",
+            text: "\(lowest.remainingPct)%",
             color: color,
             surface: quotaBadgeSurface(remaining: lowest.remainingPct),
             help: L10n.f("popover.accountQuotaHelp", settings.appLanguage, label, lowest.remainingPct)
@@ -928,7 +1000,7 @@ struct CodexAccountsPopoverSection: View {
 
     private func switchHelp(for account: CodexAccount) -> String {
         if isCLIIdentity(account) {
-            return L10n.t("popover.cliAlready", settings.appLanguage)
+            return L10n.t("popover.accountSelectedHelp", settings.appLanguage)
         }
         if account.isSystem {
             return L10n.t("popover.restoreCLI", settings.appLanguage)
@@ -939,6 +1011,11 @@ struct CodexAccountsPopoverSection: View {
     private func confirmRemove(_ account: CodexAccount) {
         accountPendingRemoval = account
         showingRemoveConfirmation = true
+    }
+
+    private func dismissRemoveConfirmation() {
+        showingRemoveConfirmation = false
+        accountPendingRemoval = nil
     }
 
     private var addAccountRow: some View {
@@ -985,7 +1062,7 @@ struct CodexAccountsPopoverSection: View {
         let selectedLabel = selected?.email
             ?? L10n.t(selected?.isSystem == true ? "provider.systemAccount" : "provider.accountGeneric", lang)
         let hint = alreadyInCLI
-            ? L10n.t("popover.cliAlready", lang)
+            ? L10n.t("popover.accountSelectedHelp", lang)
             : (activeID == "system"
                ? L10n.t("popover.restoreCLI", lang)
                : L10n.f("popover.cliCard.switchTo", lang, selectedLabel))
@@ -1006,7 +1083,7 @@ struct CodexAccountsPopoverSection: View {
                     HStack(spacing: 3) {
                         Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath.circle.fill")
                             .font(.system(size: 9, weight: .bold))
-                        Text(L10n.t(alreadyInCLI ? "popover.cliActive" : "popover.switchReady", lang))
+                        Text(L10n.t(alreadyInCLI ? "popover.accountSelected" : "popover.switchReady", lang))
                             .font(.system(size: 10, weight: .semibold))
                     }
                     .foregroundStyle(tint)
@@ -1035,30 +1112,29 @@ struct CodexAccountsPopoverSection: View {
                 guard !alreadyInCLI else { return }
                 Task { await switchCLI() }
             } label: {
-                HStack(spacing: 6) {
+                ZStack {
+                    Circle()
+                        .fill(switchButtonGradient(alreadyInCLI: alreadyInCLI))
+                        .frame(width: 58, height: 58)
+                        .shadow(
+                            color: alreadyInCLI ? .clear : VocabbyTheme.brandBlue.opacity(0.45),
+                            radius: alreadyInCLI ? 0 : 16
+                        )
+                        .overlay(
+                            Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                        )
+
                     if busy && !alreadyInCLI {
                         ProgressView()
-                            .controlSize(.small)
-                            .tint(tint)
+                            .controlSize(.regular)
+                            .tint(.white)
                     } else {
                         Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(.white)
                     }
-                    Text(switchButtonTitle(alreadyInCLI: alreadyInCLI, lang: lang))
-                        .font(.system(size: 11, weight: .semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
                 }
-                .foregroundStyle(tint)
-                .frame(width: 112, height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(alreadyInCLI ? VocabbyTheme.successSurface : VocabbyTheme.selectedSurface)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(tint.opacity(0.22), lineWidth: 1)
-                )
+                .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .disabled(busy || alreadyInCLI)
@@ -1076,14 +1152,19 @@ struct CodexAccountsPopoverSection: View {
         .padding(.top, 6)
     }
 
-    private func switchButtonTitle(alreadyInCLI: Bool, lang: String) -> String {
+    private func switchButtonGradient(alreadyInCLI: Bool) -> LinearGradient {
         if alreadyInCLI {
-            return L10n.t("popover.cliActiveShort", lang)
+            return LinearGradient(
+                colors: [VocabbyTheme.success.opacity(0.90), VocabbyTheme.success],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         }
-        if activeID == "system" {
-            return L10n.t("popover.restoreCLIButton", lang)
-        }
-        return L10n.t("popover.switchAccountButton", lang)
+        return LinearGradient(
+            colors: [VocabbyTheme.brandBlue, VocabbyTheme.blue],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 
     private func reload() {
@@ -1135,6 +1216,7 @@ struct CodexAccountsPopoverSection: View {
 
     private func removeAccount(_ account: CodexAccount) {
         accountActionErrorText = nil
+        showingRemoveConfirmation = false
         do {
             try CodexAccountStore.remove(account: account, from: accounts)
             reload()
