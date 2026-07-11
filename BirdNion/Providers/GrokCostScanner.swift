@@ -42,7 +42,9 @@ struct GrokUsageReport: Equatable {
     let daily: [GrokDailyUsage]
     let topModel: String?
 
-    var isEmpty: Bool { last30Tokens == 0 }
+    /// Empty only when there is neither spend nor tokens in the 30-day window
+    /// (usd alone still warrants a chart card).
+    var isEmpty: Bool { last30Tokens == 0 && last30USD <= 0 && todayTokens == 0 && todayUSD <= 0 }
 
     var asSummary: GrokCostSummary {
         GrokCostSummary(todayUSD: todayUSD, todayTokens: todayTokens,

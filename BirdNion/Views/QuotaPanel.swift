@@ -106,6 +106,12 @@ struct QuotaOverview: View {
                             if s.id == "codex" {
                                 CodexAccountsPopoverSection()
                             }
+                            // Grok Build: 30-day cost chart from local
+                            // ~/.grok/sessions/**/signals.json (parity with Codex).
+                            if s.id == "grok", let report = grokReport,
+                               !report.isEmpty {
+                                GrokUsageChartCard(report: report)
+                            }
                         }
                     }
                 }
@@ -2264,6 +2270,166 @@ struct CodexUsageChartCard: View {
             isCurrent: day.date == daily30.last?.date,
             hasActivity: day.usd > 0
         )
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        L10n.dayMonth(date, preference: settings.appLanguage)
+    }
+
+    private func formatUSD(_ amount: Double) -> String {
+        AllUsageFormat.usd(amount)
+    }
+
+    private func formatTokens(_ n: Int) -> String {
+        AllUsageFormat.tokens(n)
+    }
+
+    private func formatTokensShort(_ n: Int) -> String {
+        AllUsageFormat.tokensShort(n)
+    }
+}
+
+// MARK: - Grok Build usage chart
+
+/// 30-day bar chart for Grok Build local sessions (`GrokCostScanner`),
+/// mirroring `CodexUsageChartCard` layout so the Grok tab shows the same
+/// Today / 30d / latest-tokens + hover model breakdown as Codex/Claude.
+struct GrokUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let report: GrokUsageReport
+    @State private var hoveredDay: GrokDailyUsage?
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
+    private var daily30: [GrokDailyUsage] { Array(report.daily.suffix(30)) }
+
+    private var maxBarUSD: Double {
+        max(daily30.map(\.usd).max() ?? 0, 0.01)
+    }
+
+    private var detailDay: GrokDailyUsage? {
+        hoveredDay ?? daily30.last(where: { $0.tokens > 0 || $0.usd > 0 })
+    }
+
+    private var latestDayTokens: Int {
+        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 16) {
+                summaryColumn(
+                    label: vi ? "Hôm nay" : "Today",
+                    amount: report.todayUSD,
+                    tokens: report.todayTokens)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: vi ? "30 ngày" : "30d cost",
+                    amount: report.last30USD,
+                    tokens: report.last30Tokens,
+                    alignTrailing: true)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: vi ? "Token mới nhất" : "Latest tokens",
+                    amount: nil,
+                    tokens: latestDayTokens,
+                    alignTrailing: true)
+            }
+            barChart
+                .frame(height: 56)
+            if let detail = detailDay {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.primary)
+                    ForEach(detail.models) { m in
+                        HStack(spacing: 8) {
+                            Text(m.name)
+                                .font(.system(size: 10))
+                                .foregroundStyle(VocabbyTheme.secondary)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text("\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
+                                .font(.system(size: 10).monospacedDigit())
+                                .foregroundStyle(VocabbyTheme.tertiary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatUSD(report.last30USD))")
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.primary)
+            if let top = report.topModel, !top.isEmpty {
+                Text("\(vi ? "Model dùng nhiều" : "Top model"): \(top)")
+                    .font(.system(size: 9))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+            Text(vi
+                 ? "Ước tính từ log Grok Build cục bộ (~/.grok/sessions)."
+                 : "Estimated from local Grok Build logs (~/.grok/sessions).")
+                .font(.system(size: 9))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .vocabbyCard()
+    }
+
+    @ViewBuilder
+    private func summaryColumn(label: String, amount: Double?, tokens: Int,
+                               alignTrailing: Bool = false) -> some View {
+        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .tracking(0.3)
+            if let amount {
+                Text(formatUSD(amount))
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.primary)
+            }
+            Text(formatTokens(tokens))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+    }
+
+    private var barChart: some View {
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(daily30) { day in
+                    let heightFraction = day.usd > 0
+                        ? CGFloat(day.usd / maxBarUSD)
+                        : 0
+                    let barHeight = max(geo.size.height * heightFraction, day.usd > 0 ? 3 : 1)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(barColor(for: day))
+                            .frame(height: barHeight)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(hoveredDay?.id == day.id
+                                ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { hoveredDay = day }
+                        else if hoveredDay?.id == day.id { hoveredDay = nil }
+                    }
+                    .help("\(dayLabel(day.date)): \(formatUSD(day.usd)) · \(formatTokens(day.tokens))")
+                }
+            }
+        }
+    }
+
+    private func barColor(for day: GrokDailyUsage) -> Color {
+        // Grok brand near-black; slightly lift the current day for readability.
+        if day.usd <= 0 { return VocabbyTheme.track }
+        if day.date == daily30.last?.date {
+            return VocabbyTheme.chartGrok
+        }
+        return VocabbyTheme.chartGrok.opacity(0.78)
     }
 
     private func dayLabel(_ date: Date) -> String {
