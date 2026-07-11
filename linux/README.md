@@ -7,37 +7,48 @@ Stack: Tauri v2 (Rust core + web UI vanilla TS). Dùng chung schema config
 ## Tính năng (parity với macOS)
 
 - [x] Tray icon (Show/Quit, tooltip % quota động), đóng window = ẩn xuống tray
-- [x] Tab **All**: tổng cost Claude Code CLI + Codex — period picker 24h/7/30/90 ngày,
-      stacked bars theo nguồn, heatmap 90 ngày clickable (peak/avg/streak), top models
-- [x] Cost scanner: Claude (`claude_scanner.rs`, port 1:1 semantics) +
-      Codex (`codex_scanner.rs`, parse rollout jsonl + bảng giá CodexBar, lệch <3%)
-- [x] **23/23 providers**: 10 API-key (openrouter, deepseek, zai, minimax, hapo,
-      elevenlabs, deepgram, groq, kiro, bedrock-SigV4) + 5 CLI/OAuth (codex, claude,
-      gemini, kilo, antigravity) + 8 cookie-based qua `rookie` (opencode, opencodego,
-      commandcode, cursor, mimo, alibaba, freemodel, copilot)
-- [x] Tab per-provider: quota windows + reset countdown + chart 30 ngày (Claude/Codex)
-- [x] Settings: bật/tắt provider, API key, cookie thủ công, autostart — ghi settings.json (0600)
-- [x] Notifications cảnh báo quota ≤20% (libnotify), i18n vi/en
-- [x] CI: GitHub Actions build .deb/.rpm/AppImage trên ubuntu-22.04 + cargo test
-- [x] Claude Admin API org dashboard (card 30 ngày trên tab Claude khi có admin key)
-- [x] Copilot Device Flow login ngay trong Settings (mã + link GitHub + polling)
+- [x] Tab **All**: tổng cost **Claude + Codex + Grok** — period picker 24h/7/30/90 ngày,
+      stacked bars 3 nguồn (màu Grok `#111827`), heatmap 90 ngày (soft greens), top models
+- [x] Cost scanners: Claude (`claude_scanner.rs`) + Codex (`codex_scanner.rs`) +
+      Grok (`grok_scanner.rs` — `~/.grok/sessions/**/signals.json`)
+- [x] **Cost history** high-water (`cost_history.rs` → `~/.config/birdnion/cost-history.json`):
+      bar ngày không co khi xóa session local (Claude/Codex/Grok)
+- [x] **26 providers** (roster + registry): 23 cũ + **Grok**, **OpenAI** (Admin spend), **Ollama**
+- [x] Tab per-provider: quota windows + reset countdown + chart 30 ngày
+      (Claude/Codex/Grok) + Claude Admin card khi có admin key
+- [x] Settings (section nav): Providers / General / About —
+      bật/tắt, API key, cookie, project id (OpenAI), autostart, polling, about/update
+- [x] Notifications cảnh báo quota ≤20% + failure episodes, i18n vi/en
+- [x] CI: GitHub Actions build .deb/.rpm/AppImage + cargo test
+- [x] Copilot Device Flow login trong Settings; Codex multi-account
+
+## Providers mới
+
+| Id | Cách auth | Ghi chú |
+|---|---|---|
+| `grok` | Zero-config `~/.grok/auth.json` | Quota Grok Build + cost từ signals.json |
+| `openai` | `OPENAI_ADMIN_KEY` / API key + Project ID tùy chọn | Org Admin costs — **không** phải ChatGPT/Codex |
+| `ollama` | Cookie ollama.com và/hoặc API key | Session/Weekly % |
 
 ## Khác biệt đã biết so với macOS
 
 - Cookie: cần trình duyệt Chrome/Chromium/Brave/Edge/Firefox trên Linux (gnome-keyring);
   Safari không tồn tại — có ô "cookie thủ công" trong Settings làm fallback
 - Menu-bar percent rotation → tray tooltip (GNOME/KDE không hỗ trợ text cạnh icon tray)
+- Global hotkey OS-level: không có (Wayland không ổn định) — trong window dùng **Ctrl+,** mở Settings
 
 ## Dev
 
 ```bash
 npm install
 npm run tauri dev            # chạy app (macOS/Linux)
-cd src-tauri && cargo test   # 162 unit tests
+cd src-tauri && cargo test   # unit tests (lib)
 ```
 
 Build Ubuntu thật: CI `.github/workflows/linux-build.yml` hoặc máy Ubuntu với
 `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`.
+
+Ma trận parity chi tiết: [`docs/linux-parity-matrix.md`](../docs/linux-parity-matrix.md).
 
 ## Cài đặt (không cần build)
 
@@ -52,10 +63,9 @@ sudo apt install ./BirdNion_<version>_amd64.deb   # Ubuntu/Debian
 
 ## Kiến trúc
 
-- `src-tauri/src/claude_scanner.rs` / `codex_scanner.rs` — cost scanners (90d daily,
-  strict 30d totals, 24h hourly)
+- `src-tauri/src/claude_scanner.rs` / `codex_scanner.rs` / `grok_scanner.rs` — cost scanners
+- `src-tauri/src/cost_history.rs` — high-water merge shared với macOS schema
 - `src-tauri/src/config.rs` — settings.json reader/writer (schema chung macOS)
-- `src-tauri/src/providers/` — 23 provider + `browser_cookies.rs` (rookie) +
-  registry `mod.rs` fetch concurrent
-- `src/` — web UI: `all-tab.ts` (chart/heatmap/models), `provider-tab.ts` (quota),
-  `settings-tab.ts`, `i18n.ts` (vi/en), `usage.ts` (combine + format)
+- `src-tauri/src/providers/` — 26 provider + `browser_cookies.rs` (rookie) + registry
+- `src/` — web UI: `all-tab.ts`, `provider-tab.ts`, `source-chart.ts`, `settings-tab.ts`
+  (sections), `i18n.ts`, `usage.ts` (combine 3 nguồn)

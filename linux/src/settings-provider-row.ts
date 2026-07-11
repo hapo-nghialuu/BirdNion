@@ -59,51 +59,66 @@ export function moveProvider(providers: { id: string }[], id: string, direction:
   return true;
 }
 
-/** Reorder arrow buttons (↑/↓). `onMoved` re-renders the settings list. */
+/**
+ * Swap an **enabled** provider with the previous/next enabled peer, ignoring
+ * disabled rows. Keeps Settings sidebar order (active block) in lockstep with
+ * popover tab order, which only shows enabled providers.
+ */
+export function moveEnabledProvider(
+  providers: { id: string; enabled?: boolean | null }[],
+  id: string,
+  direction: -1 | 1,
+): boolean {
+  const enabledIdx = providers
+    .map((p, i) => (p.enabled === true ? i : -1))
+    .filter((i) => i >= 0);
+  const pos = enabledIdx.findIndex((i) => providers[i]!.id === id);
+  if (pos < 0) return false;
+  const swapPos = pos + direction;
+  if (swapPos < 0 || swapPos >= enabledIdx.length) return false;
+  const a = enabledIdx[pos]!;
+  const b = enabledIdx[swapPos]!;
+  const tmp = providers[a]!;
+  providers[a] = providers[b]!;
+  providers[b] = tmp;
+  return true;
+}
+
+/** Reorder arrow buttons (↑/↓). `onMoved` re-renders the settings list.
+ * When `enabledOnly` is true (default), arrows move among active providers
+ * only — matches the popover tab strip. */
 export function reorderControls(
-  providers: { id: string }[],
+  providers: { id: string; enabled?: boolean | null }[],
   cfg: ProviderRowCfg,
   onMoved: () => void,
+  enabledOnly = true,
 ): HTMLElement {
   const wrap = el("span", "settings-reorder");
+  const move = (dir: -1 | 1) => {
+    const ok = enabledOnly
+      ? moveEnabledProvider(providers, cfg.id, dir)
+      : moveProvider(providers, cfg.id, dir);
+    if (ok) onMoved();
+  };
   const up = document.createElement("button");
   up.className = "reorder-btn";
   up.textContent = "↑";
   up.type = "button";
   up.title = t("settingsMoveUp");
-  up.addEventListener("click", () => {
-    if (moveProvider(providers, cfg.id, -1)) onMoved();
+  up.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    move(-1);
   });
   const down = document.createElement("button");
   down.className = "reorder-btn";
   down.textContent = "↓";
   down.type = "button";
   down.title = t("settingsMoveDown");
-  down.addEventListener("click", () => {
-    if (moveProvider(providers, cfg.id, 1)) onMoved();
+  down.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    move(1);
   });
   wrap.append(up, down);
-  return wrap;
-}
-
-/** Numeric input for the per-provider refresh interval override (seconds).
- * Empty/0 clears the override so the provider falls back to the global
- * interval, matching `QuotaService.overrideInterval` semantics. */
-export function refreshIntervalInput(cfg: ProviderRowCfg): HTMLElement {
-  const wrap = el("label", "settings-inline-field");
-  wrap.append(el("span", "settings-inline-label", t("settingsRefreshInterval")));
-  const input = document.createElement("input");
-  input.type = "number";
-  input.min = "0";
-  input.step = "10";
-  input.placeholder = "120";
-  input.className = "settings-input settings-input-narrow";
-  input.value = cfg.refreshInterval ? String(cfg.refreshInterval) : "";
-  input.addEventListener("change", () => {
-    const n = Number(input.value);
-    cfg.refreshInterval = Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
-  });
-  wrap.append(input);
   return wrap;
 }
 

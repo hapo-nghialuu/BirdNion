@@ -12,24 +12,129 @@
   --chart-bar: #469be9;
   --claude: #cc7c5e;
   --codex: #469be9;
+  --grok: #111827;
   --track: #e3e6ea;
+  /* GitHub-style heatmap greens (softened, macOS VocabbyTheme.heat*) */
+  --heat-0: #ebedf0;
+  --heat-1: #c6f0cd;
+  --heat-2: #8cdc9b;
+  --heat-3: #5abe73;
+  --heat-4: #379b55;
   font-family: system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
 }
 
 * { box-sizing: border-box; }
 
+html {
+  margin: 0;
+  /* Main popover: height is owned by Tauri setSize — no page scrollbar. */
+  overflow: hidden;
+  background: var(--background);
+}
+
 body {
   margin: 0;
   background: var(--background);
   color: var(--primary);
+  overflow: hidden;
+  /* Hug content; window resizes via fitMainWindowToContent(). */
+  height: auto;
+  min-height: 0;
 }
 
-.container { padding: 10px; }
+/* Only when content exceeds screen cap do we allow internal scroll. */
+html.popover-capped,
+html.popover-capped body {
+  overflow: hidden;
+  height: 100%;
+}
+
+html.popover-capped body {
+  overflow-y: auto;
+}
+
+.container {
+  /* macOS QuotaOverview VStack spacing 7 + compact pad */
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px; /* matches macOS VStack(spacing: 7) between header / tabs / body */
+  /* Dynamic height per tab — do NOT force 100vh (that left empty scroll space). */
+  min-height: 0;
+  height: auto;
+  width: 420px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.app-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: visible;
+  margin: 0;
+}
 
 .loading, .empty {
   font-size: 11px;
   color: var(--secondary);
   padding: 12px;
+}
+
+/* --- App header (macOS BirdNionHeader) -------------------------------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0; /* spacing via .container gap */
+  flex-shrink: 0;
+}
+
+.app-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+.app-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.app-titles { min-width: 0; }
+
+.app-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  line-height: 1.2;
+}
+
+.app-status {
+  font-size: 10px;
+  color: var(--secondary);
+  line-height: 1.2;
+}
+
+.header-refresh {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--blue);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.header-refresh:hover { background: #e7f1ff; }
+.header-refresh:disabled { opacity: 0.55; cursor: default; }
+.header-refresh.spinning { animation: spin 0.9s linear infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .card {
@@ -38,6 +143,10 @@ body {
   border-radius: 7px;
   padding: 10px;
   margin-bottom: 8px;
+}
+
+.app-body > .card:last-child {
+  margin-bottom: 0;
 }
 
 .summary-row {
@@ -67,19 +176,203 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Provider tabs --------------------------------------------------- */
+/* --- Provider tabs (macOS ProviderTabs: All + providers only) ----------- */
 
 .tabs {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: #eef0f4; /* VocabbyTheme.segment */
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow-x: auto;
+  margin: 0; /* spacing via .container gap — no extra margin above/below strip */
+  padding: 0;
+  height: 30px; /* ProviderTabs.chipHeight — tight, no dead band above icons */
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  padding: 0;
+  margin: 0;
+  color: var(--secondary); /* idle chips = secondary, not primary */
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 0; /* kill text-node / button line-box gap above icon */
+}
+
+/* chipHeight 30, minWidth 40 — ProviderTabs.swift */
+.tab-icon {
+  width: 40px;
+  min-width: 40px;
+  height: 30px;
+  min-height: 30px;
+  max-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #59616d; /* VocabbyTheme.secondary */
+  border-radius: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.tab-icon.active {
+  background: #e7f1ff; /* selectedSurface */
+  color: #0057b8; /* VocabbyTheme.blue */
+}
+
+/* SF Symbol-style All icon */
+.tab-sf-icon {
+  width: 18px;
+  height: 18px;
+  color: inherit;
+  display: block;
+}
+
+/* Mono mask logos — ink color inherits from .tab-icon color via background */
+.tab-logo-mono {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  flex-shrink: 0;
+  background-color: #59616d; /* secondary when idle */
+}
+
+.tab-icon.active .tab-logo-mono {
+  background-color: #0057b8; /* blue when selected */
+}
+
+.tab-logo-letter {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Colored logos (settings sidebar / detail only) */
+.tab-logo,
+.pp-side-logo,
+.pp-detail-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  display: block;
+}
+
+.pp-side-logo {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+/* Sidebar mono tint — macOS ProviderLogoView template + sidebarLogoTint */
+.pp-side-logo.pp-logo-on {
+  background-color: #1c1f26; /* primary near-black when enabled */
+}
+.pp-side-row.selected .pp-side-logo.pp-logo-on {
+  background-color: #0057b8; /* accent when row selected + enabled */
+}
+.pp-side-logo.pp-logo-off {
+  background-color: rgba(154, 163, 173, 0.82); /* disabled.opacity(0.82) */
+}
+
+.pp-detail-logo { width: 32px; height: 32px; }
+
+.tab-divider {
+  width: 1px;
+  align-self: center;
+  height: 18px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* --- Popover footer (macOS Settings / About / Quit) ------------------- */
+
+.popover-footer {
+  margin-top: 0; /* .container gap handles separation */
+  padding-top: 6px;
+  border-top: 1px solid var(--track);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 8px 6px;
+  font-size: 12px;
+  color: var(--primary);
+  cursor: pointer;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.footer-row:hover { background: #eef0f4; }
+
+.footer-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.footer-icon {
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--secondary);
+  flex-shrink: 0;
+}
+
+.footer-label { font-weight: 500; }
+
+.footer-shortcut {
+  font-size: 11px;
+  color: var(--tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Settings --------------------------------------------------------- */
+
+.settings {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+}
+
+/* Section nav — Providers / General / About (macOS Settings tabs, compact) */
+.settings-sections {
   display: flex;
   gap: 0;
   background: #eef0f4;
   border: 1px solid var(--border);
   border-radius: 7px;
-  overflow-x: auto;
-  margin-bottom: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
 }
 
-.tab {
+.settings-section-btn {
+  flex: 1;
   border: none;
   background: transparent;
   font-size: 11px;
@@ -89,17 +382,16 @@ body {
   white-space: nowrap;
 }
 
-.tab.active { background: #e7f1ff; font-weight: 600; color: var(--blue); }
+.settings-section-btn.active {
+  background: #e7f1ff;
+  font-weight: 600;
+  color: var(--blue);
+}
 
-.lang-toggle { margin-left: auto; color: var(--tertiary); font-size: 10px; }
-
-/* --- Settings --------------------------------------------------------- */
-
-.settings {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 10px;
+.settings-hint {
+  font-size: 10px;
+  color: var(--tertiary);
+  flex: 1;
 }
 
 .settings-row {
@@ -220,30 +512,250 @@ body {
   font-size: 11px;
 }
 
-/* --- Provider card ---------------------------------------------------- */
+/* --- Provider stack (macOS ProviderHeaderCard + ProviderCard) ---------- */
 
-.provider-head { margin-bottom: 8px; }
-.provider-name-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.provider-name { font-size: 13px; font-weight: 600; }
-.provider-meta { font-size: 10px; color: var(--tertiary); }
-.provider-extras { font-size: 10px; color: var(--tertiary); margin-bottom: 6px; }
-.provider-storage { font-size: 10px; color: var(--tertiary); margin-top: 6px; }
+.provider-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.provider-stack > .card { margin-bottom: 0; }
+
+/* Header: tighter padding like macOS ProviderHeaderCard (10h / 7v) */
+.provider-header-card {
+  padding: 7px 10px;
+}
+
+.provider-body-card {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.provider-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 24pt mark + 5pt pad = 34; segment #EEF0F4 (VocabbyTheme.segment) */
+.provider-logo-plate {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: #eef0f4;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.provider-logo-ink.tab-logo-mono {
+  width: 24px !important;
+  height: 24px !important;
+  background-color: #0057b8 !important; /* VocabbyTheme.blue */
+  background-image: none !important;
+  opacity: 1;
+  -webkit-mask-size: contain !important;
+  mask-size: contain !important;
+  -webkit-mask-repeat: no-repeat !important;
+  mask-repeat: no-repeat !important;
+  -webkit-mask-position: center !important;
+  mask-position: center !important;
+}
+
+.provider-head-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: center;
+}
+
+.provider-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  line-height: 1.25;
+}
+
+.provider-meta {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.provider-extras { font-size: 10px; color: var(--tertiary); }
+.provider-storage { font-size: 10px; color: var(--tertiary); }
+
+.provider-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0;
+}
+
+/* macOS QuotaSummaryStrip */
+.quota-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 1px 0;
+}
+
+.quota-summary-left {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quota-summary-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--secondary);
+}
+
+.quota-summary-window {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quota-summary-pct {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.quota-summary-pct.ok { color: #15803d; }       /* VocabbyTheme.success */
+.quota-summary-pct.warning { color: #a84b00; }  /* VocabbyTheme.yellow */
+.quota-summary-pct.critical { color: #d70015; }
+
+/* macOS MenuBarVisibilityToggle */
+.mb-vis {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mb-vis-health-svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.mb-vis-health-svg.ok { color: #15803d; }
+.mb-vis-health-svg.err { color: #d70015; }
+
+.mb-vis-switch {
+  display: inline-flex;
+  align-items: center;
+  width: 30px;
+  height: 16px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--track);
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background 0.16s ease, border-color 0.16s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.mb-vis-switch:not(.on) { justify-content: flex-start; }
+
+.mb-vis-switch.on {
+  justify-content: flex-end;
+  background: #0057b8; /* VocabbyTheme.blue */
+  border-color: rgba(0, 87, 184, 0.45);
+}
+
+.mb-vis-knob {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fafbfc; /* VocabbyTheme.card / group */
+  box-shadow: 0 1px 1px rgba(28, 31, 38, 0.16);
+  flex-shrink: 0;
+}
+
+.mb-vis-switch:hover { filter: brightness(0.98); }
+
+.mb-vis-switch:focus-visible {
+  outline: 2px solid rgba(0, 87, 184, 0.35);
+  outline-offset: 2px;
+}
+
 .self-test-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 
 .provider-error {
   font-size: 11px;
   color: #d70015;
-  background: #ffe8ea;
+  background: rgba(255, 232, 234, 0.7);
   border: 1px solid rgba(215, 0, 21, 0.16);
   border-radius: 7px;
   padding: 8px 10px;
 }
 
-.window-row { margin-top: 9px; }
+/* macOS LoadingQuotaSkeleton: 124×10 / full×8 / 180×8 grey bars @0.75. */
+.quota-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.skeleton-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track);
+  opacity: 0.75;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton-bar.w-narrow { width: 124px; height: 10px; }
+.skeleton-bar.w-full { width: 100%; }
+.skeleton-bar.w-mid { width: 180px; }
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 0.45; }
+}
+
+/* macOS AllUsageOverview "Scanning X, Y…" partial-results hint. */
+.scanning-hint {
+  font-size: 10px;
+  color: var(--tertiary);
+  padding: 0 2px 6px;
+}
+
+/* macOS WindowRow — solid fills, 5px bar */
+.window-row { margin-top: 0; }
 
 .window-head {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   margin-bottom: 4px;
 }
 
@@ -270,6 +782,7 @@ body {
   display: flex;
   justify-content: space-between;
   margin-top: 4px;
+  gap: 8px;
 }
 
 .window-subtitle { font-size: 10px; color: var(--tertiary); }
@@ -339,6 +852,7 @@ body {
 .bar-seg { width: 100%; }
 .bar-seg.claude { background: var(--claude); }
 .bar-seg.codex { background: var(--codex); }
+.bar-seg.grok { background: var(--grok); }
 .bar-seg.solo { border-radius: 2px; }
 .bar-seg.mono { background: var(--chart-bar); opacity: 0.72; }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
@@ -350,6 +864,7 @@ body {
 .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 .dot.claude { background: var(--claude); }
 .dot.codex { background: var(--codex); }
+.dot.grok { background: var(--grok); }
 
 .legend-label {
   font-size: 9px;
@@ -454,10 +969,11 @@ body {
 }
 
 .heat-cell.empty { background: transparent; cursor: default; }
-.heat-cell.h1 { background: rgba(70, 155, 233, 0.3); }
-.heat-cell.h2 { background: rgba(70, 155, 233, 0.5); }
-.heat-cell.h3 { background: rgba(70, 155, 233, 0.75); }
-.heat-cell.h4 { background: var(--blue); }
+.heat-cell.h0 { background: var(--heat-0); }
+.heat-cell.h1 { background: var(--heat-1); }
+.heat-cell.h2 { background: var(--heat-2); }
+.heat-cell.h3 { background: var(--heat-3); }
+.heat-cell.h4 { background: var(--heat-4); }
 .heat-cell.today { outline: 1px solid var(--blue); outline-offset: -1px; }
 .heat-cell.selected { outline: 1.5px solid var(--primary); outline-offset: -1px; }
 
@@ -474,60 +990,183 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Claude Code quick-apply ------------------------------------------ */
+/* --- Claude Code quick-apply (macOS ClaudeCodeQuickApplyButton) -------- */
 
 .cc-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 7px;
-  padding: 10px;
+  padding: 9px 10px;
   margin-bottom: 8px;
 }
 
-.cc-head {
+.cc-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
+  gap: 12px;
 }
 
-.cc-title { font-size: 12px; font-weight: 600; }
+.cc-lead-icon {
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(89, 97, 109, 0.12);
+  color: var(--secondary);
+}
 
-.cc-badge {
+.cc-lead-on { background: rgba(55, 155, 85, 0.14); color: #379b55; }
+.cc-lead-off { background: rgba(89, 97, 109, 0.12); color: var(--secondary); }
+.cc-lead-stale { background: rgba(200, 140, 20, 0.16); color: #a84b00; }
+.cc-lead-needsSetup { background: rgba(0, 87, 184, 0.12); color: var(--blue); }
+
+.cc-lead-svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.cc-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cc-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cc-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.cc-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 999px;
 }
 
-.cc-badge.cc-on { background: #e6f6ec; color: #15803d; }
-.cc-badge.cc-off { background: #eef0f4; color: var(--secondary); }
-.cc-badge.cc-stale { background: #fff3d9; color: #a84b00; }
-.cc-badge.cc-needsSetup { background: #e7f1ff; color: var(--blue); }
+.cc-state-glyph { font-size: 9px; line-height: 1; }
 
-.cc-subtitle { font-size: 11px; color: var(--secondary); margin-bottom: 3px; }
+.cc-state-on { color: #379b55; }
+.cc-state-off { color: var(--secondary); }
+.cc-state-stale { color: #a84b00; }
+.cc-state-needsSetup { color: var(--blue); }
 
-.cc-target {
-  font-size: 10px;
-  color: var(--tertiary);
-  margin-bottom: 8px;
+.cc-subtitle {
+  font-size: 11px;
+  color: var(--secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.cc-toggle {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 6px 14px;
-  border-radius: 6px;
-  border: 1px solid rgba(0, 87, 184, 0.35);
-  background: #e7f1ff;
-  color: var(--blue);
-  cursor: pointer;
+.cc-target {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.cc-toggle:disabled { opacity: 0.6; cursor: default; }
+/* Circular power button — macOS ClaudeCodePowerButton diameter 58 */
+.cc-power-host {
+  flex: 0 0 auto;
+}
+
+.cc-power {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 1px 2px rgba(28, 31, 38, 0.12);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.15s ease;
+}
+
+.cc-power:hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: scale(1.02);
+}
+
+.cc-power:active:not(:disabled) { transform: scale(0.97); }
+.cc-power:disabled { cursor: default; opacity: 0.85; }
+
+.cc-power-on {
+  background: linear-gradient(135deg, #1a6fd4 0%, #0057b8 100%);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 18px rgba(0, 87, 184, 0.45);
+}
+
+.cc-power-off {
+  background: linear-gradient(135deg, #7a8494 0%, #3d4654 100%);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.cc-power-stale {
+  background: linear-gradient(135deg, #e0a030 0%, #c98810 100%);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.cc-power-needsSetup {
+  background: linear-gradient(135deg, #8a93a0 0%, #3d4654 100%);
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.cc-power-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  pointer-events: none;
+}
+
+.cc-power-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--blue);
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+
+.cc-power-stale .cc-power-dot { background: #f0b429; }
+
+.cc-power-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: cc-spin 0.7s linear infinite;
+}
+
+@keyframes cc-spin {
+  to { transform: rotate(360deg); }
+}
 
 /* --- Claude Code settings section -------------------------------------- */
 
@@ -550,26 +1189,1186 @@ body {
   color: var(--secondary);
 }
 
-/* --- Top models ------------------------------------------------------ */
+/* --- Top models (macOS CombinedTopModelsCard) ------------------------- */
 
-.model-row { margin-top: 8px; }
+.top-models-card { padding-bottom: 8px; }
 
-.model-head {
+.top-model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+}
+
+.top-model-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 3px;
+  gap: 8px;
 }
 
-.model-name { font-size: 10px; color: var(--secondary); }
+.top-model-name {
+  font-size: 10px;
+  color: var(--secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.top-model-amount {
+  font-size: 10px;
+  color: var(--tertiary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 
 .model-track {
   height: 3px;
   border-radius: 1.5px;
   background: var(--track);
   overflow: hidden;
+  width: 100%;
 }
 
 .model-fill { height: 100%; border-radius: 1.5px; }
 .model-fill.claude { background: var(--claude); }
 .model-fill.codex { background: var(--codex); }
+.model-fill.grok { background: var(--grok); }
+
+/* --- Settings window (macOS SettingsSceneRoot 780×720) ---------------- */
+/* Tokens mirror VocabbyTheme / SettingsTheme exactly. */
+
+body.settings-body-root {
+  background: #f4f5f7; /* VocabbyTheme.background */
+  overflow: hidden;
+  font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.settings-root-container {
+  padding: 0 !important;
+  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f4f5f7;
+}
+
+.settings-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #f4f5f7;
+}
+
+/* Tab bar — SettingsTabBar: segment bg, icon 20pt, label 10pt */
+.sw-tabbar {
+  display: flex;
+  gap: 0;
+  padding: 8px 12px;
+  background: #eef0f4; /* VocabbyTheme.segment */
+  flex-shrink: 0;
+}
+
+.sw-tab {
+  flex: 1;
+  min-width: 70px;
+  min-height: 48px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: #59616d; /* secondary */
+  padding: 6px 8px;
+  transition: background 0.16s ease-out, color 0.16s ease-out;
+}
+
+.sw-tab:hover { background: #e7eaf0; /* hoverSurface */ }
+
+.sw-tab.active {
+  background: #e7f1ff; /* selectedSurface */
+  color: #0057b8; /* accent blue */
+}
+
+.sw-tab-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.sw-tab-label {
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.sw-tab.active .sw-tab-label { font-weight: 600; }
+
+.sw-divider {
+  height: 1px;
+  background: #d7dce2;
+  flex-shrink: 0;
+}
+
+.sw-content {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+  background: #f4f5f7;
+}
+
+/* SettingsPage: VStack spacing 18, padding 20/18 */
+.settings-page {
+  max-width: none;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 20px 28px;
+  box-sizing: border-box;
+}
+
+/* Group = section header above card (macOS SettingsCard) */
+.sw-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sw-section-header {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: #59616d;
+  padding: 0 4px;
+  text-transform: uppercase;
+}
+
+.sw-card {
+  background: #fefeff; /* VocabbyTheme.card */
+  border: 1px solid rgba(215, 220, 226, 0.75);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.025);
+}
+
+.sw-card-body { padding: 0; }
+
+/* SettingsLabeledRow: 14h / 10v, minHeight 44, title 13, sub 11 */
+.sw-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.sw-row-text { min-width: 0; flex: 1; }
+
+.sw-row-title {
+  font-size: 13px;
+  font-weight: 400;
+  color: #1c1f26;
+  line-height: 1.3;
+}
+
+.sw-row-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: #59616d; /* secondary — macOS uses secondary not tertiary for subtitle */
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.sw-row-divider {
+  height: 1px;
+  background: rgba(215, 220, 226, 0.72);
+  margin-left: 14px;
+  margin-right: 0;
+}
+
+.sw-card-footer-note {
+  font-size: 11px;
+  color: #6b7280; /* tertiary */
+  padding: 0 4px;
+  line-height: 1.4;
+}
+
+/* macOS-style switch (Toggle) */
+.sw-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: #e3e6ea;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+  border: none;
+  margin: 0;
+}
+
+.sw-switch::after {
+  content: "";
+  position: absolute;
+  top: 1.5px;
+  left: 1.5px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  transition: transform 0.15s ease;
+}
+
+.sw-switch:checked { background: #0057b8; }
+.sw-switch:checked::after { transform: translateX(16px); }
+.sw-switch:focus-visible { outline: 2px solid rgba(0, 87, 184, 0.35); outline-offset: 2px; }
+
+.sw-select {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  background: #fafbfc;
+  color: #1c1f26;
+  min-width: 120px;
+  max-width: 180px;
+}
+
+.sw-input-num {
+  width: 64px;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  background: #fafbfc;
+  color: #1c1f26;
+}
+
+.sw-shortcut-pill,
+.sw-pill-btn {
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  background: #fafbfc;
+  color: #59616d;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.sw-pill-btn {
+  cursor: pointer;
+  color: #0057b8;
+  border-color: rgba(0, 87, 184, 0.35);
+  background: #e7f1ff;
+  font-weight: 500;
+}
+
+.sw-pill-btn:hover { background: #d6e9ff; }
+
+.sw-card-quit {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.025);
+}
+
+.sw-quit-btn {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 87, 184, 0.35);
+  background: #e7f1ff;
+  color: #0057b8;
+  cursor: pointer;
+}
+
+.sw-quit-btn:hover { background: #d6e9ff; }
+
+/* About section inside settings window */
+.settings-window .settings-section {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.settings-window .settings-section > .summary-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: #59616d;
+  text-transform: uppercase;
+  padding: 0 4px 6px;
+}
+
+/* Providers list inside settings window */
+.settings-window .settings-provider-list {
+  max-height: none;
+  padding: 4px 8px 8px;
+}
+
+.settings-window .settings-provider {
+  background: #fff;
+  border: 1px solid rgba(215, 220, 226, 0.72);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 4px;
+}
+
+.settings-window .save-button {
+  margin: 8px 14px 14px;
+}
+
+/* SF Symbol style icons in popover chrome */
+.tab-sf-icon {
+  width: 18px;
+  height: 18px;
+  color: inherit;
+}
+
+.header-refresh-icon {
+  width: 15px;
+  height: 15px;
+  color: #0057b8;
+  display: block;
+}
+
+.header-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0; /* hide old text glyph if any */
+}
+
+.footer-icon-svg {
+  width: 15px;
+  height: 15px;
+  color: #59616d;
+  flex-shrink: 0;
+  display: block;
+}
+
+/* --- Providers pane (macOS two-column master-detail) ------------------- */
+
+.pp-root {
+  display: flex;
+  gap: 14px;
+  height: 100%;
+  min-height: 520px;
+  padding: 16px;
+  box-sizing: border-box;
+  background: #f4f5f7;
+}
+
+.pp-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #fefeff;
+  border: 1px solid rgba(215, 220, 226, 0.75);
+  border-radius: 8px;
+  padding: 6px 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.025);
+  max-height: calc(100vh - 120px);
+  overflow: hidden;
+}
+
+.pp-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 6px 2px;
+  padding: 5px 8px;
+  background: #fafbfc;
+  border: 1px solid rgba(215, 220, 226, 0.75);
+  border-radius: 6px;
+}
+
+.pp-search-icon {
+  color: #59616d;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.pp-search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  color: #1c1f26;
+  outline: none;
+  min-width: 0;
+}
+
+.pp-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.pp-side-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  margin: 0 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pp-side-row:hover { background: rgba(231, 234, 240, 0.62); }
+.pp-side-row.selected { background: #e7f1ff; }
+
+.pp-check {
+  width: 14px;
+  height: 14px;
+  accent-color: #0057b8;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* size/tint for sidebar logos defined above with .pp-logo-on / .pp-logo-off */
+
+.pp-side-text { flex: 1; min-width: 0; }
+
+.pp-side-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1c1f26;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pp-side-name.off {
+  color: #59616d; /* secondary when provider disabled */
+}
+
+.pp-side-sub {
+  font-size: 10px;
+  color: #59616d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pp-side-sub.error { color: #d70015; }
+
+.pp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #9aa3ad;
+}
+.pp-dot.ok { background: #15803d; }
+.pp-dot.warn { background: #b86a00; }
+.pp-dot.off { background: rgba(154, 163, 173, 0.55); }
+
+.pp-detail {
+  flex: 1;
+  min-width: 0;
+  max-height: calc(100vh - 120px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.pp-detail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 2px 20px;
+}
+
+.pp-empty {
+  font-size: 13px;
+  color: #59616d;
+  text-align: center;
+  padding: 60px 20px;
+  background: #fefeff;
+  border: 1px solid rgba(215, 220, 226, 0.75);
+  border-radius: 8px;
+}
+
+.pp-head-card { padding: 0; }
+
+.pp-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.pp-detail-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.pp-head-titles { flex: 1; min-width: 0; }
+
+.pp-head-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1c1f26;
+}
+
+.pp-head-sub {
+  font-size: 11px;
+  color: #59616d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pp-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sw-icon-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  background: #fafbfc;
+  cursor: pointer;
+  color: #0057b8;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.sw-icon-btn:hover { background: #e7f1ff; }
+
+.pp-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
+.pp-info-label { color: #59616d; }
+.pp-info-value {
+  color: #1c1f26;
+  text-align: right;
+  word-break: break-word;
+  max-width: 60%;
+}
+
+.pp-usage-block { padding: 10px 14px; }
+
+.pp-usage-top {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #59616d;
+}
+
+/* macOS usage row label: UPPERCASE 11pt semibold tracking 0.5 */
+.pp-usage-label { letter-spacing: 0.5px; }
+
+.pp-usage-pct { color: #15803d; font-variant-numeric: tabular-nums; font-size: 12px; }
+.pp-usage-pct.warning { color: #a84b00; }
+.pp-usage-pct.critical { color: #d70015; }
+
+/* macOS settings quota bar: 8pt track, radius 4 */
+.pp-usage-track {
+  height: 8px;
+  border-radius: 4px;
+  background: #e3e6ea;
+  overflow: hidden;
+}
+
+.pp-usage-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #15803d;
+}
+.pp-usage-fill.warning { background: #b86a00; }
+.pp-usage-fill.critical { background: #d70015; }
+
+.pp-usage-sub {
+  font-size: 10px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+/* Pace/reserve foot line ("x% dự phòng" | "Reset sau 4h 59m") */
+.pp-usage-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-usage-note {
+  font-size: 10px;
+  color: #59616d;
+  margin-top: 2px;
+}
+.pp-usage-note.warn { color: #a84b00; }
+
+/* CREDITS / HÔM NAY / 30 NGÀY key-value rows in the usage card */
+.pp-usage-kv {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(215, 220, 226, 0.72);
+  font-size: 11px;
+}
+
+.pp-usage-kv-value {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-usage-empty {
+  padding: 12px 14px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* Info-grid extras */
+.pp-info-error .pp-info-value { color: #d70015; }
+
+.pp-svc { display: inline-flex; align-items: center; gap: 6px; }
+
+.pp-svc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9aa3ad;
+  flex-shrink: 0;
+}
+.pp-svc-dot.none { background: #15803d; }
+.pp-svc-dot.minor, .pp-svc-dot.major { background: #b86a00; }
+.pp-svc-dot.critical { background: #d70015; }
+
+/* Self-test inline result under the detail header */
+.pp-selftest-result { font-size: 10px; padding: 0 14px 8px; display: none; }
+.pp-selftest-result.running { display: block; color: #6b7280; }
+.pp-selftest-result.pass { display: block; color: #15803d; }
+.pp-selftest-result.fail { display: block; color: #d70015; }
+
+/* Setup field rows (label left, control right — macOS SettingsLabeledRow) */
+.pp-setup-body { padding: 4px 0; }
+
+.pp-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 14px;
+  font-size: 12px;
+}
+
+.pp-field-label { color: #1c1f26; flex-shrink: 0; }
+
+.pp-field-input { flex: 1; max-width: 260px; }
+
+.pp-field-stack { display: flex; flex-direction: column; gap: 6px; padding: 0 14px 7px; }
+.pp-field-stack .pp-field-row { padding: 0; }
+.pp-field-stack .settings-input { width: 100%; }
+
+.pp-field-hint {
+  font-size: 10px;
+  color: #6b7280;
+  padding: 4px 14px 8px;
+}
+
+.pp-setup-body .settings-inline-field { padding: 7px 14px; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+
+/* Quota warning card */
+.pp-warn-body { padding: 4px 0; }
+
+.pp-warn-row { padding: 7px 14px; }
+
+.pp-warn-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+
+.pp-warn-detail { display: flex; gap: 16px; padding: 6px 0 0 22px; }
+
+.pp-warn-field { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }
+
+.pp-warn-label { color: #59616d; }
+
+.pp-warn-inherit { font-size: 11px; color: #6b7280; }
+
+/* Links section rows */
+.pp-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 9px 14px;
+  font-size: 12px;
+  color: #0057b8;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pp-link-row:hover { background: #e7f1ff; }
+
+.pp-link-row + .pp-link-row { border-top: 1px solid rgba(215, 220, 226, 0.72); }
+
+.pp-link-arrow { font-size: 11px; color: #6b7280; }
+
+/* Sidebar reorder arrows (selected row only) */
+.pp-side-row .settings-reorder { display: inline-flex; flex-direction: column; gap: 1px; margin-left: 4px; }
+
+/* Selects in the detail pane must not clip their labels */
+.pp-select,
+.pp-setup-body select.settings-input {
+  width: auto;
+  min-width: 150px;
+  max-width: 260px;
+}
+
+/* Legacy sub-sections embedded in the setup card need the card gutter */
+.pp-setup-body .settings-row { padding: 7px 14px; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pp-setup-body .cc-settings-section { margin: 6px 14px 4px; }
+
+/* Codex accounts card (macOS CodexAccountsCard) */
+.pp-accounts { padding: 2px 0; }
+
+.pp-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
+.pp-account-row + .pp-account-row { border-top: 1px solid rgba(215, 220, 226, 0.72); }
+
+.pp-account-name {
+  font-weight: 500;
+  color: #1c1f26;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pp-account-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.pp-account-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #15803d;
+  background: #eaf7ef;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.pp-account-remove { color: #d70015; }
+
+.pp-account-footer {
+  padding: 8px 14px;
+  border-top: 1px solid rgba(215, 220, 226, 0.72);
+}
+
+.pp-accounts-status { font-size: 10px; color: #d70015; padding: 0 14px 6px; }
+.pp-accounts-status:empty { display: none; }
+
+.pp-setup-inner {
+  padding: 4px 6px 8px;
+}
+
+.pp-setup-inner .settings-provider {
+  border: none;
+  margin: 0;
+  padding: 4px;
+  background: transparent;
+}
+
+.pp-save-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pp-save-row .save-button { margin: 0; }
+
+/* Settings content area full height for providers */
+.sw-content:has(.pp-root) {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* About pane — centered like macOS AboutPane */
+.about-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 24px 18px;
+  text-align: center;
+}
+
+.about-hero-icon {
+  width: 92px;
+  height: 92px;
+  border-radius: 18px;
+  object-fit: contain;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.about-hero-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1c1f26;
+}
+
+.about-hero-ver {
+  font-size: 11px;
+  color: #59616d;
+}
+
+.about-hero-tag {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.about-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.about-link-row {
+  display: block;
+  text-align: left;
+  padding: 8px 4px;
+  font-size: 13px;
+  color: #0057b8;
+  text-decoration: none;
+  border-top: 1px solid rgba(215, 220, 226, 0.72);
+}
+
+.about-link-row:hover { text-decoration: underline; }
+
+/* --- Claude Code pane (macOS ClaudeCodePane) --------------------------- */
+
+.ccp-hint {
+  font-size: 11px;
+  color: #59616d;
+  padding: 10px 12px 6px;
+}
+
+.ccp-side-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ccp-check { color: #15803d; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+
+.ccp-custom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 4px;
+}
+
+.ccp-add { color: #0057b8; font-weight: 700; }
+
+.ccp-profile-icon { width: 22px; display: inline-flex; justify-content: center; flex-shrink: 0; color: #59616d; }
+.ccp-profile-svg { width: 14px; height: 14px; }
+
+/* Activation panel */
+.ccp-act-row { display: flex; align-items: center; gap: 14px; padding: 13px 14px; }
+
+.ccp-act-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ccp-act-svg { width: 18px; height: 18px; }
+.ccp-act-on { color: #15803d; background: rgba(21, 128, 61, 0.12); }
+.ccp-act-off { color: #59616d; background: rgba(89, 97, 109, 0.12); }
+.ccp-act-stale { color: #b86a00; background: rgba(184, 106, 0, 0.12); }
+.ccp-act-needsSetup { color: #0057b8; background: rgba(0, 87, 184, 0.12); }
+
+.ccp-act-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ccp-act-title-row { display: flex; align-items: center; gap: 8px; }
+.ccp-act-title { font-size: 15px; font-weight: 600; }
+
+.ccp-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; }
+.ccp-badge-glyph { font-size: 9px; font-weight: 700; }
+.ccp-badge-on { color: #15803d; }
+.ccp-badge-off { color: #59616d; }
+.ccp-badge-stale { color: #a84b00; }
+.ccp-badge-needsSetup { color: #0057b8; }
+
+.ccp-act-sub { font-size: 12px; color: #59616d; }
+.ccp-act-target {
+  font-size: 10px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ccp-act-provider { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; }
+.ccp-act-logo { width: 18px; height: 18px; object-fit: contain; }
+.ccp-act-provider-name { font-size: 12px; font-weight: 600; }
+
+/* 76px power button (macOS diameter 76 in this pane) */
+.cc-power-lg { width: 76px; height: 76px; flex-shrink: 0; }
+.cc-power-lg .cc-power-icon { width: 26px; height: 26px; }
+
+.ccp-status { font-size: 11px; color: #15803d; text-align: center; padding: 2px 0 6px; }
+.ccp-status.error { color: #d70015; }
+
+/* Segmented scope picker */
+.ccp-seg {
+  display: inline-flex;
+  background: #eef0f4;
+  border: 1px solid #d7dce2;
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+.ccp-seg-btn {
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 5px;
+  color: #59616d;
+  cursor: pointer;
+}
+.ccp-seg-btn.active { background: #0057b8; color: #fff; font-weight: 600; }
+
+.ccp-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* keep the tail of long paths visible */
+  text-align: left;
+}
+.ccp-path.empty { color: #6b7280; direction: ltr; }
+
+.ccp-strong { font-weight: 600; }
+.ccp-nopad { padding: 0; }
+.ccp-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.ccp-danger { color: #d70015; }
+.ccp-primary { color: #0057b8; font-weight: 600; }
+.ccp-remove-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+/* Model rows */
+.ccp-model-label { width: 62px; flex-shrink: 0; font-size: 13px; }
+.ccp-model-input { flex: 1; min-width: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.ccp-model-pick { width: 34px; flex-shrink: 0; border: 1px solid #d7dce2; border-radius: 4px; background: #fafbfc; color: #59616d; }
+
+/* Custom profile form */
+/* Custom profile form — macOS ClaudeCodeCustomProfileForm field rows */
+.ccp-form { display: flex; flex-direction: column; gap: 14px; }
+
+.ccp-field-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  min-height: 40px;
+}
+
+.ccp-form-label {
+  width: 110px;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.ccp-field-control {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.ccp-row-divider {
+  height: 1px;
+  background: rgba(215, 220, 226, 0.72);
+  margin: 0 14px;
+}
+
+.ccp-input {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--primary);
+  box-sizing: border-box;
+}
+
+.ccp-input:focus {
+  outline: none;
+  border-color: rgba(0, 87, 184, 0.55);
+  box-shadow: 0 0 0 3px rgba(0, 87, 184, 0.12);
+}
+
+.ccp-select {
+  max-width: 260px;
+  cursor: pointer;
+  background: #fafbfc;
+}
+
+.ccp-token-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.ccp-token-wrap .ccp-input { flex: 1; min-width: 0; }
+
+.ccp-eye { flex-shrink: 0; }
+.ccp-eye-svg { width: 14px; height: 14px; display: block; }
+
+.ccp-env-block {
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ccp-env-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.ccp-env-list { display: flex; flex-direction: column; gap: 6px; }
+
+.ccp-env-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ccp-env-key { flex: 0 0 38%; max-width: 180px; }
+.ccp-env-val { flex: 1 1 auto; min-width: 0; }
+.ccp-env-eq { color: #6b7280; flex-shrink: 0; }
+.ccp-add-env { align-self: flex-start; margin-top: 2px; }
+
+.ccp-paste-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 2px;
+}
+
+.ccp-form-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+
+.ccp-form-foot.ccp-center { justify-content: center; }
+
+/* Claude Code root uses same master-detail shell as Providers */
+.ccp-root.pp-root {
+  min-height: 0;
+  height: 100%;
+}
+
+/* Paste-JSON modal */
+.ccp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+.ccp-modal {
+  width: 480px;
+  max-width: calc(100vw - 60px);
+  background: #fefeff;
+  border: 1px solid #d7dce2;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.ccp-modal-title { font-size: 14px; font-weight: 600; }
+.ccp-modal-text {
+  min-height: 200px;
+  resize: vertical;
+  border: 1px solid #d7dce2;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+/* Empty state */
+.ccp-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 28px 18px; text-align: center; }
+.ccp-empty-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: #e7f1ff;
+  color: #0057b8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ccp-empty-svg { width: 24px; height: 24px; }
+.ccp-empty-title { font-size: 15px; font-weight: 600; }
+.ccp-empty-body { font-size: 12px; color: #59616d; max-width: 380px; }

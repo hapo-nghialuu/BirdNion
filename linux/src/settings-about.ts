@@ -22,10 +22,28 @@ const POLL_KEY = "birdnion.pollSeconds";
 const POLL_DEFAULT = 120;
 const POLL_MANUAL = 0;
 const POLL_MIN = 30;
-const POLL_MAX = 1800;
+/** Allow 1h to match macOS RefreshFrequency.oneHour. */
+const POLL_MAX = 3600;
 const REFRESH_ON_OPEN_KEY = "birdnion.refreshOnOpen";
 const PROVIDER_STORAGE_ENABLED_KEY = "birdnion.providerStorageFootprintsEnabled";
+const STATUS_CHECKS_KEY = "birdnion.statusChecksEnabled";
+const SESSION_NOTIFY_KEY = "birdnion.sessionQuotaNotificationsEnabled";
+const QUOTA_WARN_KEY = "birdnion.quotaWarningNotificationsEnabled";
+const QUOTA_WARN_L1_KEY = "birdnion.quotaWarnLevel1";
+const QUOTA_WARN_L2_KEY = "birdnion.quotaWarnLevel2";
+const SHOW_TRAY_PERCENT_KEY = "birdnion.showPercentInTray";
+const HIDE_PERSONAL_KEY = "birdnion.hidePersonalInfo";
 const REPO_URL = "https://github.com/hapo-nghialuu/BirdNion";
+
+/** macOS RefreshFrequency options (seconds). */
+export const REFRESH_OPTIONS: { value: number; vi: string; en: string }[] = [
+  { value: 0, vi: "Thủ công", en: "Manual" },
+  { value: 60, vi: "1 phút", en: "1 minute" },
+  { value: 120, vi: "2 phút", en: "2 minutes" },
+  { value: 300, vi: "5 phút", en: "5 minutes" },
+  { value: 900, vi: "15 phút", en: "15 minutes" },
+  { value: 3600, vi: "1 giờ", en: "1 hour" },
+];
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -51,12 +69,113 @@ export function isManualRefresh(): boolean {
   return getPollSeconds() === POLL_MANUAL;
 }
 
-function setPollSeconds(seconds: number) {
+export function setPollSeconds(seconds: number) {
   const clamped = seconds === POLL_MANUAL
     ? POLL_MANUAL
     : Math.min(POLL_MAX, Math.max(POLL_MIN, Math.trunc(seconds)));
   localStorage.setItem(POLL_KEY, String(clamped));
 }
+
+export function isStatusChecksEnabled(): boolean {
+  return localStorage.getItem(STATUS_CHECKS_KEY) !== "false";
+}
+export function setStatusChecksEnabled(v: boolean) {
+  localStorage.setItem(STATUS_CHECKS_KEY, String(v));
+}
+export function isSessionNotifyEnabled(): boolean {
+  return localStorage.getItem(SESSION_NOTIFY_KEY) !== "false";
+}
+export function setSessionNotifyEnabled(v: boolean) {
+  localStorage.setItem(SESSION_NOTIFY_KEY, String(v));
+}
+export function isQuotaWarnEnabled(): boolean {
+  return localStorage.getItem(QUOTA_WARN_KEY) === "true";
+}
+export function setQuotaWarnEnabled(v: boolean) {
+  localStorage.setItem(QUOTA_WARN_KEY, String(v));
+}
+export function getQuotaWarnL1(): number {
+  const raw = localStorage.getItem(QUOTA_WARN_L1_KEY);
+  const n = raw === null ? NaN : Number(raw);
+  // NB: Number(null) is 0 — the old code silently returned threshold 0
+  // for fresh installs instead of the macOS default 50.
+  return Number.isFinite(n) && n > 0 ? n : 50;
+}
+export function setQuotaWarnL1(n: number) {
+  localStorage.setItem(QUOTA_WARN_L1_KEY, String(n));
+}
+export function getQuotaWarnL2(): number {
+  const raw = localStorage.getItem(QUOTA_WARN_L2_KEY);
+  const n = raw === null ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 20;
+}
+export function setQuotaWarnL2(n: number) {
+  localStorage.setItem(QUOTA_WARN_L2_KEY, String(n));
+}
+
+/** Per-provider/per-window quota-warning override — macOS `QuotaWarnConfig`
+ * (UserDefaults `quotaWarn.<provider>.<window>` CSV "warn,critical").
+ * `windowKey` is "session" (5h) or "weekly". */
+export type QuotaWarnConfig = { warn: number; critical: number };
+
+const quotaWarnKey = (id: string, windowKey: string) => `birdnion.quotaWarn.${id}.${windowKey}`;
+
+export function getProviderQuotaWarn(id: string, windowKey: string): QuotaWarnConfig | null {
+  const raw = localStorage.getItem(quotaWarnKey(id, windowKey));
+  if (!raw) return null;
+  const [warn, critical] = raw.split(",").map(Number);
+  if (!Number.isFinite(warn) || !Number.isFinite(critical)) return null;
+  return { warn, critical };
+}
+
+export function setProviderQuotaWarn(id: string, windowKey: string, cfg: QuotaWarnConfig | null) {
+  if (cfg) localStorage.setItem(quotaWarnKey(id, windowKey), `${cfg.warn},${cfg.critical}`);
+  else localStorage.removeItem(quotaWarnKey(id, windowKey));
+}
+
+/** Effective thresholds for one quota window: the per-provider override when
+ * customized, else the global L1/L2 pair. */
+export function effectiveQuotaWarn(id: string, windowLabel: string): QuotaWarnConfig {
+  const windowKey = windowLabel.includes("Tuần") ? "weekly" : "session";
+  return getProviderQuotaWarn(id, windowKey) ?? { warn: getQuotaWarnL1(), critical: getQuotaWarnL2() };
+}
+/** When the key has never been written, default **on** so the tray shows %
+ * next to the icon out of the box (macOS users who enable Display → show-%
+ * expect the same on this shell; tooltip-only was invisible without hover). */
+export function isShowTrayPercentEnabled(): boolean {
+  const raw = localStorage.getItem(SHOW_TRAY_PERCENT_KEY);
+  if (raw === null) return true;
+  return raw === "true";
+}
+export function setShowTrayPercentEnabled(v: boolean) {
+  localStorage.setItem(SHOW_TRAY_PERCENT_KEY, String(v));
+  // Notify other webviews (main popover) so the tray title rebuilds immediately.
+  // `storage` events only fire cross-window; same-window listeners need this.
+  window.dispatchEvent(new CustomEvent("birdnion-tray-display-changed", { detail: { enabled: v } }));
+  // Immediate clear when turning off — don't wait for main's next tick.
+  if (!v) {
+    void invoke("set_tray_status", {
+      tooltip: "BirdNion",
+      title: null,
+      iconPng: null,
+    }).catch(() => {});
+  }
+}
+
+export const TRAY_PERCENT_STORAGE_KEY = SHOW_TRAY_PERCENT_KEY;
+export function isHidePersonalInfo(): boolean {
+  return localStorage.getItem(HIDE_PERSONAL_KEY) === "true";
+}
+export function setHidePersonalInfo(v: boolean) {
+  localStorage.setItem(HIDE_PERSONAL_KEY, String(v));
+}
+export function setRefreshOnOpenEnabledPublic(enabled: boolean) {
+  setRefreshOnOpenEnabled(enabled);
+}
+export function setProviderStorageEnabledPublic(enabled: boolean) {
+  setProviderStorageEnabled(enabled);
+}
+export { REPO_URL };
 
 /** Whether the window should re-fetch all providers each time it becomes
  * visible/focused — mirrors macOS `refreshOnMenuOpen` (default false). */
@@ -143,38 +262,61 @@ export function globalPollingSection(onRefreshNow: () => void): HTMLElement {
   return section;
 }
 
-/** App name, version, and a link to the GitHub repo. */
+/** About pane — macOS AboutPane: centered icon + version + links + updates. */
 export async function aboutSection(): Promise<HTMLElement> {
-  const section = el("div", "settings-section");
-  section.append(el("div", "summary-label", t("settingsAbout")));
+  const page = el("div", "settings-page");
+  page.style.maxWidth = "430px";
+  page.style.margin = "0 auto";
 
-  const nameRow = el("div", "settings-row");
-  nameRow.append(el("span", "provider-name", "BirdNion"));
   let version = "";
   try {
     version = await getVersion();
   } catch {
     version = "";
   }
+
+  const heroCard = el("div", "sw-card");
+  const hero = el("div", "about-hero");
+  const icon = document.createElement("img");
+  icon.className = "about-hero-icon";
+  icon.src = "/logos/app.png";
+  icon.alt = "BirdNion";
+  icon.draggable = false;
+  icon.addEventListener("click", () => { void openUrl(REPO_URL).catch(() => {}); });
+  hero.append(icon);
+  hero.append(el("div", "about-hero-name", "BirdNion"));
   if (version) {
-    nameRow.append(el("span", "window-subtitle", `${t("settingsVersion")}: ${version}`));
+    hero.append(el("div", "about-hero-ver", `${t("settingsVersion")} ${version}`));
   }
-  section.append(nameRow);
+  hero.append(el("div", "about-hero-tag", t("aboutTagline")));
 
-  const linkRow = el("div", "settings-row");
-  const link = document.createElement("a");
-  link.href = REPO_URL;
-  link.textContent = t("settingsRepo");
-  link.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    void openUrl(REPO_URL).catch(() => {});
-  });
-  linkRow.append(link);
-  section.append(linkRow);
+  const links = el("div", "about-links");
+  for (const [label, url] of [
+    ["GitHub", REPO_URL],
+    ["Website", REPO_URL],
+  ] as const) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.className = "about-link-row";
+    a.textContent = label;
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      void openUrl(url).catch(() => {});
+    });
+    links.append(a);
+  }
+  hero.append(links);
+  heroCard.append(hero);
+  page.append(heroCard);
 
-  section.append(updateCheckRow(version));
+  const updates = el("div", "sw-group");
+  updates.append(el("div", "sw-section-header", t("settingsCheckUpdate").toUpperCase()));
+  const updatesCard = el("div", "sw-card");
+  updatesCard.append(updateCheckRow(version));
+  updates.append(updatesCard);
+  page.append(updates);
 
-  return section;
+  return page;
 }
 
 /** "Check for updates" button + result line (up to date / update available

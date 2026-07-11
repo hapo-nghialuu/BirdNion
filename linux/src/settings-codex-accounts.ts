@@ -21,11 +21,14 @@ function accountLabel(account: CodexAccount): string {
   return account.email ?? account.id;
 }
 
+/** Card-body content styled for the settings detail column — macOS
+ * `CodexAccountsCard` rows: account name + "Đang dùng" badge / switch +
+ * remove pills, and a footer "Lưu account hiện tại" action. */
 export function codexAccountsSection(): HTMLElement {
-  const wrap = el("div", "settings-row settings-codex-accounts");
-  const list = el("div", "codex-account-list");
-  const status = el("div", "window-subtitle");
-  wrap.append(el("span", "settings-inline-label", t("codexAccountsLabel")), list, status);
+  const wrap = el("div", "pp-accounts");
+  const list = el("div", "pp-accounts-list");
+  const status = el("div", "pp-accounts-status");
+  wrap.append(list, status);
 
   const render = async () => {
     list.textContent = "";
@@ -38,13 +41,14 @@ export function codexAccountsSection(): HTMLElement {
       return;
     }
     for (const account of state.accounts) {
-      const row = el("div", "codex-account-row");
+      const row = el("div", "pp-account-row");
       const isActive = account.id === state.activeId;
-      row.append(el("span", "provider-name", accountLabel(account)));
+      row.append(el("span", "pp-account-name", accountLabel(account)));
+      const actions = el("span", "pp-account-actions");
       if (isActive) {
-        row.append(el("span", "provider-meta", t("codexAccountActive")));
+        actions.append(el("span", "pp-account-badge", t("codexAccountActive")));
       } else {
-        const useBtn = el("button", "reorder-btn", t("codexAccountSwitch")) as HTMLButtonElement;
+        const useBtn = el("button", "sw-pill-btn", t("codexAccountSwitch")) as HTMLButtonElement;
         useBtn.type = "button";
         useBtn.addEventListener("click", async () => {
           try {
@@ -54,10 +58,10 @@ export function codexAccountsSection(): HTMLElement {
             status.textContent = `${t("loadError")}: ${err}`;
           }
         });
-        row.append(useBtn);
+        actions.append(useBtn);
       }
       if (!account.isSystem) {
-        const removeBtn = el("button", "reorder-btn", t("codexAccountRemove")) as HTMLButtonElement;
+        const removeBtn = el("button", "sw-pill-btn pp-account-remove", t("codexAccountRemove")) as HTMLButtonElement;
         removeBtn.type = "button";
         removeBtn.addEventListener("click", async () => {
           try {
@@ -67,13 +71,15 @@ export function codexAccountsSection(): HTMLElement {
             status.textContent = `${t("loadError")}: ${err}`;
           }
         });
-        row.append(removeBtn);
+        actions.append(removeBtn);
       }
+      row.append(actions);
       list.append(row);
     }
   };
 
-  const saveBtn = el("button", "save-button", t("codexAccountSaveCurrent")) as HTMLButtonElement;
+  const footer = el("div", "pp-account-footer");
+  const saveBtn = el("button", "sw-pill-btn", t("codexAccountSaveCurrent")) as HTMLButtonElement;
   saveBtn.type = "button";
   saveBtn.addEventListener("click", async () => {
     saveBtn.setAttribute("disabled", "true");
@@ -86,7 +92,8 @@ export function codexAccountsSection(): HTMLElement {
       saveBtn.removeAttribute("disabled");
     }
   });
-  wrap.append(saveBtn);
+  footer.append(saveBtn);
+  wrap.append(footer);
 
   void render();
   return wrap;

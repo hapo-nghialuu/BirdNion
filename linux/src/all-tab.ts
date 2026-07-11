@@ -55,6 +55,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const wTokens = windowDaily.reduce((s, d) => s + d.tokens, 0);
     const wClaude = windowDaily.reduce((s, d) => s + d.claudeUsd, 0);
     const wCodex = windowDaily.reduce((s, d) => s + d.codexUsd, 0);
+    const wGrok = windowDaily.reduce((s, d) => s + d.grokUsd, 0);
     const is24h = period === 1;
     const claude24Usd = claudeHourly.reduce((s, h) => s + h.usd, 0);
     const claude24Tokens = claudeHourly.reduce((s, h) => s + h.tokens, 0);
@@ -64,8 +65,12 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     summary.append(summaryColumn(t("today"), combined.todayUsd, combined.todayTokens));
     summary.append(summaryColumn(
       is24h ? "24h" : `${period} ${t("days")}`,
-      is24h ? claude24Usd + (today?.codexUsd ?? 0) : wUsd,
-      is24h ? claude24Tokens + (today?.codexTokens ?? 0) : wTokens,
+      is24h
+        ? claude24Usd + (today?.codexUsd ?? 0) + (today?.grokUsd ?? 0)
+        : wUsd,
+      is24h
+        ? claude24Tokens + (today?.codexTokens ?? 0) + (today?.grokTokens ?? 0)
+        : wTokens,
       true));
     card.append(summary);
 
@@ -89,7 +94,8 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       const legend = el("div", "legend");
       legend.append(
         legendDot("claude", `Claude ${usd(claude24Usd)}`),
-        legendDot("codex", `${t("codexToday")} ${usd(today?.codexUsd ?? 0)}`));
+        legendDot("codex", `${t("codexToday")} ${usd(today?.codexUsd ?? 0)}`),
+        legendDot("grok", `Grok ${usd(today?.grokUsd ?? 0)}`));
       card.append(legend, detail);
       card.append(el("div", "footnote", t("hourBarsNote")));
     } else {
@@ -97,7 +103,8 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       const legend = el("div", "legend");
       legend.append(
         legendDot("claude", `Claude ${usd(wClaude)}`),
-        legendDot("codex", `Codex ${usd(wCodex)}`));
+        legendDot("codex", `Codex ${usd(wCodex)}`),
+        legendDot("grok", `Grok ${usd(wGrok)}`));
       card.append(legend, detail);
       const lastActive = [...windowDaily].reverse().find((d) => d.active);
       if (lastActive) showDayDetail(detail, lastActive);
@@ -121,11 +128,15 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
     detail.append(sourceRow("codex", "Codex", day.codexUsd, day.codexTokens));
     appendModelRows(detail, day, "codex");
   }
+  if (day.grokUsd > 0 || day.grokTokens > 0) {
+    detail.append(sourceRow("grok", "Grok", day.grokUsd, day.grokTokens));
+    appendModelRows(detail, day, "grok");
+  }
 }
 
 /** Indented per-model lines under a source row (top 5/day from the scanner),
  * so "Claude" isn't one opaque figure — mirrors the macOS DaySourceModelRows. */
-function appendModelRows(detail: HTMLElement, day: CombinedDay, source: "claude" | "codex") {
+function appendModelRows(detail: HTMLElement, day: CombinedDay, source: "claude" | "codex" | "grok") {
   for (const m of day.models.filter((x) => x.source === source)) {
     const row = el("div", "model-row");
     row.append(
@@ -135,7 +146,7 @@ function appendModelRows(detail: HTMLElement, day: CombinedDay, source: "claude"
   }
 }
 
-/** Stacked per-source bars: Claude segment on top, Codex below. */
+/** Stacked per-source bars: Claude → Codex → Grok. */
 function stackedBarChart(days: CombinedDay[], detail: HTMLElement): HTMLElement {
   const max = Math.max(...days.map((d) => d.usd), 0.01);
   const chart = el("div", `bar-chart${days.length > 45 ? " dense" : ""}`);
@@ -147,10 +158,12 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement): HTMLElement 
       const stack = el("div", "bar-stack");
       stack.style.height = `${heightPct}%`;
       const claude = el("div", "bar-seg claude");
-      claude.style.flexGrow = String(day.claudeUsd);
+      claude.style.flexGrow = String(Math.max(day.claudeUsd, 0.0001));
       const codex = el("div", "bar-seg codex");
-      codex.style.flexGrow = String(day.codexUsd);
-      stack.append(claude, codex);
+      codex.style.flexGrow = String(Math.max(day.codexUsd, 0.0001));
+      const grok = el("div", "bar-seg grok");
+      grok.style.flexGrow = String(Math.max(day.grokUsd, 0.0001));
+      stack.append(claude, codex, grok);
       col.append(stack);
     } else {
       col.append(el("div", "bar-idle"));
@@ -287,19 +300,24 @@ function statsColumn(combined: Combined): HTMLElement {
 // --- Top models card --------------------------------------------------------
 
 export function topModelsCard(combined: Combined): HTMLElement {
-  const card = el("section", "card");
+  const card = el("section", "card top-models-card");
   card.append(el("div", "summary-label", t("topModels")));
   // Denominator is the 90-day window TOTAL (not the top model's own USD), so
   // bar width reflects each model's actual share of spend — macOS parity
   // fix (previously divided by max, so the top row was always ~100%).
   const total = Math.max(combined.totalUsd, 0.01);
   for (const model of combined.topModels) {
-    const row = el("div", "model-row");
-    const head = el("div", "model-head");
+    const row = el("div", "top-model-row");
+    const head = el("div", "top-model-head");
     const left = el("span", "legend-item");
-    left.append(el("span", `dot ${model.source}`), el("span", "model-name", model.name));
-    head.append(left, el("span", "source-amount",
-      `${usd(model.usd)} · ${tokensShort(model.tokens)}`));
+    left.append(
+      el("span", `dot ${model.source}`),
+      el("span", "top-model-name", shortModelName(model.name)),
+    );
+    head.append(
+      left,
+      el("span", "top-model-amount", `${usd(model.usd)} · ${tokensShort(model.tokens)}`),
+    );
     const track = el("div", "model-track");
     const fill = el("div", `model-fill ${model.source}`);
     fill.style.width = `${Math.max((model.usd / total) * 100, 1)}%`;
@@ -308,4 +326,11 @@ export function topModelsCard(combined: Combined): HTMLElement {
     card.append(row);
   }
   return card;
+}
+
+/** Compact model label for dense rows (macOS AllUsageFormat.shortName parity). */
+function shortModelName(name: string): string {
+  // Drop common date/version noise: "claude-haiku-4-5-20251001" → keep as-is if short
+  if (name.length <= 28) return name;
+  return name.slice(0, 26) + "…";
 }

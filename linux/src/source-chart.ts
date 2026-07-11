@@ -32,10 +32,19 @@ function showDetail(detail: HTMLElement, day: DailyUsage) {
   }
 }
 
-export function sourceChartCard(report: UsageReport, source: "claude" | "codex"): HTMLElement {
+export function sourceChartCard(
+  report: UsageReport,
+  source: "claude" | "codex" | "grok",
+): HTMLElement {
   const card = el("section", "card");
   const daily30 = report.daily.slice(-30);
   const latestActive = [...daily30].reverse().find((d) => d.tokens > 0);
+  const barClass = source === "claude" ? "claude"
+    : source === "codex" ? "codex"
+    : "grok";
+  const footnoteKey = source === "claude" ? "claudeFootnote"
+    : source === "codex" ? "codexFootnote"
+    : "grokFootnote";
 
   const summary = el("div", "summary-row");
   summary.append(summaryColumn(t("today"), report.todayUsd, report.todayTokens));
@@ -50,7 +59,7 @@ export function sourceChartCard(report: UsageReport, source: "claude" | "codex")
     const col = el("div", "bar-col");
     col.title = `${dayLabel(day.date)}: ${usd(day.usd)} · ${tokens(day.tokens)}`;
     if (day.usd > 0) {
-      const bar = el("div", "bar-seg solo mono");
+      const bar = el("div", `bar-seg solo ${barClass}`);
       bar.style.height = `${Math.max((day.usd / max) * 100, 5)}%`;
       col.append(bar);
     } else {
@@ -66,7 +75,6 @@ export function sourceChartCard(report: UsageReport, source: "claude" | "codex")
   if (report.topModel) {
     card.append(el("div", "footnote", `${t("topModel")}: ${report.topModel}`));
   }
-  card.append(el("div", "footnote",
-    t(source === "claude" ? "claudeFootnote" : "codexFootnote")));
+  card.append(el("div", "footnote", t(footnoteKey)));
   return card;
 }
