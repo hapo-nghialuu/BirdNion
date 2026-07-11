@@ -1,6 +1,143 @@
 import Foundation
 import os
 
+// MARK: - FreemodelAccountStore
+
+/// One FreeModel identity the app can fetch quota for.
+/// - `browser` (default) scans all browsers for the first signed-in session.
+/// - `browser:<id>` pins ONE specific browser's session — two browsers signed
+///   in to two different FreeModel accounts appear as two entries.
+/// - Managed accounts hold a user-pasted `bm_session` cookie header.
+struct FreemodelAccount: Identifiable, Equatable {
+    let id: String          // "browser", "browser:<browserID>", or a UUID
+    let email: String?
+    let label: String?      // custom label (managed) or browser name
+    let isBrowser: Bool
+}
+
+/// FreeModel multi-account state — pattern-matched to `CodexAccountStore`:
+/// managed accounts persist in their own metadata file under Application
+/// Support (cookies are secrets — never in the shared settings.json), the
+/// active id lives in UserDefaults.
+enum FreemodelAccountStore {
+    static let activeKey = "activeFreemodelAccount"
+    static let browserID = "browser"
+    static let browserPrefix = "browser:"
+
+    private static func metadataURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base
+            .appendingPathComponent("BirdNion", isDirectory: true)
+            .appendingPathComponent("freemodel-accounts.json")
+    }
+
+    // MARK: Active selection
+
+    static func activeID() -> String {
+        UserDefaults.standard.string(forKey: activeKey) ?? browserID
+    }
+
+    static func setActive(_ id: String) {
+        UserDefaults.standard.set(id, forKey: activeKey)
+        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+    }
+
+    /// The stored cookie header for the ACTIVE account — nil for browser
+    /// entries (live scan) or when the managed account vanished.
+    static func activeCookieHeader() -> String? {
+        let id = activeID()
+        guard id != browserID, !id.hasPrefix(browserPrefix) else { return nil }
+        return storedEntries().first(where: { $0.id == id })?.cookie
+    }
+
+    /// The pinned browser id when the active account is `browser:<id>`.
+    static func activeBrowserID() -> String? {
+        let id = activeID()
+        guard id.hasPrefix(browserPrefix) else { return nil }
+        return String(id.dropFirst(browserPrefix.count))
+    }
+
+    // MARK: Persistence
+
+    private struct Stored: Codable { var accounts: [Entry] }
+    private struct Entry: Codable {
+        var id: String
+        var email: String?
+        var label: String?
+        var cookie: String
+    }
+
+    private static func storedEntries() -> [Entry] {
+        guard let data = try? Data(contentsOf: metadataURL()),
+              let stored = try? JSONDecoder().decode(Stored.self, from: data) else { return [] }
+        return stored.accounts
+    }
+
+    private static func persist(_ entries: [Entry]) throws {
+        let url = metadataURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(Stored(accounts: entries))
+        try data.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    // MARK: Listing / mutation
+
+    static func managedAccounts() -> [FreemodelAccount] {
+        storedEntries().map {
+            FreemodelAccount(id: $0.id, email: $0.email, label: $0.label, isBrowser: false)
+        }
+    }
+
+    /// "Trình duyệt (tự động)" + one entry per signed-in browser + managed
+    /// accounts. Browser detection is a blocking cookie-store read — call
+    /// off-main. `emailResolver` (network) labels per-browser sessions.
+    static func allAccounts(
+        emailResolver: (String) async -> String? = { _ in nil }) async -> [FreemodelAccount]
+    {
+        var out = [FreemodelAccount(id: browserID, email: nil, label: nil, isBrowser: true)]
+        let sessions = ProviderCookieReader.allBrowserSessions(
+            domain: FreemodelProvider.cookieDomain, requiredCookie: "bm_session")
+        for session in sessions {
+            let email = await emailResolver(session.cookieHeader)
+            out.append(FreemodelAccount(
+                id: browserPrefix + session.browserID,
+                email: email,
+                label: session.browserName,
+                isBrowser: true))
+        }
+        out.append(contentsOf: managedAccounts())
+        return out
+    }
+
+    /// Stores a pasted cookie as a new managed account. The cookie must carry
+    /// `bm_session` (a bare token is wrapped by the caller's filter).
+    @discardableResult
+    static func add(cookie: String, label: String?, email: String?) throws -> FreemodelAccount {
+        let trimmedLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = Entry(
+            id: UUID().uuidString,
+            email: email,
+            label: (trimmedLabel?.isEmpty ?? true) ? nil : trimmedLabel,
+            cookie: cookie)
+        var entries = storedEntries()
+        entries.append(entry)
+        try persist(entries)
+        return FreemodelAccount(id: entry.id, email: entry.email, label: entry.label, isBrowser: false)
+    }
+
+    /// Removes a managed account (no-op for browser entries); the active
+    /// selection falls back to the auto browser scan.
+    static func remove(_ id: String) throws {
+        guard id != browserID, !id.hasPrefix(browserPrefix) else { return }
+        try persist(storedEntries().filter { $0.id != id })
+        if activeID() == id {
+            setActive(browserID)
+        }
+    }
+}
+
 /// FreeModel quota provider.
 ///
 /// Authenticates via the `bm_session` browser cookie set by freemodel.dev —
@@ -45,8 +182,10 @@ final class FreemodelProvider: QuotaProvider {
     private static let log = Logger(subsystem: "com.local.birdnion", category: "provider.freemodel")
 
     /// Account email cached after the first successful `/api/auth/me`; later polls
-    /// reuse it instead of re-hitting the endpoint.
+    /// reuse it instead of re-hitting the endpoint. Keyed by the cookie header so
+    /// an account switch re-resolves the email.
     private var cachedEmail: String?
+    private var cachedEmailCookie: String?
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -55,12 +194,21 @@ final class FreemodelProvider: QuotaProvider {
     // MARK: - QuotaProvider
 
     func fetch() async throws -> ProviderStatus {
-        // `bm_session` is the login cookie. Passing it as the required cookie
-        // makes the reader skip browsers that only hold stale freemodel.dev
-        // analytics/Stripe cookies (e.g. Chrome) and keep scanning until it
-        // finds the browser the user actually logged in with (e.g. Brave).
-        let rawHeader = ProviderCookieReader.resolvedCookieHeader(
-            providerID: id, domain: Self.cookieDomain, requiredCookie: Self.sessionCookieName)
+        // Multi-account resolution: a managed account's stored cookie → a
+        // pinned `browser:<id>` entry's live read of THAT browser → the
+        // default scan across all browsers. `bm_session` as the required
+        // cookie makes every browser path skip stores that only hold stale
+        // analytics/Stripe cookies.
+        let rawHeader: String?
+        if let stored = FreemodelAccountStore.activeCookieHeader() {
+            rawHeader = stored
+        } else if let browserID = FreemodelAccountStore.activeBrowserID() {
+            rawHeader = ProviderCookieReader.cookieHeader(
+                browserID: browserID, domain: Self.cookieDomain, requiredCookie: Self.sessionCookieName)
+        } else {
+            rawHeader = ProviderCookieReader.resolvedCookieHeader(
+                providerID: id, domain: Self.cookieDomain, requiredCookie: Self.sessionCookieName)
+        }
         let cookieHeader = rawHeader.flatMap { Self.filteredCookieHeader(from: $0) }
         guard let cookieHeader else {
             return failure("Chưa đăng nhập FreeModel trên trình duyệt")
@@ -129,15 +277,29 @@ final class FreemodelProvider: QuotaProvider {
         if let explicit = BirdNionConfigStore.accountLabel(provider: id), !explicit.isEmpty {
             return explicit
         }
-        // Resolved once already — reuse it; don't re-hit /api/auth/me every poll.
-        if let cachedEmail { return cachedEmail }
-        guard let data = try? await fetchEndpoint(url: Self.meURL, cookieHeader: cookieHeader, timeout: Self.accountTimeout),
+        // Resolved once already — reuse it; don't re-hit /api/auth/me every
+        // poll. Keyed by cookie so switching accounts re-resolves.
+        if let cachedEmail, cachedEmailCookie == cookieHeader { return cachedEmail }
+        guard let email = await Self.accountEmail(cookieHeader: cookieHeader) else { return nil }
+        cachedEmail = email
+        cachedEmailCookie = cookieHeader
+        return email
+    }
+
+    /// `/api/auth/me` email for an arbitrary cookie header — shared with the
+    /// account store's per-browser session labeling and add-account flow.
+    static func accountEmail(
+        cookieHeader: String,
+        session: URLSession = .shared) async -> String?
+    {
+        guard let data = try? await Self.fetchEndpoint(
+                url: Self.meURL, cookieHeader: cookieHeader,
+                timeout: Self.accountTimeout, session: session),
               let me = try? JSONDecoder().decode(MeResponse.self, from: data),
               !me.user.email.isEmpty
         else {
             return nil
         }
-        cachedEmail = me.user.email
         return me.user.email
     }
 
@@ -177,6 +339,14 @@ final class FreemodelProvider: QuotaProvider {
     // MARK: - Networking
 
     private func fetchEndpoint(url: URL, cookieHeader: String, timeout: TimeInterval) async throws -> Data {
+        try await Self.fetchEndpoint(url: url, cookieHeader: cookieHeader, timeout: timeout, session: session)
+    }
+
+    /// Static so the account store / add flow can validate arbitrary cookies.
+    private static func fetchEndpoint(
+        url: URL, cookieHeader: String, timeout: TimeInterval,
+        session: URLSession = .shared) async throws -> Data
+    {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = timeout

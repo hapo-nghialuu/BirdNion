@@ -527,4 +527,39 @@ final class NewProviderTests: XCTestCase {
         // No session cookie → rejected (nil), even if other cookies exist.
         XCTAssertNil(FreemodelProvider.filteredCookieHeader(from: "_ga=1; __stripe_mid=2"))
     }
+
+    // MARK: - FreemodelAccountStore
+
+    func testFreemodelAccountStoreBrowserEntriesHaveNoStoredCookie() {
+        // Browser entries (auto + per-browser) never resolve a stored cookie —
+        // they are live-scan pointers, not persisted secrets.
+        UserDefaults.standard.set("browser", forKey: FreemodelAccountStore.activeKey)
+        XCTAssertNil(FreemodelAccountStore.activeCookieHeader())
+        XCTAssertNil(FreemodelAccountStore.activeBrowserID())
+
+        UserDefaults.standard.set("browser:chrome", forKey: FreemodelAccountStore.activeKey)
+        XCTAssertNil(FreemodelAccountStore.activeCookieHeader())
+        XCTAssertEqual(FreemodelAccountStore.activeBrowserID(), "chrome")
+
+        UserDefaults.standard.removeObject(forKey: FreemodelAccountStore.activeKey)
+    }
+
+    func testFreemodelAccountStoreAddSwitchRemoveRoundtrip() throws {
+        defer { UserDefaults.standard.removeObject(forKey: FreemodelAccountStore.activeKey) }
+        let account = try FreemodelAccountStore.add(
+            cookie: "bm_session=test-roundtrip", label: "Test", email: "t@x.com")
+        defer { try? FreemodelAccountStore.remove(account.id) }
+
+        XCTAssertFalse(account.isBrowser)
+        XCTAssertEqual(account.label, "Test")
+
+        FreemodelAccountStore.setActive(account.id)
+        XCTAssertEqual(FreemodelAccountStore.activeCookieHeader(), "bm_session=test-roundtrip")
+
+        try FreemodelAccountStore.remove(account.id)
+        // Removing the active account falls back to the browser scan.
+        XCTAssertEqual(FreemodelAccountStore.activeID(), FreemodelAccountStore.browserID)
+        XCTAssertNil(FreemodelAccountStore.activeCookieHeader())
+        XCTAssertFalse(FreemodelAccountStore.managedAccounts().contains(where: { $0.id == account.id }))
+    }
 }

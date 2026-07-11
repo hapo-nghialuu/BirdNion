@@ -106,6 +106,11 @@ struct QuotaOverview: View {
                             if s.id == "codex" {
                                 CodexAccountsPopoverSection()
                             }
+                            // FreeModel: account switcher (per-browser sessions
+                            // + pasted cookies), same collapsed-card pattern.
+                            if s.id == "freemodel" {
+                                FreemodelAccountsPopoverSection()
+                            }
                             // Grok Build: 30-day cost chart from local
                             // ~/.grok/sessions/**/signals.json (parity with Codex).
                             if s.id == "grok", let report = grokReport,
@@ -1395,6 +1400,239 @@ struct WindowRow: View {
                 Text(resetText)
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.tertiary)
+            }
+        }
+    }
+}
+
+// MARK: - FreeModel accounts (popover)
+
+/// FreeModel account switcher — same collapsed-card pattern as
+/// `CodexAccountsPopoverSection`: header row (icon + active account + count +
+/// chevron), expandable rows with a radio + switch/remove, and an add form
+/// (paste a `bm_session` cookie). Per-browser sessions are auto-detected so
+/// two browsers signed in to two accounts appear as two entries.
+struct FreemodelAccountsPopoverSection: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    @State private var accounts: [FreemodelAccount] = []
+    @State private var activeID = FreemodelAccountStore.browserID
+    @State private var revealed = false
+    @State private var busy = false
+    @State private var errorText: String?
+    @State private var addCookie = ""
+    @State private var addLabel = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            collapsedRow
+            if revealed {
+                Divider()
+                    .overlay(VocabbyTheme.border)
+                    .padding(.vertical, 6)
+                ForEach(accounts) { account in
+                    accountRow(account)
+                }
+                if let errorText {
+                    Text(errorText)
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .lineLimit(2)
+                        .padding(.vertical, 4)
+                }
+                addAccountRow
+            }
+        }
+        .vocabbyCard()
+        .onAppear(perform: reload)
+    }
+
+    private func accountName(_ account: FreemodelAccount) -> String {
+        if account.isBrowser {
+            if account.id == FreemodelAccountStore.browserID {
+                return L10n.t("freemodel.browserAuto", settings.appLanguage)
+            }
+            let browser = account.label ?? String(account.id.dropFirst(FreemodelAccountStore.browserPrefix.count))
+            if let email = account.email { return "\(browser) · \(email)" }
+            return browser
+        }
+        return account.label ?? account.email ?? String(account.id.prefix(8))
+    }
+
+    private var collapsedRow: some View {
+        let lang = settings.appLanguage
+        let active = accounts.first(where: { $0.id == activeID })
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.blue)
+                .frame(width: 30, height: 30)
+                .background(VocabbyTheme.blue.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("popover.accounts", lang))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(active.map(accountName) ?? L10n.t("freemodel.browserAuto", lang))
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            Text("\(accounts.count)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(VocabbyTheme.segment))
+            Image(systemName: revealed ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+        .contentShape(Rectangle())
+        .pointingHandCursor()
+        .onTapGesture { revealed.toggle() }
+    }
+
+    private func accountRow(_ account: FreemodelAccount) -> some View {
+        let isActive = account.id == activeID
+        return HStack(spacing: 8) {
+            Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                .font(.system(size: 14))
+                .foregroundStyle(isActive ? VocabbyTheme.blue : VocabbyTheme.tertiary)
+
+            Text(accountName(account))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(VocabbyTheme.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(account.email ?? "")
+
+            Spacer(minLength: 6)
+
+            if !isActive {
+                Button {
+                    switchTo(account)
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.blue)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(VocabbyTheme.blue.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .disabled(busy)
+                .help(L10n.t("freemodel.switchAccount", settings.appLanguage))
+            }
+            if !account.isBrowser {
+                Button {
+                    removeAccount(account)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VocabbyTheme.critical)
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .disabled(busy)
+            }
+        }
+        .padding(.vertical, 5)
+    }
+
+    private var addAccountRow: some View {
+        let lang = settings.appLanguage
+        return VStack(alignment: .leading, spacing: 6) {
+            Divider()
+                .overlay(VocabbyTheme.border)
+                .padding(.vertical, 2)
+            Text(L10n.t("freemodel.addHint", lang))
+                .font(.system(size: 10))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                SecureField(L10n.t("freemodel.cookiePlaceholder", lang), text: $addCookie)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                TextField(L10n.t("freemodel.labelPlaceholder", lang), text: $addLabel)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 90)
+                Button {
+                    addAccount()
+                } label: {
+                    if busy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(L10n.t("freemodel.addAccount", lang))
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                }
+                .controlSize(.small)
+                .disabled(busy || addCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    // MARK: Actions
+
+    private func reload() {
+        activeID = FreemodelAccountStore.activeID()
+        Task.detached(priority: .utility) {
+            let all = await FreemodelAccountStore.allAccounts(emailResolver: { header in
+                await FreemodelProvider.accountEmail(cookieHeader: header)
+            })
+            await MainActor.run {
+                accounts = all
+                activeID = FreemodelAccountStore.activeID()
+            }
+        }
+    }
+
+    private func switchTo(_ account: FreemodelAccount) {
+        FreemodelAccountStore.setActive(account.id)
+        activeID = account.id
+        errorText = nil
+    }
+
+    private func removeAccount(_ account: FreemodelAccount) {
+        do {
+            try FreemodelAccountStore.remove(account.id)
+            errorText = nil
+            reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func addAccount() {
+        let raw = addCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalized = FreemodelProvider.filteredCookieHeader(from: raw) else {
+            errorText = L10n.t("freemodel.cookieNeedsSession", settings.appLanguage)
+            return
+        }
+        busy = true
+        let label = addLabel
+        Task.detached(priority: .utility) {
+            // Email lookup doubles as soft validation; a rate-limited /me
+            // still stores the cookie, just unlabeled.
+            let email = await FreemodelProvider.accountEmail(cookieHeader: normalized)
+            await MainActor.run {
+                do {
+                    try FreemodelAccountStore.add(cookie: normalized, label: label, email: email)
+                    addCookie = ""
+                    addLabel = ""
+                    errorText = nil
+                    reload()
+                } catch {
+                    errorText = error.localizedDescription
+                }
+                busy = false
             }
         }
     }

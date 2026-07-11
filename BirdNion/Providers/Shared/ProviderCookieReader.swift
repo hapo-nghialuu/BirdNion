@@ -78,6 +78,67 @@ enum ProviderCookieReader {
         }
     }
 
+    /// One signed-in browser session for a domain: which browser and the full
+    /// cookie header from that browser's store.
+    struct BrowserSession {
+        /// Stable id (`Browser.rawValue`, e.g. "chrome").
+        let browserID: String
+        /// Human name ("Chrome", "Brave"…).
+        let browserName: String
+        let cookieHeader: String
+    }
+
+    /// EVERY browser whose store holds `requiredCookie` for `domain`, in scan
+    /// order — lets multi-account UIs surface each signed-in browser as its
+    /// own selectable session (two browsers logged in to two accounts).
+    static func allBrowserSessions(domain: String, requiredCookie: String) -> [BrowserSession] {
+        BrowserCookieSerialGate.lock.lock()
+        defer { BrowserCookieSerialGate.lock.unlock() }
+
+        let client = BrowserCookieClient()
+        let query = BrowserCookieQuery(domains: [domain])
+        var sessions: [BrowserSession] = []
+
+        func collect(_ browser: Browser) {
+            do {
+                let storeRecords = try client.records(matching: query, in: browser)
+                // Same detached-snapshot dance as extractFromBrowsers (see the
+                // memory-corruption note there).
+                for store in storeRecords {
+                    let pairs: [CookiePair] = store.records.map { rec in
+                        CookiePair(
+                            name: String(decoding: Array(rec.name.utf8), as: UTF8.self),
+                            value: String(decoding: Array(rec.value.utf8), as: UTF8.self))
+                    }
+                    guard !pairs.isEmpty, pairs.contains(where: { $0.name == requiredCookie }) else { continue }
+                    sessions.append(BrowserSession(
+                        browserID: browser.rawValue,
+                        browserName: browser.displayName,
+                        cookieHeader: buildCookieHeader(from: pairs)))
+                    return // one session per browser (first matching store)
+                }
+            } catch let error as BrowserCookieError {
+                recordCooldownIfNeeded(error, domain: domain)
+            } catch {
+                // browser not installed / store unreadable — skip
+            }
+        }
+
+        collect(.safari)
+        for browser in Browser.defaultImportOrder where browser != .safari {
+            collect(browser)
+        }
+        return sessions
+    }
+
+    /// Cookie header from ONE specific browser (by `Browser.rawValue`), gated
+    /// on `requiredCookie` — used when the user pinned a per-browser account.
+    static func cookieHeader(browserID: String, domain: String, requiredCookie: String) -> String? {
+        allBrowserSessions(domain: domain, requiredCookie: requiredCookie)
+            .first(where: { $0.browserID == browserID })?
+            .cookieHeader
+    }
+
     // MARK: - Browser iteration
 
     private static func extractFromBrowsers(domain: String, requiredCookie: String?) -> String? {
