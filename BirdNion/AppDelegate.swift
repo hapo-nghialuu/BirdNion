@@ -352,9 +352,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyCurrentFrame()
     }
 
-    /// Render the current frame on the status bar button. The bird frame is
-    /// image-only; a provider frame shows its quota percentages with the
-    /// provider's logo to their right.
+    /// Render the current frame on the status bar button.
+    ///
+    /// Visual contract: **`91%` then provider logo** (percent text left,
+    /// brand mark right). Bird frame is image-only (no title).
     private func applyCurrentFrame() {
         guard let button = statusItem?.button else { return }
         let frame = frames.indices.contains(frameIndex) ? frames[frameIndex] : .bird
@@ -364,13 +365,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = MenuBarIconRenderer.iconImage()
             button.title = ""
         case let .provider(id, _, percents, text):
-            // Percentages on the left, brand logo on the right. A trailing space
-            // keeps the last number off the logo; two spaces separate the
-            // two quota numbers so they read as distinct values.
+            // Percent on the left, brand logo on the right — never the
+            // provider display name in the title (that lives in the tooltip
+            // / popover). Trailing space keeps the last digit off the logo.
             button.imagePosition = .imageRight
             button.image = MenuBarIconRenderer.providerLogo(for: id)
             if let text {
-                // Display-mode override (Kiro). Empty string = hidden → logo only.
+                // Display-mode override (Kiro credits / Hapo $). Empty = logo only.
                 button.title = text.isEmpty ? "" : "\(text) "
             } else {
                 let numbers = MenuBarIconRenderer.percentTitle(for: percents)

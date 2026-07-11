@@ -5,8 +5,9 @@ import AppKit
 /// it needs.
 ///
 /// The default frame is the bird logo. When the user enables menu-bar
-/// percentages, provider quota frames are returned in provider order so the
-/// status item can rotate through them.
+/// percentages, provider quota frames rotate in sorted order: **active**
+/// providers first (any window with remaining under 100% / used over 0), then
+/// alphabetically by `displayName`.
 enum MenuBarIconRenderer {
     static let assetName = "MenuBarIcon"
 
@@ -44,7 +45,37 @@ enum MenuBarIconRenderer {
         from statuses: [ProviderStatus],
         visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
     ) -> [Frame] {
-        statuses.compactMap { menuBarFrame(from: $0, visibility: visibility) }
+        statuses
+            .compactMap { menuBarFrame(from: $0, visibility: visibility) }
+            .sorted(by: menuBarFrameSort)
+    }
+
+    /// Active frames sort before idle full-quota ones; ties break A→Z by name.
+    static func menuBarFrameSort(_ lhs: Frame, _ rhs: Frame) -> Bool {
+        let lActive = isActiveMenuBarFrame(lhs)
+        let rActive = isActiveMenuBarFrame(rhs)
+        if lActive != rActive { return lActive && !rActive }
+        return displayName(of: lhs)
+            .localizedCaseInsensitiveCompare(displayName(of: rhs)) == .orderedAscending
+    }
+
+    /// True when the provider is currently consuming quota (not sitting at
+    /// a full unused window set). Bird frames are never "active".
+    static func isActiveMenuBarFrame(_ frame: Frame) -> Bool {
+        switch frame {
+        case .bird:
+            return false
+        case let .provider(_, _, percents, _):
+            // remaining under 100 ⇔ used over 0 for the usual 0…100 clamp.
+            return percents.contains { $0 < 100 }
+        }
+    }
+
+    private static func displayName(of frame: Frame) -> String {
+        switch frame {
+        case .bird: return ""
+        case let .provider(_, name, _, _): return name
+        }
     }
 
     private static func menuBarFrame(

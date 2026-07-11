@@ -393,11 +393,54 @@ final class NewProviderTests: XCTestCase {
             windows: [QuotaWindow(label: "Week", usedPct: 24, remainingPct: 76)],
             lastUpdated: Date())
 
+        // Both active → alphabetical by displayName ("AI Hub" before "Codex"),
+        // independent of input order.
         XCTAssertEqual(
             MenuBarIconRenderer.frames(from: [codex, hapo], showPercent: true, visibility: { _ in true }),
             [
-                .provider(id: "codex", name: "Codex", percents: [93], text: nil),
                 .provider(id: "hapo", name: "AI Hub", percents: [76], text: nil),
+                .provider(id: "codex", name: "Codex", percents: [93], text: nil),
+            ])
+        XCTAssertEqual(
+            MenuBarIconRenderer.frames(from: [hapo, codex], showPercent: true, visibility: { _ in true }),
+            [
+                .provider(id: "hapo", name: "AI Hub", percents: [76], text: nil),
+                .provider(id: "codex", name: "Codex", percents: [93], text: nil),
+            ])
+    }
+
+    /// Active (used) providers rotate before idle full-quota ones; within each
+    /// group the order is A→Z by displayName.
+    func testMenuBarFramesPrioritizeActiveThenAlphabetical() {
+        let idleZ = ProviderStatus(
+            id: "zai", displayName: "Z.ai",
+            windows: [QuotaWindow(label: "Day", usedPct: 0, remainingPct: 100)],
+            lastUpdated: Date())
+        let activeM = ProviderStatus(
+            id: "minimax", displayName: "MiniMax",
+            windows: [QuotaWindow(label: "Day", usedPct: 45, remainingPct: 55)],
+            lastUpdated: Date())
+        let activeA = ProviderStatus(
+            id: "claude", displayName: "Claude",
+            windows: [QuotaWindow(label: "5h", usedPct: 10, remainingPct: 90)],
+            lastUpdated: Date())
+        let idleB = ProviderStatus(
+            id: "bedrock", displayName: "Bedrock",
+            windows: [QuotaWindow(label: "Day", usedPct: 0, remainingPct: 100)],
+            lastUpdated: Date())
+
+        XCTAssertEqual(
+            MenuBarIconRenderer.frames(
+                from: [idleZ, activeM, activeA, idleB],
+                showPercent: true,
+                visibility: { _ in true }),
+            [
+                // Active, A→Z
+                .provider(id: "claude", name: "Claude", percents: [90], text: nil),
+                .provider(id: "minimax", name: "MiniMax", percents: [55], text: nil),
+                // Idle, A→Z
+                .provider(id: "bedrock", name: "Bedrock", percents: [100], text: nil),
+                .provider(id: "zai", name: "Z.ai", percents: [100], text: nil),
             ])
     }
 

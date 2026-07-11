@@ -128,11 +128,11 @@ struct ProvidersPane: View {
 
     // MARK: - Sidebar
 
-    /// View order for the sidebar: enabled providers first (preserving the
-    /// user's custom order within each group), then disabled. Search text
-    /// narrows both groups by display name + id (case-insensitive). Matches
-    /// CodexBar's "enabled first" ordering so the user can spot which
-    /// providers are actually polling.
+    /// View order for the sidebar:
+    /// 1. **Enabled (active)** first — user custom order from `rows` / drag-reorder
+    /// 2. **Disabled** after — A→Z by display name so the long roster is scannable
+    ///
+    /// Search narrows both groups by display name + id (case-insensitive).
     private var visibleRows: [BirdNionConfigStore.Provider] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -141,10 +141,15 @@ struct ProvidersPane: View {
             return displayName(for: row).lowercased().contains(query)
                 || row.id.lowercased().contains(query)
         }
-        // Stable partition: enabled first, then disabled — each preserving
-        // the relative order in `rows` (so user drag-reorder survives sort).
+        // Active: preserve relative order in `rows` (drag-reorder writes that array).
         let active = filtered.filter { $0.enabled == true }
-        let inactive = filtered.filter { $0.enabled != true }
+        // Inactive: alphabetical so disabled roster is easy to find.
+        let inactive = filtered
+            .filter { $0.enabled != true }
+            .sorted {
+                displayName(for: $0)
+                    .localizedCaseInsensitiveCompare(displayName(for: $1)) == .orderedAscending
+            }
         return active + inactive
     }
 
