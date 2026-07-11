@@ -17,6 +17,11 @@ pub struct Settings {
     /// here since there is no UserDefaults on Linux.
     #[serde(default)]
     pub active_codex_account: Option<String>,
+    /// Active FreeModel account id ("browser" or a managed account UUID) —
+    /// Linux-only multi-account feature; cookies live in a separate
+    /// `freemodel-accounts.json` sibling file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_freemodel_account: Option<String>,
     /// Custom Claude Code backends (Settings → Claude Code → "TUỲ CHỈNH") —
     /// same schema and top-level key as macOS `BirdNionConfigStore`.
     #[serde(default, rename = "claudeCodeProfiles", skip_serializing_if = "Vec::is_empty")]
@@ -73,6 +78,12 @@ pub struct ProfileEnvRow {
 pub fn find_profile(id: &str) -> Option<ClaudeCodeProfile> {
     load().claude_code_profiles.into_iter().find(|p| p.id == id)
 }
+
+/// Process-wide lock for tests that mutate `BIRDNION_CONFIG`/env vars —
+/// every test module touching the config env MUST hold this one lock, or
+/// parallel `cargo test` runs clobber each other's temp dirs.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// One provider entry. All fields except `id` are optional in the file —
 /// mirrors the Swift `BirdNionConfigStore.Provider`.

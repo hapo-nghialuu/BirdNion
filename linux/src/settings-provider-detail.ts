@@ -17,6 +17,7 @@ import { trayVisibilityToggle, regionSelect, claudeSourceSelect } from "./settin
 import { claudeCodeSettingsSection } from "./claude-code-settings";
 import { copilotDeviceLoginRow } from "./settings-copilot-login";
 import { codexAccountsSection } from "./settings-codex-accounts";
+import { freemodelAccountsSection } from "./settings-freemodel-accounts";
 
 /** settings.json provider entry (shared schema with macOS). */
 export type ProviderCfg = {
@@ -681,6 +682,19 @@ export function codexAccountsCard(): HTMLElement {
   const card = el("div", "sw-card");
   const body = el("div", "sw-card-body");
   body.append(codexAccountsSection());
+  card.append(body);
+  group.append(card);
+  return group;
+}
+
+/** Standalone FreeModel accounts card — same shape as the Codex one:
+ * "browser" scan + managed pasted-cookie accounts with switch/remove/add. */
+export function freemodelAccountsCard(): HTMLElement {
+  const group = el("div", "sw-group");
+  group.append(el("div", "sw-section-header", t("fmAccountsLabel").toUpperCase()));
+  const card = el("div", "sw-card");
+  const body = el("div", "sw-card-body");
+  body.append(freemodelAccountsSection());
   card.append(body);
   group.append(card);
   return group;

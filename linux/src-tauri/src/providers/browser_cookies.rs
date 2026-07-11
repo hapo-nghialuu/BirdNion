@@ -86,6 +86,46 @@ fn auto_cookie_header(domains: &[&str], required_cookie: Option<&str>) -> Result
     }
 }
 
+/// Every browser (scan order) whose cookie set for `domains` contains
+/// `required_cookie`, as `(browser_id, header)` pairs — lets multi-account
+/// UIs surface "Chrome" and "Brave" sessions as separate accounts. Blocking.
+pub fn browsers_with_cookie(domains: &[&str], required_cookie: &str) -> Vec<(&'static str, String)> {
+    let domain_list: Vec<String> = domains.iter().map(|d| d.to_string()).collect();
+    let mut out = Vec::new();
+    for browser in BROWSER_ORDER {
+        let Ok(cookies) = read_browser(browser, domain_list.clone()) else { continue };
+        if cookies.is_empty() || !cookies.iter().any(|c| c.name == required_cookie) {
+            continue;
+        }
+        let header = cookies
+            .iter()
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect::<Vec<_>>()
+            .join("; ");
+        out.push((*browser, header));
+    }
+    out
+}
+
+/// Cookie header from ONE specific browser, gated on `required_cookie`.
+/// Blocking — see module docs.
+pub fn single_browser_cookie_header(
+    browser: &str,
+    domains: &[&str],
+    required_cookie: &str,
+) -> Result<String, String> {
+    let domain_list: Vec<String> = domains.iter().map(|d| d.to_string()).collect();
+    let cookies = read_browser(browser, domain_list)?;
+    if cookies.is_empty() || !cookies.iter().any(|c| c.name == required_cookie) {
+        return Err(format!("Không tìm thấy cookie đăng nhập trong {browser}"));
+    }
+    Ok(cookies
+        .iter()
+        .map(|c| format!("{}={}", c.name, c.value))
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
 fn read_browser(browser: &str, domains: Vec<String>) -> Result<Vec<rookie::enums::Cookie>, String> {
     let domains = Some(domains);
     let result = match browser {

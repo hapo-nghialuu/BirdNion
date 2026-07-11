@@ -382,6 +382,20 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     en: "Uses the global thresholds unless customized per window.",
   },
 
+  // FreeModel multi-account
+  fmAccountsLabel: { vi: "Tài khoản FreeModel", en: "FreeModel accounts" },
+  fmAccountBrowser: { vi: "Trình duyệt (tự động)", en: "Browser (auto)" },
+  fmAccountAdd: { vi: "Thêm tài khoản", en: "Add account" },
+  fmAccountCookiePlaceholder: {
+    vi: "Dán cookie (bm_session=… hoặc cả chuỗi Cookie)",
+    en: "Paste cookie (bm_session=… or the full Cookie string)",
+  },
+  fmAccountLabelPlaceholder: { vi: "Nhãn (tuỳ chọn)", en: "Label (optional)" },
+  fmAccountAddHint: {
+    vi: "Mỗi tài khoản là một cookie bm_session dán từ trình duyệt đã đăng nhập freemodel.dev (DevTools → Application → Cookies).",
+    en: "Each account is one bm_session cookie pasted from a browser signed in to freemodel.dev (DevTools → Application → Cookies).",
+  },
+
   // Claude Code pane (macOS ClaudeCodePane)
   ccxSelectProvider: {
     vi: "Chọn provider để cấu hình làm backend cho Claude Code",

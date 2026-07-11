@@ -29,14 +29,32 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let id = cfg.id.clone();
     let cfg_clone = cfg.clone();
 
-    let raw_header = match tauri::async_runtime::spawn_blocking(move || {
-        browser_cookies::cookie_header_required(&["freemodel.dev"], &cfg_clone, Some(SESSION_COOKIE))
-    })
-    .await
-    {
-        Ok(Ok(h)) => h,
-        Ok(Err(_)) => return ProviderStatus::failure(&id, &name, "Chưa đăng nhập FreeModel trên trình duyệt"),
-        Err(_) => return ProviderStatus::failure(&id, &name, "Lỗi nội bộ khi đọc cookie"),
+    // Multi-account resolution order: a managed account's stored cookie →
+    // a pinned `browser:<name>` entry's live scan of THAT browser → the
+    // default all-browser scan.
+    let raw_header = match crate::freemodel_accounts::active_cookie() {
+        Some(stored) => stored,
+        None => {
+            let pinned_browser = crate::freemodel_accounts::active_browser();
+            let scan = tauri::async_runtime::spawn_blocking(move || match pinned_browser {
+                Some(browser) => browser_cookies::single_browser_cookie_header(
+                    &browser,
+                    &["freemodel.dev"],
+                    SESSION_COOKIE,
+                ),
+                None => browser_cookies::cookie_header_required(
+                    &["freemodel.dev"],
+                    &cfg_clone,
+                    Some(SESSION_COOKIE),
+                ),
+            })
+            .await;
+            match scan {
+                Ok(Ok(h)) => h,
+                Ok(Err(_)) => return ProviderStatus::failure(&id, &name, "Chưa đăng nhập FreeModel trên trình duyệt"),
+                Err(_) => return ProviderStatus::failure(&id, &name, "Lỗi nội bộ khi đọc cookie"),
+            }
+        }
     };
 
     let Some(cookie_header) = filtered_cookie_header(&raw_header) else {
@@ -80,7 +98,9 @@ fn browser_get(client: &reqwest::Client, url: &str, cookie_header: &str) -> reqw
 }
 
 /// `/api/auth/me` → `{ "user": { "email": … } }` — 5s budget like macOS.
-async fn fetch_email(client: &reqwest::Client, cookie_header: &str) -> Option<String> {
+/// `pub(crate)`: the add-account command uses it to validate + label a
+/// pasted cookie.
+pub(crate) async fn fetch_email(client: &reqwest::Client, cookie_header: &str) -> Option<String> {
     let resp = browser_get(client, ME_URL, cookie_header)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -99,8 +119,9 @@ async fn fetch_email(client: &reqwest::Client, cookie_header: &str) -> Option<St
 
 /// Tolerates a full `"Cookie: ..."` line prefix (case-insensitive); a bare
 /// token (no `=`) wraps as `bm_session=<token>`; otherwise forwards ALL
-/// cookie pairs, gated on `bm_session` being present.
-fn filtered_cookie_header(raw: &str) -> Option<String> {
+/// cookie pairs, gated on `bm_session` being present. `pub(crate)` so the
+/// add-account command normalizes pasted cookies through the same rules.
+pub(crate) fn filtered_cookie_header(raw: &str) -> Option<String> {
     let stripped = strip_cookie_prefix(raw.trim());
     if stripped.is_empty() {
         return None;

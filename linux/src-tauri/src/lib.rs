@@ -8,6 +8,7 @@ mod codex_accounts;
 mod codex_scanner;
 mod config;
 mod cost_history;
+mod freemodel_accounts;
 mod grok_scanner;
 mod providers;
 mod storage;
@@ -356,6 +357,97 @@ fn codex_account_remove(id: String) -> Result<CodexAccountsState, String> {
     Ok(codex_accounts_list())
 }
 
+/// FreeModel multi-account state — implicit "browser" entry (auto scan) +
+/// one entry per signed-in browser + managed pasted-cookie accounts, plus
+/// the active id.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FreemodelAccountsState {
+    accounts: Vec<freemodel_accounts::FreemodelAccount>,
+    active_id: String,
+}
+
+/// Per-browser email cache — a browser's signed-in FreeModel identity only
+/// changes when the user re-logs in there; don't hit `/api/auth/me` on
+/// every settings render.
+static FM_BROWSER_EMAILS: LazyLock<Mutex<HashMap<String, Option<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Detects every browser signed in to freemodel.dev (has `bm_session`) and
+/// resolves each one's account email, so two browsers logged in to two
+/// different FreeModel accounts appear as two selectable entries.
+async fn freemodel_detected_browsers() -> Vec<freemodel_accounts::FreemodelAccount> {
+    let sessions = tauri::async_runtime::spawn_blocking(|| {
+        providers::browser_cookies::browsers_with_cookie(&["freemodel.dev"], "bm_session")
+    })
+    .await
+    .unwrap_or_default();
+
+    let client = providers::shared_client();
+    let mut out = Vec::new();
+    for (browser, header) in sessions {
+        let cached = FM_BROWSER_EMAILS.lock().unwrap().get(browser).cloned();
+        let email = match cached {
+            Some(email) => email,
+            None => {
+                let email = providers::freemodel::fetch_email(&client, &header).await;
+                FM_BROWSER_EMAILS.lock().unwrap().insert(browser.to_string(), email.clone());
+                email
+            }
+        };
+        out.push(freemodel_accounts::FreemodelAccount {
+            id: format!("{}{browser}", freemodel_accounts::BROWSER_PREFIX),
+            email,
+            label: Some(freemodel_accounts::browser_label(browser)),
+            is_browser: true,
+        });
+    }
+    out
+}
+
+async fn freemodel_state() -> FreemodelAccountsState {
+    let mut accounts = freemodel_accounts::all_accounts();
+    // Splice per-browser sessions right after the "auto" entry (index 0).
+    let detected = freemodel_detected_browsers().await;
+    accounts.splice(1..1, detected);
+    FreemodelAccountsState { accounts, active_id: freemodel_accounts::active_id() }
+}
+
+#[tauri::command]
+async fn freemodel_accounts_list() -> FreemodelAccountsState {
+    freemodel_state().await
+}
+
+/// Validates a pasted FreeModel cookie (must carry `bm_session`; a bare token
+/// is wrapped), resolves the account email best-effort, and stores it as a
+/// new managed account.
+#[tauri::command]
+async fn freemodel_account_add(cookie: String, label: Option<String>) -> Result<FreemodelAccountsState, String> {
+    let Some(normalized) = providers::freemodel::filtered_cookie_header(&cookie) else {
+        return Err("Cookie phải chứa bm_session".to_string());
+    };
+    // Email lookup doubles as a soft validation — a dead cookie still stores
+    // (freemodel may rate-limit /me), it just goes in unlabeled.
+    let client = providers::shared_client();
+    let email = providers::freemodel::fetch_email(&client, &normalized).await;
+    freemodel_accounts::add(&normalized, label.as_deref(), email.as_deref())?;
+    Ok(freemodel_state().await)
+}
+
+/// Switches the active FreeModel account the provider fetch reads from.
+#[tauri::command]
+async fn freemodel_account_switch(id: String) -> Result<FreemodelAccountsState, String> {
+    freemodel_accounts::set_active(&id)?;
+    Ok(freemodel_state().await)
+}
+
+/// Removes a managed FreeModel account (no-op for browser entries).
+#[tauri::command]
+async fn freemodel_account_remove(id: String) -> Result<FreemodelAccountsState, String> {
+    freemodel_accounts::remove(&id)?;
+    Ok(freemodel_state().await)
+}
+
 /// Starts a GitHub Device Flow login for Copilot: requests a user code the
 /// user enters at the returned verification URL.
 #[tauri::command]
@@ -563,6 +655,10 @@ pub fn run() {
             codex_account_save_current,
             codex_account_switch,
             codex_account_remove,
+            freemodel_accounts_list,
+            freemodel_account_add,
+            freemodel_account_switch,
+            freemodel_account_remove,
             copilot_login_start,
             copilot_login_poll,
             get_settings,

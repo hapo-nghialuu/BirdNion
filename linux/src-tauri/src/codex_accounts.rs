@@ -238,8 +238,9 @@ pub fn remove(id: &str) -> Result<(), String> {
 
 /// Minimal UUID v4 generator (no extra crate dependency) — format matches
 /// `UUID().uuidString` closely enough for a directory/account name; only
-/// uniqueness matters here, not RFC-strict compliance.
-fn uuid_v4() -> String {
+/// uniqueness matters here, not RFC-strict compliance. Shared with the
+/// freemodel account store.
+pub(crate) fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
     let pid = std::process::id() as u128;
@@ -265,11 +266,10 @@ fn uuid_v4() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    // Serializes tests that touch process-wide env vars / BIRDNION_CONFIG so
-    // parallel `cargo test` runs don't clobber each other's temp dirs.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Shared process-wide lock (config.rs) — freemodel_accounts tests touch
+    // the same BIRDNION_CONFIG env var.
+    use crate::config::TEST_ENV_LOCK as ENV_LOCK;
 
     fn temp_config_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("birdnion-codex-accounts-test-{tag}-{}", std::process::id()));

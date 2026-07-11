@@ -37,20 +37,9 @@ body {
   background: var(--background);
   color: var(--primary);
   overflow: hidden;
-  /* Hug content; window resizes via fitMainWindowToContent(). */
+  /* Hug content — window resizes per tab (no internal scroll by default). */
   height: auto;
   min-height: 0;
-}
-
-/* Only when content exceeds screen cap do we allow internal scroll. */
-html.popover-capped,
-html.popover-capped body {
-  overflow: hidden;
-  height: 100%;
-}
-
-html.popover-capped body {
-  overflow-y: auto;
 }
 
 .container {
@@ -59,7 +48,7 @@ html.popover-capped body {
   display: flex;
   flex-direction: column;
   gap: 7px; /* matches macOS VStack(spacing: 7) between header / tabs / body */
-  /* Dynamic height per tab — do NOT force 100vh (that left empty scroll space). */
+  /* Dynamic height per tab — do NOT force 100vh (creates empty scroll chrome). */
   min-height: 0;
   height: auto;
   width: 420px;
@@ -67,11 +56,39 @@ html.popover-capped body {
   box-sizing: border-box;
 }
 
+.app-header,
+.tabs,
+.popover-footer {
+  flex-shrink: 0;
+}
+
 .app-body {
   flex: 0 1 auto;
   min-height: 0;
+  /* No scrollbar — the Tauri window grows/shrinks to fit each tab. */
   overflow: visible;
   margin: 0;
+}
+
+/*
+ * Extremely rare: content taller than ~screen. Only then allow body scroll
+ * so the window never exceeds the display. Normal tabs never hit this.
+ */
+html.popover-capped,
+html.popover-capped body {
+  height: 100%;
+  overflow: hidden;
+}
+
+html.popover-capped #app.container {
+  height: 100%;
+}
+
+html.popover-capped .app-body {
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .loading, .empty {
@@ -1297,11 +1314,15 @@ body.settings-body-root {
   color: #0057b8; /* accent blue */
 }
 
+/* Match macOS SettingsTabButton Image(systemName:) @ 20pt regular */
 .sw-tab-icon {
   width: 20px;
   height: 20px;
   display: block;
   flex-shrink: 0;
+  overflow: visible;
+  /* currentColor inherits tab secondary / accent blue when selected */
+  color: inherit;
 }
 
 .sw-tab-label {
@@ -2005,6 +2026,15 @@ body.settings-body-root {
 .pp-accounts-status { font-size: 10px; color: #d70015; padding: 0 14px 6px; }
 .pp-accounts-status:empty { display: none; }
 
+/* FreeModel add-account form (cookie + label + button) */
+.pp-account-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.pp-account-add .settings-input { flex: 1; min-width: 0; }
+.pp-account-add .sw-pill-btn { flex-shrink: 0; }
+
 .pp-setup-inner {
   padding: 4px 6px 8px;
 }
@@ -2372,3 +2402,92 @@ body.settings-body-root {
 .ccp-empty-svg { width: 24px; height: 24px; }
 .ccp-empty-title { font-size: 15px; font-weight: 600; }
 .ccp-empty-body { font-size: 12px; color: #59616d; max-width: 380px; }
+
+
+/* --- FreeModel accounts popover card (macOS CodexAccountsPopoverSection) --- */
+
+.fm-pop-card { padding: 0; overflow: hidden; }
+
+.fm-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.fm-pop-head:hover { background: #e7eaf0; }
+
+.fm-pop-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: rgba(0, 87, 184, 0.10);
+  color: #0057b8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.fm-pop-icon-svg { width: 15px; height: 15px; }
+
+.fm-pop-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.fm-pop-title { font-size: 12px; font-weight: 600; }
+.fm-pop-active {
+  font-size: 11px;
+  color: #59616d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-pop-count {
+  font-size: 11px;
+  font-weight: 600;
+  background: #eef0f4;
+  border-radius: 999px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}
+.fm-pop-chevron { font-size: 10px; color: #59616d; flex-shrink: 0; }
+
+.fm-pop-list { border-top: 1px solid rgba(215, 220, 226, 0.72); }
+
+.fm-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.fm-pop-row + .fm-pop-row { border-top: 1px solid rgba(215, 220, 226, 0.72); }
+
+.fm-pop-radio {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid #9aa3ad;
+  flex-shrink: 0;
+  position: relative;
+}
+.fm-pop-radio.on { border-color: #0057b8; }
+.fm-pop-radio.on::after {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: #0057b8;
+}
+
+.fm-pop-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-pop-use { flex-shrink: 0; }

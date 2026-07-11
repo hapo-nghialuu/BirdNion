@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { combine, UsageReport } from "./usage";
 import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
 import { providerCard, claudeCodeQuickApplyCard, loadingSkeleton, ProviderStatus } from "./provider-tab";
+import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
@@ -12,7 +13,7 @@ import {
   isShowTrayPercentEnabled,
 } from "./settings-about";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { LogicalSize } from "@tauri-apps/api/dpi";
+import { LogicalSize, PhysicalSize } from "@tauri-apps/api/dpi";
 import { logoMark, logoUrl } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
@@ -22,6 +23,8 @@ const POPOVER_WIDTH = 420;
 /** Cap so a huge All-tab never overflows the screen. */
 const POPOVER_MAX_HEIGHT = 900;
 const POPOVER_MIN_HEIGHT = 220;
+/** Extra logical px so the last footer row ("Thoát") is never clipped. */
+const FIT_SAFETY_PX = 18;
 
 const TAB_KEY = "birdnion.selectedTab";
 /** How often the tick loop runs; each provider is only re-fetched once its
@@ -264,34 +267,105 @@ function scanningHint(names: ScanSource[]): HTMLElement {
 }
 
 /**
+ * Natural content height of the popover chrome + body + footer.
+ * Sums sections so we don't under-count flex/gap/padding edge cases that
+ * leave "Thoát BirdNion" half-clipped.
+ */
+function measurePopoverContentHeight(app: HTMLElement): number {
+  app.style.height = "auto";
+  void app.offsetHeight;
+
+  const header = app.querySelector(".app-header") as HTMLElement | null;
+  const tabs = app.querySelector(".tabs") as HTMLElement | null;
+  const body = app.querySelector(".app-body") as HTMLElement | null;
+  const footer = app.querySelector(".popover-footer") as HTMLElement | null;
+
+  // .container padding 8 top + 10 bottom; three 7px gaps between 4 sections.
+  const padY = 8 + 10;
+  const gaps = 7 * 3;
+  let sum = padY + gaps;
+  for (const el of [header, tabs, body, footer]) {
+    if (!el) continue;
+    // scrollHeight catches overflow children; rect is laid-out size.
+    sum += Math.max(el.scrollHeight, el.getBoundingClientRect().height);
+  }
+
+  const whole = Math.max(app.scrollHeight, app.getBoundingClientRect().height);
+  return Math.max(sum, whole);
+}
+
+/**
  * Resize the main popover to hug its content (macOS DropdownPanel fittingSize).
- * No page scroll: window height follows the active tab.
+ *
+ * No internal scrollbar on normal tabs. `setSize` is the **outer** window
+ * (includes title-bar chrome), so we add outer−inner and then verify the
+ * footer is fully inside `window.innerHeight`.
  */
 async function fitMainWindowToContent() {
   if (isSettingsWindow()) return;
-  const app = document.querySelector("#app");
+  const app = document.querySelector("#app") as HTMLElement | null;
   if (!app) return;
-  // Include padding from .container
-  const rect = app.getBoundingClientRect();
-  let height = Math.ceil(rect.height);
-  // Safety: if layout not ready yet, skip this frame
-  if (height < 80) return;
+
+  document.documentElement.classList.remove("popover-capped");
+  document.body.classList.remove("popover-capped");
+
+  const natural = measurePopoverContentHeight(app);
+  if (natural < 80) return;
+
+  const contentH = Math.ceil(natural + FIT_SAFETY_PX);
+  const win = getCurrentWindow();
+
+  // Outer − inner = title bar / borders (logical px). setSize uses outer size.
+  let chromeLogical = 0;
+  let scale = 1;
+  try {
+    scale = await win.scaleFactor();
+    const outer = await win.outerSize();
+    const inner = await win.innerSize();
+    if (outer.height > 0 && inner.height > 0 && outer.height >= inner.height) {
+      chromeLogical = (outer.height - inner.height) / scale;
+    }
+  } catch {
+    // mock / first paint — assume a typical macOS titlebar if decorated.
+    chromeLogical = 28;
+  }
 
   const screenCap = typeof window.screen?.availHeight === "number"
-    ? Math.floor(window.screen.availHeight * 0.92)
+    ? Math.floor(window.screen.availHeight * 0.95)
     : POPOVER_MAX_HEIGHT;
-  const maxH = Math.min(POPOVER_MAX_HEIGHT, screenCap);
-  height = Math.max(POPOVER_MIN_HEIGHT, Math.min(maxH, height));
-
-  // If content still taller than cap, allow internal scroll as last resort.
-  document.documentElement.classList.toggle("popover-capped", rect.height > maxH + 2);
-  document.body.classList.toggle("popover-capped", rect.height > maxH + 2);
+  const maxOuter = Math.min(POPOVER_MAX_HEIGHT + chromeLogical, screenCap);
+  let outerH = Math.ceil(contentH + chromeLogical);
+  outerH = Math.max(POPOVER_MIN_HEIGHT + chromeLogical, Math.min(maxOuter, outerH));
 
   try {
-    await getCurrentWindow().setSize(new LogicalSize(POPOVER_WIDTH, height));
+    await win.setSize(new LogicalSize(POPOVER_WIDTH, outerH));
   } catch {
-    // Browser/mock — ignore
+    // Browser/mock
   }
+
+  // Second / third pass: grow until footer is fully inside the inner viewport.
+  // (Title-bar chrome can differ after the first resize on retina.)
+  for (let pass = 0; pass < 3; pass++) {
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const footer = app.querySelector(".popover-footer") as HTMLElement | null;
+    if (!footer) break;
+    const clip = footer.getBoundingClientRect().bottom - window.innerHeight;
+    if (clip <= 0.5) break;
+    try {
+      scale = await win.scaleFactor();
+      const outer = await win.outerSize();
+      const growPx = Math.ceil(clip * scale) + Math.ceil(6 * scale);
+      await win.setSize(new PhysicalSize(outer.width, outer.height + growPx));
+    } catch {
+      break;
+    }
+  }
+
+  app.style.height = "";
+  // Scroll only if content truly exceeds the screen cap (rare).
+  const capped = contentH + chromeLogical > maxOuter;
+  document.documentElement.classList.toggle("popover-capped", capped);
+  document.body.classList.toggle("popover-capped", capped);
 }
 
 function scheduleFitWindow() {
@@ -358,6 +432,14 @@ function render() {
           else if (card) body.append(card);
           scheduleFitWindow();
         });
+    }
+    // FreeModel: quick account switcher (browser sessions + pasted cookies)
+    // — popover parity with macOS CodexAccountsPopoverSection.
+    if (state.tab === "freemodel") {
+      body.append(freemodelAccountsPopoverCard(
+        () => scheduleFitWindow(),
+        () => { void refetchProvider("freemodel"); },
+      ));
     }
     // Claude/Codex/Grok tabs also show their own local 30-day cost chart,
     // matching the macOS per-provider chart cards.
@@ -815,6 +897,19 @@ async function load() {
     for (const s of state.statuses) delete s.pending;
     render();
   }
+}
+
+/** Re-fetches ONE provider immediately (e.g. after an account switch) and
+ * merges the fresh status over the cached state. */
+async function refetchProvider(id: string) {
+  if (isSettingsWindow()) return;
+  const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] }).catch(() => []);
+  if (fresh.length === 0) return;
+  lastFetched.set(id, Date.now());
+  state.statuses = mergeStatuses(state.statuses, fresh);
+  checkQuotaWarnings(fresh);
+  await updateTrayTooltip(state.statuses, await fetchTrayHidden());
+  render();
 }
 
 /** Tick: only re-fetch providers whose own effective interval elapsed,
