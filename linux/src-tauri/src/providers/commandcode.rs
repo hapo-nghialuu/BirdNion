@@ -142,6 +142,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
             remaining_pct: 100 - used_pct,
             subtitle: Some(format!("{p_name} · ${monthly:.2} còn lại", p_name = p.display_name)),
             resets_at: None,
+            window_seconds: None,
         });
     } else {
         windows.push(QuotaWindow {
@@ -150,6 +151,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
             remaining_pct: 100,
             subtitle: Some(format!("${monthly:.2} còn lại")),
             resets_at: None,
+            window_seconds: None,
         });
     }
 
@@ -160,6 +162,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
             remaining_pct: 100,
             subtitle: Some(format!("${purchased:.2}")),
             resets_at: None,
+            window_seconds: None,
         });
     }
 
@@ -170,6 +173,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
             remaining_pct: 100,
             subtitle: Some(format!("${premium:.2}")),
             resets_at: None,
+            window_seconds: None,
         });
     }
 

@@ -79,6 +79,7 @@ pub fn parse_balance(id: &str, name: &str, account_label: &str, body: &Value) ->
         remaining_pct: if low_balance { 0 } else { 100 },
         subtitle: Some(subtitle),
         resets_at: None,
+        window_seconds: None,
     };
     ProviderStatus {
         id: id.to_string(),

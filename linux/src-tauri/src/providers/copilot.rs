@@ -185,7 +185,7 @@ fn window(label: &str, snap: Option<&Snap>, reset: Option<i64>) -> Option<QuotaW
     };
 
     let used = (100.0 - percent_remaining).round().clamp(0.0, 100.0) as i32;
-    Some(QuotaWindow { label: label.to_string(), used_pct: used, remaining_pct: 100 - used, subtitle: None, resets_at: reset })
+    Some(QuotaWindow { label: label.to_string(), used_pct: used, remaining_pct: 100 - used, subtitle: None, resets_at: reset, window_seconds: None })
 }
 
 fn parse_reset(value: Option<&str>) -> Option<i64> {
@@ -376,6 +376,7 @@ fn budget_windows(budgets: &[BudgetEntry]) -> Vec<QuotaWindow> {
                 remaining_pct: 100 - used,
                 subtitle: Some(format!("${:.2} / ${:.2}", b.current_amount, b.budget_amount)),
                 resets_at: None,
+                window_seconds: None,
             })
         })
         .collect()

@@ -20,12 +20,19 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{browser_cookies, claude_admin, display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{
+    browser_cookies, claude_admin, cli_version_blocking, display_name, fetch_service_status,
+    ProviderStatus, QuotaWindow,
+};
 
 const REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const DEFAULT_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+/// statuspage probe — macOS `ClaudeProvider.fetchServiceStatus` parity.
+const STATUS_URL: &str = "https://status.anthropic.com/api/v2/summary.json";
+
+static CLI_VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq)]
 struct Credentials {
@@ -206,11 +213,24 @@ async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
     if creds.access_token.is_empty() {
         return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Claude — đăng nhập bằng Claude Code");
     }
-    let body = match fetch_usage(&creds.access_token).await {
+    // Side-channel info alongside usage (macOS parity): CLI version
+    // (memoized) + statuspage probe — both best-effort, never fail the fetch.
+    let (body, version, service) = futures::join!(
+        fetch_usage(&creds.access_token),
+        tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "claude")),
+        fetch_service_status(STATUS_URL),
+    );
+    let body = match body {
         Ok(b) => b,
         Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
     };
-    build_status(&cfg.id, name, &body, creds.subscription_type.as_deref())
+    let mut status = build_status(&cfg.id, name, &body, creds.subscription_type.as_deref());
+    status.account_label = cfg.account_label.clone();
+    status.version = version.unwrap_or(None);
+    status.service_status = service.as_ref().map(|(d, _)| d.clone());
+    status.service_status_level = service.map(|(_, i)| i);
+    status.source_label = Some("OAuth".to_string());
+    status
 }
 
 /// Admin API "source" — maps the 30-day org cost snapshot onto a single
@@ -226,9 +246,11 @@ async fn fetch_admin_api(cfg: &config::Provider, name: &str) -> ProviderStatus {
                 remaining_pct: 100,
                 subtitle: Some(format!("${:.2}", snap.last30_days.cost_usd)),
                 resets_at: None,
+                window_seconds: None,
             }],
             last_updated: chrono::Utc::now().timestamp(),
             account_label: Some("Claude Admin API".to_string()),
+            source_label: Some("Admin API".to_string()),
             ..Default::default()
         },
         None => ProviderStatus::failure(
@@ -276,7 +298,10 @@ async fn fetch_web(cfg: &config::Provider, name: &str) -> ProviderStatus {
             Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
         };
 
-    build_status(&cfg.id, name, &usage_body, None)
+    let mut status = build_status(&cfg.id, name, &usage_body, None);
+    status.account_label = cfg.account_label.clone();
+    status.source_label = Some("Web".to_string());
+    status
 }
 
 async fn fetch_web_json(client: &reqwest::Client, url: &str, cookie: &str) -> Result<Value, String> {
@@ -351,9 +376,19 @@ fn parse_window(v: Option<&Value>) -> Option<RateWindow> {
     Some(RateWindow { used_pct, resets_at })
 }
 
-fn to_quota_window(w: RateWindow, label: &str) -> QuotaWindow {
+const FIVE_HOURS_SECS: i64 = 5 * 3600;
+const SEVEN_DAYS_SECS: i64 = 7 * 24 * 3600;
+
+fn to_quota_window(w: RateWindow, label: &str, window_seconds: Option<i64>) -> QuotaWindow {
     let used = w.used_pct.round().clamp(0.0, 100.0) as i32;
-    QuotaWindow { label: label.to_string(), used_pct: used, remaining_pct: 100 - used, subtitle: None, resets_at: w.resets_at }
+    QuotaWindow {
+        label: label.to_string(),
+        used_pct: used,
+        remaining_pct: 100 - used,
+        subtitle: None,
+        resets_at: w.resets_at,
+        window_seconds,
+    }
 }
 
 /// Pure OAuth usage payload → windows mapping (unit-tested). Mirrors
@@ -373,19 +408,19 @@ fn build_status(id: &str, name: &str, body: &Value, subscription_type: Option<&s
     let has_primary = primary.is_some();
 
     if let Some(w) = primary {
-        windows.push(to_quota_window(w, "5 giờ"));
+        windows.push(to_quota_window(w, "5 giờ", Some(FIVE_HOURS_SECS)));
     }
     if let Some(w) = seven_day {
-        windows.push(to_quota_window(w, "Tuần"));
+        windows.push(to_quota_window(w, "Tuần", Some(SEVEN_DAYS_SECS)));
     }
     if let Some(w) = seven_day_opus {
-        windows.push(to_quota_window(w, "Opus"));
+        windows.push(to_quota_window(w, "Opus", Some(SEVEN_DAYS_SECS)));
     }
     if let Some(w) = seven_day_sonnet {
-        windows.push(to_quota_window(w, "Sonnet"));
+        windows.push(to_quota_window(w, "Sonnet", Some(SEVEN_DAYS_SECS)));
     }
     if let Some(w) = parse_window(body.get("seven_day_routines")) {
-        windows.push(to_quota_window(w, "Daily Routines"));
+        windows.push(to_quota_window(w, "Daily Routines", Some(SEVEN_DAYS_SECS)));
     }
 
     let mut credits_remaining = None;
@@ -396,13 +431,14 @@ fn build_status(id: &str, name: &str, body: &Value, subscription_type: Option<&s
         }
     }
 
-    let account_label = plan_label(subscription_type);
+    // Plan rides in `plan_name` (settings "Tên gói" row + popover meta) —
+    // `account_label` stays free for the config override, macOS parity.
     ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        account_label: Some(account_label),
+        plan_name: subscription_type.map(|s| plan_label(Some(s))),
         credits_remaining,
         ..Default::default()
     }
@@ -432,6 +468,7 @@ fn spend_limit_window(extra: Option<&Value>) -> Option<(QuotaWindow, Option<f64>
             remaining_pct: 100 - pct.round() as i32,
             subtitle: Some(format!("${used:.2} / ${limit:.2}")),
             resets_at: None,
+            window_seconds: None,
         },
         Some(remaining),
     ))
@@ -505,7 +542,9 @@ mod tests {
         assert_eq!(s.windows[0].label, "5 giờ");
         assert_eq!(s.windows[0].used_pct, 42);
         assert_eq!(s.windows[1].label, "Tuần");
-        assert_eq!(s.account_label.as_deref(), Some("Claude Max"));
+        assert_eq!(s.plan_name.as_deref(), Some("Claude Max"));
+        assert_eq!(s.windows[0].window_seconds, Some(FIVE_HOURS_SECS));
+        assert_eq!(s.windows[1].window_seconds, Some(SEVEN_DAYS_SECS));
     }
 
     #[test]
@@ -537,7 +576,8 @@ mod tests {
     fn empty_payload_yields_no_windows() {
         let s = build_status("claude", "Claude", &json!({}), None);
         assert!(s.windows.is_empty());
-        assert_eq!(s.account_label.as_deref(), Some("Claude account"));
+        // No subscription type → no plan row (config label stays separate).
+        assert!(s.plan_name.is_none());
     }
 
     #[test]

@@ -11,26 +11,50 @@
 //! Endpoint values are supplied outside source control via env vars
 //! (`HAPO_BASE_URL`, `HAPO_ME_URL`, `HAPO_AUTH_TEMPLATE`) or `cfg.base_url`
 //! as a config-file override — the source tree carries no real hostnames.
+//! Release builds bake the values at COMPILE time from the build shell's
+//! environment (`source Scripts/dev-env.sh` before `cargo build`), mirroring
+//! how macOS injects them into Info.plist — still nothing in source.
 
 use serde_json::Value;
 
 use crate::config;
 use crate::providers::{shared_client, ProviderStatus, QuotaWindow};
 
+/// Compile-time baked endpoints (from the gitignored dev-env.sh at build).
+const BAKED_BASE_URL: Option<&str> = option_env!("HAPO_BASE_URL");
+const BAKED_ME_URL: Option<&str> = option_env!("HAPO_ME_URL");
+const BAKED_AUTH_TEMPLATE: Option<&str> = option_env!("HAPO_AUTH_TEMPLATE");
+
+fn clean_value(s: &str) -> Option<String> {
+    let s = s.trim();
+    // "$(" guards against un-expanded Xcode-style placeholders leaking in.
+    (!s.is_empty() && !s.starts_with("$(")).then(|| s.to_string())
+}
+
 fn env_or(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && !s.starts_with("$("))
+    std::env::var(key).ok().as_deref().and_then(clean_value)
+}
+
+/// Base-URL resolution chain shared with the Claude Code backend mapping:
+/// settings.json override → runtime env → compile-time baked value.
+pub fn resolved_base_url(cfg: &config::Provider) -> Option<String> {
+    cfg.base_url
+        .as_deref()
+        .and_then(clean_value)
+        .or_else(|| env_or("HAPO_BASE_URL"))
+        .or_else(|| BAKED_BASE_URL.and_then(clean_value))
 }
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = cfg.display_name.clone().unwrap_or_else(|| "AIHub".to_string());
 
-    // Base URL: config-file override wins, then HAPO_BASE_URL env.
-    let base_url = cfg.base_url.clone().filter(|s| !s.trim().is_empty()).or_else(|| env_or("HAPO_BASE_URL"));
-    let Some(base_url) = base_url else {
+    let Some(base_url) = resolved_base_url(cfg) else {
         return ProviderStatus::failure(&cfg.id, &name, "Hapo endpoint chưa được cấu hình trong bản build");
     };
-    let me_url = env_or("HAPO_ME_URL");
-    let auth_template = env_or("HAPO_AUTH_TEMPLATE").unwrap_or_else(|| "Bearer {token}".to_string());
+    let me_url = env_or("HAPO_ME_URL").or_else(|| BAKED_ME_URL.and_then(clean_value));
+    let auth_template = env_or("HAPO_AUTH_TEMPLATE")
+        .or_else(|| BAKED_AUTH_TEMPLATE.and_then(clean_value))
+        .unwrap_or_else(|| "Bearer {token}".to_string());
 
     let Some(token) = config::api_key(cfg) else {
         return ProviderStatus::failure(&cfg.id, &name, "Chưa cấu hình token");
@@ -116,6 +140,7 @@ pub fn parse_budget(id: &str, name: &str, body: &Value) -> ProviderStatus {
             remaining_pct,
             subtitle: Some(format!("${remaining_usd:.2} / ${weekly_usd:.2}")),
             resets_at,
+            window_seconds: None,
         }],
         last_updated: chrono::Utc::now().timestamp(),
         ..Default::default()

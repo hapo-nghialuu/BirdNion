@@ -397,6 +397,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
             remaining_pct: 100 - rolling_used,
             subtitle: Some(format!("{rolling_used}%")),
             resets_at: Some(now + snap.rolling_reset_sec),
+            window_seconds: None,
         },
         QuotaWindow {
             label: "Tuần".into(),
@@ -404,6 +405,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
             remaining_pct: 100 - weekly_used,
             subtitle: Some(format!("{weekly_used}%")),
             resets_at: Some(now + snap.weekly_reset_sec),
+            window_seconds: None,
         },
     ];
 
@@ -414,6 +416,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
             remaining_pct: 100,
             subtitle: None,
             resets_at: Some(renew),
+            window_seconds: None,
         });
     }
 

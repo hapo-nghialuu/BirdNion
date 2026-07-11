@@ -79,6 +79,7 @@ pub fn parse_credits(
             remaining_pct: 100 - used_pct,
             subtitle: Some(format!("Còn ${remaining:.2} / ${total:.2}")),
             resets_at: None,
+            window_seconds: None,
         }],
         last_updated: chrono::Utc::now().timestamp(),
         account_label: Some(account_label.to_string()),
@@ -118,6 +119,7 @@ pub fn parse_key_window(body: &Value) -> Option<QuotaWindow> {
         remaining_pct: 100 - used_pct,
         subtitle: Some(format!("${usage:.2} / ${limit:.2}")),
         resets_at: None,
+        window_seconds: None,
     })
 }
 

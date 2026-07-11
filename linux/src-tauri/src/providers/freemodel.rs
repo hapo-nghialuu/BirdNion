@@ -11,6 +11,18 @@ use crate::providers::browser_cookies;
 use crate::providers::{display_name, ProviderStatus, QuotaWindow};
 
 const USAGE_URL: &str = "https://freemodel.dev/api/usage";
+const ME_URL: &str = "https://freemodel.dev/api/auth/me";
+/// Akamai bot-manager session cookie the budgets are gated on. Passed as the
+/// REQUIRED cookie so the browser scan skips browsers that only hold stale
+/// analytics/Stripe cookies and keeps looking for the signed-in one (macOS
+/// `ProviderCookieReader.resolvedCookieHeader(requiredCookie:)` parity).
+const SESSION_COOKIE: &str = "bm_session";
+/// freemodel.dev sits behind Akamai — send browser-like headers or the
+/// session cookie is rejected (macOS sends the same set).
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+    (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
+const ORIGIN: &str = "https://freemodel.dev";
+const REFERER: &str = "https://freemodel.dev/dashboard/usage";
 
 pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
@@ -18,12 +30,12 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let cfg_clone = cfg.clone();
 
     let raw_header = match tauri::async_runtime::spawn_blocking(move || {
-        browser_cookies::cookie_header(&["freemodel.dev"], &cfg_clone)
+        browser_cookies::cookie_header_required(&["freemodel.dev"], &cfg_clone, Some(SESSION_COOKIE))
     })
     .await
     {
         Ok(Ok(h)) => h,
-        Ok(Err(e)) => return ProviderStatus::failure(&id, &name, e),
+        Ok(Err(_)) => return ProviderStatus::failure(&id, &name, "Chưa đăng nhập FreeModel trên trình duyệt"),
         Err(_) => return ProviderStatus::failure(&id, &name, "Lỗi nội bộ khi đọc cookie"),
     };
 
@@ -32,7 +44,7 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     };
 
     let client = crate::providers::shared_client();
-    let resp = client.get(USAGE_URL).header("Cookie", &cookie_header).send().await;
+    let resp = browser_get(&client, USAGE_URL, &cookie_header).send().await;
 
     let body = match resp {
         Ok(r) if r.status().is_success() => match r.text().await {
@@ -43,10 +55,46 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
         Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
     };
 
-    match parse_status(&id, &name, &body) {
+    let mut status = match parse_status(&id, &name, &body) {
         Ok(status) => status,
-        Err(e) => ProviderStatus::failure(&id, &name, e),
+        Err(e) => return ProviderStatus::failure(&id, &name, e),
+    };
+    // Account email — best-effort enrichment, never blocks the budgets.
+    status.account_label = match cfg.account_label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(explicit) => Some(explicit.to_string()),
+        None => fetch_email(&client, &cookie_header).await,
+    };
+    status
+}
+
+/// GET with the browser-like header set freemodel/Akamai expects.
+fn browser_get(client: &reqwest::Client, url: &str, cookie_header: &str) -> reqwest::RequestBuilder {
+    client
+        .get(url)
+        .header("Cookie", cookie_header)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("User-Agent", USER_AGENT)
+        .header("Origin", ORIGIN)
+        .header("Referer", REFERER)
+}
+
+/// `/api/auth/me` → `{ "user": { "email": … } }` — 5s budget like macOS.
+async fn fetch_email(client: &reqwest::Client, cookie_header: &str) -> Option<String> {
+    let resp = browser_get(client, ME_URL, cookie_header)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
     }
+    let body: Value = resp.json().await.ok()?;
+    body.get("user")
+        .and_then(|u| u.get("email"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Tolerates a full `"Cookie: ..."` line prefix (case-insensitive); a bare
@@ -115,12 +163,20 @@ fn cents_window(label: &str, window: &Value) -> Result<QuotaWindow, String> {
     let limit_usd = limit_cents / 100.0;
     let pct = if limit_usd > 0.0 { (used_usd / limit_usd * 100.0).round().clamp(0.0, 100.0) as i32 } else { 0 };
 
+    // Window lengths are fixed by the product (5h + weekly) — drives the
+    // settings pace line, macOS windowSeconds parity.
+    let window_seconds = match label {
+        "5 giờ" => Some(5 * 3600),
+        "Tuần" => Some(7 * 24 * 3600),
+        _ => None,
+    };
     Ok(QuotaWindow {
         label: label.to_string(),
         used_pct: pct,
         remaining_pct: 100 - pct,
         subtitle: Some(format!("${used_usd:.2} / ${limit_usd:.2}")),
         resets_at,
+        window_seconds,
     })
 }
 

@@ -160,6 +160,7 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
             remaining_pct: 100 - used_pct,
             subtitle: Some(format!("${used:.2} / ${total:.2}")),
             resets_at: None,
+            window_seconds: None,
         });
     } else if credit_snap.total == Some(0.0) {
         windows.push(QuotaWindow {
@@ -168,6 +169,7 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
             remaining_pct: 0,
             subtitle: Some("$0.00 / $0.00".into()),
             resets_at: None,
+            window_seconds: None,
         });
     }
 
@@ -186,6 +188,7 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
             remaining_pct: 100 - used_pct,
             subtitle: Some(subtitle),
             resets_at: pass_snap.resets_at,
+            window_seconds: None,
         });
     }
 

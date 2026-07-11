@@ -22,6 +22,19 @@ const BROWSER_ORDER: &[&str] = &["chrome", "chromium", "brave", "edge", "firefox
 /// Resolve the `Cookie:` header value for the given domains, honoring the
 /// provider's configured cookie source. Blocking — see module docs.
 pub fn cookie_header(domains: &[&str], cfg: &config::Provider) -> Result<String, String> {
+    cookie_header_required(domains, cfg, None)
+}
+
+/// Like [`cookie_header`], but in auto mode only accepts a browser whose
+/// cookie set contains `required_cookie` — macOS `resolvedCookieHeader(...,
+/// requiredCookie:)` parity: a browser holding only stale analytics/Stripe
+/// cookies for the domain must not shadow the browser the user actually
+/// signed in with.
+pub fn cookie_header_required(
+    domains: &[&str],
+    cfg: &config::Provider,
+    required_cookie: Option<&str>,
+) -> Result<String, String> {
     match cfg.cookie_source.as_deref() {
         Some("manual") => {
             let manual = cfg.manual_cookie.as_deref().unwrap_or("").trim();
@@ -32,14 +45,15 @@ pub fn cookie_header(domains: &[&str], cfg: &config::Provider) -> Result<String,
             }
         }
         Some("off") => Err("Đã tắt nguồn cookie".to_string()),
-        _ => auto_cookie_header(domains),
+        _ => auto_cookie_header(domains, required_cookie),
     }
 }
 
-/// Scans supported browsers in order, returning the first non-empty cookie
-/// set found for `domains`. Only a genuine per-browser error (not "no
-/// cookies") is surfaced if every browser fails to produce cookies.
-fn auto_cookie_header(domains: &[&str]) -> Result<String, String> {
+/// Scans supported browsers in order, returning the first cookie set for
+/// `domains` that is non-empty (and contains `required_cookie` when given).
+/// Only a genuine per-browser error (not "no cookies") is surfaced if every
+/// browser fails to produce cookies.
+fn auto_cookie_header(domains: &[&str], required_cookie: Option<&str>) -> Result<String, String> {
     let domain_list: Vec<String> = domains.iter().map(|d| d.to_string()).collect();
     let mut last_error: Option<String> = None;
 
@@ -47,6 +61,11 @@ fn auto_cookie_header(domains: &[&str]) -> Result<String, String> {
         let result = read_browser(browser, domain_list.clone());
         match result {
             Ok(cookies) if !cookies.is_empty() => {
+                if let Some(required) = required_cookie {
+                    if !cookies.iter().any(|c| c.name == required) {
+                        continue; // keep scanning — this browser isn't signed in
+                    }
+                }
                 let header = cookies
                     .iter()
                     .map(|c| format!("{}={}", c.name, c.value))

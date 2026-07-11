@@ -17,6 +17,61 @@ pub struct Settings {
     /// here since there is no UserDefaults on Linux.
     #[serde(default)]
     pub active_codex_account: Option<String>,
+    /// Custom Claude Code backends (Settings → Claude Code → "TUỲ CHỈNH") —
+    /// same schema and top-level key as macOS `BirdNionConfigStore`.
+    #[serde(default, rename = "claudeCodeProfiles", skip_serializing_if = "Vec::is_empty")]
+    pub claude_code_profiles: Vec<ClaudeCodeProfile>,
+    /// Any top-level keys this build doesn't know about (e.g. written by a
+    /// newer macOS version) must survive a Linux round-trip save.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One custom Claude Code profile — mirrors the macOS `ClaudeCodeProfile`
+/// JSON exactly (`baseURL` capitalization included).
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeCodeProfile {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, rename = "baseURL", skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// "ANTHROPIC_AUTH_TOKEN" (default) or "ANTHROPIC_API_KEY".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_env_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_helper: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub haiku_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sonnet_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opus_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_code_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_code_project_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_env: Vec<ProfileEnvRow>,
+}
+
+/// One KEY=value row of a custom profile's extra env.
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileEnvRow {
+    pub id: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// Find a custom Claude Code profile by id.
+pub fn find_profile(id: &str) -> Option<ClaudeCodeProfile> {
+    load().claude_code_profiles.into_iter().find(|p| p.id == id)
 }
 
 /// One provider entry. All fields except `id` are optional in the file —
@@ -175,6 +230,8 @@ pub fn api_key(provider: &Provider) -> Option<String> {
         "deepseek" => Some("DEEPSEEK_API_KEY"),
         "elevenlabs" => Some("ELEVENLABS_API_KEY"),
         "minimax" => Some("MINIMAX_CODING_API_KEY"),
+        "openai" => Some("OPENAI_ADMIN_KEY"),
+        "ollama" => Some("OLLAMA_API_KEY"),
         _ => None,
     };
     if let Some(var) = env_var {

@@ -20,8 +20,11 @@ pub mod elevenlabs;
 pub mod error_classifier;
 pub mod freemodel;
 pub mod gemini;
+pub mod grok;
 pub mod groq;
 pub mod hapo;
+pub mod ollama;
+pub mod openai;
 pub mod kilo;
 pub mod kiro;
 pub mod mimo;
@@ -45,6 +48,10 @@ pub struct QuotaWindow {
     /// Unix seconds; None when the API gives no reset time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<i64>,
+    /// Window length in seconds (5h = 18 000, week = 604 800) — with
+    /// `resets_at`, drives the settings pace/reserve line (macOS WindowPace).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_seconds: Option<i64>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -74,6 +81,27 @@ pub struct ProviderStatus {
     pub credits_purchase_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credits_history_count: Option<i32>,
+    /// Billing tier id (codex: "plus"/"pro") — settings grid "Gói" row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
+    /// Human plan label ("Claude Max", "Creator"…) — grid "Tên gói" row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_name: Option<String>,
+    /// CLI version string ("codex-cli 0.144.1") — codex/claude only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// statuspage.io description ("All Systems Operational") + indicator
+    /// level ("none"|"minor"|"major"|"critical") — codex/claude only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_status_level: Option<String>,
+    /// Which data path produced this status ("OAuth"/"Web"/"Cookie"/"Admin API").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
+    /// "∞ Unlimited" credits (codex plans without metered credits).
+    #[serde(default)]
+    pub credits_unlimited: bool,
 }
 
 impl ProviderStatus {
@@ -105,6 +133,9 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "elevenlabs" => "ElevenLabs",
         "deepgram" => "Deepgram",
         "groq" => "Groq",
+        "grok" => "Grok",
+        "openai" => "OpenAI",
+        "ollama" => "Ollama",
         "kiro" => "Kiro",
         "bedrock" => "Bedrock",
         "claude" => "Claude",
@@ -118,6 +149,8 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "mimo" => "Xiaomi MiMo",
         "alibaba" => "Alibaba / Qwen",
         "freemodel" => "FreeModel",
+        "gemini" => "Gemini",
+        "antigravity" => "Antigravity",
         other => other,
     }
     .to_string()
@@ -135,6 +168,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         "elevenlabs" => elevenlabs::fetch(cfg).await,
         "deepgram" => deepgram::fetch(cfg).await,
         "groq" => groq::fetch(cfg).await,
+        "grok" => grok::fetch(cfg).await,
+        "openai" => openai::fetch(cfg).await,
+        "ollama" => ollama::fetch(cfg).await,
         "kiro" => kiro::fetch(cfg).await,
         "bedrock" => bedrock::fetch(cfg).await,
         "codex" => codex::fetch(cfg).await,
@@ -220,4 +256,42 @@ pub fn shared_client() -> reqwest::Client {
         .user_agent("BirdNion-Linux")
         .build()
         .expect("reqwest client")
+}
+
+/// Best-effort statuspage.io probe — port of macOS `OpenAIStatusProbe` /
+/// `ClaudeProvider.fetchServiceStatus`. Returns `(description, indicator)`
+/// like ("All Systems Operational", "none"); `None` on any failure so it can
+/// never break the primary quota fetch it runs alongside.
+pub async fn fetch_service_status(url: &str) -> Option<(String, String)> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent("BirdNion-Linux")
+        .build()
+        .ok()?;
+    let json: serde_json::Value = client.get(url).send().await.ok()?.json().await.ok()?;
+    let status = json.get("status")?;
+    let description = status.get("description")?.as_str()?.to_string();
+    let indicator = status.get("indicator")?.as_str()?.to_string();
+    Some((description, indicator))
+}
+
+/// Memoized `<cli> --version` output (first line, trimmed) — port of macOS
+/// `ClaudeCLIVersionDetector` / `CodexProvider` version detection. Runs the
+/// binary at most once per process; call from a blocking thread.
+pub fn cli_version_blocking(
+    cache: &'static std::sync::OnceLock<Option<String>>,
+    binary: &str,
+) -> Option<String> {
+    cache
+        .get_or_init(|| {
+            std::process::Command::new(binary)
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .and_then(|out| String::from_utf8(out.stdout).ok())
+                .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+                .filter(|s| !s.is_empty())
+        })
+        .clone()
 }

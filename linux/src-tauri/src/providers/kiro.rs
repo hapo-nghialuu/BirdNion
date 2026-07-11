@@ -277,7 +277,7 @@ pub fn parse_usage(stripped: &str, account_email: Option<&str>) -> Result<Provid
         return Ok(ProviderStatus {
             id: "kiro".into(),
             display_name: "Kiro".into(),
-            windows: vec![QuotaWindow { label: "Credits".into(), used_pct: 0, remaining_pct: 100, subtitle: None, resets_at: None }],
+            windows: vec![QuotaWindow { label: "Credits".into(), used_pct: 0, remaining_pct: 100, subtitle: None, resets_at: None, window_seconds: None }],
             last_updated: chrono::Utc::now().timestamp(),
             account_label: account_email.map(String::from),
             ..Default::default()
@@ -310,6 +310,7 @@ pub fn parse_usage(stripped: &str, account_email: Option<&str>) -> Result<Provid
         remaining_pct,
         subtitle,
         resets_at,
+        window_seconds: None,
     }];
 
     if let Some((used, total, expiry_days)) = parse_bonus_credits(stripped) {
@@ -321,6 +322,7 @@ pub fn parse_usage(stripped: &str, account_email: Option<&str>) -> Result<Provid
             remaining_pct: 100 - bonus_used_pct,
             subtitle: Some(format!("{used:.2} / {total:.0} bonus")),
             resets_at: bonus_expiry,
+            window_seconds: None,
         });
     }
 
@@ -338,6 +340,7 @@ pub fn parse_usage(stripped: &str, account_email: Option<&str>) -> Result<Provid
             remaining_pct: 100,
             subtitle: Some(if parts.is_empty() { "Đang bật".to_string() } else { parts.join(" · ") }),
             resets_at: None,
+            window_seconds: None,
         });
     }
 

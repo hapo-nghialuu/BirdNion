@@ -243,19 +243,15 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     };
     let windows = map_to_windows(&buckets);
     let plan_name = load_plan_name(&client, &access_token, creds.id_token.as_deref()).await;
-    let account_label = match (email, plan_name) {
-        (Some(e), Some(p)) => Some(format!("{e} ({p})")),
-        (Some(e), None) => Some(e),
-        (None, Some(p)) => Some(p),
-        (None, None) => None,
-    };
 
     ProviderStatus {
         id: cfg.id.clone(),
         display_name: name,
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        account_label,
+        // Email and plan ride in separate fields (macOS grid parity).
+        account_label: email,
+        plan_name,
         ..Default::default()
     }
 }
@@ -327,6 +323,7 @@ fn map_to_windows(buckets: &[Bucket]) -> Vec<QuotaWindow> {
             remaining_pct: 100 - used_pct,
             subtitle: None,
             resets_at,
+            window_seconds: None,
         });
     }
     windows

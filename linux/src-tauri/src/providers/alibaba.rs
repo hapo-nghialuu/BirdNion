@@ -395,6 +395,7 @@ fn quota_window(label: &str, used: i64, total: i64, reset: Option<i64>) -> Quota
         remaining_pct: 100 - used_pct,
         subtitle: Some(format!("{} / {} requests còn lại", format_number((total - used).max(0) as f64), format_number(total as f64))),
         resets_at: reset,
+        window_seconds: None,
     }
 }
 
@@ -438,6 +439,7 @@ fn parse_token_plan_window(text: &str) -> Option<QuotaWindow> {
         remaining_pct: 100 - used_pct,
         subtitle: Some(format!("{} / {} credits còn lại", format_number(rem), format_number(total))),
         resets_at,
+        window_seconds: None,
     })
 }
 

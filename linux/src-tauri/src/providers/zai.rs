@@ -166,6 +166,7 @@ pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> P
                 remaining_pct: 100 - used_pct,
                 subtitle: None,
                 resets_at,
+                window_seconds: None,
             }
         })
         .collect();

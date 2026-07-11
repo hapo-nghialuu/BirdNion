@@ -469,6 +469,7 @@ fn build_status(
                 remaining_pct: 100 - used_pct,
                 subtitle: Some(format!("${spend:.2} / ${b:.2}")),
                 resets_at,
+                window_seconds: None,
             });
         } else {
             windows.push(QuotaWindow {
@@ -477,6 +478,7 @@ fn build_status(
                 remaining_pct: 100,
                 subtitle: Some(format!("Đã dùng ${spend:.2} tháng này")),
                 resets_at,
+                window_seconds: None,
             });
         }
     }
@@ -495,6 +497,7 @@ fn build_status(
             remaining_pct: 100,
             subtitle: Some(subtitle),
             resets_at: None,
+            window_seconds: None,
         });
     }
 

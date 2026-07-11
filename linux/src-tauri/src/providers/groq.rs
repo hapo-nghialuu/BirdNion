@@ -102,6 +102,7 @@ fn build_status(
             remaining_pct: 100,
             subtitle: Some(format!("{} req/phút", dec(req_per_min))),
             resets_at: None,
+            window_seconds: None,
         },
         QuotaWindow {
             label: "Tokens/phút".into(),
@@ -109,6 +110,7 @@ fn build_status(
             remaining_pct: 100,
             subtitle: Some(format!("{} tok/phút", dec(tok_per_min))),
             resets_at: None,
+            window_seconds: None,
         },
     ];
     if cache_per_min > 0.0 {
@@ -118,6 +120,7 @@ fn build_status(
             remaining_pct: 100,
             subtitle: Some(format!("{} cache/phút", dec(cache_per_min))),
             resets_at: None,
+            window_seconds: None,
         });
     }
 

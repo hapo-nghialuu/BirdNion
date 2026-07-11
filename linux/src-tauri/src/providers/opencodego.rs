@@ -294,6 +294,7 @@ fn parse_page(text: &str, zen_balance: Option<f64>) -> Option<ProviderStatus> {
             remaining_pct: 100,
             subtitle: None,
             resets_at: Some(renew),
+            window_seconds: None,
         });
     }
 
@@ -397,6 +398,7 @@ fn make_window(label: &str, result: &WindowResult, now: i64) -> QuotaWindow {
         remaining_pct: 100 - used,
         subtitle: Some(format!("{used}%")),
         resets_at: Some(now + result.reset_sec),
+        window_seconds: None,
     }
 }
 

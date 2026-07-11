@@ -25,12 +25,19 @@ use std::path::PathBuf;
 use crate::codex_accounts;
 use crate::config;
 use crate::providers::browser_cookies;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{
+    cli_version_blocking, display_name, fetch_service_status, shared_client, ProviderStatus,
+    QuotaWindow,
+};
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 const REFRESH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const EIGHT_DAYS_SECS: i64 = 8 * 24 * 60 * 60;
+/// statuspage probe — macOS `OpenAIStatusProbe` parity.
+const STATUS_URL: &str = "https://status.openai.com/api/v2/status.json";
+
+static CLI_VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq)]
 struct Credentials {
@@ -109,20 +116,36 @@ fn parse_iso8601(s: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp())
 }
 
-/// Best-effort email from the OAuth `id_token` JWT payload. Never panics.
-fn email_from_id_token(id_token: Option<&str>) -> Option<String> {
+/// Decoded JWT payload of the OAuth `id_token`. Never panics.
+fn id_token_payload(id_token: Option<&str>) -> Option<Value> {
     let token = id_token?;
     let mut parts = token.split('.');
     parts.next()?;
     let payload_b64 = parts.next()?;
     let payload = decode_base64url(payload_b64)?;
-    let json: Value = serde_json::from_slice(&payload).ok()?;
+    serde_json::from_slice(&payload).ok()
+}
+
+/// Best-effort email from the OAuth `id_token` JWT payload.
+fn email_from_id_token(id_token: Option<&str>) -> Option<String> {
+    let json = id_token_payload(id_token)?;
     if let Some(email) = json.get("email").and_then(Value::as_str) {
         return Some(email.to_string());
     }
     json.get("https://api.openai.com/profile")
         .and_then(|p| p.get("email"))
         .and_then(Value::as_str)
+        .map(String::from)
+}
+
+/// ChatGPT plan tier ("plus"/"pro"/"team") from the id_token auth claims —
+/// macOS `CodexAuth.planType` parity; drives the settings "Gói" row.
+fn plan_from_id_token(id_token: Option<&str>) -> Option<String> {
+    id_token_payload(id_token)?
+        .get("https://api.openai.com/auth")
+        .and_then(|a| a.get("chatgpt_plan_type"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
         .map(String::from)
 }
 
@@ -286,8 +309,19 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     }
 
     let client = shared_client();
-    match fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
-        Ok(body) => build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref()).await,
+    // Side-channel info fetched alongside usage (macOS runs these the same
+    // way): CLI version (memoized) + statuspage probe — both best-effort.
+    let (usage, version, service) = futures::join!(
+        fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()),
+        tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "codex")),
+        fetch_service_status(STATUS_URL),
+    );
+    let version = version.unwrap_or(None);
+    let side = SideInfo { version, service };
+    match usage {
+        Ok(body) => {
+            build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref(), &side).await
+        }
         Err(UsageError::Unauthorized) => {
             if !creds.refresh_token.is_empty() {
                 if let Ok((access, refresh, id_token)) = refresh_token(&creds.refresh_token).await {
@@ -297,7 +331,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
                     creds.last_refresh = Some(now);
                     let _ = save_auth_json(&path, &creds);
                     if let Ok(body) = fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
-                        return build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref()).await;
+                        return build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref(), &side).await;
                     }
                 }
             }
@@ -307,6 +341,12 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         Err(UsageError::Invalid(e)) => ProviderStatus::failure(&cfg.id, &name, format!("Response không hợp lệ: {e}")),
         Err(UsageError::Network(e)) => ProviderStatus::failure(&cfg.id, &name, format!("Network: {e}")),
     }
+}
+
+/// Best-effort side-channel info shown in the settings detail grid.
+struct SideInfo {
+    version: Option<String>,
+    service: Option<(String, String)>,
 }
 
 /// No usable OAuth session (`auth.json` missing) → try the cookie-authenticated
@@ -338,6 +378,8 @@ async fn fetch_cookie_fallback(cfg: &config::Provider, name: &str) -> ProviderSt
         signed_in_email: extras.signed_in_email,
         credits_purchase_url: extras.credits_purchase_url,
         credits_history_count: extras.credits_history_count,
+        source_label: Some("Cookie".to_string()),
+        credits_unlimited: credits_unlimited(&body),
         ..Default::default()
     }
 }
@@ -371,7 +413,19 @@ fn dashboard_extras(body: &Value) -> DashboardExtras {
     }
 }
 
-async fn build_success(id: &str, name: &str, body: &Value, creds: &Credentials, cookie_enrichment: Option<&Value>) -> ProviderStatus {
+/// True when either payload reports unlimited credits.
+fn credits_unlimited(body: &Value) -> bool {
+    body.get("credits").and_then(|c| c.get("unlimited")).and_then(Value::as_bool).unwrap_or(false)
+}
+
+async fn build_success(
+    id: &str,
+    name: &str,
+    body: &Value,
+    creds: &Credentials,
+    cookie_enrichment: Option<&Value>,
+    side: &SideInfo,
+) -> ProviderStatus {
     let windows = map_windows(body);
     if windows.is_empty() {
         return ProviderStatus::failure(id, name, "Codex chưa có dữ liệu quota");
@@ -402,6 +456,13 @@ async fn build_success(id: &str, name: &str, body: &Value, creds: &Credentials, 
         signed_in_email,
         credits_purchase_url,
         credits_history_count,
+        plan_type: plan_from_id_token(creds.id_token.as_deref()),
+        version: side.version.clone(),
+        service_status: side.service.as_ref().map(|(d, _)| d.clone()),
+        service_status_level: side.service.as_ref().map(|(_, i)| i.clone()),
+        source_label: Some("OAuth".to_string()),
+        credits_unlimited: credits_unlimited(body)
+            || cookie_enrichment.map(credits_unlimited).unwrap_or(false),
         ..Default::default()
     }
 }
@@ -467,6 +528,7 @@ fn to_quota_window(w: Window, label: &str) -> QuotaWindow {
         remaining_pct: (100 - w.used_percent) as i32,
         subtitle: None,
         resets_at: if w.reset_at > 0 { Some(w.reset_at) } else { None },
+        window_seconds: (w.limit_window_seconds > 0).then_some(w.limit_window_seconds),
     }
 }
 

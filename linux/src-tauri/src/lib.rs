@@ -7,29 +7,85 @@ mod claude_scanner;
 mod codex_accounts;
 mod codex_scanner;
 mod config;
+mod cost_history;
+mod grok_scanner;
 mod providers;
 mod storage;
 mod updater;
 mod usage;
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_notification::NotificationExt as _;
 
-/// Claude Code CLI usage rolled up from local session logs.
-/// None (→ null) when no projects root exists on this machine.
-#[tauri::command]
-fn claude_usage_report() -> Option<usage::UsageReport> {
-    claude_scanner::usage_report()
+/// In-memory scanner cache — macOS `ClaudeCostScanner`/`CodexCostScanner`/
+/// `GrokCostScanner` actor-cache parity (TTL 300 s): repeat calls within the
+/// window skip the full JSONL rescan and the cost-history disk round-trip.
+const USAGE_REPORT_TTL: Duration = Duration::from_secs(300);
+static USAGE_REPORT_CACHE: LazyLock<Mutex<HashMap<&'static str, (Instant, usage::UsageReport)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Runs `scan` (full log walk) at most once per TTL per source, merging with
+/// the cost-history high-water mark on refresh (macOS CostHistoryStore
+/// parity). Always returns a report — history-backed when no live logs exist.
+fn cached_usage_report(
+    source: &'static str,
+    scan: fn() -> Option<usage::UsageReport>,
+) -> usage::UsageReport {
+    if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get(source) {
+        if at.elapsed() < USAGE_REPORT_TTL {
+            return report.clone();
+        }
+    }
+    let live = scan();
+    let merged = cost_history::apply_and_report(source, live.as_ref());
+    USAGE_REPORT_CACHE
+        .lock()
+        .unwrap()
+        .insert(source, (Instant::now(), merged.clone()));
+    merged
 }
 
-/// Codex CLI usage rolled up from local rollout logs.
-/// None (→ null) when no sessions root exists on this machine.
+/// Claude Code CLI usage rolled up from local session logs. The scan runs on
+/// a blocking thread — sync commands execute on the GTK main loop and froze
+/// the webview's first paint for the whole log walk (macOS runs its scanners
+/// detached off-main for the same reason).
 #[tauri::command]
-fn codex_usage_report() -> Option<usage::UsageReport> {
-    codex_scanner::usage_report()
+async fn claude_usage_report() -> Option<usage::UsageReport> {
+    tauri::async_runtime::spawn_blocking(|| {
+        cached_usage_report("claude", claude_scanner::usage_report)
+    })
+    .await
+    .ok()
+}
+
+/// Codex CLI usage rolled up from local rollout logs (blocking thread + cache,
+/// see `claude_usage_report`).
+#[tauri::command]
+async fn codex_usage_report() -> Option<usage::UsageReport> {
+    tauri::async_runtime::spawn_blocking(|| {
+        cached_usage_report("codex", codex_scanner::usage_report)
+    })
+    .await
+    .ok()
+}
+
+/// Grok Build local session cost (signals.json) + history merge (blocking
+/// thread + cache, see `claude_usage_report`).
+#[tauri::command]
+async fn grok_usage_report() -> Option<usage::UsageReport> {
+    tauri::async_runtime::spawn_blocking(|| {
+        cached_usage_report("grok", grok_scanner::usage_report)
+    })
+    .await
+    .ok()
 }
 
 /// Quota status for providers enabled in settings.json, fetched concurrently.
@@ -170,6 +226,98 @@ fn claude_code_remove_env(provider_id: String) -> Result<bool, String> {
     claude_code::remove_env_settings(&scope)
 }
 
+/// Static backend facts for the Claude Code pane's read-only rows: resolved
+/// Anthropic-compatible base URL + suggested model ids (macOS
+/// `ClaudeCodeBackend.baseURL` / `.suggestedModels`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeCodeBackendInfo {
+    base_url: Option<String>,
+    suggested_models: Vec<String>,
+}
+
+#[tauri::command]
+fn claude_code_backend_info(provider_id: String) -> ClaudeCodeBackendInfo {
+    let provider = config::find_provider(&provider_id);
+    ClaudeCodeBackendInfo {
+        base_url: claude_code::base_url_for_provider(&provider_id, &provider),
+        suggested_models: claude_code::suggested_models(&provider_id)
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    }
+}
+
+/// `GET {base}/v1/models` against an Anthropic-compatible backend — macOS
+/// `ClaudeCodeModelsFetcher` (x-api-key first, Bearer retry on 401/403).
+#[tauri::command]
+async fn claude_code_models(base_url: String, token: String) -> Result<Vec<String>, String> {
+    claude_code::fetch_models(&base_url, &token).await
+}
+
+// --- Custom Claude Code profiles (macOS `claudeCodeProfiles`) --------------
+
+fn claude_code_profile_state_for(profile_id: &str) -> ClaudeCodeState {
+    let Some(profile) = config::find_profile(profile_id) else {
+        return ClaudeCodeState { state: "needsSetup", target_path: None };
+    };
+    let scope = claude_code::profile_scope(&profile);
+    let configured = scope.is_some() && claude_code::profile_ready(&profile);
+    let (sync, target) = match (&scope, configured) {
+        (Some(sc), true) => {
+            let sync = claude_code::spec_for_profile(&profile)
+                .map(|s| claude_code::sync_state(&s, sc))
+                .unwrap_or(claude_code::SyncState::Off);
+            (sync, Some(claude_code::target_path(sc).to_string_lossy().to_string()))
+        }
+        (Some(sc), false) => (
+            claude_code::SyncState::Off,
+            Some(claude_code::target_path(sc).to_string_lossy().to_string()),
+        ),
+        (None, _) => (claude_code::SyncState::Off, None),
+    };
+    let state = match claude_code::power_state(configured, sync) {
+        claude_code::PowerState::On => "on",
+        claude_code::PowerState::Off => "off",
+        claude_code::PowerState::Stale => "stale",
+        claude_code::PowerState::NeedsSetup => "needsSetup",
+    };
+    ClaudeCodeState { state, target_path: target }
+}
+
+#[tauri::command]
+fn claude_code_profile_state(profile_id: String) -> ClaudeCodeState {
+    claude_code_profile_state_for(&profile_id)
+}
+
+#[tauri::command]
+fn claude_code_profile_apply(profile_id: String) -> Result<ClaudeCodeState, String> {
+    let profile = config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
+    let scope = claude_code::profile_scope(&profile)
+        .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+    let spec = claude_code::spec_for_profile(&profile)
+        .ok_or_else(|| "Nhập Base URL + Token để bật".to_string())?;
+    claude_code::apply(&spec, &scope)?;
+    Ok(claude_code_profile_state_for(&profile_id))
+}
+
+#[tauri::command]
+fn claude_code_profile_deactivate(profile_id: String) -> Result<ClaudeCodeState, String> {
+    let profile = config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
+    let scope = claude_code::profile_scope(&profile)
+        .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+    claude_code::deactivate(&scope)?;
+    Ok(claude_code_profile_state_for(&profile_id))
+}
+
+#[tauri::command]
+fn claude_code_profile_remove_env(profile_id: String) -> Result<bool, String> {
+    let profile = config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
+    let scope = claude_code::profile_scope(&profile)
+        .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+    claude_code::remove_env_settings(&scope)
+}
+
 /// Every Codex login the app knows about (system + managed accounts) plus
 /// the currently active id. Drives the account-list row in Settings.
 #[derive(serde::Serialize)]
@@ -263,12 +411,123 @@ fn get_autostart(app: tauri::AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
 }
 
-/// Tray tooltip mirror of the macOS menu-bar percent readout — the JS side
-/// pushes "Claude 78% · Codex 95%"-style summaries after each refresh.
+/// Tray status mirror of the macOS menu-bar percent readout.
+///
+/// Visual contract (macOS NSStatusItem parity): **`91%` then provider logo**.
+/// The JS side paints that into a single composite PNG (`icon_png`) because
+/// tray-icon places the image left of the title on macOS; compositing keeps
+/// the percent→logo order. Title is left empty when a composite is provided.
+///
+/// * `tooltip` — hover text (macOS/Windows; unsupported on Linux panel).
+/// * `title` — optional raw text (unused when `icon_png` carries the frame).
+/// * `icon_png` — composite frame PNG, or `None` to restore the default logo.
+#[tauri::command]
+fn set_tray_status(
+    app: tauri::AppHandle,
+    tooltip: String,
+    title: Option<String>,
+    icon_png: Option<Vec<u8>>,
+) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some(tooltip.as_str()));
+        // Empty string clears the title slot so the composite icon stands alone.
+        match title.as_deref().filter(|s| !s.is_empty()) {
+            Some(t) => {
+                let _ = tray.set_title(Some(t));
+            }
+            None => {
+                let _ = tray.set_title(Some(""));
+            }
+        }
+        if let Some(bytes) = icon_png {
+            if let Ok(img) = Image::from_bytes(&bytes) {
+                let _ = tray.set_icon(Some(img));
+                // Colors (incl. white-tinted logos) are baked into the PNG.
+                let _ = tray.set_icon_as_template(false);
+            }
+        } else if let Some(def) = app.default_window_icon() {
+            let _ = tray.set_icon(Some(def.clone()));
+            let _ = tray.set_icon_as_template(false);
+        }
+    }
+}
+
+/// Back-compat: tooltip only (title left unchanged). Prefer `set_tray_status`.
 #[tauri::command]
 fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) {
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_tooltip(Some(tooltip));
+    }
+}
+
+/// Quit the whole process (footer / settings parity with macOS popover Quit).
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// Open (or focus) the dedicated Settings window — macOS Settings scene parity
+/// (780×720, separate from the tray popover).
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    open_settings_window_impl(&app, None)
+}
+
+fn open_settings_window_impl(app: &tauri::AppHandle, section: Option<&str>) -> Result<(), String> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    if let Some(existing) = app.get_webview_window("settings") {
+        if let Some(sec) = section {
+            // Single path: localStorage + one custom event (no emit+eval double fire).
+            let script = format!(
+                "localStorage.setItem('birdnion.settingsSection',{});\
+                 window.dispatchEvent(new CustomEvent('birdnion-settings-section',{{detail:{}}}));",
+                serde_json::to_string(sec).unwrap_or_else(|_| "\"general\"".into()),
+                serde_json::to_string(sec).unwrap_or_else(|_| "\"general\"".into()),
+            );
+            let _ = existing.eval(&script);
+        }
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+    // Dedicated settings.html entry — never shares the popover main.ts path
+    // (blank/spinning Settings was caused by wrong branch + blocked await paint).
+    let mut init = String::from("window.__BIRDNION_MODE__='settings';");
+    if let Some(sec) = section {
+        init.push_str(&format!(
+            "localStorage.setItem('birdnion.settingsSection',{});",
+            serde_json::to_string(sec).unwrap_or_else(|_| "\"general\"".into())
+        ));
+    }
+    let win = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+        .title("BirdNion Settings")
+        .inner_size(780.0, 720.0)
+        .min_inner_size(640.0, 520.0)
+        .resizable(true)
+        .initialization_script(&init)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let _ = win.set_focus();
+    Ok(())
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn toggle_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
     }
 }
 
@@ -277,6 +536,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -284,6 +544,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             claude_usage_report,
             codex_usage_report,
+            grok_usage_report,
             provider_statuses,
             classify_provider_error,
             test_provider,
@@ -292,6 +553,12 @@ pub fn run() {
             claude_code_apply,
             claude_code_deactivate,
             claude_code_remove_env,
+            claude_code_backend_info,
+            claude_code_models,
+            claude_code_profile_state,
+            claude_code_profile_apply,
+            claude_code_profile_deactivate,
+            claude_code_profile_remove_env,
             codex_accounts_list,
             codex_account_save_current,
             codex_account_switch,
@@ -303,36 +570,69 @@ pub fn run() {
             notify,
             set_autostart,
             get_autostart,
+            set_tray_status,
             set_tray_tooltip,
+            quit_app,
+            open_settings_window,
             updater::check_update,
             storage::provider_storage,
             storage::format_storage_bytes
         ])
         .setup(|app| {
+            // Tray context menu mirrors the macOS status-item menu / popover footer:
+            // open the quota popover, open Settings window, About, Quit.
+            // Left-click on macOS toggles the main popover (show_menu_on_left_click = false).
+            // Linux libappindicator only supports menu-on-click, so left-click shows this menu.
             let show = MenuItem::with_id(app, "show", "Mở BirdNion", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Thoát", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
-            TrayIconBuilder::with_id("main-tray")
+            let settings = MenuItem::with_id(app, "settings", "Cài đặt…", true, None::<&str>)?;
+            let about = MenuItem::with_id(app, "about", "Giới thiệu BirdNion", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Thoát BirdNion", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &settings, &about, &quit])?;
+
+            let mut tray = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .show_menu_on_left_click(true)
+                // macOS: left-click → popover; right-click → menu (matches NSStatusItem).
+                // Linux: menu on click is the only reliable path (no tray click events).
+                .show_menu_on_left_click(cfg!(not(target_os = "macos")))
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                    "show" => show_main_window(app),
+                    "settings" => {
+                        let _ = open_settings_window_impl(app, Some("general"));
+                    }
+                    "about" => {
+                        let _ = open_settings_window_impl(app, Some("about"));
                     }
                     "quit" => app.exit(0),
                     _ => {}
-                })
-                .build(app)?;
+                });
+
+            // macOS/Windows: left-click toggles the quota popover window.
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                tray = tray.on_tray_icon_event(|tray, event| {
+                    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        toggle_main_window(tray.app_handle());
+                    }
+                });
+            }
+
+            tray.build(app)?;
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Tray app: closing the window only hides it; quit lives in the
-            // tray menu.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Settings is a real window — destroy on close.
+                // Main popover stays tray-resident (hide only).
+                if window.label() == "settings" {
+                    return;
+                }
                 let _ = window.hide();
                 api.prevent_close();
             }

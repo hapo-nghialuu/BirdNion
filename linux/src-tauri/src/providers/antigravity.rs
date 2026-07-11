@@ -408,6 +408,7 @@ fn map_model_windows(quotas: &[ModelQuota]) -> Vec<QuotaWindow> {
                 remaining_pct,
                 subtitle: None,
                 resets_at: q.reset_time,
+                window_seconds: None,
             }
         })
         .collect()
@@ -473,6 +474,7 @@ fn map_summary_windows(groups: &[Value]) -> Vec<QuotaWindow> {
                 remaining_pct,
                 subtitle: None,
                 resets_at: reset_time,
+                window_seconds: None,
             });
         }
     }
@@ -669,6 +671,7 @@ fn make_google_window(label: &str, fraction: f64, reset_time: Option<String>) ->
         remaining_pct: 100 - used_pct,
         subtitle: None,
         resets_at,
+        window_seconds: None,
     }
 }
 

@@ -108,6 +108,7 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
         remaining_pct: 100 - used,
         subtitle: Some(format!("{} / {}", fmt_num(char_count), fmt_num(char_limit))),
         resets_at,
+        window_seconds: None,
     });
 
     if let (Some(u), Some(lim)) = (
@@ -121,6 +122,7 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
             remaining_pct: 100 - p,
             subtitle: Some(format!("{u} / {lim}")),
             resets_at: None,
+            window_seconds: None,
         });
     }
     if let (Some(u), Some(lim)) = (
@@ -134,10 +136,11 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
             remaining_pct: 100 - p,
             subtitle: Some(format!("{u} / {lim}")),
             resets_at: None,
+            window_seconds: None,
         });
     }
 
-    let _plan = display_tier(
+    let plan = display_tier(
         body.get("tier").and_then(Value::as_str),
         body.get("status").and_then(Value::as_str),
     );
@@ -148,6 +151,7 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
         windows,
         last_updated: chrono::Utc::now().timestamp(),
         account_label: Some(account_label.to_string()),
+        plan_name: plan,
         ..Default::default()
     }
 }

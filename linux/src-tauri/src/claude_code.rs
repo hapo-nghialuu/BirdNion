@@ -13,7 +13,7 @@
 //! tests never touch the real filesystem; file wrappers layer the actual
 //! `~/.claude/settings.json` (or `CLAUDE_CONFIG_DIR` override) I/O on top.
 
-use crate::config::Provider;
+use crate::config::{ClaudeCodeProfile, Provider};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
@@ -96,11 +96,8 @@ fn cleaned(value: Option<&str>) -> Option<String> {
 pub fn base_url_for_provider(id: &str, provider: &Provider) -> Option<String> {
     match id {
         "hapo" => {
-            let raw = provider
-                .base_url
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| std::env::var("HAPO_BASE_URL").ok().filter(|s| !s.trim().is_empty()))?;
+            // Full chain incl. the compile-time baked endpoint (dev-env.sh).
+            let raw = crate::providers::hapo::resolved_base_url(provider)?;
             anthropic_origin(&raw)
         }
         "minimax" => {
@@ -192,6 +189,150 @@ pub fn spec_for_provider(id: &str, provider: &Provider) -> Option<EnvSpec> {
         env.insert(DISABLE_1M_KEY.to_string(), Value::String("1".to_string()));
     }
     Some(EnvSpec { env, api_key_helper: None })
+}
+
+/// Suggested model ids per preset backend — macOS `ClaudeCodeBackend.suggestedModels`.
+pub fn suggested_models(id: &str) -> &'static [&'static str] {
+    match id {
+        "minimax" => &["MiniMax-M3[1m]", "MiniMax-M3", "MiniMax-M2"],
+        "deepseek" => &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+        "zai" => &["GLM-4.7", "GLM-4.5-Air", "glm-4.6", "glm-4.5"],
+        _ => &[],
+    }
+}
+
+// MARK: - Custom profiles (macOS `claudeCodeProfiles`)
+
+/// A profile can be applied once it has both a base URL and a token —
+/// macOS `ClaudeCodeConfigWriter.isReady`.
+pub fn profile_ready(p: &ClaudeCodeProfile) -> bool {
+    cleaned(p.base_url.as_deref()).is_some() && cleaned(p.token.as_deref()).is_some()
+}
+
+/// Build the write spec for a custom profile: `env[tokenEnvKey] = token`,
+/// base URL, optional per-tier models, extraEnv rows merged verbatim, and
+/// `apiKeyHelper` as a TOP-LEVEL key — macOS `spec(for profile:)`.
+pub fn spec_for_profile(p: &ClaudeCodeProfile) -> Option<EnvSpec> {
+    let base = cleaned(p.base_url.as_deref())?;
+    let token = cleaned(p.token.as_deref())?;
+    let token_key = cleaned(p.token_env_key.as_deref()).unwrap_or_else(|| AUTH_TOKEN_KEY.to_string());
+
+    let mut env = Map::new();
+    env.insert(token_key, Value::String(token));
+    env.insert(BASE_URL_KEY.to_string(), Value::String(base));
+    if let Some(m) = cleaned(p.haiku_model.as_deref()) {
+        env.insert(HAIKU_KEY.to_string(), Value::String(m));
+    }
+    if let Some(m) = cleaned(p.sonnet_model.as_deref()) {
+        env.insert(SONNET_KEY.to_string(), Value::String(m));
+    }
+    if let Some(m) = cleaned(p.opus_model.as_deref()) {
+        env.insert(OPUS_KEY.to_string(), Value::String(m));
+    }
+    for row in &p.extra_env {
+        let key = row.key.trim();
+        if !key.is_empty() {
+            env.insert(key.to_string(), Value::String(row.value.clone()));
+        }
+    }
+    Some(EnvSpec { env, api_key_helper: cleaned(p.api_key_helper.as_deref()) })
+}
+
+/// Scope a profile currently targets (same semantics as providers).
+pub fn profile_scope(p: &ClaudeCodeProfile) -> Option<Scope> {
+    if p.claude_code_scope.as_deref() != Some("project") {
+        return Some(Scope::Global);
+    }
+    let path = cleaned(p.claude_code_project_path.as_deref())?;
+    Some(Scope::Project(PathBuf::from(path)))
+}
+
+// MARK: - Models fetcher (macOS `ClaudeCodeModelsFetcher`)
+
+/// `GET {base}/v1/models` URL, tolerating a trailing slash and a base that
+/// already ends in `/v1`.
+fn models_url(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    if trimmed.ends_with("/v1") {
+        format!("{trimmed}/models")
+    } else {
+        format!("{trimmed}/v1/models")
+    }
+}
+
+/// Sort newest-first by `created_at` (ISO) / `created` (unix); entries with
+/// no timestamp keep their API order after the dated ones.
+fn parse_models(body: &Value) -> Vec<String> {
+    let Some(data) = body.get("data").and_then(Value::as_array) else { return Vec::new() };
+    let mut dated: Vec<(i64, String)> = Vec::new();
+    let mut undated: Vec<String> = Vec::new();
+    for entry in data {
+        let Some(id) = entry.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let ts = entry
+            .get("created")
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                entry
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|d| d.timestamp())
+            });
+        match ts {
+            Some(ts) => dated.push((ts, id.to_string())),
+            None => undated.push(id.to_string()),
+        }
+    }
+    dated.sort_by(|a, b| b.0.cmp(&a.0));
+    dated.into_iter().map(|(_, id)| id).chain(undated).collect()
+}
+
+/// Fetch the model list for an Anthropic-compatible backend. Auth: try
+/// `x-api-key` first, retry `Authorization: Bearer` on 401/403 — some
+/// gateways only accept one of the two (macOS fetcher behavior).
+pub async fn fetch_models(base_url: &str, token: &str) -> Result<Vec<String>, String> {
+    let base = base_url.trim();
+    if base.is_empty() || !base.contains("://") {
+        return Err("Base URL không hợp lệ".to_string());
+    }
+    let url = models_url(base);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("client: {e}"))?;
+    let send = |auth_bearer: bool| {
+        let client = client.clone();
+        let url = url.clone();
+        let token = token.to_string();
+        async move {
+            let mut req = client
+                .get(&url)
+                .header("anthropic-version", "2023-06-01")
+                .header("Accept", "application/json");
+            req = if auth_bearer {
+                req.header("Authorization", format!("Bearer {token}"))
+            } else {
+                req.header("x-api-key", token)
+            };
+            req.send().await
+        }
+    };
+    let mut resp = send(false).await.map_err(|e| format!("Lỗi mạng: {e}"))?;
+    if matches!(resp.status().as_u16(), 401 | 403) {
+        resp = send(true).await.map_err(|e| format!("Lỗi mạng: {e}"))?;
+    }
+    let code = resp.status().as_u16();
+    if !(200..=299).contains(&code) {
+        return Err(format!("HTTP {code}"));
+    }
+    let body: Value = resp.json().await.map_err(|_| "Không đọc được danh sách model".to_string())?;
+    let models = parse_models(&body);
+    if models.is_empty() {
+        return Err("Không có model nào".to_string());
+    }
+    Ok(models)
 }
 
 // MARK: - Pure merge/deactivate/sync-state over JSON content
@@ -493,6 +634,63 @@ mod tests {
         let (content, changed) = remove_env_content(r#"{"foo": 1}"#).unwrap();
         assert!(!changed);
         assert_eq!(content, r#"{"foo": 1}"#);
+    }
+
+    fn profile() -> ClaudeCodeProfile {
+        ClaudeCodeProfile {
+            id: "p1".into(),
+            name: Some("Main".into()),
+            base_url: Some("https://api.example.com".into()),
+            token: Some("sk-custom".into()),
+            token_env_key: Some("ANTHROPIC_API_KEY".into()),
+            api_key_helper: Some("echo hi".into()),
+            sonnet_model: Some("model-s".into()),
+            extra_env: vec![crate::config::ProfileEnvRow {
+                id: "e1".into(),
+                key: "API_TIMEOUT_MS".into(),
+                value: "60000".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn profile_spec_uses_token_env_key_and_extra_env() {
+        let spec = spec_for_profile(&profile()).unwrap();
+        assert_eq!(spec.env["ANTHROPIC_API_KEY"], "sk-custom");
+        assert!(spec.env.get(AUTH_TOKEN_KEY).is_none());
+        assert_eq!(spec.env[BASE_URL_KEY], "https://api.example.com");
+        assert_eq!(spec.env[SONNET_KEY], "model-s");
+        assert!(spec.env.get(HAIKU_KEY).is_none()); // optional tier omitted
+        assert_eq!(spec.env["API_TIMEOUT_MS"], "60000");
+        assert_eq!(spec.api_key_helper.as_deref(), Some("echo hi"));
+    }
+
+    #[test]
+    fn profile_ready_needs_base_and_token() {
+        assert!(profile_ready(&profile()));
+        let mut p = profile();
+        p.token = None;
+        assert!(!profile_ready(&p));
+    }
+
+    #[test]
+    fn models_url_tolerates_v1_and_trailing_slash() {
+        assert_eq!(models_url("https://api.x.com"), "https://api.x.com/v1/models");
+        assert_eq!(models_url("https://api.x.com/"), "https://api.x.com/v1/models");
+        assert_eq!(models_url("https://api.x.com/v1"), "https://api.x.com/v1/models");
+        assert_eq!(models_url("https://api.x.com/anthropic"), "https://api.x.com/anthropic/v1/models");
+    }
+
+    #[test]
+    fn parse_models_sorts_newest_first_undated_last() {
+        let body = serde_json::json!({"data": [
+            {"id": "old", "created": 100},
+            {"id": "undated"},
+            {"id": "new", "created_at": "2026-01-01T00:00:00Z"},
+        ]});
+        let models = parse_models(&body);
+        assert_eq!(models, vec!["new", "old", "undated"]);
     }
 
     #[test]

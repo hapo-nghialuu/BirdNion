@@ -243,6 +243,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
             remaining_pct: interval_remaining,
             subtitle: None,
             resets_at: interval_reset,
+            window_seconds: None,
         });
         windows.push(QuotaWindow {
             label: format!("{prefix}Tuần"),
@@ -250,6 +251,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
             remaining_pct: weekly_remaining,
             subtitle: None,
             resets_at: weekly_reset,
+            window_seconds: None,
         });
     }
 
@@ -264,6 +266,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
             remaining_pct: 100,
             subtitle: None,
             resets_at: Some(resets_at),
+            window_seconds: None,
         });
     }
 
@@ -273,6 +276,13 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
         windows,
         last_updated: chrono::Utc::now().timestamp(),
         account_label: Some(account_label.to_string()),
+        // Subscription title when the platform endpoint returns it
+        // (macOS `current_subscribe_title` plan-name parity).
+        plan_name: body
+            .get("current_subscribe_title")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(String::from),
         ..Default::default()
     }
 }

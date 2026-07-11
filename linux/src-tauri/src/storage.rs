@@ -19,6 +19,14 @@ fn candidate_paths(id: &str, home: &std::path::Path) -> Vec<PathBuf> {
             }
             vec![p(".codex")]
         }
+        "grok" => {
+            if let Ok(custom) = std::env::var("GROK_HOME") {
+                if !custom.trim().is_empty() {
+                    return vec![PathBuf::from(custom)];
+                }
+            }
+            vec![p(".grok")]
+        }
         "gemini" => vec![p(".gemini"), p(".config/gemini")],
         "copilot" => vec![p(".config/github-copilot")],
         "opencode" | "opencodego" => vec![p(".config/opencode"), p(".local/share/opencode")],
@@ -29,17 +37,23 @@ fn candidate_paths(id: &str, home: &std::path::Path) -> Vec<PathBuf> {
 
 /// Sums regular-file sizes under `id`'s candidate directories. Symlinks
 /// (both the dir entry itself and nested ones) are skipped. Missing paths
-/// are silently ignored — mirrors macOS best-effort scan semantics.
+/// are silently ignored — mirrors macOS best-effort scan semantics. Runs on
+/// a blocking thread: the tree walk over `~/.claude` etc. is far too slow
+/// for the GTK main loop (sync commands block the webview's paint).
 #[tauri::command]
-pub fn provider_storage(id: String) -> u64 {
-    let home = match std::env::var("HOME") {
-        Ok(h) if !h.trim().is_empty() => PathBuf::from(h),
-        _ => return 0,
-    };
-    candidate_paths(&id, &home)
-        .into_iter()
-        .map(|path| scan_dir_size(&path))
-        .sum()
+pub async fn provider_storage(id: String) -> u64 {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = match std::env::var("HOME") {
+            Ok(h) if !h.trim().is_empty() => PathBuf::from(h),
+            _ => return 0,
+        };
+        candidate_paths(&id, &home)
+            .into_iter()
+            .map(|path| scan_dir_size(&path))
+            .sum()
+    })
+    .await
+    .unwrap_or(0)
 }
 
 /// Walks one directory (or measures one file), summing regular-file sizes.
@@ -135,6 +149,13 @@ mod tests {
         let home = std::path::Path::new("/home/x");
         let paths = candidate_paths("claude", home);
         assert!(paths.contains(&home.join(".claude")));
+    }
+
+    #[test]
+    fn grok_candidates_include_dotgrok() {
+        let home = std::path::Path::new("/home/x");
+        let paths = candidate_paths("grok", home);
+        assert!(paths.contains(&home.join(".grok")));
     }
 
     #[test]

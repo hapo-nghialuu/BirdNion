@@ -144,6 +144,7 @@ fn parse_status(
         remaining_pct: 100,
         subtitle: Some(subtitle),
         resets_at: None,
+        window_seconds: None,
     }];
 
     let plan_name = detail_body
@@ -170,6 +171,7 @@ fn parse_status(
                         remaining_pct: 100 - pct,
                         subtitle: Some(format!("{} / {} tokens", format_thousands(used), format_thousands(limit))),
                         resets_at: None,
+                        window_seconds: None,
                     });
                 }
             }

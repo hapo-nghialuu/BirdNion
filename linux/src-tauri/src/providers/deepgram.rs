@@ -146,6 +146,7 @@ fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_
         remaining_pct: 100,
         subtitle: Some(fmt(agg.requests)),
         resets_at: None,
+        window_seconds: None,
     }];
     if agg.hours > 0.0 {
         let audio = if agg.total_hours > 0.0 {
@@ -159,6 +160,7 @@ fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_
             remaining_pct: 100,
             subtitle: Some(audio),
             resets_at: None,
+            window_seconds: None,
         });
     }
     let mut extra = Vec::new();
@@ -179,15 +181,16 @@ fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_
             remaining_pct: 100,
             subtitle: Some(extra.join(" · ")),
             resets_at: None,
+            window_seconds: None,
         });
     }
-    let _ = plan_name; // surfaced via account_label/plan in Swift; no plan field on Rust ProviderStatus.
     ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
         account_label: Some(account_label.to_string()),
+        plan_name: Some(plan_name.to_string()),
         ..Default::default()
     }
 }
