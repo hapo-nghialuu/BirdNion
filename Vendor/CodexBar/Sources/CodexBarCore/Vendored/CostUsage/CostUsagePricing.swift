@@ -183,6 +183,43 @@ enum CostUsagePricing {
             outputCostPerToken: 1.8e-4,
             cacheReadInputCostPerToken: nil,
             displayLabel: nil),
+        // GPT-5.6 family (OpenAI public pricing). Sol ≈ gpt-5.5 rates.
+        "gpt-5.6": CodexPricing(
+            inputCostPerToken: 5e-6,
+            outputCostPerToken: 3e-5,
+            cacheReadInputCostPerToken: 5e-7,
+            displayLabel: nil,
+            thresholdTokens: 272_000,
+            inputCostPerTokenAboveThreshold: 1e-5,
+            outputCostPerTokenAboveThreshold: 4.5e-5,
+            cacheReadInputCostPerTokenAboveThreshold: 1e-6),
+        "gpt-5.6-sol": CodexPricing(
+            inputCostPerToken: 5e-6,
+            outputCostPerToken: 3e-5,
+            cacheReadInputCostPerToken: 5e-7,
+            displayLabel: nil,
+            thresholdTokens: 272_000,
+            inputCostPerTokenAboveThreshold: 1e-5,
+            outputCostPerTokenAboveThreshold: 4.5e-5,
+            cacheReadInputCostPerTokenAboveThreshold: 1e-6),
+        "gpt-5.6-terra": CodexPricing(
+            inputCostPerToken: 2.5e-6,
+            outputCostPerToken: 1.5e-5,
+            cacheReadInputCostPerToken: 2.5e-7,
+            displayLabel: nil,
+            thresholdTokens: 272_000,
+            inputCostPerTokenAboveThreshold: 5e-6,
+            outputCostPerTokenAboveThreshold: 2.25e-5,
+            cacheReadInputCostPerTokenAboveThreshold: 5e-7),
+        "gpt-5.6-luna": CodexPricing(
+            inputCostPerToken: 1e-6,
+            outputCostPerToken: 6e-6,
+            cacheReadInputCostPerToken: 1e-7,
+            displayLabel: nil,
+            thresholdTokens: 272_000,
+            inputCostPerTokenAboveThreshold: 2e-6,
+            outputCostPerTokenAboveThreshold: 9e-6,
+            cacheReadInputCostPerTokenAboveThreshold: 2e-7),
     ]
 
     static func codexBuiltInPricingFingerprint() -> String {

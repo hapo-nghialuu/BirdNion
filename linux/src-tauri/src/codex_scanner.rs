@@ -92,6 +92,36 @@ fn price_for(model: &str) -> Option<Price> {
             cache_read_above: 1e-6,
             output_above: 4.5e-5,
         },
+        // GPT-5.6 family (OpenAI public pricing, short/long context).
+        // Sol matches gpt-5.5 rate card; Terra ~half; Luna is the fast tier.
+        // Model ids in Codex logs: "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna".
+        "gpt-5.6" | "gpt-5.6-sol" => Price {
+            input: 5e-6,
+            cache_read: 5e-7,
+            output: 3e-5,
+            threshold: Some(272_000),
+            input_above: 1e-5,
+            cache_read_above: 1e-6,
+            output_above: 4.5e-5,
+        },
+        "gpt-5.6-terra" => Price {
+            input: 2.5e-6,
+            cache_read: 2.5e-7,
+            output: 1.5e-5,
+            threshold: Some(272_000),
+            input_above: 5e-6,
+            cache_read_above: 5e-7,
+            output_above: 2.25e-5,
+        },
+        "gpt-5.6-luna" => Price {
+            input: 1e-6,
+            cache_read: 1e-7,
+            output: 6e-6,
+            threshold: Some(272_000),
+            input_above: 2e-6,
+            cache_read_above: 2e-7,
+            output_above: 9e-6,
+        },
         _ => return None,
     };
     Some(p)
@@ -388,6 +418,12 @@ mod tests {
         assert!((above - 3.0).abs() < 1e-9);
         // Dated + prefixed model names normalize to the base entry.
         assert!(cost_usd("openai/gpt-5.5-2026-01-01", 1_000, 0, 0) > 0.0);
+        // gpt-5.6-sol was missing from the table → $0 despite real tokens.
+        // Use 100K (below 272K threshold) so short-context rates apply.
+        assert!((cost_usd("gpt-5.6-sol", 100_000, 0, 0) - 0.5).abs() < 1e-9);
+        assert!((cost_usd("gpt-5.6-terra", 100_000, 0, 0) - 0.25).abs() < 1e-9);
+        assert!((cost_usd("gpt-5.6-luna", 100_000, 0, 0) - 0.1).abs() < 1e-9);
+        assert!(cost_usd("gpt-5.6-sol", 1_000_000, 0, 0) > 0.0);
         // Unknown models cost $0.
         assert_eq!(cost_usd("mystery-model", 1_000_000, 0, 0), 0.0);
     }
