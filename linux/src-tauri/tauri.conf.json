@@ -20,7 +20,9 @@
         "minWidth": 420,
         "maxWidth": 420,
         "minHeight": 200,
-        "resizable": true
+        "resizable": true,
+        "decorations": true,
+        "alwaysOnTop": false
       }
     ],
     "security": {
