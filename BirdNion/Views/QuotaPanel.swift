@@ -1409,9 +1409,10 @@ struct WindowRow: View {
 
 /// FreeModel account switcher — same collapsed-card pattern as
 /// `CodexAccountsPopoverSection`: header row (icon + active account + count +
-/// chevron), expandable rows with a radio + switch/remove, and an add form
-/// (paste a `bm_session` cookie). Per-browser sessions are auto-detected so
-/// two browsers signed in to two accounts appear as two entries.
+/// chevron) and expandable rows with a radio + switch/remove. Per-browser
+/// sessions are auto-detected so two browsers signed in to two accounts
+/// appear as two entries. (No add-cookie form here — the popover is a fast
+/// switcher; pasted-cookie accounts are managed elsewhere.)
 struct FreemodelAccountsPopoverSection: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -1420,8 +1421,6 @@ struct FreemodelAccountsPopoverSection: View {
     @State private var revealed = false
     @State private var busy = false
     @State private var errorText: String?
-    @State private var addCookie = ""
-    @State private var addLabel = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1440,7 +1439,6 @@ struct FreemodelAccountsPopoverSection: View {
                         .lineLimit(2)
                         .padding(.vertical, 4)
                 }
-                addAccountRow
             }
         }
         .vocabbyCard()
@@ -1545,40 +1543,6 @@ struct FreemodelAccountsPopoverSection: View {
         .padding(.vertical, 5)
     }
 
-    private var addAccountRow: some View {
-        let lang = settings.appLanguage
-        return VStack(alignment: .leading, spacing: 6) {
-            Divider()
-                .overlay(VocabbyTheme.border)
-                .padding(.vertical, 2)
-            Text(L10n.t("freemodel.addHint", lang))
-                .font(.system(size: 10))
-                .foregroundStyle(VocabbyTheme.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                SecureField(L10n.t("freemodel.cookiePlaceholder", lang), text: $addCookie)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-                TextField(L10n.t("freemodel.labelPlaceholder", lang), text: $addLabel)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-                    .frame(width: 90)
-                Button {
-                    addAccount()
-                } label: {
-                    if busy {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text(L10n.t("freemodel.addAccount", lang))
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                }
-                .controlSize(.small)
-                .disabled(busy || addCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-
     // MARK: Actions
 
     private func reload() {
@@ -1607,33 +1571,6 @@ struct FreemodelAccountsPopoverSection: View {
             reload()
         } catch {
             errorText = error.localizedDescription
-        }
-    }
-
-    private func addAccount() {
-        let raw = addCookie.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let normalized = FreemodelProvider.filteredCookieHeader(from: raw) else {
-            errorText = L10n.t("freemodel.cookieNeedsSession", settings.appLanguage)
-            return
-        }
-        busy = true
-        let label = addLabel
-        Task.detached(priority: .utility) {
-            // Email lookup doubles as soft validation; a rate-limited /me
-            // still stores the cookie, just unlabeled.
-            let email = await FreemodelProvider.accountEmail(cookieHeader: normalized)
-            await MainActor.run {
-                do {
-                    try FreemodelAccountStore.add(cookie: normalized, label: label, email: email)
-                    addCookie = ""
-                    addLabel = ""
-                    errorText = nil
-                    reload()
-                } catch {
-                    errorText = error.localizedDescription
-                }
-                busy = false
-            }
         }
     }
 }
