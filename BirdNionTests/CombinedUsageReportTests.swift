@@ -186,12 +186,76 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(week.usd, 5, accuracy: 0.001)          // 2 + 3, -8d excluded
         XCTAssertEqual(week.claudeUSD, 2, accuracy: 0.001)
         XCTAssertEqual(week.codexUSD, 3, accuracy: 0.001)
+        XCTAssertEqual(week.grokUSD, 0, accuracy: 0.001)
         XCTAssertEqual(week.tokens, 300)
 
         let quarter = r.totals(lastDays: 90)
         XCTAssertEqual(quarter.usd, 10, accuracy: 0.001)
         XCTAssertEqual(quarter.claudeTokens, 150)
         XCTAssertEqual(quarter.codexTokens, 200)
+    }
+
+    /// Grok is a third local-cost source on the All tab — merges by calendar day
+    /// and contributes to last30 / topModels with source tag "grok".
+    func testMergesGrokAsThirdSource() {
+        let claude = claudeReport(
+            daily: [claudeDay(0, usd: 1, tokens: 10)],
+            last30USD: 1, last30Tokens: 10)
+        let codex = codexReport(
+            daily: [codexDay(0, usd: 2, tokens: 20)],
+            last30USD: 2, last30Tokens: 20)
+        let grok = GrokUsageReport(
+            todayUSD: 3, todayTokens: 30,
+            last30USD: 3, last30Tokens: 30,
+            daily: [GrokDailyUsage(
+                date: day(0), usd: 3, tokens: 30,
+                models: [GrokDailyModel(name: "grok-4.5", usd: 3, tokens: 30)])],
+            topModel: "grok-4.5")
+
+        let r = CombinedUsageReport.build(claude: claude, codex: codex, grok: grok,
+                                          calendar: calendar, now: now)
+        XCTAssertEqual(r.todayUSD, 6, accuracy: 0.001)
+        XCTAssertEqual(r.todayTokens, 60)
+        XCTAssertEqual(r.last30USD, 6, accuracy: 0.001)
+        XCTAssertEqual(r.daily.last?.grokUSD ?? -1, 3, accuracy: 0.001)
+        XCTAssertEqual(r.totals(lastDays: 7).grokUSD, 3, accuracy: 0.001)
+        XCTAssertTrue(r.topModels.contains { $0.source == "grok" && $0.name == "grok-4.5" })
+    }
+
+    func testDisabledSourcesExcludePreviouslyLoadedReports() {
+        let claude = claudeReport(
+            daily: [claudeDay(0, usd: 1, tokens: 10)],
+            last30USD: 1, last30Tokens: 10)
+        let codex = codexReport(
+            daily: [codexDay(
+                0,
+                usd: 2,
+                tokens: 20,
+                models: [CodexDailyModel(name: "gpt-5.5", usd: 2, tokens: 20)])],
+            last30USD: 2, last30Tokens: 20)
+        let grok = GrokUsageReport(
+            todayUSD: 3, todayTokens: 30,
+            last30USD: 3, last30Tokens: 30,
+            daily: [GrokDailyUsage(
+                date: day(0), usd: 3, tokens: 30,
+                models: [GrokDailyModel(name: "grok-4.5", usd: 3, tokens: 30)])],
+            topModel: "grok-4.5")
+
+        let r = CombinedUsageReport.build(
+            claude: claude,
+            codex: codex,
+            grok: grok,
+            includeClaude: false,
+            includeCodex: true,
+            includeGrok: false,
+            calendar: calendar,
+            now: now)
+
+        XCTAssertEqual(r.todayUSD, 2, accuracy: 0.001)
+        XCTAssertEqual(r.todayTokens, 20)
+        XCTAssertEqual(r.last30USD, 2, accuracy: 0.001)
+        XCTAssertEqual(r.last30Tokens, 20)
+        XCTAssertEqual(r.topModels.map(\.source), ["codex"])
     }
 
     /// Models merge per source across days, sort by cost, and keep their

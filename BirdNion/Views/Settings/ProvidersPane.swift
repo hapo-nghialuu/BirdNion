@@ -1152,6 +1152,10 @@ struct ProvidersPane: View {
                 // Gemini uses Google OAuth from the Gemini CLI creds file,
                 // not a pasted API token — show sign-in status instead.
                 geminiSignInSection()
+            } else if row.id == "grok" {
+                // Grok uses grok login (~/.grok/auth.json) + optional browser
+                // session on grok.com — no pasted API token.
+                grokSignInSection()
             } else if row.id == "kiro" {
                 // Kiro uses the Kiro CLI (no API token) — show a sign-in hint.
                 kiroSignInSection()
@@ -1371,6 +1375,34 @@ struct ProvidersPane: View {
                 .padding(.vertical, 10)
             }
 
+            if row.id == "openai" {
+                SettingsRowDivider()
+                VStack(alignment: .leading, spacing: 4) {
+                    let vi = L10n.languageCode(language) == "vi"
+                    Text(vi ? "OpenAI Project ID" : "OpenAI Project ID")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
+                    Text(vi
+                         ? "Tùy chọn (proj_…). Dùng Admin API key (OPENAI_ADMIN_KEY). Không phải ChatGPT/Codex quota — đó là provider Codex."
+                         : "Optional (proj_…). Prefer an Admin API key (OPENAI_ADMIN_KEY). Not ChatGPT/Codex quota — use the Codex provider for that.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    TextField("proj_…", text: Binding(
+                        get: { rows[idx].projectID ?? "" },
+                        set: { raw in
+                            let v = raw.trimmingCharacters(in: .whitespaces)
+                            rows[idx].projectID = v.isEmpty ? nil : v
+                            saveAll()
+                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+
             if row.id == "copilot" {
                 SettingsRowDivider()
                 VStack(alignment: .leading, spacing: 4) {
@@ -1559,7 +1591,7 @@ struct ProvidersPane: View {
 
     /// Provider ids that authenticate via a browser session cookie (no API token).
     static let cookieProviderIDs: Set<String> = [
-        "commandcode", "mimo", "alibaba", "opencode", "opencodego", "cursor", "freemodel",
+        "commandcode", "mimo", "alibaba", "opencode", "opencodego", "cursor", "freemodel", "ollama",
     ]
 
     /// Cookie-source picker (Auto / Manual / Off) + manual Cookie-header field.
@@ -2163,6 +2195,38 @@ struct ProvidersPane: View {
         .padding(.vertical, 10)
     }
 
+    private func grokLoginStatus() -> String {
+        let vi = L10n.languageCode(language) == "vi"
+        if let email = GrokProvider.signedInEmail() {
+            return vi ? "Đã đăng nhập: \(email)" : "Signed in: \(email)"
+        }
+        if GrokProvider.isSignedIn() {
+            return vi ? "Đã đăng nhập (CLI/auth)" : "Signed in (CLI/auth)"
+        }
+        return vi ? "Chưa đăng nhập" : "Not signed in"
+    }
+
+    @ViewBuilder
+    private func grokSignInSection() -> some View {
+        let vi = L10n.languageCode(language) == "vi"
+        VStack(alignment: .leading, spacing: 4) {
+            Text(vi ? "Đăng nhập" : "Sign in")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
+            Text(grokLoginStatus())
+                .font(.system(size: 12))
+                .foregroundStyle(SettingsTheme.secondary)
+            Text(vi
+                 ? "Grok đọc `~/.grok/auth.json` (chạy `grok login`) và fallback billing grok.com qua cookie Chrome. Không cần dán API token."
+                 : "Grok reads `~/.grok/auth.json` (`grok login`) and falls back to grok.com billing via Chrome cookies. No API token paste.")
+                .font(.system(size: 11))
+                .foregroundStyle(SettingsTheme.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
     /// One labeled AWS credential field bound to a config keyPath via `rows[idx]`.
     @ViewBuilder
     private func bedrockField(
@@ -2739,6 +2803,17 @@ struct ProvidersPane: View {
             return [dash("https://console.deepgram.com/project/"), stat("https://status.deepgram.com")].compactMap { $0 }
         case "groq":
             return [dash("https://console.groq.com/dashboard/metrics"), stat("https://status.groq.com")].compactMap { $0 }
+        case "grok":
+            return [usage("https://grok.com/?_s=usage"),
+                    changelog("https://x.ai/news"),
+                    stat("https://status.x.ai")].compactMap { $0 }
+        case "openai":
+            return [usage("https://platform.openai.com/usage"),
+                    dash("https://platform.openai.com/settings/organization/admin-keys"),
+                    stat("https://status.openai.com")].compactMap { $0 }
+        case "ollama":
+            return [dash("https://ollama.com/settings"),
+                    usage("https://ollama.com/settings/keys")].compactMap { $0 }
         case "copilot":
             return [dash("https://github.com/settings/copilot"), stat("https://www.githubstatus.com/")].compactMap { $0 }
         case "kilo":
@@ -2886,6 +2961,9 @@ struct ProvidersPane: View {
         case "elevenlabs": "ElevenLabs"
         case "deepgram": "Deepgram"
         case "groq": "Groq"
+        case "grok": "Grok"
+        case "openai": "OpenAI"
+        case "ollama": "Ollama"
         case "copilot": "Copilot"
         case "kilo": "Kilo"
         case "commandcode": "Command Code"
@@ -3041,6 +3119,12 @@ struct ProviderLogoView: View {
             logo("DeepgramLogo", brand: VocabbyTheme.deepgram)
         case "groq":
             logo("GroqLogo", brand: VocabbyTheme.groq)
+        case "grok":
+            logo("GrokLogo", brand: VocabbyTheme.grok)
+        case "openai":
+            logo("CodexLogo", brand: VocabbyTheme.openAI)
+        case "ollama":
+            logo("OllamaLogo", brand: VocabbyTheme.ollama)
         case "copilot":
             logo("CopilotLogo", brand: VocabbyTheme.copilot)
         case "kilo":

@@ -40,6 +40,11 @@
 		OPC00001000000000000B01 /* OpenCodeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OPC00002000000000000F01 /* OpenCodeProvider.swift */; };
 		OCG00001000000000000B01 /* OpenCodeGoProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OCG00002000000000000F01 /* OpenCodeGoProvider.swift */; };
 		GEM00001000000000000B01 /* GeminiProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GEM00002000000000000F01 /* GeminiProvider.swift */; };
+		GRK00001000000000000B01 /* GrokProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00002000000000000F01 /* GrokProvider.swift */; };
+		GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00004000000000000F01 /* GrokCostScanner.swift */; };
+		CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHS00002000000000000F01 /* CostHistoryStore.swift */; };
+		OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OAI00002000000000000F01 /* OpenAIProvider.swift */; };
+		OLA00001000000000000B01 /* OllamaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OLA00002000000000000F01 /* OllamaProvider.swift */; };
 		KRO00001000000000000B01 /* KiroProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = KRO00002000000000000F01 /* KiroProvider.swift */; };
 		ANT00001000000000000B01 /* AntigravityProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANT00002000000000000F01 /* AntigravityProvider.swift */; };
 		ANT00003000000000000B01 /* AntigravityOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANT00004000000000000F01 /* AntigravityOAuth.swift */; };
@@ -185,6 +190,11 @@
 		OPC00002000000000000F01 /* OpenCodeProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenCodeProvider.swift; sourceTree = "<group>"; };
 		OCG00002000000000000F01 /* OpenCodeGoProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenCodeGoProvider.swift; sourceTree = "<group>"; };
 		GEM00002000000000000F01 /* GeminiProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GeminiProvider.swift; sourceTree = "<group>"; };
+		GRK00002000000000000F01 /* GrokProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokProvider.swift; sourceTree = "<group>"; };
+		GRK00004000000000000F01 /* GrokCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokCostScanner.swift; sourceTree = "<group>"; };
+		CHS00002000000000000F01 /* CostHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CostHistoryStore.swift; sourceTree = "<group>"; };
+		OAI00002000000000000F01 /* OpenAIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenAIProvider.swift; sourceTree = "<group>"; };
+		OLA00002000000000000F01 /* OllamaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OllamaProvider.swift; sourceTree = "<group>"; };
 		KRO00002000000000000F01 /* KiroProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/KiroProvider.swift; sourceTree = "<group>"; };
 		ANT00002000000000000F01 /* AntigravityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/AntigravityProvider.swift; sourceTree = "<group>"; };
 		ANT00004000000000000F01 /* AntigravityOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Antigravity/AntigravityOAuth.swift; sourceTree = "<group>"; };
@@ -570,6 +580,11 @@
 				OPC00001000000000000B01 /* OpenCodeProvider.swift in Sources */,
 				OCG00001000000000000B01 /* OpenCodeGoProvider.swift in Sources */,
 				GEM00001000000000000B01 /* GeminiProvider.swift in Sources */,
+				GRK00001000000000000B01 /* GrokProvider.swift in Sources */,
+				GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */,
+				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
+				OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */,
+				OLA00001000000000000B01 /* OllamaProvider.swift in Sources */,
 				KRO00001000000000000B01 /* KiroProvider.swift in Sources */,
 				ANT00001000000000000B01 /* AntigravityProvider.swift in Sources */,
 				ANT00003000000000000B01 /* AntigravityOAuth.swift in Sources */,

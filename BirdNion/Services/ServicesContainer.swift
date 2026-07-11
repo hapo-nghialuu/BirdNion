@@ -82,6 +82,15 @@ final class ServicesContainer: ObservableObject {
                 result.append(DeepgramProvider())
             case "groq":
                 result.append(GroqProvider())
+            case "grok":
+                // Zero-config: reads ~/.grok/auth.json + CLI/web billing.
+                result.append(GrokProvider())
+            case "openai":
+                // Admin API spend (OPENAI_ADMIN_KEY) + legacy credit grants fallback.
+                result.append(OpenAIProvider())
+            case "ollama":
+                // Cloud usage via cookies; API key verifies access only.
+                result.append(OllamaProvider())
             case "copilot":
                 result.append(CopilotProvider())
             case "kilo":

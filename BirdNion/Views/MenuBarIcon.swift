@@ -201,6 +201,16 @@ enum MenuBarIconRenderer {
         case "groq":
             return scaled(NSImage(named: "GroqLogo"), to: pointSize, isTemplate: false, tint: .white)
                 ?? fallbackLogo(pointSize)
+        case "grok":
+            return scaled(NSImage(named: "GrokLogo"), to: pointSize, isTemplate: false, tint: .white)
+                ?? fallbackLogo(pointSize)
+        case "openai":
+            // Same monochrome mark as Codex (CodexBar OpenAI branding).
+            return scaled(NSImage(named: "CodexLogo"), to: pointSize, isTemplate: false, tint: .white)
+                ?? fallbackLogo(pointSize)
+        case "ollama":
+            return scaled(NSImage(named: "OllamaLogo"), to: pointSize, isTemplate: false, tint: .white)
+                ?? fallbackLogo(pointSize)
         case "copilot":
             return scaled(NSImage(named: "CopilotLogo"), to: pointSize, isTemplate: false, tint: .white)
                 ?? fallbackLogo(pointSize)

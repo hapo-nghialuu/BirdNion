@@ -137,13 +137,27 @@ enum CodexCostScanner {
         // Same as `summary()`: the machine-wide ~/.codex is the only place
         // session logs actually accumulate.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
-        guard let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
+        let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,
             codexHomePath: codexHome,
             historyDays: chartWindowDays)
-        else { return nil }
-        let value = mapReport(snapshot, now: now)
+        let live = snapshot.map { mapReport($0, now: now) }
+        let liveDays = (live?.daily ?? []).map {
+            ($0.date, $0.usd, $0.tokens,
+             $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
+        }
+        let window = CostHistoryStore.apply(
+            source: .codex,
+            liveDays: liveDays,
+            now: now,
+            windowDays: chartWindowDays)
+        let value = CostHistoryStore.makeCodexReport(window: window, now: now)
+        // Persist high-water days even when the live snapshot fails / is empty
+        // (e.g. user deleted ~/.codex/sessions after a prior successful scan).
+        if value.isEmpty && live == nil {
+            return nil
+        }
         await Cache.shared.storeReport(value, at: now)
         return value
     }

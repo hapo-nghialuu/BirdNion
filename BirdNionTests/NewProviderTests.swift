@@ -44,6 +44,252 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(GroqProvider.parseScalar(json), 4.0, accuracy: 0.001)
     }
 
+    /// Grok CLI billing JSON → monthly used% + Monthly/Tuần label + $ subtitle.
+    func testGrokBillingJSONMapsToProviderStatus() throws {
+        let json = """
+        {
+          "billingCycle": {
+            "billingPeriodStart": "2026-05-01T00:00:00Z",
+            "billingPeriodEnd": "2026-06-01T00:00:00Z"
+          },
+          "monthlyLimit": { "val": 99900 },
+          "onDemandCap": { "val": 0 },
+          "on_demand_enabled": false,
+          "disabledByConfig": false,
+          "usage": {
+            "includedUsed": { "val": 49950 },
+            "onDemandUsed": { "val": 0 },
+            "totalUsed": { "val": 49950 }
+          }
+        }
+        """.data(using: .utf8)!
+        let s = try GrokProvider._parseBillingJSONForTesting(
+            json, email: "user@x.ai", loginMethod: "SuperGrok")
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.id, "grok")
+        XCTAssertEqual(s.accountLabel, "user@x.ai")
+        XCTAssertEqual(s.planName, "SuperGrok")
+        XCTAssertEqual(s.windows.count, 1)
+        XCTAssertEqual(s.windows.first?.usedPct, 50)
+        XCTAssertEqual(s.windows.first?.remainingPct, 50)
+        XCTAssertEqual(s.windows.first?.label, "Tháng")  // ~31d period → Monthly
+        XCTAssertEqual(s.windows.first?.subtitle, "$499.50 / $999.00")
+        XCTAssertEqual(s.windows.first?.windowSeconds, 31 * 24 * 60 * 60)
+        XCTAssertNotNil(s.windows.first?.resetDate)
+    }
+
+    /// Grok web billing snapshot → used% + reset date (Credits / Tuần / Tháng).
+    func testGrokWebBillingSnapshotMapsToProviderStatus() {
+        let reset = Date(timeIntervalSince1970: 1_800_000_000)
+        let now = Date(timeIntervalSince1970: 1_799_000_000) // ~11.5 days before reset → Weekly
+        let s = GrokProvider._mapWebBillingForTesting(
+            usedPercent: 42.5,
+            resetsAt: reset,
+            email: "web@x.ai",
+            now: now)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.accountLabel, "web@x.ai")
+        XCTAssertEqual(s.windows.first?.usedPct, 43) // 42.5 rounded
+        XCTAssertEqual(s.windows.first?.remainingPct, 57)
+        XCTAssertEqual(s.windows.first?.resetDate, reset)
+        XCTAssertEqual(s.windows.first?.label, "Tuần")
+    }
+
+    func testGrokLocalizeWindowLabel() {
+        XCTAssertEqual(GrokProvider.localizeWindowLabel("Weekly"), "Tuần")
+        XCTAssertEqual(GrokProvider.localizeWindowLabel("Monthly"), "Tháng")
+        XCTAssertEqual(GrokProvider.localizeWindowLabel("Credits"), "Credits")
+    }
+
+    /// High-water merge: a lower live rescan (sessions deleted) must not
+    /// erase a previously stored day; a higher live day must update the store.
+    func testCostHistoryNeverShrinksDeletedSessions() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        // First scan: store yesterday + today.
+        let w1 = CostHistoryStore.apply(
+            source: .claude,
+            liveDays: [
+                (yesterday, 10.0, 1000, [("claude-opus", 10.0, 1000)]),
+                (today, 2.0, 200, [("claude-sonnet", 2.0, 200)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url)
+        XCTAssertEqual(w1.last?.tokens ?? -1, 200)
+        XCTAssertEqual(w1[w1.count - 2].tokens, 1000)
+
+        // User deletes sessions → live only has a smaller today, no yesterday.
+        let w2 = CostHistoryStore.apply(
+            source: .claude,
+            liveDays: [
+                (today, 0.5, 50, [("claude-sonnet", 0.5, 50)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url)
+        // Yesterday preserved (high-water).
+        XCTAssertEqual(w2[w2.count - 2].tokens, 1000)
+        XCTAssertEqual(w2[w2.count - 2].usd, 10.0, accuracy: 0.001)
+        // Today keeps the higher prior mark (200), not the shrunk live 50.
+        XCTAssertEqual(w2.last?.tokens ?? -1, 200)
+
+        // New usage today grows past the stored mark → update.
+        let w3 = CostHistoryStore.apply(
+            source: .claude,
+            liveDays: [
+                (today, 5.0, 500, [("claude-sonnet", 5.0, 500)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url)
+        XCTAssertEqual(w3.last?.tokens ?? -1, 500)
+        XCTAssertEqual(w3.last?.usd ?? -1, 5.0, accuracy: 0.001)
+        // Yesterday still intact.
+        XCTAssertEqual(w3[w3.count - 2].tokens, 1000)
+    }
+
+    func testCostHistoryPreferHigher() {
+        let low = CostHistoryStore.Day(usd: 1, tokens: 10, models: [])
+        let high = CostHistoryStore.Day(usd: 2, tokens: 20, models: [
+            .init(name: "m", usd: 2, tokens: 20)
+        ])
+        XCTAssertEqual(CostHistoryStore.preferHigher(low, high).tokens, 20)
+        XCTAssertEqual(CostHistoryStore.preferHigher(high, low).tokens, 20)
+    }
+
+    func testOpenAIMapBalanceCredits() {
+        // mapBalance is CodexBarCore-typed; exercise via a thin test helper.
+        let s = OpenAIProvider._mapBalanceForTesting(
+            granted: 100, used: 25, available: 75)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.id, "openai")
+        XCTAssertEqual(s.windows.first?.label, "Credits")
+        XCTAssertEqual(s.windows.first?.usedPct, 25)
+        XCTAssertEqual(s.creditsRemaining ?? -1, 75, accuracy: 0.001)
+    }
+
+    func testOllamaParseSessionWeeklyHTML() throws {
+        let html = """
+        <div>Cloud Usage</div>
+        <div>Session usage <span>42% used</span> data-time="2099-01-01T00:00:00Z"</div>
+        <div>Weekly usage <span>10% used</span></div>
+        """
+        let s = try OllamaProvider._parseHTMLForTesting(html)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.count, 2)
+        XCTAssertEqual(s.windows.first { $0.label == "Session" }?.usedPct, 42)
+        XCTAssertEqual(s.windows.first { $0.label == "Tuần" }?.usedPct, 10)
+    }
+
+    func testCostHistoryConcurrentSourcesDoNotOverwriteEachOther() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let now = Date()
+        let sources = CostHistoryStore.Source.allCases
+
+        for attempt in 0..<12 {
+            let url = dir.appendingPathComponent("cost-history-\(attempt).json")
+            await withTaskGroup(of: Void.self) { group in
+                for (index, source) in sources.enumerated() {
+                    group.addTask {
+                        _ = CostHistoryStore.apply(
+                            source: source,
+                            liveDays: [(now, Double(index + 1), index + 1, [])],
+                            now: now,
+                            windowDays: 1,
+                            url: url)
+                    }
+                }
+            }
+
+            let stored = Set((CostHistoryStore.read(url: url).sources ?? [:]).keys)
+            XCTAssertEqual(stored, Set(sources.map(\.rawValue)))
+        }
+    }
+
+    func testGrokBinaryAloneIsNotSignedIn() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        XCTAssertFalse(GrokProvider.isSignedIn(env: [
+            "GROK_HOME": home.path,
+            "GROK_CLI_PATH": "/usr/bin/false",
+            "PATH": "/usr/bin",
+        ]))
+    }
+
+    /// Grok 4.5 blended rate: 75% × $2 + 25% × $6 = $3 / M tokens.
+    func testGrokModelPriceBlendedEstimate() {
+        let usd = GrokModelPrice.estimateUSD(tokens: 1_000_000, model: "grok-4.5")
+        XCTAssertEqual(usd, 3.0, accuracy: 0.001)
+        let half = GrokModelPrice.estimateUSD(tokens: 500_000, model: "grok-4.5")
+        XCTAssertEqual(half, 1.5, accuracy: 0.001)
+        XCTAssertEqual(GrokModelPrice.estimateUSD(tokens: 0, model: "grok-4.5"), 0, accuracy: 0.001)
+    }
+
+    /// Session points fold into contiguous daily buckets + calendar-today totals.
+    func testGrokCostScannerBuildReport() {
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+        let sessions: [GrokCostScanner.SessionPoint] = [
+            .init(day: today, tokens: 100_000, usd: 0.30, model: "grok-4.5"),
+            .init(day: today, tokens: 50_000, usd: 0.15, model: "grok-4.5"),
+            .init(day: yesterday, tokens: 200_000, usd: 0.60, model: "grok-4.5"),
+        ]
+        let report = GrokCostScanner.buildReport(sessions: sessions, now: now, windowDays: 90, calendar: cal)
+        XCTAssertEqual(report.daily.count, 90)
+        XCTAssertEqual(report.todayTokens, 150_000)
+        XCTAssertEqual(report.todayUSD, 0.45, accuracy: 0.001)
+        XCTAssertEqual(report.last30Tokens, 350_000)
+        XCTAssertEqual(report.last30USD, 1.05, accuracy: 0.001)
+        XCTAssertEqual(report.topModel, "grok-4.5")
+        let y = report.daily[report.daily.count - 2]
+        XCTAssertEqual(y.tokens, 200_000)
+        XCTAssertEqual(y.usd, 0.60, accuracy: 0.001)
+    }
+
+    /// Parse a signals.json fixture from a temp session directory.
+    func testGrokCostScannerParseSignalsFixture() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let session = base.appendingPathComponent("sessions/proj/sess-1")
+        try fm.createDirectory(at: session, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let signals = """
+        {"totalTokensBeforeCompaction":0,"contextTokensUsed":1000000,\
+        "modelsUsed":["grok-4.5"],"primaryModelId":"grok-4.5"}
+        """
+        try signals.write(to: session.appendingPathComponent("signals.json"),
+                          atomically: true, encoding: .utf8)
+
+        // Stamp last_active_at to "now" so calendar-today is unambiguous
+        // across timezones (UTC ISO vs local startOfDay).
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let summary = """
+        {"current_model_id":"grok-4.5","last_active_at":"\(iso.string(from: now))"}
+        """
+        try summary.write(to: session.appendingPathComponent("summary.json"),
+                          atomically: true, encoding: .utf8)
+
+        let report = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+        XCTAssertEqual(report.todayTokens, 1_000_000)
+        XCTAssertEqual(report.todayUSD, 3.0, accuracy: 0.01) // 1M × $3 blended
+        XCTAssertEqual(report.last30Tokens, 1_000_000)
+        XCTAssertEqual(report.topModel, "grok-4.5")
+    }
+
     // MARK: - Parity additions (Wave 2-3)
 
     func testElevenLabsProVoicesAndStatusSuffix() {

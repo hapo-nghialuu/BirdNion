@@ -25,6 +25,9 @@ struct QuotaOverview: View {
     /// 5 min by `CodexCostScanner` itself.
     @State private var codexReport: CodexUsageReport?
     @State private var codexReportTaskId: String?
+    /// Lazy-scanned Grok usage report from `~/.grok/sessions/**/signals.json`.
+    @State private var grokReport: GrokUsageReport?
+    @State private var grokReportTaskId: String?
     @State private var claudeCodeTargetRevision = 0
 
     var body: some View {
@@ -58,14 +61,16 @@ struct QuotaOverview: View {
                         showAllTab: hasLocalCostSources
                     )
                     if selected == "all" {
-                        // Combined Claude CLI + Codex overview (no real
+                        // Combined Claude CLI + Codex + Grok overview (no real
                         // ProviderStatus behind it — reports only).
                         VStack(alignment: .leading, spacing: 8) {
                             AllUsageOverview(
                                 claude: claudeReport,
                                 codex: codexReport,
+                                grok: grokReport,
                                 claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
-                                codexEnabled: quota.displayStatuses.contains { $0.id == "codex" })
+                                codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
+                                grokEnabled: quota.displayStatuses.contains { $0.id == "grok" })
                         }
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
@@ -124,7 +129,8 @@ struct QuotaOverview: View {
             // anything else must still be a live provider id.
             let selectionValid: Bool
             switch selectedProviderId {
-            case "all": selectionValid = ids.contains("claude") || ids.contains("codex")
+            case "all":
+                selectionValid = ids.contains("claude") || ids.contains("codex") || ids.contains("grok")
             case let sel?: selectionValid = ids.contains(sel)
             case nil: selectionValid = false
             }
@@ -151,6 +157,7 @@ struct QuotaOverview: View {
     private func triggerReportsIfNeeded(providerId: String) {
         triggerClaudeReportIfNeeded(providerId: providerId)
         triggerCodexReportIfNeeded(providerId: providerId)
+        triggerGrokReportIfNeeded(providerId: providerId)
     }
 
     /// Trigger the Claude 30-day scan only when the user actually views the
@@ -197,10 +204,28 @@ struct QuotaOverview: View {
         }
     }
 
+    /// Trigger the Grok session-signal scan when the user views Grok or All.
+    /// Cached 5 min by `GrokCostScanner`.
+    private func triggerGrokReportIfNeeded(providerId: String) {
+        let wantsGrok = providerId == "grok"
+            || (providerId == "all"
+                && quota.displayStatuses.contains(where: { $0.id == "grok" }))
+        guard wantsGrok else { return }
+        let taskId = UUID().uuidString
+        grokReportTaskId = taskId
+        Task {
+            let report = await GrokCostScanner.usageReport()
+            await MainActor.run {
+                guard grokReportTaskId == taskId else { return }
+                grokReport = report
+            }
+        }
+    }
+
     /// The All tab only exists when at least one local-cost source (Claude
     /// Code CLI or Codex) is enabled.
     private var hasLocalCostSources: Bool {
-        quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" }
+        quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" || $0.id == "grok" }
     }
 
     private func effectiveSelectedId() -> String {
@@ -389,6 +414,12 @@ struct ProviderLogoMark: View {
             logo("DeepgramLogo", brand: VocabbyTheme.deepgram)
         case "groq":
             logo("GroqLogo", brand: VocabbyTheme.groq)
+        case "grok":
+            logo("GrokLogo", brand: VocabbyTheme.grok)
+        case "openai":
+            logo("CodexLogo", brand: VocabbyTheme.openAI)
+        case "ollama":
+            logo("OllamaLogo", brand: VocabbyTheme.ollama)
         case "copilot":
             logo("CopilotLogo", brand: VocabbyTheme.copilot)
         case "kilo":
@@ -1778,6 +1809,8 @@ enum VocabbyTheme {
     // Claude amber-yellow for a clearer stacked-bar split.
     static let chartCodex  = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255)  // #469BE9
     static let chartClaude = Color(red: 204 / 255, green: 124 / 255, blue: 94 / 255)  // #CC7C5E (brand orange)
+    // Grok product brand is black (xAI/Grok mark), not CodexBar's teal placeholder.
+    static let chartGrok   = Color(red: 17 / 255, green: 24 / 255, blue: 39 / 255)    // #111827 near-black
     static let badge      = group
     static let border     = Color(red: 215 / 255, green: 220 / 255, blue: 226 / 255) // #D7DCE2
     static let disabled   = Color(red: 154 / 255, green: 163 / 255, blue: 173 / 255) // #9AA3AD
@@ -1795,6 +1828,10 @@ enum VocabbyTheme {
     static let elevenLabs = Color.primary                                            // CodexBar #EBEBE6 invisible on light → mono
     static let deepgram   = Color(red: 100 / 255, green: 103 / 255, blue: 242 / 255) // #6467F2 (CodexBar)
     static let groq       = Color(red: 245 / 255, green: 104 / 255, blue: 68 / 255)  // #F56844
+    static let grok       = Color(red: 17 / 255, green: 24 / 255, blue: 39 / 255)    // #111827 near-black (Grok brand)
+    // CodexBar OpenAI API branding (teal), distinct from Codex chat (#49A3B0).
+    static let openAI     = Color(red: 15 / 255, green: 130 / 255, blue: 110 / 255)  // ~#0F8270
+    static let ollama     = Color(red: 136 / 255, green: 136 / 255, blue: 136 / 255) // #888888 (CodexBar)
     static let copilot    = Color(red: 168 / 255, green: 85 / 255, blue: 247 / 255)  // #A855F7
     static let kilo       = Color(red: 242 / 255, green: 112 / 255, blue: 39 / 255)  // #F27027
     static let commandCode = Color(red: 0, green: 0, blue: 0)                        // #000000 (CodexBar)
@@ -1820,6 +1857,9 @@ enum VocabbyTheme {
         case "elevenlabs": return primary
         case "deepgram": return deepgram
         case "groq": return groq
+        case "grok": return grok
+        case "openai": return openAI
+        case "ollama": return ollama
         case "copilot": return copilot
         case "kilo": return kilo
         case "commandcode": return commandCode
@@ -1867,12 +1907,21 @@ enum VocabbyTheme {
 
     /// Heatmap cell fill for the All tab's activity grid: 0 → idle track,
     /// then four intensity steps of the chart blue.
+    /// GitHub-style contribution greens, lightened one step so the popover
+    /// heatmap is softer than the full GitHub calendar palette.
+    /// Empty → L1 pale → L2 mid → L3 strong → L4 deepest (still soft).
+    static let heatEmpty = Color(red: 235 / 255, green: 237 / 255, blue: 240 / 255) // #EBEDF0
+    static let heatL1    = Color(red: 198 / 255, green: 240 / 255, blue: 205 / 255) // #C6F0CD (was #9BE9A8)
+    static let heatL2    = Color(red: 140 / 255, green: 220 / 255, blue: 155 / 255) // #8CDC9B (was #40C463)
+    static let heatL3    = Color(red: 90 / 255, green: 190 / 255, blue: 115 / 255)  // #5ABE73 (was #30A14E)
+    static let heatL4    = Color(red: 55 / 255, green: 155 / 255, blue: 85 / 255)   // #379B55 (was #216E39)
+
     static func heatColor(fraction: Double) -> Color {
-        guard fraction > 0 else { return track }
-        if fraction <= 0.25 { return chartBar.opacity(0.3) }
-        if fraction <= 0.5 { return chartBar.opacity(0.5) }
-        if fraction <= 0.75 { return chartBar.opacity(0.75) }
-        return blue
+        guard fraction > 0 else { return heatEmpty }
+        if fraction <= 0.25 { return heatL1 }
+        if fraction <= 0.5 { return heatL2 }
+        if fraction <= 0.75 { return heatL3 }
+        return heatL4
     }
 }
 

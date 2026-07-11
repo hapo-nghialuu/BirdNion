@@ -11,7 +11,7 @@
 [![Homebrew](https://img.shields.io/badge/brew-hapo--nghialuu%2Ftap%2Fbirdnion-orange?style=flat-square)](https://github.com/hapo-nghialuu/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/license-MIT-6e5aff?style=flat-square)](LICENSE)
 
-23 providers. Tiny macOS 14+ menu-bar app that keeps AI coding limits visible, shows when each window resets, and centralizes the settings that decide how each coding agent is read. Codex, Claude, MiniMax, Hapo AI Hub, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, and FreeModel. No Dock icon, minimal UI, dynamic provider icons.
+26 providers. Tiny macOS 14+ menu-bar app that keeps AI coding limits visible, shows when each window resets, and centralizes the settings that decide how each coding agent is read. Codex, Claude, MiniMax, Hapo AI Hub, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, Grok, OpenAI, Ollama, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, and FreeModel. No Dock icon, minimal UI, dynamic provider icons.
 
 BirdNion is inspired by [CodexBar](https://github.com/steipete/CodexBar). It reuses a vendored, trimmed `CodexBarCore` subset while staying focused on BirdNion's provider set, Hapo workflows, Homebrew distribution, and future agent-settings control.
 
@@ -118,6 +118,9 @@ Planned direction:
 - **ElevenLabs** - API key for character credits, voice slots, professional voices, plan, and subscription status.
 - **Deepgram** - API key with optional Project ID for usage summaries and aggregate-all-project mode.
 - **Groq** - API key for Prometheus-backed request, token, and cache-hit metrics.
+- **Grok** - Zero-config from `~/.grok/auth.json` (`grok login`); CLI `x.ai/billing` RPC then grok.com billing gRPC-web via Chrome cookies / auth bearer; SuperGrok identity and credit windows. Local cost on the All tab from `~/.grok/sessions/**/signals.json` (token totals × blended model price table).
+- **OpenAI** - Platform Admin API (`OPENAI_ADMIN_KEY` / config) for org spend Today/7d/30d; optional Project ID; legacy credit-grants fallback for user API keys. Not ChatGPT/Codex subscription (use Codex for that).
+- **Ollama** - Cloud Session/Weekly usage via ollama.com cookies (Auto/Manual); optional `OLLAMA_API_KEY` verifies Cloud API access.
 - **GitHub Copilot** - GitHub Device Flow or PAT fallback, enterprise host, premium usage, username, and budget extras via web cookies.
 - **Kilo** - API token or CLI session, Kilo organization scope, credits, and auto top-up details.
 - **Kiro** - CLI-based usage, credits/overage data, and 9 menu-bar display modes.
@@ -169,6 +172,7 @@ The menu-bar icon is the BirdNion bird by default. When "Show percent in menu ba
 | Cursor session | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
 | Antigravity OAuth accounts | `~/.config/birdnion/antigravity-oauth.json` |
 | Copilot OAuth accounts | `~/.config/birdnion/copilot-accounts.json` |
+| Daily cost history (All tab) | `~/.config/birdnion/cost-history.json` (sibling of settings; high-water merge so deleted Claude/Codex/Grok sessions keep past bars) |
 | Browser/manual cookie source | `UserDefaults` keys `<providerID>CookieSource`, `<providerID>ManualCookie` |
 | Menu-bar percent display | `UserDefaults.showPercentInMenuBar` |
 | Menu-bar visibility | `UserDefaults.menuBarVisibility.<id>` |

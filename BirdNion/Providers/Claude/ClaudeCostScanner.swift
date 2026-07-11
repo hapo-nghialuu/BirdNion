@@ -212,7 +212,24 @@ enum ClaudeCostScanner {
             return cached
         }
         let value = await Task.detached(priority: .utility) {
-            scanFull(roots: roots, now: now)
+            // Live scan may be empty after the user deletes session jsonls —
+            // merge with CostHistoryStore so past All-tab bars survive.
+            let live = scanFull(roots: roots, now: now)
+            let liveDays = (live?.daily ?? []).map {
+                ($0.date, $0.usd, $0.tokens,
+                 $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
+            }
+            let window = CostHistoryStore.apply(
+                source: .claude,
+                liveDays: liveDays,
+                now: now,
+                windowDays: historyDays)
+            let report = CostHistoryStore.makeClaudeReport(
+                window: window,
+                hourly: live?.hourly ?? [],
+                now: now)
+            // Nil only when history + live are both empty (first run, no logs).
+            return report.isEmpty && live == nil ? nil : report
         }.value
         if let value { await Cache.shared.storeFull(value, at: now) }
         return value
