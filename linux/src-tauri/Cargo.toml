@@ -1,6 +1,6 @@
 [package]
 name = "birdnion"
-version = "0.8.14"
+version = "0.8.15"
 description = "BirdNion for Linux — AI provider usage & cost tracker (tray app)"
 authors = ["hapo-nghialuu"]
 edition = "2021"
