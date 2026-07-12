@@ -118,4 +118,37 @@ final class ClaudeNativeTests: XCTestCase {
             now: Date())
         XCTAssertEqual(report?.last30Tokens, 150)   // 100 + 50, deduped (not 300)
     }
+
+    /// `scanDays` narrows both the entry cutoff and the daily bucket window;
+    /// the default keeps the full 90-day behaviour.
+    func testCostScanFullScanDaysNarrowsWindow() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("projects/enc")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        let recent = iso.string(from: now.addingTimeInterval(-2 * 86_400))
+        let old = iso.string(from: now.addingTimeInterval(-10 * 86_400))
+        let lines = """
+        {"type":"assistant","timestamp":"\(recent)","requestId":"r1",\
+        "message":{"id":"m1","model":"claude-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+        {"type":"assistant","timestamp":"\(old)","requestId":"r2",\
+        "message":{"id":"m2","model":"claude-sonnet","usage":{"input_tokens":200,"output_tokens":100}}}
+        """
+        try lines.write(to: root.appendingPathComponent("p.jsonl"), atomically: true, encoding: .utf8)
+        let roots = [base.appendingPathComponent("projects")]
+
+        // Narrow scan: only the 2-day-old entry is inside the 7-day cutoff.
+        let narrow = ClaudeCostScanner.scanFull(roots: roots, now: now, scanDays: 7)
+        XCTAssertEqual(narrow?.daily.count, 7)
+        XCTAssertEqual(narrow?.daily.map(\.tokens).reduce(0, +), 150)
+
+        // Default window still counts both entries.
+        let full = ClaudeCostScanner.scanFull(roots: roots, now: now)
+        XCTAssertEqual(full?.daily.count, 90)
+        XCTAssertEqual(full?.daily.map(\.tokens).reduce(0, +), 450)
+    }
 }

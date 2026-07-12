@@ -125,7 +125,10 @@ enum GrokCostScanner {
     static func usageReport(now: Date = Date()) async -> GrokUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
         let value = await Task.detached(priority: .utility) {
-            let live = scanFull(now: now)
+            // Only rescan days that can still change persisted history; the
+            // store supplies the older days.
+            let scanDays = CostHistoryStore.scanBackDays(source: .grok, now: now)
+            let live = scanFull(now: now, windowDays: scanDays)
             let liveDays = live.daily.map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
@@ -139,6 +142,20 @@ enum GrokCostScanner {
         }.value
         await Cache.shared.storeReport(value, at: now)
         return value
+    }
+
+    /// Instant chart seed from persisted history — no session scan. Nil when
+    /// the store has nothing for Grok so callers keep their loading skeleton.
+    /// Deliberately not stored in `Cache`: a cached seed would mask the live
+    /// scan for the whole TTL.
+    static func seededReport(now: Date = Date(),
+                             url: URL = CostHistoryStore.historyURL()) async -> GrokUsageReport? {
+        await Task.detached(priority: .userInitiated) {
+            let window = CostHistoryStore.window(
+                source: .grok, now: now, windowDays: chartWindowDays, url: url)
+            guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
+            return CostHistoryStore.makeGrokReport(window: window)
+        }.value
     }
 
     /// Pure filesystem scan — unit-testable via `homeURL` override.

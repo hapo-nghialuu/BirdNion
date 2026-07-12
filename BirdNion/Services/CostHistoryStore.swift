@@ -141,8 +141,20 @@ enum CostHistoryStore {
 
         sources[source.rawValue] = byDay
         let updated = Document(version: version, sources: sources)
+        let window = buildWindow(
+            byDay: byDay, now: now, calendar: calendar, windowDays: windowDays)
+        return (updated, window)
+    }
 
-        // Contiguous window for the chart (oldest → newest).
+    /// Contiguous chart window (oldest → newest) from one source's stored
+    /// days; days without a stored entry render as zeros.
+    static func buildWindow(
+        byDay: [String: Day],
+        now: Date,
+        calendar: Calendar,
+        windowDays: Int) -> [DayBucket]
+    {
+        let startOfToday = calendar.startOfDay(for: now)
         var window: [DayBucket] = []
         window.reserveCapacity(windowDays)
         for offset in stride(from: windowDays - 1, through: 0, by: -1) {
@@ -156,7 +168,7 @@ enum CostHistoryStore {
                 tokens: stored?.tokens ?? 0,
                 models: stored?.models ?? []))
         }
-        return (updated, window)
+        return window
     }
 
     struct DayBucket: Equatable {
@@ -189,6 +201,45 @@ enum CostHistoryStore {
             windowDays: windowDays)
         try? write(updated, url: url)
         return window
+    }
+
+    // MARK: - Read-only views
+
+    /// Read-only window straight from the persisted store — seeds the popover
+    /// chart before the live scan lands. No merge, no write.
+    static func window(
+        source: Source,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        windowDays: Int = 90,
+        url: URL = historyURL()) -> [DayBucket]
+    {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        let byDay = read(url: url).sources?[source.rawValue] ?? [:]
+        return buildWindow(byDay: byDay, now: now, calendar: calendar, windowDays: windowDays)
+    }
+
+    /// Days the live scan must cover so no day slips between persisted
+    /// history and the fresh scan: distance from the source's newest stored
+    /// day to today (that day is rescanned too — it may still grow), clamped
+    /// to [minDays, maxDays]. Sources without history scan the full maxDays.
+    static func scanBackDays(
+        source: Source,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        minDays: Int = 7,
+        maxDays: Int = 90,
+        url: URL = historyURL()) -> Int
+    {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        let byDay = read(url: url).sources?[source.rawValue] ?? [:]
+        guard let latest = byDay.keys.compactMap({ parseDayKey($0, calendar: calendar) }).max()
+        else { return maxDays }
+        let days = calendar.dateComponents(
+            [.day], from: latest, to: calendar.startOfDay(for: now)).day ?? maxDays
+        return min(max(days + 1, minDays), maxDays)
     }
 
     // MARK: - Report rebuilders

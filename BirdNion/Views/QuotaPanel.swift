@@ -185,7 +185,15 @@ struct QuotaOverview: View {
         guard wantsClaude else { return }
         let taskId = UUID().uuidString
         claudeReportTaskId = taskId
+        let needsSeed = claudeReport == nil
         Task {
+            // Seed instantly from persisted history; the live scan overwrites.
+            if needsSeed, let seed = await ClaudeCostScanner.seededReport() {
+                await MainActor.run {
+                    guard claudeReportTaskId == taskId, claudeReport == nil else { return }
+                    claudeReport = seed
+                }
+            }
             let report = await ClaudeCostScanner.usageReport()
             await MainActor.run {
                 guard claudeReportTaskId == taskId else { return }
@@ -206,7 +214,15 @@ struct QuotaOverview: View {
         }
         let taskId = UUID().uuidString
         codexReportTaskId = taskId
+        let needsSeed = codexReport == nil
         Task {
+            // Seed instantly from persisted history; the live scan overwrites.
+            if needsSeed, let seed = await CodexCostScanner.seededReport() {
+                await MainActor.run {
+                    guard codexReportTaskId == taskId, codexReport == nil else { return }
+                    codexReport = seed
+                }
+            }
             let report = await CodexCostScanner.usageReport()
             await MainActor.run {
                 guard codexReportTaskId == taskId else { return }
@@ -224,7 +240,15 @@ struct QuotaOverview: View {
         guard wantsGrok else { return }
         let taskId = UUID().uuidString
         grokReportTaskId = taskId
+        let needsSeed = grokReport == nil
         Task {
+            // Seed instantly from persisted history; the live scan overwrites.
+            if needsSeed, let seed = await GrokCostScanner.seededReport() {
+                await MainActor.run {
+                    guard grokReportTaskId == taskId, grokReport == nil else { return }
+                    grokReport = seed
+                }
+            }
             let report = await GrokCostScanner.usageReport()
             await MainActor.run {
                 guard grokReportTaskId == taskId else { return }

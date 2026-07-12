@@ -160,6 +160,128 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(CostHistoryStore.preferHigher(high, low).tokens, 20)
     }
 
+    /// Read-only `window()` must return the same buckets `apply` produced,
+    /// leave other sources zeroed, and never create a missing file.
+    func testCostHistoryWindowReadOnly() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        let applied = CostHistoryStore.apply(
+            source: .claude,
+            liveDays: [
+                (yesterday, 10.0, 1000, [("claude-opus", 10.0, 1000)]),
+                (today, 2.0, 200, [("claude-sonnet", 2.0, 200)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url)
+
+        let window = CostHistoryStore.window(
+            source: .claude, now: now, calendar: cal, windowDays: 90, url: url)
+        XCTAssertEqual(window, applied)
+
+        // Other sources read as all-zero buckets.
+        let codex = CostHistoryStore.window(
+            source: .codex, now: now, calendar: cal, windowDays: 90, url: url)
+        XCTAssertEqual(codex.count, 90)
+        XCTAssertFalse(codex.contains { $0.tokens > 0 || $0.usd > 0 })
+
+        // Missing file: zero window, and the read must not create the file.
+        let missing = dir.appendingPathComponent("nope.json")
+        let empty = CostHistoryStore.window(
+            source: .claude, now: now, calendar: cal, windowDays: 90, url: missing)
+        XCTAssertEqual(empty.count, 90)
+        XCTAssertFalse(empty.contains { $0.tokens > 0 || $0.usd > 0 })
+        XCTAssertFalse(fm.fileExists(atPath: missing.path))
+    }
+
+    /// scanBackDays: no history → full window (first run); fresh history →
+    /// min clamp; stale history → widen to cover the gap; ancient → cap.
+    func testScanBackDaysStaleness() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+
+        func store(latestDaysAgo: Int, url: URL) {
+            let day = cal.date(byAdding: .day, value: -latestDaysAgo, to: today)!
+            _ = CostHistoryStore.apply(
+                source: .claude, liveDays: [(day, 1.0, 1, [])],
+                now: now, calendar: cal, windowDays: 90, url: url)
+        }
+
+        // No file yet → full scan.
+        let missing = dir.appendingPathComponent("missing.json")
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: missing), 90)
+
+        let fresh = dir.appendingPathComponent("fresh.json")
+        store(latestDaysAgo: 0, url: fresh)
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: fresh), 7)
+        // Same file, source without history → still full scan.
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .codex, now: now, calendar: cal, url: fresh), 90)
+
+        let stale = dir.appendingPathComponent("stale.json")
+        store(latestDaysAgo: 20, url: stale)
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: stale), 21)
+
+        let ancient = dir.appendingPathComponent("ancient.json")
+        store(latestDaysAgo: 200, url: ancient)
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: ancient), 90)
+    }
+
+    /// seededReport builds a chart-ready report straight from the persisted
+    /// store (no log scan) and stays nil when the store has nothing.
+    func testSeededReportFromHistoryAndEmpty() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        for source in CostHistoryStore.Source.allCases {
+            _ = CostHistoryStore.apply(
+                source: source,
+                liveDays: [
+                    (yesterday, 10.0, 1000, [("model-a", 10.0, 1000)]),
+                    (today, 2.0, 200, [("model-b", 2.0, 200)]),
+                ],
+                now: now, calendar: cal, windowDays: 90, url: url)
+        }
+
+        let claude = await ClaudeCostScanner.seededReport(now: now, url: url)
+        XCTAssertEqual(claude?.todayTokens, 200)
+        XCTAssertEqual(claude?.last30Tokens, 1200)
+        XCTAssertEqual(claude?.hourly.isEmpty, true)
+
+        let codex = await CodexCostScanner.seededReport(now: now, url: url)
+        XCTAssertEqual(codex?.todayTokens, 200)
+
+        let grok = await GrokCostScanner.seededReport(now: now, url: url)
+        XCTAssertEqual(grok?.todayTokens, 200)
+
+        // Empty store → nil so the UI keeps its loading skeleton.
+        let missing = dir.appendingPathComponent("nope.json")
+        let empty = await ClaudeCostScanner.seededReport(now: now, url: missing)
+        XCTAssertNil(empty)
+    }
+
     func testOpenAIMapBalanceCredits() {
         // mapBalance is CodexBarCore-typed; exercise via a thin test helper.
         let s = OpenAIProvider._mapBalanceForTesting(

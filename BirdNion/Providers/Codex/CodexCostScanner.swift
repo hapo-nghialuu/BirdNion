@@ -137,11 +137,14 @@ enum CodexCostScanner {
         // Same as `summary()`: the machine-wide ~/.codex is the only place
         // session logs actually accumulate.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
+        // Only rescan days that can still change persisted history; the
+        // store supplies the older days.
+        let scanDays = CostHistoryStore.scanBackDays(source: .codex, now: now)
         let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,
             codexHomePath: codexHome,
-            historyDays: chartWindowDays)
+            historyDays: scanDays)
         let live = snapshot.map { mapReport($0, now: now) }
         let liveDays = (live?.daily ?? []).map {
             ($0.date, $0.usd, $0.tokens,
@@ -160,6 +163,20 @@ enum CodexCostScanner {
         }
         await Cache.shared.storeReport(value, at: now)
         return value
+    }
+
+    /// Instant chart seed from persisted history — no log scan. Nil when the
+    /// store has nothing for Codex so callers keep their loading skeleton.
+    /// Deliberately not stored in `Cache`: a cached seed would mask the live
+    /// scan for the whole TTL.
+    static func seededReport(now: Date = Date(),
+                             url: URL = CostHistoryStore.historyURL()) async -> CodexUsageReport? {
+        await Task.detached(priority: .userInitiated) {
+            let window = CostHistoryStore.window(
+                source: .codex, now: now, windowDays: chartWindowDays, url: url)
+            guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
+            return CostHistoryStore.makeCodexReport(window: window, now: now)
+        }.value
     }
 
     /// Pure mapping (snapshot → chart report), unit-testable. Mirrors CodexBar's

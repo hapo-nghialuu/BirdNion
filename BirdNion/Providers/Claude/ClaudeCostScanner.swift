@@ -214,7 +214,10 @@ enum ClaudeCostScanner {
         let value = await Task.detached(priority: .utility) {
             // Live scan may be empty after the user deletes session jsonls —
             // merge with CostHistoryStore so past All-tab bars survive.
-            let live = scanFull(roots: roots, now: now)
+            // Only rescan logs that can still change persisted history; the
+            // store supplies the older days.
+            let scanDays = CostHistoryStore.scanBackDays(source: .claude, now: now)
+            let live = scanFull(roots: roots, now: now, scanDays: scanDays)
             let liveDays = (live?.daily ?? []).map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
@@ -235,6 +238,21 @@ enum ClaudeCostScanner {
         return value
     }
 
+    /// Instant chart seed from persisted history — no log scan. Nil when the
+    /// store has nothing for Claude so callers keep their loading skeleton.
+    /// Hourly stays empty (history is day-resolution); the live scan fills it.
+    /// Deliberately not stored in `Cache`: a cached seed would mask the live
+    /// scan for the whole TTL.
+    static func seededReport(now: Date = Date(),
+                             url: URL = CostHistoryStore.historyURL()) async -> ClaudeUsageReport? {
+        await Task.detached(priority: .userInitiated) {
+            let window = CostHistoryStore.window(
+                source: .claude, now: now, windowDays: historyDays, url: url)
+            guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
+            return CostHistoryStore.makeClaudeReport(window: window, now: now)
+        }.value
+    }
+
     // MARK: - Scanning
 
     static func scan(roots: [URL], now: Date) -> ClaudeCostSummary? {
@@ -245,11 +263,12 @@ enum ClaudeCostScanner {
     /// and the per-day bucket array. Buckets are keyed by startOfDay in the
     /// local calendar so the chart bars line up with "today" / "yesterday"
     /// labels the UI uses.
-    static func scanFull(roots: [URL], now: Date) -> ClaudeUsageReport? {
+    static func scanFull(roots: [URL], now: Date,
+                         scanDays: Int = historyDays) -> ClaudeUsageReport? {
         let fm = FileManager.default
         let calendar = Calendar.current
         let startOfToday = calendar.startOfDay(for: now)
-        let cutoff = now.addingTimeInterval(-TimeInterval(historyDays) * 86_400)
+        let cutoff = now.addingTimeInterval(-TimeInterval(scanDays) * 86_400)
         // Separate 30-day cutoff for the totals — the scan window is wider
         // (90d, for the heatmap) but `last30*` must stay a strict 30 days.
         let last30Cutoff = now.addingTimeInterval(-30 * 86_400)
@@ -271,7 +290,8 @@ enum ClaudeCostScanner {
                 guard url.pathExtension == "jsonl" else { continue }
                 let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
                     .contentModificationDate) ?? .distantPast
-                // Fast-path skip: files untouched in 30 days hold no usable line.
+                // Fast-path skip: files untouched inside the scan window hold
+                // no usable line (a file's mtime is >= its newest entry).
                 guard mtime >= cutoff else { continue }
                 files.append(url)
             }
@@ -331,7 +351,7 @@ enum ClaudeCostScanner {
         // Build a contiguous array so the chart x-axis has a bar per day
         // even when there's no activity (renders as a zero-height bar).
         let daily: [ClaudeDailyUsage] = Self.makeDailyBuckets(
-            buckets: buckets, endDay: startOfToday, count: historyDays, calendar: calendar)
+            buckets: buckets, endDay: startOfToday, count: scanDays, calendar: calendar)
 
         // Contiguous 24 hour buckets ending at the current clock hour.
         var hourly: [ClaudeHourlyUsage] = []
