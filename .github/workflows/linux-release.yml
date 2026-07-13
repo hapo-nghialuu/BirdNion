@@ -62,7 +62,33 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build bundles (.deb / .rpm / AppImage)
-        run: npm run tauri build
+        env:
+          HAPO_BASE_URL: ${{ secrets.HAPO_BASE_URL }}
+          HAPO_ME_URL: ${{ secrets.HAPO_ME_URL }}
+          HAPO_AUTH_TEMPLATE: ${{ secrets.HAPO_AUTH_TEMPLATE }}
+        shell: bash
+        run: |
+          for name in HAPO_BASE_URL HAPO_ME_URL HAPO_AUTH_TEMPLATE; do
+            if [ -z "${!name}" ]; then
+              echo "Required GitHub Actions secret $name is missing" >&2
+              exit 1
+            fi
+          done
+          if [[ "$HAPO_AUTH_TEMPLATE" != *'{token}'* ]]; then
+            echo "HAPO_AUTH_TEMPLATE must contain the literal {token} placeholder" >&2
+            exit 1
+          fi
+
+          cargo clean --manifest-path src-tauri/Cargo.toml -p birdnion --release
+          npm run tauri build
+
+          binary=src-tauri/target/release/birdnion
+          for name in HAPO_BASE_URL HAPO_ME_URL HAPO_AUTH_TEMPLATE; do
+            if ! grep -aFq -- "${!name}" "$binary"; then
+              echo "$name was not baked into the release binary" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload bundles to GitHub Release
         uses: softprops/action-gh-release@v2
