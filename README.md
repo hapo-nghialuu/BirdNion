@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/images/logo.png" width="128" alt="BirdNion" />
+  <img src="docs/social.png" alt="BirdNion - AI quota companion for macOS and Linux" />
 </div>
 
 # BirdNion - May your AI agents stay in budget.
@@ -156,11 +156,31 @@ Planned direction:
 
 Open to more providers when they fit the existing `QuotaProvider` model.
 
-## Icons & Screenshot
+## Icon & Screenshots
 
 The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in menu bar" is enabled, the bar rotates through active provider quota percents with each provider's logo. Linux keeps the tray icon stable and exposes the rotating provider value in its tooltip.
 
-![BirdNion preview](docs/social.png)
+<div align="center">
+  <img src="docs/images/logo.png" width="112" alt="BirdNion app icon" />
+  <br />
+  <strong>BirdNion app icon</strong>
+</div>
+
+<br />
+
+<div align="center">
+  <img src="docs/images/usage-overview.png" width="426" alt="BirdNion usage and cost overview" />
+  <br />
+  <strong>Usage and cost overview</strong>
+</div>
+
+<br />
+
+<div align="center">
+  <img src="docs/images/general-settings.png" width="776" alt="BirdNion general settings" />
+  <br />
+  <strong>General settings</strong>
+</div>
 
 ## Features
 
