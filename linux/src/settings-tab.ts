@@ -10,7 +10,7 @@ import { logoMark } from "./logos";
 import type { ProviderStatus } from "./provider-tab";
 import {
   detailInfoGrid, usageSection, setupSection, quotaWarningCard, linksSection,
-  codexAccountsCard, freemodelAccountsCard, relativeUpdated, displayError,
+  codexAccountsCard, freemodelAccountsCard, elevenlabsKeysCard, relativeUpdated, displayError,
   type ProviderCfg, type Settings,
 } from "./settings-provider-detail";
 
@@ -289,6 +289,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     scroll.append(setupSection(cfg, vi));
     if (selectedId === "codex") scroll.append(codexAccountsCard());
     if (selectedId === "freemodel") scroll.append(freemodelAccountsCard());
+    if (selectedId === "elevenlabs") scroll.append(elevenlabsKeysCard());
     scroll.append(quotaWarningCard(selectedId));
     const links = linksSection(selectedId);
     if (links) scroll.append(links);

@@ -111,6 +111,10 @@ struct QuotaOverview: View {
                             if s.id == "freemodel" {
                                 FreemodelAccountsPopoverSection()
                             }
+                            // ElevenLabs: multi API-key switcher (same card pattern).
+                            if s.id == "elevenlabs" {
+                                ElevenLabsKeysPopoverSection()
+                            }
                             // Grok Build: 30-day cost chart from local
                             // ~/.grok/sessions/**/signals.json (parity with Codex).
                             if s.id == "grok", let report = grokReport,
@@ -1425,6 +1429,172 @@ struct WindowRow: View {
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
+        }
+    }
+}
+
+// MARK: - ElevenLabs keys (popover)
+
+/// ElevenLabs multi-key switcher — same collapsed-card pattern as FreeModel:
+/// header (icon + active key + count + chevron) and expandable rows with radio
+/// + switch/remove. Adding keys stays in Settings.
+struct ElevenLabsKeysPopoverSection: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    @State private var keys: [ElevenLabsKey] = []
+    @State private var activeID: String?
+    @State private var revealed = false
+    @State private var busy = false
+    @State private var errorText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            collapsedRow
+            if revealed {
+                Divider()
+                    .overlay(VocabbyTheme.border)
+                    .padding(.vertical, 6)
+                if keys.isEmpty {
+                    Text(L10n.t("elevenlabs.keysEmpty", settings.appLanguage))
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                        .padding(.vertical, 4)
+                }
+                ForEach(keys) { key in
+                    keyRow(key)
+                }
+                if let errorText {
+                    Text(errorText)
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .lineLimit(2)
+                        .padding(.vertical, 4)
+                }
+            }
+        }
+        .vocabbyCard()
+        .onAppear(perform: reload)
+        // Settings (or the other surface) may add/remove/switch keys while this
+        // popover view stays alive — re-list immediately, no app restart.
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionElevenLabsKeysChanged)) { _ in
+            reload()
+        }
+    }
+
+    private func displayName(_ key: ElevenLabsKey) -> String {
+        if let label = key.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
+        return key.preview
+    }
+
+    private var collapsedRow: some View {
+        let lang = settings.appLanguage
+        let active = keys.first(where: { $0.id == activeID })
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.blue)
+                .frame(width: 30, height: 30)
+                .background(VocabbyTheme.blue.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("elevenlabs.popoverTitle", lang))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(active.map(displayName) ?? L10n.t("elevenlabs.keysEmpty", lang))
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            Text("\(keys.count)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(VocabbyTheme.segment))
+            Image(systemName: revealed ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+        .contentShape(Rectangle())
+        .pointingHandCursor()
+        .onTapGesture { revealed.toggle() }
+    }
+
+    private func keyRow(_ key: ElevenLabsKey) -> some View {
+        let isActive = key.id == activeID
+        return HStack(spacing: 8) {
+            Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                .font(.system(size: 14))
+                .foregroundStyle(isActive ? VocabbyTheme.blue : VocabbyTheme.tertiary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(displayName(key))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(key.preview + "…")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+
+            Spacer(minLength: 6)
+
+            if !isActive {
+                Button {
+                    switchTo(key)
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.blue)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(VocabbyTheme.blue.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .disabled(busy)
+                .help(L10n.t("elevenlabs.switchKey", settings.appLanguage))
+            }
+            Button {
+                removeKey(key)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.critical)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .disabled(busy)
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func reload() {
+        keys = ElevenLabsKeyStore.allKeys()
+        activeID = ElevenLabsKeyStore.activeID()
+    }
+
+    private func switchTo(_ key: ElevenLabsKey) {
+        // setActive posts keys-changed + refresh; reload keeps this surface in sync.
+        ElevenLabsKeyStore.setActive(key.id)
+        reload()
+        errorText = nil
+    }
+
+    private func removeKey(_ key: ElevenLabsKey) {
+        do {
+            try ElevenLabsKeyStore.remove(key.id)
+            errorText = nil
+            reload()
+        } catch {
+            errorText = error.localizedDescription
         }
     }
 }
@@ -2750,6 +2920,9 @@ extension Notification.Name {
     /// QuotaService.providers from disk so the popover + menu-bar pick up
     /// the new order without a restart.
     static let birdnionProvidersChanged = Notification.Name("com.local.birdnion.providersChanged")
+    /// Posted by `ElevenLabsKeyStore` when keys are added/removed/switched so
+    /// Settings + the popover switcher re-list immediately (no app restart).
+    static let birdnionElevenLabsKeysChanged = Notification.Name("com.local.birdnion.elevenLabsKeysChanged")
 }
 
 // MARK: - Empty State

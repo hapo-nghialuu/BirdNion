@@ -22,6 +22,9 @@ pub struct Settings {
     /// `freemodel-accounts.json` sibling file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_freemodel_account: Option<String>,
+    /// Active ElevenLabs multi-key id — keys live in `elevenlabs-keys.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_elevenlabs_key: Option<String>,
     /// Custom Claude Code backends (Settings → Claude Code → "TUỲ CHỈNH") —
     /// same schema and top-level key as macOS `BirdNionConfigStore`.
     #[serde(default, rename = "claudeCodeProfiles", skip_serializing_if = "Vec::is_empty")]

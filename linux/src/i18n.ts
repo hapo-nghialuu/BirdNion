@@ -396,6 +396,22 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     en: "Each account is one bm_session cookie pasted from a browser signed in to freemodel.dev (DevTools → Application → Cookies).",
   },
 
+  // ElevenLabs multi-key
+  elKeysLabel: { vi: "API keys ElevenLabs", en: "ElevenLabs API keys" },
+  elKeysEmpty: {
+    vi: "Chưa có API key — dán key bên dưới để thêm.",
+    en: "No API keys yet — paste a key below to add one.",
+  },
+  elKeyPlaceholder: { vi: "Dán API key ElevenLabs…", en: "Paste ElevenLabs API key…" },
+  elKeyLabelPlaceholder: { vi: "Nhãn (tuỳ chọn)", en: "Label (optional)" },
+  elKeyAdd: { vi: "Thêm key", en: "Add key" },
+  elKeySwitch: { vi: "Dùng key này", en: "Use this key" },
+  elKeyActive: { vi: "Đang dùng", en: "Active" },
+  elKeysAddHint: {
+    vi: "Lưu nhiều API key và chuyển nhanh trên popover. Key được lưu riêng (elevenlabs-keys.json).",
+    en: "Store multiple API keys and switch from the popover. Keys live in a separate file (elevenlabs-keys.json).",
+  },
+
   // Claude Code pane (macOS ClaudeCodePane)
   ccxSelectProvider: {
     vi: "Chọn provider để cấu hình làm backend cho Claude Code",

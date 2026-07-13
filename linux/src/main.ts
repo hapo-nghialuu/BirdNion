@@ -4,6 +4,7 @@ import { combine, UsageReport } from "./usage";
 import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
 import { providerCard, claudeCodeQuickApplyCard, loadingSkeleton, ProviderStatus } from "./provider-tab";
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
+import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
 import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
@@ -439,6 +440,12 @@ function render() {
       body.append(freemodelAccountsPopoverCard(
         () => scheduleFitWindow(),
         () => { void refetchProvider("freemodel"); },
+      ));
+    }
+    if (state.tab === "elevenlabs") {
+      body.append(elevenlabsKeysPopoverCard(
+        () => scheduleFitWindow(),
+        () => { void refetchProvider("elevenlabs"); },
       ));
     }
     // Claude/Codex/Grok tabs also show their own local 30-day cost chart,

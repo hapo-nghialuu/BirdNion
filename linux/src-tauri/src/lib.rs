@@ -8,6 +8,7 @@ mod codex_accounts;
 mod codex_scanner;
 mod config;
 mod cost_history;
+mod elevenlabs_keys;
 mod freemodel_accounts;
 mod grok_scanner;
 mod providers;
@@ -448,6 +449,44 @@ async fn freemodel_account_remove(id: String) -> Result<FreemodelAccountsState, 
     Ok(freemodel_state().await)
 }
 
+/// ElevenLabs multi-key state — managed keys + active id (secrets never leave Rust).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ElevenLabsKeysState {
+    keys: Vec<elevenlabs_keys::ElevenLabsKey>,
+    active_id: Option<String>,
+}
+
+fn elevenlabs_keys_state() -> ElevenLabsKeysState {
+    ElevenLabsKeysState {
+        keys: elevenlabs_keys::all_keys(),
+        active_id: elevenlabs_keys::active_id(),
+    }
+}
+
+#[tauri::command]
+fn elevenlabs_keys_list() -> ElevenLabsKeysState {
+    elevenlabs_keys_state()
+}
+
+#[tauri::command]
+fn elevenlabs_key_add(api_key: String, label: Option<String>) -> Result<ElevenLabsKeysState, String> {
+    elevenlabs_keys::add(&api_key, label.as_deref())?;
+    Ok(elevenlabs_keys_state())
+}
+
+#[tauri::command]
+fn elevenlabs_key_switch(id: String) -> Result<ElevenLabsKeysState, String> {
+    elevenlabs_keys::set_active(&id)?;
+    Ok(elevenlabs_keys_state())
+}
+
+#[tauri::command]
+fn elevenlabs_key_remove(id: String) -> Result<ElevenLabsKeysState, String> {
+    elevenlabs_keys::remove(&id)?;
+    Ok(elevenlabs_keys_state())
+}
+
 /// Starts a GitHub Device Flow login for Copilot: requests a user code the
 /// user enters at the returned verification URL.
 #[tauri::command]
@@ -659,6 +698,10 @@ pub fn run() {
             freemodel_account_add,
             freemodel_account_switch,
             freemodel_account_remove,
+            elevenlabs_keys_list,
+            elevenlabs_key_add,
+            elevenlabs_key_switch,
+            elevenlabs_key_remove,
             copilot_login_start,
             copilot_login_poll,
             get_settings,

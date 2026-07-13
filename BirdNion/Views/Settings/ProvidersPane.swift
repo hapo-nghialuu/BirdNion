@@ -543,6 +543,9 @@ struct ProvidersPane: View {
                         CodexAccountsCard()
                         CodexAutoPrimeCard()
                     }
+                    if rows[idx].id == "elevenlabs" {
+                        ElevenLabsKeysCard()
+                    }
                     if rows[idx].id == "antigravity" {
                         antigravityOAuthAccountsSection()
                     }
@@ -1174,6 +1177,10 @@ struct ProvidersPane: View {
                 // Manual / Off) + an optional manual Cookie-header field, mirroring
                 // CodexBar (no token box).
                 cookieProviderControls(row.id)
+            } else if row.id == "elevenlabs" {
+                // Multi-key store (ElevenLabsKeyStore) — managed in the card
+                // below settingsSection; skip the single TokenField.
+                EmptyView()
             } else {
                 TokenField(
                     providerID: row.id,
@@ -3357,6 +3364,163 @@ private struct QuotaWarningCard: View {
 // MARK: - Codex accounts card
 
 /// Multi-account management for Codex. The system account (~/.codex) is shown
+// MARK: - ElevenLabs multi-key card
+
+/// Settings card for managing multiple ElevenLabs API keys — add / switch /
+/// remove. Secrets live in `elevenlabs-keys.json`; the active id is in
+/// UserDefaults (`activeElevenLabsKey`).
+private struct ElevenLabsKeysCard: View {
+    @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+
+    @State private var keys: [ElevenLabsKey] = []
+    @State private var activeID: String?
+    @State private var newKey = ""
+    @State private var newLabel = ""
+    @State private var errorText: String?
+    @State private var busy = false
+
+    var body: some View {
+        SettingsCard(
+            header: L10n.t("elevenlabs.keysLabel", settings.appLanguage),
+            footer: LocalizedStringKey(L10n.t("elevenlabs.keysFooter", settings.appLanguage))
+        ) {
+            if keys.isEmpty {
+                Text(L10n.t("elevenlabs.keysEmpty", settings.appLanguage))
+                    .font(.system(size: 12))
+                    .foregroundStyle(SettingsTheme.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                SettingsRowDivider()
+            }
+            ForEach(keys) { key in
+                keyRow(key)
+                SettingsRowDivider()
+            }
+            addRow
+            if let errorText {
+                Text(errorText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(SettingsTheme.critical)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+            }
+        }
+        .onAppear(perform: reload)
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionElevenLabsKeysChanged)) { _ in
+            reload()
+        }
+    }
+
+    private func displayName(_ key: ElevenLabsKey) -> String {
+        if let label = key.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
+        return key.preview
+    }
+
+    private func keyRow(_ key: ElevenLabsKey) -> some View {
+        let isActive = key.id == activeID
+        return HStack(spacing: 10) {
+            Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(isActive ? SettingsTheme.accent : SettingsTheme.secondary)
+                .onTapGesture { switchTo(key) }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayName(key))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
+                Text(key.preview + "…")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(SettingsTheme.secondary)
+            }
+
+            Spacer(minLength: 6)
+
+            if isActive {
+                Text(L10n.t("elevenlabs.activeBadge", settings.appLanguage))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.accent)
+            } else {
+                Button(L10n.t("elevenlabs.switchKey", settings.appLanguage)) {
+                    switchTo(key)
+                }
+                .controlSize(.small)
+                .disabled(busy)
+            }
+
+            Button(role: .destructive) {
+                removeKey(key)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .controlSize(.small)
+            .disabled(busy)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var addRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SecureField(L10n.t("elevenlabs.keyPlaceholder", settings.appLanguage), text: $newKey)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12).monospacedDigit())
+            HStack(spacing: 8) {
+                TextField(L10n.t("elevenlabs.labelPlaceholder", settings.appLanguage), text: $newLabel)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                Button(L10n.t("elevenlabs.addKey", settings.appLanguage)) {
+                    addKey()
+                }
+                .controlSize(.small)
+                .disabled(busy || newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func reload() {
+        keys = ElevenLabsKeyStore.allKeys()
+        activeID = ElevenLabsKeyStore.activeID()
+    }
+
+    private func switchTo(_ key: ElevenLabsKey) {
+        // Store posts keys-changed + birdnionRefresh (force fetch).
+        ElevenLabsKeyStore.setActive(key.id)
+        reload()
+        errorText = nil
+    }
+
+    private func addKey() {
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            // Store notifies Settings + popover to re-list immediately.
+            _ = try ElevenLabsKeyStore.add(apiKey: newKey, label: newLabel.isEmpty ? nil : newLabel)
+            newKey = ""
+            newLabel = ""
+            reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func removeKey(_ key: ElevenLabsKey) {
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            try ElevenLabsKeyStore.remove(key.id)
+            reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+}
+
 /// read-only; managed accounts live in their own CODEX_HOME and are added via
 /// `codex login` in the browser. Selecting one switches which login the
 /// provider reads.

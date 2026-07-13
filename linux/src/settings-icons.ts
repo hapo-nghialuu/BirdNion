@@ -12,7 +12,8 @@ export type SettingsIconId =
   | "info.circle"
   | "power"
   | "arrow.clockwise"
-  | "person";
+  | "person"
+  | "key";
 
 /** Shared outline attrs — SF regular weight optical match at 20pt. */
 const O = 'fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"';
@@ -82,6 +83,13 @@ const PATHS: Record<SettingsIconId, string> = {
     <circle cx="12" cy="12" r="8.15" ${O}/>
     <circle cx="12" cy="10" r="2.6" ${O}/>
     <path ${O} d="M6.8 18.1a6.4 6.4 0 0 1 10.4 0"/>`,
+
+  // SF `key.fill` outline (ElevenLabs multi-key switcher)
+  key: `
+    <circle cx="8.2" cy="12" r="3.4" ${O}/>
+    <path ${O} d="M11.2 12h8.3"/>
+    <path ${O} d="M16.4 12v2.4"/>
+    <path ${O} d="M18.7 12v1.7"/>`,
 };
 
 export function settingsIcon(id: SettingsIconId, className = "sw-icon"): SVGSVGElement {

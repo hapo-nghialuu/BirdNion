@@ -684,4 +684,89 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNil(FreemodelAccountStore.activeCookieHeader())
         XCTAssertFalse(FreemodelAccountStore.managedAccounts().contains(where: { $0.id == account.id }))
     }
+
+    // MARK: - ElevenLabsKeyStore
+
+    /// Isolated store: temp metadata file + throwaway UserDefaults suite so
+    /// tests never touch the real key store or the app's active selection.
+    private func makeTempElevenLabsStore() throws -> (url: URL, defaults: UserDefaults, cleanup: () -> Void) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("el-keys-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("elevenlabs-keys.json")
+        // Pre-create an empty store so ensureLegacyImport never copies the
+        // machine's real legacy apiKey into the temp store.
+        try Data(#"{"accounts":[]}"#.utf8).write(to: url)
+        let suite = "el-keys-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        return (url, defaults, {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: dir)
+        })
+    }
+
+    func testElevenLabsKeyStoreAddSwitchRemoveRoundtrip() throws {
+        let store = try makeTempElevenLabsStore()
+        defer { store.cleanup() }
+        let url = store.url, defaults = store.defaults
+
+        XCTAssertTrue(ElevenLabsKeyStore.allKeys(url: url, defaults: defaults).isEmpty)
+        XCTAssertNil(ElevenLabsKeyStore.activeApiKey(url: url, defaults: defaults))
+
+        let k1 = try ElevenLabsKeyStore.add(apiKey: "sk-el-test-one-aaaa", label: "Work",
+                                            url: url, defaults: defaults)
+        XCTAssertEqual(k1.label, "Work")
+        XCTAssertEqual(k1.preview, "sk-el-te")
+        // First key auto-activates.
+        XCTAssertEqual(ElevenLabsKeyStore.activeID(url: url, defaults: defaults), k1.id)
+
+        let k2 = try ElevenLabsKeyStore.add(apiKey: "sk-el-test-two-bbbb", label: "Personal",
+                                            url: url, defaults: defaults)
+        // Adding a second key must NOT steal active.
+        XCTAssertEqual(ElevenLabsKeyStore.activeID(url: url, defaults: defaults), k1.id)
+
+        ElevenLabsKeyStore.setActive(k2.id, url: url, defaults: defaults)
+        XCTAssertEqual(ElevenLabsKeyStore.activeID(url: url, defaults: defaults), k2.id)
+        XCTAssertEqual(ElevenLabsKeyStore.activeApiKey(url: url, defaults: defaults), "sk-el-test-two-bbbb")
+        XCTAssertEqual(ElevenLabsKeyStore.activeDisplayLabel(url: url, defaults: defaults), "Personal")
+
+        try ElevenLabsKeyStore.remove(k2.id, url: url, defaults: defaults)
+        // Active falls back to the first remaining key.
+        XCTAssertEqual(ElevenLabsKeyStore.activeID(url: url, defaults: defaults), k1.id)
+        XCTAssertEqual(ElevenLabsKeyStore.allKeys(url: url, defaults: defaults).count, 1)
+
+        try ElevenLabsKeyStore.remove(k1.id, url: url, defaults: defaults)
+        XCTAssertTrue(ElevenLabsKeyStore.allKeys(url: url, defaults: defaults).isEmpty)
+        XCTAssertNil(ElevenLabsKeyStore.activeApiKey(url: url, defaults: defaults))
+    }
+
+    /// Regression for the bug where a wiped UserDefaults mirror silently made
+    /// quota fetch fall back to the FIRST stored key instead of the selected
+    /// one: the file's `activeId` is authoritative and must survive on its own.
+    func testElevenLabsKeyStoreActiveSurvivesDefaultsWipe() throws {
+        let store = try makeTempElevenLabsStore()
+        defer { store.cleanup() }
+        let url = store.url, defaults = store.defaults
+
+        let k1 = try ElevenLabsKeyStore.add(apiKey: "sk-el-test-one-aaaa", label: nil,
+                                            url: url, defaults: defaults)
+        let k2 = try ElevenLabsKeyStore.add(apiKey: "sk-el-test-two-bbbb", label: nil,
+                                            url: url, defaults: defaults)
+        ElevenLabsKeyStore.setActive(k2.id, url: url, defaults: defaults)
+
+        // Simulate the old landmine: the UserDefaults mirror gets wiped.
+        defaults.removeObject(forKey: ElevenLabsKeyStore.activeKey)
+
+        XCTAssertNotEqual(k1.id, k2.id)
+        XCTAssertEqual(ElevenLabsKeyStore.activeID(url: url, defaults: defaults), k2.id)
+        XCTAssertEqual(ElevenLabsKeyStore.activeApiKey(url: url, defaults: defaults), "sk-el-test-two-bbbb")
+    }
+
+    func testElevenLabsKeyStoreRejectsEmptyKey() throws {
+        let store = try makeTempElevenLabsStore()
+        defer { store.cleanup() }
+        XCTAssertThrowsError(try ElevenLabsKeyStore.add(apiKey: "   ", label: nil,
+                                                        url: store.url, defaults: store.defaults))
+        XCTAssertTrue(ElevenLabsKeyStore.allKeys(url: store.url, defaults: store.defaults).isEmpty)
+    }
 }

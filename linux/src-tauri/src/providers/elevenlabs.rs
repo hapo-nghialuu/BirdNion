@@ -12,14 +12,17 @@ const ENDPOINT: &str = "https://api.elevenlabs.io/v1/user/subscription";
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
+    // Resolution: env override → multi-key store active → legacy settings apiKey.
     let envtok = std::env::var("ELEVENLABS_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let token = envtok.or_else(|| config::api_key(cfg));
+    let token = envtok
+        .or_else(crate::elevenlabs_keys::active_api_key)
+        .or_else(|| config::api_key(cfg));
     let Some(token) = token else {
         return ProviderStatus::failure(&cfg.id, &name, "Chưa cấu hình API key ElevenLabs");
     };
-    let account_label = cfg
-        .account_label
-        .clone()
+    // Prefer active multi-key label so switching keys updates the shown identity.
+    let account_label = crate::elevenlabs_keys::active_display_label()
+        .or_else(|| cfg.account_label.clone())
         .unwrap_or_else(|| token.chars().take(8).collect());
 
     let client = shared_client();
@@ -27,6 +30,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         .get(ENDPOINT)
         .header("xi-api-key", &token)
         .header("Accept", "application/json")
+        .header("Cache-Control", "no-cache")
         .send()
         .await;
     let resp = match resp {
