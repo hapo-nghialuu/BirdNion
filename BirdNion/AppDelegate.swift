@@ -371,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.imagePosition = .imageRight
             button.image = MenuBarIconRenderer.providerLogo(for: id)
             if let text {
-                // Display-mode override (Kiro credits / Hapo $). Empty = logo only.
+                // Display-mode override (Kiro credits). Empty = logo only.
                 button.title = text.isEmpty ? "" : "\(text) "
             } else {
                 let numbers = MenuBarIconRenderer.percentTitle(for: percents)

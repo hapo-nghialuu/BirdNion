@@ -87,7 +87,9 @@ enum MenuBarIconRenderer {
             ? CodexMenuBarMetric.current.filter(status.windows)
             : MenuBarMetricStore.filter(status.windows, id: status.id)
         guard !windows.isEmpty else { return nil }
-        let text = providerDisplayText(status: status, windows: windows)
+        let text = status.id == "kiro"
+            ? kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
+            : nil
         if text == "" { return nil }
         return .provider(
             id: status.id,
@@ -95,34 +97,6 @@ enum MenuBarIconRenderer {
             percents: windows.map { $0.remainingPct },
             text: text
         )
-    }
-
-    private static func providerDisplayText(status: ProviderStatus, windows: [QuotaWindow]) -> String? {
-        switch status.id {
-        case "hapo":
-            return hapoDisplayText(windows: windows)
-        case "kiro":
-            return kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
-        default:
-            return nil
-        }
-    }
-
-    private static func hapoDisplayText(windows: [QuotaWindow]) -> String? {
-        guard let window = windows.first,
-              let amount = remainingBudgetText(from: window.subtitle) else {
-            return nil
-        }
-        return "\(amount) \(percentTitle(for: [window.remainingPct]))"
-    }
-
-    private static func remainingBudgetText(from subtitle: String?) -> String? {
-        guard let subtitle else { return nil }
-        let amount = subtitle
-            .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return amount?.isEmpty == false ? amount : nil
     }
 
     // MARK: - Kiro menu-bar display mode
@@ -199,83 +173,41 @@ enum MenuBarIconRenderer {
             ?? NSImage(size: NSSize(width: pointSize, height: pointSize))
     }
 
-    /// Brand logo for a provider id, scaled for the menu bar. Falls back to a
-    /// neutral SF Symbol (rendered as a template so it follows the menu bar
-    /// appearance) for providers without a bundled asset, e.g. Codex.
+    /// Brand logo for a provider id, scaled as a monochrome template so AppKit
+    /// applies the correct menu-bar foreground color in every appearance.
     static func providerLogo(for id: String, pointSize: CGFloat = 18) -> NSImage {
+        let providerAsset: String
         switch id {
-        case "minimax":
-            return scaled(NSImage(named: "MiniMaxLogo"), to: pointSize, isTemplate: false)
-                ?? fallbackLogo(pointSize)
-        case "hapo":
-            return scaled(NSImage(named: "HapoLogo"), to: pointSize, isTemplate: false)
-                ?? fallbackLogo(pointSize)
-        case "claude":
-            // Anthropic's sun/star logo (claude.svg) is monochrome white in
-            // its template-rendering-intent, so a tint keeps it readable on
-            // both light and dark menu bar backgrounds.
-            return scaled(NSImage(named: "ClaudeLogo"), to: pointSize,
-                          isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "codex":
-            // Codex ships as a monochrome SVG silhouette; tint it white so it
-            // reads on the menu bar (it's shown blue in the popover instead).
-            return scaled(NSImage(named: "CodexLogo"), to: pointSize,
-                          isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "elevenlabs":
-            return scaled(NSImage(named: "ElevenLabsLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "deepgram":
-            return scaled(NSImage(named: "DeepgramLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "groq":
-            return scaled(NSImage(named: "GroqLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "grok":
-            return scaled(NSImage(named: "GrokLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "openai":
-            // Same monochrome mark as Codex (CodexBar OpenAI branding).
-            return scaled(NSImage(named: "CodexLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "ollama":
-            return scaled(NSImage(named: "OllamaLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "copilot":
-            return scaled(NSImage(named: "CopilotLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "kilo":
-            return scaled(NSImage(named: "KiloLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "commandcode":
-            return scaled(NSImage(named: "CommandCodeLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "freemodel":
-            return scaled(NSImage(named: "FreemodelLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "mimo":
-            return scaled(NSImage(named: "MiMoLogo"), to: pointSize, isTemplate: false, tint: .white)
-                ?? fallbackLogo(pointSize)
-        case "alibaba":
-            return scaled(NSImage(named: "AlibabaLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
-        case "cursor":
-            return scaled(NSImage(named: "CursorLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
-        case "gemini":
-            return scaled(NSImage(named: "GeminiLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
-        case "kiro":
-            return scaled(NSImage(named: "KiroLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
-        case "opencode":
-            return scaled(NSImage(named: "OpenCodeLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
-        case "opencodego":
-            return scaled(NSImage(named: "OpenCodeGoLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
-        case "antigravity":
-            return scaled(NSImage(named: "AntigravityLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
-        case "bedrock":
-            return scaled(NSImage(named: "BedrockLogo"), to: pointSize, isTemplate: false, tint: .white) ?? fallbackLogo(pointSize)
+        case "minimax": providerAsset = "MiniMaxLogo"
+        case "hapo": providerAsset = "HapoLogo"
+        case "claude": providerAsset = "ClaudeLogo"
+        case "codex", "openai": providerAsset = "CodexLogo"
+        case "openrouter": providerAsset = "OpenRouterLogo"
+        case "deepseek": providerAsset = "DeepSeekLogo"
+        case "zai": providerAsset = "ZaiLogo"
+        case "elevenlabs": providerAsset = "ElevenLabsLogo"
+        case "deepgram": providerAsset = "DeepgramLogo"
+        case "groq": providerAsset = "GroqLogo"
+        case "grok": providerAsset = "GrokLogo"
+        case "ollama": providerAsset = "OllamaLogo"
+        case "copilot": providerAsset = "CopilotLogo"
+        case "kilo": providerAsset = "KiloLogo"
+        case "commandcode": providerAsset = "CommandCodeLogo"
+        case "freemodel": providerAsset = "FreemodelLogo"
+        case "mimo": providerAsset = "MiMoLogo"
+        case "alibaba": providerAsset = "AlibabaLogo"
+        case "cursor": providerAsset = "CursorLogo"
+        case "gemini": providerAsset = "GeminiLogo"
+        case "kiro": providerAsset = "KiroLogo"
+        case "opencode": providerAsset = "OpenCodeLogo"
+        case "opencodego": providerAsset = "OpenCodeGoLogo"
+        case "antigravity": providerAsset = "AntigravityLogo"
+        case "bedrock": providerAsset = "BedrockLogo"
         default:
             return fallbackLogo(pointSize)
         }
+        return scaled(NSImage(named: providerAsset), to: pointSize, isTemplate: true)
+            ?? fallbackLogo(pointSize)
     }
 
     /// Neutral, theme-aware logo for providers without a brand asset.
@@ -288,12 +220,9 @@ enum MenuBarIconRenderer {
 
     /// Redraw `image` into a square `pointSize` bitmap with high-quality
     /// interpolation so it stays crisp at small menu bar sizes. `isTemplate`
-    /// controls tinting: false keeps the source colours (brand logos), true
-    /// lets AppKit tint the alpha mask to match the menu bar (SF Symbols).
-    /// When `tint` is set, the source is recoloured to that colour over its
-    /// alpha (a flat silhouette), used for the monochrome Codex logo.
+    /// lets AppKit tint the alpha mask to match the current menu-bar appearance.
     private static func scaled(_ image: NSImage?, to pointSize: CGFloat,
-                               isTemplate: Bool, tint: NSColor? = nil) -> NSImage? {
+                               isTemplate: Bool) -> NSImage? {
         guard let source = image else { return nil }
         let target = NSSize(width: pointSize, height: pointSize)
         let rect = NSRect(origin: .zero, size: target)
@@ -304,10 +233,6 @@ enum MenuBarIconRenderer {
                     from: NSRect(origin: .zero, size: source.size),
                     operation: .sourceOver,
                     fraction: 1.0)
-        if let tint = tint {
-            tint.set()
-            rect.fill(using: .sourceAtop)
-        }
         out.unlockFocus()
         out.isTemplate = isTemplate
         return out

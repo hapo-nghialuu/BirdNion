@@ -489,6 +489,19 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [-4, 120]), "0%  100%")
     }
 
+    func testMenuBarProviderLogosAreMonochromeTemplates() {
+        let providerIDs = [
+            "minimax", "hapo", "codex", "claude", "openrouter", "deepseek", "zai",
+            "elevenlabs", "deepgram", "groq", "grok", "openai", "ollama", "copilot",
+            "kilo", "commandcode", "freemodel", "mimo", "cursor", "alibaba", "opencode",
+            "opencodego", "gemini", "kiro", "antigravity", "bedrock",
+        ]
+
+        for id in providerIDs {
+            XCTAssertTrue(MenuBarIconRenderer.providerLogo(for: id).isTemplate, id)
+        }
+    }
+
     func testMenuBarFramesFallBackToBirdWhenPercentHiddenOrNoQuota() {
         let status = ProviderStatus(
             id: "hapo", displayName: "AI Hub",
@@ -566,7 +579,7 @@ final class NewProviderTests: XCTestCase {
             ])
     }
 
-    func testHapoMenuBarFrameShowsMoneyBeforePercent() {
+    func testHapoMenuBarFrameShowsPercentOnly() {
         let hapo = ProviderStatus(
             id: "hapo", displayName: "AI Hub",
             windows: [QuotaWindow(label: "Week",
@@ -577,7 +590,7 @@ final class NewProviderTests: XCTestCase {
 
         XCTAssertEqual(
             MenuBarIconRenderer.frames(from: [hapo], showPercent: true, visibility: { _ in true }),
-            [.provider(id: "hapo", name: "AI Hub", percents: [73], text: "$14.60 73%")])
+            [.provider(id: "hapo", name: "AI Hub", percents: [73], text: nil)])
     }
 
     /// Kilo org list comes back as a tRPC batch whose `json` is a DIRECT array
