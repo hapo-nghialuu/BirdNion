@@ -1,6 +1,6 @@
 cask "birdnion" do
-  version "0.8.16"
-  sha256 "ecab49ccfc7805eeb800222f090c00bda41b6c48c04b4ab53ea53f654f40ea0d"
+  version "0.8.17"
+  sha256 "b0cfb05e4cc312d41768327b60d795b232fb82e5e85d77c79ff77bb24b2f824c"
 
   url "https://github.com/hapo-nghialuu/BirdNion/releases/download/v#{version}/BirdNion-#{version}.zip"
   name "BirdNion"
