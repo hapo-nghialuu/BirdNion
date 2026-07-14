@@ -483,6 +483,81 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(MenuBarIconRenderer.kiroDisplayText(status: s2, mode: .overageCostWhenExhausted), "10")
     }
 
+    /// Kiro /usage parsing: full pipeline including whoami auth method,
+    /// /context breakdown, overage status, and version.
+    func testKiroParseUsageFullOutput() {
+        let usage = """
+        Plan: Q Developer Pro
+        ████████████████ 42% (resets on 2027-01-01)
+        (21.00 of 50 covered in plan)
+        Bonus credits:
+        10.00/100 credits used, expires in 88 days
+        Overages: Enabled
+        Credits used: 5.25
+        Est. cost: $1.31 USD
+        Manage at https://app.kiro.dev/account/usage
+        """
+        let whoami = """
+        Logged in with AWS Builder ID
+        Email: boss@example.com
+        """
+        let context = """
+        Context window: 12.5% used
+        Context files 3.0%
+        Tools 4.5%
+        Kiro responses 2.0%
+        Your prompts 3.0%
+        """
+        let s = KiroProvider._parseForTesting(
+            usageOutput: usage, whoamiOutput: whoami,
+            contextOutput: context, version: "kiro-cli 1.23.1")
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows[0].label, "Credits")
+        XCTAssertEqual(s.windows[0].usedPct, 42)
+        XCTAssertNotNil(s.windows[0].resetDate)
+        XCTAssertEqual(s.windows[1].label, "Bonus Credits")
+        XCTAssertEqual(s.windows[1].usedPct, 10)
+        XCTAssertEqual(s.windows[2].label, "Vượt hạn mức")
+        XCTAssertEqual(s.windows[2].subtitle, "5.25 credits · ~$1.31")
+        XCTAssertEqual(s.accountLabel, "boss@example.com")
+        XCTAssertEqual(s.sourceLabel, "AWS Builder ID")
+        XCTAssertEqual(s.planName, "Q Developer Pro")
+        XCTAssertEqual(s.version, "kiro-cli 1.23.1")
+        XCTAssertEqual(s.kiroMenu?.overagesStatus, "Enabled")
+        XCTAssertEqual(s.kiroMenu?.contextPercentUsed, 12.5)
+        XCTAssertEqual(s.kiroMenu?.contextToolsPercent, 4.5)
+        XCTAssertEqual(s.kiroMenu?.creditsRemaining, 29)
+    }
+
+    /// Managed plans hide plan credits but keep bonus/overage windows
+    /// (CodexBar behavior — previously BirdNion dropped them).
+    func testKiroParseManagedPlanKeepsBonusAndOverage() {
+        let usage = """
+        Plan: Enterprise
+        Managed by Admin
+        Bonus credits:
+        2.00/20 credits used, expires in 10 days
+        Overages: Disabled
+        """
+        let s = KiroProvider._parseForTesting(usageOutput: usage, whoamiOutput: nil)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.map(\.label), ["Credits", "Bonus Credits", "Vượt hạn mức"])
+        XCTAssertEqual(s.windows[0].remainingPct, 100)
+        XCTAssertEqual(s.windows[2].subtitle, "Disabled")
+        XCTAssertEqual(s.kiroMenu?.overagesStatus, "Disabled")
+    }
+
+    /// KIRO-branded plan names get title-cased; version prefix is stripped.
+    func testKiroDisplayHelpers() {
+        XCTAssertEqual(KiroProvider.displayPlanName("KIRO  FREE"), "Kiro Free")
+        XCTAssertEqual(KiroProvider.displayPlanName("Q Developer Pro"), "Q Developer Pro")
+        XCTAssertEqual(KiroProvider.parseVersionOutput("kiro-cli 1.23.1"), "1.23.1")
+        XCTAssertEqual(KiroProvider.parseVersionOutput("2.0.0"), "2.0.0")
+        XCTAssertNil(KiroProvider.parseContextUsage("no context here"))
+        XCTAssertTrue(KiroProvider.isLoginRequired("Error: Not logged in"))
+        XCTAssertFalse(KiroProvider.isLoginRequired("Plan: Free"))
+    }
+
     func testMenuBarPercentTitleIncludesUnit() {
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [76]), "76%")
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [93, 82]), "93%  82%")

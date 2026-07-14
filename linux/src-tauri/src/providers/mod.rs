@@ -102,6 +102,9 @@ pub struct ProviderStatus {
     /// "∞ Unlimited" credits (codex plans without metered credits).
     #[serde(default)]
     pub credits_unlimited: bool,
+    /// Kiro context-window usage % from `kiro-cli /context` (best-effort).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kiro_context_percent: Option<f64>,
 }
 
 impl ProviderStatus {

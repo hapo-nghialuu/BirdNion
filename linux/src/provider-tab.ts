@@ -45,6 +45,8 @@ export type ProviderStatus = {
   serviceStatusLevel?: string;
   sourceLabel?: string;
   creditsUnlimited?: boolean;
+  /** Kiro context-window usage % from `kiro-cli /context` (best-effort). */
+  kiroContextPercent?: number;
   /** JS-side only (never set by Rust): placeholder while the first fetch for
    * this provider is still in flight — renders the loading skeleton instead
    * of "no quota data", mirroring macOS `displayStatuses` placeholders. */

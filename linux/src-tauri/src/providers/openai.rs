@@ -167,6 +167,7 @@ pub fn parse_admin_status(
         service_status_level: None,
         source_label: Some("Admin API".into()),
         credits_unlimited: false,
+        kiro_context_percent: None,
     }
     .with_plan_label(plan)
 }

@@ -202,8 +202,9 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
     }
 }
 
-/// Structured Kiro usage consumed by the menu-bar display-mode picker.
-/// All optional so a partial parse still yields what it found.
+/// Structured Kiro usage consumed by the menu-bar display-mode picker and the
+/// Settings info grid. All optional so a partial parse still yields what it
+/// found. Mirrors CodexBar's `KiroUsageDetails` (+ flattened context usage).
 struct KiroMenuUsage: Codable, Equatable, Sendable {
     /// Credits remaining (plan credits left).
     let creditsRemaining: Double?
@@ -217,19 +218,40 @@ struct KiroMenuUsage: Codable, Equatable, Sendable {
     let overageCreditsUsed: Double?
     /// Pay-as-you-go overage cost in USD (when exhausted).
     let overageCostUSD: Double?
+    /// Raw "Overages: …" status line from /usage (e.g. "Enabled" / "Disabled").
+    let overagesStatus: String?
+    /// Context-window usage from `/context` — total percent used.
+    let contextPercentUsed: Double?
+    /// Per-category context percents (context files / tools / responses / prompts).
+    let contextFilesPercent: Double?
+    let contextToolsPercent: Double?
+    let contextResponsesPercent: Double?
+    let contextPromptsPercent: Double?
 
     init(creditsRemaining: Double? = nil,
          creditsUsed: Double? = nil,
          creditsTotal: Double? = nil,
          primaryRemainingPct: Int? = nil,
          overageCreditsUsed: Double? = nil,
-         overageCostUSD: Double? = nil) {
+         overageCostUSD: Double? = nil,
+         overagesStatus: String? = nil,
+         contextPercentUsed: Double? = nil,
+         contextFilesPercent: Double? = nil,
+         contextToolsPercent: Double? = nil,
+         contextResponsesPercent: Double? = nil,
+         contextPromptsPercent: Double? = nil) {
         self.creditsRemaining = creditsRemaining
         self.creditsUsed = creditsUsed
         self.creditsTotal = creditsTotal
         self.primaryRemainingPct = primaryRemainingPct
         self.overageCreditsUsed = overageCreditsUsed
         self.overageCostUSD = overageCostUSD
+        self.overagesStatus = overagesStatus
+        self.contextPercentUsed = contextPercentUsed
+        self.contextFilesPercent = contextFilesPercent
+        self.contextToolsPercent = contextToolsPercent
+        self.contextResponsesPercent = contextResponsesPercent
+        self.contextPromptsPercent = contextPromptsPercent
     }
 }
 

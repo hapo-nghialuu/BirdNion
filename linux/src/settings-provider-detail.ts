@@ -151,6 +151,10 @@ export function detailInfoGrid(id: string, enabled: boolean, st: ProviderStatus 
   const account = isHidePersonalInfo() ? null : (st?.accountLabel || st?.signedInEmail);
   if (account) body.append(infoRow(t("provider.account"), account));
   if (st?.version) body.append(infoRow(t("provider.version"), st.version));
+  if (id === "kiro" && st?.kiroContextPercent != null) {
+    // Context-window usage from `kiro-cli /context` (best-effort).
+    body.append(infoRow(t("provider.kiroContext"), `${Math.round(st.kiroContextPercent)}%`));
+  }
 
   if (st?.serviceStatus) {
     const value = el("span", "pp-info-value pp-svc");

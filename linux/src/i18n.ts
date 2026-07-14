@@ -307,6 +307,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "provider.planName": { vi: "Tên gói", en: "Plan name" },
   "provider.account": { vi: "Tài khoản", en: "Account" },
   "provider.version": { vi: "Phiên bản", en: "Version" },
+  "provider.kiroContext": { vi: "Context window", en: "Context window" },
   "provider.serviceStatus": { vi: "Tình trạng", en: "Service status" },
   "provider.error": { vi: "Lỗi", en: "Error" },
   "provider.updated": { vi: "Cập nhật", en: "Updated" },

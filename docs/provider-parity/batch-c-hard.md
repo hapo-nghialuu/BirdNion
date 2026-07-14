@@ -1,7 +1,7 @@
 # Batch C — HARD providers
 
 Gemini · Kiro · Antigravity · Bedrock
-Kết: **0 full / 2 partial / 2 diverge.**
+Kết: **1 full / 1 partial / 2 diverge.**
 
 Chung (cosmetics): cả 4 thiếu **brand tint color** (CodexBar có ProviderColor riêng) + thiếu **dashboard/status link** (`dashboardLinks` default→[]).
 
@@ -16,13 +16,12 @@ Chung (cosmetics): cả 4 thiếu **brand tint color** (CodexBar có ProviderCol
 - **Cosmetics**: displayName "Gemini" ✓, logo ✓ (tint trắng). brand tint CodexBar RGB(171,135,234) — BirdNion không có. dashboard link THIẾU (`gemini.google.com` + Google status).
 - **Gaps**: (1) đổi grouping sang 3-tier label cố định (`:321-336`); (2) thêm plan "Workspace" đọc `hd` (`:231-236`); (3) curl fallback timeout; (4) dashboard link.
 
-## Kiro 🟡 PARTIAL
-- **Auth**: subprocess `kiro`/`kiro-cli whoami` + `chat --no-interactive /usage`, strip ANSI — MATCH.
-- **Endpoints/flow**: whoami 3s + usage 20s, kill process-group on timeout (`KiroProvider.swift:60,75,142`) — tương đương. CodexBar có version-detector cho menu; BirdNion không.
-- **Parsing/data**: cả 2 parse credits `█+ X%`, `(X.XX of Y covered)`, bonus, reset, managed-plan, plan name. THIẾU trong BirdNion: **overagesStatus / overageCreditsUsed / estimatedOverageCostUSD / manageURL / contextUsage** (`KiroStatusProbe.swift:21-25`).
-- **UI fields**: windows[Credits, Bonus Credits], creditsRemaining ✓, planName ✓, accountLabel=email. THIẾU: overage cost/credits, context-usage breakdown, manageURL. CodexBar còn có **menu-bar display mode picker 9 options** (`SettingsStore.swift:69-97`); BirdNion không.
-- **Cosmetics**: displayName "Kiro" ✓, logo ✓. brand tint CodexBar RGB(255,153,0) cam — BirdNion không. dashboard link THIẾU (`app.kiro.dev/account/usage` + AWS health).
-- **Gaps**: (1) port overage + context-usage (ít nhất hiển thị khi credits=0); (2) menu-bar display-mode picker; (3) dashboard link.
+## Kiro 🟢 FULL (2026-07-14)
+- **Auth**: subprocess `kiro`/`kiro-cli whoami` (song song với usage, parse email + **authMethod** "Logged in with …" → `sourceLabel`) + `chat --no-interactive /usage` + `chat --no-interactive /context`, strip ANSI — MATCH.
+- **Transport**: pipe-first với **idle cutoff** (4s im lặng sau khi có output) + **PTY fallback** giới hạn deadline (spawn khi pipe im lặng >5s hoặc output không parse được) — port đầy đủ cơ chế race của `KiroStatusProbe` (`KiroProvider.swift runCommand`). Linux: pipe + idle cutoff (PTY fallback không port — cần pty crate, chỉ phục vụ CLI đời rất cũ trước bản Linux).
+- **Parsing/data**: credits `█+ X%`, `(X.XX of Y covered)`, bonus, reset, managed-plan (giữ bonus/overage thay vì drop), plan name (displayPlanName title-case), overagesStatus/overageCreditsUsed/estimatedOverageCostUSD/manageURL, **contextUsage** (`/context` breakdown), **version detector** (`kiro-cli --version`).
+- **UI fields**: windows[Credits, Bonus Credits, Vượt hạn mức], creditsRemaining ✓, planName ✓, accountLabel=email, version ✓, sourceLabel=authMethod ✓, context % trong info grid (macOS `provider.kiroContext` + Linux `kiroContextPercent`). Menu-bar display mode picker 9 options ✓.
+- **Cosmetics**: displayName "Kiro" ✓, logo ✓, brand tint #FF9900 ✓ (`VocabbyTheme.kiro`), dashboard link ✓ (`app.kiro.dev/account/usage` + AWS health).
 
 ## Antigravity 🔴 DIVERGE/MISSING
 - **Auth/flow**: BirdNion = **CHỈ local probe** (`ps -ax` tìm language_server/agy → `--csrf_token`+port → `lsof` → POST Connect/JSON, `AntigravityProvider.swift:94-198`). CodexBar có **3 source mode** (descriptor `:42-63`): `app/ide local` + **`agy` CLI warm-session** (spawn process, poll port, auth-prompt detect) + **`oauth` remote** (multi-account Google login, AntigravityRemoteUsageFetcher). → BirdNion thiếu ~2/3 chiến lược.

@@ -1,29 +1,56 @@
+import Darwin
 import Foundation
 
 /// Kiro (AWS) quota provider.
 ///
 /// Resolves the `kiro` or `kiro-cli` binary from PATH (mirrors ClaudeCLIVersionDetector pattern).
-/// Subcommands:
-///   - `kiro-cli whoami` — verifies login; parses email + auth method.
-///   - `kiro-cli chat --no-interactive /usage` — usage output with credits %, plan, reset date.
+/// Subcommands (mirrors CodexBar's KiroStatusProbe):
+///   - `kiro-cli whoami` — verifies login; parses email + auth method. Runs in
+///     parallel with the usage command; its not-logged-in verdict upgrades a
+///     usage parse error into a clearer "not logged in" message.
+///   - `kiro-cli chat --no-interactive /usage` — usage output with credits %,
+///     plan, reset date, bonus credits, overage status/cost.
+///   - `kiro-cli chat --no-interactive /context` — context-window breakdown
+///     (best-effort; failures are non-fatal).
+///   - `kiro-cli --version` — CLI version for the info grid (best-effort).
+///
+/// Transport: recent Kiro CLIs can keep their TUI alive indefinitely under a
+/// PTY even with `--no-interactive`, while older releases emit no output
+/// through pipes. So each command prefers plain pipes (with an idle cutoff
+/// once output starts) and races a bounded PTY fallback that only spawns when
+/// the pipe stays silent past `pipeFallbackCap` or returns unusable output.
 /// ANSI codes are stripped before parsing.
-/// Hard timeout of 25s total (20s for usage cmd + 5s for whoami); process group killed on timeout.
 final class KiroProvider: QuotaProvider {
     let id = "kiro"
     let displayName = "Kiro"
 
     private let binaryResolver: () -> String?
-    private let timeout: TimeInterval
+    private let usageTimeout: TimeInterval
+    private let whoamiTimeout: TimeInterval
+    private let contextTimeout: TimeInterval
+    /// How long the pipe transport may stay silent before the PTY fallback
+    /// spawns (capped at half the command timeout).
+    private let pipeFallbackCap: TimeInterval
 
-    init(timeout: TimeInterval = 25) {
-        self.timeout = timeout
+    init(timeout: TimeInterval = 20) {
+        self.usageTimeout = timeout
+        self.whoamiTimeout = 3
+        self.contextTimeout = 8
+        self.pipeFallbackCap = 5
         self.binaryResolver = { KiroProvider.resolveBinary() }
     }
 
     /// Testable init — inject a custom binary resolver.
-    init(binaryResolver: @escaping () -> String?, timeout: TimeInterval = 25) {
+    init(binaryResolver: @escaping () -> String?,
+         timeout: TimeInterval = 20,
+         whoamiTimeout: TimeInterval = 3,
+         contextTimeout: TimeInterval = 8,
+         pipeFallbackCap: TimeInterval = 5) {
         self.binaryResolver = binaryResolver
-        self.timeout = timeout
+        self.usageTimeout = timeout
+        self.whoamiTimeout = whoamiTimeout
+        self.contextTimeout = contextTimeout
+        self.pipeFallbackCap = pipeFallbackCap
     }
 
     func fetch() async throws -> ProviderStatus {
@@ -31,6 +58,8 @@ final class KiroProvider: QuotaProvider {
             return try await fetchInternal()
         } catch let err as KiroProviderError {
             return failure(err.localizedMessage)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return failure(error.localizedDescription)
         }
@@ -39,60 +68,375 @@ final class KiroProvider: QuotaProvider {
     // MARK: - Testing hook
 
     /// Parse raw CLI text (post ANSI-strip) into ProviderStatus (for unit tests).
-    static func _parseForTesting(usageOutput: String, whoamiOutput: String?) -> ProviderStatus {
-        let email = whoamiOutput.flatMap { parseWhoamiEmail(from: Self.stripANSI($0)) }
+    static func _parseForTesting(usageOutput: String,
+                                 whoamiOutput: String?,
+                                 contextOutput: String? = nil,
+                                 version: String? = nil) -> ProviderStatus {
+        let account = whoamiOutput.map { parseWhoami(stripANSI($0)) }
+        let context = contextOutput.flatMap { parseContextUsage(stripANSI($0)) }
         do {
-            let snapshot = try parseUsage(stripped: Self.stripANSI(usageOutput), accountEmail: email)
-            return snapshot
+            return try parseUsage(
+                stripped: stripANSI(usageOutput),
+                accountEmail: account?.email,
+                authMethod: account?.authMethod,
+                contextUsage: context,
+                version: version)
+        } catch let err as KiroProviderError {
+            return ProviderStatus(id: "kiro", displayName: "Kiro", windows: [],
+                                  lastUpdated: Date(), error: err.localizedMessage)
         } catch {
-            return ProviderStatus(id: "kiro", displayName: "Kiro", windows: [], lastUpdated: Date(), error: error.localizedDescription)
+            return ProviderStatus(id: "kiro", displayName: "Kiro", windows: [],
+                                  lastUpdated: Date(), error: error.localizedDescription)
         }
     }
 
     // MARK: - Core fetch
+
+    private enum AccountProbe: Equatable {
+        case account(email: String?, authMethod: String?)
+        case notLoggedIn
+        case unavailable
+
+        var email: String? {
+            if case let .account(email, _) = self { return email }
+            return nil
+        }
+
+        var authMethod: String? {
+            if case let .account(_, method) = self { return method }
+            return nil
+        }
+    }
 
     private func fetchInternal() async throws -> ProviderStatus {
         guard let binary = binaryResolver() else {
             throw KiroProviderError.binaryNotFound
         }
 
-        // Run whoami (3s timeout, non-fatal on failure)
-        let whoamiOut = try? runCommand(binary: binary, arguments: ["whoami"], timeout: 3)
-        let email: String?
-        if let out = whoamiOut {
-            let stripped = Self.stripANSI(out)
-            // Check for "not logged in" in whoami output
-            let lower = stripped.lowercased()
-            if lower.contains("not logged in") || lower.contains("login required") {
+        // whoami + version run concurrently with the usage command.
+        let accountTask = Task { await self.fetchAccount(binary: binary) }
+        let versionTask = Task.detached(priority: .utility) { Self.detectVersion(binary: binary) }
+
+        let usageResult: KiroCLIResult
+        do {
+            usageResult = try await runCommand(
+                binary: binary, arguments: ["chat", "--no-interactive", "/usage"],
+                timeout: usageTimeout, idleTimeout: 4.0, kind: .usage)
+        } catch is CancellationError {
+            accountTask.cancel()
+            versionTask.cancel()
+            throw CancellationError()
+        } catch {
+            versionTask.cancel()
+            // A silent/failed usage probe on a logged-out CLI should read as
+            // "not logged in", not as a timeout.
+            if await accountTask.value == .notLoggedIn {
                 throw KiroProviderError.notLoggedIn
             }
-            email = Self.parseWhoamiEmail(from: stripped)
-        } else {
-            email = nil
+            throw error
         }
 
-        // Run usage command (20s timeout with idle detection)
-        let usageOut = try runCommand(binary: binary, arguments: ["chat", "--no-interactive", "/usage"], timeout: 20)
-        let strippedUsage = Self.stripANSI(usageOut)
-
-        let lowerUsage = strippedUsage.lowercased()
-        if lowerUsage.contains("not logged in")
-            || lowerUsage.contains("login required")
-            || lowerUsage.contains("failed to initialize auth portal")
-            || lowerUsage.contains("kiro-cli login")
-            || lowerUsage.contains("oauth error")
-        {
+        let usageOut = usageResult.output
+        if Self.isLoginRequired(usageOut) {
+            accountTask.cancel()
+            versionTask.cancel()
             throw KiroProviderError.notLoggedIn
         }
+        let strippedUsage = Self.stripANSI(usageOut)
+        try Self.validateCompletion(
+            usageResult, command: "usage",
+            allowIdleOutput: Self.usageLooksParseable(strippedUsage))
 
-        return try Self.parseUsage(stripped: strippedUsage, accountEmail: email)
+        // Context breakdown is best-effort; never fails the fetch.
+        let contextUsage = await fetchContext(binary: binary)
+
+        let account = await accountTask.value
+        let version = await versionTask.value
+
+        do {
+            return try Self.parseUsage(
+                stripped: strippedUsage,
+                accountEmail: account.email,
+                authMethod: account.authMethod,
+                contextUsage: contextUsage,
+                version: version)
+        } catch KiroProviderError.parseError where account == .notLoggedIn {
+            throw KiroProviderError.notLoggedIn
+        }
     }
 
-    // MARK: - CLI execution
+    private func fetchAccount(binary: String) async -> AccountProbe {
+        do {
+            let result = try await runCommand(
+                binary: binary, arguments: ["whoami"],
+                timeout: whoamiTimeout, idleTimeout: 1.5, kind: .whoami)
+            let output = result.output
+            if Self.isLoginRequired(output) { return .notLoggedIn }
+            if result.stoppedAfterOutput { return .unavailable }
+            guard result.terminationStatus == 0,
+                  !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return .unavailable }
+            let info = Self.parseWhoami(Self.stripANSI(output))
+            return .account(email: info.email, authMethod: info.authMethod)
+        } catch {
+            return .unavailable
+        }
+    }
 
-    /// Runs a kiro-cli subcommand synchronously via Foundation Process, bridged into async context.
-    /// Hard kills the process + process group on timeout.
-    private func runCommand(binary: String, arguments: [String], timeout: TimeInterval) throws -> String {
+    private func fetchContext(binary: String) async -> KiroContextUsage? {
+        guard let result = try? await runCommand(
+            binary: binary, arguments: ["chat", "--no-interactive", "/context"],
+            timeout: contextTimeout, idleTimeout: 3.0, kind: .context)
+        else { return nil }
+        return Self.parseContextUsage(Self.stripANSI(result.output))
+    }
+
+    // MARK: - CLI transport (pipe + bounded PTY fallback)
+
+    struct KiroCLIResult: Sendable {
+        let stdout: String
+        let stderr: String
+        let terminationStatus: Int32
+        /// The process was cut off by the idle/deadline watchdog after it had
+        /// produced output — the text is usable but the exit status is not.
+        let stoppedAfterOutput: Bool
+
+        var output: String {
+            let out = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let err = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return [out, err].filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+    }
+
+    private enum CommandKind { case whoami, usage, context }
+
+    private enum TransportOutcome: Sendable {
+        case result(KiroCLIResult)
+        case failure(KiroProviderError)
+        case cancelled
+    }
+
+    private enum TransportEvent: Sendable {
+        case pipe(TransportOutcome)
+        case pty(TransportOutcome)
+        case fallbackReady
+    }
+
+    /// Marks pipe output activity across tasks (drives idle cutoff + decides
+    /// whether the PTY fallback is needed).
+    private final class PipeActivity: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastActivity = Date()
+        private var receivedOutput = false
+
+        var lastActivityAt: Date { lock.withLock { lastActivity } }
+        var hasReceivedOutput: Bool { lock.withLock { receivedOutput } }
+
+        func markActivity() {
+            lock.withLock {
+                lastActivity = Date()
+                receivedOutput = true
+            }
+        }
+    }
+
+    /// Lets the async race cancel the synchronous PTY loop running in a
+    /// detached task (Task cancellation does not propagate into it).
+    private final class CancellationFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        var isCancelled: Bool { lock.withLock { cancelled } }
+        func cancel() { lock.withLock { cancelled = true } }
+    }
+
+    /// Runs a kiro-cli subcommand: pipe transport first; a PTY fallback spawns
+    /// when the pipe stays silent past `pipeFallbackCap` or finishes with
+    /// unusable output, all bounded by one shared deadline.
+    private func runCommand(binary: String, arguments: [String],
+                            timeout: TimeInterval, idleTimeout: TimeInterval,
+                            kind: CommandKind) async throws -> KiroCLIResult {
+        let deadline = Date().addingTimeInterval(timeout)
+        let fallbackDelay = min(max(0, pipeFallbackCap), max(0, timeout / 2))
+        let activity = PipeActivity()
+        let ptyCancel = CancellationFlag()
+
+        return try await withThrowingTaskGroup(of: TransportEvent.self) { group in
+            defer {
+                ptyCancel.cancel()
+                group.cancelAll()
+            }
+            group.addTask {
+                await .pipe(Self.pipeOutcome(
+                    binary: binary, arguments: arguments,
+                    timeout: timeout, idleTimeout: idleTimeout, activity: activity))
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(fallbackDelay * 1_000_000_000))
+                return .fallbackReady
+            }
+
+            func startPTY() {
+                let remaining = deadline.timeIntervalSinceNow
+                guard remaining > 0 else { return }
+                group.addTask {
+                    await .pty(Self.ptyOutcome(
+                        binary: binary, arguments: arguments,
+                        timeout: remaining, idleTimeout: min(idleTimeout, remaining),
+                        cancel: ptyCancel))
+                }
+            }
+
+            var ptyStarted = false
+            var pipeDoneUnaccepted = false
+            var pendingPTY: TransportOutcome?
+
+            while let event = try await group.next() {
+                try Task.checkCancellation()
+                switch event {
+                case .fallbackReady:
+                    // Only fall back when the pipe has stayed completely silent.
+                    guard !ptyStarted, !activity.hasReceivedOutput,
+                          deadline.timeIntervalSinceNow > 0 else { continue }
+                    ptyStarted = true
+                    startPTY()
+
+                case let .pipe(.result(result)):
+                    if try shouldReturnPipeResult(result, kind: kind, deadline: deadline) {
+                        return result
+                    }
+                    pipeDoneUnaccepted = true
+                    if let pending = try Self.resolvePending(pendingPTY, deadline: deadline) {
+                        return pending
+                    }
+                    if !ptyStarted {
+                        guard deadline.timeIntervalSinceNow > 0 else { throw KiroProviderError.timeout }
+                        ptyStarted = true
+                        startPTY()
+                    }
+
+                case .pipe(.failure(.timeout)):
+                    pipeDoneUnaccepted = true
+                    if let pending = try Self.resolvePending(pendingPTY, deadline: deadline) {
+                        return pending
+                    }
+
+                case let .pipe(.failure(error)):
+                    throw error
+
+                case .pipe(.cancelled), .pty(.cancelled):
+                    throw CancellationError()
+
+                case let .pty(.result(result)):
+                    guard acceptPTYResult(result, kind: kind) else {
+                        if pipeDoneUnaccepted {
+                            guard Date() <= deadline else { throw KiroProviderError.timeout }
+                            return result
+                        }
+                        pendingPTY = .result(result)
+                        continue
+                    }
+                    guard Date() <= deadline else { throw KiroProviderError.timeout }
+                    return result
+
+                case let .pty(.failure(error)):
+                    if pipeDoneUnaccepted { throw error }
+                    pendingPTY = .failure(error)
+                }
+            }
+            if let pending = try Self.resolvePending(pendingPTY, deadline: deadline) {
+                return pending
+            }
+            throw KiroProviderError.timeout
+        }
+    }
+
+    private static func resolvePending(_ pending: TransportOutcome?,
+                                       deadline: Date) throws -> KiroCLIResult? {
+        guard let pending else { return nil }
+        guard Date() <= deadline else { throw KiroProviderError.timeout }
+        switch pending {
+        case let .result(result): return result
+        case let .failure(error): throw error
+        case .cancelled: throw CancellationError()
+        }
+    }
+
+    /// A pipe result is usable when it is a definitive login prompt or when the
+    /// command's parser recognises it.
+    private func acceptPipeResult(_ result: KiroCLIResult, kind: CommandKind) -> Bool {
+        let output = result.output
+        if Self.isLoginRequired(output) { return true }
+        switch kind {
+        case .whoami:
+            let info = Self.parseWhoami(Self.stripANSI(output))
+            return info.email != nil || info.authMethod != nil
+        case .usage:
+            return Self.usageLooksParseable(Self.stripANSI(output))
+        case .context:
+            if Self.parseContextUsage(Self.stripANSI(output)) != nil { return true }
+            // A clean, silent exit is a valid "no context yet" answer.
+            return result.terminationStatus == 0 && !result.stoppedAfterOutput && output.isEmpty
+        }
+    }
+
+    private func shouldReturnPipeResult(_ result: KiroCLIResult, kind: CommandKind,
+                                        deadline: Date) throws -> Bool {
+        guard acceptPipeResult(result, kind: kind) else { return false }
+        if !Self.isLoginRequired(result.output), Date() > deadline {
+            throw KiroProviderError.timeout
+        }
+        return true
+    }
+
+    private func acceptPTYResult(_ result: KiroCLIResult, kind: CommandKind) -> Bool {
+        if Self.isLoginRequired(result.output) { return true }
+        return result.terminationStatus == 0 && acceptPipeResult(result, kind: kind)
+    }
+
+    private static func pipeOutcome(binary: String, arguments: [String],
+                                    timeout: TimeInterval, idleTimeout: TimeInterval,
+                                    activity: PipeActivity) async -> TransportOutcome {
+        do {
+            return try await .result(runViaPipe(
+                binary: binary, arguments: arguments,
+                timeout: timeout, idleTimeout: idleTimeout, activity: activity))
+        } catch is CancellationError {
+            return .cancelled
+        } catch let error as KiroProviderError {
+            return .failure(error)
+        } catch {
+            return .failure(.cliFailed(error.localizedDescription))
+        }
+    }
+
+    private static func ptyOutcome(binary: String, arguments: [String],
+                                   timeout: TimeInterval, idleTimeout: TimeInterval,
+                                   cancel: CancellationFlag) async -> TransportOutcome {
+        let task = Task.detached(priority: .userInitiated) {
+            try runViaPTY(binary: binary, arguments: arguments,
+                          timeout: timeout, idleTimeout: idleTimeout, cancel: cancel)
+        }
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                cancel.cancel()
+            }
+            return .result(result)
+        } catch is CancellationError {
+            return .cancelled
+        } catch let error as KiroProviderError {
+            return .failure(error)
+        } catch {
+            return .failure(.cliFailed(error.localizedDescription))
+        }
+    }
+
+    /// Pipe transport: non-blocking reads with a 100ms poll; cuts off after
+    /// `idleTimeout` of silence once output has started, or at the deadline.
+    private static func runViaPipe(binary: String, arguments: [String],
+                                   timeout: TimeInterval, idleTimeout: TimeInterval,
+                                   activity: PipeActivity) async throws -> KiroCLIResult {
         let outPipe = Pipe()
         let errPipe = Pipe()
 
@@ -107,9 +451,6 @@ final class KiroProvider: QuotaProvider {
         proc.standardError = errPipe
         proc.standardInput = FileHandle.nullDevice
 
-        let sem = DispatchSemaphore(value: 0)
-        proc.terminationHandler = { _ in sem.signal() }
-
         do {
             try proc.run()
         } catch {
@@ -119,27 +460,155 @@ final class KiroProvider: QuotaProvider {
         // Move to a process group so we can kill all descendants
         let pid = proc.processIdentifier
         let pgid: pid_t? = (setpgid(pid, pid) == 0) ? pid : nil
+        let outFD = outPipe.fileHandleForReading.fileDescriptor
+        let errFD = errPipe.fileHandleForReading.fileDescriptor
+        _ = fcntl(outFD, F_SETFL, O_NONBLOCK)
+        _ = fcntl(errFD, F_SETFL, O_NONBLOCK)
 
-        let didExit = sem.wait(timeout: .now() + timeout) == .success
-        if !didExit {
+        var stdoutData = Data()
+        var stderrData = Data()
+        let deadline = Date().addingTimeInterval(timeout)
+        var stoppedAfterOutput = false
+
+        func drain() {
+            readAvailable(outFD, into: &stdoutData, activity: activity)
+            readAvailable(errFD, into: &stderrData, activity: activity)
+        }
+
+        do {
+            while proc.isRunning {
+                try Task.checkCancellation()
+                drain()
+                let now = Date()
+                if now >= deadline {
+                    stoppedAfterOutput = true
+                    break
+                }
+                if activity.hasReceivedOutput,
+                   now.timeIntervalSince(activity.lastActivityAt) >= max(0, idleTimeout) {
+                    stoppedAfterOutput = true
+                    break
+                }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+        } catch {
             terminateGroup(pgid: pgid, proc: proc)
-            throw KiroProviderError.timeout
+            throw error
         }
 
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        let stdout = String(data: outData, encoding: .utf8) ?? ""
-        let stderr = String(data: errData, encoding: .utf8) ?? ""
-
-        // Prefer stdout; fall back to stderr
-        let combined = stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stderr : stdout
-        if proc.terminationStatus != 0, combined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw KiroProviderError.cliFailed("kiro-cli thoát với code \(proc.terminationStatus)")
+        if proc.isRunning {
+            terminateGroup(pgid: pgid, proc: proc)
+            guard !proc.isRunning else { throw KiroProviderError.timeout }
+            guard activity.hasReceivedOutput else { throw KiroProviderError.timeout }
         }
-        return combined
+        drain()
+
+        return KiroCLIResult(
+            stdout: String(decoding: stdoutData, as: UTF8.self),
+            stderr: String(decoding: stderrData, as: UTF8.self),
+            terminationStatus: proc.terminationStatus,
+            stoppedAfterOutput: stoppedAfterOutput)
     }
 
-    private func terminateGroup(pgid: pid_t?, proc: Process) {
+    /// PTY transport for older Kiro CLIs that emit nothing through plain
+    /// pipes. One-shot: spawn on a pseudo-terminal, capture until natural
+    /// exit / idle cutoff / deadline, kill the process group on the way out.
+    private static func runViaPTY(binary: String, arguments: [String],
+                                  timeout: TimeInterval, idleTimeout: TimeInterval,
+                                  cancel: CancellationFlag) throws -> KiroCLIResult {
+        var pFD: Int32 = -1
+        var sFD: Int32 = -1
+        var win = winsize(ws_row: 50, ws_col: 200, ws_xpixel: 0, ws_ypixel: 0)
+        guard openpty(&pFD, &sFD, nil, nil, &win) == 0 else {
+            throw KiroProviderError.cliFailed("openpty failed: \(String(cString: strerror(errno)))")
+        }
+        _ = fcntl(pFD, F_SETFL, O_NONBLOCK)
+        let pHandle = FileHandle(fileDescriptor: pFD, closeOnDealloc: true)
+        let sHandle = FileHandle(fileDescriptor: sFD, closeOnDealloc: true)
+        defer {
+            try? pHandle.close()
+            try? sHandle.close()
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.arguments = arguments
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        proc.environment = env
+        proc.standardInput = sHandle
+        proc.standardOutput = sHandle
+        proc.standardError = sHandle
+
+        do {
+            try proc.run()
+        } catch {
+            throw KiroProviderError.cliFailed("Không khởi động được kiro-cli: \(error.localizedDescription)")
+        }
+        let pid = proc.processIdentifier
+        let pgid: pid_t? = (setpgid(pid, pid) == 0) ? pid : nil
+
+        var buffer = Data()
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastOutput = Date()
+        var exitedNaturally = false
+        var stoppedForIdle = false
+
+        while true {
+            if cancel.isCancelled {
+                terminateGroup(pgid: pgid, proc: proc)
+                throw CancellationError()
+            }
+            var chunk = Data()
+            readAvailable(pFD, into: &chunk, activity: nil)
+            if !chunk.isEmpty {
+                buffer.append(chunk)
+                lastOutput = Date()
+            }
+            if !proc.isRunning {
+                exitedNaturally = true
+                var final = Data()
+                readAvailable(pFD, into: &final, activity: nil)
+                buffer.append(final)
+                break
+            }
+            let now = Date()
+            if now >= deadline { break }
+            if !buffer.isEmpty, now.timeIntervalSince(lastOutput) >= max(0, idleTimeout) {
+                stoppedForIdle = true
+                break
+            }
+            usleep(50_000)
+        }
+
+        if proc.isRunning {
+            terminateGroup(pgid: pgid, proc: proc)
+        }
+        if stoppedForIdle {
+            return KiroCLIResult(
+                stdout: String(decoding: buffer, as: UTF8.self),
+                stderr: "", terminationStatus: 0, stoppedAfterOutput: true)
+        }
+        guard exitedNaturally else { throw KiroProviderError.timeout }
+        return KiroCLIResult(
+            stdout: String(decoding: buffer, as: UTF8.self),
+            stderr: "", terminationStatus: proc.terminationStatus,
+            stoppedAfterOutput: false)
+    }
+
+    /// Non-blocking read of everything currently available on `fd`.
+    private static func readAvailable(_ fd: Int32, into buffer: inout Data,
+                                      activity: PipeActivity?) {
+        var buf = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = read(fd, &buf, buf.count)
+            guard n > 0 else { break }
+            buffer.append(buf, count: n)
+            activity?.markActivity()
+        }
+    }
+
+    private static func terminateGroup(pgid: pid_t?, proc: Process) {
         if let g = pgid {
             killpg(g, SIGTERM)
         } else {
@@ -148,10 +617,28 @@ final class KiroProvider: QuotaProvider {
         Thread.sleep(forTimeInterval: 0.2)
         if proc.isRunning {
             if let g = pgid { killpg(g, SIGKILL) } else { proc.terminate() }
+            Thread.sleep(forTimeInterval: 0.1)
         }
     }
 
-    // MARK: - Binary resolution
+    /// An idle-stopped result is fine when the parser already understands it;
+    /// a naturally-exited result must have exit code 0.
+    static func validateCompletion(_ result: KiroCLIResult, command: String,
+                                   allowIdleOutput: Bool) throws {
+        if result.stoppedAfterOutput {
+            guard allowIdleOutput else { throw KiroProviderError.timeout }
+            return
+        }
+        guard result.terminationStatus == 0 else {
+            let message = stripANSI(result.output).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw KiroProviderError.cliFailed(
+                message.isEmpty
+                    ? "kiro-cli \(command) thoát với code \(result.terminationStatus)"
+                    : message)
+        }
+    }
+
+    // MARK: - Binary resolution + version
 
     /// Scans common PATH entries for `kiro` then `kiro-cli`.
     static func resolveBinary() -> String? {
@@ -177,6 +664,39 @@ final class KiroProvider: QuotaProvider {
         return path.isEmpty ? nil : path
     }
 
+    /// Runs `kiro-cli --version` (5s, best-effort) and strips the binary-name
+    /// prefix, mirroring CodexBar's `KiroStatusProbe.detectVersion`.
+    static func detectVersion(binary: String) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.arguments = ["--version"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        proc.standardInput = FileHandle.nullDevice
+        let sem = DispatchSemaphore(value: 0)
+        proc.terminationHandler = { _ in sem.signal() }
+        do { try proc.run() } catch { return nil }
+        guard sem.wait(timeout: .now() + 5) == .success else {
+            proc.terminate()
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard proc.terminationStatus == 0,
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        let line = stripANSI(text)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
+        guard let line else { return nil }
+        return parseVersionOutput(line)
+    }
+
+    /// "kiro-cli 1.23.1" → "1.23.1"; anything else passes through.
+    static func parseVersionOutput(_ line: String) -> String {
+        line.hasPrefix("kiro-cli ") ? String(line.dropFirst("kiro-cli ".count)) : line
+    }
+
     // MARK: - ANSI stripping
 
     /// Strips ANSI CSI and OSC escape sequences from CLI output.
@@ -191,24 +711,82 @@ final class KiroProvider: QuotaProvider {
 
     // MARK: - Parsing
 
-    /// Parses whoami output for email.
-    private static func parseWhoamiEmail(from stripped: String) -> String? {
+    static func isLoginRequired(_ output: String) -> Bool {
+        let lowered = stripANSI(output).lowercased()
+        return lowered.contains("not logged in")
+            || lowered.contains("login required")
+            || lowered.contains("failed to initialize auth portal")
+            || lowered.contains("kiro-cli login")
+            || lowered.contains("oauth error")
+    }
+
+    /// Parses whoami output for email + auth method ("Logged in with X").
+    static func parseWhoami(_ stripped: String) -> (email: String?, authMethod: String?) {
+        var email: String?
+        var authMethod: String?
         for line in stripped.components(separatedBy: .newlines) {
             let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if t.localizedCaseInsensitiveContains("email:") {
-                let val = t.replacingOccurrences(of: #"(?i)^\s*email:\s*"#, with: "", options: .regularExpression)
+            guard !t.isEmpty else { continue }
+            if t.localizedCaseInsensitiveContains("logged in with") {
+                let val = t.replacingOccurrences(
+                    of: #"(?i)^\s*logged in with\s+"#, with: "", options: .regularExpression)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                if !val.isEmpty { return val }
-            } else if t.contains("@"), !t.contains(" ") {
-                return t
+                if !val.isEmpty { authMethod = val }
+            } else if t.localizedCaseInsensitiveContains("email:") {
+                let val = t.replacingOccurrences(
+                    of: #"(?i)^\s*email:\s*"#, with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !val.isEmpty { email = val }
+            } else if email == nil, t.contains("@"), !t.contains(" ") {
+                email = t
             }
         }
-        return nil
+        return (email, authMethod)
+    }
+
+    /// Context-window breakdown parsed from `/context` output.
+    struct KiroContextUsage: Equatable {
+        let totalPercentUsed: Double
+        let contextFilesPercent: Double?
+        let toolsPercent: Double?
+        let kiroResponsesPercent: Double?
+        let promptsPercent: Double?
+    }
+
+    /// "Context window: 12.5% used" + optional per-category percents.
+    static func parseContextUsage(_ stripped: String) -> KiroContextUsage? {
+        guard let total = firstCapture(
+            in: stripped,
+            pattern: #"(?i)Context window:\s*(\d+\.?\d*)%\s+used"#).flatMap(Double.init)
+        else { return nil }
+        return KiroContextUsage(
+            totalPercentUsed: total,
+            contextFilesPercent: percent(after: "Context files", in: stripped),
+            toolsPercent: percent(after: "Tools", in: stripped),
+            kiroResponsesPercent: percent(after: "Kiro responses", in: stripped),
+            promptsPercent: percent(after: "Your prompts", in: stripped))
+    }
+
+    private static func percent(after label: String, in text: String) -> Double? {
+        let escaped = NSRegularExpression.escapedPattern(for: label)
+        return firstCapture(in: text, pattern: #"(?i)"# + escaped + #"\s+(\d+\.?\d*)%"#)
+            .flatMap(Double.init)
+    }
+
+    /// Cheap "would parseUsage succeed?" probe used by the transport layer to
+    /// judge whether a cut-off output is already usable.
+    static func usageLooksParseable(_ stripped: String) -> Bool {
+        (try? parseUsage(stripped: stripped, accountEmail: nil, authMethod: nil,
+                         contextUsage: nil, version: nil)) != nil
     }
 
     /// Main parse from stripped usage output → ProviderStatus.
     /// Mirrors KiroStatusProbe parsing logic (regex-based).
-    private static func parseUsage(stripped: String, accountEmail: String?) throws -> ProviderStatus {
+    static func parseUsage(stripped: String,
+                           accountEmail: String?,
+                           authMethod: String? = nil,
+                           contextUsage: KiroContextUsage? = nil,
+                           version: String? = nil) throws -> ProviderStatus {
         let trimmed = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw KiroProviderError.parseError("Output trống từ kiro-cli")
@@ -219,7 +797,7 @@ final class KiroProvider: QuotaProvider {
         }
 
         // -- Plan name --
-        let planName = parsePlanName(from: stripped)
+        let planName = displayPlanName(parsePlanName(from: stripped))
 
         // -- Reset date --
         let resetDate = parseResetDate(from: stripped)
@@ -252,16 +830,41 @@ final class KiroProvider: QuotaProvider {
             creditsPercent = (creditsUsed / creditsTotal) * 100.0
         }
 
+        // -- Bonus credits + overage (parsed for every plan shape) --
+        let bonus = parseBonusCredits(from: stripped)
+        let overagesStatus = firstCapture(in: stripped, pattern: #"(?i)Overages:\s*([^\n]+)"#)
+            .map { stripANSI($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let overageCreditsUsed = firstCapture(in: stripped, pattern: #"(?i)Credits used:\s*(\d+\.?\d*)"#).flatMap(Double.init)
+        let overageCostUSD = firstCapture(in: stripped, pattern: #"(?i)Est\.\s*cost:\s*\$?(\d+\.?\d*)\s*USD"#).flatMap(Double.init)
+        let manageURL = firstCapture(in: stripped, pattern: #"https://app\.kiro\.dev/account/usage"#)
+
         // -- Managed plan with no usage (e.g. "Managed by Admin") --
         let isManagedPlan = stripped.lowercased().contains("managed by admin")
             || stripped.lowercased().contains("managed by organization")
         let isNewFormat = firstCapture(in: stripped, pattern: #"Plan:[ \t]*(.+)"#) != nil
         if isNewFormat, isManagedPlan, !matchedPercent, !matchedCredits {
-            let window = QuotaWindow(label: "Credits", usedPct: 0, remainingPct: 100)
+            // Managed plans hide plan credits but may still report bonus and
+            // overage — keep those windows instead of dropping them.
+            var windows = [QuotaWindow(label: "Credits", usedPct: 0, remainingPct: 100)]
+            if let w = bonusWindow(bonus) { windows.append(w) }
+            if let w = overageWindow(status: overagesStatus, creditsUsed: overageCreditsUsed,
+                                     costUSD: overageCostUSD) { windows.append(w) }
+            let kiroMenu = KiroMenuUsage(
+                primaryRemainingPct: 100,
+                overageCreditsUsed: overageCreditsUsed,
+                overageCostUSD: overageCostUSD,
+                overagesStatus: overagesStatus,
+                contextPercentUsed: contextUsage?.totalPercentUsed,
+                contextFilesPercent: contextUsage?.contextFilesPercent,
+                contextToolsPercent: contextUsage?.toolsPercent,
+                contextResponsesPercent: contextUsage?.kiroResponsesPercent,
+                contextPromptsPercent: contextUsage?.promptsPercent)
             return ProviderStatus(
                 id: "kiro", displayName: "Kiro",
-                windows: [window], lastUpdated: Date(), error: nil,
-                accountLabel: accountEmail, planName: planName)
+                windows: windows, lastUpdated: Date(), error: nil,
+                accountLabel: accountEmail, version: version,
+                planName: planName, sourceLabel: authMethod, kiroMenu: kiroMenu)
         }
 
         guard matchedPercent || matchedCredits else {
@@ -270,11 +873,6 @@ final class KiroProvider: QuotaProvider {
 
         let usedPct = max(0, min(100, Int(creditsPercent.rounded())))
         let remainingPct = 100 - usedPct
-
-        // -- Overage (pay-as-you-go beyond the plan), ported from CodexBar --
-        let overageCreditsUsed = firstCapture(in: stripped, pattern: #"(?i)Credits used:\s*(\d+\.?\d*)"#).flatMap(Double.init)
-        let overageCostUSD = firstCapture(in: stripped, pattern: #"(?i)Est\.\s*cost:\s*\$?(\d+\.?\d*)\s*USD"#).flatMap(Double.init)
-        let manageURL = firstCapture(in: stripped, pattern: #"https://app\.kiro\.dev/account/usage"#)
 
         // Subtitle: "X.XX / Y credits"; add a manage hint once credits run out.
         var subtitle: String? = matchedCredits
@@ -291,51 +889,65 @@ final class KiroProvider: QuotaProvider {
             subtitle: subtitle,
             resetDate: resetDate)
 
-        // Bonus credits window (if present)
         var windows: [QuotaWindow] = [creditsWindow]
-        if let bonus = parseBonusCredits(from: stripped) {
-            let bonusUsedPct = bonus.total > 0
-                ? max(0, min(100, Int((bonus.used / bonus.total * 100).rounded())))
-                : 0
-            let bonusExpiry: Date? = bonus.expiryDays.flatMap {
-                Calendar.current.date(byAdding: .day, value: $0, to: Date())
-            }
-            let bonusWindow = QuotaWindow(
-                label: "Bonus Credits",
-                usedPct: bonusUsedPct,
-                remainingPct: 100 - bonusUsedPct,
-                subtitle: String(format: "%.2f / %.0f bonus", bonus.used, bonus.total),
-                resetDate: bonusExpiry)
-            windows.append(bonusWindow)
-        }
+        if let w = bonusWindow(bonus) { windows.append(w) }
+        if let w = overageWindow(status: overagesStatus, creditsUsed: overageCreditsUsed,
+                                 costUSD: overageCostUSD) { windows.append(w) }
 
-        // Overage window — only when the plan reports pay-as-you-go usage.
-        if overageCostUSD != nil || overageCreditsUsed != nil {
-            var parts: [String] = []
-            if let u = overageCreditsUsed { parts.append(String(format: "%.2f credits", u)) }
-            if let c = overageCostUSD { parts.append(String(format: "~$%.2f", c)) }
-            windows.append(QuotaWindow(
-                label: "Vượt hạn mức",
-                usedPct: 0, remainingPct: 100,
-                subtitle: parts.isEmpty ? "Đang bật" : parts.joined(separator: " · ")))
-        }
-
-        // Structured payload for the menu-bar display-mode picker.
+        // Structured payload for the menu-bar display-mode picker + info grid.
         let kiroMenu = KiroMenuUsage(
             creditsRemaining: creditsTotal - creditsUsed,
             creditsUsed: matchedCredits ? creditsUsed : nil,
             creditsTotal: matchedCredits ? creditsTotal : nil,
             primaryRemainingPct: remainingPct,
             overageCreditsUsed: overageCreditsUsed,
-            overageCostUSD: overageCostUSD)
+            overageCostUSD: overageCostUSD,
+            overagesStatus: overagesStatus,
+            contextPercentUsed: contextUsage?.totalPercentUsed,
+            contextFilesPercent: contextUsage?.contextFilesPercent,
+            contextToolsPercent: contextUsage?.toolsPercent,
+            contextResponsesPercent: contextUsage?.kiroResponsesPercent,
+            contextPromptsPercent: contextUsage?.promptsPercent)
 
         return ProviderStatus(
             id: "kiro", displayName: "Kiro",
             windows: windows, lastUpdated: Date(), error: nil,
             accountLabel: accountEmail,
             creditsRemaining: creditsTotal - creditsUsed,
+            version: version,
             planName: planName,
+            sourceLabel: authMethod,
             kiroMenu: kiroMenu)
+    }
+
+    // MARK: - Window builders
+
+    private static func bonusWindow(_ bonus: (used: Double, total: Double, expiryDays: Int?)?) -> QuotaWindow? {
+        guard let bonus else { return nil }
+        let bonusUsedPct = bonus.total > 0
+            ? max(0, min(100, Int((bonus.used / bonus.total * 100).rounded())))
+            : 0
+        let bonusExpiry: Date? = bonus.expiryDays.flatMap {
+            Calendar.current.date(byAdding: .day, value: $0, to: Date())
+        }
+        return QuotaWindow(
+            label: "Bonus Credits",
+            usedPct: bonusUsedPct,
+            remainingPct: 100 - bonusUsedPct,
+            subtitle: String(format: "%.2f / %.0f bonus", bonus.used, bonus.total),
+            resetDate: bonusExpiry)
+    }
+
+    /// Overage window — shown when the plan reports pay-as-you-go usage or an
+    /// explicit Overages status line (Enabled/Disabled).
+    private static func overageWindow(status: String?, creditsUsed: Double?,
+                                      costUSD: Double?) -> QuotaWindow? {
+        guard status != nil || creditsUsed != nil || costUSD != nil else { return nil }
+        var parts: [String] = []
+        if let u = creditsUsed { parts.append(String(format: "%.2f credits", u)) }
+        if let c = costUSD { parts.append(String(format: "~$%.2f", c)) }
+        let subtitle = parts.isEmpty ? (status ?? "Đang bật") : parts.joined(separator: " · ")
+        return QuotaWindow(label: "Vượt hạn mức", usedPct: 0, remainingPct: 100, subtitle: subtitle)
     }
 
     // MARK: - Parse helpers
@@ -351,20 +963,26 @@ final class KiroProvider: QuotaProvider {
         if let m = text.range(of: #"Estimated Usage[ \t]*\|[^\n|]*\|[ \t]*([A-Z][A-Z0-9 ]+)"#, options: .regularExpression) {
             let line = String(text[m])
             if let plan = line.split(separator: "|").last?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty {
-                return formatPlanName(plan)
+                return plan
             }
         }
         // Legacy: "| KIRO FREE"
         if let m = text.range(of: #"\|[ \t]*(KIRO[ \t]+\w+)"#, options: .regularExpression) {
-            let raw = String(text[m]).replacingOccurrences(of: "|", with: "").trimmingCharacters(in: .whitespaces)
-            return formatPlanName(raw)
+            return String(text[m]).replacingOccurrences(of: "|", with: "").trimmingCharacters(in: .whitespaces)
         }
         return "Kiro"
     }
 
-    private static func formatPlanName(_ raw: String) -> String {
-        // "KIRO FREE" → "Kiro Free"
-        raw.split(separator: " ").map { word in
+    /// Whitespace-collapsed display form; KIRO-branded names get title-cased
+    /// ("KIRO  FREE" → "Kiro Free"), others pass through cleaned.
+    static func displayPlanName(_ planName: String) -> String {
+        let cleaned = stripANSI(planName)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned.localizedCaseInsensitiveContains("KIRO") else {
+            return cleaned.isEmpty ? planName : cleaned
+        }
+        return cleaned.split(separator: " ").map { word in
             if word.caseInsensitiveCompare("KIRO") == .orderedSame { return "Kiro" }
             return word.prefix(1).uppercased() + word.dropFirst().lowercased()
         }.joined(separator: " ")
@@ -425,8 +1043,7 @@ final class KiroProvider: QuotaProvider {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(text.startIndex..., in: text)
         guard let match = regex.firstMatch(in: text, range: range),
-              match.numberOfRanges > 1,
-              let r = Range(match.range(at: 1), in: text)
+              let r = Range(match.range(at: match.numberOfRanges > 1 ? 1 : 0), in: text)
         else { return nil }
         return String(text[r]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -451,7 +1068,7 @@ final class KiroProvider: QuotaProvider {
 
 // MARK: - Internal error type
 
-private enum KiroProviderError: Error {
+enum KiroProviderError: Error, Equatable {
     case binaryNotFound
     case notLoggedIn
     case cliFailed(String)

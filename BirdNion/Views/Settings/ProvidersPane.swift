@@ -656,6 +656,16 @@ struct ProvidersPane: View {
                 } else if row.id == "claude" {
                     // OAuth token comes from the Claude Code Keychain item.
                     infoRow(L10n.t("provider.source", language), "OAuth")
+                } else if row.id == "kiro", let auth = s?.sourceLabel, !auth.isEmpty {
+                    // Auth method from `kiro-cli whoami` ("Logged in with …") —
+                    // CodexBar's "Auth:" menu note.
+                    infoRow(L10n.t("provider.source", language),
+                            L10n.providerText(auth, preference: language))
+                }
+                if row.id == "kiro", let ctx = s?.kiroMenu?.contextPercentUsed {
+                    // Context-window usage from `kiro-cli /context` (best-effort).
+                    infoRow(L10n.t("provider.kiroContext", language),
+                            String(format: "%.0f%%", ctx))
                 }
                 if let plan = s?.planType, !plan.isEmpty {
                     infoRow(L10n.t("provider.plan", language),
