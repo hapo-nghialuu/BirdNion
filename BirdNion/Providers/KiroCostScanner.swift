@@ -3,11 +3,15 @@ import SQLite3
 
 // MARK: - Models
 
-/// Token/cost rolled up from local Kiro CLI conversation history
-/// (`~/Library/Application Support/kiro-cli/data.sqlite3` and optional
-/// `~/.kiro_sessions/*.json` archives). Token counts and USD are estimates:
-/// input ≈ chars÷4 + cache-read derivation; output ≈ streamed chunk count
-/// (same approach as community kiro-usage trackers).
+/// Token/cost rolled up from local Kiro CLI conversation history. Three
+/// storage generations are scanned:
+///   - `~/.kiro/sessions/cli/<id>.json` — current TUI kiro-cli; per-turn
+///     REAL billed credits (`metering_usage`) + context percentages, while
+///     the old SQLite tables stay empty.
+///   - `~/Library/Application Support/kiro-cli/data.sqlite3` — older CLIs.
+///   - `~/.kiro_sessions/*.json` archives (optional).
+/// USD is real (credits × Kiro's $0.04 add-on price) for the sessions
+/// source; SQLite-era numbers stay estimates (chars÷4 + price table).
 struct KiroCostSummary: Equatable {
     let todayUSD: Double
     let todayTokens: Int
@@ -87,6 +91,10 @@ struct KiroModelPrice {
                 + Double(cacheRead) * p.readPerM
                 + Double(output) * p.outputPerM) / 1_000_000.0
     }
+
+    /// Kiro bills in credits; add-on/overage credits are $0.04 each
+    /// (kiro.dev/pricing) — converts real metered credits to USD.
+    static let usdPerCredit = 0.04
 }
 
 // MARK: - Scanner
@@ -157,6 +165,11 @@ enum KiroCostScanner {
         home.appendingPathComponent(".kiro_sessions", isDirectory: true)
     }
 
+    /// Current TUI kiro-cli session store (`cli/<id>.json` sidecars).
+    static func defaultSessionsURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent(".kiro/sessions", isDirectory: true)
+    }
+
     // MARK: - Session points
 
     struct SessionPoint: Equatable {
@@ -170,6 +183,7 @@ enum KiroCostScanner {
     static func scanFull(
         cliDBURL: URL? = nil,
         archiveURL: URL? = nil,
+        sessionsURL: URL? = nil,
         fileManager: FileManager = .default,
         now: Date = Date(),
         windowDays: Int = chartWindowDays,
@@ -178,9 +192,11 @@ enum KiroCostScanner {
         let home = fileManager.homeDirectoryForCurrentUser
         let db = cliDBURL ?? defaultCLIDatabaseURL(home: home)
         let archive = archiveURL ?? defaultArchiveURL(home: home)
+        let sessions = sessionsURL ?? defaultSessionsURL(home: home)
         let points = loadPoints(
             cliDBURL: db,
             archiveURL: archive,
+            sessionsURL: sessions,
             fileManager: fileManager,
             now: now,
             windowDays: windowDays,
@@ -191,6 +207,7 @@ enum KiroCostScanner {
     static func loadPoints(
         cliDBURL: URL,
         archiveURL: URL,
+        sessionsURL: URL,
         fileManager: FileManager = .default,
         now: Date = Date(),
         windowDays: Int = chartWindowDays,
@@ -201,7 +218,7 @@ enum KiroCostScanner {
             ?? startOfToday.addingTimeInterval(-Double(windowDays) * 86_400)
         let cutoffMs = Int64(cutoff.timeIntervalSince1970 * 1000)
 
-        // Deduplicate by conversation id (prefer newer updated_at).
+        // Deduplicate by conversation/session id (prefer newer updated_at).
         var byID: [String: (updated: Int64, points: [SessionPoint])] = [:]
 
         for snap in loadArchived(archiveURL: archiveURL, fileManager: fileManager) {
@@ -227,6 +244,15 @@ enum KiroCostScanner {
             guard !points.isEmpty else { continue }
             if let existing = byID[cid], existing.updated >= snap.updatedAtMs { continue }
             byID[cid] = (snap.updatedAtMs, points)
+        }
+
+        // Current TUI kiro-cli: ~/.kiro/sessions/cli/<id>.json sidecars.
+        for snap in loadCLISessions(
+            sessionsURL: sessionsURL, fileManager: fileManager,
+            cutoff: cutoff, cutoffMs: cutoffMs, calendar: calendar)
+        {
+            if let existing = byID[snap.id], existing.updated >= snap.updatedMs { continue }
+            byID[snap.id] = (snap.updatedMs, snap.points)
         }
 
         return byID.values.flatMap(\.points)
@@ -351,6 +377,125 @@ enum KiroCostScanner {
                 value: value))
         }
         return out
+    }
+
+    // MARK: - TUI kiro-cli sessions (~/.kiro/sessions/cli)
+
+    /// Current TUI kiro-cli stores each session as `cli/<id>.json` (metadata +
+    /// per-turn metering) next to a `<id>.jsonl` transcript; the old SQLite
+    /// tables stay empty on those builds.
+    private static func loadCLISessions(
+        sessionsURL: URL,
+        fileManager: FileManager,
+        cutoff: Date,
+        cutoffMs: Int64,
+        calendar: Calendar) -> [(id: String, updatedMs: Int64, points: [SessionPoint])]
+    {
+        let cliDir = sessionsURL.appendingPathComponent("cli", isDirectory: true)
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: cliDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { return [] }
+        var out: [(id: String, updatedMs: Int64, points: [SessionPoint])] = []
+        for url in files where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            let sid = (json["session_id"] as? String)
+                ?? url.deletingPathExtension().lastPathComponent
+            let updatedMs = parseISODate(json["updated_at"] as? String)
+                .map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+            if updatedMs > 0, updatedMs < cutoffMs { continue }
+            let points = parseCLISessionSidecar(json, cutoff: cutoff, calendar: calendar)
+            guard !points.isEmpty else { continue }
+            out.append((sid, updatedMs, points))
+        }
+        return out
+    }
+
+    /// One sidecar → per-day SessionPoints. USD is REAL (per-turn
+    /// `metering_usage` credits × $0.04); tokens prefer the CLI's exact
+    /// counts and fall back to context-window growth
+    /// (Δ`context_usage_percentage` × window size) when they are zeroed.
+    static func parseCLISessionSidecar(
+        _ json: [String: Any],
+        cutoff: Date,
+        calendar: Calendar = .current) -> [SessionPoint]
+    {
+        guard let state = json["session_state"] as? [String: Any],
+              let convMeta = state["conversation_metadata"] as? [String: Any],
+              let turns = convMeta["user_turn_metadatas"] as? [[String: Any]],
+              !turns.isEmpty
+        else { return [] }
+
+        let modelInfo = (state["rts_model_state"] as? [String: Any])?["model_info"] as? [String: Any]
+        let modelID = (modelInfo?["model_id"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (modelID?.isEmpty == false) ? modelID! : "kiro"
+        let rawWindow = Int(int64Value(modelInfo?["context_window_tokens"]))
+        let contextWindow = rawWindow > 0 ? rawWindow : 200_000
+
+        let sessionCreated = parseISODate(json["created_at"] as? String)
+
+        var prevPct = 0.0
+        var buckets: [Date: (tokens: Int, usd: Double)] = [:]
+        for turn in turns {
+            // Real billed credits for the turn (one entry per request).
+            var credits = 0.0
+            for entry in (turn["metering_usage"] as? [[String: Any]] ?? []) {
+                let unit = (entry["unit"] as? String ?? "").lowercased()
+                guard unit.contains("credit") else { continue }
+                credits += doubleValue(entry["value"])
+            }
+            let usd = credits * KiroModelPrice.usdPerCredit
+
+            // Exact token counts when the CLI populates them; else grow-of-
+            // context estimate. `context_usage_percentage` is cumulative, so
+            // the per-turn delta is what this turn added (clamped: compaction
+            // can shrink it).
+            var tokens = Int(int64Value(turn["input_token_count"]))
+                + Int(int64Value(turn["output_token_count"]))
+            let pct = doubleValue(turn["context_usage_percentage"])
+            if tokens == 0, pct > 0 {
+                let delta = max(0, pct - prevPct)
+                tokens = Int((delta / 100.0 * Double(contextWindow)).rounded())
+            }
+            if pct > 0 { prevPct = pct }
+
+            guard let activeAt = parseISODate(turn["end_timestamp"] as? String) ?? sessionCreated
+            else { continue }
+            let day = calendar.startOfDay(for: activeAt)
+            guard day >= calendar.startOfDay(for: cutoff) else { continue }
+            guard tokens > 0 || usd > 0 else { continue }
+
+            var acc = buckets[day] ?? (0, 0)
+            acc.tokens += tokens
+            acc.usd += usd
+            buckets[day] = acc
+        }
+
+        return buckets.map {
+            SessionPoint(day: $0.key, tokens: $0.value.tokens, usd: $0.value.usd, model: model)
+        }
+    }
+
+    /// ISO8601 with or without fractional seconds ("2026-07-15T06:20:44.636576Z").
+    static func parseISODate(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: raw) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: raw)
+    }
+
+    private static func doubleValue(_ raw: Any?) -> Double {
+        switch raw {
+        case let d as Double: return d
+        case let n as NSNumber: return n.doubleValue
+        case let i as Int: return Double(i)
+        case let s as String: return Double(s) ?? 0
+        default: return 0
+        }
     }
 
     // MARK: - Parse conversation turns

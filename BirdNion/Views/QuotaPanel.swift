@@ -125,7 +125,8 @@ struct QuotaOverview: View {
                                 GrokUsageChartCard(report: report)
                             }
                             // Kiro: 30-day usage chart from local kiro-cli
-                            // SQLite conversations (+ optional ~/.kiro_sessions).
+                            // sessions (~/.kiro/sessions sidecars with real
+                            // metered credits + legacy SQLite/archives).
                             if s.id == "kiro", let report = kiroReport,
                                !report.isEmpty {
                                 KiroUsageChartCard(report: report)

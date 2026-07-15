@@ -538,6 +538,65 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(report.todayTokens, totalTokens)
     }
 
+    /// Parse a TUI kiro-cli session sidecar (~/.kiro/sessions/cli/<id>.json):
+    /// USD from real metered credits, tokens from context-window growth.
+    func testKiroCostScannerParseCLISessionSidecar() {
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let turnEnd = iso.string(from: now)
+
+        let sidecar: [String: Any] = [
+            "session_id": "6f45aad0-test",
+            "created_at": turnEnd,
+            "updated_at": turnEnd,
+            "session_state": [
+                "conversation_metadata": [
+                    "user_turn_metadatas": [
+                        [
+                            "end_timestamp": turnEnd,
+                            "input_token_count": 0,
+                            "output_token_count": 0,
+                            "context_usage_percentage": 2.0,
+                            "metering_usage": [
+                                ["value": 0.07, "unit": "credit"],
+                                ["value": 0.09, "unit": "credit"],
+                            ],
+                        ] as [String: Any],
+                        [
+                            "end_timestamp": turnEnd,
+                            "input_token_count": 0,
+                            "output_token_count": 0,
+                            "context_usage_percentage": 4.5,
+                            "metering_usage": [["value": 0.84, "unit": "credit"]],
+                        ] as [String: Any],
+                    ],
+                ],
+                "rts_model_state": [
+                    "model_info": [
+                        "model_id": "claude-sonnet-4.5",
+                        "context_window_tokens": 200_000,
+                    ],
+                ],
+            ] as [String: Any],
+        ]
+
+        let points = KiroCostScanner.parseCLISessionSidecar(sidecar, cutoff: today, calendar: cal)
+        XCTAssertEqual(points.count, 1)   // both turns land on today
+        let p = points[0]
+        XCTAssertEqual(p.model, "claude-sonnet-4.5")
+        // Turn 1: 2.0% of 200k = 4000; turn 2: Δ2.5% = 5000 → 9000 tokens.
+        XCTAssertEqual(p.tokens, 9000)
+        // Credits (0.07+0.09+0.84 = 1.0) × $0.04/credit.
+        XCTAssertEqual(p.usd, 0.04, accuracy: 0.0001)
+
+        // Old sidecar without metering/turns parses to nothing (no crash).
+        XCTAssertTrue(KiroCostScanner.parseCLISessionSidecar(
+            ["session_id": "x"], cutoff: today, calendar: cal).isEmpty)
+    }
+
     /// Kiro /usage parsing: full pipeline including whoami auth method,
     /// /context breakdown, overage status, and version.
     func testKiroParseUsageFullOutput() {
