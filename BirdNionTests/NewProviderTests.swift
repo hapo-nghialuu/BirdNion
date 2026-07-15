@@ -558,6 +558,45 @@ final class NewProviderTests: XCTestCase {
         XCTAssertFalse(KiroProvider.isLoginRequired("Plan: Free"))
     }
 
+    /// GUI apps miss shell PATH; resolveBinary must still find ~/.local/bin/kiro-cli
+    /// and must skip the Kiro IDE launcher under Kiro.app.
+    func testKiroResolveBinaryFindsLocalBinAndSkipsIDE() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("kiro-resolve-\(UUID().uuidString)", isDirectory: true)
+        let localBin = root.appendingPathComponent(".local/bin", isDirectory: true)
+        let appBin = root.appendingPathComponent(
+            "Applications/Kiro.app/Contents/Resources/app/bin", isDirectory: true)
+        try fm.createDirectory(at: localBin, withIntermediateDirectories: true)
+        try fm.createDirectory(at: appBin, withIntermediateDirectories: true)
+
+        let cli = localBin.appendingPathComponent("kiro-cli")
+        let ide = appBin.appendingPathComponent("code")
+        try "#!/bin/sh\necho cli\n".write(to: cli, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho ide\n".write(to: ide, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cli.path)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ide.path)
+
+        // Thin GUI PATH + well-known ~/.local/bin under a fake home.
+        let found = KiroProvider.resolveBinary(
+            home: root.path, pathEnv: "/usr/bin:/bin", fileManager: fm)
+        XCTAssertEqual(found, cli.path)
+
+        // IDE shim under Kiro.app must be rejected.
+        XCTAssertFalse(KiroProvider.isUsableCLI(at: ide.path, fileManager: fm))
+        XCTAssertTrue(KiroProvider.isUsableCLI(at: cli.path, fileManager: fm))
+
+        // Prefer kiro-cli over a plain `kiro` sibling.
+        let plain = localBin.appendingPathComponent("kiro")
+        try "#!/bin/sh\necho plain\n".write(to: plain, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: plain.path)
+        let preferred = KiroProvider.resolveBinary(
+            home: root.path, pathEnv: "/usr/bin:/bin", fileManager: fm)
+        XCTAssertEqual(preferred, cli.path)
+
+        try? fm.removeItem(at: root)
+    }
+
     func testMenuBarPercentTitleIncludesUnit() {
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [76]), "76%")
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [93, 82]), "93%  82%")

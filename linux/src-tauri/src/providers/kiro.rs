@@ -44,26 +44,36 @@ fn fetch_blocking(id: &str, name: &str) -> ProviderStatus {
         return ProviderStatus::failure(id, name, "Chưa cài Kiro CLI");
     };
 
-    // whoami: email + auth method; its logged-out verdict upgrades a failed
-    // usage probe into a clearer "not logged in" message.
-    let whoami = run_command(&binary, &["whoami"], Duration::from_secs(3), Duration::from_millis(1500)).ok();
-    let mut whoami_logged_out = false;
-    let (email, auth_method) = match whoami.as_ref() {
-        Some(res) => {
-            if is_login_required(&res.output) {
-                whoami_logged_out = true;
-                (None, None)
-            } else {
-                parse_whoami(&strip_ansi(&res.output))
+    // whoami (email + auth method) and --version run on their own threads,
+    // concurrent with the usage command — macOS fetchInternal parity. The
+    // whoami logged-out verdict upgrades a failed usage probe into a clearer
+    // "not logged in" message.
+    let whoami_thread = {
+        let binary = binary.clone();
+        std::thread::spawn(move || {
+            run_command(&binary, &["whoami"], Duration::from_secs(3), Duration::from_millis(1500)).ok()
+        })
+    };
+    let version_thread = {
+        let binary = binary.clone();
+        std::thread::spawn(move || cached_version(&binary))
+    };
+    let join_account = |t: std::thread::JoinHandle<Option<KiroCliResult>>| -> (bool, Option<String>, Option<String>) {
+        match t.join().ok().flatten() {
+            Some(res) if is_login_required(&res.output) => (true, None, None),
+            Some(res) => {
+                let (email, method) = parse_whoami(&strip_ansi(&res.output));
+                (false, email, method)
             }
+            None => (false, None, None),
         }
-        None => (None, None),
     };
 
     let usage = match run_command(&binary, &["chat", "--no-interactive", "/usage"], Duration::from_secs(20), Duration::from_secs(4)) {
         Ok(o) => o,
         Err(e) => {
-            if whoami_logged_out {
+            let (logged_out, _, _) = join_account(whoami_thread);
+            if logged_out {
                 return not_logged_in(id, name);
             }
             return ProviderStatus::failure(id, name, e);
@@ -92,11 +102,13 @@ fn fetch_blocking(id: &str, name: &str) -> ProviderStatus {
         );
     }
 
-    // Context breakdown + version are best-effort; never fail the fetch.
+    // Context breakdown is best-effort; never fails the fetch.
     let context_pct = run_command(&binary, &["chat", "--no-interactive", "/context"], Duration::from_secs(8), Duration::from_secs(3))
         .ok()
         .and_then(|res| parse_context_percent(&strip_ansi(&res.output)));
-    let version = detect_version(&binary);
+
+    let (whoami_logged_out, email, auth_method) = join_account(whoami_thread);
+    let version = version_thread.join().ok().flatten();
 
     match parse_usage(&stripped, email.as_deref(), auth_method.as_deref(), context_pct, version.as_deref()) {
         Ok(status) => status,
@@ -109,17 +121,69 @@ fn not_logged_in(id: &str, name: &str) -> ProviderStatus {
     ProviderStatus::failure(id, name, "Chưa đăng nhập Kiro. Chạy 'kiro-cli login' trong Terminal")
 }
 
+/// Resolves the Kiro usage CLI for both terminal and desktop launches.
+/// Prefer `kiro-cli` over `kiro`, scan PATH + well-known dirs (`~/.local/bin`,
+/// Homebrew, `/usr/local/bin`) so tray apps without a login-shell PATH still
+/// find the binary. Skip IDE launchers that resolve under `Kiro.app`.
 fn resolve_binary() -> Option<String> {
-    ["kiro", "kiro-cli"].iter().find_map(|n| which(n))
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut dirs: Vec<String> = Vec::new();
+    if let Ok(path_env) = std::env::var("PATH") {
+        dirs.extend(path_env.split(':').map(String::from));
+    }
+    dirs.push(format!("{home}/.local/bin"));
+    dirs.push("/opt/homebrew/bin".into());
+    dirs.push("/usr/local/bin".into());
+    dirs.push("/usr/bin".into());
+
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<String> = dirs
+        .into_iter()
+        .filter(|d| !d.is_empty() && seen.insert(d.clone()))
+        .collect();
+
+    for name in ["kiro-cli", "kiro"] {
+        for dir in &unique {
+            let candidate = format!("{dir}/{name}");
+            if is_usable_cli(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
-fn which(name: &str) -> Option<String> {
-    let out = Command::new("which").arg(name).stderr(Stdio::null()).output().ok()?;
-    if !out.status.success() {
-        return None;
+fn is_usable_cli(path: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
+        return false;
     }
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if path.is_empty() { None } else { Some(path) }
+    // Skip VS Code-style IDE shim under Kiro.app.
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        if resolved.to_string_lossy().contains("Kiro.app") {
+            return false;
+        }
+    }
+    true
+}
+
+/// Version rarely changes between refreshes — probe each binary path once per
+/// app run instead of spawning `--version` on every fetch cycle.
+fn cached_version(binary: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(hit) = cache.lock().unwrap().get(binary) {
+        return hit.clone();
+    }
+    let detected = detect_version(binary);
+    cache.lock().unwrap().insert(binary.to_string(), detected.clone());
+    detected
 }
 
 /// Runs `kiro-cli --version` (5s, best-effort); strips the "kiro-cli " prefix.
@@ -628,5 +692,10 @@ mod tests {
     #[test]
     fn no_recognizable_usage_is_error() {
         assert!(parse_usage("Some unrelated CLI banner text", None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn usable_cli_rejects_missing_path() {
+        assert!(!is_usable_cli("/tmp/definitely-not-a-kiro-cli-binary"));
     }
 }

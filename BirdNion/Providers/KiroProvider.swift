@@ -3,8 +3,9 @@ import Foundation
 
 /// Kiro (AWS) quota provider.
 ///
-/// Resolves the `kiro` or `kiro-cli` binary from PATH (mirrors ClaudeCLIVersionDetector pattern).
-/// Subcommands (mirrors CodexBar's KiroStatusProbe):
+/// Resolves the usage CLI by scanning PATH + well-known install dirs,
+/// preferring `kiro-cli` and skipping the Kiro IDE launcher (see
+/// `resolveBinary`). Subcommands (mirrors CodexBar's KiroStatusProbe):
 ///   - `kiro-cli whoami` — verifies login; parses email + auth method. Runs in
 ///     parallel with the usage command; its not-logged-in verdict upgrades a
 ///     usage parse error into a clearer "not logged in" message.
@@ -115,7 +116,7 @@ final class KiroProvider: QuotaProvider {
 
         // whoami + version run concurrently with the usage command.
         let accountTask = Task { await self.fetchAccount(binary: binary) }
-        let versionTask = Task.detached(priority: .utility) { Self.detectVersion(binary: binary) }
+        let versionTask = Task.detached(priority: .utility) { Self.cachedVersion(binary: binary) }
 
         let usageResult: KiroCLIResult
         do {
@@ -640,28 +641,68 @@ final class KiroProvider: QuotaProvider {
 
     // MARK: - Binary resolution + version
 
-    /// Scans common PATH entries for `kiro` then `kiro-cli`.
-    static func resolveBinary() -> String? {
-        for name in ["kiro", "kiro-cli"] {
-            if let path = which(name) { return path }
+    /// Resolves the Kiro usage CLI for both Terminal and GUI launches.
+    ///
+    /// macOS menu-bar apps inherit a thin PATH (no shell profile), so
+    /// `which kiro-cli` alone misses installs under `~/.local/bin`. Scan PATH
+    /// plus well-known dirs, prefer `kiro-cli` over `kiro`, and skip the IDE
+    /// launcher (`/usr/local/bin/kiro` → `Kiro.app/.../bin/code`).
+    static func resolveBinary(
+        home: String = NSHomeDirectory(),
+        pathEnv: String? = ProcessInfo.processInfo.environment["PATH"],
+        fileManager: FileManager = .default
+    ) -> String? {
+        var dirs: [String] = []
+        if let pathEnv {
+            dirs += pathEnv.split(separator: ":").map(String.init)
+        }
+        // Always include install locations that shell profiles usually add.
+        dirs += [
+            "\(home)/.local/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ]
+        var seen = Set<String>()
+        let uniqueDirs = dirs.filter { !$0.isEmpty && seen.insert($0).inserted }
+
+        // Prefer kiro-cli (usage tool) over kiro (often the IDE shim).
+        for name in ["kiro-cli", "kiro"] {
+            for dir in uniqueDirs {
+                let candidate = (dir as NSString).appendingPathComponent(name)
+                if isUsableCLI(at: candidate, fileManager: fileManager) {
+                    return candidate
+                }
+            }
         }
         return nil
     }
 
-    private static func which(_ name: String) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        proc.arguments = ["which", name]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        do { try proc.run() } catch { return nil }
-        proc.waitUntilExit()
-        guard proc.terminationStatus == 0 else { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        let path = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.isEmpty ? nil : path
+    /// True when `path` is an executable usage CLI, not the Kiro IDE launcher.
+    static func isUsableCLI(at path: String, fileManager: FileManager = .default) -> Bool {
+        guard fileManager.isExecutableFile(atPath: path) else { return false }
+        let resolved = (path as NSString).resolvingSymlinksInPath
+        // VS Code-style shim lives under Kiro.app and cannot run /usage.
+        if resolved.contains("Kiro.app") { return false }
+        return true
+    }
+
+    /// Version rarely changes between refreshes — probe each binary path once
+    /// per app run instead of spawning `--version` on every fetch cycle.
+    private static let versionCacheLock = NSLock()
+    private static var versionCache: [String: String?] = [:]
+
+    static func cachedVersion(binary: String) -> String? {
+        versionCacheLock.lock()
+        if let hit = versionCache[binary] {
+            versionCacheLock.unlock()
+            return hit
+        }
+        versionCacheLock.unlock()
+        let detected = detectVersion(binary: binary)
+        versionCacheLock.lock()
+        versionCache[binary] = detected
+        versionCacheLock.unlock()
+        return detected
     }
 
     /// Runs `kiro-cli --version` (5s, best-effort) and strips the binary-name
