@@ -1720,11 +1720,23 @@ body.settings-body-root {
   overflow: clip;
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+
+/* Claude Code: activation / power button stays pinned; form scrolls below. */
+.ccp-detail-top {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 0;
 }
 
 .pp-detail-scroll {
   flex: 1;
+  min-height: 0; /* allow flex child to shrink so overflow-y actually scrolls */
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 16px;
