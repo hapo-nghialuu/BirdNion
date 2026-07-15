@@ -40,14 +40,15 @@ type ProviderCfg = {
 };
 type Settings = { version: number; providers: ProviderCfg[] };
 
-/** Local usage-report sources scanned from disk (Claude → Codex → Grok). */
-const SCAN_SOURCES = ["claude", "codex", "grok"] as const;
+/** Local usage-report sources scanned from disk (Claude → Codex → Grok → Kiro). */
+const SCAN_SOURCES = ["claude", "codex", "grok", "kiro"] as const;
 type ScanSource = (typeof SCAN_SOURCES)[number];
 
 type State = {
   claude: UsageReport | null;
   codex: UsageReport | null;
   grok: UsageReport | null;
+  kiro: UsageReport | null;
   statuses: ProviderStatus[];
   claudeAdmin: ClaudeAdminSnapshot | null;
   tab: string; // "all" | provider id
@@ -62,6 +63,7 @@ const state: State = {
   claude: null,
   codex: null,
   grok: null,
+  kiro: null,
   statuses: [],
   claudeAdmin: null,
   tab: (() => {
@@ -404,7 +406,7 @@ function render() {
 
   if (state.tab === "all") {
     const pending = pendingScanSources();
-    if (!state.claude && !state.codex && !state.grok) {
+    if (!state.claude && !state.codex && !state.grok && !state.kiro) {
       // No data yet: skeleton card while scans are in flight (macOS
       // AllUsageOverview), "no logs" only once every scan came back empty.
       if (pending.length > 0) {
@@ -416,7 +418,7 @@ function render() {
       }
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
-      const combined = combine(state.claude, state.codex, state.grok);
+      const combined = combine(state.claude, state.codex, state.grok, state.kiro);
       body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(heatmapCard(combined));
       if (combined.topModels.length > 0) body.append(topModelsCard(combined));
@@ -448,7 +450,7 @@ function render() {
         () => { void refetchProvider("elevenlabs"); },
       ));
     }
-    // Claude/Codex/Grok tabs also show their own local 30-day cost chart,
+    // Claude/Codex/Grok/Kiro tabs also show their own local 30-day cost chart,
     // matching the macOS per-provider chart cards.
     if (state.tab === "claude" && state.claude) {
       body.append(sourceChartCard(state.claude, "claude"));
@@ -457,6 +459,8 @@ function render() {
       body.append(sourceChartCard(state.codex, "codex"));
     } else if (state.tab === "grok" && state.grok) {
       body.append(sourceChartCard(state.grok, "grok"));
+    } else if (state.tab === "kiro" && state.kiro) {
+      body.append(sourceChartCard(state.kiro, "kiro"));
     }
   }
   app.append(popoverFooter());
@@ -889,6 +893,7 @@ async function load() {
       scanReport("claude"),
       scanReport("codex"),
       scanReport("grok"),
+      scanReport("kiro"),
       statusesDone,
       invoke<ClaudeAdminSnapshot | null>("claude_admin_usage")
         .catch(() => null)

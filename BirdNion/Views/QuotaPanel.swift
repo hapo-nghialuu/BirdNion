@@ -64,16 +64,18 @@ struct QuotaOverview: View {
                         showAllTab: hasLocalCostSources
                     )
                     if selected == "all" {
-                        // Combined Claude CLI + Codex + Grok overview (no real
-                        // ProviderStatus behind it — reports only).
+                        // Combined Claude CLI + Codex + Grok + Kiro overview
+                        // (no real ProviderStatus behind it — reports only).
                         VStack(alignment: .leading, spacing: 8) {
                             AllUsageOverview(
                                 claude: claudeReport,
                                 codex: codexReport,
                                 grok: grokReport,
+                                kiro: kiroReport,
                                 claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
                                 codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
-                                grokEnabled: quota.displayStatuses.contains { $0.id == "grok" })
+                                grokEnabled: quota.displayStatuses.contains { $0.id == "grok" },
+                                kiroEnabled: quota.displayStatuses.contains { $0.id == "kiro" })
                         }
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
@@ -155,7 +157,8 @@ struct QuotaOverview: View {
             let selectionValid: Bool
             switch selectedProviderId {
             case "all":
-                selectionValid = ids.contains("claude") || ids.contains("codex") || ids.contains("grok")
+                selectionValid = ids.contains("claude") || ids.contains("codex")
+                    || ids.contains("grok") || ids.contains("kiro")
             case let sel?: selectionValid = ids.contains(sel)
             case nil: selectionValid = false
             }
@@ -272,10 +275,13 @@ struct QuotaOverview: View {
         }
     }
 
-    /// Trigger the Kiro CLI session scan when the user views the Kiro tab.
+    /// Trigger the Kiro CLI session scan when the user views Kiro or All.
     /// Cached 5 min by `KiroCostScanner`.
     private func triggerKiroReportIfNeeded(providerId: String) {
-        guard providerId == "kiro" else { return }
+        let wantsKiro = providerId == "kiro"
+            || (providerId == "all"
+                && quota.displayStatuses.contains(where: { $0.id == "kiro" }))
+        guard wantsKiro else { return }
         let taskId = UUID().uuidString
         kiroReportTaskId = taskId
         let needsSeed = kiroReport == nil
@@ -294,10 +300,11 @@ struct QuotaOverview: View {
         }
     }
 
-    /// The All tab only exists when at least one local-cost source (Claude
-    /// Code CLI or Codex) is enabled.
+    /// The All tab only exists when at least one local-cost source is enabled.
     private var hasLocalCostSources: Bool {
-        quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" || $0.id == "grok" }
+        quota.displayStatuses.contains {
+            $0.id == "claude" || $0.id == "codex" || $0.id == "grok" || $0.id == "kiro"
+        }
     }
 
     private func effectiveSelectedId() -> String {
@@ -2219,6 +2226,8 @@ enum VocabbyTheme {
     static let chartClaude = Color(red: 204 / 255, green: 124 / 255, blue: 94 / 255)  // #CC7C5E (brand orange)
     // Grok product brand is black (xAI/Grok mark), not CodexBar's teal placeholder.
     static let chartGrok   = Color(red: 17 / 255, green: 24 / 255, blue: 39 / 255)    // #111827 near-black
+    /// Kiro All-tab / stacked series — matches brand violet on the Kiro tab chart.
+    static let chartKiro   = Color(red: 139 / 255, green: 71 / 255, blue: 249 / 255)  // #8B47F9
     static let badge      = group
     static let border     = Color(red: 215 / 255, green: 220 / 255, blue: 226 / 255) // #D7DCE2
     static let disabled   = Color(red: 154 / 255, green: 163 / 255, blue: 173 / 255) // #9AA3AD

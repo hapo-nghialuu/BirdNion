@@ -11,6 +11,7 @@ mod cost_history;
 mod elevenlabs_keys;
 mod freemodel_accounts;
 mod grok_scanner;
+mod kiro_scanner;
 mod providers;
 mod storage;
 mod updater;
@@ -85,6 +86,17 @@ async fn codex_usage_report() -> Option<usage::UsageReport> {
 async fn grok_usage_report() -> Option<usage::UsageReport> {
     tauri::async_runtime::spawn_blocking(|| {
         cached_usage_report("grok", grok_scanner::usage_report)
+    })
+    .await
+    .ok()
+}
+
+/// Kiro CLI local session cost (SQLite + optional ~/.kiro_sessions) + history
+/// merge (blocking thread + cache, see `claude_usage_report`).
+#[tauri::command]
+async fn kiro_usage_report() -> Option<usage::UsageReport> {
+    tauri::async_runtime::spawn_blocking(|| {
+        cached_usage_report("kiro", kiro_scanner::usage_report)
     })
     .await
     .ok()
@@ -676,6 +688,7 @@ pub fn run() {
             claude_usage_report,
             codex_usage_report,
             grok_usage_report,
+            kiro_usage_report,
             provider_statuses,
             classify_provider_error,
             test_provider,

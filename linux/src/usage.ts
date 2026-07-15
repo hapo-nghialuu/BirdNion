@@ -19,7 +19,7 @@ export type CombinedModel = {
   name: string;
   usd: number;
   tokens: number;
-  source: "claude" | "codex" | "grok";
+  source: "claude" | "codex" | "grok" | "kiro";
 };
 
 export type CombinedDay = {
@@ -30,6 +30,8 @@ export type CombinedDay = {
   codexTokens: number;
   grokUsd: number;
   grokTokens: number;
+  kiroUsd: number;
+  kiroTokens: number;
   usd: number;
   tokens: number;
   active: boolean;
@@ -52,14 +54,15 @@ export type Combined = {
   topModels: CombinedModel[];
 };
 
-/** Merge scanners' daily arrays by calendar-day string (Claude + Codex + Grok). */
+/** Merge scanners' daily arrays (Claude + Codex + Grok + Kiro). */
 export function combine(
   claude: UsageReport | null,
   codex: UsageReport | null,
   grok: UsageReport | null = null,
+  kiro: UsageReport | null = null,
 ): Combined {
   const byDate = new Map<string, CombinedDay>();
-  const seed = (r: UsageReport | null, source: "claude" | "codex" | "grok") => {
+  const seed = (r: UsageReport | null, source: CombinedModel["source"]) => {
     for (const d of r?.daily ?? []) {
       let day = byDate.get(d.date);
       if (!day) {
@@ -68,15 +71,17 @@ export function combine(
           claudeUsd: 0, claudeTokens: 0,
           codexUsd: 0, codexTokens: 0,
           grokUsd: 0, grokTokens: 0,
+          kiroUsd: 0, kiroTokens: 0,
           usd: 0, tokens: 0, active: false, models: [],
         };
         byDate.set(d.date, day);
       }
       if (source === "claude") { day.claudeUsd += d.usd; day.claudeTokens += d.tokens; }
       else if (source === "codex") { day.codexUsd += d.usd; day.codexTokens += d.tokens; }
-      else { day.grokUsd += d.usd; day.grokTokens += d.tokens; }
-      day.usd = day.claudeUsd + day.codexUsd + day.grokUsd;
-      day.tokens = day.claudeTokens + day.codexTokens + day.grokTokens;
+      else if (source === "grok") { day.grokUsd += d.usd; day.grokTokens += d.tokens; }
+      else { day.kiroUsd += d.usd; day.kiroTokens += d.tokens; }
+      day.usd = day.claudeUsd + day.codexUsd + day.grokUsd + day.kiroUsd;
+      day.tokens = day.claudeTokens + day.codexTokens + day.grokTokens + day.kiroTokens;
       day.active = day.usd > 0 || day.tokens > 0;
       for (const m of d.models) {
         const existing = day.models.find((x) => x.source === source && x.name === m.name);
@@ -88,6 +93,7 @@ export function combine(
   seed(claude, "claude");
   seed(codex, "codex");
   seed(grok, "grok");
+  seed(kiro, "kiro");
   const daily = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   // Token-first ranking (matches macOS All chart + top-models list).
   for (const d of daily) d.models.sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
@@ -105,8 +111,10 @@ export function combine(
   while (i >= 0 && daily[i].active) { streak++; i--; }
 
   const last30 = daily.slice(-30);
-  const last30Usd = (claude?.last30Usd ?? 0) + (codex?.last30Usd ?? 0) + (grok?.last30Usd ?? 0);
-  const last30Tokens = (claude?.last30Tokens ?? 0) + (codex?.last30Tokens ?? 0) + (grok?.last30Tokens ?? 0);
+  const last30Usd = (claude?.last30Usd ?? 0) + (codex?.last30Usd ?? 0)
+    + (grok?.last30Usd ?? 0) + (kiro?.last30Usd ?? 0);
+  const last30Tokens = (claude?.last30Tokens ?? 0) + (codex?.last30Tokens ?? 0)
+    + (grok?.last30Tokens ?? 0) + (kiro?.last30Tokens ?? 0);
 
   // Top models across window
   const modelMap = new Map<string, CombinedModel>();

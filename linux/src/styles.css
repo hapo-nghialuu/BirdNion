@@ -13,6 +13,7 @@
   --claude: #cc7c5e;
   --codex: #469be9;
   --grok: #111827;
+  --kiro: #8b47f9;
   --track: #e3e6ea;
   /* GitHub-style heatmap greens (softened, macOS VocabbyTheme.heat*) */
   --heat-0: #ebedf0;
@@ -870,6 +871,7 @@ html.popover-capped .app-body {
 .bar-seg.claude { background: var(--claude); }
 .bar-seg.codex { background: var(--codex); }
 .bar-seg.grok { background: var(--grok); }
+.bar-seg.kiro { background: var(--kiro); }
 .bar-seg.solo { border-radius: 2px; }
 .bar-seg.mono { background: var(--chart-bar); opacity: 0.72; }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
@@ -882,6 +884,7 @@ html.popover-capped .app-body {
 .dot.claude { background: var(--claude); }
 .dot.codex { background: var(--codex); }
 .dot.grok { background: var(--grok); }
+.dot.kiro { background: var(--kiro); }
 
 .legend-label {
   font-size: 9px;
@@ -1253,6 +1256,7 @@ html.popover-capped .app-body {
 .model-fill.claude { background: var(--claude); }
 .model-fill.codex { background: var(--codex); }
 .model-fill.grok { background: var(--grok); }
+.model-fill.kiro { background: var(--kiro); }
 
 /* --- Settings window (macOS SettingsSceneRoot 780×720) ---------------- */
 /* Tokens mirror VocabbyTheme / SettingsTheme exactly. */

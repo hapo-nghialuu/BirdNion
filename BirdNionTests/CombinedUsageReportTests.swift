@@ -258,6 +258,51 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(r.topModels.map(\.source), ["codex"])
     }
 
+    /// Kiro folds into the All-tab stack as a fourth local source.
+    func testMergesKiroAsFourthSource() {
+        let claude = claudeReport(
+            daily: [claudeDay(0, usd: 1, tokens: 10)],
+            last30USD: 1, last30Tokens: 10)
+        let codex = codexReport(
+            daily: [codexDay(0, usd: 2, tokens: 20)],
+            last30USD: 2, last30Tokens: 20)
+        let grok = GrokUsageReport(
+            todayUSD: 3, todayTokens: 30,
+            last30USD: 3, last30Tokens: 30,
+            daily: [GrokDailyUsage(
+                date: day(0), usd: 3, tokens: 30,
+                models: [GrokDailyModel(name: "grok-4.5", usd: 3, tokens: 30)])],
+            topModel: "grok-4.5")
+        let kiro = KiroUsageReport(
+            todayUSD: 4, todayTokens: 40,
+            last30USD: 4, last30Tokens: 40,
+            daily: [KiroDailyUsage(
+                date: day(0), usd: 4, tokens: 40,
+                models: [KiroDailyModel(name: "claude-sonnet-4", usd: 4, tokens: 40)])],
+            topModel: "claude-sonnet-4")
+
+        let r = CombinedUsageReport.build(
+            claude: claude, codex: codex, grok: grok, kiro: kiro,
+            calendar: calendar, now: now)
+        XCTAssertEqual(r.todayUSD, 10, accuracy: 0.001)
+        XCTAssertEqual(r.todayTokens, 100)
+        XCTAssertEqual(r.last30USD, 10, accuracy: 0.001)
+        XCTAssertEqual(r.last30Tokens, 100)
+        XCTAssertEqual(r.daily.last?.kiroUSD ?? -1, 4, accuracy: 0.001)
+        XCTAssertEqual(r.daily.last?.kiroTokens, 40)
+        XCTAssertEqual(r.totals(lastDays: 7).kiroTokens, 40)
+        XCTAssertTrue(r.topModels.contains { $0.source == "kiro" && $0.name == "claude-sonnet-4" })
+
+        // Disabled Kiro must not contribute even when a report is loaded.
+        let off = CombinedUsageReport.build(
+            claude: claude, codex: codex, grok: grok, kiro: kiro,
+            includeKiro: false,
+            calendar: calendar, now: now)
+        XCTAssertEqual(off.todayTokens, 60)
+        XCTAssertEqual(off.daily.last?.kiroTokens, 0)
+        XCTAssertFalse(off.topModels.contains { $0.source == "kiro" })
+    }
+
     /// Models merge per source across days, sort by tokens, and keep their
     /// source tag for the brand colour.
     func testTopModelsMergeAcrossSourcesAndDays() {
