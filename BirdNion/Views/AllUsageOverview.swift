@@ -2,9 +2,8 @@ import SwiftUI
 
 // MARK: - Combined usage model
 
-/// One calendar day of combined Claude Code CLI + Codex + Grok + Kiro usage.
-/// Kept per-source so the stacked chart and hover detail can split the bar
-/// by origin.
+/// One calendar day of combined Claude Code CLI + Codex + Grok usage. Kept
+/// per-source so the stacked chart and hover detail can split the bar by origin.
 struct CombinedDailyUsage: Equatable, Identifiable {
     let date: Date   // startOfDay in local tz
     let claudeUSD: Double
@@ -13,15 +12,13 @@ struct CombinedDailyUsage: Equatable, Identifiable {
     let codexTokens: Int
     let grokUSD: Double
     let grokTokens: Int
-    let kiroUSD: Double
-    let kiroTokens: Int
     /// Per-model split for this day (all sources, token-sorted). Feeds the
     /// chart hover / heatmap pinned-day breakdown so "Claude" isn't a single
     /// opaque line. Defaulted so call sites without model data still compile.
     var models: [CombinedModelCost] = []
 
-    var usd: Double { claudeUSD + codexUSD + grokUSD + kiroUSD }
-    var tokens: Int { claudeTokens + codexTokens + grokTokens + kiroTokens }
+    var usd: Double { claudeUSD + codexUSD + grokUSD }
+    var tokens: Int { claudeTokens + codexTokens + grokTokens }
     var isActive: Bool { usd > 0 || tokens > 0 }
     var id: Date { date }
 
@@ -29,7 +26,6 @@ struct CombinedDailyUsage: Equatable, Identifiable {
          claudeUSD: Double, claudeTokens: Int,
          codexUSD: Double, codexTokens: Int,
          grokUSD: Double = 0, grokTokens: Int = 0,
-         kiroUSD: Double = 0, kiroTokens: Int = 0,
          models: [CombinedModelCost] = []) {
         self.date = date
         self.claudeUSD = claudeUSD
@@ -38,8 +34,6 @@ struct CombinedDailyUsage: Equatable, Identifiable {
         self.codexTokens = codexTokens
         self.grokUSD = grokUSD
         self.grokTokens = grokTokens
-        self.kiroUSD = kiroUSD
-        self.kiroTokens = kiroTokens
         self.models = models
     }
 }
@@ -50,7 +44,7 @@ struct CombinedModelCost: Equatable, Identifiable {
     let name: String
     let usd: Double
     let tokens: Int
-    /// "claude" | "codex" | "grok" | "kiro" — drives the brand dot/bar colour.
+    /// "claude" | "codex" | "grok" — drives the brand dot/bar colour.
     let source: String
     var id: String { "\(source):\(name)" }
 }
@@ -89,11 +83,9 @@ struct CombinedUsageReport: Equatable {
     static func build(claude: ClaudeUsageReport?,
                       codex: CodexUsageReport?,
                       grok: GrokUsageReport? = nil,
-                      kiro: KiroUsageReport? = nil,
                       includeClaude: Bool = true,
                       includeCodex: Bool = true,
                       includeGrok: Bool = true,
-                      includeKiro: Bool = true,
                       calendar: Calendar = .current,
                       now: Date = Date(),
                       windowDays: Int = 90) -> CombinedUsageReport {
@@ -101,7 +93,6 @@ struct CombinedUsageReport: Equatable {
         let includedClaude = includeClaude ? claude : nil
         let includedCodex = includeCodex ? codex : nil
         let includedGrok = includeGrok ? grok : nil
-        let includedKiro = includeKiro ? kiro : nil
 
         // Re-normalize sources onto startOfDay keys before merging —
         // Claude's older buckets were built with -86 400 s steps, which can
@@ -116,9 +107,6 @@ struct CombinedUsageReport: Equatable {
         let grokDays = dayTotals(from: includedGrok?.daily.map {
             ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
         } ?? [], calendar: calendar)
-        let kiroDays = dayTotals(from: includedKiro?.daily.map {
-            ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
-        } ?? [], calendar: calendar)
 
         var daily: [CombinedDailyUsage] = []
         daily.reserveCapacity(windowDays)
@@ -127,18 +115,15 @@ struct CombinedUsageReport: Equatable {
             let c = claudeDays.totals[day] ?? (0, 0)
             let x = codexDays.totals[day] ?? (0, 0)
             let g = grokDays.totals[day] ?? (0, 0)
-            let k = kiroDays.totals[day] ?? (0, 0)
             daily.append(CombinedDailyUsage(
                 date: day,
                 claudeUSD: c.usd, claudeTokens: c.tokens,
                 codexUSD: x.usd, codexTokens: x.tokens,
                 grokUSD: g.usd, grokTokens: g.tokens,
-                kiroUSD: k.usd, kiroTokens: k.tokens,
                 models: mergedModelCosts(
                     claude: claudeDays.models[day] ?? [:],
                     codex: codexDays.models[day] ?? [:],
-                    grok: grokDays.models[day] ?? [:],
-                    kiro: kiroDays.models[day] ?? [:])))
+                    grok: grokDays.models[day] ?? [:])))
         }
 
         let today = daily.last
@@ -164,20 +149,17 @@ struct CombinedUsageReport: Equatable {
             mergedModelCosts(
                 claude: foldModels(claudeDays.models),
                 codex: foldModels(codexDays.models),
-                grok: foldModels(grokDays.models),
-                kiro: foldModels(kiroDays.models)).prefix(6))
+                grok: foldModels(grokDays.models)).prefix(6))
 
         return CombinedUsageReport(
             todayUSD: today?.usd ?? 0,
             todayTokens: today?.tokens ?? 0,
             last30USD: (includedClaude?.last30USD ?? 0)
                 + (includedCodex?.last30USD ?? 0)
-                + (includedGrok?.last30USD ?? 0)
-                + (includedKiro?.last30USD ?? 0),
+                + (includedGrok?.last30USD ?? 0),
             last30Tokens: (includedClaude?.last30Tokens ?? 0)
                 + (includedCodex?.last30Tokens ?? 0)
-                + (includedGrok?.last30Tokens ?? 0)
-                + (includedKiro?.last30Tokens ?? 0),
+                + (includedGrok?.last30Tokens ?? 0),
             totalUSD: totalUSD,
             totalTokens: totalTokens,
             daily: daily,
@@ -237,8 +219,7 @@ struct CombinedUsageReport: Equatable {
     private static func mergedModelCosts(
         claude: [String: (usd: Double, tokens: Int)],
         codex: [String: (usd: Double, tokens: Int)],
-        grok: [String: (usd: Double, tokens: Int)] = [:],
-        kiro: [String: (usd: Double, tokens: Int)] = [:]
+        grok: [String: (usd: Double, tokens: Int)] = [:]
     ) -> [CombinedModelCost] {
         var merged: [CombinedModelCost] = claude.map {
             CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "claude")
@@ -248,9 +229,6 @@ struct CombinedUsageReport: Equatable {
         }
         merged += grok.map {
             CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "grok")
-        }
-        merged += kiro.map {
-            CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "kiro")
         }
         merged.removeAll { $0.usd <= 0 && $0.tokens <= 0 }
         merged.sort {
@@ -271,8 +249,6 @@ struct CombinedWindowTotals: Equatable {
     let codexTokens: Int
     let grokUSD: Double
     let grokTokens: Int
-    let kiroUSD: Double
-    let kiroTokens: Int
 }
 
 extension CombinedUsageReport {
@@ -289,9 +265,7 @@ extension CombinedUsageReport {
             codexUSD: window.reduce(0) { $0 + $1.codexUSD },
             codexTokens: window.reduce(0) { $0 + $1.codexTokens },
             grokUSD: window.reduce(0) { $0 + $1.grokUSD },
-            grokTokens: window.reduce(0) { $0 + $1.grokTokens },
-            kiroUSD: window.reduce(0) { $0 + $1.kiroUSD },
-            kiroTokens: window.reduce(0) { $0 + $1.kiroTokens })
+            grokTokens: window.reduce(0) { $0 + $1.grokTokens })
     }
 }
 
@@ -306,13 +280,11 @@ struct AllUsageOverview: View {
     let claude: ClaudeUsageReport?
     let codex: CodexUsageReport?
     let grok: GrokUsageReport?
-    let kiro: KiroUsageReport?
     /// Which sources are enabled in Settings — a disabled source's nil
     /// report means "not applicable", not "still scanning".
     var claudeEnabled: Bool = true
     var codexEnabled: Bool = true
     var grokEnabled: Bool = true
-    var kiroEnabled: Bool = true
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
@@ -322,12 +294,11 @@ struct AllUsageOverview: View {
         if claudeEnabled, claude == nil { pending.append("Claude") }
         if codexEnabled, codex == nil { pending.append("Codex") }
         if grokEnabled, grok == nil { pending.append("Grok") }
-        if kiroEnabled, kiro == nil { pending.append("Kiro") }
         return pending
     }
 
     private var anyReportReady: Bool {
-        claude != nil || codex != nil || grok != nil || kiro != nil
+        claude != nil || codex != nil || grok != nil
     }
 
     var body: some View {
@@ -342,11 +313,9 @@ struct AllUsageOverview: View {
                 claude: claude,
                 codex: codex,
                 grok: grok,
-                kiro: kiro,
                 includeClaude: claudeEnabled,
                 includeCodex: codexEnabled,
-                includeGrok: grokEnabled,
-                includeKiro: kiroEnabled)
+                includeGrok: grokEnabled)
             if !pendingSources.isEmpty {
                 HStack(spacing: 6) {
                     ProgressView()
@@ -403,16 +372,14 @@ struct CombinedChartCard: View {
     /// Chart bars scale by tokens (not USD) so volume, not spend, drives height.
     private var maxBarTokens: Int { max(windowDaily.map(\.tokens).max() ?? 0, 1) }
 
-    // 24h-period numbers: Claude summed over the hour buckets; Codex/Grok/Kiro
-    // from today's calendar bucket (their finest available resolution).
+    // 24h-period numbers: Claude summed over the hour buckets; Codex/Grok from
+    // today's calendar bucket (their finest available resolution).
     private var claude24USD: Double { claudeHourly.reduce(0) { $0 + $1.usd } }
     private var claude24Tokens: Int { claudeHourly.reduce(0) { $0 + $1.tokens } }
     private var codexTodayUSD: Double { report.daily.last?.codexUSD ?? 0 }
     private var codexTodayTokens: Int { report.daily.last?.codexTokens ?? 0 }
     private var grokTodayUSD: Double { report.daily.last?.grokUSD ?? 0 }
     private var grokTodayTokens: Int { report.daily.last?.grokTokens ?? 0 }
-    private var kiroTodayUSD: Double { report.daily.last?.kiroUSD ?? 0 }
-    private var kiroTodayTokens: Int { report.daily.last?.kiroTokens ?? 0 }
     private var maxBarHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
 
     private var detailDay: CombinedDailyUsage? {
@@ -434,10 +401,10 @@ struct CombinedChartCard: View {
                 summaryColumn(
                     label: periodLabel(periodDays),
                     amount: is24h
-                        ? claude24USD + codexTodayUSD + grokTodayUSD + kiroTodayUSD
+                        ? claude24USD + codexTodayUSD + grokTodayUSD
                         : windowTotals.usd,
                     tokens: is24h
-                        ? claude24Tokens + codexTodayTokens + grokTodayTokens + kiroTodayTokens
+                        ? claude24Tokens + codexTodayTokens + grokTodayTokens
                         : windowTotals.tokens,
                     alignTrailing: true)
             }
@@ -452,7 +419,7 @@ struct CombinedChartCard: View {
             .frame(height: 56)
             // Legend doubles as the per-source split for the chosen period
             // (token volume — same metric as the stacked bars).
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 legendDot(color: VocabbyTheme.chartClaude,
                           label: "Claude \(AllUsageFormat.tokensShort(is24h ? claude24Tokens : windowTotals.claudeTokens))")
                 legendDot(color: VocabbyTheme.chartCodex,
@@ -461,9 +428,6 @@ struct CombinedChartCard: View {
                 legendDot(color: VocabbyTheme.chartGrok,
                           label: (is24h ? (vi ? "Grok (hôm nay) " : "Grok (today) ") : "Grok ")
                               + AllUsageFormat.tokensShort(is24h ? grokTodayTokens : windowTotals.grokTokens))
-                legendDot(color: VocabbyTheme.chartKiro,
-                          label: (is24h ? (vi ? "Kiro (hôm nay) " : "Kiro (today) ") : "Kiro ")
-                              + AllUsageFormat.tokensShort(is24h ? kiroTodayTokens : windowTotals.kiroTokens))
             }
             if is24h {
                 if let hovered = hoveredHour {
@@ -471,8 +435,8 @@ struct CombinedChartCard: View {
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(VocabbyTheme.secondary)
                 }
-                Text(vi ? "Cột giờ chỉ gồm Claude — log Codex/Grok/Kiro chỉ ghi theo ngày."
-                        : "Hour bars are Claude-only — Codex/Grok/Kiro logs have day resolution.")
+                Text(vi ? "Cột giờ chỉ gồm Claude — log Codex/Grok chỉ ghi theo ngày."
+                        : "Hour bars are Claude-only — Codex/Grok logs have day resolution.")
                     .font(.system(size: 9))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -484,8 +448,8 @@ struct CombinedChartCard: View {
                      + ": \(AllUsageFormat.tokens(windowTotals.tokens))")
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(VocabbyTheme.primary)
-                Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex, Grok và Kiro."
-                        : "Estimated from local Claude Code CLI, Codex, Grok, and Kiro logs.")
+                Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex và Grok."
+                        : "Estimated from local Claude Code CLI, Codex, and Grok logs.")
                     .font(.system(size: 9))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -550,8 +514,8 @@ struct CombinedChartCard: View {
         }
     }
 
-    /// Stacked bars over the selected window: Claude → Codex → Grok → Kiro
-    /// (top → bottom); total height proportional to the day's combined tokens.
+    /// Stacked bars over the selected window: Claude (top) → Codex → Grok
+    /// (bottom); total height proportional to the day's combined tokens.
     private var barChart: some View {
         GeometryReader { geo in
             // 90 bars don't fit with the standard 2pt gap — tighten it.
@@ -564,9 +528,7 @@ struct CombinedChartCard: View {
                         ? barHeight * CGFloat(Double(day.claudeTokens) / Double(day.tokens)) : 0
                     let codexHeight = hasTokens
                         ? barHeight * CGFloat(Double(day.codexTokens) / Double(day.tokens)) : 0
-                    let grokHeight = hasTokens
-                        ? barHeight * CGFloat(Double(day.grokTokens) / Double(day.tokens)) : 0
-                    let kiroHeight = max(0, barHeight - claudeHeight - codexHeight - grokHeight)
+                    let grokHeight = max(0, barHeight - claudeHeight - codexHeight)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         VStack(spacing: 0) {
@@ -577,8 +539,6 @@ struct CombinedChartCard: View {
                                     .frame(height: codexHeight)
                                 Rectangle().fill(VocabbyTheme.chartGrok)
                                     .frame(height: grokHeight)
-                                Rectangle().fill(VocabbyTheme.chartKiro)
-                                    .frame(height: kiroHeight)
                             } else {
                                 Rectangle()
                                     .fill(VocabbyTheme.selectedSurface.opacity(0.76))
@@ -660,9 +620,9 @@ struct CombinedChartCard: View {
     }
 }
 
-/// Source rows (Claude/Codex/Grok/Kiro day totals) plus indented per-model
-/// sub-rows — shared by the chart hover detail and the heatmap pinned-day
-/// detail so the breakdown names the actual models instead of one opaque line.
+/// Source rows (Claude/Codex/Grok day totals) plus indented per-model sub-rows —
+/// shared by the chart hover detail and the heatmap pinned-day detail so the
+/// breakdown names the actual models instead of one opaque "Claude" line.
 private struct DaySourceModelRows: View {
     let day: CombinedDailyUsage
 
@@ -681,11 +641,6 @@ private struct DaySourceModelRows: View {
             sourceRow(color: VocabbyTheme.chartGrok, label: "Grok",
                       usd: day.grokUSD, tokens: day.grokTokens)
             modelRows("grok")
-        }
-        if day.kiroUSD > 0 || day.kiroTokens > 0 {
-            sourceRow(color: VocabbyTheme.chartKiro, label: "Kiro",
-                      usd: day.kiroUSD, tokens: day.kiroTokens)
-            modelRows("kiro")
         }
     }
 
@@ -952,7 +907,6 @@ struct CombinedTopModelsCard: View {
         switch model.source {
         case "claude": return VocabbyTheme.chartClaude
         case "grok": return VocabbyTheme.chartGrok
-        case "kiro": return VocabbyTheme.chartKiro
         default: return VocabbyTheme.chartCodex
         }
     }

@@ -40,15 +40,14 @@ type ProviderCfg = {
 };
 type Settings = { version: number; providers: ProviderCfg[] };
 
-/** Local usage-report sources scanned from disk (Claude → Codex → Grok → Kiro). */
-const SCAN_SOURCES = ["claude", "codex", "grok", "kiro"] as const;
+/** Local usage-report sources scanned from disk (Claude → Codex → Grok). */
+const SCAN_SOURCES = ["claude", "codex", "grok"] as const;
 type ScanSource = (typeof SCAN_SOURCES)[number];
 
 type State = {
   claude: UsageReport | null;
   codex: UsageReport | null;
   grok: UsageReport | null;
-  kiro: UsageReport | null;
   statuses: ProviderStatus[];
   claudeAdmin: ClaudeAdminSnapshot | null;
   tab: string; // "all" | provider id
@@ -63,7 +62,6 @@ const state: State = {
   claude: null,
   codex: null,
   grok: null,
-  kiro: null,
   statuses: [],
   claudeAdmin: null,
   tab: (() => {
@@ -406,7 +404,7 @@ function render() {
 
   if (state.tab === "all") {
     const pending = pendingScanSources();
-    if (!state.claude && !state.codex && !state.grok && !state.kiro) {
+    if (!state.claude && !state.codex && !state.grok) {
       // No data yet: skeleton card while scans are in flight (macOS
       // AllUsageOverview), "no logs" only once every scan came back empty.
       if (pending.length > 0) {
@@ -418,7 +416,7 @@ function render() {
       }
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
-      const combined = combine(state.claude, state.codex, state.grok, state.kiro);
+      const combined = combine(state.claude, state.codex, state.grok);
       body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(heatmapCard(combined));
       if (combined.topModels.length > 0) body.append(topModelsCard(combined));
@@ -450,7 +448,7 @@ function render() {
         () => { void refetchProvider("elevenlabs"); },
       ));
     }
-    // Claude/Codex/Grok/Kiro tabs also show their own local 30-day cost chart,
+    // Claude/Codex/Grok tabs also show their own local 30-day cost chart,
     // matching the macOS per-provider chart cards.
     if (state.tab === "claude" && state.claude) {
       body.append(sourceChartCard(state.claude, "claude"));
@@ -459,8 +457,6 @@ function render() {
       body.append(sourceChartCard(state.codex, "codex"));
     } else if (state.tab === "grok" && state.grok) {
       body.append(sourceChartCard(state.grok, "grok"));
-    } else if (state.tab === "kiro" && state.kiro) {
-      body.append(sourceChartCard(state.kiro, "kiro"));
     }
   }
   app.append(popoverFooter());
@@ -594,37 +590,43 @@ function loadTrayLogo(id: string): Promise<HTMLImageElement | null> {
 /**
  * Paint `91%` + provider logo into one PNG (percent left, logo right).
  *
- * The panel scales the image to its own height, so the canvas is a ratio
- * template: glyph size relative to canvas height decides how big the text
- * looks next to the clock/indicators — see the ratio notes below.
+ * Linux GNOME AppIndicator / StatusNotifier scales the tray image to the
+ * **full panel height** (no fixed 18pt slot like macOS). Glyph size is
+ * therefore a ratio of canvas height, not absolute px:
+ *
+ *   - GNOME top-bar text ≈ 36–42% of panel height (clock / locale chip).
+ *   - v2 used 14/18 (78%) → huge. v3 used 12/22 (55%) → still oversized
+ *     next to "vi" / network. v4 targets ≈ 38% with lighter weight.
+ *
+ * Never fall back to StatusNotifier `title` for the percent — the panel
+ * paints that label at full system type size and it always looks too big.
  */
 async function renderPercentProviderIcon(
   providerId: string,
   percentText: string,
 ): Promise<number[] | null> {
   // Size tag busts cache when we retune metrics.
-  const cacheKey = `v3|${providerId}|${percentText}`;
+  const cacheKey = `v4|${providerId}|${percentText}`;
   const cached = trayIconCache.get(cacheKey);
   if (cached) return cached;
 
-  // Linux panels (GNOME AppIndicator) scale the image to FULL panel height —
-  // there is no fixed 18pt slot like macOS. Whatever we draw is stretched to
-  // panel height, so what matters is the glyph/canvas RATIO, not absolute px.
-  // Panel text (clock, "vi", etc.) runs ≈55% of panel height; bake that ratio
-  // in with vertical breathing room or the percent renders comically large.
-  const height = 22;
-  const fontPx = 12; // ≈55% of canvas height — matches neighboring panel text.
-  const iconPx = 15;
-  const gap = 4;
-  const padX = 1;
+  // Ratio template: text ~38% of canvas, logo ~46%, rest is breathing room
+  // so the panel scale-up doesn't make glyphs fill the whole tray slot.
+  const height = 32;
+  const fontPx = 12; // 12/32 = 37.5% of canvas height
+  const iconPx = 15; // 15/32 ≈ 47%
+  const gap = 3;
+  const padX = 2;
   const dpr = Math.min(3, Math.max(2, Math.round(window.devicePixelRatio || 2)));
-  // Tabular mono digits — same idea as AppDelegate monospacedDigitSystemFont.
-  const font = `500 ${fontPx}px ui-monospace, "SF Mono", Menlo, Monaco, monospace`;
+  // Regular weight + UI sans (not mono 500): mono digits read heavier at the
+  // same px size and looked "to" next to GNOME indicators.
+  const font = `400 ${fontPx}px system-ui, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif`;
 
   const measure = document.createElement("canvas").getContext("2d");
   if (!measure) return null;
   measure.font = font;
-  const textW = Math.ceil(measure.measureText(percentText).width);
+  // ceil + 1px slack so anti-aliased edges aren't clipped after scale.
+  const textW = Math.ceil(measure.measureText(percentText).width) + 1;
 
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.ceil((padX + textW + gap + iconPx + padX) * dpr));
@@ -632,11 +634,13 @@ async function renderPercentProviderIcon(
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.font = font;
   ctx.fillStyle = "#ffffff";
   ctx.textBaseline = "middle";
-  // Optical vertical center: canvas text sits a hair high with middle baseline.
-  ctx.fillText(percentText, padX, height / 2 + 0.5);
+  ctx.textAlign = "left";
+  // Optical center: alphabetic middle sits slightly high on sans faces.
+  ctx.fillText(percentText, padX, height / 2 + 0.75);
 
   const logo = await loadTrayLogo(providerId);
   if (logo) {
@@ -715,10 +719,12 @@ function applyTrayFrame() {
     return;
   }
   const frame = trayFrames[trayFrameIndex % trayFrames.length]!;
+  // Never put the percent in StatusNotifier `title`: GNOME paints that label
+  // at full panel type size (the oversized "59%" next to the bird). Percent
+  // lives only inside the composite PNG; if paint failed, bird-only + tooltip.
   void invoke("set_tray_status", {
     tooltip,
-    // Composite already has "% + logo". If paint failed, fall back to title text.
-    title: frame.iconPng ? null : frame.percentText,
+    title: null,
     iconPng: frame.iconPng,
   }).catch(() => {});
 }
@@ -893,7 +899,6 @@ async function load() {
       scanReport("claude"),
       scanReport("codex"),
       scanReport("grok"),
-      scanReport("kiro"),
       statusesDone,
       invoke<ClaudeAdminSnapshot | null>("claude_admin_usage")
         .catch(() => null)

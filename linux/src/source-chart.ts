@@ -34,18 +34,16 @@ function showDetail(detail: HTMLElement, day: DailyUsage) {
 
 export function sourceChartCard(
   report: UsageReport,
-  source: "claude" | "codex" | "grok" | "kiro",
+  source: "claude" | "codex" | "grok",
 ): HTMLElement {
   const card = el("section", "card");
   const daily30 = report.daily.slice(-30);
   const latestActive = [...daily30].reverse().find((d) => d.tokens > 0);
   const barClass = source === "claude" ? "claude"
     : source === "codex" ? "codex"
-    : source === "kiro" ? "kiro"
     : "grok";
   const footnoteKey = source === "claude" ? "claudeFootnote"
     : source === "codex" ? "codexFootnote"
-    : source === "kiro" ? "kiroFootnote"
     : "grokFootnote";
 
   const summary = el("div", "summary-row");

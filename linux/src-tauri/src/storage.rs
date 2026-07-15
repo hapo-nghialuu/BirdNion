@@ -31,11 +31,6 @@ fn candidate_paths(id: &str, home: &std::path::Path) -> Vec<PathBuf> {
         "copilot" => vec![p(".config/github-copilot")],
         "opencode" | "opencodego" => vec![p(".config/opencode"), p(".local/share/opencode")],
         "cursor" => vec![p(".config/Cursor"), p(".cursor")],
-        "kiro" => vec![
-            p(".kiro"),
-            p(".local/share/kiro-cli"),
-            p(".kiro_sessions"),
-        ],
         _ => vec![],
     }
 }

@@ -57,7 +57,6 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const wClaudeTokens = windowDaily.reduce((s, d) => s + d.claudeTokens, 0);
     const wCodexTokens = windowDaily.reduce((s, d) => s + d.codexTokens, 0);
     const wGrokTokens = windowDaily.reduce((s, d) => s + d.grokTokens, 0);
-    const wKiroTokens = windowDaily.reduce((s, d) => s + d.kiroTokens, 0);
     const is24h = period === 1;
     const claude24Usd = claudeHourly.reduce((s, h) => s + h.usd, 0);
     const claude24Tokens = claudeHourly.reduce((s, h) => s + h.tokens, 0);
@@ -68,10 +67,10 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     summary.append(summaryColumn(
       is24h ? "24h" : `${period} ${t("days")}`,
       is24h
-        ? claude24Usd + (today?.codexUsd ?? 0) + (today?.grokUsd ?? 0) + (today?.kiroUsd ?? 0)
+        ? claude24Usd + (today?.codexUsd ?? 0) + (today?.grokUsd ?? 0)
         : wUsd,
       is24h
-        ? claude24Tokens + (today?.codexTokens ?? 0) + (today?.grokTokens ?? 0) + (today?.kiroTokens ?? 0)
+        ? claude24Tokens + (today?.codexTokens ?? 0) + (today?.grokTokens ?? 0)
         : wTokens,
       true));
     card.append(summary);
@@ -97,8 +96,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       legend.append(
         legendDot("claude", `Claude ${tokensShort(claude24Tokens)}`),
         legendDot("codex", `${t("codexToday")} ${tokensShort(today?.codexTokens ?? 0)}`),
-        legendDot("grok", `Grok ${tokensShort(today?.grokTokens ?? 0)}`),
-        legendDot("kiro", `Kiro ${tokensShort(today?.kiroTokens ?? 0)}`));
+        legendDot("grok", `Grok ${tokensShort(today?.grokTokens ?? 0)}`));
       card.append(legend, detail);
       card.append(el("div", "footnote", t("hourBarsNote")));
     } else {
@@ -107,8 +105,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       legend.append(
         legendDot("claude", `Claude ${tokensShort(wClaudeTokens)}`),
         legendDot("codex", `Codex ${tokensShort(wCodexTokens)}`),
-        legendDot("grok", `Grok ${tokensShort(wGrokTokens)}`),
-        legendDot("kiro", `Kiro ${tokensShort(wKiroTokens)}`));
+        legendDot("grok", `Grok ${tokensShort(wGrokTokens)}`));
       card.append(legend, detail);
       const lastActive = [...windowDaily].reverse().find((d) => d.active);
       if (lastActive) showDayDetail(detail, lastActive);
@@ -136,19 +133,11 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
     detail.append(sourceRow("grok", "Grok", day.grokUsd, day.grokTokens));
     appendModelRows(detail, day, "grok");
   }
-  if (day.kiroUsd > 0 || day.kiroTokens > 0) {
-    detail.append(sourceRow("kiro", "Kiro", day.kiroUsd, day.kiroTokens));
-    appendModelRows(detail, day, "kiro");
-  }
 }
 
 /** Indented per-model lines under a source row (top 5/day from the scanner),
  * so "Claude" isn't one opaque figure — mirrors the macOS DaySourceModelRows. */
-function appendModelRows(
-  detail: HTMLElement,
-  day: CombinedDay,
-  source: "claude" | "codex" | "grok" | "kiro",
-) {
+function appendModelRows(detail: HTMLElement, day: CombinedDay, source: "claude" | "codex" | "grok") {
   for (const m of day.models.filter((x) => x.source === source)) {
     const row = el("div", "model-row");
     row.append(
@@ -158,7 +147,7 @@ function appendModelRows(
   }
 }
 
-/** Stacked per-source bars: Claude → Codex → Grok → Kiro; height by tokens. */
+/** Stacked per-source bars: Claude → Codex → Grok; height by tokens. */
 function stackedBarChart(days: CombinedDay[], detail: HTMLElement): HTMLElement {
   const max = Math.max(...days.map((d) => d.tokens), 1);
   const chart = el("div", `bar-chart${days.length > 45 ? " dense" : ""}`);
@@ -175,9 +164,7 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement): HTMLElement 
       codex.style.flexGrow = String(Math.max(day.codexTokens, 0.0001));
       const grok = el("div", "bar-seg grok");
       grok.style.flexGrow = String(Math.max(day.grokTokens, 0.0001));
-      const kiro = el("div", "bar-seg kiro");
-      kiro.style.flexGrow = String(Math.max(day.kiroTokens, 0.0001));
-      stack.append(claude, codex, grok, kiro);
+      stack.append(claude, codex, grok);
       col.append(stack);
     } else {
       col.append(el("div", "bar-idle"));

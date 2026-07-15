@@ -787,38 +787,23 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
   };
 
   // --- detail render -----------------------------------------------------------
-  // Layout: pin the activation panel (power button) ABOVE the scroll region.
-  // Previously everything lived in .pp-detail-scroll; focusing a lower form
-  // input made WebKit focus-reveal scroll the panel out of view (see
-  // fix(linux) overflow:clip). Users then only saw "Paste JSON" + the form
-  // and thought the power button was missing / old UI.
   const renderDetail = () => {
     detail.textContent = "";
+    const scroll = el("div", "pp-detail-scroll");
     if (!selected) {
-      const scroll = el("div", "pp-detail-scroll");
       scroll.append(emptyState());
       detail.append(scroll);
       return;
     }
     const sel = selected;
 
-    // Sticky top: activation + status (always visible).
-    const top = el("div", "ccp-detail-top");
-    // Skeleton while resolveState is in flight (keeps layout stable).
-    top.append(activationPanel(sel, "needsSetup"));
-    detail.append(top);
-
-    const scroll = el("div", "pp-detail-scroll");
-    // Body content is filled once we know power state, so badges match disk.
+    // Placeholder panel first, replaced when the disk state resolves.
     void resolveState(sel).then((state) => {
+      // Selection may have changed while resolving.
       if (selected !== sel) return;
-      top.replaceChildren();
-      top.append(activationPanel(sel, state));
-      if (statusMsg) {
-        top.append(el("div", `ccp-status${statusMsg.isError ? " error" : ""}`, statusMsg.text));
-      }
-
       scroll.textContent = "";
+      scroll.append(activationPanel(sel, state));
+      if (statusMsg) scroll.append(el("div", `ccp-status${statusMsg.isError ? " error" : ""}`, statusMsg.text));
       scroll.append(scopeCard(sel));
       if (sel.kind === "provider") {
         // Preset: scope → models (with load) → 1M toggle (macOS presetDetail).
@@ -834,8 +819,6 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
         scroll.append(pasteRow);
         scroll.append(profileForm(sel.profile));
       }
-      // Reset scroll so re-selecting a profile never leaves the body mid-page.
-      scroll.scrollTop = 0;
     });
     detail.append(scroll);
   };

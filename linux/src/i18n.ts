@@ -19,12 +19,12 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   days: { vi: "ngày", en: "days" },
   estTotal: { vi: "Ước tính {n} ngày", en: "Est. {n}-day total" },
   estFootnote: {
-    vi: "Ước tính từ log cục bộ Claude Code CLI, Codex, Grok và Kiro.",
-    en: "Estimated from local Claude Code CLI, Codex, Grok, and Kiro logs.",
+    vi: "Ước tính từ log cục bộ Claude Code CLI, Codex và Grok.",
+    en: "Estimated from local Claude Code CLI, Codex, and Grok logs.",
   },
   hourBarsNote: {
-    vi: "Cột giờ chỉ gồm Claude — Codex/Grok/Kiro chỉ có độ phân giải theo ngày.",
-    en: "Hour bars are Claude-only — Codex/Grok/Kiro logs have day resolution.",
+    vi: "Cột giờ chỉ gồm Claude — Codex/Grok chỉ có độ phân giải theo ngày.",
+    en: "Hour bars are Claude-only — Codex/Grok logs have day resolution.",
   },
   codexToday: { vi: "Codex (hôm nay)", en: "Codex (today)" },
   activity90: { vi: "Hoạt động 90 ngày", en: "90-day activity" },
@@ -37,17 +37,13 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   topModel: { vi: "Model dùng nhiều", en: "Top model" },
   latestTokens: { vi: "Token mới nhất", en: "Latest tokens" },
   noLogs: {
-    vi: "Không tìm thấy log Claude (~/.claude), Codex (~/.codex), Grok (~/.grok) hoặc Kiro (kiro-cli).",
-    en: "No Claude (~/.claude), Codex (~/.codex), Grok (~/.grok), or Kiro (kiro-cli) logs found.",
+    vi: "Không tìm thấy log Claude (~/.claude), Codex (~/.codex) hoặc Grok (~/.grok).",
+    en: "No Claude (~/.claude), Codex (~/.codex), or Grok (~/.grok) logs found.",
   },
   scanningSources: { vi: "Đang quét {names}…", en: "Scanning {names}…" },
   grokFootnote: {
     vi: "Ước tính từ log Grok Build cục bộ (~/.grok/sessions).",
     en: "Estimated from local Grok Build logs (~/.grok/sessions).",
-  },
-  kiroFootnote: {
-    vi: "Ước tính từ log Kiro CLI cục bộ (kiro-cli sessions).",
-    en: "Estimated from local Kiro CLI sessions (kiro-cli data.sqlite3).",
   },
   noQuota: { vi: "Không có dữ liệu quota.", en: "No quota data." },
   creditsHistoryCount: { vi: "{n} giao dịch credit", en: "{n} credit events" },

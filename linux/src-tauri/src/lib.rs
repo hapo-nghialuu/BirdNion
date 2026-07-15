@@ -11,7 +11,6 @@ mod cost_history;
 mod elevenlabs_keys;
 mod freemodel_accounts;
 mod grok_scanner;
-mod kiro_scanner;
 mod providers;
 mod storage;
 mod updater;
@@ -86,17 +85,6 @@ async fn codex_usage_report() -> Option<usage::UsageReport> {
 async fn grok_usage_report() -> Option<usage::UsageReport> {
     tauri::async_runtime::spawn_blocking(|| {
         cached_usage_report("grok", grok_scanner::usage_report)
-    })
-    .await
-    .ok()
-}
-
-/// Kiro CLI local session cost (SQLite + optional ~/.kiro_sessions) + history
-/// merge (blocking thread + cache, see `claude_usage_report`).
-#[tauri::command]
-async fn kiro_usage_report() -> Option<usage::UsageReport> {
-    tauri::async_runtime::spawn_blocking(|| {
-        cached_usage_report("kiro", kiro_scanner::usage_report)
     })
     .await
     .ok()
@@ -559,10 +547,16 @@ fn get_autostart(app: tauri::AppHandle) -> bool {
 /// Visual contract (macOS NSStatusItem parity): **`91%` then provider logo**.
 /// The JS side paints that into a single composite PNG (`icon_png`) because
 /// tray-icon places the image left of the title on macOS; compositing keeps
-/// the percent→logo order. Title is left empty when a composite is provided.
+/// the percent→logo order.
+///
+/// On Linux (GNOME AppIndicator / StatusNotifier), `title` is a **panel label**
+/// drawn at full system type size — putting `"59%"` there makes the percent
+/// look comically large next to the bird. Always clear the title slot; the
+/// percent must live inside `icon_png` only.
 ///
 /// * `tooltip` — hover text (macOS/Windows; unsupported on Linux panel).
-/// * `title` — optional raw text (unused when `icon_png` carries the frame).
+/// * `title` — ignored on Linux; always cleared. Kept in the signature so
+///   older frontends still call this command without schema break.
 /// * `icon_png` — composite frame PNG, or `None` to restore the default logo.
 #[tauri::command]
 fn set_tray_status(
@@ -571,17 +565,13 @@ fn set_tray_status(
     title: Option<String>,
     icon_png: Option<Vec<u8>>,
 ) {
+    let _ = title; // intentionally unused — see doc above
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_tooltip(Some(tooltip.as_str()));
-        // Empty string clears the title slot so the composite icon stands alone.
-        match title.as_deref().filter(|s| !s.is_empty()) {
-            Some(t) => {
-                let _ = tray.set_title(Some(t));
-            }
-            None => {
-                let _ = tray.set_title(Some(""));
-            }
-        }
+        // Always clear the StatusNotifier label. `None` and `Some("")` both
+        // needed across tray-icon/ayatana versions — try both.
+        let _ = tray.set_title(None::<&str>);
+        let _ = tray.set_title(Some(""));
         if let Some(bytes) = icon_png {
             if let Ok(img) = Image::from_bytes(&bytes) {
                 let _ = tray.set_icon(Some(img));
@@ -688,7 +678,6 @@ pub fn run() {
             claude_usage_report,
             codex_usage_report,
             grok_usage_report,
-            kiro_usage_report,
             provider_statuses,
             classify_provider_error,
             test_provider,
