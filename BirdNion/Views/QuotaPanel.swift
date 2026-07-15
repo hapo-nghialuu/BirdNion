@@ -2248,7 +2248,7 @@ enum VocabbyTheme {
     static let alibaba    = Color(red: 255 / 255, green: 106 / 255, blue: 0 / 255)   // #FF6A00
     static let cursor     = Color(red: 0, green: 191 / 255, blue: 165 / 255)         // #00BFA5
     static let gemini     = Color(red: 171 / 255, green: 135 / 255, blue: 234 / 255) // #AB87EA
-    static let kiro       = Color(red: 255 / 255, green: 153 / 255, blue: 0 / 255)   // #FF9900
+    static let kiro       = Color(red: 139 / 255, green: 71 / 255, blue: 249 / 255)  // #8B47F9 (Kiro violet, icon gradient mid)
     static let openCode   = Color(red: 59 / 255, green: 130 / 255, blue: 246 / 255)  // #3B82F6
     static let antigravity = Color(red: 96 / 255, green: 186 / 255, blue: 126 / 255) // #60BA7E
     static let bedrock    = Color(red: 255 / 255, green: 153 / 255, blue: 0 / 255)   // #FF9900 (AWS)
