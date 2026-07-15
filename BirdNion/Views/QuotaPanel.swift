@@ -28,6 +28,9 @@ struct QuotaOverview: View {
     /// Lazy-scanned Grok usage report from `~/.grok/sessions/**/signals.json`.
     @State private var grokReport: GrokUsageReport?
     @State private var grokReportTaskId: String?
+    /// Lazy-scanned Kiro usage report from local kiro-cli SQLite sessions.
+    @State private var kiroReport: KiroUsageReport?
+    @State private var kiroReportTaskId: String?
     @State private var claudeCodeTargetRevision = 0
 
     var body: some View {
@@ -121,6 +124,12 @@ struct QuotaOverview: View {
                                !report.isEmpty {
                                 GrokUsageChartCard(report: report)
                             }
+                            // Kiro: 30-day usage chart from local kiro-cli
+                            // SQLite conversations (+ optional ~/.kiro_sessions).
+                            if s.id == "kiro", let report = kiroReport,
+                               !report.isEmpty {
+                                KiroUsageChartCard(report: report)
+                            }
                         }
                     }
                 }
@@ -173,6 +182,7 @@ struct QuotaOverview: View {
         triggerClaudeReportIfNeeded(providerId: providerId)
         triggerCodexReportIfNeeded(providerId: providerId)
         triggerGrokReportIfNeeded(providerId: providerId)
+        triggerKiroReportIfNeeded(providerId: providerId)
     }
 
     /// Trigger the Claude 30-day scan only when the user actually views the
@@ -257,6 +267,28 @@ struct QuotaOverview: View {
             await MainActor.run {
                 guard grokReportTaskId == taskId else { return }
                 grokReport = report
+            }
+        }
+    }
+
+    /// Trigger the Kiro CLI session scan when the user views the Kiro tab.
+    /// Cached 5 min by `KiroCostScanner`.
+    private func triggerKiroReportIfNeeded(providerId: String) {
+        guard providerId == "kiro" else { return }
+        let taskId = UUID().uuidString
+        kiroReportTaskId = taskId
+        let needsSeed = kiroReport == nil
+        Task {
+            if needsSeed, let seed = await KiroCostScanner.seededReport() {
+                await MainActor.run {
+                    guard kiroReportTaskId == taskId, kiroReport == nil else { return }
+                    kiroReport = seed
+                }
+            }
+            let report = await KiroCostScanner.usageReport()
+            await MainActor.run {
+                guard kiroReportTaskId == taskId else { return }
+                kiroReport = report
             }
         }
     }
@@ -2639,6 +2671,167 @@ struct CodexUsageChartCard: View {
             isCurrent: day.date == daily30.last?.date,
             hasActivity: day.usd > 0
         )
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        L10n.dayMonth(date, preference: settings.appLanguage)
+    }
+
+    private func formatUSD(_ amount: Double) -> String {
+        AllUsageFormat.usd(amount)
+    }
+
+    private func formatTokens(_ n: Int) -> String {
+        AllUsageFormat.tokens(n)
+    }
+
+    private func formatTokensShort(_ n: Int) -> String {
+        AllUsageFormat.tokensShort(n)
+    }
+}
+
+// MARK: - Kiro usage chart
+
+/// 30-day bar chart for Kiro CLI local sessions (`KiroCostScanner`),
+/// mirroring `GrokUsageChartCard` layout so the Kiro tab shows the same
+/// Today / 30d / latest-tokens + hover model breakdown. Bar height uses
+/// tokens (volume), not USD estimates.
+struct KiroUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let report: KiroUsageReport
+    @State private var hoveredDay: KiroDailyUsage?
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
+    private var daily30: [KiroDailyUsage] { Array(report.daily.suffix(30)) }
+
+    private var maxBarTokens: Int {
+        max(daily30.map(\.tokens).max() ?? 0, 1)
+    }
+
+    private var detailDay: KiroDailyUsage? {
+        hoveredDay ?? daily30.last(where: { $0.tokens > 0 || $0.usd > 0 })
+    }
+
+    private var latestDayTokens: Int {
+        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 16) {
+                summaryColumn(
+                    label: vi ? "Hôm nay" : "Today",
+                    amount: report.todayUSD,
+                    tokens: report.todayTokens)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: vi ? "30 ngày" : "30d cost",
+                    amount: report.last30USD,
+                    tokens: report.last30Tokens,
+                    alignTrailing: true)
+                Spacer(minLength: 8)
+                summaryColumn(
+                    label: vi ? "Token mới nhất" : "Latest tokens",
+                    amount: nil,
+                    tokens: latestDayTokens,
+                    alignTrailing: true)
+            }
+            barChart
+                .frame(height: 56)
+            if let detail = detailDay {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(dayLabel(detail.date)) · \(formatTokens(detail.tokens)) · \(formatUSD(detail.usd))")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.primary)
+                    ForEach(detail.models) { m in
+                        HStack(spacing: 8) {
+                            Text(m.name)
+                                .font(.system(size: 10))
+                                .foregroundStyle(VocabbyTheme.secondary)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text("\(formatTokensShort(m.tokens)) · \(formatUSD(m.usd))")
+                                .font(.system(size: 10).monospacedDigit())
+                                .foregroundStyle(VocabbyTheme.tertiary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatTokens(report.last30Tokens))")
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.primary)
+            if let top = report.topModel, !top.isEmpty {
+                Text("\(vi ? "Model dùng nhiều" : "Top model"): \(top)")
+                    .font(.system(size: 9))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+            Text(vi
+                 ? "Ước tính từ log Kiro CLI cục bộ (kiro-cli sessions)."
+                 : "Estimated from local Kiro CLI sessions (kiro-cli data.sqlite3).")
+                .font(.system(size: 9))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .vocabbyCard()
+    }
+
+    @ViewBuilder
+    private func summaryColumn(label: String, amount: Double?, tokens: Int,
+                               alignTrailing: Bool = false) -> some View {
+        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .tracking(0.3)
+            if let amount {
+                Text(formatUSD(amount))
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.primary)
+            }
+            Text(formatTokens(tokens))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+    }
+
+    private var barChart: some View {
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(daily30) { day in
+                    let hasTokens = day.tokens > 0
+                    let heightFraction = hasTokens
+                        ? CGFloat(Double(day.tokens) / Double(maxBarTokens))
+                        : 0
+                    let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(barColor(for: day))
+                            .frame(height: barHeight)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(hoveredDay?.id == day.id
+                                ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { hoveredDay = day }
+                        else if hoveredDay?.id == day.id { hoveredDay = nil }
+                    }
+                    .help("\(dayLabel(day.date)): \(formatTokens(day.tokens)) · \(formatUSD(day.usd))")
+                }
+            }
+        }
+    }
+
+    private func barColor(for day: KiroDailyUsage) -> Color {
+        if day.tokens <= 0 { return VocabbyTheme.track }
+        if day.date == daily30.last?.date {
+            return VocabbyTheme.kiro
+        }
+        return VocabbyTheme.kiro.opacity(0.78)
     }
 
     private func dayLabel(_ date: Date) -> String {

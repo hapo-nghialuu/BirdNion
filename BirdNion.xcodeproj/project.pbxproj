@@ -46,6 +46,7 @@
 		OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OAI00002000000000000F01 /* OpenAIProvider.swift */; };
 		OLA00001000000000000B01 /* OllamaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OLA00002000000000000F01 /* OllamaProvider.swift */; };
 		KRO00001000000000000B01 /* KiroProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = KRO00002000000000000F01 /* KiroProvider.swift */; };
+		KRO00003000000000000B01 /* KiroCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = KRO00004000000000000F01 /* KiroCostScanner.swift */; };
 		ANT00001000000000000B01 /* AntigravityProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANT00002000000000000F01 /* AntigravityProvider.swift */; };
 		ANT00003000000000000B01 /* AntigravityOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANT00004000000000000F01 /* AntigravityOAuth.swift */; };
 		BED00001000000000000B01 /* BedrockProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BED00002000000000000F01 /* BedrockProvider.swift */; };
@@ -196,6 +197,7 @@
 		OAI00002000000000000F01 /* OpenAIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenAIProvider.swift; sourceTree = "<group>"; };
 		OLA00002000000000000F01 /* OllamaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OllamaProvider.swift; sourceTree = "<group>"; };
 		KRO00002000000000000F01 /* KiroProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/KiroProvider.swift; sourceTree = "<group>"; };
+		KRO00004000000000000F01 /* KiroCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/KiroCostScanner.swift; sourceTree = "<group>"; };
 		ANT00002000000000000F01 /* AntigravityProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/AntigravityProvider.swift; sourceTree = "<group>"; };
 		ANT00004000000000000F01 /* AntigravityOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Antigravity/AntigravityOAuth.swift; sourceTree = "<group>"; };
 		BED00002000000000000F01 /* BedrockProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/BedrockProvider.swift; sourceTree = "<group>"; };
@@ -586,6 +588,7 @@
 				OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */,
 				OLA00001000000000000B01 /* OllamaProvider.swift in Sources */,
 				KRO00001000000000000B01 /* KiroProvider.swift in Sources */,
+				KRO00003000000000000B01 /* KiroCostScanner.swift in Sources */,
 				ANT00001000000000000B01 /* AntigravityProvider.swift in Sources */,
 				ANT00003000000000000B01 /* AntigravityOAuth.swift in Sources */,
 				BED00001000000000000B01 /* BedrockProvider.swift in Sources */,

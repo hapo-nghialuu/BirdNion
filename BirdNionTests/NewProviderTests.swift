@@ -483,6 +483,61 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(MenuBarIconRenderer.kiroDisplayText(status: s2, mode: .overageCostWhenExhausted), "10")
     }
 
+    /// Kiro session points fold into contiguous daily buckets + calendar-today totals.
+    func testKiroCostScannerBuildReport() {
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+        let sessions: [KiroCostScanner.SessionPoint] = [
+            .init(day: today, tokens: 100_000, usd: 0.30, model: "claude-sonnet-4"),
+            .init(day: today, tokens: 50_000, usd: 0.15, model: "claude-sonnet-4"),
+            .init(day: yesterday, tokens: 200_000, usd: 0.60, model: "claude-opus-4.5"),
+        ]
+        let report = KiroCostScanner.buildReport(sessions: sessions, now: now, windowDays: 90, calendar: cal)
+        XCTAssertEqual(report.daily.count, 90)
+        XCTAssertEqual(report.todayTokens, 150_000)
+        XCTAssertEqual(report.todayUSD, 0.45, accuracy: 0.001)
+        XCTAssertEqual(report.last30Tokens, 350_000)
+        XCTAssertEqual(report.last30USD, 1.05, accuracy: 0.001)
+        // Token-first top model: opus yesterday 200k > sonnet today 150k
+        XCTAssertEqual(report.topModel, "claude-opus-4.5")
+        let y = report.daily[report.daily.count - 2]
+        XCTAssertEqual(y.tokens, 200_000)
+        XCTAssertEqual(y.usd, 0.60, accuracy: 0.001)
+    }
+
+    /// Parse a conversation history fixture into daily session points.
+    func testKiroCostScannerParseConversationFixture() {
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let tsMs = Int64(now.timeIntervalSince1970 * 1000)
+        let data: [String: Any] = [
+            "conversation_id": "sess-test-1",
+            "history": [
+                [
+                    "user": ["content": String(repeating: "a", count: 400)], // ~100 tokens
+                    "assistant": ["content": String(repeating: "b", count: 200)], // ~50 tokens
+                    "request_metadata": [
+                        "model_id": "claude-sonnet-4",
+                        "request_start_timestamp_ms": tsMs,
+                        "time_between_chunks": Array(repeating: 1, count: 40),
+                    ],
+                ] as [String: Any],
+            ],
+        ]
+        let points = KiroCostScanner.parseConversation(
+            data: data, fallbackCreatedMs: tsMs, cutoff: today, calendar: cal)
+        XCTAssertFalse(points.isEmpty)
+        let totalTokens = points.reduce(0) { $0 + $1.tokens }
+        XCTAssertGreaterThan(totalTokens, 0)
+        XCTAssertEqual(points.first?.model, "claude-sonnet-4")
+        let report = KiroCostScanner.buildReport(sessions: points, now: now, windowDays: 30, calendar: cal)
+        XCTAssertFalse(report.isEmpty)
+        XCTAssertEqual(report.todayTokens, totalTokens)
+    }
+
     /// Kiro /usage parsing: full pipeline including whoami auth method,
     /// /context breakdown, overage status, and version.
     func testKiroParseUsageFullOutput() {
