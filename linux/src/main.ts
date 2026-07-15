@@ -590,32 +590,32 @@ function loadTrayLogo(id: string): Promise<HTMLImageElement | null> {
 /**
  * Paint `91%` + provider logo into one PNG (percent left, logo right).
  *
- * tray-icon on macOS scales every tray image to **18pt height**, so the
- * canvas must be designed around that slot: large font/logo relative to
- * height (not a tall canvas that just gets downscaled into mush).
- * macOS native uses 12pt monospaced-digit title + 18pt logo; composite
- * runs a notch larger so it reads equally next to system status items.
+ * The panel scales the image to its own height, so the canvas is a ratio
+ * template: glyph size relative to canvas height decides how big the text
+ * looks next to the clock/indicators — see the ratio notes below.
  */
 async function renderPercentProviderIcon(
   providerId: string,
   percentText: string,
 ): Promise<number[] | null> {
   // Size tag busts cache when we retune metrics.
-  const cacheKey = `v2|${providerId}|${percentText}`;
+  const cacheKey = `v3|${providerId}|${percentText}`;
   const cached = trayIconCache.get(cacheKey);
   if (cached) return cached;
 
-  // Match NSStatusBar content height. tray-icon forces display height ≈ 18pt.
-  const height = 18;
-  // Slightly above macOS 12pt title so baked-in text stays legible after scale.
-  const fontPx = 14;
-  // macOS `providerLogo(pointSize: 18)` — fills the status-item slot.
-  const iconPx = 18;
-  const gap = 5;
+  // Linux panels (GNOME AppIndicator) scale the image to FULL panel height —
+  // there is no fixed 18pt slot like macOS. Whatever we draw is stretched to
+  // panel height, so what matters is the glyph/canvas RATIO, not absolute px.
+  // Panel text (clock, "vi", etc.) runs ≈55% of panel height; bake that ratio
+  // in with vertical breathing room or the percent renders comically large.
+  const height = 22;
+  const fontPx = 12; // ≈55% of canvas height — matches neighboring panel text.
+  const iconPx = 15;
+  const gap = 4;
   const padX = 1;
   const dpr = Math.min(3, Math.max(2, Math.round(window.devicePixelRatio || 2)));
   // Tabular mono digits — same idea as AppDelegate monospacedDigitSystemFont.
-  const font = `600 ${fontPx}px ui-monospace, "SF Mono", Menlo, Monaco, monospace`;
+  const font = `500 ${fontPx}px ui-monospace, "SF Mono", Menlo, Monaco, monospace`;
 
   const measure = document.createElement("canvas").getContext("2d");
   if (!measure) return null;

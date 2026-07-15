@@ -1710,7 +1710,10 @@ body.settings-body-root {
   flex: 1;
   min-width: 0;
   max-height: calc(100vh - 120px);
-  overflow: hidden;
+  /* clip (not hidden): hidden boxes are still programmatically scrollable —
+   * WebKit's focus-reveal scrolls them when an input near the bottom gets
+   * focus, and the user can never scroll back up. clip is never scrollable. */
+  overflow: clip;
   display: flex;
   flex-direction: column;
 }
@@ -2056,7 +2059,10 @@ body.settings-body-root {
 /* Settings content area full height for providers */
 .sw-content:has(.pp-root) {
   padding: 0;
-  overflow: hidden;
+  /* clip, not hidden — see .pp-detail: hidden still honors focus-reveal
+   * scrolling, which pushed the Claude Code pane content out of view with
+   * no way to scroll back. */
+  overflow: clip;
 }
 
 /* About pane — centered like macOS AboutPane */
