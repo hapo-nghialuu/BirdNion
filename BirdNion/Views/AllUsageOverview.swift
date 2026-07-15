@@ -12,7 +12,7 @@ struct CombinedDailyUsage: Equatable, Identifiable {
     let codexTokens: Int
     let grokUSD: Double
     let grokTokens: Int
-    /// Per-model split for this day (all sources, cost-sorted). Feeds the
+    /// Per-model split for this day (all sources, token-sorted). Feeds the
     /// chart hover / heatmap pinned-day breakdown so "Claude" isn't a single
     /// opaque line. Defaulted so call sites without model data still compile.
     var models: [CombinedModelCost] = []
@@ -66,7 +66,7 @@ struct CombinedUsageReport: Equatable {
     let totalTokens: Int
     /// Contiguous daily buckets, oldest → newest, ending today.
     let daily: [CombinedDailyUsage]
-    /// Top models by summed cost across the window, both sources merged.
+    /// Top models by summed tokens across the window, both sources merged.
     /// Approximate: each scanner only records the top 5 models per day.
     let topModels: [CombinedModelCost]
     let peakDayUSD: Double
@@ -214,7 +214,7 @@ struct CombinedUsageReport: Equatable {
         return out
     }
 
-    /// Folds per-source model accumulators into one cost-sorted list, dropping
+    /// Folds per-source model accumulators into one token-sorted list, dropping
     /// zero rows. Shared by the per-day split and the window-wide top models.
     private static func mergedModelCosts(
         claude: [String: (usd: Double, tokens: Int)],
@@ -232,7 +232,7 @@ struct CombinedUsageReport: Equatable {
         }
         merged.removeAll { $0.usd <= 0 && $0.tokens <= 0 }
         merged.sort {
-            $0.usd == $1.usd ? $0.tokens > $1.tokens : $0.usd > $1.usd
+            $0.tokens == $1.tokens ? $0.usd > $1.usd : $0.tokens > $1.tokens
         }
         return merged
     }
@@ -369,7 +369,8 @@ struct CombinedChartCard: View {
     private var is24h: Bool { periodDays == 1 }
     private var windowDaily: [CombinedDailyUsage] { Array(report.daily.suffix(periodDays)) }
     private var windowTotals: CombinedWindowTotals { report.totals(lastDays: periodDays) }
-    private var maxBarUSD: Double { max(windowDaily.map(\.usd).max() ?? 0, 0.01) }
+    /// Chart bars scale by tokens (not USD) so volume, not spend, drives height.
+    private var maxBarTokens: Int { max(windowDaily.map(\.tokens).max() ?? 0, 1) }
 
     // 24h-period numbers: Claude summed over the hour buckets; Codex/Grok from
     // today's calendar bucket (their finest available resolution).
@@ -379,7 +380,7 @@ struct CombinedChartCard: View {
     private var codexTodayTokens: Int { report.daily.last?.codexTokens ?? 0 }
     private var grokTodayUSD: Double { report.daily.last?.grokUSD ?? 0 }
     private var grokTodayTokens: Int { report.daily.last?.grokTokens ?? 0 }
-    private var maxBarHourUSD: Double { max(claudeHourly.map(\.usd).max() ?? 0, 0.000001) }
+    private var maxBarHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
 
     private var detailDay: CombinedDailyUsage? {
         hoveredDay ?? windowDaily.last(where: \.isActive)
@@ -416,20 +417,21 @@ struct CombinedChartCard: View {
                 }
             }
             .frame(height: 56)
-            // Legend doubles as the per-source split for the chosen period.
+            // Legend doubles as the per-source split for the chosen period
+            // (token volume — same metric as the stacked bars).
             HStack(spacing: 12) {
                 legendDot(color: VocabbyTheme.chartClaude,
-                          label: "Claude \(AllUsageFormat.usd(is24h ? claude24USD : windowTotals.claudeUSD))")
+                          label: "Claude \(AllUsageFormat.tokensShort(is24h ? claude24Tokens : windowTotals.claudeTokens))")
                 legendDot(color: VocabbyTheme.chartCodex,
                           label: (is24h ? (vi ? "Codex (hôm nay) " : "Codex (today) ") : "Codex ")
-                              + AllUsageFormat.usd(is24h ? codexTodayUSD : windowTotals.codexUSD))
+                              + AllUsageFormat.tokensShort(is24h ? codexTodayTokens : windowTotals.codexTokens))
                 legendDot(color: VocabbyTheme.chartGrok,
                           label: (is24h ? (vi ? "Grok (hôm nay) " : "Grok (today) ") : "Grok ")
-                              + AllUsageFormat.usd(is24h ? grokTodayUSD : windowTotals.grokUSD))
+                              + AllUsageFormat.tokensShort(is24h ? grokTodayTokens : windowTotals.grokTokens))
             }
             if is24h {
                 if let hovered = hoveredHour {
-                    Text("\(hourLabel(hovered.date)) · \(AllUsageFormat.usd(hovered.usd)) · \(AllUsageFormat.tokens(hovered.tokens))")
+                    Text("\(hourLabel(hovered.date)) · \(AllUsageFormat.tokens(hovered.tokens)) · \(AllUsageFormat.usd(hovered.usd))")
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(VocabbyTheme.secondary)
                 }
@@ -443,7 +445,7 @@ struct CombinedChartCard: View {
                     detailRows(detail)
                 }
                 Text((vi ? "Ước tính \(periodDays) ngày" : "Est. \(periodDays)-day total")
-                     + ": \(AllUsageFormat.usd(windowTotals.usd))")
+                     + ": \(AllUsageFormat.tokens(windowTotals.tokens))")
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(VocabbyTheme.primary)
                 Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex và Grok."
@@ -513,23 +515,24 @@ struct CombinedChartCard: View {
     }
 
     /// Stacked bars over the selected window: Claude (top) → Codex → Grok
-    /// (bottom); total height proportional to the day's combined USD.
+    /// (bottom); total height proportional to the day's combined tokens.
     private var barChart: some View {
         GeometryReader { geo in
             // 90 bars don't fit with the standard 2pt gap — tighten it.
             HStack(alignment: .bottom, spacing: windowDaily.count > 45 ? 1 : 2) {
                 ForEach(windowDaily) { day in
-                    let fraction = day.usd > 0 ? CGFloat(day.usd / maxBarUSD) : 0
-                    let barHeight = max(geo.size.height * fraction, day.usd > 0 ? 3 : 1)
-                    let claudeHeight = day.usd > 0
-                        ? barHeight * CGFloat(day.claudeUSD / day.usd) : 0
-                    let codexHeight = day.usd > 0
-                        ? barHeight * CGFloat(day.codexUSD / day.usd) : 0
+                    let hasTokens = day.tokens > 0
+                    let fraction = hasTokens ? CGFloat(Double(day.tokens) / Double(maxBarTokens)) : 0
+                    let barHeight = max(geo.size.height * fraction, hasTokens ? 3 : 1)
+                    let claudeHeight = hasTokens
+                        ? barHeight * CGFloat(Double(day.claudeTokens) / Double(day.tokens)) : 0
+                    let codexHeight = hasTokens
+                        ? barHeight * CGFloat(Double(day.codexTokens) / Double(day.tokens)) : 0
                     let grokHeight = max(0, barHeight - claudeHeight - codexHeight)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         VStack(spacing: 0) {
-                            if day.usd > 0 {
+                            if hasTokens {
                                 Rectangle().fill(VocabbyTheme.chartClaude)
                                     .frame(height: claudeHeight)
                                 Rectangle().fill(VocabbyTheme.chartCodex)
@@ -552,7 +555,7 @@ struct CombinedChartCard: View {
                         if inside { hoveredDay = day }
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
                     }
-                    .help("\(dayLabel(day.date)): \(AllUsageFormat.usd(day.usd)) · \(AllUsageFormat.tokens(day.tokens))")
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
                 }
             }
         }
@@ -563,12 +566,14 @@ struct CombinedChartCard: View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(claudeHourly) { hour in
-                    let fraction = hour.usd > 0 ? CGFloat(hour.usd / maxBarHourUSD) : 0
-                    let barHeight = max(geo.size.height * fraction, hour.usd > 0 ? 3 : 1)
+                    let hasTokens = hour.tokens > 0
+                    let fraction = hasTokens
+                        ? CGFloat(Double(hour.tokens) / Double(maxBarHourTokens)) : 0
+                    let barHeight = max(geo.size.height * fraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(hour.usd > 0
+                            .fill(hasTokens
                                   ? VocabbyTheme.chartClaude
                                   : VocabbyTheme.selectedSurface.opacity(0.76))
                             .frame(height: barHeight)
@@ -581,7 +586,7 @@ struct CombinedChartCard: View {
                         if inside { hoveredHour = hour }
                         else if hoveredHour?.id == hour.id { hoveredHour = nil }
                     }
-                    .help("\(hourLabel(hour.date)): \(AllUsageFormat.usd(hour.usd)) · \(AllUsageFormat.tokens(hour.tokens))")
+                    .help("\(hourLabel(hour.date)): \(AllUsageFormat.tokens(hour.tokens)) · \(AllUsageFormat.usd(hour.usd))")
                 }
             }
         }
@@ -602,7 +607,7 @@ struct CombinedChartCard: View {
     @ViewBuilder
     private func detailRows(_ detail: CombinedDailyUsage) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(dayLabel(detail.date)) · \(AllUsageFormat.usd(detail.usd)) · \(AllUsageFormat.tokens(detail.tokens))")
+            Text("\(dayLabel(detail.date)) · \(AllUsageFormat.tokens(detail.tokens)) · \(AllUsageFormat.usd(detail.usd))")
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.primary)
             DaySourceModelRows(day: detail)
@@ -650,7 +655,7 @@ private struct DaySourceModelRows: View {
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text("\(AllUsageFormat.usd(m.usd)) · \(AllUsageFormat.tokensShort(m.tokens))")
+                Text("\(AllUsageFormat.tokensShort(m.tokens)) · \(AllUsageFormat.usd(m.usd))")
                     .font(.system(size: 9).monospacedDigit())
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
@@ -665,7 +670,7 @@ private struct DaySourceModelRows: View {
                 .font(.system(size: 10))
                 .foregroundStyle(VocabbyTheme.secondary)
             Spacer(minLength: 8)
-            Text("\(AllUsageFormat.usd(usd)) · \(AllUsageFormat.tokensShort(tokens))")
+            Text("\(AllUsageFormat.tokensShort(tokens)) · \(AllUsageFormat.usd(usd))")
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
@@ -848,17 +853,16 @@ struct CombinedHeatmapCard: View {
 // MARK: - Top models card
 
 /// Merged top-models list (both sources), each row carrying its provider's
-/// brand colour and a cost-proportional bar — mirrors CodeBurn's Models block.
+/// brand colour and a token-share bar — mirrors CodeBurn's Models block.
 struct CombinedTopModelsCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let report: CombinedUsageReport
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    /// Bars show each model's share of the WINDOW total (not of the largest
-    /// model, which would always render the top row at 100%). The 90-day
-    /// combined total is the denominator so the widths read as "% of spend".
-    private var totalUSD: Double { max(report.totalUSD, 0.01) }
+    /// Bars show each model's share of the WINDOW token total (not of the
+    /// largest model, which would always render the top row at 100%).
+    private var totalTokens: Double { max(Double(report.totalTokens), 1) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -877,7 +881,7 @@ struct CombinedTopModelsCard: View {
                             .foregroundStyle(VocabbyTheme.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 8)
-                        Text("\(AllUsageFormat.usd(model.usd)) · \(AllUsageFormat.tokensShort(model.tokens))")
+                        Text("\(AllUsageFormat.tokensShort(model.tokens)) · \(AllUsageFormat.usd(model.usd))")
                             .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(VocabbyTheme.tertiary)
                     }
@@ -888,7 +892,7 @@ struct CombinedTopModelsCard: View {
                         GeometryReader { geo in
                             RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                                 .fill(color(for: model))
-                                .frame(width: max(2, geo.size.width * CGFloat(model.usd / totalUSD)),
+                                .frame(width: max(2, geo.size.width * CGFloat(Double(model.tokens) / totalTokens)),
                                        height: 3)
                         }
                         .frame(height: 3)

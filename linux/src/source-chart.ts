@@ -23,11 +23,11 @@ function summaryColumn(label: string, amount: number | null, tokenCount: number,
 function showDetail(detail: HTMLElement, day: DailyUsage) {
   detail.textContent = "";
   detail.append(el("div", "day-detail-head",
-    `${dayLabel(day.date)} · ${usd(day.usd)} · ${tokens(day.tokens)}`));
+    `${dayLabel(day.date)} · ${tokens(day.tokens)} · ${usd(day.usd)}`));
   for (const m of day.models) {
     const row = el("div", "source-row");
     row.append(el("span", "model-name", m.name));
-    row.append(el("span", "source-amount", `${usd(m.usd)} · ${tokensShort(m.tokens)}`));
+    row.append(el("span", "source-amount", `${tokensShort(m.tokens)} · ${usd(m.usd)}`));
     detail.append(row);
   }
 }
@@ -53,14 +53,15 @@ export function sourceChartCard(
   card.append(summary);
 
   const detail = el("div", "day-detail");
-  const max = Math.max(...daily30.map((d) => d.usd), 0.01);
+  // Bar height by tokens (parity with All chart card).
+  const max = Math.max(...daily30.map((d) => d.tokens), 1);
   const chart = el("div", "bar-chart");
   for (const day of daily30) {
     const col = el("div", "bar-col");
-    col.title = `${dayLabel(day.date)}: ${usd(day.usd)} · ${tokens(day.tokens)}`;
-    if (day.usd > 0) {
+    col.title = `${dayLabel(day.date)}: ${tokens(day.tokens)} · ${usd(day.usd)}`;
+    if (day.tokens > 0) {
       const bar = el("div", `bar-seg solo ${barClass}`);
-      bar.style.height = `${Math.max((day.usd / max) * 100, 5)}%`;
+      bar.style.height = `${Math.max((day.tokens / max) * 100, 5)}%`;
       col.append(bar);
     } else {
       col.append(el("div", "bar-idle"));
@@ -71,7 +72,7 @@ export function sourceChartCard(
   card.append(chart, detail);
   if (latestActive) showDetail(detail, latestActive);
 
-  card.append(el("div", "est-total", `${t("estTotal", { n: 30 })}: ${usd(report.last30Usd)}`));
+  card.append(el("div", "est-total", `${t("estTotal", { n: 30 })}: ${tokens(report.last30Tokens)}`));
   if (report.topModel) {
     card.append(el("div", "footnote", `${t("topModel")}: ${report.topModel}`));
   }

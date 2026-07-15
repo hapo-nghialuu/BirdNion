@@ -89,7 +89,8 @@ export function combine(
   seed(codex, "codex");
   seed(grok, "grok");
   const daily = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-  for (const d of daily) d.models.sort((a, b) => (b.usd - a.usd) || (b.tokens - a.tokens));
+  // Token-first ranking (matches macOS All chart + top-models list).
+  for (const d of daily) d.models.sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
 
   const today = daily[daily.length - 1];
   const totalUsd = daily.reduce((s, d) => s + d.usd, 0);
@@ -118,7 +119,7 @@ export function combine(
     }
   }
   const topModels = [...modelMap.values()]
-    .sort((a, b) => (b.usd - a.usd) || (b.tokens - a.tokens))
+    .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd))
     .slice(0, 6);
 
   return {

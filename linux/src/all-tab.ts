@@ -37,7 +37,8 @@ function sourceRow(cssClass: string, label: string, amount: number, tokenCount: 
   const row = el("div", "source-row");
   const left = el("span", "legend-item");
   left.append(el("span", `dot ${cssClass}`), el("span", "legend-label", label));
-  row.append(left, el("span", "source-amount", `${usd(amount)} · ${tokensShort(tokenCount)}`));
+  // Tokens first — chart metric is volume, $ is secondary.
+  row.append(left, el("span", "source-amount", `${tokensShort(tokenCount)} · ${usd(amount)}`));
   return row;
 }
 
@@ -53,9 +54,9 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const windowDaily = combined.daily.slice(-period);
     const wUsd = windowDaily.reduce((s, d) => s + d.usd, 0);
     const wTokens = windowDaily.reduce((s, d) => s + d.tokens, 0);
-    const wClaude = windowDaily.reduce((s, d) => s + d.claudeUsd, 0);
-    const wCodex = windowDaily.reduce((s, d) => s + d.codexUsd, 0);
-    const wGrok = windowDaily.reduce((s, d) => s + d.grokUsd, 0);
+    const wClaudeTokens = windowDaily.reduce((s, d) => s + d.claudeTokens, 0);
+    const wCodexTokens = windowDaily.reduce((s, d) => s + d.codexTokens, 0);
+    const wGrokTokens = windowDaily.reduce((s, d) => s + d.grokTokens, 0);
     const is24h = period === 1;
     const claude24Usd = claudeHourly.reduce((s, h) => s + h.usd, 0);
     const claude24Tokens = claudeHourly.reduce((s, h) => s + h.tokens, 0);
@@ -93,22 +94,22 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       card.append(hourChart(claudeHourly, detail));
       const legend = el("div", "legend");
       legend.append(
-        legendDot("claude", `Claude ${usd(claude24Usd)}`),
-        legendDot("codex", `${t("codexToday")} ${usd(today?.codexUsd ?? 0)}`),
-        legendDot("grok", `Grok ${usd(today?.grokUsd ?? 0)}`));
+        legendDot("claude", `Claude ${tokensShort(claude24Tokens)}`),
+        legendDot("codex", `${t("codexToday")} ${tokensShort(today?.codexTokens ?? 0)}`),
+        legendDot("grok", `Grok ${tokensShort(today?.grokTokens ?? 0)}`));
       card.append(legend, detail);
       card.append(el("div", "footnote", t("hourBarsNote")));
     } else {
       card.append(stackedBarChart(windowDaily, detail));
       const legend = el("div", "legend");
       legend.append(
-        legendDot("claude", `Claude ${usd(wClaude)}`),
-        legendDot("codex", `Codex ${usd(wCodex)}`),
-        legendDot("grok", `Grok ${usd(wGrok)}`));
+        legendDot("claude", `Claude ${tokensShort(wClaudeTokens)}`),
+        legendDot("codex", `Codex ${tokensShort(wCodexTokens)}`),
+        legendDot("grok", `Grok ${tokensShort(wGrokTokens)}`));
       card.append(legend, detail);
       const lastActive = [...windowDaily].reverse().find((d) => d.active);
       if (lastActive) showDayDetail(detail, lastActive);
-      card.append(el("div", "est-total", `${t("estTotal", { n: period })}: ${usd(wUsd)}`));
+      card.append(el("div", "est-total", `${t("estTotal", { n: period })}: ${tokens(wTokens)}`));
       card.append(el("div", "footnote", t("estFootnote")));
     }
   };
@@ -119,7 +120,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
 function showDayDetail(detail: HTMLElement, day: CombinedDay) {
   detail.textContent = "";
   detail.append(el("div", "day-detail-head",
-    `${dayLabel(day.date)} · ${usd(day.usd)} · ${tokens(day.tokens)}`));
+    `${dayLabel(day.date)} · ${tokens(day.tokens)} · ${usd(day.usd)}`));
   if (day.claudeUsd > 0 || day.claudeTokens > 0) {
     detail.append(sourceRow("claude", "Claude", day.claudeUsd, day.claudeTokens));
     appendModelRows(detail, day, "claude");
@@ -141,28 +142,28 @@ function appendModelRows(detail: HTMLElement, day: CombinedDay, source: "claude"
     const row = el("div", "model-row");
     row.append(
       el("span", "model-name", m.name),
-      el("span", "model-amount", `${usd(m.usd)} · ${tokensShort(m.tokens)}`));
+      el("span", "model-amount", `${tokensShort(m.tokens)} · ${usd(m.usd)}`));
     detail.append(row);
   }
 }
 
-/** Stacked per-source bars: Claude → Codex → Grok. */
+/** Stacked per-source bars: Claude → Codex → Grok; height by tokens. */
 function stackedBarChart(days: CombinedDay[], detail: HTMLElement): HTMLElement {
-  const max = Math.max(...days.map((d) => d.usd), 0.01);
+  const max = Math.max(...days.map((d) => d.tokens), 1);
   const chart = el("div", `bar-chart${days.length > 45 ? " dense" : ""}`);
   for (const day of days) {
     const col = el("div", "bar-col");
-    col.title = `${dayLabel(day.date)}: ${usd(day.usd)} · ${tokens(day.tokens)}`;
-    if (day.usd > 0) {
-      const heightPct = Math.max((day.usd / max) * 100, 5);
+    col.title = `${dayLabel(day.date)}: ${tokens(day.tokens)} · ${usd(day.usd)}`;
+    if (day.tokens > 0) {
+      const heightPct = Math.max((day.tokens / max) * 100, 5);
       const stack = el("div", "bar-stack");
       stack.style.height = `${heightPct}%`;
       const claude = el("div", "bar-seg claude");
-      claude.style.flexGrow = String(Math.max(day.claudeUsd, 0.0001));
+      claude.style.flexGrow = String(Math.max(day.claudeTokens, 0.0001));
       const codex = el("div", "bar-seg codex");
-      codex.style.flexGrow = String(Math.max(day.codexUsd, 0.0001));
+      codex.style.flexGrow = String(Math.max(day.codexTokens, 0.0001));
       const grok = el("div", "bar-seg grok");
-      grok.style.flexGrow = String(Math.max(day.grokUsd, 0.0001));
+      grok.style.flexGrow = String(Math.max(day.grokTokens, 0.0001));
       stack.append(claude, codex, grok);
       col.append(stack);
     } else {
@@ -174,17 +175,17 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement): HTMLElement 
   return chart;
 }
 
-/** 24 Claude-only hour bars (Codex has no hourly resolution). */
+/** 24 Claude-only hour bars (Codex has no hourly resolution); height by tokens. */
 function hourChart(hourly: HourlyUsage[], detail: HTMLElement): HTMLElement {
-  const max = Math.max(...hourly.map((h) => h.usd), 1e-6);
+  const max = Math.max(...hourly.map((h) => h.tokens), 1);
   const chart = el("div", "bar-chart");
   for (const hour of hourly) {
     const label = hour.hour.slice(11); // "HH:00"
     const col = el("div", "bar-col");
-    col.title = `${label}: ${usd(hour.usd)} · ${tokens(hour.tokens)}`;
-    if (hour.usd > 0) {
+    col.title = `${label}: ${tokens(hour.tokens)} · ${usd(hour.usd)}`;
+    if (hour.tokens > 0) {
       const bar = el("div", "bar-seg claude solo");
-      bar.style.height = `${Math.max((hour.usd / max) * 100, 5)}%`;
+      bar.style.height = `${Math.max((hour.tokens / max) * 100, 5)}%`;
       col.append(bar);
     } else {
       col.append(el("div", "bar-idle"));
@@ -192,7 +193,7 @@ function hourChart(hourly: HourlyUsage[], detail: HTMLElement): HTMLElement {
     col.addEventListener("mouseenter", () => {
       detail.textContent = "";
       detail.append(el("div", "day-detail-head",
-        `${label} · ${usd(hour.usd)} · ${tokens(hour.tokens)}`));
+        `${label} · ${tokens(hour.tokens)} · ${usd(hour.usd)}`));
     });
     chart.append(col);
   }
@@ -302,10 +303,9 @@ function statsColumn(combined: Combined): HTMLElement {
 export function topModelsCard(combined: Combined): HTMLElement {
   const card = el("section", "card top-models-card");
   card.append(el("div", "summary-label", t("topModels")));
-  // Denominator is the 90-day window TOTAL (not the top model's own USD), so
-  // bar width reflects each model's actual share of spend — macOS parity
-  // fix (previously divided by max, so the top row was always ~100%).
-  const total = Math.max(combined.totalUsd, 0.01);
+  // Denominator is the 90-day window TOKEN total (not the top model's own
+  // volume), so bar width reflects each model's share of tokens.
+  const total = Math.max(combined.totalTokens, 1);
   for (const model of combined.topModels) {
     const row = el("div", "top-model-row");
     const head = el("div", "top-model-head");
@@ -316,11 +316,11 @@ export function topModelsCard(combined: Combined): HTMLElement {
     );
     head.append(
       left,
-      el("span", "top-model-amount", `${usd(model.usd)} · ${tokensShort(model.tokens)}`),
+      el("span", "top-model-amount", `${tokensShort(model.tokens)} · ${usd(model.usd)}`),
     );
     const track = el("div", "model-track");
     const fill = el("div", `model-fill ${model.source}`);
-    fill.style.width = `${Math.max((model.usd / total) * 100, 1)}%`;
+    fill.style.width = `${Math.max((model.tokens / total) * 100, 1)}%`;
     track.append(fill);
     row.append(head, track);
     card.append(row);

@@ -258,7 +258,7 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(r.topModels.map(\.source), ["codex"])
     }
 
-    /// Models merge per source across days, sort by cost, and keep their
+    /// Models merge per source across days, sort by tokens, and keep their
     /// source tag for the brand colour.
     func testTopModelsMergeAcrossSourcesAndDays() {
         let claude = claudeReport(daily: [
@@ -302,7 +302,7 @@ final class CombinedUsageReportTests: XCTestCase {
         let r = CombinedUsageReport.build(claude: claude, codex: codex,
                                           calendar: calendar, now: now)
 
-        // Today: both sources, cost-sorted (codex 8 > opus 2 > sonnet 1).
+        // Today: both sources, token-sorted (codex 80 > opus 20 > sonnet 10).
         let today = r.daily.last!
         XCTAssertEqual(today.models.map(\.name),
                        ["gpt-5.5", "claude-opus-4-8", "claude-sonnet-5"])
