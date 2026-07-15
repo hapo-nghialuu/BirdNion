@@ -103,23 +103,21 @@ enum MenuBarIconRenderer {
     }
 
     /// FreeModel: the bonus "Số dư" window stays out of the menu bar (it is
-    /// not a rate window); when the 5-hour window is exhausted its slot
-    /// switches to the bonus balance instead — credits apply automatically
-    /// once the plan window runs dry, so that's the number that matters then.
+    /// not a rate window). Once the 5-hour window is exhausted and bonus
+    /// balance remains, the readout collapses to JUST the balance percent —
+    /// credits apply automatically at that point, so it's the only number
+    /// that matters until the window resets.
     static func freemodelMenuBarPercents(_ windows: [QuotaWindow]) -> [Int] {
         let balance = windows.first { $0.label == "Số dư" }
-        var percents: [Int] = []
-        for w in windows where w.label != "Số dư" {
-            if w.label == "5 giờ", w.remainingPct <= 0,
-               let balance, balance.remainingPct > 0 {
-                percents.append(balance.remainingPct)
-            } else {
-                percents.append(w.remainingPct)
-            }
+        if let fiveH = windows.first(where: { $0.label == "5 giờ" }),
+           fiveH.remainingPct <= 0,
+           let balance, balance.remainingPct > 0 {
+            return [balance.remainingPct]
         }
+        let percents = windows.filter { $0.label != "Số dư" }.map(\.remainingPct)
         // The menu-bar metric picker isolated the balance window itself →
         // show it as-is instead of an empty title.
-        if percents.isEmpty, let balance { percents.append(balance.remainingPct) }
+        if percents.isEmpty, let balance { return [balance.remainingPct] }
         return percents
     }
 

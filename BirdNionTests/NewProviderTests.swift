@@ -711,8 +711,9 @@ final class NewProviderTests: XCTestCase {
         try? fm.removeItem(at: root)
     }
 
-    /// FreeModel menu bar: the bonus "Số dư" window is excluded; when the
-    /// 5-hour window hits 0 remaining, its slot shows the balance instead.
+    /// FreeModel menu bar: the bonus "Số dư" window is excluded; once the
+    /// 5-hour window hits 0 remaining, the readout collapses to JUST the
+    /// balance percent (no week percent alongside).
     func testFreemodelMenuBarPercentsSwapToBalanceWhenExhausted() {
         func w(_ label: String, remaining: Int) -> QuotaWindow {
             QuotaWindow(label: label, usedPct: 100 - remaining, remainingPct: remaining)
@@ -722,12 +723,12 @@ final class NewProviderTests: XCTestCase {
             MenuBarIconRenderer.freemodelMenuBarPercents(
                 [w("5 giờ", remaining: 38), w("Tuần", remaining: 92), w("Số dư", remaining: 64)]),
             [38, 92])
-        // 5h exhausted → its slot switches to the balance.
+        // 5h exhausted → ONLY the balance percent.
         XCTAssertEqual(
             MenuBarIconRenderer.freemodelMenuBarPercents(
-                [w("5 giờ", remaining: 0), w("Tuần", remaining: 92), w("Số dư", remaining: 64)]),
-            [64, 92])
-        // 5h exhausted but no balance left → keep the honest 0%.
+                [w("5 giờ", remaining: 0), w("Tuần", remaining: 92), w("Số dư", remaining: 67)]),
+            [67])
+        // 5h exhausted but no balance left → keep the honest plan windows.
         XCTAssertEqual(
             MenuBarIconRenderer.freemodelMenuBarPercents(
                 [w("5 giờ", remaining: 0), w("Tuần", remaining: 92), w("Số dư", remaining: 0)]),

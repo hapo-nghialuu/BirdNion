@@ -570,22 +570,19 @@ function trayPercentText(s: ProviderStatus): string {
 }
 
 /** FreeModel: the bonus "Số dư" window stays out of the tray (not a rate
- * window); when the 5-hour window is exhausted its slot switches to the bonus
- * balance — credits apply automatically once the plan runs dry (macOS
- * `freemodelMenuBarPercents` parity). Other providers: all windows. */
+ * window). Once the 5-hour window is exhausted and bonus balance remains,
+ * the readout collapses to JUST the balance percent — credits apply
+ * automatically at that point (macOS `freemodelMenuBarPercents` parity).
+ * Other providers: all windows. */
 function trayPercents(s: ProviderStatus): number[] {
   if (s.id !== "freemodel") return s.windows.map((w) => w.remainingPct);
   const balance = s.windows.find((w) => w.label === "Số dư");
-  const out: number[] = [];
-  for (const w of s.windows) {
-    if (w.label === "Số dư") continue;
-    if (w.label === "5 giờ" && w.remainingPct <= 0 && balance && balance.remainingPct > 0) {
-      out.push(balance.remainingPct);
-    } else {
-      out.push(w.remainingPct);
-    }
+  const fiveH = s.windows.find((w) => w.label === "5 giờ");
+  if (fiveH && fiveH.remainingPct <= 0 && balance && balance.remainingPct > 0) {
+    return [balance.remainingPct];
   }
-  if (out.length === 0 && balance) out.push(balance.remainingPct);
+  const out = s.windows.filter((w) => w.label !== "Số dư").map((w) => w.remainingPct);
+  if (out.length === 0 && balance) return [balance.remainingPct];
   return out;
 }
 
