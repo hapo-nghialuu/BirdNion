@@ -91,12 +91,36 @@ enum MenuBarIconRenderer {
             ? kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
             : nil
         if text == "" { return nil }
+        let percents = status.id == "freemodel"
+            ? freemodelMenuBarPercents(windows)
+            : windows.map { $0.remainingPct }
         return .provider(
             id: status.id,
             name: status.displayName,
-            percents: windows.map { $0.remainingPct },
+            percents: percents,
             text: text
         )
+    }
+
+    /// FreeModel: the bonus "Số dư" window stays out of the menu bar (it is
+    /// not a rate window); when the 5-hour window is exhausted its slot
+    /// switches to the bonus balance instead — credits apply automatically
+    /// once the plan window runs dry, so that's the number that matters then.
+    static func freemodelMenuBarPercents(_ windows: [QuotaWindow]) -> [Int] {
+        let balance = windows.first { $0.label == "Số dư" }
+        var percents: [Int] = []
+        for w in windows where w.label != "Số dư" {
+            if w.label == "5 giờ", w.remainingPct <= 0,
+               let balance, balance.remainingPct > 0 {
+                percents.append(balance.remainingPct)
+            } else {
+                percents.append(w.remainingPct)
+            }
+        }
+        // The menu-bar metric picker isolated the balance window itself →
+        // show it as-is instead of an empty title.
+        if percents.isEmpty, let balance { percents.append(balance.remainingPct) }
+        return percents
     }
 
     // MARK: - Kiro menu-bar display mode

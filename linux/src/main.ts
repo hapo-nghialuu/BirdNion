@@ -564,9 +564,29 @@ function clampPct(n: number): number {
 
 /** macOS `MenuBarIconRenderer.percentTitle` — digits only, no provider name. */
 function trayPercentText(s: ProviderStatus): string {
-  return s.windows
-    .map((w) => `${clampPct(w.remainingPct)}%`)
+  return trayPercents(s)
+    .map((p) => `${clampPct(p)}%`)
     .join("  ");
+}
+
+/** FreeModel: the bonus "Số dư" window stays out of the tray (not a rate
+ * window); when the 5-hour window is exhausted its slot switches to the bonus
+ * balance — credits apply automatically once the plan runs dry (macOS
+ * `freemodelMenuBarPercents` parity). Other providers: all windows. */
+function trayPercents(s: ProviderStatus): number[] {
+  if (s.id !== "freemodel") return s.windows.map((w) => w.remainingPct);
+  const balance = s.windows.find((w) => w.label === "Số dư");
+  const out: number[] = [];
+  for (const w of s.windows) {
+    if (w.label === "Số dư") continue;
+    if (w.label === "5 giờ" && w.remainingPct <= 0 && balance && balance.remainingPct > 0) {
+      out.push(balance.remainingPct);
+    } else {
+      out.push(w.remainingPct);
+    }
+  }
+  if (out.length === 0 && balance) out.push(balance.remainingPct);
+  return out;
 }
 
 /** Active = any window still consuming quota (remaining under 100 or used over 0).
