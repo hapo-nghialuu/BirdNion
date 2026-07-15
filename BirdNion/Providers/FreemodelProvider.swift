@@ -156,6 +156,8 @@ enum FreemodelAccountStore {
 /// (the endpoint also returns request/token totals we don't surface.)
 ///
 /// `me` response shape: `{ "user": { "email": "…", … } }`.
+/// `referral` + `billing` (best-effort) feed the "Số dư" bonus-credit window
+/// mirroring the dashboard's "Current balance" card.
 final class FreemodelProvider: QuotaProvider {
     let id = "freemodel"
     let displayName = "FreeModel"
@@ -168,6 +170,10 @@ final class FreemodelProvider: QuotaProvider {
 
     private static let usageURL = URL(string: "https://freemodel.dev/api/usage")!
     private static let meURL = URL(string: "https://freemodel.dev/api/auth/me")!
+    /// Bonus-credit sources behind the dashboard's "Current balance" card:
+    /// referral credits (+count) and the signup credit (cents).
+    private static let referralURL = URL(string: "https://freemodel.dev/api/referral")!
+    private static let billingURL = URL(string: "https://freemodel.dev/api/billing")!
     private static let webOrigin = "https://freemodel.dev"
     private static let referer = "https://freemodel.dev/dashboard/usage"
     private static let userAgent =
@@ -222,29 +228,44 @@ final class FreemodelProvider: QuotaProvider {
             return failure("Network: \(error.localizedDescription)")
         }
 
-        // Account email is best-effort enrichment — never block the budget on it.
+        // Account email + bonus-balance cards are best-effort enrichment —
+        // never block the budget windows on them.
+        async let referralTask = Self.optionalFetch(
+            url: Self.referralURL, cookieHeader: cookieHeader, session: session)
+        async let billingTask = Self.optionalFetch(
+            url: Self.billingURL, cookieHeader: cookieHeader, session: session)
         let accountLabel = await resolveAccountLabel(cookieHeader: cookieHeader)
+        let referralData = await referralTask
+        let billingData = await billingTask
 
-        return parse(usageData: usageData, accountLabel: accountLabel)
+        return parse(usageData: usageData, accountLabel: accountLabel,
+                     referralData: referralData, billingData: billingData)
     }
 
     // MARK: - Parsing (static entry point for unit tests — no network I/O)
 
-    static func _parseForTesting(usageData: Data, accountLabel: String?) -> ProviderStatus {
-        FreemodelProvider().parse(usageData: usageData, accountLabel: accountLabel)
+    static func _parseForTesting(usageData: Data, accountLabel: String?,
+                                 referralData: Data? = nil,
+                                 billingData: Data? = nil) -> ProviderStatus {
+        FreemodelProvider().parse(usageData: usageData, accountLabel: accountLabel,
+                                  referralData: referralData, billingData: billingData)
     }
 
-    private func parse(usageData: Data, accountLabel: String?) -> ProviderStatus {
+    private func parse(usageData: Data, accountLabel: String?,
+                       referralData: Data?, billingData: Data?) -> ProviderStatus {
         guard let usage = try? JSONDecoder().decode(UsageResponse.self, from: usageData) else {
             // Never log the raw body — it may carry account/billing/auth data.
             Self.log.error("parse: decode failed (bytes=\(usageData.count, privacy: .public))")
             return failure("Response /api/usage không hợp lệ")
         }
 
-        let windows = [
+        var windows = [
             Self.window(label: "5 giờ", from: usage.window5h, windowSeconds: 5 * 3600),
             Self.window(label: "Tuần", from: usage.windowWeek, windowSeconds: 7 * 24 * 3600),
         ]
+        if let balance = Self.balanceWindow(referralData: referralData, billingData: billingData) {
+            windows.append(balance)
+        }
 
         return ProviderStatus(
             id: id,
@@ -253,6 +274,36 @@ final class FreemodelProvider: QuotaProvider {
             lastUpdated: Date(),
             error: nil,
             accountLabel: accountLabel)
+    }
+
+    /// Dashboard "Current balance" (§ Extra usage) — bonus credits applied
+    /// automatically before plan credits. remaining = referral credits +
+    /// signup credit; total = remaining + used (matches the web card's
+    /// "$used / $total" readout). nil when nothing was ever earned.
+    static func balanceWindow(referralData: Data?, billingData: Data?) -> QuotaWindow? {
+        guard let referralData,
+              let referral = try? JSONDecoder().decode(ReferralResponse.self, from: referralData)
+        else { return nil }
+        let signupUSD = billingData
+            .flatMap { try? JSONDecoder().decode(BillingResponse.self, from: $0) }
+            .flatMap(\.signupCreditCents)
+            .map { Double($0) / 100.0 } ?? 0
+
+        let used = referral.used ?? 0
+        let remaining = (referral.credits ?? 0) + signupUSD
+        let total = remaining + used
+        guard total > 0 else { return nil }
+
+        let usedPct = max(0, min(100, Int((used / total * 100).rounded())))
+        var subtitle = "\(UsageFormatter.usdString(used)) / \(UsageFormatter.usdString(total))"
+        if let count = referral.count, count > 0 {
+            subtitle += " · \(count) giới thiệu"
+        }
+        return QuotaWindow(
+            label: "Số dư",
+            usedPct: usedPct,
+            remainingPct: 100 - usedPct,
+            subtitle: subtitle)
     }
 
     /// Map one freemodel dollar window into a QuotaWindow with a "$used / $limit"
@@ -342,6 +393,14 @@ final class FreemodelProvider: QuotaProvider {
         try await Self.fetchEndpoint(url: url, cookieHeader: cookieHeader, timeout: timeout, session: session)
     }
 
+    /// Best-effort GET with the short account timeout — nil on any failure
+    /// (enrichment endpoints must never fail the fetch).
+    private static func optionalFetch(url: URL, cookieHeader: String,
+                                      session: URLSession) async -> Data? {
+        try? await fetchEndpoint(url: url, cookieHeader: cookieHeader,
+                                 timeout: accountTimeout, session: session)
+    }
+
     /// Static so the account store / add flow can validate arbitrary cookies.
     private static func fetchEndpoint(
         url: URL, cookieHeader: String, timeout: TimeInterval,
@@ -386,4 +445,17 @@ private struct UsageResponse: Decodable {
 private struct MeResponse: Decodable {
     let user: User
     struct User: Decodable { let email: String }
+}
+
+/// `/api/referral` — `{ "count": 8, "credits": 53.22, "used": 67.22, … }`
+/// (credits/used are dollars; the dashboard adds the signup credit on top).
+private struct ReferralResponse: Decodable {
+    let count: Int?
+    let credits: Double?
+    let used: Double?
+}
+
+/// `/api/billing` — only `signupCreditCents` is consumed here.
+private struct BillingResponse: Decodable {
+    let signupCreditCents: Int?
 }

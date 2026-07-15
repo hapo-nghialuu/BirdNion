@@ -4,6 +4,8 @@
 //! `https://freemodel.dev`):
 //!   GET /api/usage    (required) -> { "window5h": {...}, "windowWeek": {...} }
 //!   GET /api/auth/me  (best-effort, not required for the quota windows)
+//!   GET /api/referral + /api/billing (best-effort) -> "Số dư" bonus window
+//!     mirroring the dashboard's "Current balance" card
 
 use serde_json::Value;
 
@@ -12,6 +14,8 @@ use crate::providers::{display_name, ProviderStatus, QuotaWindow};
 
 const USAGE_URL: &str = "https://freemodel.dev/api/usage";
 const ME_URL: &str = "https://freemodel.dev/api/auth/me";
+const REFERRAL_URL: &str = "https://freemodel.dev/api/referral";
+const BILLING_URL: &str = "https://freemodel.dev/api/billing";
 /// Akamai bot-manager session cookie the budgets are gated on. Passed as the
 /// REQUIRED cookie so the browser scan skips browsers that only hold stale
 /// analytics/Stripe cookies and keeps looking for the signed-in one (macOS
@@ -77,12 +81,65 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
         Ok(status) => status,
         Err(e) => return ProviderStatus::failure(&id, &name, e),
     };
-    // Account email — best-effort enrichment, never blocks the budgets.
+    // Account email + bonus balance — best-effort enrichment, never blocks
+    // the budgets.
     status.account_label = match cfg.account_label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(explicit) => Some(explicit.to_string()),
         None => fetch_email(&client, &cookie_header).await,
     };
+    let referral = optional_json(&client, REFERRAL_URL, &cookie_header).await;
+    let billing = optional_json(&client, BILLING_URL, &cookie_header).await;
+    if let Some(balance) = balance_window(referral.as_ref(), billing.as_ref()) {
+        status.windows.push(balance);
+    }
     status
+}
+
+/// Best-effort GET → JSON with the short 5s budget; None on any failure.
+async fn optional_json(client: &reqwest::Client, url: &str, cookie_header: &str) -> Option<Value> {
+    let resp = browser_get(client, url, cookie_header)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json().await.ok()
+}
+
+/// Dashboard "Current balance" (§ Extra usage) — remaining = referral
+/// `credits` + billing `signupCreditCents`; total = remaining + `used`
+/// (matches the web card's "$used / $total"). None when nothing was earned.
+fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<QuotaWindow> {
+    let referral = referral?;
+    let credits = referral.get("credits").and_then(Value::as_f64).unwrap_or(0.0);
+    let used = referral.get("used").and_then(Value::as_f64).unwrap_or(0.0);
+    let count = referral.get("count").and_then(Value::as_i64).unwrap_or(0);
+    let signup_usd = billing
+        .and_then(|b| b.get("signupCreditCents"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        / 100.0;
+
+    let remaining = credits + signup_usd;
+    let total = remaining + used;
+    if total <= 0.0 {
+        return None;
+    }
+    let pct = (used / total * 100.0).round().clamp(0.0, 100.0) as i32;
+    let mut subtitle = format!("${used:.2} / ${total:.2}");
+    if count > 0 {
+        subtitle += &format!(" · {count} giới thiệu");
+    }
+    Some(QuotaWindow {
+        label: "Số dư".to_string(),
+        used_pct: pct,
+        remaining_pct: 100 - pct,
+        subtitle: Some(subtitle),
+        resets_at: None,
+        window_seconds: None,
+    })
 }
 
 /// GET with the browser-like header set freemodel/Akamai expects.
@@ -219,6 +276,22 @@ mod tests {
         let body = r#"{"window5h":{"usedCents":100,"limitCents":1000,"resetsAt":0}}"#;
         let status = parse_status("freemodel", "FreeModel", body).unwrap();
         assert!(status.windows[0].resets_at.is_none());
+    }
+
+    #[test]
+    fn balance_window_from_referral_and_billing() {
+        let referral: Value =
+            serde_json::from_str(r#"{"code":"x","count":8,"credits":100.62,"used":67.22}"#).unwrap();
+        let billing: Value = serde_json::from_str(r#"{"signupCreditCents":2000}"#).unwrap();
+        let w = balance_window(Some(&referral), Some(&billing)).unwrap();
+        assert_eq!(w.label, "Số dư");
+        assert_eq!(w.subtitle.as_deref(), Some("$67.22 / $187.84 · 8 giới thiệu"));
+        assert_eq!(w.used_pct, 36);
+
+        // No referral payload → no window; zero balance → hidden.
+        assert!(balance_window(None, Some(&billing)).is_none());
+        let zero: Value = serde_json::from_str(r#"{"count":0,"credits":0,"used":0}"#).unwrap();
+        assert!(balance_window(Some(&zero), None).is_none());
     }
 
     #[test]

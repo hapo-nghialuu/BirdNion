@@ -874,6 +874,39 @@ final class NewProviderTests: XCTestCase {
         XCTAssertTrue(bad.windows.isEmpty)
     }
 
+    /// Dashboard "Current balance" → "Số dư" window: remaining = referral
+    /// credits + signup credit, total = remaining + used.
+    func testFreemodelBalanceWindow() {
+        let usage = """
+        {"window5h":{"usedCents":100,"limitCents":20000,"resetsAt":0},
+         "windowWeek":{"usedCents":100,"limitCents":132000,"resetsAt":0}}
+        """.data(using: .utf8)!
+        // Screenshot numbers: used 67.22, remaining 120.62 (referral 100.62 + signup $20).
+        let referral = Data(#"{"code":"x","count":8,"credits":100.62,"used":67.22}"#.utf8)
+        let billing = Data(#"{"signupCreditCents":2000}"#.utf8)
+
+        let s = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            referralData: referral, billingData: billing)
+        XCTAssertEqual(s.windows.count, 3)
+        let balance = s.windows[2]
+        XCTAssertEqual(balance.label, "Số dư")
+        XCTAssertEqual(balance.subtitle, "$67.22 / $187.84 · 8 giới thiệu")
+        XCTAssertEqual(balance.usedPct, 36)          // 67.22/187.84 ≈ 35.8% → 36
+        XCTAssertEqual(balance.remainingPct, 64)
+
+        // No referral data (endpoint failed) → no third window.
+        let noRef = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil, referralData: nil, billingData: billing)
+        XCTAssertEqual(noRef.windows.count, 2)
+
+        // Zero balance everywhere → hidden, not a "0/0" bar.
+        let zero = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            referralData: Data(#"{"count":0,"credits":0,"used":0}"#.utf8), billingData: nil)
+        XCTAssertEqual(zero.windows.count, 2)
+    }
+
     /// The cookie filter forwards every pair but only proceeds when `bm_session`
     /// is present, and tolerates a full "Cookie: …" header line pasted from devtools.
     func testFreemodelCookieHeaderFilter() {
