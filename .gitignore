@@ -38,3 +38,4 @@ specs/_shared/
 !plans/templates/
 .cafekit-backup/
 .cafekit.lock
+.opencode/
