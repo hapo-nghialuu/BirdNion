@@ -184,7 +184,11 @@ enum ClaudeCodeConfigWriter {
     static func syncState(forProfile p: BirdNionConfigStore.ClaudeCodeProfile,
                           scope: Scope, using config: ConfigService) -> SyncState {
         guard let spec = spec(forProfile: p) else { return .off }
-        return syncState(spec: spec, scope: scope, using: config)
+        let state = syncState(spec: spec, scope: scope, using: config)
+        if state == .synced, p.isOpenAICompatible, !p.isCLIProxyConfigurationCurrent {
+            return .stale
+        }
+        return state
     }
 
     // MARK: - Custom profiles
@@ -197,21 +201,41 @@ enum ClaudeCodeConfigWriter {
         var baseURL: String? { env[baseURLKey] }
     }
 
-    /// Build the write spec for a custom profile, or nil if it lacks a token or
-    /// base URL. The token goes into the profile's chosen env key; models +
-    /// arbitrary extra env pairs are merged verbatim.
+    /// Build the write spec for a custom profile. Direct profiles retain their
+    /// existing Anthropic contract. OpenAI-compatible profiles point Claude
+    /// Code at CLIProxyAPI; upstream and management secrets never enter env.
     static func spec(forProfile p: BirdNionConfigStore.ClaudeCodeProfile) -> EnvSpec? {
-        guard let token = cleaned(p.token), let base = cleaned(p.baseURL) else { return nil }
-        var env: [String: String] = [:]
-        env[cleaned(p.tokenEnvKey) ?? authTokenKey] = token
-        env[baseURLKey] = base
-        if let h = cleaned(p.haikuModel) { env[haikuKey] = h }
-        if let s = cleaned(p.sonnetModel) { env[sonnetKey] = s }
-        if let o = cleaned(p.opusModel) { env[opusKey] = o }
-        for pair in p.extraEnv ?? [] {
-            if let k = cleaned(pair.key) { env[k] = pair.value }
+        switch p.compatibility {
+        case .anthropic:
+            guard let token = cleaned(p.token), let base = cleaned(p.baseURL) else { return nil }
+            var env: [String: String] = [:]
+            env[cleaned(p.tokenEnvKey) ?? authTokenKey] = token
+            env[baseURLKey] = base
+            if let h = cleaned(p.haikuModel) { env[haikuKey] = h }
+            if let s = cleaned(p.sonnetModel) { env[sonnetKey] = s }
+            if let o = cleaned(p.opusModel) { env[opusKey] = o }
+            for pair in p.extraEnv ?? [] {
+                if let k = cleaned(pair.key) { env[k] = pair.value }
+            }
+            return EnvSpec(env: env, apiKeyHelper: cleaned(p.apiKeyHelper))
+
+        case .openAI:
+            guard p.isOpenAIProxyReady,
+                  let proxyKey = cleaned(p.cliProxyAPIKey),
+                  let proxyBaseURL = p.normalizedCLIProxyBaseURL else { return nil }
+            var env: [String: String] = [
+                authTokenKey: proxyKey,
+                baseURLKey: proxyBaseURL,
+            ]
+            if let h = cleaned(p.haikuModel) { env[haikuKey] = p.cliProxyModelAlias(for: h) }
+            if let s = cleaned(p.sonnetModel) { env[sonnetKey] = p.cliProxyModelAlias(for: s) }
+            if let o = cleaned(p.opusModel) { env[opusKey] = p.cliProxyModelAlias(for: o) }
+            let managedKeys = Set([authTokenKey, "ANTHROPIC_API_KEY", baseURLKey, haikuKey, sonnetKey, opusKey])
+            for pair in p.extraEnv ?? [] {
+                if let k = cleaned(pair.key), !managedKeys.contains(k) { env[k] = pair.value }
+            }
+            return EnvSpec(env: env, apiKeyHelper: nil)
         }
-        return EnvSpec(env: env, apiKeyHelper: cleaned(p.apiKeyHelper))
     }
 
     /// A profile is ready to apply once it has both a token and a base URL.
@@ -270,6 +294,9 @@ enum ClaudeCodeConfigWriter {
         }
 
         var p = base
+        // Imported JSON is a native Claude Code env block, therefore direct
+        // Anthropic mode is the only truthful interpretation of its fields.
+        p.compatibilityMode = nil
         // Token: prefer an explicit API key, else the auth token.
         if let key = str(env["ANTHROPIC_API_KEY"]) {
             p.token = key

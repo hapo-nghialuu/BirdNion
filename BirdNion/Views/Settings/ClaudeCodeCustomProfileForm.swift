@@ -7,34 +7,9 @@ struct ClaudeCodeCustomProfileForm: View {
     @Binding var profile: BirdNionConfigStore.ClaudeCodeProfile
     let lang: String
 
-    @State private var isTokenVisible = false
-
-    private let tokenEnvKeys = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SettingsCard {
-                fieldRow(L10n.t("ccx.name", lang)) {
-                    TextField(L10n.t("ccx.name.placeholder", lang), text: $profile.name)
-                        .textFieldStyle(.roundedBorder).font(.system(size: 12))
-                }
-                SettingsRowDivider()
-                fieldRow(L10n.t("claudeCode.baseURL", lang)) {
-                    TextField("https://api.example.com", text: $profile.baseURL)
-                        .textFieldStyle(.roundedBorder).font(.system(size: 12).monospaced())
-                }
-                SettingsRowDivider()
-                fieldRow(L10n.t("claudeCode.token", lang)) {
-                    tokenInput
-                }
-                SettingsRowDivider()
-                fieldRow(L10n.t("ccx.tokenEnvKey", lang)) {
-                    Picker("", selection: $profile.tokenEnvKey) {
-                        ForEach(tokenEnvKeys, id: \.self) { Text($0).tag($0) }
-                    }
-                    .labelsHidden().pickerStyle(.menu).frame(maxWidth: 240)
-                }
-            }
+            ClaudeCodeCustomProfileConnectionFields(profile: $profile, lang: lang)
 
             SettingsCard(header: L10n.t("claudeCode.model", lang)) {
                 fieldRow(L10n.t("claudeCode.model.haiku", lang)) {
@@ -100,33 +75,6 @@ struct ClaudeCodeCustomProfileForm: View {
     }
 
     // MARK: - Helpers
-
-    private var tokenInput: some View {
-        HStack(spacing: 6) {
-            Group {
-                if isTokenVisible {
-                    TextField(L10n.t("config.enter", lang), text: $profile.token)
-                } else {
-                    SecureField(L10n.t("config.enter", lang), text: $profile.token)
-                }
-            }
-            .textFieldStyle(.roundedBorder)
-            .font(.system(size: 12).monospaced())
-
-            Button {
-                isTokenVisible.toggle()
-            } label: {
-                Image(systemName: isTokenVisible ? "eye.slash" : "eye")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.secondary)
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-            .help(L10n.t(isTokenVisible ? "ccx.token.hide" : "ccx.token.show", lang))
-            .accessibilityLabel(L10n.t(isTokenVisible ? "ccx.token.hide" : "ccx.token.show", lang))
-        }
-    }
 
     private func fieldRow<Content: View>(_ label: String,
                                          @ViewBuilder _ trailing: () -> Content) -> some View {

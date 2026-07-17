@@ -456,7 +456,7 @@ struct ClaudeCodePane: View {
             activationPanelBody(
                 icon: Image(systemName: "terminal.fill"),
                 title: title,
-                subtitle: profileActivationSubtitle(state: state, name: title),
+                subtitle: profileActivationSubtitle(state: state, profile: p),
                 target: visibleTargetLabel(),
                 state: state,
                 diameter: 76,
@@ -582,14 +582,19 @@ struct ClaudeCodePane: View {
         }
     }
 
-    private func profileActivationSubtitle(state: ClaudeCodePowerButton.PowerState, name: String) -> String {
+    private func profileActivationSubtitle(state: ClaudeCodePowerButton.PowerState,
+                                           profile: BirdNionConfigStore.ClaudeCodeProfile) -> String {
         switch state {
-        case .on: return L10n.f("claudeCode.power.on", lang, name)
+        case .on:
+            let name = profile.name.isEmpty ? L10n.t("ccx.newName", lang) : profile.name
+            return L10n.f("claudeCode.power.on", lang, name)
         case .off: return L10n.t("claudeCode.power.off", lang)
         case .stale: return L10n.t("claudeCode.power.stale", lang)
         case .needsSetup:
             if scope == .project && projectDir == nil { return L10n.t("claudeCode.project.none", lang) }
-            return L10n.t("ccx.needConfig", lang)
+            return profile.isOpenAICompatible
+                ? L10n.t("ccx.needProxyConfig", lang)
+                : L10n.t("ccx.needConfig", lang)
         }
     }
 
@@ -1030,13 +1035,19 @@ struct ClaudeCodePane: View {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             do {
-                let profile = profileWithCurrentTarget(profile)
+                var profile = profileWithCurrentTarget(profile)
                 try BirdNionConfigStore.saveClaudeCodeProfile(profile)  // persist edits
                 if state == .on {
                     try ClaudeCodeConfigWriter.deactivate(profile: profile, scope: sc, using: config)
                     statusMessage = L10n.t("claudeCode.deactivated", lang)
                 } else {
-                    // .off or .stale → merge the profile's values in place.
+                    // A proxy must know its upstream before Claude Code is pointed at it.
+                    if profile.isOpenAICompatible {
+                        try await CLIProxyAPIClient().configure(profile: profile)
+                        profile.cliProxyAppliedSignature = profile.cliProxyConfigurationSignature
+                        try BirdNionConfigStore.saveClaudeCodeProfile(profile)
+                        workingProfile = profile
+                    }
                     try ClaudeCodeConfigWriter.apply(profile: profile, scope: sc, using: config)
                     let target = ClaudeCodeConfigWriter.targetURL(scope: sc, config: config)
                     statusMessage = state == .stale
@@ -1044,6 +1055,8 @@ struct ClaudeCodePane: View {
                         : L10n.f("claudeCode.saved", lang, target.path)
                 }
                 reloadProfiles()
+            } catch let e as CLIProxyAPIClient.ClientError {
+                errorMessage = cliProxyErrorMessage(e)
             } catch let e as ClaudeCodeConfigWriter.WriteError {
                 errorMessage = e.message
             } catch let e as ConfigError {
@@ -1081,6 +1094,16 @@ struct ClaudeCodePane: View {
     private func cleaned(_ value: String?) -> String? {
         guard let t = value?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
         return t
+    }
+
+    private func cliProxyErrorMessage(_ error: CLIProxyAPIClient.ClientError) -> String {
+        switch error {
+        case .incompleteConfiguration: return L10n.t("ccx.proxy.error.incomplete", lang)
+        case .invalidProxyURL: return L10n.t("ccx.proxy.error.invalidURL", lang)
+        case .network: return L10n.t("ccx.proxy.error.network", lang)
+        case .http(let code): return L10n.f("ccx.proxy.error.http", lang, String(code))
+        case .invalidResponse: return L10n.t("ccx.proxy.error.invalidResponse", lang)
+        }
     }
 
     private func providerName(_ p: BirdNionConfigStore.Provider) -> String {

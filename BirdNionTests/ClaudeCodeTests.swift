@@ -12,6 +12,12 @@ final class ClaudeCodeTests: XCTestCase {
         return c
     }
 
+    private func makeCLIProxyStubConfig() -> URLSessionConfiguration {
+        let c = URLSessionConfiguration.ephemeral
+        c.protocolClasses = [CLIProxyURLProtocol.self] + (c.protocolClasses ?? [])
+        return c
+    }
+
     private func tempDir() -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("cc-test-\(UUID().uuidString)", isDirectory: true)
@@ -324,6 +330,36 @@ final class ClaudeCodeTests: XCTestCase {
               extraEnv: [.init(id: "e1", key: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", value: "1")])
     }
 
+    private func openAIProfile() -> BirdNionConfigStore.ClaudeCodeProfile {
+        var profile = freeModelProfile()
+        profile.compatibilityMode = "openai"
+        profile.openAIBaseURL = "https://openai-upstream.example/v1"
+        profile.openAIAPIKey = "upstream-key"
+        profile.cliProxyBaseURL = "http://127.0.0.1:8317/v1"
+        profile.cliProxyAPIKey = "proxy-key"
+        profile.cliProxyManagementKey = "management-key"
+        profile.haikuModel = "gpt-4o-mini"
+        profile.sonnetModel = "gpt-4o"
+        profile.opusModel = "gpt-4.1"
+        return profile
+    }
+
+    func testLegacyProfileDecodesAsAnthropic() throws {
+        let json = """
+        {
+          "id": "legacy", "name": "Legacy", "baseURL": "https://anthropic.example",
+          "token": "legacy-token", "tokenEnvKey": "ANTHROPIC_AUTH_TOKEN"
+        }
+        """
+        let profile = try JSONDecoder().decode(BirdNionConfigStore.ClaudeCodeProfile.self,
+                                               from: Data(json.utf8))
+
+        XCTAssertEqual(profile.compatibility, .anthropic)
+        XCTAssertTrue(ClaudeCodeConfigWriter.isReady(profile))
+        XCTAssertEqual(ClaudeCodeConfigWriter.spec(forProfile: profile)?.env["ANTHROPIC_AUTH_TOKEN"],
+                       "legacy-token")
+    }
+
     func testProfileReadyAndSpec() {
         XCTAssertTrue(ClaudeCodeConfigWriter.isReady(freeModelProfile()))
         let spec = ClaudeCodeConfigWriter.spec(forProfile: freeModelProfile())
@@ -336,6 +372,132 @@ final class ClaudeCodeTests: XCTestCase {
             apiKeyHelper: nil, haikuModel: nil, sonnetModel: nil, opusModel: nil, extraEnv: nil)
         XCTAssertFalse(ClaudeCodeConfigWriter.isReady(empty))
         XCTAssertNil(ClaudeCodeConfigWriter.spec(forProfile: empty))
+    }
+
+    func testOpenAIProfileWriterUsesProxyCredentialsAndPrefixedModels() {
+        let profile = openAIProfile()
+        let spec = ClaudeCodeConfigWriter.spec(forProfile: profile)
+
+        XCTAssertTrue(profile.isOpenAIProxyReady)
+        XCTAssertEqual(spec?.env["ANTHROPIC_AUTH_TOKEN"], "proxy-key")
+        XCTAssertNil(spec?.env["ANTHROPIC_API_KEY"])
+        XCTAssertEqual(spec?.env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317")
+        XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+                       "\(profile.cliProxyProviderName)/gpt-4o-mini")
+        XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+                       "\(profile.cliProxyProviderName)/gpt-4o")
+        XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+                       "\(profile.cliProxyProviderName)/gpt-4.1")
+        XCTAssertFalse(spec?.env.values.contains("upstream-key") ?? true)
+        XCTAssertFalse(spec?.env.values.contains("management-key") ?? true)
+        XCTAssertNil(spec?.apiKeyHelper)
+    }
+
+    func testImportIntoOpenAIProfileReturnsToAnthropicMode() throws {
+        let json = #"{"env":{"ANTHROPIC_AUTH_TOKEN":"direct-token","ANTHROPIC_BASE_URL":"https://direct.example"}}"#
+        let profile = try ClaudeCodeConfigWriter.profile(byImporting: json, into: openAIProfile())
+
+        XCTAssertEqual(profile.compatibility, .anthropic)
+        XCTAssertEqual(profile.token, "direct-token")
+        XCTAssertEqual(profile.baseURL, "https://direct.example")
+    }
+
+    @MainActor
+    func testOpenAIProfileBecomesStaleWhenOnlyUpstreamChanges() throws {
+        let home = tempDir()
+        let config = ConfigService(homeOverride: home)
+        var profile = openAIProfile()
+        profile.cliProxyAppliedSignature = profile.cliProxyConfigurationSignature
+        try ClaudeCodeConfigWriter.apply(profile: profile, scope: .global, using: config)
+
+        XCTAssertEqual(ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: .global, using: config), .synced)
+        profile.openAIAPIKey = "changed-upstream-key"
+        XCTAssertEqual(ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: .global, using: config), .stale)
+    }
+
+    func testCLIProxyAPIClientMergesOnlyProfileOwnedEntry() async throws {
+        let session = URLSession(configuration: makeCLIProxyStubConfig())
+        let profile = openAIProfile()
+        CLIProxyURLProtocol.install { request, requestCount in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200,
+                                           httpVersion: nil, headerFields: nil)!
+            guard request.value(forHTTPHeaderField: "Authorization") == "Bearer management-key" else {
+                return (HTTPURLResponse(url: request.url!, statusCode: 401,
+                                        httpVersion: nil, headerFields: nil)!, Data())
+            }
+            if requestCount == 1 {
+                guard request.httpMethod == "GET",
+                      request.url?.path == "/v0/management/openai-compatibility" else {
+                    return (HTTPURLResponse(url: request.url!, statusCode: 400,
+                                            httpVersion: nil, headerFields: nil)!, Data())
+                }
+                let responseBody: [String: Any] = [
+                    "openai-compatibility": [
+                        [
+                            "name": "keep-me",
+                            "base-url": "https://keep.example/v1",
+                            "api-key-entries": [["api-key": "keep-key"]],
+                            "models": [["name": "keep-model", "alias": "keep-model"]],
+                            "headers": ["X-Keep": "yes"],
+                        ],
+                        [
+                            "name": profile.cliProxyProviderName,
+                            "base-url": "https://stale.example/v1",
+                            "api-key-entries": [],
+                            "models": [],
+                        ],
+                    ],
+                ]
+                return (response, try! JSONSerialization.data(withJSONObject: responseBody))
+            }
+            guard request.httpMethod == "PUT" else {
+                return (HTTPURLResponse(url: request.url!, statusCode: 400,
+                                        httpVersion: nil, headerFields: nil)!, Data())
+            }
+            return (response, Data())
+        }
+        defer { CLIProxyURLProtocol.reset() }
+
+        try await CLIProxyAPIClient(session: session).configure(profile: profile)
+
+        XCTAssertEqual(CLIProxyURLProtocol.requestCount, 2)
+        guard let body = CLIProxyURLProtocol.lastBody,
+              let entries = try JSONSerialization.jsonObject(with: body) as? [[String: Any]] else {
+            return XCTFail("missing management PUT payload")
+        }
+        XCTAssertEqual(entries.count, 2)
+        let retained = entries.first { ($0["name"] as? String) == "keep-me" }
+        XCTAssertEqual((retained?["headers"] as? [String: String])?["X-Keep"], "yes")
+
+        let configured = entries.first { ($0["name"] as? String) == profile.cliProxyProviderName }
+        XCTAssertEqual(configured?["prefix"] as? String, profile.cliProxyProviderName)
+        XCTAssertEqual(configured?["base-url"] as? String, "https://openai-upstream.example/v1")
+        let keys = configured?["api-key-entries"] as? [[String: Any]]
+        XCTAssertEqual(keys?.first?["api-key"] as? String, "upstream-key")
+        let models = configured?["models"] as? [[String: Any]]
+        XCTAssertEqual(models?.map { $0["alias"] as? String }, ["gpt-4o-mini", "gpt-4o", "gpt-4.1"])
+
+        let payload = String(data: body, encoding: .utf8) ?? ""
+        XCTAssertFalse(payload.contains("proxy-key"))
+        XCTAssertFalse(payload.contains("management-key"))
+    }
+
+    func testCLIProxyAPIClientSurfacesHTTPFailure() async {
+        let session = URLSession(configuration: makeCLIProxyStubConfig())
+        CLIProxyURLProtocol.install { request, _ in
+            (HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        defer { CLIProxyURLProtocol.reset() }
+
+        do {
+            try await CLIProxyAPIClient(session: session).configure(profile: openAIProfile())
+            XCTFail("expected HTTP failure")
+        } catch let error as CLIProxyAPIClient.ClientError {
+            XCTAssertEqual(error, .http(503))
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
+        XCTAssertEqual(CLIProxyURLProtocol.requestCount, 1)
     }
 
     @MainActor
@@ -510,5 +672,87 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertEqual(ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: .global, using: config), .synced)
         profile.token = "fe_oa_new"
         XCTAssertEqual(ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: .global, using: config), .stale)
+    }
+}
+
+private final class CLIProxyURLProtocol: URLProtocol {
+    typealias Handler = (URLRequest, Int) -> (HTTPURLResponse, Data)
+
+    private static let lock = NSLock()
+    private static var handler: Handler?
+    private static var requests: [URLRequest] = []
+    private static var requestBodies: [Data?] = []
+
+    static var requestCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return requests.count
+    }
+
+    static var lastRequest: URLRequest? {
+        lock.lock(); defer { lock.unlock() }
+        return requests.last
+    }
+
+    static var lastBody: Data? {
+        lock.lock(); defer { lock.unlock() }
+        return requestBodies.last ?? nil
+    }
+
+    static func install(_ newHandler: @escaping Handler) {
+        lock.lock(); defer { lock.unlock() }
+        handler = newHandler
+        requests = []
+        requestBodies = []
+    }
+
+    static func reset() {
+        lock.lock(); defer { lock.unlock() }
+        handler = nil
+        requests = []
+        requestBodies = []
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let body = Self.body(from: request)
+        let handlerAndCount: (Handler?, Int) = Self.locked {
+            Self.requests.append(request)
+            Self.requestBodies.append(body)
+            return (Self.handler, Self.requests.count)
+        }
+        guard let handler = handlerAndCount.0 else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let (response, data) = handler(request, handlerAndCount.1)
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static func locked<T>(_ body: () -> T) -> T {
+        lock.lock(); defer { lock.unlock() }
+        return body()
+    }
+
+    private static func body(from request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count >= 0 else { return nil }
+            guard count > 0 else { break }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+        return data
     }
 }

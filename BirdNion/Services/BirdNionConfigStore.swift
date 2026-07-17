@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Single source of truth for all BirdNion configuration: provider tokens,
 /// enable flags, per-provider metadata (region, base URL, display name,
@@ -82,6 +83,101 @@ enum BirdNionConfigStore {
         var claudeCodeProjectPath: String?
         /// Arbitrary extra env pairs merged verbatim into the `env` block.
         var extraEnv: [ClaudeCodeEnvPair]?
+        /// Nil preserves profiles created before protocol selection existed.
+        /// Values are currently "anthropic" and "openai".
+        var compatibilityMode: String? = nil
+        /// OpenAI-compatible upstream configuration. These values are sent only
+        /// to CLIProxyAPI's management endpoint, never to Claude Code settings.
+        var openAIBaseURL: String? = nil
+        var openAIAPIKey: String? = nil
+        /// The running CLIProxyAPI instance that presents an Anthropic surface
+        /// to Claude Code. The proxy API key is written to Claude Code; the
+        /// management key stays in BirdNion's restricted config file.
+        var cliProxyBaseURL: String? = nil
+        var cliProxyAPIKey: String? = nil
+        var cliProxyManagementKey: String? = nil
+        /// SHA-256 marker of the last CLIProxyAPI registration. It makes an
+        /// upstream-only edit visibly stale without storing another plaintext
+        /// copy of any secret.
+        var cliProxyAppliedSignature: String? = nil
+
+        enum CompatibilityMode: String, CaseIterable, Identifiable {
+            case anthropic
+            case openAI = "openai"
+
+            var id: String { rawValue }
+        }
+
+        var compatibility: CompatibilityMode {
+            CompatibilityMode(rawValue: compatibilityMode ?? "") ?? .anthropic
+        }
+
+        var isOpenAICompatible: Bool { compatibility == .openAI }
+
+        /// Stable per-profile ownership marker for CLIProxyAPI configuration and
+        /// model routing. A namespaced prefix avoids collisions across profiles.
+        var cliProxyProviderName: String {
+            let safeID = id.lowercased().unicodeScalars.map { scalar in
+                CharacterSet.alphanumerics.contains(scalar) ? String(scalar) : "-"
+            }.joined()
+            return "birdnion-\(safeID)"
+        }
+
+        var normalizedCLIProxyBaseURL: String? {
+            guard let raw = BirdNionConfigStore.cleaned(cliProxyBaseURL),
+                  var components = URLComponents(string: raw),
+                  let scheme = components.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme),
+                  components.host != nil else { return nil }
+            var path = components.path
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            if path == "/v1" { path = "" }
+            components.path = path
+            components.query = nil
+            components.fragment = nil
+            return components.string
+        }
+
+        var openAIModelNames: [String] {
+            [haikuModel, sonnetModel, opusModel].compactMap(BirdNionConfigStore.cleaned)
+        }
+
+        var isOpenAIProxyReady: Bool {
+            guard normalizedCLIProxyBaseURL != nil,
+                  BirdNionConfigStore.cleaned(openAIBaseURL) != nil,
+                  BirdNionConfigStore.cleaned(openAIAPIKey) != nil,
+                  BirdNionConfigStore.cleaned(cliProxyAPIKey) != nil,
+                  BirdNionConfigStore.cleaned(cliProxyManagementKey) != nil else { return false }
+            return !openAIModelNames.isEmpty
+        }
+
+        var cliProxyConfigurationSignature: String? {
+            guard let proxyBaseURL = normalizedCLIProxyBaseURL,
+                  let upstreamBaseURL = BirdNionConfigStore.cleaned(openAIBaseURL),
+                  let upstreamAPIKey = BirdNionConfigStore.cleaned(openAIAPIKey),
+                  let proxyAPIKey = BirdNionConfigStore.cleaned(cliProxyAPIKey),
+                  let managementKey = BirdNionConfigStore.cleaned(cliProxyManagementKey),
+                  !openAIModelNames.isEmpty else { return nil }
+            let material = ([
+                cliProxyProviderName,
+                proxyBaseURL,
+                upstreamBaseURL,
+                upstreamAPIKey,
+                proxyAPIKey,
+                managementKey,
+            ] + openAIModelNames).map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
+            return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+        }
+
+        var isCLIProxyConfigurationCurrent: Bool {
+            guard let signature = cliProxyConfigurationSignature else { return false }
+            return signature == cliProxyAppliedSignature
+        }
+
+        func cliProxyModelAlias(for model: String) -> String {
+            let prefix = "\(cliProxyProviderName)/"
+            return model.hasPrefix(prefix) ? model : prefix + model
+        }
     }
 
     /// A single key=value env entry for a `ClaudeCodeProfile`.
