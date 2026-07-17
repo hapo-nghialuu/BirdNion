@@ -605,7 +605,10 @@ struct ProviderHeaderCard: View {
         if status.creditsUnlimited {
             parts.append("∞ credits")
         } else if status.id == "codex", let c = status.creditsRemaining {
-            parts.append(String(format: "$%.2f credits", c))
+            let amount = c.truncatingRemainder(dividingBy: 1) == 0
+                ? String(Int(c))
+                : String(format: "%.2f", c)
+            parts.append("\(amount) credits")
         }
         if let v = status.version, !v.isEmpty { parts.append(v) }
         if let cr = status.codexWeb?.codeReviewRemainingPercent {
