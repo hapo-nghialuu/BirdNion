@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Connection fields are isolated from the profile form so both protocol modes
-/// stay compact and the credentials' destinations remain visually distinct.
+/// Connection fields are isolated from the profile form so the upstream stays
+/// concise while BirdNion manages its local conversion core internally.
 struct ClaudeCodeCustomProfileConnectionFields: View {
     @Binding var profile: BirdNionConfigStore.ClaudeCodeProfile
     let lang: String
@@ -30,11 +30,22 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                 .accessibilityLabel(L10n.t("ccx.compatibility", lang))
             }
             SettingsRowDivider()
-            if profile.isOpenAICompatible {
-                openAIFields
+            upstreamFields
+            SettingsRowDivider()
+            if profile.embeddedLocalProxy == true || profile.isOpenAICompatible {
+                localEndpointRow
             } else {
-                anthropicFields
+                tokenEnvironmentRow
             }
+        }
+    }
+
+    @ViewBuilder
+    private var upstreamFields: some View {
+        if profile.isOpenAICompatible {
+            openAIFields
+        } else {
+            anthropicFields
         }
     }
 
@@ -49,7 +60,10 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
         fieldRow(L10n.t("claudeCode.token", lang)) {
             secretInput("anthropic-token", text: $profile.token)
         }
-        SettingsRowDivider()
+    }
+
+    @ViewBuilder
+    private var tokenEnvironmentRow: some View {
         fieldRow(L10n.t("ccx.tokenEnvKey", lang)) {
             Picker("", selection: $profile.tokenEnvKey) {
                 ForEach(tokenEnvKeys, id: \.self) { Text($0).tag($0) }
@@ -71,19 +85,15 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
         fieldRow(L10n.t("ccx.openai.apiKey", lang)) {
             secretInput("openai-api-key", text: optionalBinding(\.openAIAPIKey))
         }
-        SettingsRowDivider()
-        fieldRow(L10n.t("ccx.proxy.baseURL", lang)) {
-            TextField("http://127.0.0.1:8317", text: optionalBinding(\.cliProxyBaseURL))
-                .textFieldStyle(.roundedBorder)
+    }
+
+    private var localEndpointRow: some View {
+        fieldRow(L10n.t("ccx.proxy.localEndpoint", lang)) {
+            Text(EmbeddedCLIProxyService.localEndpoint)
                 .font(.system(size: 12).monospaced())
-        }
-        SettingsRowDivider()
-        fieldRow(L10n.t("ccx.proxy.apiKey", lang)) {
-            secretInput("proxy-api-key", text: optionalBinding(\.cliProxyAPIKey))
-        }
-        SettingsRowDivider()
-        fieldRow(L10n.t("ccx.proxy.managementKey", lang)) {
-            secretInput("proxy-management-key", text: optionalBinding(\.cliProxyManagementKey))
+                .foregroundStyle(SettingsTheme.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
         }
     }
 
@@ -91,9 +101,16 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
         Binding(
             get: { profile.compatibility.rawValue },
             set: { value in
-                profile.compatibilityMode = value == BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
-                    ? nil
-                    : value
+                let next = BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode(rawValue: value) ?? .anthropic
+                if next == .openAI {
+                    if profile.openAIBaseURL?.isEmpty ?? true { profile.openAIBaseURL = nonEmpty(profile.baseURL) }
+                    if profile.openAIAPIKey?.isEmpty ?? true { profile.openAIAPIKey = nonEmpty(profile.token) }
+                } else {
+                    if profile.baseURL.isEmpty { profile.baseURL = profile.openAIBaseURL ?? "" }
+                    if profile.token.isEmpty { profile.token = profile.openAIAPIKey ?? "" }
+                }
+                profile.compatibilityMode = next == .anthropic ? nil : next.rawValue
+                profile.embeddedLocalProxy = true
             }
         )
     }
@@ -136,6 +153,11 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
             get: { profile[keyPath: keyPath] ?? "" },
             set: { profile[keyPath: keyPath] = $0.isEmpty ? nil : $0 }
         )
+    }
+
+    private func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func fieldRow<Content: View>(_ label: String,

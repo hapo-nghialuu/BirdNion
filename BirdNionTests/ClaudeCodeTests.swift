@@ -333,6 +333,7 @@ final class ClaudeCodeTests: XCTestCase {
     private func openAIProfile() -> BirdNionConfigStore.ClaudeCodeProfile {
         var profile = freeModelProfile()
         profile.compatibilityMode = "openai"
+        profile.embeddedLocalProxy = true
         profile.openAIBaseURL = "https://openai-upstream.example/v1"
         profile.openAIAPIKey = "upstream-key"
         profile.cliProxyBaseURL = "http://127.0.0.1:8317/v1"
@@ -341,6 +342,18 @@ final class ClaudeCodeTests: XCTestCase {
         profile.haikuModel = "gpt-4o-mini"
         profile.sonnetModel = "gpt-4o"
         profile.opusModel = "gpt-4.1"
+        return profile
+    }
+
+    private func embeddedAnthropicProfile() -> BirdNionConfigStore.ClaudeCodeProfile {
+        var profile = freeModelProfile()
+        profile.embeddedLocalProxy = true
+        profile.cliProxyBaseURL = "http://127.0.0.1:8317/v1"
+        profile.cliProxyAPIKey = "anthropic-local-key"
+        profile.cliProxyManagementKey = "management-key"
+        profile.haikuModel = "claude-haiku"
+        profile.sonnetModel = "claude-sonnet"
+        profile.opusModel = "claude-opus"
         return profile
     }
 
@@ -393,11 +406,57 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertNil(spec?.apiKeyHelper)
     }
 
+    func testEmbeddedAnthropicProfileWriterKeepsUpstreamCredentialsOutOfClaudeCode() {
+        let profile = embeddedAnthropicProfile()
+        let spec = ClaudeCodeConfigWriter.spec(forProfile: profile)
+
+        XCTAssertEqual(spec?.env["ANTHROPIC_AUTH_TOKEN"], "anthropic-local-key")
+        XCTAssertEqual(spec?.env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317")
+        XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+                       "\(profile.cliProxyProviderName)/claude-haiku")
+        XCTAssertFalse(spec?.env.values.contains("fe_oa_abc") ?? true)
+        XCTAssertFalse(spec?.env.values.contains("management-key") ?? true)
+        XCTAssertNil(spec?.apiKeyHelper)
+    }
+
+    func testCLIProxyConfigurationContainsBothUpstreamProtocols() throws {
+        let anthropic = embeddedAnthropicProfile()
+        let openAI = openAIProfile()
+        let configuration = try XCTUnwrap(
+            CLIProxyAPIConfiguration(profiles: [anthropic, openAI], authDirectory: tempDir())
+        )
+        let yaml = try XCTUnwrap(String(data: configuration.yamlData(), encoding: .utf8))
+
+        XCTAssertEqual(configuration.apiKeys, ["anthropic-local-key", "proxy-key"])
+        XCTAssertEqual(configuration.claudeAPIKeys.first?.baseURL, anthropic.baseURL)
+        XCTAssertEqual(configuration.openAICompatibility.first?.baseURL, openAI.openAIBaseURL)
+        XCTAssertTrue(yaml.contains("host: \"127.0.0.1\""))
+        XCTAssertTrue(yaml.contains("claude-api-key:"))
+        XCTAssertTrue(yaml.contains("openai-compatibility:"))
+        XCTAssertTrue(yaml.contains("force-model-prefix: false"))
+    }
+
+    func testCLIProxyConfigurationDropsDeletedProfileCredentials() throws {
+        let remaining = embeddedAnthropicProfile()
+        let deleted = openAIProfile()
+        let configuration = try XCTUnwrap(
+            CLIProxyAPIConfiguration(profiles: [remaining], authDirectory: tempDir())
+        )
+
+        XCTAssertEqual(configuration.apiKeys, ["anthropic-local-key"])
+        XCTAssertEqual(configuration.claudeAPIKeys.count, 1)
+        XCTAssertTrue(configuration.openAICompatibility.isEmpty)
+        let yaml = try XCTUnwrap(String(data: configuration.yamlData(), encoding: .utf8))
+        XCTAssertFalse(yaml.contains(deleted.cliProxyAPIKey!))
+        XCTAssertFalse(yaml.contains(deleted.openAIAPIKey!))
+    }
+
     func testImportIntoOpenAIProfileReturnsToAnthropicMode() throws {
         let json = #"{"env":{"ANTHROPIC_AUTH_TOKEN":"direct-token","ANTHROPIC_BASE_URL":"https://direct.example"}}"#
         let profile = try ClaudeCodeConfigWriter.profile(byImporting: json, into: openAIProfile())
 
         XCTAssertEqual(profile.compatibility, .anthropic)
+        XCTAssertNil(profile.embeddedLocalProxy)
         XCTAssertEqual(profile.token, "direct-token")
         XCTAssertEqual(profile.baseURL, "https://direct.example")
     }
@@ -415,70 +474,56 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertEqual(ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: .global, using: config), .stale)
     }
 
-    func testCLIProxyAPIClientMergesOnlyProfileOwnedEntry() async throws {
+    func testCLIProxyAPIClientSynchronizesBirdNionOwnedLists() async throws {
         let session = URLSession(configuration: makeCLIProxyStubConfig())
-        let profile = openAIProfile()
-        CLIProxyURLProtocol.install { request, requestCount in
+        let anthropic = embeddedAnthropicProfile()
+        let openAI = openAIProfile()
+        let configuration = try XCTUnwrap(
+            CLIProxyAPIConfiguration(profiles: [anthropic, openAI], authDirectory: tempDir())
+        )
+        CLIProxyURLProtocol.install { request, _ in
             let response = HTTPURLResponse(url: request.url!, statusCode: 200,
                                            httpVersion: nil, headerFields: nil)!
-            guard request.value(forHTTPHeaderField: "Authorization") == "Bearer management-key" else {
+            guard request.httpMethod == "PUT",
+                  request.value(forHTTPHeaderField: "Authorization") == "Bearer management-key",
+                  request.value(forHTTPHeaderField: "Content-Type") == "application/json" else {
                 return (HTTPURLResponse(url: request.url!, statusCode: 401,
-                                        httpVersion: nil, headerFields: nil)!, Data())
-            }
-            if requestCount == 1 {
-                guard request.httpMethod == "GET",
-                      request.url?.path == "/v0/management/openai-compatibility" else {
-                    return (HTTPURLResponse(url: request.url!, statusCode: 400,
-                                            httpVersion: nil, headerFields: nil)!, Data())
-                }
-                let responseBody: [String: Any] = [
-                    "openai-compatibility": [
-                        [
-                            "name": "keep-me",
-                            "base-url": "https://keep.example/v1",
-                            "api-key-entries": [["api-key": "keep-key"]],
-                            "models": [["name": "keep-model", "alias": "keep-model"]],
-                            "headers": ["X-Keep": "yes"],
-                        ],
-                        [
-                            "name": profile.cliProxyProviderName,
-                            "base-url": "https://stale.example/v1",
-                            "api-key-entries": [],
-                            "models": [],
-                        ],
-                    ],
-                ]
-                return (response, try! JSONSerialization.data(withJSONObject: responseBody))
-            }
-            guard request.httpMethod == "PUT" else {
-                return (HTTPURLResponse(url: request.url!, statusCode: 400,
                                         httpVersion: nil, headerFields: nil)!, Data())
             }
             return (response, Data())
         }
         defer { CLIProxyURLProtocol.reset() }
 
-        try await CLIProxyAPIClient(session: session).configure(profile: profile)
+        try await CLIProxyAPIClient(session: session).synchronize(configuration)
 
-        XCTAssertEqual(CLIProxyURLProtocol.requestCount, 2)
-        guard let body = CLIProxyURLProtocol.lastBody,
-              let entries = try JSONSerialization.jsonObject(with: body) as? [[String: Any]] else {
-            return XCTFail("missing management PUT payload")
+        XCTAssertEqual(CLIProxyURLProtocol.allRequests.map { $0.url?.path }, [
+            "/v0/management/api-keys",
+            "/v0/management/claude-api-key",
+            "/v0/management/openai-compatibility",
+        ])
+        let bodies = CLIProxyURLProtocol.allBodies
+        guard bodies.count == 3 else {
+            return XCTFail("expected three management payloads, got \(bodies.count)")
         }
-        XCTAssertEqual(entries.count, 2)
-        let retained = entries.first { ($0["name"] as? String) == "keep-me" }
-        XCTAssertEqual((retained?["headers"] as? [String: String])?["X-Keep"], "yes")
+        let apiKeys = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(bodies[0])) as? [String]
+        )
+        XCTAssertEqual(apiKeys, ["anthropic-local-key", "proxy-key"])
 
-        let configured = entries.first { ($0["name"] as? String) == profile.cliProxyProviderName }
-        XCTAssertEqual(configured?["prefix"] as? String, profile.cliProxyProviderName)
-        XCTAssertEqual(configured?["base-url"] as? String, "https://openai-upstream.example/v1")
-        let keys = configured?["api-key-entries"] as? [[String: Any]]
-        XCTAssertEqual(keys?.first?["api-key"] as? String, "upstream-key")
-        let models = configured?["models"] as? [[String: Any]]
-        XCTAssertEqual(models?.map { $0["alias"] as? String }, ["gpt-4o-mini", "gpt-4o", "gpt-4.1"])
+        let claude = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(bodies[1])) as? [[String: Any]]
+        )
+        XCTAssertEqual(claude.first?["api-key"] as? String, "fe_oa_abc")
+        XCTAssertEqual(claude.first?["prefix"] as? String, anthropic.cliProxyProviderName)
 
-        let payload = String(data: body, encoding: .utf8) ?? ""
-        XCTAssertFalse(payload.contains("proxy-key"))
+        let openAIEntries = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(bodies[2])) as? [[String: Any]]
+        )
+        XCTAssertEqual(openAIEntries.first?["name"] as? String, openAI.cliProxyProviderName)
+        let upstreamKeys = openAIEntries.first?["api-key-entries"] as? [[String: Any]]
+        XCTAssertEqual(upstreamKeys?.first?["api-key"] as? String, "upstream-key")
+
+        let payload = bodies.compactMap { $0 }.compactMap { String(data: $0, encoding: .utf8) }.joined()
         XCTAssertFalse(payload.contains("management-key"))
     }
 
@@ -490,7 +535,10 @@ final class ClaudeCodeTests: XCTestCase {
         defer { CLIProxyURLProtocol.reset() }
 
         do {
-            try await CLIProxyAPIClient(session: session).configure(profile: openAIProfile())
+            let configuration = try XCTUnwrap(
+                CLIProxyAPIConfiguration(profiles: [openAIProfile()], authDirectory: tempDir())
+            )
+            try await CLIProxyAPIClient(session: session).synchronize(configuration)
             XCTFail("expected HTTP failure")
         } catch let error as CLIProxyAPIClient.ClientError {
             XCTAssertEqual(error, .http(503))
@@ -696,6 +744,16 @@ private final class CLIProxyURLProtocol: URLProtocol {
     static var lastBody: Data? {
         lock.lock(); defer { lock.unlock() }
         return requestBodies.last ?? nil
+    }
+
+    static var allRequests: [URLRequest] {
+        lock.lock(); defer { lock.unlock() }
+        return requests
+    }
+
+    static var allBodies: [Data?] {
+        lock.lock(); defer { lock.unlock() }
+        return requestBodies
     }
 
     static func install(_ newHandler: @escaping Handler) {

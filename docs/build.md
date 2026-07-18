@@ -24,6 +24,22 @@ xcodebuild build -project BirdNion.xcodeproj -scheme BirdNion \
   -configuration Release -destination 'platform=macOS'
 ```
 
+### CLIProxyAPI nhúng cho Claude Code
+
+Các custom Claude Code profile dùng BirdNion local proxy sẽ đóng gói core
+CLIProxyAPI vào app. Build cần có Go và source CLIProxyAPI ở thư mục cùng cấp
+với BirdNion (`~/Desktop/CLIProxyAPI`). Nếu source nằm nơi khác, truyền đường
+dẫn tuyệt đối trước khi chạy `xcodebuild`:
+
+```bash
+export CLIPROXYAPI_SOURCE=/duong-dan/toi/CLIProxyAPI
+xcodebuild build -project BirdNion.xcodeproj -scheme BirdNion \
+  -configuration Debug -destination 'platform=macOS'
+```
+
+Build phase tạo helper universal cho Apple Silicon và Intel, rồi nhúng tại
+`BirdNion.app/Contents/Resources/cliproxyapi`.
+
 **Lưu ý**: Sau khi đổi `project.pbxproj` (thêm file, thay đổi build settings) → cần `clean` để tránh linker error từ `.o` cũ.
 
 ```bash

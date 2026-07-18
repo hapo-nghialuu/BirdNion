@@ -592,7 +592,7 @@ struct ClaudeCodePane: View {
         case .stale: return L10n.t("claudeCode.power.stale", lang)
         case .needsSetup:
             if scope == .project && projectDir == nil { return L10n.t("claudeCode.project.none", lang) }
-            return profile.isOpenAICompatible
+            return profile.usesEmbeddedCLIProxy
                 ? L10n.t("ccx.needProxyConfig", lang)
                 : L10n.t("ccx.needConfig", lang)
         }
@@ -1002,7 +1002,8 @@ struct ClaudeCodePane: View {
     private static func blankProfile() -> BirdNionConfigStore.ClaudeCodeProfile {
         .init(id: UUID().uuidString, name: "", baseURL: "", token: "",
               tokenEnvKey: "ANTHROPIC_AUTH_TOKEN", apiKeyHelper: nil,
-              haikuModel: nil, sonnetModel: nil, opusModel: nil, extraEnv: nil)
+              haikuModel: nil, sonnetModel: nil, opusModel: nil, extraEnv: nil,
+              embeddedLocalProxy: true)
     }
 
     private func addProfile() {
@@ -1016,11 +1017,19 @@ struct ClaudeCodePane: View {
 
     private func deleteProfile() {
         guard let id = selectedProfileID else { return }
-        try? BirdNionConfigStore.removeClaudeCodeProfile(id: id)
+        do {
+            try BirdNionConfigStore.removeClaudeCodeProfile(id: id)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         selectedProfileID = nil
         workingProfile = nil
         reloadProfiles()
         selectedID = providers.first?.id
+        Task { @MainActor in
+            await EmbeddedCLIProxyService.shared.reconcileStoredProfiles()
+        }
     }
 
     /// Power toggle for a custom profile. Persists the working profile first,
@@ -1041,11 +1050,10 @@ struct ClaudeCodePane: View {
                     try ClaudeCodeConfigWriter.deactivate(profile: profile, scope: sc, using: config)
                     statusMessage = L10n.t("claudeCode.deactivated", lang)
                 } else {
-                    // A proxy must know its upstream before Claude Code is pointed at it.
-                    if profile.isOpenAICompatible {
-                        try await CLIProxyAPIClient().configure(profile: profile)
-                        profile.cliProxyAppliedSignature = profile.cliProxyConfigurationSignature
-                        try BirdNionConfigStore.saveClaudeCodeProfile(profile)
+                    // Prepare the embedded conversion core before Claude Code
+                    // receives its loopback URL and generated local API key.
+                    if profile.usesEmbeddedCLIProxy {
+                        profile = try await EmbeddedCLIProxyService.shared.prepare(profile: profile)
                         workingProfile = profile
                     }
                     try ClaudeCodeConfigWriter.apply(profile: profile, scope: sc, using: config)
@@ -1055,6 +1063,8 @@ struct ClaudeCodePane: View {
                         : L10n.f("claudeCode.saved", lang, target.path)
                 }
                 reloadProfiles()
+            } catch let e as EmbeddedCLIProxyService.ServiceError {
+                errorMessage = embeddedCLIProxyErrorMessage(e)
             } catch let e as CLIProxyAPIClient.ClientError {
                 errorMessage = cliProxyErrorMessage(e)
             } catch let e as ClaudeCodeConfigWriter.WriteError {
@@ -1098,11 +1108,18 @@ struct ClaudeCodePane: View {
 
     private func cliProxyErrorMessage(_ error: CLIProxyAPIClient.ClientError) -> String {
         switch error {
-        case .incompleteConfiguration: return L10n.t("ccx.proxy.error.incomplete", lang)
         case .invalidProxyURL: return L10n.t("ccx.proxy.error.invalidURL", lang)
         case .network: return L10n.t("ccx.proxy.error.network", lang)
         case .http(let code): return L10n.f("ccx.proxy.error.http", lang, String(code))
         case .invalidResponse: return L10n.t("ccx.proxy.error.invalidResponse", lang)
+        }
+    }
+
+    private func embeddedCLIProxyErrorMessage(_ error: EmbeddedCLIProxyService.ServiceError) -> String {
+        switch error {
+        case .incompleteConfiguration: return L10n.t("ccx.proxy.error.incomplete", lang)
+        case .helperUnavailable: return L10n.t("ccx.proxy.error.helperUnavailable", lang)
+        case .didNotStart: return L10n.t("ccx.proxy.error.didNotStart", lang)
         }
     }
 

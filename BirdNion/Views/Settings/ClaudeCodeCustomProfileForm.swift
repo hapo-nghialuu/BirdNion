@@ -29,12 +29,14 @@ struct ClaudeCodeCustomProfileForm: View {
             }
 
             SettingsCard(header: L10n.t("ccx.advanced", lang)) {
-                fieldRow("apiKeyHelper") {
-                    TextField(L10n.t("ccx.apiKeyHelper.placeholder", lang),
-                              text: optionalBinding(\.apiKeyHelper))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 12).monospaced())
+                if !profile.usesEmbeddedCLIProxy {
+                    fieldRow("apiKeyHelper") {
+                        TextField(L10n.t("ccx.apiKeyHelper.placeholder", lang),
+                                  text: optionalBinding(\.apiKeyHelper))
+                            .textFieldStyle(.roundedBorder).font(.system(size: 12).monospaced())
+                    }
+                    SettingsRowDivider()
                 }
-                SettingsRowDivider()
                 extraEnvEditor
             }
         }

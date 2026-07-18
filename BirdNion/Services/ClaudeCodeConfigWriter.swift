@@ -185,7 +185,7 @@ enum ClaudeCodeConfigWriter {
                           scope: Scope, using config: ConfigService) -> SyncState {
         guard let spec = spec(forProfile: p) else { return .off }
         let state = syncState(spec: spec, scope: scope, using: config)
-        if state == .synced, p.isOpenAICompatible, !p.isCLIProxyConfigurationCurrent {
+        if state == .synced, p.embeddedLocalProxy == true, !p.isCLIProxyConfigurationCurrent {
             return .stale
         }
         return state
@@ -201,26 +201,12 @@ enum ClaudeCodeConfigWriter {
         var baseURL: String? { env[baseURLKey] }
     }
 
-    /// Build the write spec for a custom profile. Direct profiles retain their
-    /// existing Anthropic contract. OpenAI-compatible profiles point Claude
-    /// Code at CLIProxyAPI; upstream and management secrets never enter env.
+    /// Build the write spec for a custom profile. Embedded-proxy profiles point
+    /// Claude Code at BirdNion's loopback CLIProxyAPI core; upstream and
+    /// management secrets never enter Claude Code's env block.
     static func spec(forProfile p: BirdNionConfigStore.ClaudeCodeProfile) -> EnvSpec? {
-        switch p.compatibility {
-        case .anthropic:
-            guard let token = cleaned(p.token), let base = cleaned(p.baseURL) else { return nil }
-            var env: [String: String] = [:]
-            env[cleaned(p.tokenEnvKey) ?? authTokenKey] = token
-            env[baseURLKey] = base
-            if let h = cleaned(p.haikuModel) { env[haikuKey] = h }
-            if let s = cleaned(p.sonnetModel) { env[sonnetKey] = s }
-            if let o = cleaned(p.opusModel) { env[opusKey] = o }
-            for pair in p.extraEnv ?? [] {
-                if let k = cleaned(pair.key) { env[k] = pair.value }
-            }
-            return EnvSpec(env: env, apiKeyHelper: cleaned(p.apiKeyHelper))
-
-        case .openAI:
-            guard p.isOpenAIProxyReady,
+        if p.embeddedLocalProxy == true {
+            guard p.isEmbeddedCLIProxyReady,
                   let proxyKey = cleaned(p.cliProxyAPIKey),
                   let proxyBaseURL = p.normalizedCLIProxyBaseURL else { return nil }
             var env: [String: String] = [
@@ -236,11 +222,31 @@ enum ClaudeCodeConfigWriter {
             }
             return EnvSpec(env: env, apiKeyHelper: nil)
         }
+
+        switch p.compatibility {
+        case .anthropic:
+            guard let token = cleaned(p.token), let base = cleaned(p.baseURL) else { return nil }
+            var env: [String: String] = [:]
+            env[cleaned(p.tokenEnvKey) ?? authTokenKey] = token
+            env[baseURLKey] = base
+            if let h = cleaned(p.haikuModel) { env[haikuKey] = h }
+            if let s = cleaned(p.sonnetModel) { env[sonnetKey] = s }
+            if let o = cleaned(p.opusModel) { env[opusKey] = o }
+            for pair in p.extraEnv ?? [] {
+                if let k = cleaned(pair.key) { env[k] = pair.value }
+            }
+            return EnvSpec(env: env, apiKeyHelper: cleaned(p.apiKeyHelper))
+
+        case .openAI:
+            return nil
+        }
     }
 
-    /// A profile is ready to apply once it has both a token and a base URL.
+    /// Embedded profiles need only their upstream URL + key before activation:
+    /// BirdNion generates their loopback credentials at activation time.
     static func isReady(_ p: BirdNionConfigStore.ClaudeCodeProfile) -> Bool {
-        spec(forProfile: p) != nil
+        if p.usesEmbeddedCLIProxy { return p.hasUpstreamConfiguration }
+        return spec(forProfile: p) != nil
     }
 
     @MainActor
@@ -294,9 +300,13 @@ enum ClaudeCodeConfigWriter {
         }
 
         var p = base
-        // Imported JSON is a native Claude Code env block, therefore direct
-        // Anthropic mode is the only truthful interpretation of its fields.
+        // Imported JSON is an Anthropic-shaped upstream configuration.
         p.compatibilityMode = nil
+        p.embeddedLocalProxy = nil
+        p.cliProxyBaseURL = nil
+        p.cliProxyAPIKey = nil
+        p.cliProxyManagementKey = nil
+        p.cliProxyAppliedSignature = nil
         // Token: prefer an explicit API key, else the auth token.
         if let key = str(env["ANTHROPIC_API_KEY"]) {
             p.token = key

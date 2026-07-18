@@ -87,6 +87,8 @@
 		CCMF0001000000000000B001 /* ClaudeCodeModelsFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCMF0002000000000000F001 /* ClaudeCodeModelsFetcher.swift */; };
 		CCCW0001000000000000B001 /* ClaudeCodeConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCW0002000000000000F001 /* ClaudeCodeConfigWriter.swift */; };
 		CCPX0001000000000000B001 /* CLIProxyAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPX0002000000000000F001 /* CLIProxyAPIClient.swift */; };
+		CLPX0001000000000000B001 /* CLIProxyAPIConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */; };
+		CLPX0003000000000000B001 /* EmbeddedCLIProxyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */; };
 		CCPN0001000000000000B001 /* ClaudeCodePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPN0002000000000000F001 /* ClaudeCodePane.swift */; };
 		CCPB0001000000000000B001 /* ClaudeCodePowerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPB0002000000000000F001 /* ClaudeCodePowerButton.swift */; };
 		CCXF0001000000000000B001 /* ClaudeCodeCustomProfileForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCXF0002000000000000F001 /* ClaudeCodeCustomProfileForm.swift */; };
@@ -227,6 +229,8 @@
 		CCMF0002000000000000F001 /* ClaudeCodeModelsFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeCodeModelsFetcher.swift; sourceTree = "<group>"; };
 		CCCW0002000000000000F001 /* ClaudeCodeConfigWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ClaudeCodeConfigWriter.swift; sourceTree = "<group>"; };
 		CCPX0002000000000000F001 /* CLIProxyAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CLIProxyAPIClient.swift; sourceTree = "<group>"; };
+		CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIProxyAPIConfiguration.swift; sourceTree = "<group>"; };
+		CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedCLIProxyService.swift; sourceTree = "<group>"; };
 		CCPN0002000000000000F001 /* ClaudeCodePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodePane.swift; sourceTree = "<group>"; };
 		CCPB0002000000000000F001 /* ClaudeCodePowerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/ClaudeCodePowerButton.swift; sourceTree = "<group>"; };
 		CCXF0002000000000000F001 /* ClaudeCodeCustomProfileForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodeCustomProfileForm.swift; sourceTree = "<group>"; };
@@ -327,6 +331,28 @@
 	};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		CLPX0005000000000000S001 /* Embed CLIProxyAPI Core */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed CLIProxyAPI Core";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/cliproxyapi",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nsource_path=\"${CLIPROXYAPI_SOURCE:-$SRCROOT/../CLIProxyAPI}\"\noutput_dir=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\noutput=\"$output_dir/cliproxyapi\"\ntemporary_dir=\"$TARGET_TEMP_DIR/cliproxyapi\"\n\nif [ ! -d \"$source_path\" ]; then\n  echo \"error: CLIProxyAPI source not found at $source_path. Set CLIPROXYAPI_SOURCE before building BirdNion.\" >&2\n  exit 1\nfi\n\ngo_bin=\"$(command -v go || true)\"\nif [ -z \"$go_bin\" ]; then\n  for candidate in /opt/homebrew/bin/go /usr/local/bin/go; do\n    if [ -x \"$candidate\" ]; then\n      go_bin=\"$candidate\"\n      break\n    fi\n  done\nfi\nif [ -z \"$go_bin\" ]; then\n  echo \"error: Go is required to embed CLIProxyAPI.\" >&2\n  exit 1\nfi\n\nmkdir -p \"$output_dir\" \"$temporary_dir\"\ncd \"$source_path\"\nCGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \"$go_bin\" build -o \"$temporary_dir/cliproxyapi-arm64\" ./cmd/server\nCGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \"$go_bin\" build -o \"$temporary_dir/cliproxyapi-x86_64\" ./cmd/server\n/usr/bin/lipo -create -output \"$output\" \"$temporary_dir/cliproxyapi-arm64\" \"$temporary_dir/cliproxyapi-x86_64\"\n/bin/chmod 755 \"$output\"\n/usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$output\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXGroup section */
 		AAAA0006000000000000G001 /* Root */ = {
 			isa = PBXGroup;
@@ -373,6 +399,8 @@
 			children = (
 				FFFF0004000000000000F002 /* ServicesContainer.swift */,
 				L10N0002000000000000F001 /* AppLocalizer.swift */,
+				CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */,
+				CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -408,6 +436,7 @@
 			buildConfigurationList = AAAA0015000000000000CL002 /* Build configuration list for PBXNativeTarget "BirdNion" */;
 			buildPhases = (
 				AAAA0005000000000000B002 /* Frameworks */,
+				CLPX0005000000000000S001 /* Embed CLIProxyAPI Core */,
 				EEEE0005000000000000BR01 /* Resources */,
 				AAAA000F000000000000B003 /* Sources */,
 			);
@@ -614,6 +643,8 @@
 				CCMF0001000000000000B001 /* ClaudeCodeModelsFetcher.swift in Sources */,
 				CCCW0001000000000000B001 /* ClaudeCodeConfigWriter.swift in Sources */,
 				CCPX0001000000000000B001 /* CLIProxyAPIClient.swift in Sources */,
+				CLPX0001000000000000B001 /* CLIProxyAPIConfiguration.swift in Sources */,
+				CLPX0003000000000000B001 /* EmbeddedCLIProxyService.swift in Sources */,
 				CCPN0001000000000000B001 /* ClaudeCodePane.swift in Sources */,
 				CCPB0001000000000000B001 /* ClaudeCodePowerButton.swift in Sources */,
 				CCXF0001000000000000B001 /* ClaudeCodeCustomProfileForm.swift in Sources */,

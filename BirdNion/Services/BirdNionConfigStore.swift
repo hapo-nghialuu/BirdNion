@@ -87,12 +87,16 @@ enum BirdNionConfigStore {
         /// Values are currently "anthropic" and "openai".
         var compatibilityMode: String? = nil
         /// OpenAI-compatible upstream configuration. These values are sent only
-        /// to CLIProxyAPI's management endpoint, never to Claude Code settings.
+        /// to BirdNion's embedded CLIProxyAPI core, never to Claude Code settings.
         var openAIBaseURL: String? = nil
         var openAIAPIKey: String? = nil
-        /// The running CLIProxyAPI instance that presents an Anthropic surface
-        /// to Claude Code. The proxy API key is written to Claude Code; the
-        /// management key stays in BirdNion's restricted config file.
+        /// Explicitly marks a profile as managed by BirdNion's embedded local
+        /// proxy. Nil keeps old Anthropic profiles on their direct path, while
+        /// older OpenAI profiles migrate automatically on their next apply.
+        var embeddedLocalProxy: Bool? = nil
+        /// Internal credentials for BirdNion's loopback CLIProxyAPI core. The
+        /// local API key is written to Claude Code; the management key remains
+        /// inside BirdNion's restricted configuration file.
         var cliProxyBaseURL: String? = nil
         var cliProxyAPIKey: String? = nil
         var cliProxyManagementKey: String? = nil
@@ -113,6 +117,30 @@ enum BirdNionConfigStore {
         }
 
         var isOpenAICompatible: Bool { compatibility == .openAI }
+
+        /// New profiles always use the embedded proxy. Existing OpenAI profiles
+        /// do too, so the earlier manual CLIProxyAPI settings migrate when the
+        /// profile is next applied. Legacy Anthropic profiles remain direct
+        /// until the user changes their compatibility selection.
+        var usesEmbeddedCLIProxy: Bool {
+            embeddedLocalProxy ?? isOpenAICompatible
+        }
+
+        var upstreamBaseURL: String? {
+            isOpenAICompatible
+                ? BirdNionConfigStore.cleaned(openAIBaseURL) ?? BirdNionConfigStore.cleaned(baseURL)
+                : BirdNionConfigStore.cleaned(baseURL)
+        }
+
+        var upstreamAPIKey: String? {
+            isOpenAICompatible
+                ? BirdNionConfigStore.cleaned(openAIAPIKey) ?? BirdNionConfigStore.cleaned(token)
+                : BirdNionConfigStore.cleaned(token)
+        }
+
+        var hasUpstreamConfiguration: Bool {
+            upstreamBaseURL != nil && upstreamAPIKey != nil
+        }
 
         /// Stable per-profile ownership marker for CLIProxyAPI configuration and
         /// model routing. A namespaced prefix avoids collisions across profiles.
@@ -142,24 +170,29 @@ enum BirdNionConfigStore {
             [haikuModel, sonnetModel, opusModel].compactMap(BirdNionConfigStore.cleaned)
         }
 
-        var isOpenAIProxyReady: Bool {
+        var isEmbeddedCLIProxyReady: Bool {
             guard normalizedCLIProxyBaseURL != nil,
-                  BirdNionConfigStore.cleaned(openAIBaseURL) != nil,
-                  BirdNionConfigStore.cleaned(openAIAPIKey) != nil,
+                  hasUpstreamConfiguration,
                   BirdNionConfigStore.cleaned(cliProxyAPIKey) != nil,
                   BirdNionConfigStore.cleaned(cliProxyManagementKey) != nil else { return false }
-            return !openAIModelNames.isEmpty
+            return true
+        }
+
+        /// Compatibility alias retained for the previous OpenAI-only flow.
+        var isOpenAIProxyReady: Bool {
+            usesEmbeddedCLIProxy && isEmbeddedCLIProxyReady
         }
 
         var cliProxyConfigurationSignature: String? {
-            guard let proxyBaseURL = normalizedCLIProxyBaseURL,
-                  let upstreamBaseURL = BirdNionConfigStore.cleaned(openAIBaseURL),
-                  let upstreamAPIKey = BirdNionConfigStore.cleaned(openAIAPIKey),
+            guard usesEmbeddedCLIProxy,
+                  let proxyBaseURL = normalizedCLIProxyBaseURL,
+                  let upstreamBaseURL,
+                  let upstreamAPIKey,
                   let proxyAPIKey = BirdNionConfigStore.cleaned(cliProxyAPIKey),
-                  let managementKey = BirdNionConfigStore.cleaned(cliProxyManagementKey),
-                  !openAIModelNames.isEmpty else { return nil }
+                  let managementKey = BirdNionConfigStore.cleaned(cliProxyManagementKey) else { return nil }
             let material = ([
                 cliProxyProviderName,
+                compatibility.rawValue,
                 proxyBaseURL,
                 upstreamBaseURL,
                 upstreamAPIKey,

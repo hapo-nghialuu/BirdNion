@@ -58,6 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         services.start()
+        Task { @MainActor in
+            await EmbeddedCLIProxyService.shared.restoreIfConfigured()
+        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(openSettings(_:)),
             name: .openSettings, object: nil
@@ -428,6 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rotationTimer = nil
         if let m = localClickMonitor { NSEvent.removeMonitor(m) }
         if let m = globalClickMonitor { NSEvent.removeMonitor(m) }
+        EmbeddedCLIProxyService.shared.stop()
         services.stop()
     }
 }
