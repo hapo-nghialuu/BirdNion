@@ -118,6 +118,36 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
         fieldRow(L10n.t("ccx.openai.apiKey", lang)) {
             secretInput("openai-api-key", text: optionalBinding(\.openAIAPIKey))
         }
+        SettingsRowDivider()
+        openAIFormatRow
+    }
+
+    private var openAIFormatRow: some View {
+        fieldRow(L10n.t("ccx.openai.format", lang)) {
+            Picker("", selection: openAIFormatBinding) {
+                Text(L10n.t("ccx.openai.format.chat", lang)).tag("chat")
+                Text(L10n.t("ccx.openai.format.responses", lang)).tag("responses")
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            // SegmentedControl caches its previous selection in AppKit.
+            // Recreate it when moving between custom profiles.
+            .id(profile.id)
+            .frame(maxWidth: 360, alignment: .trailing)
+            .accessibilityLabel(L10n.t("ccx.openai.format", lang))
+        }
+    }
+
+    /// `nil` openAIFormat = Chat Completions; `"responses"` = Responses API.
+    private var openAIFormatBinding: Binding<String> {
+        Binding(
+            get: { profile.openAIProxyFormat == "responses" ? "responses" : "chat" },
+            set: { raw in
+                var updated = profile
+                updated.openAIFormat = raw == "responses" ? "responses" : nil
+                profile = updated
+            }
+        )
     }
 
     private var compatibilitySelection: Binding<String> {

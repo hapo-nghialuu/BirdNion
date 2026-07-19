@@ -3,11 +3,15 @@ import SwiftUI
 struct CodexProfileConnectionFields: View {
     @Binding var profile: BirdNionConfigStore.CodexProfile
     let lang: String
+    var header: String? = nil
 
     @State private var apiKeyVisible = false
+    @State private var models: [String] = []
+    @State private var loadingModels = false
+    @State private var modelsError: String?
 
     var body: some View {
-        SettingsCard(header: L10n.t("ccx.step.upstream", lang)) {
+        SettingsCard(header: header ?? L10n.t("ccx.step.upstream", lang)) {
             fieldRow(L10n.t("codexConfig.name", lang)) {
                 TextField(L10n.t("codexConfig.name.placeholder", lang), text: $profile.name)
                     .textFieldStyle(.roundedBorder)
@@ -39,9 +43,98 @@ struct CodexProfileConnectionFields: View {
             }
             SettingsRowDivider()
             fieldRow(L10n.t("codexConfig.model", lang)) {
-                TextField("gpt-5.6", text: $profile.model)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12).monospaced())
+                modelInput
+            }
+            if let modelsError {
+                Text(modelsError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(SettingsTheme.critical)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private var modelInput: some View {
+        let options = suggestionOptions(current: profile.model)
+        return HStack(spacing: 8) {
+            TextField("gpt-5.6", text: $profile.model)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12).monospaced())
+            Button {
+                loadModels()
+            } label: {
+                if loadingModels {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .disabled(loadingModels || !canFetchModels)
+            .help(models.isEmpty
+                  ? L10n.t("claudeCode.loadModels", lang)
+                  : L10n.t("claudeCode.reloadModels", lang))
+            .accessibilityLabel(models.isEmpty
+                                ? L10n.t("claudeCode.loadModels", lang)
+                                : L10n.t("claudeCode.reloadModels", lang))
+            Menu {
+                ForEach(options, id: \.self) { id in
+                    Button(id) { profile.model = id }
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 22)
+            .fixedSize()
+            .disabled(options.isEmpty)
+        }
+    }
+
+    private var canFetchModels: Bool {
+        let base = profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = profile.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !base.isEmpty && !key.isEmpty
+    }
+
+    private func suggestionOptions(current: String) -> [String] {
+        var opts = models
+        if !current.isEmpty, !opts.contains(current) { opts.insert(current, at: 0) }
+        return opts
+    }
+
+    private func loadModels() {
+        let baseURL = profile.baseURL
+        let token = profile.apiKey
+        guard !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        loadingModels = true
+        modelsError = nil
+        Task {
+            do {
+                let fetched = try await ClaudeCodeModelsFetcher.fetchModels(baseURL: baseURL, token: token)
+                await MainActor.run {
+                    models = fetched
+                    loadingModels = false
+                }
+            } catch let error as ClaudeCodeModelsFetcher.FetchError {
+                await MainActor.run {
+                    modelsError = error.message
+                    loadingModels = false
+                }
+            } catch {
+                await MainActor.run {
+                    modelsError = error.localizedDescription
+                    loadingModels = false
+                }
             }
         }
     }

@@ -7,6 +7,11 @@ struct ClaudeCodeCustomProfileForm: View {
     @Binding var profile: BirdNionConfigStore.ClaudeCodeProfile
     let lang: String
     var includesConnectionFields: Bool = true
+    var modelHeader: String? = nil
+
+    @State private var models: [String] = []
+    @State private var loadingModels = false
+    @State private var modelsError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -14,20 +19,27 @@ struct ClaudeCodeCustomProfileForm: View {
                 ClaudeCodeCustomProfileConnectionFields(profile: $profile, lang: lang)
             }
 
-            SettingsCard(header: L10n.t("claudeCode.model", lang)) {
+            SettingsCard(header: modelHeader ?? L10n.t("claudeCode.model", lang)) {
+                modelHeaderRow
+                SettingsRowDivider()
                 fieldRow(L10n.t("claudeCode.model.haiku", lang)) {
-                    TextField(L10n.t("ccx.model.optional", lang), text: modelBinding(\.haikuModel))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 12).monospaced())
+                    modelInput(text: modelBinding(\.haikuModel))
                 }
                 SettingsRowDivider()
                 fieldRow(L10n.t("claudeCode.model.sonnet", lang)) {
-                    TextField(L10n.t("ccx.model.optional", lang), text: modelBinding(\.sonnetModel))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 12).monospaced())
+                    modelInput(text: modelBinding(\.sonnetModel))
                 }
                 SettingsRowDivider()
                 fieldRow(L10n.t("claudeCode.model.opus", lang)) {
-                    TextField(L10n.t("ccx.model.optional", lang), text: modelBinding(\.opusModel))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 12).monospaced())
+                    modelInput(text: modelBinding(\.opusModel))
+                }
+                if let modelsError {
+                    Text(modelsError)
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsTheme.critical)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
                 }
             }
 
@@ -41,6 +53,99 @@ struct ClaudeCodeCustomProfileForm: View {
                     SettingsRowDivider()
                 }
                 extraEnvEditor
+            }
+        }
+    }
+
+    // MARK: - Model discovery
+
+    private var canFetchModels: Bool {
+        profile.upstreamBaseURL != nil && profile.upstreamAPIKey != nil
+    }
+
+    private var modelHeaderRow: some View {
+        HStack(spacing: 10) {
+            if loadingModels {
+                Text(L10n.t("claudeCode.loadingModels", lang))
+                    .font(.system(size: 11)).foregroundStyle(SettingsTheme.secondary)
+            } else if !models.isEmpty {
+                Text(L10n.f("claudeCode.modelsLoaded", lang, models.count))
+                    .font(.system(size: 11)).foregroundStyle(SettingsTheme.secondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                loadModels()
+            } label: {
+                HStack(spacing: 5) {
+                    if loadingModels {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    Text(models.isEmpty
+                         ? L10n.t("claudeCode.loadModels", lang)
+                         : L10n.t("claudeCode.reloadModels", lang))
+                }
+            }
+            .controlSize(.small)
+            .disabled(loadingModels || !canFetchModels)
+            .pointingHandCursor()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func modelInput(text: Binding<String>) -> some View {
+        let options = suggestionOptions(current: text.wrappedValue)
+        return HStack(spacing: 8) {
+            TextField(L10n.t("ccx.model.optional", lang), text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12).monospaced())
+            Menu {
+                ForEach(options, id: \.self) { id in
+                    Button(id) { text.wrappedValue = id }
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 22)
+            .fixedSize()
+            .disabled(options.isEmpty)
+        }
+    }
+
+    private func suggestionOptions(current: String) -> [String] {
+        var opts = models
+        if !current.isEmpty, !opts.contains(current) { opts.insert(current, at: 0) }
+        return opts
+    }
+
+    private func loadModels() {
+        guard let baseURL = profile.upstreamBaseURL,
+              let token = profile.upstreamAPIKey else { return }
+        loadingModels = true
+        modelsError = nil
+        Task {
+            do {
+                let fetched = try await ClaudeCodeModelsFetcher.fetchModels(baseURL: baseURL, token: token)
+                await MainActor.run {
+                    models = fetched
+                    loadingModels = false
+                }
+            } catch let error as ClaudeCodeModelsFetcher.FetchError {
+                await MainActor.run {
+                    modelsError = error.message
+                    loadingModels = false
+                }
+            } catch {
+                await MainActor.run {
+                    modelsError = error.localizedDescription
+                    loadingModels = false
+                }
             }
         }
     }
