@@ -199,4 +199,181 @@ final class CodexConfigWriterTests: XCTestCase {
         )
         XCTAssertEqual(configuration.openAICompatibility.first?.format, "responses")
     }
+
+    // MARK: - Linked upstream sync (Claude ↔ Codex)
+
+    func testSyncedCodexProfileFromAnthropicClaude() {
+        var claude = embeddedClaudeProfile()
+        claude.baseURL = "https://new-anthropic.example"
+        claude.token = "new-token"
+        claude.compatibilityMode = "anthropic"
+        var codex = profile(protocolValue: .responses, connection: .direct)
+        codex.model = "keep-me"
+        codex.cliProxyAppliedSignature = "stale-sig"
+
+        let (synced, changed) = BirdNionConfigStore.syncedCodexProfile(from: claude, into: codex)
+
+        XCTAssertTrue(changed)
+        XCTAssertEqual(synced.baseURL, "https://new-anthropic.example")
+        XCTAssertEqual(synced.apiKey, "new-token")
+        XCTAssertEqual(synced.upstreamProtocol, .anthropic)
+        XCTAssertEqual(synced.connectionMode, .localProxy)
+        XCTAssertEqual(synced.model, "keep-me")
+        XCTAssertNil(synced.cliProxyAppliedSignature)
+    }
+
+    func testSyncedCodexProfileFromOpenAIChatAndResponses() {
+        var claude = embeddedClaudeProfile()
+        claude.compatibilityMode = "openai"
+        claude.openAIBaseURL = "https://chat.example/v1"
+        claude.openAIAPIKey = "chat-key"
+        claude.openAIFormat = nil
+
+        let chat = profile(protocolValue: .anthropic, connection: .localProxy)
+        let (syncedChat, changedChat) = BirdNionConfigStore.syncedCodexProfile(from: claude, into: chat)
+        XCTAssertTrue(changedChat)
+        XCTAssertEqual(syncedChat.upstreamProtocol, .openAIChat)
+        XCTAssertEqual(syncedChat.baseURL, "https://chat.example/v1")
+        XCTAssertEqual(syncedChat.apiKey, "chat-key")
+
+        claude.openAIFormat = "responses"
+        let responses = profile(protocolValue: .openAIChat, connection: .localProxy)
+        let (syncedResponses, changedResponses) = BirdNionConfigStore.syncedCodexProfile(from: claude, into: responses)
+        XCTAssertTrue(changedResponses)
+        XCTAssertEqual(syncedResponses.upstreamProtocol, .responses)
+        // Protocol moved to responses — do not force local-proxy; leave connection as-is.
+        XCTAssertEqual(syncedResponses.connectionMode, .localProxy)
+    }
+
+    func testSyncedClaudeCodeProfileFromCodexProtocols() {
+        var claude = embeddedClaudeProfile()
+        claude.haikuModel = "haiku-keep"
+        claude.sonnetModel = "sonnet-keep"
+        claude.opusModel = "opus-keep"
+        claude.extraEnv = [.init(id: "e1", key: "FOO", value: "1")]
+        claude.claudeCodeScope = "project"
+        claude.cliProxyAppliedSignature = "sig"
+
+        // Anthropic
+        var anthropicCodex = profile(protocolValue: .anthropic, connection: .localProxy)
+        anthropicCodex.baseURL = "https://a.example"
+        anthropicCodex.apiKey = "a-key"
+        let (syncedA, changedA) = BirdNionConfigStore.syncedClaudeCodeProfile(from: anthropicCodex, into: claude)
+        XCTAssertTrue(changedA)
+        XCTAssertEqual(syncedA.baseURL, "https://a.example")
+        XCTAssertEqual(syncedA.token, "a-key")
+        XCTAssertEqual(syncedA.compatibility, .anthropic)
+        XCTAssertEqual(syncedA.haikuModel, "haiku-keep")
+        XCTAssertEqual(syncedA.sonnetModel, "sonnet-keep")
+        XCTAssertEqual(syncedA.opusModel, "opus-keep")
+        XCTAssertEqual(syncedA.extraEnv?.first?.key, "FOO")
+        XCTAssertEqual(syncedA.claudeCodeScope, "project")
+        XCTAssertNil(syncedA.cliProxyAppliedSignature)
+
+        // OpenAI chat
+        var chatCodex = profile(protocolValue: .openAIChat, connection: .localProxy)
+        chatCodex.baseURL = "https://chat.example/v1"
+        chatCodex.apiKey = "chat-key"
+        let (syncedChat, changedChat) = BirdNionConfigStore.syncedClaudeCodeProfile(from: chatCodex, into: claude)
+        XCTAssertTrue(changedChat)
+        XCTAssertEqual(syncedChat.compatibility, .openAI)
+        XCTAssertEqual(syncedChat.openAIBaseURL, "https://chat.example/v1")
+        XCTAssertEqual(syncedChat.openAIAPIKey, "chat-key")
+        XCTAssertNil(syncedChat.openAIFormat)
+        XCTAssertEqual(syncedChat.embeddedLocalProxy, true)
+        XCTAssertEqual(syncedChat.sonnetModel, "sonnet-keep")
+
+        // Responses
+        var responsesCodex = profile(protocolValue: .responses, connection: .direct)
+        responsesCodex.baseURL = "https://resp.example/v1"
+        responsesCodex.apiKey = "resp-key"
+        let (syncedR, changedR) = BirdNionConfigStore.syncedClaudeCodeProfile(from: responsesCodex, into: claude)
+        XCTAssertTrue(changedR)
+        XCTAssertEqual(syncedR.openAIFormat, "responses")
+        XCTAssertEqual(syncedR.openAIProxyFormat, "responses")
+    }
+
+    func testSyncedProfilesIdempotent() {
+        var claude = embeddedClaudeProfile()
+        claude.compatibilityMode = "openai"
+        claude.openAIBaseURL = "https://same.example/v1"
+        claude.openAIAPIKey = "same-key"
+        claude.openAIFormat = "responses"
+        claude.embeddedLocalProxy = true
+
+        var codex = profile(protocolValue: .responses, connection: .direct)
+        codex.baseURL = "https://same.example/v1"
+        codex.apiKey = "same-key"
+        codex.cliProxyAppliedSignature = "keep-sig"
+
+        let (syncedCodex, changedCodex) = BirdNionConfigStore.syncedCodexProfile(from: claude, into: codex)
+        XCTAssertFalse(changedCodex)
+        XCTAssertEqual(syncedCodex.cliProxyAppliedSignature, "keep-sig")
+
+        claude.cliProxyAppliedSignature = "claude-sig"
+        let (syncedClaude, changedClaude) = BirdNionConfigStore.syncedClaudeCodeProfile(from: codex, into: claude)
+        XCTAssertFalse(changedClaude)
+        XCTAssertEqual(syncedClaude.cliProxyAppliedSignature, "claude-sig")
+
+        // Round-trip still idempotent after first apply
+        let (again, changedAgain) = BirdNionConfigStore.syncedCodexProfile(from: claude, into: syncedCodex)
+        XCTAssertFalse(changedAgain)
+    }
+
+    func testSaveClaudeCodeProfileMirrorsLinkedCodex() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-sync-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var claude = embeddedClaudeProfile()
+        claude.codexProfileID = "profile-1"
+        claude.baseURL = "https://orig-claude.example"
+        claude.token = "orig-token"
+        claude.compatibilityMode = "anthropic"
+        claude.sonnetModel = "claude-sonnet-only"
+
+        var codex = profile(protocolValue: .responses, connection: .direct)
+        codex.claudeCodeProfileID = claude.id
+        codex.baseURL = "https://old-codex.example"
+        codex.apiKey = "old-key"
+        codex.model = "codex-model-only"
+        codex.cliProxyAppliedSignature = "applied"
+
+        try BirdNionConfigStore.saveClaudeCodeProfile(claude, url: url)
+        try BirdNionConfigStore.saveCodexProfile(codex, url: url)
+
+        // Edit Claude upstream and save — Codex should pick it up
+        claude.baseURL = "https://mirrored.example"
+        claude.token = "mirrored-token"
+        try BirdNionConfigStore.saveClaudeCodeProfile(claude, url: url)
+
+        let storedCodex = try XCTUnwrap(BirdNionConfigStore.codexProfiles(url: url).first { $0.id == "profile-1" })
+        XCTAssertEqual(storedCodex.baseURL, "https://mirrored.example")
+        XCTAssertEqual(storedCodex.apiKey, "mirrored-token")
+        XCTAssertEqual(storedCodex.upstreamProtocol, .anthropic)
+        XCTAssertEqual(storedCodex.model, "codex-model-only")
+        XCTAssertNil(storedCodex.cliProxyAppliedSignature)
+
+        // Reverse: edit Codex → Claude mirrors, model tiers untouched
+        var updatedCodex = storedCodex
+        updatedCodex.baseURL = "https://from-codex.example"
+        updatedCodex.apiKey = "from-codex-key"
+        updatedCodex.upstreamProtocolRaw = BirdNionConfigStore.CodexProfile.UpstreamProtocol.openAIChat.rawValue
+        updatedCodex.connectionModeRaw = BirdNionConfigStore.CodexProfile.ConnectionMode.localProxy.rawValue
+        try BirdNionConfigStore.saveCodexProfile(updatedCodex, url: url)
+
+        let storedClaude = try XCTUnwrap(BirdNionConfigStore.claudeCodeProfiles(url: url).first { $0.id == claude.id })
+        XCTAssertEqual(storedClaude.compatibility, .openAI)
+        XCTAssertEqual(storedClaude.openAIBaseURL, "https://from-codex.example")
+        XCTAssertEqual(storedClaude.openAIAPIKey, "from-codex-key")
+        XCTAssertNil(storedClaude.openAIFormat)
+        XCTAssertEqual(storedClaude.sonnetModel, "claude-sonnet-only")
+        XCTAssertNil(storedClaude.cliProxyAppliedSignature)
+
+        // Second save with same values is a no-op on the peer (idempotent)
+        let before = try XCTUnwrap(BirdNionConfigStore.codexProfiles(url: url).first { $0.id == "profile-1" })
+        try BirdNionConfigStore.saveClaudeCodeProfile(storedClaude, url: url)
+        let after = try XCTUnwrap(BirdNionConfigStore.codexProfiles(url: url).first { $0.id == "profile-1" })
+        XCTAssertEqual(before, after)
+    }
 }
