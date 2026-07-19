@@ -597,18 +597,13 @@ struct ProviderHeaderCard: View {
     private var hasError: Bool { status.error != nil }
 
     /// Provider detail extras not surfaced as quota windows (Codex populates
-    /// these): credit balance / ∞, CLI version, code-review %, manual-reset
+    /// these): unlimited credits, CLI version, code-review %, manual-reset
     /// credits. Rendered as a dim second metadata line so they don't crowd the
-    /// primary one. Empty for providers that leave these fields nil.
+    /// primary one. A finite Codex balance gets its own full-width strip below.
     private var detailParts: [String] {
         var parts: [String] = []
         if status.creditsUnlimited {
             parts.append("∞ credits")
-        } else if status.id == "codex", let c = status.creditsRemaining {
-            let amount = c.truncatingRemainder(dividingBy: 1) == 0
-                ? String(Int(c))
-                : String(format: "%.2f", c)
-            parts.append("\(amount) credits")
         }
         if let v = status.version, !v.isEmpty { parts.append(v) }
         if let cr = status.codexWeb?.codeReviewRemainingPercent {
@@ -618,6 +613,60 @@ struct ProviderHeaderCard: View {
             parts.append("\(rc) reset credits")
         }
         return parts
+    }
+
+    private var availableCodexCredits: Double? {
+        guard status.id == "codex",
+              !status.creditsUnlimited,
+              let credits = status.creditsRemaining,
+              credits.isFinite,
+              credits > 0
+        else {
+            return nil
+        }
+        return credits
+    }
+
+    private func creditsText(_ credits: Double) -> String {
+        credits.rounded() == credits
+            ? String(Int(credits))
+            : String(format: "%.2f", credits)
+    }
+
+    private func creditsAccessibilityLabel(_ credits: Double) -> String {
+        let title = L10n.t("provider.creditsAvailable", settings.appLanguage)
+        return title + ": " + creditsText(credits)
+    }
+
+    /// The Codex API exposes a balance but not a credit limit, so this is a
+    /// balance strip rather than a percentage meter.
+    private func availableCreditsStrip(_ credits: Double) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "creditcard.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.blue)
+                .frame(width: 18, height: 18)
+            Text(L10n.t("provider.creditsAvailable", settings.appLanguage))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(VocabbyTheme.primary)
+            Spacer(minLength: 8)
+            Text(creditsText(credits))
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .foregroundStyle(VocabbyTheme.blue)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(VocabbyTheme.blue.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(VocabbyTheme.blue.opacity(0.18), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(creditsAccessibilityLabel(credits))
     }
 
     /// Dot color for the provider service-status badge, driven by the
@@ -631,75 +680,80 @@ struct ProviderHeaderCard: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            ProviderLogoMark(id: status.id, tint: VocabbyTheme.blue)
-                .frame(width: 24, height: 24)
-                .padding(5)
-                .background(VocabbyTheme.segment)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(VocabbyTheme.border, lineWidth: 1)
-                )
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(status.displayName)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                    if !isPlaceholder && quota.isRefreshing {
-                        // Provider has last-known data; a refresh is in
-                        // flight. Show a small inline spinner so the user
-                        // knows the row is being updated, but keep the
-                        // existing subtitle + quota windows visible.
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(VocabbyTheme.blue)
-                            .frame(width: 10, height: 10)
-                        Text(L10n.t("popover.updating", settings.appLanguage).lowercased())
-                            .font(.system(size: 10))
-                            .foregroundStyle(VocabbyTheme.tertiary)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 10) {
+                ProviderLogoMark(id: status.id, tint: VocabbyTheme.blue)
+                    .frame(width: 24, height: 24)
+                    .padding(5)
+                    .background(VocabbyTheme.segment)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(VocabbyTheme.border, lineWidth: 1)
+                    )
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(status.displayName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.primary)
+                        if !isPlaceholder && quota.isRefreshing {
+                            // Provider has last-known data; a refresh is in
+                            // flight. Show a small inline spinner so the user
+                            // knows the row is being updated, but keep the
+                            // existing subtitle + quota windows visible.
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(VocabbyTheme.blue)
+                                .frame(width: 10, height: 10)
+                            Text(L10n.t("popover.updating", settings.appLanguage).lowercased())
+                                .font(.system(size: 10))
+                                .foregroundStyle(VocabbyTheme.tertiary)
+                        }
                     }
-                }
-                HStack(spacing: 4) {
-                    if isPlaceholder {
-                        // First-time load for this provider — no previous
-                        // data to show. Use a placeholder spinner so the
-                        // popover makes clear which tab is still loading.
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(VocabbyTheme.blue)
-                            .frame(width: 12, height: 12)
-                        Text(L10n.t("provider.loading", settings.appLanguage))
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(VocabbyTheme.secondary)
-                    } else {
-                        Text(metadataParts.joined(separator: " · "))
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(VocabbyTheme.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                if !isPlaceholder, let svc = status.serviceStatus, !svc.isEmpty {
                     HStack(spacing: 4) {
-                        Circle().fill(serviceColor).frame(width: 6, height: 6)
-                        Text(L10n.providerText(svc, preference: settings.appLanguage))
-                            .font(.system(size: 10))
+                        if isPlaceholder {
+                            // First-time load for this provider — no previous
+                            // data to show. Use a placeholder spinner so the
+                            // popover makes clear which tab is still loading.
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(VocabbyTheme.blue)
+                                .frame(width: 12, height: 12)
+                            Text(L10n.t("provider.loading", settings.appLanguage))
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(VocabbyTheme.secondary)
+                        } else {
+                            Text(metadataParts.joined(separator: " · "))
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(VocabbyTheme.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    if !isPlaceholder, let svc = status.serviceStatus, !svc.isEmpty {
+                        HStack(spacing: 4) {
+                            Circle().fill(serviceColor).frame(width: 6, height: 6)
+                            Text(L10n.providerText(svc, preference: settings.appLanguage))
+                                .font(.system(size: 10))
+                                .foregroundStyle(VocabbyTheme.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    if !isPlaceholder, !detailParts.isEmpty {
+                        Text(detailParts
+                            .map { L10n.providerText($0, preference: settings.appLanguage) }
+                            .joined(separator: " · "))
+                            .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(VocabbyTheme.tertiary)
                             .lineLimit(1)
                     }
                 }
-                if !isPlaceholder, !detailParts.isEmpty {
-                    Text(detailParts
-                        .map { L10n.providerText($0, preference: settings.appLanguage) }
-                        .joined(separator: " · "))
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                        .lineLimit(1)
-                }
+                Spacer(minLength: 6)
+                MenuBarVisibilityToggle(providerId: status.id, hasError: hasError)
+                    .id("menuBarVis.\(status.id)")  // force fresh @State per provider
             }
-            Spacer(minLength: 6)
-            MenuBarVisibilityToggle(providerId: status.id, hasError: hasError)
-                .id("menuBarVis.\(status.id)")  // force fresh @State per provider
+            if !isPlaceholder, let credits = availableCodexCredits {
+                availableCreditsStrip(credits)
+            }
         }
         // Padding is tighter than the standard vocabbyCard (12pt) so the
         // taller 48pt logo doesn't grow the card height.
