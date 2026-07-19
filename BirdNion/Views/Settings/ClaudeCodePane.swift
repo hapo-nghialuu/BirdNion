@@ -179,22 +179,13 @@ struct ClaudeCodePane: View {
         }
     }
 
-    /// Codex-side counterpart of `persistWorkingProfile`. Saving mirrors the
-    /// upstream back onto the linked Claude record; refresh it so the form
-    /// never shows stale credentials.
+    /// Codex-side counterpart of `persistWorkingProfile`. Codex saves never
+    /// mirror back onto the Claude record — the shared upstream is only
+    /// editable there, so reverse writes could only carry stale snapshots.
     private func persistWorkingCodexProfile(_ profile: BirdNionConfigStore.CodexProfile?) {
         guard let p = profile else { return }
         try? BirdNionConfigStore.saveCodexProfile(p)
         reloadCodexProfiles()
-        if let claudeID = p.claudeCodeProfileID {
-            let stored = BirdNionConfigStore.claudeCodeProfiles()
-            if let mirrored = stored.first(where: { $0.id == claudeID }) {
-                if let idx = profiles.firstIndex(where: { $0.id == claudeID }) { profiles[idx] = mirrored }
-                if workingProfile?.id == claudeID, workingProfile != mirrored {
-                    workingProfile = mirrored
-                }
-            }
-        }
     }
 
     private func reloadCodexProfiles() {
