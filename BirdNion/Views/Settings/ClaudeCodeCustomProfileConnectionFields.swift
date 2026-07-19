@@ -46,10 +46,10 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                 }
                 SettingsRowDivider()
                 fieldRow(L10n.t("ccx.compatibility", lang)) {
-                    Picker("", selection: compatibilitySelection) {
-                        ForEach(BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.allCases) { mode in
-                            Text(modeLabel(mode)).tag(mode.rawValue)
-                        }
+                    Picker("", selection: protocolSelection) {
+                        Text(L10n.t("codexConfig.protocol.anthropic", lang)).tag("anthropic")
+                        Text(L10n.t("codexConfig.protocol.openaiChat", lang)).tag("chat")
+                        Text(L10n.t("codexConfig.protocol.responses", lang)).tag("responses")
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
@@ -118,61 +118,38 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
         fieldRow(L10n.t("ccx.openai.apiKey", lang)) {
             secretInput("openai-api-key", text: optionalBinding(\.openAIAPIKey))
         }
-        SettingsRowDivider()
-        openAIFormatRow
     }
 
-    private var openAIFormatRow: some View {
-        fieldRow(L10n.t("ccx.openai.format", lang)) {
-            Picker("", selection: openAIFormatBinding) {
-                Text(L10n.t("ccx.openai.format.chat", lang)).tag("chat")
-                Text(L10n.t("ccx.openai.format.responses", lang)).tag("responses")
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            // SegmentedControl caches its previous selection in AppKit.
-            // Recreate it when moving between custom profiles.
-            .id(profile.id)
-            .frame(maxWidth: 360, alignment: .trailing)
-            .accessibilityLabel(L10n.t("ccx.openai.format", lang))
-        }
-    }
-
-    /// `nil` openAIFormat = Chat Completions; `"responses"` = Responses API.
-    private var openAIFormatBinding: Binding<String> {
+    /// One user-facing wire-protocol choice covering both stored fields:
+    /// anthropic ⇄ compatibility, chat/responses ⇄ compatibility=openai +
+    /// `openAIFormat` nil / "responses". Built as a single write — a second
+    /// write derived from re-reading `profile` in the same update would see
+    /// the stale value and clobber the first.
+    private var protocolSelection: Binding<String> {
         Binding(
-            get: { profile.openAIProxyFormat == "responses" ? "responses" : "chat" },
+            get: {
+                guard profile.isOpenAICompatible else { return "anthropic" }
+                return profile.openAIProxyFormat == "responses" ? "responses" : "chat"
+            },
             set: { raw in
                 var updated = profile
-                updated.openAIFormat = raw == "responses" ? "responses" : nil
+                if raw == "anthropic" {
+                    if updated.baseURL.isEmpty { updated.baseURL = updated.openAIBaseURL ?? "" }
+                    if updated.token.isEmpty { updated.token = updated.openAIAPIKey ?? "" }
+                    updated.openAIFormat = nil
+                    updated.compatibilityMode =
+                        BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
+                } else {
+                    if updated.openAIBaseURL?.isEmpty ?? true { updated.openAIBaseURL = nonEmpty(updated.baseURL) }
+                    if updated.openAIAPIKey?.isEmpty ?? true { updated.openAIAPIKey = nonEmpty(updated.token) }
+                    updated.embeddedLocalProxy = true
+                    updated.openAIFormat = raw == "responses" ? "responses" : nil
+                    updated.compatibilityMode =
+                        BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.openAI.rawValue
+                }
                 profile = updated
             }
         )
-    }
-
-    private var compatibilitySelection: Binding<String> {
-        Binding(
-            get: { profile.compatibility.rawValue },
-            set: { rawValue in
-                let next = BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode(rawValue: rawValue) ?? .anthropic
-                selectCompatibility(next)
-            }
-        )
-    }
-
-    private func selectCompatibility(_ next: BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode) {
-        var updated = profile
-        if next == .openAI {
-            if updated.openAIBaseURL?.isEmpty ?? true { updated.openAIBaseURL = nonEmpty(updated.baseURL) }
-            if updated.openAIAPIKey?.isEmpty ?? true { updated.openAIAPIKey = nonEmpty(updated.token) }
-            updated.embeddedLocalProxy = true
-        } else {
-            if updated.baseURL.isEmpty { updated.baseURL = updated.openAIBaseURL ?? "" }
-            if updated.token.isEmpty { updated.token = updated.openAIAPIKey ?? "" }
-            updated.openAIFormat = nil
-        }
-        updated.compatibilityMode = next.rawValue
-        profile = updated
     }
 
     private var connectionModeRow: some View {
@@ -205,11 +182,6 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                 profile = updated
             }
         )
-    }
-
-    private func modeLabel(_ mode: BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode) -> String {
-        let key = mode == .anthropic ? "ccx.compatibility.anthropic" : "ccx.compatibility.openai"
-        return L10n.t(key, lang)
     }
 
     private func secretInput(_ id: String, text: Binding<String>) -> some View {

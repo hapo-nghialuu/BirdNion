@@ -559,6 +559,9 @@ enum BirdNionConfigStore {
         /// Last selected project directory path for this provider. Preserved
         /// across global/project toggles and independent from other providers.
         var claudeCodeProjectPath: String?
+        /// Derived Codex record backing this preset through the embedded
+        /// proxy (Anthropic wire protocol). Nil until the user targets Codex.
+        var codexProfileID: String?
 
         /// Default value used when a provider entry has no `enabled` flag.
         /// First-run user-revision (2026-06-25): opt-in, so default off.
