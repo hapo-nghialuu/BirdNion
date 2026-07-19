@@ -72,6 +72,7 @@ struct SettingsSceneRoot: View {
                 case .general: GeneralPane()
                 case .providers: ProvidersPane()
                 case .claudeCode: ClaudeCodePane()
+                case .codex: CodexPane()
                 case .display: DisplayPane()
                 case .advanced: AdvancedPane()
                 case .about: AboutPane()

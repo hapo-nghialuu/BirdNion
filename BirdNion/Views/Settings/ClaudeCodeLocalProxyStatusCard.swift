@@ -15,6 +15,9 @@ struct ClaudeCodeLocalProxyStatusCard: View {
     let onStart: () -> Void
     let onStop: () -> Void
     let onRefresh: () -> Void
+    var header: String? = nil
+    var runningDetail: String? = nil
+    var stoppedDetail: String? = nil
 
     private enum Action {
         case start
@@ -25,7 +28,7 @@ struct ClaudeCodeLocalProxyStatusCard: View {
     }
 
     var body: some View {
-        SettingsCard(header: L10n.t("ccx.step.proxy", lang)) {
+        SettingsCard(header: header ?? L10n.t("ccx.step.proxy", lang)) {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: presentation.icon)
                     .font(.system(size: 16, weight: .semibold))
@@ -195,7 +198,7 @@ struct ClaudeCodeLocalProxyStatusCard: View {
                 "checkmark.circle.fill",
                 SettingsTheme.success,
                 L10n.t("ccx.proxy.status.running", lang),
-                L10n.t("ccx.proxy.detail.running", lang)
+                runningDetail ?? L10n.t("ccx.proxy.detail.running", lang)
             )
         case .running:
             return (
@@ -209,7 +212,7 @@ struct ClaudeCodeLocalProxyStatusCard: View {
                 "stop.circle",
                 SettingsTheme.secondary,
                 L10n.t("ccx.proxy.status.stopped", lang),
-                L10n.t("ccx.proxy.detail.stopped", lang)
+                stoppedDetail ?? L10n.t("ccx.proxy.detail.stopped", lang)
             )
         case .failed:
             return (

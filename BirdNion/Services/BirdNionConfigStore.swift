@@ -53,6 +53,151 @@ enum BirdNionConfigStore {
         var providers: [Provider]?
         /// User-defined Claude Code backends (Settings → "Claude Code" → Custom).
         var claudeCodeProfiles: [ClaudeCodeProfile]?
+        /// User-defined third-party Codex CLI backends (Settings → "Codex").
+        var codexProfiles: [CodexProfile]?
+    }
+
+    /// One third-party backend for Codex CLI. Codex only speaks the OpenAI
+    /// Responses protocol, so non-Responses upstreams use BirdNion's embedded
+    /// CLIProxyAPI conversion service.
+    struct CodexProfile: Codable, Equatable, Identifiable {
+        var id: String
+        var name: String
+        var baseURL: String
+        var apiKey: String
+        var model: String
+        /// `responses`, `openai-chat`, or `anthropic`. Nil is migrated to the
+        /// safe direct default because it matches Codex's native wire protocol.
+        var upstreamProtocolRaw: String? = nil
+        /// `direct` or `local-proxy`. Non-Responses upstreams always resolve
+        /// to local proxy even if an older profile omitted this field.
+        var connectionModeRaw: String? = nil
+        var cliProxyBaseURL: String? = nil
+        var cliProxyAPIKey: String? = nil
+        var cliProxyManagementKey: String? = nil
+        var cliProxyAppliedSignature: String? = nil
+
+        enum UpstreamProtocol: String, CaseIterable, Identifiable {
+            case responses
+            case openAIChat = "openai-chat"
+            case anthropic
+
+            var id: String { rawValue }
+        }
+
+        enum ConnectionMode: String, CaseIterable, Identifiable {
+            case direct
+            case localProxy = "local-proxy"
+
+            var id: String { rawValue }
+        }
+
+        var upstreamProtocol: UpstreamProtocol {
+            UpstreamProtocol(rawValue: upstreamProtocolRaw ?? "") ?? .responses
+        }
+
+        var requiresEmbeddedCLIProxy: Bool {
+            upstreamProtocol != .responses
+        }
+
+        var connectionMode: ConnectionMode {
+            if requiresEmbeddedCLIProxy { return .localProxy }
+            return ConnectionMode(rawValue: connectionModeRaw ?? "") ?? .direct
+        }
+
+        var usesEmbeddedCLIProxy: Bool {
+            connectionMode == .localProxy
+        }
+
+        var hasUpstreamConfiguration: Bool {
+            BirdNionConfigStore.cleaned(baseURL) != nil
+                && BirdNionConfigStore.cleaned(apiKey) != nil
+                && BirdNionConfigStore.cleaned(model) != nil
+        }
+
+        var cliProxyProviderName: String {
+            let safeID = id.lowercased().unicodeScalars.map { scalar in
+                CharacterSet.alphanumerics.contains(scalar) ? String(scalar) : "-"
+            }.joined()
+            return "birdnion-codex-\(safeID)"
+        }
+
+        var normalizedCLIProxyBaseURL: String? {
+            guard let raw = BirdNionConfigStore.cleaned(cliProxyBaseURL),
+                  var components = URLComponents(string: raw),
+                  let scheme = components.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme),
+                  components.host != nil else { return nil }
+            var path = components.path
+            while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+            if path == "/v1" { path = "" }
+            components.path = path
+            components.query = nil
+            components.fragment = nil
+            return components.string
+        }
+
+        var isEmbeddedCLIProxyReady: Bool {
+            normalizedCLIProxyBaseURL != nil
+                && hasUpstreamConfiguration
+                && BirdNionConfigStore.cleaned(cliProxyAPIKey) != nil
+                && BirdNionConfigStore.cleaned(cliProxyManagementKey) != nil
+        }
+
+        var cliProxyConfigurationSignature: String? {
+            guard usesEmbeddedCLIProxy,
+                  let proxyBaseURL = normalizedCLIProxyBaseURL,
+                  let baseURL = BirdNionConfigStore.cleaned(baseURL),
+                  let apiKey = BirdNionConfigStore.cleaned(apiKey),
+                  let model = BirdNionConfigStore.cleaned(model),
+                  let proxyAPIKey = BirdNionConfigStore.cleaned(cliProxyAPIKey),
+                  let managementKey = BirdNionConfigStore.cleaned(cliProxyManagementKey)
+            else { return nil }
+            let material = [
+                "codex-proxy-v1",
+                cliProxyProviderName,
+                upstreamProtocol.rawValue,
+                proxyBaseURL,
+                baseURL,
+                apiKey,
+                model,
+                proxyAPIKey,
+                managementKey,
+            ].map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
+            return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+        }
+
+        var isCLIProxyConfigurationCurrent: Bool {
+            guard let signature = cliProxyConfigurationSignature else { return false }
+            return signature == cliProxyAppliedSignature
+        }
+
+        /// Marker used by the Codex config writer to distinguish a saved draft
+        /// from the provider/model values that are actually active in Codex.
+        var codexConfigurationSignature: String? {
+            guard let model = BirdNionConfigStore.cleaned(model) else { return nil }
+            let endpoint: String
+            let token: String
+            if usesEmbeddedCLIProxy {
+                guard let base = normalizedCLIProxyBaseURL,
+                      let key = BirdNionConfigStore.cleaned(cliProxyAPIKey) else { return nil }
+                endpoint = base + "/v1"
+                token = key
+            } else {
+                guard let base = BirdNionConfigStore.cleaned(baseURL),
+                      let key = BirdNionConfigStore.cleaned(apiKey) else { return nil }
+                endpoint = base
+                token = key
+            }
+            let material = [
+                "codex-config-v1",
+                cliProxyProviderName,
+                model,
+                endpoint,
+                token,
+            ].map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
+            return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+        }
     }
 
     /// One user-defined Claude Code backend. Unlike the built-in provider
@@ -435,6 +580,31 @@ enum BirdNionConfigStore {
     static func removeClaudeCodeProfile(id: String, url: URL = configURL()) throws {
         var config = read(url: url) ?? Config(version: 1, providers: [])
         config.claudeCodeProfiles?.removeAll { $0.id == id }
+        try writeConfig(config, url: url)
+    }
+
+    // MARK: - Codex custom profiles
+
+    static func codexProfiles(url: URL = configURL()) -> [CodexProfile] {
+        read(url: url)?.codexProfiles ?? []
+    }
+
+    static func saveCodexProfile(_ profile: CodexProfile, url: URL = configURL()) throws {
+        var config = read(url: url) ?? Config(version: 1, providers: [])
+        var profiles = config.codexProfiles ?? []
+        if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
+            profiles[index] = profile
+        } else {
+            profiles.append(profile)
+        }
+        config.codexProfiles = profiles
+        config.version = config.version ?? 1
+        try writeConfig(config, url: url)
+    }
+
+    static func removeCodexProfile(id: String, url: URL = configURL()) throws {
+        var config = read(url: url) ?? Config(version: 1, providers: [])
+        config.codexProfiles?.removeAll { $0.id == id }
         try writeConfig(config, url: url)
     }
 

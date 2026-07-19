@@ -96,6 +96,13 @@
 		CCCF0001000000000000B001 /* ClaudeCodeCustomProfileConnectionFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCF0002000000000000F001 /* ClaudeCodeCustomProfileConnectionFields.swift */; };
 		CCPS0001000000000000B001 /* ClaudeCodeLocalProxyStatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPS0002000000000000F001 /* ClaudeCodeLocalProxyStatusCard.swift */; };
 		CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCTS0002000000000000F001 /* ClaudeCodeTests.swift */; };
+		CDXW0001000000000000B001 /* CodexConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXW0002000000000000F001 /* CodexConfigWriter.swift */; };
+		CDXD0001000000000000B001 /* CodexConfigDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXD0002000000000000F001 /* CodexConfigDocument.swift */; };
+		CDXP0001000000000000B001 /* CodexPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXP0002000000000000F001 /* CodexPane.swift */; };
+		CDXF0001000000000000B001 /* CodexProfileConnectionFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXF0002000000000000F001 /* CodexProfileConnectionFields.swift */; };
+		CDXL0001000000000000B001 /* CodexProfileList.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXL0002000000000000F001 /* CodexProfileList.swift */; };
+		CDXA0001000000000000B001 /* CodexProfileActivationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */; };
+		CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */; };
 
 		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
 		SET0005000000000000B003 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0006000000000000F003 /* SettingsTab.swift */; };
@@ -240,6 +247,13 @@
 		CCCF0002000000000000F001 /* ClaudeCodeCustomProfileConnectionFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodeCustomProfileConnectionFields.swift; sourceTree = "<group>"; };
 		CCPS0002000000000000F001 /* ClaudeCodeLocalProxyStatusCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodeLocalProxyStatusCard.swift; sourceTree = "<group>"; };
 		CCTS0002000000000000F001 /* ClaudeCodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ClaudeCodeTests.swift; sourceTree = "<group>"; };
+		CDXW0002000000000000F001 /* CodexConfigWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConfigWriter.swift; sourceTree = "<group>"; };
+		CDXD0002000000000000F001 /* CodexConfigDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConfigDocument.swift; sourceTree = "<group>"; };
+		CDXP0002000000000000F001 /* CodexPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexPane.swift; sourceTree = "<group>"; };
+		CDXF0002000000000000F001 /* CodexProfileConnectionFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileConnectionFields.swift; sourceTree = "<group>"; };
+		CDXL0002000000000000F001 /* CodexProfileList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileList.swift; sourceTree = "<group>"; };
+		CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileActivationCard.swift; sourceTree = "<group>"; };
+		CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexConfigWriterTests.swift; sourceTree = "<group>"; };
 
 		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
 		SET0006000000000000F003 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsTab.swift; sourceTree = "<group>"; };
@@ -318,6 +332,7 @@
 				CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */,
 				NPT00001000000000000B01 /* NewProviderTests.swift in Sources */,
 				CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */,
+				CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -406,6 +421,8 @@
 				CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */,
 				CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */,
 				CLPM0002000000000000F001 /* LocalProxyProcessController.swift */,
+				CDXW0002000000000000F001 /* CodexConfigWriter.swift */,
+				CDXD0002000000000000F001 /* CodexConfigDocument.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -656,6 +673,12 @@
 				CCXF0001000000000000B001 /* ClaudeCodeCustomProfileForm.swift in Sources */,
 				CCCF0001000000000000B001 /* ClaudeCodeCustomProfileConnectionFields.swift in Sources */,
 				CCPS0001000000000000B001 /* ClaudeCodeLocalProxyStatusCard.swift in Sources */,
+				CDXW0001000000000000B001 /* CodexConfigWriter.swift in Sources */,
+				CDXD0001000000000000B001 /* CodexConfigDocument.swift in Sources */,
+				CDXP0001000000000000B001 /* CodexPane.swift in Sources */,
+				CDXF0001000000000000B001 /* CodexProfileConnectionFields.swift in Sources */,
+				CDXL0001000000000000B001 /* CodexProfileList.swift in Sources */,
+				CDXA0001000000000000B001 /* CodexProfileActivationCard.swift in Sources */,
 
 				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,
 				SET0005000000000000B003 /* SettingsTab.swift in Sources */,

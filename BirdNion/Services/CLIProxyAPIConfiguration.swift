@@ -37,6 +37,7 @@ struct CLIProxyAPIConfiguration: Encodable {
         let baseURL: String
         let apiKeyEntries: [OpenAIAPIKey]
         let models: [Model]
+        let format: String?
 
         enum CodingKeys: String, CodingKey {
             case name
@@ -44,7 +45,23 @@ struct CLIProxyAPIConfiguration: Encodable {
             case baseURL = "base-url"
             case apiKeyEntries = "api-key-entries"
             case models
+            case format
         }
+    }
+
+    private enum UpstreamKind {
+        case anthropic
+        case openAI(format: String?)
+    }
+
+    private struct ManagedProfile {
+        let providerName: String
+        let kind: UpstreamKind
+        let baseURL: String
+        let apiKey: String
+        let localAPIKey: String
+        let managementKey: String
+        let models: [Model]
     }
 
     /// Keep BirdNion's embedded helper away from CLIProxyAPI's documented
@@ -61,38 +78,41 @@ struct CLIProxyAPIConfiguration: Encodable {
     let openAICompatibility: [OpenAICompatibility]
 
     init?(profiles: [BirdNionConfigStore.ClaudeCodeProfile], authDirectory: URL) {
-        let managed = profiles.filter { $0.embeddedLocalProxy == true && $0.isEmbeddedCLIProxyReady }
-        guard let managementKey = managed.compactMap(\.cliProxyManagementKey).first(where: { !$0.isEmpty }) else {
+        self.init(claudeProfiles: profiles, codexProfiles: [], authDirectory: authDirectory)
+    }
+
+    init?(claudeProfiles: [BirdNionConfigStore.ClaudeCodeProfile],
+          codexProfiles: [BirdNionConfigStore.CodexProfile],
+          authDirectory: URL) {
+        let managed = Self.managedProfiles(claudeProfiles: claudeProfiles, codexProfiles: codexProfiles)
+        guard let managementKey = managed.map(\.managementKey).first(where: { !$0.isEmpty }) else {
             return nil
         }
-        let compatible = managed.filter { $0.cliProxyManagementKey == managementKey }
+        let compatible = managed.filter { $0.managementKey == managementKey }
         guard !compatible.isEmpty else { return nil }
 
         self.baseURL = Self.localBaseURL
         self.authDirectory = authDirectory.path
         self.managementKey = managementKey
-        self.apiKeys = Self.unique(compatible.compactMap(\.cliProxyAPIKey))
+        self.apiKeys = Self.unique(compatible.map(\.localAPIKey))
         self.claudeAPIKeys = compatible.compactMap { profile in
-            guard profile.compatibility == .anthropic,
-                  let baseURL = profile.upstreamBaseURL,
-                  let apiKey = profile.upstreamAPIKey else { return nil }
+            guard case .anthropic = profile.kind else { return nil }
             return ClaudeKey(
-                apiKey: apiKey,
+                apiKey: profile.apiKey,
                 prefix: "",
-                baseURL: baseURL,
-                models: Self.models(for: profile)
+                baseURL: profile.baseURL,
+                models: profile.models
             )
         }
         self.openAICompatibility = compatible.compactMap { profile in
-            guard profile.compatibility == .openAI,
-                  let baseURL = profile.upstreamBaseURL,
-                  let apiKey = profile.upstreamAPIKey else { return nil }
+            guard case let .openAI(format) = profile.kind else { return nil }
             return OpenAICompatibility(
-                name: profile.cliProxyProviderName,
+                name: profile.providerName,
                 prefix: "",
-                baseURL: baseURL,
-                apiKeyEntries: [.init(apiKey: apiKey)],
-                models: Self.models(for: profile)
+                baseURL: profile.baseURL,
+                apiKeyEntries: [.init(apiKey: profile.apiKey)],
+                models: profile.models,
+                format: format
             )
         }
     }
@@ -137,12 +157,16 @@ struct CLIProxyAPIConfiguration: Encodable {
         guard !openAICompatibility.isEmpty else { return }
         lines.append("openai-compatibility:")
         for entry in openAICompatibility {
-            lines += [
+            var entryLines = [
                 "  - name: \(quote(entry.name))",
                 "    prefix: \(quote(entry.prefix))",
                 "    base-url: \(quote(entry.baseURL))",
-                "    api-key-entries:",
             ]
+            if let format = entry.format?.trimmingCharacters(in: .whitespacesAndNewlines), !format.isEmpty {
+                entryLines.append("    format: \(quote(format))")
+            }
+            entryLines.append("    api-key-entries:")
+            lines += entryLines
             lines += entry.apiKeyEntries.map { "      - api-key: \(quote($0.apiKey))" }
             append(models: entry.models, indent: "    ", to: &lines)
         }
@@ -168,6 +192,60 @@ struct CLIProxyAPIConfiguration: Encodable {
         }
     }
 
+    private static func managedProfiles(
+        claudeProfiles: [BirdNionConfigStore.ClaudeCodeProfile],
+        codexProfiles: [BirdNionConfigStore.CodexProfile]
+    ) -> [ManagedProfile] {
+        let claude = claudeProfiles.compactMap { profile -> ManagedProfile? in
+            guard profile.embeddedLocalProxy == true,
+                  profile.isEmbeddedCLIProxyReady,
+                  let baseURL = profile.upstreamBaseURL,
+                  let apiKey = profile.upstreamAPIKey,
+                  let localAPIKey = profile.cliProxyAPIKey,
+                  let managementKey = profile.cliProxyManagementKey else { return nil }
+            let kind: UpstreamKind = profile.compatibility == .anthropic
+                ? .anthropic
+                : .openAI(format: nil)
+            return ManagedProfile(
+                providerName: profile.cliProxyProviderName,
+                kind: kind,
+                baseURL: baseURL,
+                apiKey: apiKey,
+                localAPIKey: localAPIKey,
+                managementKey: managementKey,
+                models: Self.models(for: profile)
+            )
+        }
+        let codex = codexProfiles.compactMap { profile -> ManagedProfile? in
+            guard profile.usesEmbeddedCLIProxy,
+                  profile.isEmbeddedCLIProxyReady,
+                  let baseURL = Self.cleaned(profile.baseURL),
+                  let apiKey = Self.cleaned(profile.apiKey),
+                  let localAPIKey = profile.cliProxyAPIKey,
+                  let managementKey = profile.cliProxyManagementKey,
+                  let model = Self.cleaned(profile.model) else { return nil }
+            let kind: UpstreamKind
+            switch profile.upstreamProtocol {
+            case .anthropic:
+                kind = .anthropic
+            case .openAIChat:
+                kind = .openAI(format: nil)
+            case .responses:
+                kind = .openAI(format: "responses")
+            }
+            return ManagedProfile(
+                providerName: profile.cliProxyProviderName,
+                kind: kind,
+                baseURL: baseURL,
+                apiKey: apiKey,
+                localAPIKey: localAPIKey,
+                managementKey: managementKey,
+                models: [.init(name: model, alias: model)]
+            )
+        }
+        return claude + codex
+    }
+
     /// Claude Code removes its documented `[1m]` model marker before sending a
     /// request. Keep the marker in the upstream name, but register the local
     /// alias without it so routing still resolves to the intended provider.
@@ -181,6 +259,11 @@ struct CLIProxyAPIConfiguration: Encodable {
         values.reduce(into: [String]()) { result, value in
             if !result.contains(value) { result.append(value) }
         }
+    }
+
+    private static func cleaned(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
     }
 
     private func quote(_ value: String) -> String {
