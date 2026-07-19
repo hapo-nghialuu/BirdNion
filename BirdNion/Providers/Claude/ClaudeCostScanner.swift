@@ -77,9 +77,9 @@ struct ClaudeUsageReport: Equatable {
     }
 }
 
-/// Per-million-token prices (USD) for Anthropic models. Anthropic splits
-/// input into fresh / cache-write / cache-read (Codex only has fresh + cached
-/// read). Updated 2026-06; revisit when Anthropic revises pricing.
+/// Per-million-token prices (USD) for models recorded by Claude Code. Claude
+/// logs also carry Hapo's Anthropic-compatible model ids, so those supported
+/// Hapo families are priced here rather than falling through to $0.
 struct ClaudeModelPrice {
     let inputPerM: Double
     let cacheWritePerM: Double
@@ -91,6 +91,9 @@ struct ClaudeModelPrice {
     /// into settings.json. Unknown models still count tokens but cost $0.
     static func price(for model: String, inputSideTokens: Int = 0) -> ClaudeModelPrice? {
         let m = model.lowercased()
+        if let price = hapoPrice(for: m, inputSideTokens: inputSideTokens) {
+            return price
+        }
         // Fable 5 — $10/$50 per-M. Cache pricing follows Anthropic's current
         // 1.25x write / 0.1x read ratios because local logs split those fields.
         if m.contains("fable-5") {
@@ -124,6 +127,53 @@ struct ClaudeModelPrice {
         }
         return nil  // non-Claude model — tokens counted, cost $0
     }
+
+    /// Hapo exposes provider-prefixed ids from `/v1/models`, but no rate card.
+    /// Keep this narrow to Hapo's ids so unrelated Claude-compatible backends
+    /// do not gain an inferred price. OpenAI's rate card has no cache-write
+    /// tier, so the Anthropic-shaped cache-creation counter uses fresh-input
+    /// pricing; cached reads retain their public discounted rate.
+    private static func hapoPrice(for model: String,
+                                  inputSideTokens: Int) -> ClaudeModelPrice? {
+        if model.hasPrefix("openai.gpt-5.6-") {
+            let longContext = inputSideTokens > 272_000
+            switch model {
+            case let id where id.contains("luna"):
+                return ClaudeModelPrice(
+                    inputPerM: longContext ? 2.0 : 1.0,
+                    cacheWritePerM: longContext ? 2.0 : 1.0,
+                    cacheReadPerM: longContext ? 0.20 : 0.10,
+                    outputPerM: longContext ? 9.0 : 6.0)
+            case let id where id.contains("terra"):
+                return ClaudeModelPrice(
+                    inputPerM: longContext ? 5.0 : 2.5,
+                    cacheWritePerM: longContext ? 5.0 : 2.5,
+                    cacheReadPerM: longContext ? 0.50 : 0.25,
+                    outputPerM: longContext ? 22.5 : 15.0)
+            case let id where id.contains("sol"):
+                return ClaudeModelPrice(
+                    inputPerM: longContext ? 10.0 : 5.0,
+                    cacheWritePerM: longContext ? 10.0 : 5.0,
+                    cacheReadPerM: longContext ? 1.0 : 0.5,
+                    outputPerM: longContext ? 45.0 : 30.0)
+            default:
+                return nil
+            }
+        }
+
+        // Hapo's current id is `minimax.minimax-m2.5`; retain its older
+        // `minimax-m2.5-ultra-*` spelling so existing session logs reprice.
+        if model.hasPrefix("minimax.minimax-m2.5")
+            || model.hasPrefix("minimax-m2.5-ultra") {
+            let highSpeed = model.contains("highspeed")
+            return ClaudeModelPrice(
+                inputPerM: highSpeed ? 0.60 : 0.30,
+                cacheWritePerM: 0.375,
+                cacheReadPerM: 0.03,
+                outputPerM: highSpeed ? 2.40 : 1.20)
+        }
+        return nil
+    }
 }
 
 /// Token usage recorded in one assistant message.
@@ -145,6 +195,15 @@ enum ClaudeCostScanner {
     /// All tab). The `last30*` totals keep their own 30-day cutoff so the
     /// Claude tab numbers don't change with this window.
     static let historyDays = 90
+    /// Bump when model pricing changes. Existing persisted days need one full
+    /// rescan so old $0 estimates do not survive the high-water merge.
+    static let pricingRevision = 1
+    private static let pricingRevisionKey = "claudeCostPricingRevision"
+
+    static func scanDaysForHistory(storedPricingRevision: Int,
+                                   incrementalDays: Int) -> Int {
+        storedPricingRevision < pricingRevision ? historyDays : incrementalDays
+    }
 
     /// Actor-isolated cache so brief memoization is safe across tasks.
     private actor Cache {
@@ -216,7 +275,10 @@ enum ClaudeCostScanner {
             // merge with CostHistoryStore so past All-tab bars survive.
             // Only rescan logs that can still change persisted history; the
             // store supplies the older days.
-            let scanDays = CostHistoryStore.scanBackDays(source: .claude, now: now)
+            let incrementalDays = CostHistoryStore.scanBackDays(source: .claude, now: now)
+            let scanDays = scanDaysForHistory(
+                storedPricingRevision: UserDefaults.standard.integer(forKey: pricingRevisionKey),
+                incrementalDays: incrementalDays)
             let live = scanFull(roots: roots, now: now, scanDays: scanDays)
             let liveDays = (live?.daily ?? []).map {
                 ($0.date, $0.usd, $0.tokens,
@@ -231,6 +293,9 @@ enum ClaudeCostScanner {
                 window: window,
                 hourly: live?.hourly ?? [],
                 now: now)
+            if live != nil {
+                UserDefaults.standard.set(pricingRevision, forKey: pricingRevisionKey)
+            }
             // Nil only when history + live are both empty (first run, no logs).
             return report.isEmpty && live == nil ? nil : report
         }.value

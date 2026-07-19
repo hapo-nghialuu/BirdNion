@@ -151,4 +151,36 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(full?.daily.count, 90)
         XCTAssertEqual(full?.daily.map(\.tokens).reduce(0, +), 450)
     }
+
+    func testHapoModelPricesAndPricingRevision() throws {
+        let luna = try XCTUnwrap(ClaudeModelPrice.price(for: "openai.gpt-5.6-luna"))
+        XCTAssertEqual(luna.inputPerM, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(luna.cacheReadPerM, 0.10, accuracy: 0.0001)
+        XCTAssertEqual(luna.outputPerM, 6.0, accuracy: 0.0001)
+        let longLuna = try XCTUnwrap(ClaudeModelPrice.price(
+            for: "openai.gpt-5.6-luna", inputSideTokens: 272_001))
+        XCTAssertEqual(longLuna.inputPerM, 2.0, accuracy: 0.0001)
+        XCTAssertEqual(longLuna.outputPerM, 9.0, accuracy: 0.0001)
+
+        let terra = try XCTUnwrap(ClaudeModelPrice.price(for: "openai.gpt-5.6-terra"))
+        XCTAssertEqual(terra.inputPerM, 2.5, accuracy: 0.0001)
+        XCTAssertEqual(terra.outputPerM, 15.0, accuracy: 0.0001)
+        let sol = try XCTUnwrap(ClaudeModelPrice.price(for: "openai.gpt-5.6-sol"))
+        XCTAssertEqual(sol.inputPerM, 5.0, accuracy: 0.0001)
+        XCTAssertEqual(sol.outputPerM, 30.0, accuracy: 0.0001)
+
+        let m25 = try XCTUnwrap(ClaudeModelPrice.price(for: "minimax.minimax-m2.5"))
+        XCTAssertEqual(m25.inputPerM, 0.30, accuracy: 0.0001)
+        XCTAssertEqual(m25.cacheWritePerM, 0.375, accuracy: 0.0001)
+        XCTAssertEqual(m25.cacheReadPerM, 0.03, accuracy: 0.0001)
+        XCTAssertEqual(m25.outputPerM, 1.20, accuracy: 0.0001)
+        XCTAssertNotNil(ClaudeModelPrice.price(for: "minimax-m2.5-ultra-5"))
+        XCTAssertNil(ClaudeModelPrice.price(for: "gpt-5.6-luna"))
+        XCTAssertNil(ClaudeModelPrice.price(for: "openai.gpt-5.60-luna"))
+
+        XCTAssertEqual(ClaudeCostScanner.scanDaysForHistory(
+            storedPricingRevision: 0, incrementalDays: 7), ClaudeCostScanner.historyDays)
+        XCTAssertEqual(ClaudeCostScanner.scanDaysForHistory(
+            storedPricingRevision: ClaudeCostScanner.pricingRevision, incrementalDays: 7), 7)
+    }
 }
