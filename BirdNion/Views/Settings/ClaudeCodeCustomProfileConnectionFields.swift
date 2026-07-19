@@ -45,7 +45,13 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                         .font(.system(size: 12))
                 }
                 SettingsRowDivider()
-                fieldRow(L10n.t("ccx.compatibility", lang)) {
+                // Full labels need the whole card width — inline next to the
+                // 150pt label column the three segments clip (the original
+                // Codex-pane overflow bug).
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.t("ccx.compatibility", lang))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
                     Picker("", selection: protocolSelection) {
                         Text(L10n.t("codexConfig.protocol.anthropic", lang)).tag("anthropic")
                         Text(L10n.t("codexConfig.protocol.openaiChat", lang)).tag("chat")
@@ -56,10 +62,12 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                     // SegmentedControl caches its previous selection in AppKit.
                     // Recreate it when moving between custom profiles.
                     .id(profile.id)
-                    .frame(maxWidth: 360, alignment: .trailing)
+                    .frame(maxWidth: .infinity)
                     .help(L10n.t("ccx.compatibility.hint", lang))
                     .accessibilityLabel(L10n.t("ccx.compatibility", lang))
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
                 SettingsRowDivider()
                 if !profile.isOpenAICompatible {
                     connectionModeRow
