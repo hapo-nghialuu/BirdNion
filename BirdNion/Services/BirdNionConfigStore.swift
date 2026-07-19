@@ -454,6 +454,72 @@ enum BirdNionConfigStore {
         )
     }
 
+    /// Pure upstream sync Claude → linked Codex. Never touches `model` (per-agent).
+    /// Returns the updated profile and whether any upstream field actually changed.
+    static func syncedCodexProfile(from claude: ClaudeCodeProfile,
+                                   into codex: CodexProfile) -> (CodexProfile, Bool) {
+        var updated = codex
+        let newBase = claude.upstreamBaseURL ?? ""
+        let newKey = claude.upstreamAPIKey ?? ""
+        let newProtocol: CodexProfile.UpstreamProtocol
+        switch claude.compatibility {
+        case .anthropic:
+            newProtocol = .anthropic
+        case .openAI:
+            newProtocol = claude.openAIProxyFormat == "responses" ? .responses : .openAIChat
+        }
+
+        let protocolChanged = updated.upstreamProtocol != newProtocol
+        updated.baseURL = newBase
+        updated.apiKey = newKey
+        updated.upstreamProtocolRaw = newProtocol.rawValue
+        if protocolChanged && newProtocol != .responses {
+            updated.connectionModeRaw = CodexProfile.ConnectionMode.localProxy.rawValue
+        }
+
+        let changed = updated.baseURL != codex.baseURL
+            || updated.apiKey != codex.apiKey
+            || updated.upstreamProtocol != codex.upstreamProtocol
+            || updated.connectionModeRaw != codex.connectionModeRaw
+        if !changed { return (codex, false) }
+        updated.cliProxyAppliedSignature = nil
+        return (updated, true)
+    }
+
+    /// Pure upstream sync Codex → linked Claude. Never touches model tiers,
+    /// `extraEnv`, or scope fields.
+    static func syncedClaudeCodeProfile(from codex: CodexProfile,
+                                        into claude: ClaudeCodeProfile) -> (ClaudeCodeProfile, Bool) {
+        var updated = claude
+        if codex.upstreamProtocol == .anthropic {
+            updated.baseURL = codex.baseURL
+            updated.token = codex.apiKey
+            updated.compatibilityMode = ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
+        } else {
+            updated.openAIBaseURL = codex.baseURL
+            updated.openAIAPIKey = codex.apiKey
+            updated.compatibilityMode = ClaudeCodeProfile.CompatibilityMode.openAI.rawValue
+            updated.openAIFormat = codex.upstreamProtocol == .responses ? "responses" : nil
+            updated.embeddedLocalProxy = true
+        }
+
+        let changed: Bool
+        if codex.upstreamProtocol == .anthropic {
+            changed = updated.baseURL != claude.baseURL
+                || updated.token != claude.token
+                || updated.compatibility != claude.compatibility
+        } else {
+            changed = updated.openAIBaseURL != claude.openAIBaseURL
+                || updated.openAIAPIKey != claude.openAIAPIKey
+                || updated.compatibility != claude.compatibility
+                || updated.openAIFormat != claude.openAIFormat
+                || updated.embeddedLocalProxy != claude.embeddedLocalProxy
+        }
+        if !changed { return (claude, false) }
+        updated.cliProxyAppliedSignature = nil
+        return (updated, true)
+    }
+
     /// One provider's configuration. Fields are all optional so partial
     /// entries are valid (e.g. just an apiKey without enabled).
     struct Provider: Codable, Equatable {
@@ -493,6 +559,9 @@ enum BirdNionConfigStore {
         /// Last selected project directory path for this provider. Preserved
         /// across global/project toggles and independent from other providers.
         var claudeCodeProjectPath: String?
+        /// Derived Codex record backing this preset through the embedded
+        /// proxy (Anthropic wire protocol). Nil until the user targets Codex.
+        var codexProfileID: String?
 
         /// Default value used when a provider entry has no `enabled` flag.
         /// First-run user-revision (2026-06-25): opt-in, so default off.
@@ -635,6 +704,9 @@ enum BirdNionConfigStore {
     }
 
     /// Upsert one custom profile by id (atomic write, preserves providers).
+    /// When `codexProfileID` points at an existing Codex profile, mirrors the
+    /// upstream credentials/protocol onto that profile in the same write
+    /// (idempotent — no loop when values already match).
     static func saveClaudeCodeProfile(_ profile: ClaudeCodeProfile, url: URL = configURL()) throws {
         var config = read(url: url) ?? Config(version: 1, providers: [])
         var profiles = config.claudeCodeProfiles ?? []
@@ -644,6 +716,18 @@ enum BirdNionConfigStore {
             profiles.append(profile)
         }
         config.claudeCodeProfiles = profiles
+
+        if let codexID = profile.codexProfileID {
+            var codexProfiles = config.codexProfiles ?? []
+            if let index = codexProfiles.firstIndex(where: { $0.id == codexID }) {
+                let (synced, changed) = syncedCodexProfile(from: profile, into: codexProfiles[index])
+                if changed {
+                    codexProfiles[index] = synced
+                    config.codexProfiles = codexProfiles
+                }
+            }
+        }
+
         config.version = config.version ?? 1
         try writeConfig(config, url: url)
     }
@@ -660,6 +744,9 @@ enum BirdNionConfigStore {
         read(url: url)?.codexProfiles ?? []
     }
 
+    /// Upsert one Codex profile by id. When `claudeCodeProfileID` points at an
+    /// existing Claude Code profile, mirrors upstream credentials/protocol onto
+    /// that profile in the same write (idempotent).
     static func saveCodexProfile(_ profile: CodexProfile, url: URL = configURL()) throws {
         var config = read(url: url) ?? Config(version: 1, providers: [])
         var profiles = config.codexProfiles ?? []
@@ -669,6 +756,18 @@ enum BirdNionConfigStore {
             profiles.append(profile)
         }
         config.codexProfiles = profiles
+
+        if let claudeID = profile.claudeCodeProfileID {
+            var claudeProfiles = config.claudeCodeProfiles ?? []
+            if let index = claudeProfiles.firstIndex(where: { $0.id == claudeID }) {
+                let (synced, changed) = syncedClaudeCodeProfile(from: profile, into: claudeProfiles[index])
+                if changed {
+                    claudeProfiles[index] = synced
+                    config.claudeCodeProfiles = claudeProfiles
+                }
+            }
+        }
+
         config.version = config.version ?? 1
         try writeConfig(config, url: url)
     }

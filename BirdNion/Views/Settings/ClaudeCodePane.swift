@@ -1,99 +1,13 @@
 import SwiftUI
 import AppKit
 
-/// Unified Settings → AI Coding entry point. Existing Claude Code and Codex
-/// profile records remain separate because each CLI owns different model and
-/// output-file settings. Switching the step-three target creates a linked
-/// counterpart with the upstream copied once, so neither CLI overwrites the
-/// other's working configuration.
+/// Unified Settings → AI Coding entry point. One shared profile list serves
+/// both CLIs: the upstream lives once per profile, the in-form Agent step
+/// switches which agent's model/activation sections are shown, and the linked
+/// per-agent records underneath stay mirrored by the config-store sync.
 struct AICodingPane: View {
-    @EnvironmentObject private var settings: SettingsStore
-
-    @State private var selectedAgent: AICodingAgent = .claudeCode
-    @State private var selectedClaudeProfileID: String?
-    @State private var selectedCodexProfileID: String?
-
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: selectedAgent == .claudeCode ? "terminal" : "command")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.accent)
-                    .frame(width: 28, height: 28)
-                    .background(SettingsTheme.selectedSurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                Picker("", selection: $selectedAgent) {
-                    ForEach(AICodingAgent.allCases) { agent in
-                        Text(agent.title(language: settings.appLanguage)).tag(agent)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 250)
-                .accessibilityLabel(L10n.t("aiCoding.workspace", settings.appLanguage))
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-            .background(SettingsTheme.toolbar)
-
-            Divider().overlay(SettingsTheme.border)
-
-            switch selectedAgent {
-            case .claudeCode:
-                ClaudeCodePane(
-                    initialProfileID: selectedClaudeProfileID,
-                    onSwitchToCodex: openCodexConfiguration
-                )
-                .id("claude-\(selectedClaudeProfileID ?? "preset")")
-            case .codex:
-                CodexPane(
-                    initialProfileID: selectedCodexProfileID,
-                    onSwitchToClaudeCode: openClaudeCodeConfiguration
-                )
-                .id("codex-\(selectedCodexProfileID ?? "new")")
-            }
-        }
-    }
-
-    private func openCodexConfiguration(from source: BirdNionConfigStore.ClaudeCodeProfile) {
-        if let profileID = source.codexProfileID,
-           BirdNionConfigStore.codexProfiles().contains(where: { $0.id == profileID }) {
-            selectedCodexProfileID = profileID
-        } else {
-            var source = source
-            let destination = BirdNionConfigStore.makeCodexProfile(from: source)
-            do {
-                try BirdNionConfigStore.saveCodexProfile(destination)
-                source.codexProfileID = destination.id
-                try BirdNionConfigStore.saveClaudeCodeProfile(source)
-                selectedCodexProfileID = destination.id
-            } catch {
-                return
-            }
-        }
-        selectedAgent = .codex
-    }
-
-    private func openClaudeCodeConfiguration(from source: BirdNionConfigStore.CodexProfile) {
-        if let profileID = source.claudeCodeProfileID,
-           BirdNionConfigStore.claudeCodeProfiles().contains(where: { $0.id == profileID }) {
-            selectedClaudeProfileID = profileID
-        } else {
-            var source = source
-            let destination = BirdNionConfigStore.makeClaudeCodeProfile(from: source)
-            do {
-                try BirdNionConfigStore.saveClaudeCodeProfile(destination)
-                source.claudeCodeProfileID = destination.id
-                try BirdNionConfigStore.saveCodexProfile(source)
-                selectedClaudeProfileID = destination.id
-            } catch {
-                return
-            }
-        }
-        selectedAgent = .claudeCode
+        ClaudeCodePane()
     }
 }
 
@@ -107,14 +21,21 @@ struct ClaudeCodePane: View {
     @ObservedObject private var localProxy = EmbeddedCLIProxyService.shared
 
     var initialProfileID: String? = nil
-    var onSwitchToCodex: ((BirdNionConfigStore.ClaudeCodeProfile) -> Void)? = nil
 
     @State private var providers: [BirdNionConfigStore.Provider] = []
     @State private var selectedID: String?
 
-    // Custom user-defined backends.
+    // Custom user-defined backends. `detailAgent` switches the agent-specific
+    // sections in place; the shared upstream always lives on the Claude record
+    // and the config-store sync mirrors it onto the linked Codex record.
     @State private var profiles: [BirdNionConfigStore.ClaudeCodeProfile] = []
+    @State private var codexProfiles: [BirdNionConfigStore.CodexProfile] = []
     @State private var selectedProfileID: String?
+    @State private var detailAgent: AICodingAgent = .claudeCode
+    @State private var workingCodexProfile: BirdNionConfigStore.CodexProfile?
+    @State private var activeCodexProfileID: String?
+    @State private var codexModels: [String] = []
+    @State private var codexLoadingModels = false
     @State private var hoveredProviderID: String?
     @State private var hoveredProfileID: String?
     @State private var workingProfile: BirdNionConfigStore.ClaudeCodeProfile?
@@ -137,6 +58,7 @@ struct ClaudeCodePane: View {
     @State private var customFeedbackTarget: CustomFeedbackTarget?
     @State private var showingRemoveEnvConfirmation = false
     @State private var showingStopLocalProxyConfirmation = false
+    @State private var showingDeleteProfileConfirmation = false
 
     private enum ScopeChoice: String, CaseIterable, Identifiable {
         case global, project
@@ -147,6 +69,7 @@ struct ClaudeCodePane: View {
         case upstream
         case proxy
         case claudeCode
+        case codex
     }
 
     private var lang: String { settings.appLanguage }
@@ -177,6 +100,7 @@ struct ClaudeCodePane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(SettingsTheme.background)
         .onAppear {
+            migrateStandaloneCodexProfiles()
             reloadProviders()
             reloadProfiles()
             if let initialProfileID,
@@ -193,6 +117,7 @@ struct ClaudeCodePane: View {
         .onChange(of: selectedID) { _ in loadSelection() }
         .onChange(of: selectedProfileID) { _ in loadProfileSelection() }
         .onChange(of: workingProfile) { newValue in persistWorkingProfile(newValue) }
+        .onChange(of: workingCodexProfile) { newValue in persistWorkingCodexProfile(newValue) }
         .alert(L10n.t("claudeCode.removeEnv.confirmTitle", lang),
                isPresented: $showingRemoveEnvConfirmation) {
             Button(L10n.t("claudeCode.removeEnv.confirmButton", lang), role: .destructive) {
@@ -214,10 +139,30 @@ struct ClaudeCodePane: View {
         } message: {
             Text(L10n.t("ccx.proxy.stop.confirmMessage", lang))
         }
+        .confirmationDialog(
+            L10n.t("ccx.delete.confirmTitle", lang),
+            isPresented: $showingDeleteProfileConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.t("ccx.delete", lang), role: .destructive) { deleteProfile() }
+            Button(L10n.t("ccx.pasteJSON.cancel", lang), role: .cancel) {}
+        } message: {
+            Text(L10n.f("ccx.delete.confirmMessage", lang, workingProfileDisplayName))
+        }
+    }
+
+    private var workingProfileDisplayName: String {
+        guard let name = workingProfile?.name, !name.isEmpty else {
+            return L10n.t("ccx.newName", lang)
+        }
+        return name
     }
 
     /// Auto-save custom-profile edits as the user types, and reflect the change
     /// (e.g. renamed) in the left list live — without disturbing the selection.
+    /// The store mirrors upstream edits onto the linked Codex record, so the
+    /// in-memory copy is refreshed from disk afterwards (settles because the
+    /// sync is idempotent and `onChange` only fires on real value changes).
     private func persistWorkingProfile(_ profile: BirdNionConfigStore.ClaudeCodeProfile?) {
         guard let p = profile else { return }
         try? BirdNionConfigStore.saveClaudeCodeProfile(p)
@@ -226,6 +171,77 @@ struct ClaudeCodePane: View {
         } else {
             profiles.append(p)
         }
+        reloadCodexProfiles()
+        if let codexID = p.codexProfileID,
+           let mirrored = codexProfiles.first(where: { $0.id == codexID }),
+           workingCodexProfile?.id == codexID, workingCodexProfile != mirrored {
+            workingCodexProfile = mirrored
+        }
+    }
+
+    /// Codex-side counterpart of `persistWorkingProfile`. Saving mirrors the
+    /// upstream back onto the linked Claude record; refresh it so the form
+    /// never shows stale credentials.
+    private func persistWorkingCodexProfile(_ profile: BirdNionConfigStore.CodexProfile?) {
+        guard let p = profile else { return }
+        try? BirdNionConfigStore.saveCodexProfile(p)
+        reloadCodexProfiles()
+        if let claudeID = p.claudeCodeProfileID {
+            let stored = BirdNionConfigStore.claudeCodeProfiles()
+            if let mirrored = stored.first(where: { $0.id == claudeID }) {
+                if let idx = profiles.firstIndex(where: { $0.id == claudeID }) { profiles[idx] = mirrored }
+                if workingProfile?.id == claudeID, workingProfile != mirrored {
+                    workingProfile = mirrored
+                }
+            }
+        }
+    }
+
+    private func reloadCodexProfiles() {
+        codexProfiles = BirdNionConfigStore.codexProfiles()
+        activeCodexProfileID = CodexConfigWriter.activeProfileID()
+    }
+
+    /// One-time reconciliation: any Codex record without a live Claude
+    /// counterpart gets one, so the unified list (Claude records) covers every
+    /// logical profile. Preset-derived Codex records (linked from a provider)
+    /// are skipped — presets stay list entries of their own.
+    private func migrateStandaloneCodexProfiles() {
+        let presetLinked = Set(BirdNionConfigStore.allProviders().compactMap(\.codexProfileID))
+        let claudeIDs = Set(BirdNionConfigStore.claudeCodeProfiles().map(\.id))
+        for var codex in BirdNionConfigStore.codexProfiles() {
+            guard !presetLinked.contains(codex.id),
+                  codex.claudeCodeProfileID.map({ !claudeIDs.contains($0) }) ?? true else { continue }
+            var claude = BirdNionConfigStore.makeClaudeCodeProfile(from: codex)
+            claude.codexProfileID = codex.id
+            codex.claudeCodeProfileID = claude.id
+            try? BirdNionConfigStore.saveClaudeCodeProfile(claude)
+            try? BirdNionConfigStore.saveCodexProfile(codex)
+        }
+        reloadCodexProfiles()
+    }
+
+    /// Ensure the selected Claude record has a Codex counterpart, creating and
+    /// linking one on first agent switch. Returns the counterpart.
+    @discardableResult
+    private func ensureCodexCounterpart() -> BirdNionConfigStore.CodexProfile? {
+        guard var claude = workingProfile else { return nil }
+        if let id = claude.codexProfileID,
+           let existing = codexProfiles.first(where: { $0.id == id }) {
+            return existing
+        }
+        let created = BirdNionConfigStore.makeCodexProfile(from: claude)
+        claude.codexProfileID = created.id
+        do {
+            try BirdNionConfigStore.saveCodexProfile(created)
+            try BirdNionConfigStore.saveClaudeCodeProfile(claude)
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+        workingProfile = claude
+        reloadCodexProfiles()
+        return codexProfiles.first(where: { $0.id == created.id }) ?? created
     }
 
     // MARK: - Left column
@@ -280,7 +296,11 @@ struct ClaudeCodePane: View {
     private func profileRow(_ p: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
         let selected = p.id == selectedProfileID
         let hovering = p.id == hoveredProfileID
-        let activated = profileIsActivated(p)
+        let sync = ClaudeCodeConfigWriter.syncState(forProfile: p, scope: scope(for: p), using: config)
+        let activated = sync == .synced
+            && (!p.usesEmbeddedCLIProxy
+                || EmbeddedCLIProxyService.isProfileRunning(p, runtimeState: localProxy.runtimeState))
+        let ready = ClaudeCodeConfigWriter.isReady(p)
         return Button {
             selectedID = nil
             selectedProfileID = p.id
@@ -292,21 +312,25 @@ struct ClaudeCodePane: View {
                                      ? SettingsTheme.success
                                      : (selected ? SettingsTheme.accent : SettingsTheme.secondary))
                     .frame(width: 18)
-                Text(p.name.isEmpty ? L10n.t("ccx.newName", lang) : p.name)
-                    .font(.system(size: 13, weight: selected || activated ? .semibold : .regular))
-                    .foregroundStyle(SettingsTheme.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                if activated {
-                    Image(systemName: "power.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(SettingsTheme.success)
-                        .accessibilityLabel(L10n.t("claudeCode.state.on", lang))
-                } else if ClaudeCodeConfigWriter.isReady(p) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsTheme.success)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(p.name.isEmpty ? L10n.t("ccx.newName", lang) : p.name)
+                        .font(.system(size: 13, weight: selected || activated ? .semibold : .regular))
+                        .foregroundStyle(SettingsTheme.primary)
+                        .lineLimit(1)
+                    Text(combinedStatusLabel(
+                        claude: profileStatusLabel(p, sync: sync, activated: activated, ready: ready),
+                        codex: p.codexProfileID.flatMap { id in
+                            codexProfiles.first { $0.id == id }.map(codexStatusLabel)
+                        }))
+                        .font(.system(size: 10))
+                        .foregroundStyle(activated ? SettingsTheme.success : SettingsTheme.tertiary)
+                        .lineLimit(1)
                 }
+                Spacer(minLength: 4)
+                Image(systemName: activated || ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(activated || ready ? SettingsTheme.success : SettingsTheme.warning)
+                    .accessibilityLabel(profileStatusLabel(p, sync: sync, activated: activated, ready: ready))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -334,6 +358,11 @@ struct ClaudeCodePane: View {
     private func providerRow(_ p: BirdNionConfigStore.Provider) -> some View {
         let active = p.id == selectedID
         let hovering = p.id == hoveredProviderID
+        let configured = ClaudeCodeConfigWriter.isFullyConfigured(p)
+        let sync: ClaudeCodeConfigWriter.SyncState = configured
+            ? ClaudeCodeConfigWriter.syncState(forProvider: p, scope: scope(forProvider: p), using: config)
+            : .off
+        let activated = sync == .synced
         return Button {
             selectedProfileID = nil
             selectedID = p.id
@@ -342,12 +371,22 @@ struct ClaudeCodePane: View {
                 ProviderLogoMark(id: p.id,
                                  tint: active ? SettingsTheme.accent : SettingsTheme.secondary)
                     .frame(width: 18, height: 18)
-                Text(providerName(p))
-                    .font(.system(size: 13, weight: active ? .semibold : .regular))
-                    .foregroundStyle(SettingsTheme.primary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(providerName(p))
+                        .font(.system(size: 13, weight: active || activated ? .semibold : .regular))
+                        .foregroundStyle(SettingsTheme.primary)
+                        .lineLimit(1)
+                    Text(combinedStatusLabel(
+                        claude: providerStatusLabel(configured: configured, sync: sync),
+                        codex: p.codexProfileID.flatMap { id in
+                            codexProfiles.first { $0.id == id }.map(codexStatusLabel)
+                        }))
+                        .font(.system(size: 10))
+                        .foregroundStyle(activated ? SettingsTheme.success : SettingsTheme.tertiary)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 4)
-                if ClaudeCodeConfigWriter.isFullyConfigured(p) {
+                if configured {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(SettingsTheme.success)
@@ -356,9 +395,11 @@ struct ClaudeCodePane: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(active
-                        ? SettingsTheme.selectedSurface
-                        : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear))
+            .background(activated
+                        ? SettingsTheme.success.opacity(active ? 0.18 : 0.11)
+                        : (active
+                           ? SettingsTheme.selectedSurface
+                           : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -389,6 +430,24 @@ struct ClaudeCodePane: View {
     @ViewBuilder
     private func presetDetail(_ p: BirdNionConfigStore.Provider) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+                AICodingAgentSelectionCard(
+                    selectedAgent: detailAgent,
+                    profileID: "preset-\(p.id)",
+                    lang: lang,
+                    header: L10n.t("aiCoding.step.agent", lang)
+                ) { switchDetailAgent(to: $0) }
+
+                if detailAgent == .codex {
+                    codexAgentSections()
+                } else {
+                    presetClaudeSections(p)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func presetClaudeSections(_ p: BirdNionConfigStore.Provider) -> some View {
                 activationPanel(p)
 
                 if let msg = errorMessage {
@@ -436,8 +495,6 @@ struct ClaudeCodePane: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Custom profile detail
@@ -453,50 +510,28 @@ struct ClaudeCodePane: View {
                 ClaudeCodeCustomProfileConnectionFields(
                     profile: binding,
                     lang: lang,
-                    header: L10n.t("ccx.step.upstream", lang),
+                    header: stepTitle(1, "ccx.step.upstream"),
                     onPasteJSON: openPasteJSON
                 )
                 customFeedbackRow(for: .upstream)
 
-                if binding.wrappedValue.usesEmbeddedCLIProxy {
-                    ClaudeCodeLocalProxyStatusCard(
-                        runtimeState: localProxy.runtimeState,
-                        hasUpstreamConfiguration: binding.wrappedValue.hasUpstreamConfiguration,
-                        configurationCurrent: binding.wrappedValue.isCLIProxyConfigurationCurrent,
-                        endpoint: EmbeddedCLIProxyService.localEndpoint,
-                        lang: lang,
-                        busy: busy,
-                        feedback: customFeedback(for: .proxy),
-                        feedbackIsError: customFeedbackIsError,
-                        onStart: startLocalProxy,
-                        onStop: { showingStopLocalProxyConfirmation = true },
-                        onRefresh: refreshLocalProxyStatus
-                    )
-                }
-
-                if let onSwitchToCodex {
-                    AICodingAgentSelectionCard(
-                        selectedAgent: .claudeCode,
-                        profileID: binding.wrappedValue.id,
-                        lang: lang
-                    ) { target in
-                        if target == .codex {
-                            onSwitchToCodex(binding.wrappedValue)
-                        }
-                    }
-                }
-
-                ClaudeCodeCustomProfileForm(
-                    profile: binding,
+                AICodingAgentSelectionCard(
+                    selectedAgent: detailAgent,
+                    profileID: binding.wrappedValue.id,
                     lang: lang,
-                    includesConnectionFields: false
-                )
+                    header: stepTitle(2, "aiCoding.step.agent")
+                ) { switchDetailAgent(to: $0) }
 
-                customClaudeCodeStep(binding.wrappedValue)
+                switch detailAgent {
+                case .claudeCode:
+                    claudeAgentSections(binding)
+                case .codex:
+                    codexAgentSections()
+                }
 
                 HStack {
                     Spacer()
-                    Button(role: .destructive) { deleteProfile() } label: {
+                    Button(role: .destructive) { showingDeleteProfileConfirmation = true } label: {
                         Label(L10n.t("ccx.delete", lang), systemImage: "trash")
                     }
                 }
@@ -504,6 +539,422 @@ struct ClaudeCodePane: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .sheet(isPresented: $showingPasteJSON) { pasteJSONSheet }
         }
+    }
+
+    /// Steps 3-5 when the Agent step targets Claude Code. Numbers shift when
+    /// the proxy step is skipped (direct upstream).
+    @ViewBuilder
+    private func claudeAgentSections(_ binding: Binding<BirdNionConfigStore.ClaudeCodeProfile>) -> some View {
+        let hasProxy = binding.wrappedValue.usesEmbeddedCLIProxy
+        ClaudeCodeCustomProfileForm(
+            profile: binding,
+            lang: lang,
+            includesConnectionFields: false,
+            modelHeader: stepTitle(3, "claudeCode.model")
+        )
+
+        if hasProxy {
+            ClaudeCodeLocalProxyStatusCard(
+                runtimeState: localProxy.runtimeState,
+                hasUpstreamConfiguration: binding.wrappedValue.hasUpstreamConfiguration,
+                configurationCurrent: binding.wrappedValue.isCLIProxyConfigurationCurrent,
+                endpoint: EmbeddedCLIProxyService.localEndpoint,
+                lang: lang,
+                busy: busy,
+                feedback: customFeedback(for: .proxy),
+                feedbackIsError: customFeedbackIsError,
+                onStart: startLocalProxy,
+                onStop: { showingStopLocalProxyConfirmation = true },
+                onRefresh: refreshLocalProxyStatus,
+                header: stepTitle(4, "ccx.step.proxy")
+            )
+        }
+
+        customClaudeCodeStep(binding.wrappedValue,
+                             header: stepTitle(hasProxy ? 5 : 4, "aiCoding.claudeCode.settings"))
+    }
+
+    /// Steps 3-5 when the Agent step targets Codex CLI. Works for both custom
+    /// profiles (linked counterpart) and preset providers (derived record) —
+    /// whichever `workingCodexProfile` currently holds.
+    @ViewBuilder
+    private func codexAgentSections() -> some View {
+        if let codex = workingCodexProfile {
+            let codexBinding = Binding<BirdNionConfigStore.CodexProfile>(
+                get: { workingCodexProfile ?? codex },
+                set: { workingCodexProfile = $0 }
+            )
+            let hasProxy = codex.usesEmbeddedCLIProxy
+            codexModelCard(profile: codexBinding, header: stepTitle(3, "claudeCode.model"))
+
+            if hasProxy {
+                ClaudeCodeLocalProxyStatusCard(
+                    runtimeState: localProxy.runtimeState,
+                    hasUpstreamConfiguration: codex.hasUpstreamConfiguration,
+                    configurationCurrent: codex.isCLIProxyConfigurationCurrent,
+                    endpoint: EmbeddedCLIProxyService.localEndpoint,
+                    lang: lang,
+                    busy: busy,
+                    feedback: customFeedback(for: .proxy),
+                    feedbackIsError: customFeedbackIsError,
+                    onStart: startCodexProxy,
+                    onStop: { showingStopLocalProxyConfirmation = true },
+                    onRefresh: refreshLocalProxyStatus,
+                    header: stepTitle(4, "ccx.step.proxy"),
+                    runningDetail: L10n.t("codexConfig.proxy.running", lang),
+                    stoppedDetail: L10n.t("codexConfig.proxy.stopped", lang)
+                )
+            }
+
+            CodexProfileActivationCard(
+                profile: codex,
+                active: activeCodexProfileID == codex.id,
+                current: CodexConfigWriter.isApplied(codex),
+                lang: lang,
+                busy: busy,
+                header: stepTitle(hasProxy ? 5 : 4, "codexConfig.target"),
+                onApply: applyCodexProfile,
+                onDeactivate: deactivateCodexProfile,
+                onDelete: { showingDeleteProfileConfirmation = true }
+            )
+            customFeedbackRow(for: .codex)
+
+            if let flag = CodexConfigWriter.profileFlag(forProfileID: codex.id) {
+                codexProjectUsageCard(flag: flag)
+            }
+        }
+    }
+
+    /// Codex model row: free text + fetch + suggestion menu, plus the
+    /// direct/proxy choice when the Responses protocol allows both.
+    private func codexModelCard(profile: Binding<BirdNionConfigStore.CodexProfile>,
+                                header: String) -> some View {
+        let options = codexSuggestionOptions(current: profile.wrappedValue.model)
+        return SettingsCard(header: header) {
+            HStack(spacing: 8) {
+                Text(L10n.t("codexConfig.model", lang))
+                    .font(.system(size: 13))
+                    .foregroundStyle(SettingsTheme.primary)
+                    .frame(width: 62, alignment: .leading)
+                TextField("gpt-5.6", text: profile.model)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12).monospaced())
+                Button {
+                    loadCodexModels()
+                } label: {
+                    if codexLoadingModels {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .disabled(codexLoadingModels || !codexCanFetchModels(profile.wrappedValue))
+                .help(L10n.t(codexModels.isEmpty ? "claudeCode.loadModels" : "claudeCode.reloadModels", lang))
+                Menu {
+                    ForEach(options, id: \.self) { id in
+                        Button(id) { profile.wrappedValue.model = id }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 22)
+                .fixedSize()
+                .disabled(options.isEmpty)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+
+            if !profile.wrappedValue.requiresEmbeddedCLIProxy {
+                SettingsRowDivider()
+                HStack(spacing: 12) {
+                    Text(L10n.t("codexConfig.connection", lang))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
+                    Spacer(minLength: 8)
+                    Picker("", selection: codexConnectionBinding(profile)) {
+                        Text(L10n.t("codexConfig.connection.direct", lang))
+                            .tag(BirdNionConfigStore.CodexProfile.ConnectionMode.direct)
+                        Text(L10n.t("codexConfig.connection.proxy", lang))
+                            .tag(BirdNionConfigStore.CodexProfile.ConnectionMode.localProxy)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 260)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+            }
+        }
+    }
+
+    private func codexConnectionBinding(_ profile: Binding<BirdNionConfigStore.CodexProfile>)
+    -> Binding<BirdNionConfigStore.CodexProfile.ConnectionMode> {
+        Binding(
+            get: { profile.wrappedValue.connectionMode },
+            set: { mode in
+                var updated = profile.wrappedValue
+                updated.connectionModeRaw = mode.rawValue
+                updated.cliProxyAppliedSignature = nil
+                profile.wrappedValue = updated
+            }
+        )
+    }
+
+    /// Per-project usage: Codex ignores provider keys in project-local config
+    /// (security boundary), so the overlay file + `--profile` flag is the only
+    /// per-repo mechanism. Shown once the file exists (written on Apply).
+    private func codexProjectUsageCard(flag: String) -> some View {
+        let command = "codex --profile \(flag)"
+        return SettingsCard(footer: LocalizedStringKey(L10n.t("codexConfig.projectUse.hint", lang))) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.t("codexConfig.projectUse.title", lang))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
+                    Text(command)
+                        .font(.system(size: 12).monospaced())
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(command, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .pointingHandCursor()
+                .help(L10n.t("codexConfig.projectUse.copy", lang))
+                .accessibilityLabel(L10n.t("codexConfig.projectUse.copy", lang))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+        }
+    }
+
+    // MARK: - Codex agent actions
+
+    /// Fetching models only needs credentials — the model field is exactly
+    /// what the fetch is meant to fill.
+    private func codexCanFetchModels(_ p: BirdNionConfigStore.CodexProfile) -> Bool {
+        cleaned(p.baseURL) != nil && cleaned(p.apiKey) != nil
+    }
+
+    private func codexSuggestionOptions(current: String) -> [String] {
+        var opts = codexModels
+        if !current.isEmpty, !opts.contains(current) { opts.insert(current, at: 0) }
+        return opts
+    }
+
+    private func switchDetailAgent(to agent: AICodingAgent) {
+        errorMessage = nil
+        statusMessage = nil
+        customFeedbackTarget = nil
+        if agent == .codex {
+            if selectedProfileID != nil {
+                workingCodexProfile = ensureCodexCounterpart()
+            } else if let provider = selectedProvider {
+                workingCodexProfile = ensurePresetCodexProfile(for: provider)
+            }
+            guard workingCodexProfile != nil else { return }
+            codexModels = []
+        }
+        detailAgent = agent
+    }
+
+    /// Preset providers back Codex through a derived record: upstream comes
+    /// from the provider (Anthropic wire protocol → embedded proxy), linked
+    /// via `Provider.codexProfileID` and reconciled when the key/URL drifts.
+    private func ensurePresetCodexProfile(for provider: BirdNionConfigStore.Provider)
+    -> BirdNionConfigStore.CodexProfile? {
+        guard let base = ClaudeCodeBackend.baseURL(forProviderID: provider.id),
+              let key = cleaned(provider.apiKey) else {
+            customFeedbackTarget = .codex
+            errorMessage = L10n.t("codexConfig.error.incomplete", lang)
+            return nil
+        }
+        reloadCodexProfiles()
+        if let id = provider.codexProfileID,
+           var existing = codexProfiles.first(where: { $0.id == id }) {
+            if existing.baseURL != base || existing.apiKey != key {
+                existing.baseURL = base
+                existing.apiKey = key
+                existing.cliProxyAppliedSignature = nil
+                try? BirdNionConfigStore.saveCodexProfile(existing)
+                reloadCodexProfiles()
+            }
+            return codexProfiles.first(where: { $0.id == id }) ?? existing
+        }
+        let created = BirdNionConfigStore.CodexProfile(
+            id: UUID().uuidString,
+            name: providerName(provider),
+            baseURL: base,
+            apiKey: key,
+            model: "",
+            upstreamProtocolRaw: BirdNionConfigStore.CodexProfile.UpstreamProtocol.anthropic.rawValue,
+            connectionModeRaw: BirdNionConfigStore.CodexProfile.ConnectionMode.localProxy.rawValue
+        )
+        var updatedProvider = provider
+        updatedProvider.codexProfileID = created.id
+        do {
+            try BirdNionConfigStore.saveCodexProfile(created)
+            try BirdNionConfigStore.save(updatedProvider)
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+        reloadProviders()
+        reloadCodexProfiles()
+        return codexProfiles.first(where: { $0.id == created.id }) ?? created
+    }
+
+    private func loadCodexModels() {
+        guard let p = workingCodexProfile,
+              let base = cleaned(p.baseURL),
+              let key = cleaned(p.apiKey) else { return }
+        codexLoadingModels = true
+        customFeedbackTarget = .codex
+        errorMessage = nil
+        statusMessage = nil
+        Task {
+            do {
+                let fetched = try await ClaudeCodeModelsFetcher.fetchModels(baseURL: base, token: key)
+                await MainActor.run {
+                    codexModels = fetched
+                    codexLoadingModels = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = (error as? ClaudeCodeModelsFetcher.FetchError)?.message
+                        ?? error.localizedDescription
+                    codexLoadingModels = false
+                }
+            }
+        }
+    }
+
+    private func startCodexProxy() {
+        guard let profile = workingCodexProfile, profile.hasUpstreamConfiguration else {
+            customFeedbackTarget = .proxy
+            errorMessage = L10n.t("codexConfig.error.incomplete", lang)
+            return
+        }
+        customFeedbackTarget = .proxy
+        errorMessage = nil
+        statusMessage = nil
+        busy = true
+        Task { @MainActor in
+            do {
+                let prepared = try await localProxy.prepare(codexProfile: profile)
+                workingCodexProfile = prepared
+                // A proxy restart rotates the local bearer; keep an existing
+                // overlay file in sync so --profile runs don't hit 401s.
+                if CodexConfigWriter.profileFlag(forProfileID: prepared.id) != nil {
+                    _ = try? CodexConfigWriter.writeProfileFile(for: prepared)
+                }
+                reloadCodexProfiles()
+                statusMessage = L10n.t("ccx.proxy.started", lang)
+            } catch let e as EmbeddedCLIProxyService.ServiceError {
+                errorMessage = embeddedCLIProxyErrorMessage(e)
+            } catch let e as CLIProxyAPIClient.ClientError {
+                errorMessage = cliProxyErrorMessage(e)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func applyCodexProfile() {
+        guard var profile = workingCodexProfile, profile.hasUpstreamConfiguration else {
+            customFeedbackTarget = .codex
+            errorMessage = L10n.t("codexConfig.error.incomplete", lang)
+            return
+        }
+        let replacingActive = activeCodexProfileID == profile.id
+        customFeedbackTarget = .codex
+        errorMessage = nil
+        statusMessage = nil
+        busy = true
+        Task { @MainActor in
+            do {
+                if profile.usesEmbeddedCLIProxy {
+                    profile = try await localProxy.prepare(codexProfile: profile)
+                    try CodexConfigWriter.apply(profile: profile)
+                } else {
+                    profile.cliProxyAppliedSignature = nil
+                    try BirdNionConfigStore.saveCodexProfile(profile)
+                    try CodexConfigWriter.apply(profile: profile)
+                    try await localProxy.deactivateCodexProxyProfiles()
+                }
+                workingCodexProfile = profile
+                // Refresh the per-project overlay file alongside the global
+                // apply so `codex --profile` always matches what was applied.
+                _ = try? CodexConfigWriter.writeProfileFile(for: profile)
+                reloadCodexProfiles()
+                statusMessage = L10n.t(replacingActive ? "codexConfig.updated" : "codexConfig.applied", lang)
+            } catch let e as EmbeddedCLIProxyService.ServiceError {
+                errorMessage = embeddedCLIProxyErrorMessage(e)
+            } catch let e as CLIProxyAPIClient.ClientError {
+                errorMessage = cliProxyErrorMessage(e)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func deactivateCodexProfile() {
+        guard var profile = workingCodexProfile else { return }
+        customFeedbackTarget = .codex
+        errorMessage = nil
+        statusMessage = nil
+        busy = true
+        Task { @MainActor in
+            do {
+                _ = try CodexConfigWriter.deactivate()
+                profile.cliProxyAppliedSignature = nil
+                try BirdNionConfigStore.saveCodexProfile(profile)
+                try await localProxy.deactivateCodexProxyProfiles()
+                workingCodexProfile = profile
+                reloadCodexProfiles()
+                statusMessage = L10n.t("codexConfig.deactivated", lang)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    /// One-line dual-agent status: "CC: <status>" plus "CX: <status>" once a
+    /// Codex record exists for the entry.
+    private func combinedStatusLabel(claude: String, codex: String?) -> String {
+        guard let codex else { return "CC: " + claude }
+        return "CC: " + claude + " · CX: " + codex
+    }
+
+    /// Compact Codex status for the shared list rows.
+    private func codexStatusLabel(_ p: BirdNionConfigStore.CodexProfile) -> String {
+        let applied = activeCodexProfileID == p.id && CodexConfigWriter.isApplied(p)
+        let serving = !p.usesEmbeddedCLIProxy
+            || EmbeddedCLIProxyService.isProfileRunning(p, runtimeState: localProxy.runtimeState)
+        if applied && serving { return L10n.t("codexConfig.state.active", lang) }
+        if applied { return L10n.t("codexConfig.state.stale", lang) }
+        if !p.hasUpstreamConfiguration { return L10n.t("codexConfig.state.setup", lang) }
+        return L10n.t("codexConfig.state.ready", lang)
     }
 
     private var pasteJSONSheet: some View {
@@ -626,11 +1077,12 @@ struct ClaudeCodePane: View {
         }
     }
 
-    private func customClaudeCodeStep(_ profile: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
+    private func customClaudeCodeStep(_ profile: BirdNionConfigStore.ClaudeCodeProfile,
+                                      header: String) -> some View {
         let scope = currentScope()
         let state = profilePowerState(for: profile, scope: scope)
         let title = profile.name.isEmpty ? L10n.t("ccx.newName", lang) : profile.name
-        return SettingsCard(header: L10n.t("aiCoding.claudeCode.settings", lang)) {
+        return SettingsCard(header: header) {
             activationPanelBody(
                 icon: Image(systemName: "terminal.fill"),
                 title: title,
@@ -803,15 +1255,11 @@ struct ClaudeCodePane: View {
         case .stale:
             if profile.usesEmbeddedCLIProxy,
                (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
-                return L10n.t("ccx.proxy.error.startFirst", lang)
+                return L10n.t("ccx.proxy.tapToStart", lang)
             }
             return L10n.t("claudeCode.power.stale", lang)
         case .needsSetup:
             if scope == .project && projectDir == nil { return L10n.t("claudeCode.project.none", lang) }
-            if profile.usesEmbeddedCLIProxy, profile.hasUpstreamConfiguration,
-               (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
-                return L10n.t("ccx.proxy.error.startFirst", lang)
-            }
             return profile.usesEmbeddedCLIProxy
                 ? L10n.t("ccx.needProxyConfig", lang)
                 : L10n.t("ccx.needConfig", lang)
@@ -858,12 +1306,31 @@ struct ClaudeCodePane: View {
         return .project(URL(fileURLWithPath: path))
     }
 
-    private func profileIsActivated(_ profile: BirdNionConfigStore.ClaudeCodeProfile) -> Bool {
-        guard ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: scope(for: profile), using: config) == .synced else {
-            return false
+    /// List sub-label: activated ("on") beats a synced-but-proxy-down profile,
+    /// which reads as "proxy stopped" so the user knows why it is not serving.
+    private func profileStatusLabel(_ p: BirdNionConfigStore.ClaudeCodeProfile,
+                                    sync: ClaudeCodeConfigWriter.SyncState,
+                                    activated: Bool,
+                                    ready: Bool) -> String {
+        if activated { return L10n.t("claudeCode.state.on", lang) }
+        if sync == .synced { return L10n.t("ccx.proxy.status.stopped", lang) }
+        if sync == .stale { return L10n.t("claudeCode.state.stale", lang) }
+        return L10n.t(ready ? "claudeCode.state.off" : "claudeCode.state.setup", lang)
+    }
+
+    private func providerStatusLabel(configured: Bool,
+                                     sync: ClaudeCodeConfigWriter.SyncState) -> String {
+        if sync == .synced { return L10n.t("claudeCode.state.on", lang) }
+        if sync == .stale { return L10n.t("claudeCode.state.stale", lang) }
+        return L10n.t(configured ? "claudeCode.state.off" : "claudeCode.state.setup", lang)
+    }
+
+    private func scope(forProvider p: BirdNionConfigStore.Provider) -> ClaudeCodeConfigWriter.Scope {
+        guard p.claudeCodeScope == ScopeChoice.project.rawValue,
+              let path = cleaned(p.claudeCodeProjectPath) else {
+            return .global
         }
-        guard profile.usesEmbeddedCLIProxy else { return true }
-        return EmbeddedCLIProxyService.isProfileRunning(profile, runtimeState: localProxy.runtimeState)
+        return .project(URL(fileURLWithPath: path))
     }
 
     private func visibleTargetLabel() -> String {
@@ -1044,9 +1511,15 @@ struct ClaudeCodePane: View {
         statusMessage = nil
         errorMessage = nil
         customFeedbackTarget = nil
+        detailAgent = .claudeCode
+        codexModels = []
         guard let p = selectedProvider else {
             haiku = ""; sonnet = ""; opus = ""; disable1M = false; models = []
+            workingCodexProfile = nil
             return
+        }
+        workingCodexProfile = p.codexProfileID.flatMap { id in
+            codexProfiles.first { $0.id == id }
         }
         haiku = p.claudeHaikuModel ?? ""
         sonnet = p.claudeSonnetModel ?? ""
@@ -1223,16 +1696,27 @@ struct ClaudeCodePane: View {
 
     private func reloadProfiles() {
         profiles = BirdNionConfigStore.claudeCodeProfiles()
+        reloadCodexProfiles()
     }
 
     private func loadProfileSelection() {
         statusMessage = nil
         errorMessage = nil
         customFeedbackTarget = nil
-        guard let id = selectedProfileID else { workingProfile = nil; return }
+        detailAgent = .claudeCode
+        codexModels = []
+        guard let id = selectedProfileID else {
+            workingProfile = nil
+            workingCodexProfile = nil
+            return
+        }
         guard var profile = profiles.first(where: { $0.id == id }) else {
             workingProfile = nil
+            workingCodexProfile = nil
             return
+        }
+        workingCodexProfile = profile.codexProfileID.flatMap { codexID in
+            codexProfiles.first { $0.id == codexID }
         }
         if profile.migrateLegacyLocalProxyToOpenAIIfNeeded() {
             do {
@@ -1265,19 +1749,40 @@ struct ClaudeCodePane: View {
         selectedProfileID = p.id   // triggers loadProfileSelection
     }
 
+    /// Deleting a unified entry removes BOTH agent records. For a preset the
+    /// custom record does not exist — only the derived Codex record and its
+    /// provider link are removed.
     private func deleteProfile() {
-        guard let id = selectedProfileID else { return }
         do {
-            try BirdNionConfigStore.removeClaudeCodeProfile(id: id)
+            if let id = selectedProfileID {
+                let codexID = profiles.first(where: { $0.id == id })?.codexProfileID
+                try BirdNionConfigStore.removeClaudeCodeProfile(id: id)
+                if let codexID {
+                    if activeCodexProfileID == codexID { _ = try? CodexConfigWriter.deactivate() }
+                    CodexConfigWriter.removeProfileFile(profileID: codexID)
+                    try BirdNionConfigStore.removeCodexProfile(id: codexID)
+                }
+                selectedProfileID = nil
+                workingProfile = nil
+                selectedID = providers.first?.id
+            } else if let provider = selectedProvider, let codexID = provider.codexProfileID {
+                if activeCodexProfileID == codexID { _ = try? CodexConfigWriter.deactivate() }
+                CodexConfigWriter.removeProfileFile(profileID: codexID)
+                try BirdNionConfigStore.removeCodexProfile(id: codexID)
+                var updated = provider
+                updated.codexProfileID = nil
+                try BirdNionConfigStore.save(updated)
+                reloadProviders()
+            }
         } catch {
             errorMessage = error.localizedDescription
             return
         }
-        selectedProfileID = nil
-        workingProfile = nil
+        workingCodexProfile = nil
+        detailAgent = .claudeCode
         customFeedbackTarget = nil
         reloadProfiles()
-        selectedID = providers.first?.id
+        reloadCodexProfiles()
         Task { @MainActor in
             await EmbeddedCLIProxyService.shared.reconcileStoredProfiles()
         }
@@ -1320,18 +1825,25 @@ struct ClaudeCodePane: View {
         }
     }
 
+    /// The helper is shared, so stopping it invalidates whichever agent's
+    /// record the user is currently looking at.
     private func stopLocalProxy() {
-        guard var profile = workingProfile else { return }
         customFeedbackTarget = .proxy
         errorMessage = nil
         statusMessage = nil
         let didStop = EmbeddedCLIProxyService.shared.stopManagedLocalProxy()
-        profile.cliProxyAppliedSignature = nil
         do {
-            try BirdNionConfigStore.saveClaudeCodeProfile(profile)
-            workingProfile = profile
+            if detailAgent == .codex, var codex = workingCodexProfile {
+                codex.cliProxyAppliedSignature = nil
+                try BirdNionConfigStore.saveCodexProfile(codex)
+                workingCodexProfile = codex
+            } else if var profile = workingProfile {
+                profile.cliProxyAppliedSignature = nil
+                try BirdNionConfigStore.saveClaudeCodeProfile(profile)
+                workingProfile = profile
+            }
             reloadProfiles()
-            errorMessage = nil
+            reloadCodexProfiles()
             statusMessage = L10n.t(
                 didStop ? "ccx.proxy.stop.done" : "ccx.proxy.stop.none",
                 lang
@@ -1350,26 +1862,31 @@ struct ClaudeCodePane: View {
         errorMessage = nil
         statusMessage = nil
         guard state != .needsSetup else {
-            errorMessage = profile.usesEmbeddedCLIProxy && profile.hasUpstreamConfiguration
-                ? L10n.t("ccx.proxy.error.startFirst", lang)
-                : L10n.t(profile.usesEmbeddedCLIProxy ? "ccx.needProxyConfig" : "ccx.needConfig", lang)
-            return
-        }
-        if state != .on, profile.usesEmbeddedCLIProxy,
-           (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
-            errorMessage = L10n.t("ccx.proxy.error.startFirst", lang)
+            if scope == .project, projectDir == nil {
+                errorMessage = L10n.t("claudeCode.project.none", lang)
+            } else {
+                errorMessage = L10n.t(profile.usesEmbeddedCLIProxy ? "ccx.needProxyConfig" : "ccx.needConfig", lang)
+            }
             return
         }
         busy = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             do {
-                let profile = profileWithCurrentTarget(profile)
+                var profile = profileWithCurrentTarget(profile)
                 try BirdNionConfigStore.saveClaudeCodeProfile(profile)  // persist edits
                 if state == .on {
                     try ClaudeCodeConfigWriter.deactivate(profile: profile, scope: sc, using: config)
                     statusMessage = L10n.t("claudeCode.deactivated", lang)
                 } else {
+                    // One tap = full activation: bring the embedded proxy up (or
+                    // reload a stale registration) before writing Claude Code
+                    // settings, instead of asking the user to start it first.
+                    if profile.usesEmbeddedCLIProxy,
+                       (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
+                        profile = try await EmbeddedCLIProxyService.shared.prepare(profile: profile)
+                        workingProfile = profile
+                    }
                     try ClaudeCodeConfigWriter.apply(profile: profile, scope: sc, using: config)
                     if !profile.usesEmbeddedCLIProxy {
                         EmbeddedCLIProxyService.shared.deactivateForDirectUpstream()
@@ -1396,6 +1913,12 @@ struct ClaudeCodePane: View {
     }
 
     // MARK: - Helpers
+
+    /// "N. <title>" — steps are numbered in code because the proxy step can be
+    /// skipped (direct upstream), shifting every number after it.
+    private func stepTitle(_ number: Int, _ key: String) -> String {
+        "\(number). " + L10n.t(key, lang)
+    }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
         HStack(spacing: 12) {

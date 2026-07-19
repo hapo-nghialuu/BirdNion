@@ -769,19 +769,33 @@ final class ClaudeCodeTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        let compatibilityControl = allSubviews(of: host)
-            .compactMap { $0 as? NSSegmentedControl }
-            .first { $0.segmentCount == 2 && $0.label(forSegment: 0) == "Anthropic Compatible" }
+        // The picker now exposes the three wire protocols directly:
+        // Anthropic / Chat (OpenAI Chat Completions) / Responses.
+        func protocolControl() -> NSSegmentedControl? {
+            allSubviews(of: host)
+                .compactMap { $0 as? NSSegmentedControl }
+                .first { $0.segmentCount == 3 && $0.label(forSegment: 0) == "Anthropic" }
+        }
+        let compatibilityControl = protocolControl()
         XCTAssertNotNil(compatibilityControl)
         XCTAssertEqual(compatibilityControl?.selectedSegment, 0)
 
-        compatibilityControl?.selectedSegment = 1
+        compatibilityControl?.selectedSegment = 1   // OpenAI Chat
         compatibilityControl?.sendAction(compatibilityControl?.action, to: compatibilityControl?.target)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         XCTAssertEqual(recorder.profile?.compatibility, .openAI)
         XCTAssertEqual(recorder.profile?.compatibilityMode, "openai")
         XCTAssertEqual(recorder.profile?.embeddedLocalProxy, true)
+        XCTAssertNil(recorder.profile?.openAIFormat)
+
+        let refreshed = protocolControl()
+        refreshed?.selectedSegment = 2   // OpenAI Responses
+        refreshed?.sendAction(refreshed?.action, to: refreshed?.target)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(recorder.profile?.compatibility, .openAI)
+        XCTAssertEqual(recorder.profile?.openAIFormat, "responses")
     }
 
     @MainActor

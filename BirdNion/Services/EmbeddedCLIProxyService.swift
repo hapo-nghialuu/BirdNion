@@ -343,7 +343,20 @@ final class EmbeddedCLIProxyService: ObservableObject {
         }
         try write(configuration: configuration)
         try await ensureRunning()
-        try await CLIProxyAPIClient().synchronize(configuration)
+        do {
+            try await CLIProxyAPIClient().synchronize(configuration)
+        } catch let error as CLIProxyAPIClient.ClientError {
+            // A stale helper — e.g. orphaned by a previous app instance —
+            // still answers /healthz but rejects today's management key.
+            // Replace it once instead of surfacing a permanent failure.
+            guard case .http(let code) = error, code == 401 || code == 403 else { throw error }
+            _ = processController.stopManagedListeners(
+                configURL: configURL,
+                ports: [CLIProxyAPIConfiguration.localPort, CLIProxyAPIConfiguration.legacyLocalPort]
+            )
+            try await ensureRunning()
+            try await CLIProxyAPIClient().synchronize(configuration)
+        }
     }
 
     private var configDirectoryURL: URL {

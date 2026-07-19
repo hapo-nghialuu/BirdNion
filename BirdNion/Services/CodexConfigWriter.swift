@@ -100,6 +100,88 @@ enum CodexConfigWriter {
         return true
     }
 
+    // MARK: - Per-project profile files (`codex --profile <name>`)
+    //
+    // Codex ignores provider keys in project-local `.codex/config.toml` (a
+    // deliberate security boundary), so the only per-project mechanism is a
+    // user-level profile overlay file `~/.codex/<name>.config.toml` selected
+    // with `codex --profile <name>`. One file per BirdNion profile, tracked in
+    // a sidecar map so rename/delete never leaves stale credential files.
+
+    private struct ProfileFilesState: Codable, Equatable {
+        var files: [String: String] = [:]   // BirdNion profile id → file name
+    }
+
+    /// Codex profile names allow ASCII letters, digits, hyphens, underscores.
+    static func profileFlagName(for profile: BirdNionConfigStore.CodexProfile) -> String {
+        let slug = profile.name.lowercased().map { ch -> String in
+            (ch.isASCII && (ch.isLetter || ch.isNumber)) ? String(ch) : "-"
+        }.joined()
+        var collapsed = ""
+        for ch in slug where !(ch == "-" && collapsed.hasSuffix("-")) { collapsed.append(ch) }
+        let trimmed = collapsed.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let base = trimmed.isEmpty ? String(profile.id.prefix(8)).lowercased() : trimmed
+        return "bn-" + base
+    }
+
+    /// Write/refresh this profile's overlay file with the same managed block
+    /// the global apply produces. Returns the `--profile` flag value.
+    @discardableResult
+    static func writeProfileFile(for profile: BirdNionConfigStore.CodexProfile,
+                                 configURL: URL = targetURL()) throws -> String {
+        let configuration = try providerConfiguration(for: profile)
+        let directory = configURL.deletingLastPathComponent()
+        var state = loadProfileFilesState(configURL: configURL)
+
+        var flag = profileFlagName(for: profile)
+        // Two profiles sharing one display name must not share one file.
+        if state.files.contains(where: { $0.key != profile.id && $0.value == flag + ".config.toml" }) {
+            flag += "-" + String(profile.id.prefix(4)).lowercased()
+        }
+        let fileName = flag + ".config.toml"
+
+        if let previous = state.files[profile.id], previous != fileName {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(previous))
+        }
+        try write(CodexConfigDocument.applying(configuration, to: ""),
+                  to: directory.appendingPathComponent(fileName))
+        state.files[profile.id] = fileName
+        try writeProfileFilesState(state, configURL: configURL)
+        return flag
+    }
+
+    /// The flag to pass to `codex --profile`, or nil when no overlay file has
+    /// been written for this profile yet.
+    static func profileFlag(forProfileID id: String, configURL: URL = targetURL()) -> String? {
+        guard let name = loadProfileFilesState(configURL: configURL).files[id],
+              name.hasSuffix(".config.toml") else { return nil }
+        return String(name.dropLast(".config.toml".count))
+    }
+
+    static func removeProfileFile(profileID: String, configURL: URL = targetURL()) {
+        var state = loadProfileFilesState(configURL: configURL)
+        guard let name = state.files.removeValue(forKey: profileID) else { return }
+        try? FileManager.default.removeItem(
+            at: configURL.deletingLastPathComponent().appendingPathComponent(name))
+        try? writeProfileFilesState(state, configURL: configURL)
+    }
+
+    private static func profileFilesStateURL(configURL: URL) -> URL {
+        configURL.deletingLastPathComponent().appendingPathComponent("birdnion-profile-files.json")
+    }
+
+    private static func loadProfileFilesState(configURL: URL) -> ProfileFilesState {
+        guard let data = try? Data(contentsOf: profileFilesStateURL(configURL: configURL)),
+              let state = try? JSONDecoder().decode(ProfileFilesState.self, from: data) else {
+            return ProfileFilesState()
+        }
+        return state
+    }
+
+    private static func writeProfileFilesState(_ state: ProfileFilesState, configURL: URL) throws {
+        try writeData(try JSONEncoder().encode(state), to: profileFilesStateURL(configURL: configURL))
+    }
+
     private static func providerConfiguration(for profile: BirdNionConfigStore.CodexProfile) throws -> CodexProviderConfiguration {
         guard let model = cleaned(profile.model),
               let signature = profile.codexConfigurationSignature else {

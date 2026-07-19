@@ -7,10 +7,11 @@ struct AICodingAgentSelectionCard: View {
     let selectedAgent: AICodingAgent
     let profileID: String
     let lang: String
+    var header: String? = nil
     let onSelect: (AICodingAgent) -> Void
 
     var body: some View {
-        SettingsCard(header: L10n.t("aiCoding.step.agent", lang)) {
+        SettingsCard(header: header ?? L10n.t("aiCoding.step.agent", lang)) {
             HStack(spacing: 12) {
                 Text(L10n.t("aiCoding.target", lang))
                     .font(.system(size: 13, weight: .semibold))
@@ -51,12 +52,13 @@ struct CodexProfileActivationCard: View {
     let current: Bool
     let lang: String
     let busy: Bool
+    var header: String? = nil
     let onApply: () -> Void
     let onDeactivate: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
-        SettingsCard(header: L10n.t("codexConfig.target", lang)) {
+        SettingsCard(header: header ?? L10n.t("codexConfig.target", lang)) {
             HStack(spacing: 12) {
                 Image(systemName: active && current ? "checkmark.circle.fill" : "command")
                     .font(.system(size: 17, weight: .semibold))
