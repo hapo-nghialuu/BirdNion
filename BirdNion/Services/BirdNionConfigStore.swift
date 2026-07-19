@@ -492,40 +492,6 @@ enum BirdNionConfigStore {
         return (updated, true)
     }
 
-    /// Pure upstream sync Codex → linked Claude. Never touches model tiers,
-    /// `extraEnv`, or scope fields.
-    static func syncedClaudeCodeProfile(from codex: CodexProfile,
-                                        into claude: ClaudeCodeProfile) -> (ClaudeCodeProfile, Bool) {
-        var updated = claude
-        if codex.upstreamProtocol == .anthropic {
-            updated.baseURL = codex.baseURL
-            updated.token = codex.apiKey
-            updated.compatibilityMode = ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
-        } else {
-            updated.openAIBaseURL = codex.baseURL
-            updated.openAIAPIKey = codex.apiKey
-            updated.compatibilityMode = ClaudeCodeProfile.CompatibilityMode.openAI.rawValue
-            updated.openAIFormat = codex.upstreamProtocol == .responses ? "responses" : nil
-            updated.embeddedLocalProxy = true
-        }
-
-        let changed: Bool
-        if codex.upstreamProtocol == .anthropic {
-            changed = updated.baseURL != claude.baseURL
-                || updated.token != claude.token
-                || updated.compatibility != claude.compatibility
-        } else {
-            changed = updated.openAIBaseURL != claude.openAIBaseURL
-                || updated.openAIAPIKey != claude.openAIAPIKey
-                || updated.compatibility != claude.compatibility
-                || updated.openAIFormat != claude.openAIFormat
-                || updated.embeddedLocalProxy != claude.embeddedLocalProxy
-        }
-        if !changed { return (claude, false) }
-        updated.cliProxyAppliedSignature = nil
-        return (updated, true)
-    }
-
     /// One provider's configuration. Fields are all optional so partial
     /// entries are valid (e.g. just an apiKey without enabled).
     struct Provider: Codable, Equatable {
@@ -750,9 +716,12 @@ enum BirdNionConfigStore {
         read(url: url)?.codexProfiles ?? []
     }
 
-    /// Upsert one Codex profile by id. When `claudeCodeProfileID` points at an
-    /// existing Claude Code profile, mirrors upstream credentials/protocol onto
-    /// that profile in the same write (idempotent).
+    /// Upsert one Codex profile by id (atomic write, preserves providers).
+    /// Deliberately does NOT mirror back onto the linked Claude record: the
+    /// Claude record is the single source of truth for the shared upstream
+    /// (the unified UI only edits upstream there), and Codex-side bookkeeping
+    /// saves (proxy prepare, signature clears) may carry stale in-memory
+    /// snapshots that would silently overwrite the user's protocol choice.
     static func saveCodexProfile(_ profile: CodexProfile, url: URL = configURL()) throws {
         var config = read(url: url) ?? Config(version: 1, providers: [])
         var profiles = config.codexProfiles ?? []
@@ -762,18 +731,6 @@ enum BirdNionConfigStore {
             profiles.append(profile)
         }
         config.codexProfiles = profiles
-
-        if let claudeID = profile.claudeCodeProfileID {
-            var claudeProfiles = config.claudeCodeProfiles ?? []
-            if let index = claudeProfiles.firstIndex(where: { $0.id == claudeID }) {
-                let (synced, changed) = syncedClaudeCodeProfile(from: profile, into: claudeProfiles[index])
-                if changed {
-                    claudeProfiles[index] = synced
-                    config.claudeCodeProfiles = claudeProfiles
-                }
-            }
-        }
-
         config.version = config.version ?? 1
         try writeConfig(config, url: url)
     }
