@@ -137,6 +137,7 @@ struct ClaudeCodePane: View {
     @State private var customFeedbackTarget: CustomFeedbackTarget?
     @State private var showingRemoveEnvConfirmation = false
     @State private var showingStopLocalProxyConfirmation = false
+    @State private var showingDeleteProfileConfirmation = false
 
     private enum ScopeChoice: String, CaseIterable, Identifiable {
         case global, project
@@ -214,6 +215,23 @@ struct ClaudeCodePane: View {
         } message: {
             Text(L10n.t("ccx.proxy.stop.confirmMessage", lang))
         }
+        .confirmationDialog(
+            L10n.t("ccx.delete.confirmTitle", lang),
+            isPresented: $showingDeleteProfileConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.t("ccx.delete", lang), role: .destructive) { deleteProfile() }
+            Button(L10n.t("ccx.pasteJSON.cancel", lang), role: .cancel) {}
+        } message: {
+            Text(L10n.f("ccx.delete.confirmMessage", lang, workingProfileDisplayName))
+        }
+    }
+
+    private var workingProfileDisplayName: String {
+        guard let name = workingProfile?.name, !name.isEmpty else {
+            return L10n.t("ccx.newName", lang)
+        }
+        return name
     }
 
     /// Auto-save custom-profile edits as the user types, and reflect the change
@@ -280,7 +298,11 @@ struct ClaudeCodePane: View {
     private func profileRow(_ p: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
         let selected = p.id == selectedProfileID
         let hovering = p.id == hoveredProfileID
-        let activated = profileIsActivated(p)
+        let sync = ClaudeCodeConfigWriter.syncState(forProfile: p, scope: scope(for: p), using: config)
+        let activated = sync == .synced
+            && (!p.usesEmbeddedCLIProxy
+                || EmbeddedCLIProxyService.isProfileRunning(p, runtimeState: localProxy.runtimeState))
+        let ready = ClaudeCodeConfigWriter.isReady(p)
         return Button {
             selectedID = nil
             selectedProfileID = p.id
@@ -292,21 +314,21 @@ struct ClaudeCodePane: View {
                                      ? SettingsTheme.success
                                      : (selected ? SettingsTheme.accent : SettingsTheme.secondary))
                     .frame(width: 18)
-                Text(p.name.isEmpty ? L10n.t("ccx.newName", lang) : p.name)
-                    .font(.system(size: 13, weight: selected || activated ? .semibold : .regular))
-                    .foregroundStyle(SettingsTheme.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                if activated {
-                    Image(systemName: "power.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(SettingsTheme.success)
-                        .accessibilityLabel(L10n.t("claudeCode.state.on", lang))
-                } else if ClaudeCodeConfigWriter.isReady(p) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsTheme.success)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(p.name.isEmpty ? L10n.t("ccx.newName", lang) : p.name)
+                        .font(.system(size: 13, weight: selected || activated ? .semibold : .regular))
+                        .foregroundStyle(SettingsTheme.primary)
+                        .lineLimit(1)
+                    Text(profileStatusLabel(p, sync: sync, activated: activated, ready: ready))
+                        .font(.system(size: 10))
+                        .foregroundStyle(activated ? SettingsTheme.success : SettingsTheme.tertiary)
+                        .lineLimit(1)
                 }
+                Spacer(minLength: 4)
+                Image(systemName: activated || ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(activated || ready ? SettingsTheme.success : SettingsTheme.warning)
+                    .accessibilityLabel(profileStatusLabel(p, sync: sync, activated: activated, ready: ready))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -334,6 +356,11 @@ struct ClaudeCodePane: View {
     private func providerRow(_ p: BirdNionConfigStore.Provider) -> some View {
         let active = p.id == selectedID
         let hovering = p.id == hoveredProviderID
+        let configured = ClaudeCodeConfigWriter.isFullyConfigured(p)
+        let sync: ClaudeCodeConfigWriter.SyncState = configured
+            ? ClaudeCodeConfigWriter.syncState(forProvider: p, scope: scope(forProvider: p), using: config)
+            : .off
+        let activated = sync == .synced
         return Button {
             selectedProfileID = nil
             selectedID = p.id
@@ -342,12 +369,18 @@ struct ClaudeCodePane: View {
                 ProviderLogoMark(id: p.id,
                                  tint: active ? SettingsTheme.accent : SettingsTheme.secondary)
                     .frame(width: 18, height: 18)
-                Text(providerName(p))
-                    .font(.system(size: 13, weight: active ? .semibold : .regular))
-                    .foregroundStyle(SettingsTheme.primary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(providerName(p))
+                        .font(.system(size: 13, weight: active || activated ? .semibold : .regular))
+                        .foregroundStyle(SettingsTheme.primary)
+                        .lineLimit(1)
+                    Text(providerStatusLabel(configured: configured, sync: sync))
+                        .font(.system(size: 10))
+                        .foregroundStyle(activated ? SettingsTheme.success : SettingsTheme.tertiary)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 4)
-                if ClaudeCodeConfigWriter.isFullyConfigured(p) {
+                if configured {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(SettingsTheme.success)
@@ -356,9 +389,11 @@ struct ClaudeCodePane: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(active
-                        ? SettingsTheme.selectedSurface
-                        : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear))
+            .background(activated
+                        ? SettingsTheme.success.opacity(active ? 0.18 : 0.11)
+                        : (active
+                           ? SettingsTheme.selectedSurface
+                           : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -449,16 +484,21 @@ struct ClaudeCodePane: View {
                 get: { workingProfile ?? Self.blankProfile() },
                 set: { workingProfile = $0 }
             )
+            // One top-to-bottom flow: the step numbers shift when the proxy
+            // step is skipped (direct upstream) or the agent picker is hidden.
+            let hasProxy = binding.wrappedValue.usesEmbeddedCLIProxy
+            let modelStep = hasProxy ? 3 : 2
+            let activateStep = onSwitchToCodex != nil ? modelStep + 2 : modelStep + 1
             VStack(alignment: .leading, spacing: 14) {
                 ClaudeCodeCustomProfileConnectionFields(
                     profile: binding,
                     lang: lang,
-                    header: L10n.t("ccx.step.upstream", lang),
+                    header: stepTitle(1, "ccx.step.upstream"),
                     onPasteJSON: openPasteJSON
                 )
                 customFeedbackRow(for: .upstream)
 
-                if binding.wrappedValue.usesEmbeddedCLIProxy {
+                if hasProxy {
                     ClaudeCodeLocalProxyStatusCard(
                         runtimeState: localProxy.runtimeState,
                         hasUpstreamConfiguration: binding.wrappedValue.hasUpstreamConfiguration,
@@ -470,15 +510,24 @@ struct ClaudeCodePane: View {
                         feedbackIsError: customFeedbackIsError,
                         onStart: startLocalProxy,
                         onStop: { showingStopLocalProxyConfirmation = true },
-                        onRefresh: refreshLocalProxyStatus
+                        onRefresh: refreshLocalProxyStatus,
+                        header: stepTitle(2, "ccx.step.proxy")
                     )
                 }
+
+                ClaudeCodeCustomProfileForm(
+                    profile: binding,
+                    lang: lang,
+                    includesConnectionFields: false,
+                    modelHeader: stepTitle(modelStep, "claudeCode.model")
+                )
 
                 if let onSwitchToCodex {
                     AICodingAgentSelectionCard(
                         selectedAgent: .claudeCode,
                         profileID: binding.wrappedValue.id,
-                        lang: lang
+                        lang: lang,
+                        header: stepTitle(modelStep + 1, "aiCoding.step.agent")
                     ) { target in
                         if target == .codex {
                             onSwitchToCodex(binding.wrappedValue)
@@ -486,17 +535,12 @@ struct ClaudeCodePane: View {
                     }
                 }
 
-                ClaudeCodeCustomProfileForm(
-                    profile: binding,
-                    lang: lang,
-                    includesConnectionFields: false
-                )
-
-                customClaudeCodeStep(binding.wrappedValue)
+                customClaudeCodeStep(binding.wrappedValue,
+                                     header: stepTitle(activateStep, "aiCoding.claudeCode.settings"))
 
                 HStack {
                     Spacer()
-                    Button(role: .destructive) { deleteProfile() } label: {
+                    Button(role: .destructive) { showingDeleteProfileConfirmation = true } label: {
                         Label(L10n.t("ccx.delete", lang), systemImage: "trash")
                     }
                 }
@@ -626,11 +670,12 @@ struct ClaudeCodePane: View {
         }
     }
 
-    private func customClaudeCodeStep(_ profile: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
+    private func customClaudeCodeStep(_ profile: BirdNionConfigStore.ClaudeCodeProfile,
+                                      header: String) -> some View {
         let scope = currentScope()
         let state = profilePowerState(for: profile, scope: scope)
         let title = profile.name.isEmpty ? L10n.t("ccx.newName", lang) : profile.name
-        return SettingsCard(header: L10n.t("aiCoding.claudeCode.settings", lang)) {
+        return SettingsCard(header: header) {
             activationPanelBody(
                 icon: Image(systemName: "terminal.fill"),
                 title: title,
@@ -803,15 +848,11 @@ struct ClaudeCodePane: View {
         case .stale:
             if profile.usesEmbeddedCLIProxy,
                (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
-                return L10n.t("ccx.proxy.error.startFirst", lang)
+                return L10n.t("ccx.proxy.tapToStart", lang)
             }
             return L10n.t("claudeCode.power.stale", lang)
         case .needsSetup:
             if scope == .project && projectDir == nil { return L10n.t("claudeCode.project.none", lang) }
-            if profile.usesEmbeddedCLIProxy, profile.hasUpstreamConfiguration,
-               (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
-                return L10n.t("ccx.proxy.error.startFirst", lang)
-            }
             return profile.usesEmbeddedCLIProxy
                 ? L10n.t("ccx.needProxyConfig", lang)
                 : L10n.t("ccx.needConfig", lang)
@@ -858,12 +899,31 @@ struct ClaudeCodePane: View {
         return .project(URL(fileURLWithPath: path))
     }
 
-    private func profileIsActivated(_ profile: BirdNionConfigStore.ClaudeCodeProfile) -> Bool {
-        guard ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: scope(for: profile), using: config) == .synced else {
-            return false
+    /// List sub-label: activated ("on") beats a synced-but-proxy-down profile,
+    /// which reads as "proxy stopped" so the user knows why it is not serving.
+    private func profileStatusLabel(_ p: BirdNionConfigStore.ClaudeCodeProfile,
+                                    sync: ClaudeCodeConfigWriter.SyncState,
+                                    activated: Bool,
+                                    ready: Bool) -> String {
+        if activated { return L10n.t("claudeCode.state.on", lang) }
+        if sync == .synced { return L10n.t("ccx.proxy.status.stopped", lang) }
+        if sync == .stale { return L10n.t("claudeCode.state.stale", lang) }
+        return L10n.t(ready ? "claudeCode.state.off" : "claudeCode.state.setup", lang)
+    }
+
+    private func providerStatusLabel(configured: Bool,
+                                     sync: ClaudeCodeConfigWriter.SyncState) -> String {
+        if sync == .synced { return L10n.t("claudeCode.state.on", lang) }
+        if sync == .stale { return L10n.t("claudeCode.state.stale", lang) }
+        return L10n.t(configured ? "claudeCode.state.off" : "claudeCode.state.setup", lang)
+    }
+
+    private func scope(forProvider p: BirdNionConfigStore.Provider) -> ClaudeCodeConfigWriter.Scope {
+        guard p.claudeCodeScope == ScopeChoice.project.rawValue,
+              let path = cleaned(p.claudeCodeProjectPath) else {
+            return .global
         }
-        guard profile.usesEmbeddedCLIProxy else { return true }
-        return EmbeddedCLIProxyService.isProfileRunning(profile, runtimeState: localProxy.runtimeState)
+        return .project(URL(fileURLWithPath: path))
     }
 
     private func visibleTargetLabel() -> String {
@@ -1350,26 +1410,31 @@ struct ClaudeCodePane: View {
         errorMessage = nil
         statusMessage = nil
         guard state != .needsSetup else {
-            errorMessage = profile.usesEmbeddedCLIProxy && profile.hasUpstreamConfiguration
-                ? L10n.t("ccx.proxy.error.startFirst", lang)
-                : L10n.t(profile.usesEmbeddedCLIProxy ? "ccx.needProxyConfig" : "ccx.needConfig", lang)
-            return
-        }
-        if state != .on, profile.usesEmbeddedCLIProxy,
-           (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
-            errorMessage = L10n.t("ccx.proxy.error.startFirst", lang)
+            if scope == .project, projectDir == nil {
+                errorMessage = L10n.t("claudeCode.project.none", lang)
+            } else {
+                errorMessage = L10n.t(profile.usesEmbeddedCLIProxy ? "ccx.needProxyConfig" : "ccx.needConfig", lang)
+            }
             return
         }
         busy = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             do {
-                let profile = profileWithCurrentTarget(profile)
+                var profile = profileWithCurrentTarget(profile)
                 try BirdNionConfigStore.saveClaudeCodeProfile(profile)  // persist edits
                 if state == .on {
                     try ClaudeCodeConfigWriter.deactivate(profile: profile, scope: sc, using: config)
                     statusMessage = L10n.t("claudeCode.deactivated", lang)
                 } else {
+                    // One tap = full activation: bring the embedded proxy up (or
+                    // reload a stale registration) before writing Claude Code
+                    // settings, instead of asking the user to start it first.
+                    if profile.usesEmbeddedCLIProxy,
+                       (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
+                        profile = try await EmbeddedCLIProxyService.shared.prepare(profile: profile)
+                        workingProfile = profile
+                    }
                     try ClaudeCodeConfigWriter.apply(profile: profile, scope: sc, using: config)
                     if !profile.usesEmbeddedCLIProxy {
                         EmbeddedCLIProxyService.shared.deactivateForDirectUpstream()
@@ -1396,6 +1461,12 @@ struct ClaudeCodePane: View {
     }
 
     // MARK: - Helpers
+
+    /// "N. <title>" — steps are numbered in code because the proxy step can be
+    /// skipped (direct upstream), shifting every number after it.
+    private func stepTitle(_ number: Int, _ key: String) -> String {
+        "\(number). " + L10n.t(key, lang)
+    }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
         HStack(spacing: 12) {

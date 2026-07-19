@@ -17,6 +17,7 @@ struct CodexPane: View {
     @State private var statusMessage: String?
     @State private var errorMessage: String?
     @State private var showingStopProxyConfirmation = false
+    @State private var showingDeleteProfileConfirmation = false
 
     private var lang: String { settings.appLanguage }
 
@@ -63,6 +64,23 @@ struct CodexPane: View {
         } message: {
             Text(L10n.t("codexConfig.proxy.stopConfirmMessage", lang))
         }
+        .confirmationDialog(
+            L10n.t("ccx.delete.confirmTitle", lang),
+            isPresented: $showingDeleteProfileConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.t("codexConfig.delete", lang), role: .destructive) { deleteProfile() }
+            Button(L10n.t("ccx.pasteJSON.cancel", lang), role: .cancel) {}
+        } message: {
+            Text(L10n.f("ccx.delete.confirmMessage", lang, workingProfileDisplayName))
+        }
+    }
+
+    private var workingProfileDisplayName: String {
+        guard let name = workingProfile?.name, !name.isEmpty else {
+            return L10n.t("codexConfig.newName", lang)
+        }
+        return name
     }
 
     @ViewBuilder
@@ -72,10 +90,16 @@ struct CodexPane: View {
                 get: { workingProfile ?? profile },
                 set: { workingProfile = $0 }
             )
+            // One top-to-bottom flow; numbers shift when the proxy step is
+            // skipped (direct Responses upstream) or the agent picker hidden.
+            let hasProxy = profile.usesEmbeddedCLIProxy
+            let agentStep = hasProxy ? 3 : 2
+            let activateStep = onSwitchToClaudeCode != nil ? agentStep + 1 : agentStep
             VStack(alignment: .leading, spacing: 14) {
-                CodexProfileConnectionFields(profile: binding, lang: lang)
+                CodexProfileConnectionFields(profile: binding, lang: lang,
+                                             header: stepTitle(1, "ccx.step.upstream"))
 
-                if profile.usesEmbeddedCLIProxy {
+                if hasProxy {
                     ClaudeCodeLocalProxyStatusCard(
                         runtimeState: localProxy.runtimeState,
                         hasUpstreamConfiguration: profile.hasUpstreamConfiguration,
@@ -88,7 +112,7 @@ struct CodexPane: View {
                         onStart: startProxy,
                         onStop: { showingStopProxyConfirmation = true },
                         onRefresh: refreshProxy,
-                        header: L10n.t("ccx.step.proxy", lang),
+                        header: stepTitle(2, "ccx.step.proxy"),
                         runningDetail: L10n.t("codexConfig.proxy.running", lang),
                         stoppedDetail: L10n.t("codexConfig.proxy.stopped", lang)
                     )
@@ -98,7 +122,8 @@ struct CodexPane: View {
                     AICodingAgentSelectionCard(
                         selectedAgent: .codex,
                         profileID: profile.id,
-                        lang: lang
+                        lang: lang,
+                        header: stepTitle(agentStep, "aiCoding.step.agent")
                     ) { target in
                         if target == .claudeCode {
                             onSwitchToClaudeCode(profile)
@@ -112,9 +137,10 @@ struct CodexPane: View {
                     current: CodexConfigWriter.isApplied(profile),
                     lang: lang,
                     busy: busy,
+                    header: stepTitle(activateStep, "codexConfig.target"),
                     onApply: applyProfile,
                     onDeactivate: deactivateProfile,
-                    onDelete: deleteProfile
+                    onDelete: { showingDeleteProfileConfirmation = true }
                 )
 
                 feedback
@@ -138,6 +164,11 @@ struct CodexPane: View {
                 .foregroundStyle(SettingsTheme.success)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
+    }
+
+    /// "N. <title>" — mirrors ClaudeCodePane's dynamic step numbering.
+    private func stepTitle(_ number: Int, _ key: String) -> String {
+        "\(number). " + L10n.t(key, lang)
     }
 
     private var proxyFeedback: String? {
