@@ -57,6 +57,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                     // Recreate it when moving between custom profiles.
                     .id(profile.id)
                     .frame(maxWidth: 360, alignment: .trailing)
+                    .help(L10n.t("ccx.compatibility.hint", lang))
                     .accessibilityLabel(L10n.t("ccx.compatibility", lang))
                 }
                 SettingsRowDivider()
