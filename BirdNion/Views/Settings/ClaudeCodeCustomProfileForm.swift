@@ -6,10 +6,13 @@ import SwiftUI
 struct ClaudeCodeCustomProfileForm: View {
     @Binding var profile: BirdNionConfigStore.ClaudeCodeProfile
     let lang: String
+    var includesConnectionFields: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ClaudeCodeCustomProfileConnectionFields(profile: $profile, lang: lang)
+            if includesConnectionFields {
+                ClaudeCodeCustomProfileConnectionFields(profile: $profile, lang: lang)
+            }
 
             SettingsCard(header: L10n.t("claudeCode.model", lang)) {
                 fieldRow(L10n.t("claudeCode.model.haiku", lang)) {

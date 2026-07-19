@@ -118,10 +118,26 @@ enum BirdNionConfigStore {
 
         var isOpenAICompatible: Bool { compatibility == .openAI }
 
-        /// New profiles always use the embedded proxy. Existing OpenAI profiles
-        /// do too, so the earlier manual CLIProxyAPI settings migrate when the
-        /// profile is next applied. Legacy Anthropic profiles remain direct
-        /// until the user changes their compatibility selection.
+        /// Profiles created before the compatibility selector was made reliable
+        /// stored their OpenAI upstream in the legacy base URL/token fields while
+        /// already opting into BirdNion's local proxy. Promote that combination
+        /// once when the profile is opened, preserving the original values.
+        @discardableResult
+        mutating func migrateLegacyLocalProxyToOpenAIIfNeeded() -> Bool {
+            guard compatibilityMode == nil, embeddedLocalProxy == true else { return false }
+
+            compatibilityMode = CompatibilityMode.openAI.rawValue
+            if BirdNionConfigStore.cleaned(openAIBaseURL) == nil {
+                openAIBaseURL = BirdNionConfigStore.cleaned(baseURL)
+            }
+            if BirdNionConfigStore.cleaned(openAIAPIKey) == nil {
+                openAIAPIKey = BirdNionConfigStore.cleaned(token)
+            }
+            return true
+        }
+
+        /// New profiles persist their proxy choice explicitly. Older OpenAI
+        /// profiles without that choice preserve their original local-proxy path.
         var usesEmbeddedCLIProxy: Bool {
             embeddedLocalProxy ?? isOpenAICompatible
         }
@@ -142,8 +158,8 @@ enum BirdNionConfigStore {
             upstreamBaseURL != nil && upstreamAPIKey != nil
         }
 
-        /// Stable per-profile ownership marker for CLIProxyAPI configuration and
-        /// model routing. A namespaced prefix avoids collisions across profiles.
+        /// Stable per-profile ownership marker for CLIProxyAPI configuration.
+        /// It is never exposed in the model names written to Claude Code.
         var cliProxyProviderName: String {
             let safeID = id.lowercased().unicodeScalars.map { scalar in
                 CharacterSet.alphanumerics.contains(scalar) ? String(scalar) : "-"
@@ -191,6 +207,7 @@ enum BirdNionConfigStore {
                   let proxyAPIKey = BirdNionConfigStore.cleaned(cliProxyAPIKey),
                   let managementKey = BirdNionConfigStore.cleaned(cliProxyManagementKey) else { return nil }
             let material = ([
+                "direct-models-v1",
                 cliProxyProviderName,
                 compatibility.rawValue,
                 proxyBaseURL,
@@ -208,8 +225,9 @@ enum BirdNionConfigStore {
         }
 
         func cliProxyModelAlias(for model: String) -> String {
-            let prefix = "\(cliProxyProviderName)/"
-            return model.hasPrefix(prefix) ? model : prefix + model
+            // The local endpoint receives model names directly. CLIProxyAPI
+            // still needs an internal alias for Claude Code's `[1m]` handling.
+            CLIProxyAPIConfiguration.localModelAlias(for: model)
         }
     }
 

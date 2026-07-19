@@ -47,7 +47,11 @@ struct CLIProxyAPIConfiguration: Encodable {
         }
     }
 
-    static let localBaseURL = "http://127.0.0.1:8317"
+    /// Keep BirdNion's embedded helper away from CLIProxyAPI's documented
+    /// default port so it does not collide with a separately installed server.
+    static let localPort = 24_323
+    static let legacyLocalPort = 8_317
+    static let localBaseURL = "http://127.0.0.1:\(localPort)"
 
     let baseURL: String
     let authDirectory: String
@@ -74,7 +78,7 @@ struct CLIProxyAPIConfiguration: Encodable {
                   let apiKey = profile.upstreamAPIKey else { return nil }
             return ClaudeKey(
                 apiKey: apiKey,
-                prefix: profile.cliProxyProviderName,
+                prefix: "",
                 baseURL: baseURL,
                 models: Self.models(for: profile)
             )
@@ -85,7 +89,7 @@ struct CLIProxyAPIConfiguration: Encodable {
                   let apiKey = profile.upstreamAPIKey else { return nil }
             return OpenAICompatibility(
                 name: profile.cliProxyProviderName,
-                prefix: profile.cliProxyProviderName,
+                prefix: "",
                 baseURL: baseURL,
                 apiKeyEntries: [.init(apiKey: apiKey)],
                 models: Self.models(for: profile)
@@ -96,7 +100,7 @@ struct CLIProxyAPIConfiguration: Encodable {
     func yamlData() -> Data {
         var lines = [
             "host: \(quote("127.0.0.1"))",
-            "port: 8317",
+            "port: \(Self.localPort)",
             "auth-dir: \(quote(authDirectory))",
             "api-keys:",
         ]
@@ -156,7 +160,21 @@ struct CLIProxyAPIConfiguration: Encodable {
     }
 
     private static func models(for profile: BirdNionConfigStore.ClaudeCodeProfile) -> [Model] {
-        Self.unique(profile.openAIModelNames).map { .init(name: $0, alias: $0) }
+        var aliases = Set<String>()
+        return profile.openAIModelNames.compactMap { model in
+            let alias = Self.localModelAlias(for: model)
+            guard aliases.insert(alias).inserted else { return nil }
+            return .init(name: model, alias: alias)
+        }
+    }
+
+    /// Claude Code removes its documented `[1m]` model marker before sending a
+    /// request. Keep the marker in the upstream name, but register the local
+    /// alias without it so routing still resolves to the intended provider.
+    static func localModelAlias(for model: String) -> String {
+        let marker = "[1m]"
+        guard model.lowercased().hasSuffix(marker) else { return model }
+        return String(model.dropLast(marker.count))
     }
 
     private static func unique(_ values: [String]) -> [String] {
@@ -173,6 +191,8 @@ struct CLIProxyAPIConfiguration: Encodable {
         guard let data = try? JSONEncoder().encode(value), let string = String(data: data, encoding: .utf8) else {
             return "\"\""
         }
-        return string
+        // JSON permits `\/`, but YAML double-quoted scalars do not. JSONEncoder
+        // emits that optional escape for slash-containing paths and URLs.
+        return string.replacingOccurrences(of: "\\/", with: "/")
     }
 }

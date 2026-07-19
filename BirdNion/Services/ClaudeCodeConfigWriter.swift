@@ -301,7 +301,7 @@ enum ClaudeCodeConfigWriter {
 
         var p = base
         // Imported JSON is an Anthropic-shaped upstream configuration.
-        p.compatibilityMode = nil
+        p.compatibilityMode = BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
         p.embeddedLocalProxy = nil
         p.cliProxyBaseURL = nil
         p.cliProxyAPIKey = nil

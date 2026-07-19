@@ -89,10 +89,12 @@
 		CCPX0001000000000000B001 /* CLIProxyAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPX0002000000000000F001 /* CLIProxyAPIClient.swift */; };
 		CLPX0001000000000000B001 /* CLIProxyAPIConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */; };
 		CLPX0003000000000000B001 /* EmbeddedCLIProxyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */; };
+		CLPM0001000000000000B001 /* LocalProxyProcessController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLPM0002000000000000F001 /* LocalProxyProcessController.swift */; };
 		CCPN0001000000000000B001 /* ClaudeCodePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPN0002000000000000F001 /* ClaudeCodePane.swift */; };
 		CCPB0001000000000000B001 /* ClaudeCodePowerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPB0002000000000000F001 /* ClaudeCodePowerButton.swift */; };
 		CCXF0001000000000000B001 /* ClaudeCodeCustomProfileForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCXF0002000000000000F001 /* ClaudeCodeCustomProfileForm.swift */; };
 		CCCF0001000000000000B001 /* ClaudeCodeCustomProfileConnectionFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCF0002000000000000F001 /* ClaudeCodeCustomProfileConnectionFields.swift */; };
+		CCPS0001000000000000B001 /* ClaudeCodeLocalProxyStatusCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCPS0002000000000000F001 /* ClaudeCodeLocalProxyStatusCard.swift */; };
 		CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCTS0002000000000000F001 /* ClaudeCodeTests.swift */; };
 
 		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
@@ -231,10 +233,12 @@
 		CCPX0002000000000000F001 /* CLIProxyAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CLIProxyAPIClient.swift; sourceTree = "<group>"; };
 		CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIProxyAPIConfiguration.swift; sourceTree = "<group>"; };
 		CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedCLIProxyService.swift; sourceTree = "<group>"; };
+		CLPM0002000000000000F001 /* LocalProxyProcessController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalProxyProcessController.swift; sourceTree = "<group>"; };
 		CCPN0002000000000000F001 /* ClaudeCodePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodePane.swift; sourceTree = "<group>"; };
 		CCPB0002000000000000F001 /* ClaudeCodePowerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/ClaudeCodePowerButton.swift; sourceTree = "<group>"; };
 		CCXF0002000000000000F001 /* ClaudeCodeCustomProfileForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodeCustomProfileForm.swift; sourceTree = "<group>"; };
 		CCCF0002000000000000F001 /* ClaudeCodeCustomProfileConnectionFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodeCustomProfileConnectionFields.swift; sourceTree = "<group>"; };
+		CCPS0002000000000000F001 /* ClaudeCodeLocalProxyStatusCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ClaudeCodeLocalProxyStatusCard.swift; sourceTree = "<group>"; };
 		CCTS0002000000000000F001 /* ClaudeCodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ClaudeCodeTests.swift; sourceTree = "<group>"; };
 
 		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
@@ -401,6 +405,7 @@
 				L10N0002000000000000F001 /* AppLocalizer.swift */,
 				CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */,
 				CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */,
+				CLPM0002000000000000F001 /* LocalProxyProcessController.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -645,10 +650,12 @@
 				CCPX0001000000000000B001 /* CLIProxyAPIClient.swift in Sources */,
 				CLPX0001000000000000B001 /* CLIProxyAPIConfiguration.swift in Sources */,
 				CLPX0003000000000000B001 /* EmbeddedCLIProxyService.swift in Sources */,
+				CLPM0001000000000000B001 /* LocalProxyProcessController.swift in Sources */,
 				CCPN0001000000000000B001 /* ClaudeCodePane.swift in Sources */,
 				CCPB0001000000000000B001 /* ClaudeCodePowerButton.swift in Sources */,
 				CCXF0001000000000000B001 /* ClaudeCodeCustomProfileForm.swift in Sources */,
 				CCCF0001000000000000B001 /* ClaudeCodeCustomProfileConnectionFields.swift in Sources */,
+				CCPS0001000000000000B001 /* ClaudeCodeLocalProxyStatusCard.swift in Sources */,
 
 				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,
 				SET0005000000000000B003 /* SettingsTab.swift in Sources */,

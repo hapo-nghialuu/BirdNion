@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import BirdNion
 
@@ -5,6 +7,28 @@ import XCTest
 /// fetch (incl. Bearer fallback), full-config gating, and the settings.json /
 /// settings.local.json writer (global + per-project).
 final class ClaudeCodeTests: XCTestCase {
+
+    private final class CompatibilityProfileRecorder {
+        var profile: BirdNionConfigStore.ClaudeCodeProfile?
+    }
+
+    private struct CompatibilityPickerHarness: View {
+        @State private var profile: BirdNionConfigStore.ClaudeCodeProfile
+        let recorder: CompatibilityProfileRecorder
+
+        init(profile: BirdNionConfigStore.ClaudeCodeProfile,
+             recorder: CompatibilityProfileRecorder) {
+            _profile = State(initialValue: profile)
+            self.recorder = recorder
+        }
+
+        var body: some View {
+            ClaudeCodeCustomProfileConnectionFields(profile: $profile, lang: "en")
+                .frame(width: 500)
+                .onAppear { recorder.profile = profile }
+                .onChange(of: profile) { recorder.profile = $0 }
+        }
+    }
 
     private func makeStubConfig() -> URLSessionConfiguration {
         let c = URLSessionConfiguration.ephemeral
@@ -336,7 +360,7 @@ final class ClaudeCodeTests: XCTestCase {
         profile.embeddedLocalProxy = true
         profile.openAIBaseURL = "https://openai-upstream.example/v1"
         profile.openAIAPIKey = "upstream-key"
-        profile.cliProxyBaseURL = "http://127.0.0.1:8317/v1"
+        profile.cliProxyBaseURL = CLIProxyAPIConfiguration.localBaseURL + "/v1"
         profile.cliProxyAPIKey = "proxy-key"
         profile.cliProxyManagementKey = "management-key"
         profile.haikuModel = "gpt-4o-mini"
@@ -348,7 +372,7 @@ final class ClaudeCodeTests: XCTestCase {
     private func embeddedAnthropicProfile() -> BirdNionConfigStore.ClaudeCodeProfile {
         var profile = freeModelProfile()
         profile.embeddedLocalProxy = true
-        profile.cliProxyBaseURL = "http://127.0.0.1:8317/v1"
+        profile.cliProxyBaseURL = CLIProxyAPIConfiguration.localBaseURL + "/v1"
         profile.cliProxyAPIKey = "anthropic-local-key"
         profile.cliProxyManagementKey = "management-key"
         profile.haikuModel = "claude-haiku"
@@ -373,6 +397,28 @@ final class ClaudeCodeTests: XCTestCase {
                        "legacy-token")
     }
 
+    func testLegacyLocalProxyProfileMigratesToOpenAICompatibility() {
+        var profile = freeModelProfile()
+        profile.compatibilityMode = nil
+        profile.embeddedLocalProxy = true
+        profile.openAIBaseURL = nil
+        profile.openAIAPIKey = nil
+
+        XCTAssertTrue(profile.migrateLegacyLocalProxyToOpenAIIfNeeded())
+        XCTAssertEqual(profile.compatibility, .openAI)
+        XCTAssertEqual(profile.openAIBaseURL, profile.baseURL)
+        XCTAssertEqual(profile.openAIAPIKey, profile.token)
+    }
+
+    func testLegacyDirectProfileStaysAnthropic() {
+        var profile = freeModelProfile()
+        profile.compatibilityMode = nil
+        profile.embeddedLocalProxy = nil
+
+        XCTAssertFalse(profile.migrateLegacyLocalProxyToOpenAIIfNeeded())
+        XCTAssertEqual(profile.compatibility, .anthropic)
+    }
+
     func testProfileReadyAndSpec() {
         XCTAssertTrue(ClaudeCodeConfigWriter.isReady(freeModelProfile()))
         let spec = ClaudeCodeConfigWriter.spec(forProfile: freeModelProfile())
@@ -387,20 +433,20 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertNil(ClaudeCodeConfigWriter.spec(forProfile: empty))
     }
 
-    func testOpenAIProfileWriterUsesProxyCredentialsAndPrefixedModels() {
+    func testOpenAIProfileWriterUsesProxyCredentialsAndDirectModels() {
         let profile = openAIProfile()
         let spec = ClaudeCodeConfigWriter.spec(forProfile: profile)
 
         XCTAssertTrue(profile.isOpenAIProxyReady)
         XCTAssertEqual(spec?.env["ANTHROPIC_AUTH_TOKEN"], "proxy-key")
         XCTAssertNil(spec?.env["ANTHROPIC_API_KEY"])
-        XCTAssertEqual(spec?.env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317")
+        XCTAssertEqual(spec?.env["ANTHROPIC_BASE_URL"], CLIProxyAPIConfiguration.localBaseURL)
         XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-                       "\(profile.cliProxyProviderName)/gpt-4o-mini")
+                       "gpt-4o-mini")
         XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
-                       "\(profile.cliProxyProviderName)/gpt-4o")
+                       "gpt-4o")
         XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_OPUS_MODEL"],
-                       "\(profile.cliProxyProviderName)/gpt-4.1")
+                       "gpt-4.1")
         XCTAssertFalse(spec?.env.values.contains("upstream-key") ?? true)
         XCTAssertFalse(spec?.env.values.contains("management-key") ?? true)
         XCTAssertNil(spec?.apiKeyHelper)
@@ -411,12 +457,28 @@ final class ClaudeCodeTests: XCTestCase {
         let spec = ClaudeCodeConfigWriter.spec(forProfile: profile)
 
         XCTAssertEqual(spec?.env["ANTHROPIC_AUTH_TOKEN"], "anthropic-local-key")
-        XCTAssertEqual(spec?.env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317")
+        XCTAssertEqual(spec?.env["ANTHROPIC_BASE_URL"], CLIProxyAPIConfiguration.localBaseURL)
         XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-                       "\(profile.cliProxyProviderName)/claude-haiku")
+                       "claude-haiku")
         XCTAssertFalse(spec?.env.values.contains("fe_oa_abc") ?? true)
         XCTAssertFalse(spec?.env.values.contains("management-key") ?? true)
         XCTAssertNil(spec?.apiKeyHelper)
+    }
+
+    func testAnthropicProfileCanApplyTheOriginalUpstreamWithoutLocalProxy() {
+        var profile = embeddedAnthropicProfile()
+        profile.embeddedLocalProxy = false
+        profile.cliProxyAppliedSignature = "old-proxy-state"
+
+        let spec = ClaudeCodeConfigWriter.spec(forProfile: profile)
+
+        XCTAssertFalse(profile.usesEmbeddedCLIProxy)
+        XCTAssertEqual(spec?.env["ANTHROPIC_API_KEY"], "fe_oa_abc")
+        XCTAssertNil(spec?.env["ANTHROPIC_AUTH_TOKEN"])
+        XCTAssertEqual(spec?.env["ANTHROPIC_BASE_URL"], "https://api-cc.example.dev")
+        XCTAssertEqual(spec?.env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "claude-haiku")
+        XCTAssertEqual(spec?.apiKeyHelper, "echo 'fe_oa_abc'")
+        XCTAssertFalse(spec?.env.values.contains("anthropic-local-key") ?? true)
     }
 
     func testCLIProxyConfigurationContainsBothUpstreamProtocols() throws {
@@ -429,11 +491,101 @@ final class ClaudeCodeTests: XCTestCase {
 
         XCTAssertEqual(configuration.apiKeys, ["anthropic-local-key", "proxy-key"])
         XCTAssertEqual(configuration.claudeAPIKeys.first?.baseURL, anthropic.baseURL)
+        XCTAssertEqual(configuration.claudeAPIKeys.first?.prefix, "")
         XCTAssertEqual(configuration.openAICompatibility.first?.baseURL, openAI.openAIBaseURL)
+        XCTAssertEqual(configuration.openAICompatibility.first?.prefix, "")
         XCTAssertTrue(yaml.contains("host: \"127.0.0.1\""))
         XCTAssertTrue(yaml.contains("claude-api-key:"))
         XCTAssertTrue(yaml.contains("openai-compatibility:"))
         XCTAssertTrue(yaml.contains("force-model-prefix: false"))
+    }
+
+    func testCLIProxyConfigurationUsesDedicatedPortAndYAMLSafePaths() throws {
+        let authDirectory = tempDir()
+        let configuration = try XCTUnwrap(
+            CLIProxyAPIConfiguration(profiles: [openAIProfile()], authDirectory: authDirectory)
+        )
+        let yaml = try XCTUnwrap(String(data: configuration.yamlData(), encoding: .utf8))
+
+        XCTAssertEqual(CLIProxyAPIConfiguration.localBaseURL, "http://127.0.0.1:24323")
+        XCTAssertTrue(yaml.contains("port: 24323"))
+        XCTAssertTrue(yaml.contains("auth-dir: \"\(authDirectory.path)\""))
+        XCTAssertTrue(yaml.contains("base-url: \"https://openai-upstream.example/v1\""))
+        XCTAssertFalse(yaml.contains("\\/"))
+    }
+
+    func testCLIProxyConfigurationKeepsOneMillionMarkerOnlyUpstream() throws {
+        var profile = openAIProfile()
+        profile.haikuModel = "gpt-5.6-luna[1m]"
+        profile.sonnetModel = "gpt-5.6-terra[1m]"
+        profile.opusModel = "gpt-5.6-terra[1m]"
+
+        let configuration = try XCTUnwrap(
+            CLIProxyAPIConfiguration(profiles: [profile], authDirectory: tempDir())
+        )
+        let models = try XCTUnwrap(configuration.openAICompatibility.first?.models)
+
+        XCTAssertEqual(models, [
+            .init(name: "gpt-5.6-luna[1m]", alias: "gpt-5.6-luna"),
+            .init(name: "gpt-5.6-terra[1m]", alias: "gpt-5.6-terra"),
+        ])
+        XCTAssertEqual(profile.cliProxyModelAlias(for: "gpt-5.6-terra[1m]"), "gpt-5.6-terra")
+        XCTAssertEqual(profile.cliProxyModelAlias(for: "gpt-4.1"), "gpt-4.1")
+    }
+
+    @MainActor
+    func testLocalProxyOnlyRestoresTheCurrentProfile() {
+        var active = openAIProfile()
+        active.cliProxyAppliedSignature = active.cliProxyConfigurationSignature
+
+        var inactive = embeddedAnthropicProfile()
+        inactive.id = "inactive-profile"
+        inactive.cliProxyAppliedSignature = nil
+
+        XCTAssertEqual(
+            EmbeddedCLIProxyService.activeProfiles(from: [inactive, active]).map(\.id),
+            [active.id]
+        )
+    }
+
+    @MainActor
+    func testLocalProxyRunningStateRequiresTheCurrentEmbeddedProfile() {
+        var profile = openAIProfile()
+        profile.cliProxyAppliedSignature = profile.cliProxyConfigurationSignature
+
+        XCTAssertTrue(EmbeddedCLIProxyService.isProfileRunning(profile, runtimeState: .running))
+        XCTAssertFalse(EmbeddedCLIProxyService.isProfileRunning(profile, runtimeState: .stopped))
+
+        profile.embeddedLocalProxy = false
+        XCTAssertFalse(EmbeddedCLIProxyService.isProfileRunning(profile, runtimeState: .running))
+    }
+
+    @MainActor
+    func testLocalProxyStopOnlyMatchesBirdNionManagedHelper() {
+        let configURL = URL(fileURLWithPath: "/tmp/birdnion/cli-proxy-api/config.yaml")
+
+        XCTAssertTrue(LocalProxyProcessController.isManagedProcess(
+            "/Applications/BirdNion.app/Contents/Resources/cliproxyapi -config \(configURL.path) -local-model",
+            configURL: configURL
+        ))
+        XCTAssertFalse(LocalProxyProcessController.isManagedProcess(
+            "/usr/local/bin/cliproxyapi -config /tmp/another-app/config.yaml",
+            configURL: configURL
+        ))
+        XCTAssertFalse(LocalProxyProcessController.isManagedProcess(
+            "/usr/bin/python3 -m http.server 24323",
+            configURL: configURL
+        ))
+    }
+
+    @MainActor
+    func testEmbeddedProxyPortMigrationMarks8317ProfilesForReapply() {
+        var profile = openAIProfile()
+        profile.cliProxyBaseURL = "http://127.0.0.1:8317/v1"
+        XCTAssertTrue(EmbeddedCLIProxyService.needsLocalPortMigration(profile))
+
+        profile.cliProxyBaseURL = CLIProxyAPIConfiguration.localBaseURL + "/v1"
+        XCTAssertFalse(EmbeddedCLIProxyService.needsLocalPortMigration(profile))
     }
 
     func testCLIProxyConfigurationDropsDeletedProfileCredentials() throws {
@@ -514,12 +666,13 @@ final class ClaudeCodeTests: XCTestCase {
             JSONSerialization.jsonObject(with: try XCTUnwrap(bodies[1])) as? [[String: Any]]
         )
         XCTAssertEqual(claude.first?["api-key"] as? String, "fe_oa_abc")
-        XCTAssertEqual(claude.first?["prefix"] as? String, anthropic.cliProxyProviderName)
+        XCTAssertEqual(claude.first?["prefix"] as? String, "")
 
         let openAIEntries = try XCTUnwrap(
             JSONSerialization.jsonObject(with: try XCTUnwrap(bodies[2])) as? [[String: Any]]
         )
         XCTAssertEqual(openAIEntries.first?["name"] as? String, openAI.cliProxyProviderName)
+        XCTAssertEqual(openAIEntries.first?["prefix"] as? String, "")
         let upstreamKeys = openAIEntries.first?["api-key-entries"] as? [[String: Any]]
         XCTAssertEqual(upstreamKeys?.first?["api-key"] as? String, "upstream-key")
 
@@ -588,6 +741,49 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertEqual(BirdNionConfigStore.claudeCodeProfiles(url: url).first?.name, "FreeModel")
         try BirdNionConfigStore.removeClaudeCodeProfile(id: "p1", url: url)
         XCTAssertTrue(BirdNionConfigStore.claudeCodeProfiles(url: url).isEmpty)
+    }
+
+    @MainActor
+    func testNewCustomProfileCanSelectOpenAICompatibility() {
+        var profile = freeModelProfile()
+        profile.id = "new-profile"
+        profile.compatibilityMode = nil
+        profile.embeddedLocalProxy = false
+        let recorder = CompatibilityProfileRecorder()
+
+        let host = NSHostingView(rootView: CompatibilityPickerHarness(profile: profile, recorder: recorder))
+        host.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
+        let window = NSWindow(
+            contentRect: host.bounds,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+
+        host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let compatibilityControl = allSubviews(of: host)
+            .compactMap { $0 as? NSSegmentedControl }
+            .first { $0.segmentCount == 2 && $0.label(forSegment: 0) == "Anthropic Compatible" }
+        XCTAssertNotNil(compatibilityControl)
+        XCTAssertEqual(compatibilityControl?.selectedSegment, 0)
+
+        compatibilityControl?.selectedSegment = 1
+        compatibilityControl?.sendAction(compatibilityControl?.action, to: compatibilityControl?.target)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(recorder.profile?.compatibility, .openAI)
+        XCTAssertEqual(recorder.profile?.compatibilityMode, "openai")
+        XCTAssertEqual(recorder.profile?.embeddedLocalProxy, true)
+    }
+
+    @MainActor
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
 
     func testClaudeCodeTargetPersistsIndependently() throws {

@@ -8,6 +8,7 @@ import AppKit
 struct ClaudeCodePane: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
+    @ObservedObject private var localProxy = EmbeddedCLIProxyService.shared
 
     @State private var providers: [BirdNionConfigStore.Provider] = []
     @State private var selectedID: String?
@@ -34,11 +35,19 @@ struct ClaudeCodePane: View {
     @State private var busy = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    @State private var customFeedbackTarget: CustomFeedbackTarget?
     @State private var showingRemoveEnvConfirmation = false
+    @State private var showingStopLocalProxyConfirmation = false
 
     private enum ScopeChoice: String, CaseIterable, Identifiable {
         case global, project
         var id: String { rawValue }
+    }
+
+    private enum CustomFeedbackTarget: Equatable {
+        case upstream
+        case proxy
+        case claudeCode
     }
 
     private var lang: String { settings.appLanguage }
@@ -72,6 +81,7 @@ struct ClaudeCodePane: View {
             reloadProviders()
             reloadProfiles()
             loadSelection()
+            Task { await localProxy.refreshRuntimeStatus() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .birdnionProvidersChanged)) { _ in
             reloadProviders()
@@ -87,6 +97,18 @@ struct ClaudeCodePane: View {
             Button(L10n.t("ccx.pasteJSON.cancel", lang), role: .cancel) {}
         } message: {
             Text(L10n.f("claudeCode.removeEnv.confirmMessage", lang, visibleTargetPath()))
+        }
+        .confirmationDialog(
+            L10n.t("ccx.proxy.stop.confirmTitle", lang),
+            isPresented: $showingStopLocalProxyConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.t("ccx.proxy.stop", lang), role: .destructive) {
+                stopLocalProxy()
+            }
+            Button(L10n.t("ccx.pasteJSON.cancel", lang), role: .cancel) {}
+        } message: {
+            Text(L10n.t("ccx.proxy.stop.confirmMessage", lang))
         }
     }
 
@@ -152,8 +174,9 @@ struct ClaudeCodePane: View {
     }
 
     private func profileRow(_ p: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
-        let active = p.id == selectedProfileID
+        let selected = p.id == selectedProfileID
         let hovering = p.id == hoveredProfileID
+        let activated = profileIsActivated(p)
         return Button {
             selectedID = nil
             selectedProfileID = p.id
@@ -161,14 +184,21 @@ struct ClaudeCodePane: View {
             HStack(spacing: 8) {
                 Image(systemName: "terminal.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(SettingsTheme.secondary)
+                    .foregroundStyle(activated
+                                     ? SettingsTheme.success
+                                     : (selected ? SettingsTheme.accent : SettingsTheme.secondary))
                     .frame(width: 18)
                 Text(p.name.isEmpty ? L10n.t("ccx.newName", lang) : p.name)
-                    .font(.system(size: 13, weight: active ? .semibold : .regular))
+                    .font(.system(size: 13, weight: selected || activated ? .semibold : .regular))
                     .foregroundStyle(SettingsTheme.primary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if ClaudeCodeConfigWriter.isReady(p) {
+                if activated {
+                    Image(systemName: "power.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(SettingsTheme.success)
+                        .accessibilityLabel(L10n.t("claudeCode.state.on", lang))
+                } else if ClaudeCodeConfigWriter.isReady(p) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(SettingsTheme.success)
@@ -177,9 +207,12 @@ struct ClaudeCodePane: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(active
-                        ? SettingsTheme.selectedSurface
+            .background(activated
+                        ? SettingsTheme.success.opacity(selected ? 0.18 : 0.11)
+                        : (selected
+                           ? SettingsTheme.selectedSurface
                         : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear))
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -313,37 +346,37 @@ struct ClaudeCodePane: View {
                 set: { workingProfile = $0 }
             )
             VStack(alignment: .leading, spacing: 14) {
-                profileActivationPanel(binding.wrappedValue)
+                ClaudeCodeCustomProfileConnectionFields(
+                    profile: binding,
+                    lang: lang,
+                    header: L10n.t("ccx.step.upstream", lang),
+                    onPasteJSON: openPasteJSON
+                )
+                customFeedbackRow(for: .upstream)
 
-                if let msg = errorMessage {
-                    Text(msg).font(.system(size: 11)).foregroundStyle(SettingsTheme.critical)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                } else if let msg = statusMessage {
-                    Text(msg).font(.system(size: 11)).foregroundStyle(SettingsTheme.success)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                if binding.wrappedValue.usesEmbeddedCLIProxy {
+                    ClaudeCodeLocalProxyStatusCard(
+                        runtimeState: localProxy.runtimeState,
+                        hasUpstreamConfiguration: binding.wrappedValue.hasUpstreamConfiguration,
+                        configurationCurrent: binding.wrappedValue.isCLIProxyConfigurationCurrent,
+                        endpoint: EmbeddedCLIProxyService.localEndpoint,
+                        lang: lang,
+                        busy: busy,
+                        feedback: customFeedback(for: .proxy),
+                        feedbackIsError: customFeedbackIsError,
+                        onStart: startLocalProxy,
+                        onStop: { showingStopLocalProxyConfirmation = true },
+                        onRefresh: refreshLocalProxyStatus
+                    )
                 }
 
-                SettingsCard {
-                    scopeRow
-                    if scope == .project {
-                        SettingsRowDivider()
-                        projectRow
-                    }
-                    SettingsRowDivider()
-                    removeEnvRow
-                }
+                ClaudeCodeCustomProfileForm(
+                    profile: binding,
+                    lang: lang,
+                    includesConnectionFields: false
+                )
 
-                HStack {
-                    Spacer()
-                    Button {
-                        pasteJSONText = ""; importError = nil; showingPasteJSON = true
-                    } label: {
-                        Label(L10n.t("ccx.pasteJSON", lang), systemImage: "doc.on.clipboard")
-                    }
-                    .controlSize(.small)
-                }
-
-                ClaudeCodeCustomProfileForm(profile: binding, lang: lang)
+                customClaudeCodeStep(binding.wrappedValue)
 
                 HStack {
                     Spacer()
@@ -393,6 +426,8 @@ struct ClaudeCodePane: View {
             workingProfile = try ClaudeCodeConfigWriter.profile(byImporting: pasteJSONText, into: current)
             showingPasteJSON = false
             importError = nil
+            customFeedbackTarget = .upstream
+            errorMessage = nil
             statusMessage = L10n.t("ccx.pasteJSON.imported", lang)
         } catch let e as ClaudeCodeConfigWriter.ImportError {
             importError = e.message
@@ -445,24 +480,85 @@ struct ClaudeCodePane: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
-    private func profileActivationPanel(_ p: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
-        let ready = ClaudeCodeConfigWriter.isReady(p)
-        let configured = ready && (scope != .project || projectDir != nil)
-        let sc = currentScope()
-        let sync = configured ? ClaudeCodeConfigWriter.syncState(forProfile: p, scope: sc, using: config) : .off
-        let state = powerState(configured: configured, sync: sync)
-        let title = p.name.isEmpty ? L10n.t("ccx.newName", lang) : p.name
-        return SettingsCard {
+    private func openPasteJSON() {
+        customFeedbackTarget = nil
+        errorMessage = nil
+        statusMessage = nil
+        pasteJSONText = ""
+        importError = nil
+        showingPasteJSON = true
+    }
+
+    private func customFeedback(for target: CustomFeedbackTarget) -> String? {
+        guard customFeedbackTarget == target else { return nil }
+        return errorMessage ?? statusMessage
+    }
+
+    private var customFeedbackIsError: Bool {
+        errorMessage != nil
+    }
+
+    @ViewBuilder
+    private func customFeedbackRow(for target: CustomFeedbackTarget) -> some View {
+        if let feedback = customFeedback(for: target) {
+            Label(feedback, systemImage: customFeedbackIsError
+                  ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(customFeedbackIsError ? SettingsTheme.critical : SettingsTheme.success)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    private func customClaudeCodeStep(_ profile: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
+        let scope = currentScope()
+        let state = profilePowerState(for: profile, scope: scope)
+        let title = profile.name.isEmpty ? L10n.t("ccx.newName", lang) : profile.name
+        let headerKey = profile.usesEmbeddedCLIProxy ? "ccx.step.claudeCode" : "ccx.step.claudeCode.direct"
+        return SettingsCard(header: L10n.t(headerKey, lang)) {
             activationPanelBody(
                 icon: Image(systemName: "terminal.fill"),
                 title: title,
-                subtitle: profileActivationSubtitle(state: state, profile: p),
+                subtitle: profileActivationSubtitle(state: state, profile: profile),
                 target: visibleTargetLabel(),
                 state: state,
-                diameter: 76,
-                action: { powerTapProfile(p, state: state, scope: sc) }
+                diameter: 64,
+                action: { powerTapProfile(profile, state: state, scope: scope) }
             )
+
+            SettingsRowDivider()
+            scopeRow
+            if self.scope == .project {
+                SettingsRowDivider()
+                projectRow
+            }
+            SettingsRowDivider()
+            removeEnvRow
+
+            if let feedback = customFeedback(for: .claudeCode) {
+                SettingsRowDivider()
+                Label(feedback, systemImage: customFeedbackIsError
+                      ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(customFeedbackIsError ? SettingsTheme.critical : SettingsTheme.success)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+            }
         }
+    }
+
+    private func profilePowerState(for profile: BirdNionConfigStore.ClaudeCodeProfile,
+                                   scope: ClaudeCodeConfigWriter.Scope) -> ClaudeCodePowerButton.PowerState {
+        let targetIsReady = self.scope != .project || projectDir != nil
+        let configured = ClaudeCodeConfigWriter.isReady(profile) && targetIsReady
+        guard configured else { return .needsSetup }
+        let sync = ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: scope, using: config)
+        if profile.usesEmbeddedCLIProxy,
+           (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
+            return .stale
+        }
+        return powerState(configured: true, sync: sync)
     }
 
     private func activationPanel(_ p: BirdNionConfigStore.Provider) -> some View {
@@ -589,9 +685,18 @@ struct ClaudeCodePane: View {
             let name = profile.name.isEmpty ? L10n.t("ccx.newName", lang) : profile.name
             return L10n.f("claudeCode.power.on", lang, name)
         case .off: return L10n.t("claudeCode.power.off", lang)
-        case .stale: return L10n.t("claudeCode.power.stale", lang)
+        case .stale:
+            if profile.usesEmbeddedCLIProxy,
+               (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
+                return L10n.t("ccx.proxy.error.startFirst", lang)
+            }
+            return L10n.t("claudeCode.power.stale", lang)
         case .needsSetup:
             if scope == .project && projectDir == nil { return L10n.t("claudeCode.project.none", lang) }
+            if profile.usesEmbeddedCLIProxy, profile.hasUpstreamConfiguration,
+               (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
+                return L10n.t("ccx.proxy.error.startFirst", lang)
+            }
             return profile.usesEmbeddedCLIProxy
                 ? L10n.t("ccx.needProxyConfig", lang)
                 : L10n.t("ccx.needConfig", lang)
@@ -628,6 +733,22 @@ struct ClaudeCodePane: View {
     private func currentScope() -> ClaudeCodeConfigWriter.Scope {
         if scope == .project, let dir = projectDir { return .project(dir) }
         return .global
+    }
+
+    private func scope(for profile: BirdNionConfigStore.ClaudeCodeProfile) -> ClaudeCodeConfigWriter.Scope {
+        guard profile.claudeCodeScope == ScopeChoice.project.rawValue,
+              let path = cleaned(profile.claudeCodeProjectPath) else {
+            return .global
+        }
+        return .project(URL(fileURLWithPath: path))
+    }
+
+    private func profileIsActivated(_ profile: BirdNionConfigStore.ClaudeCodeProfile) -> Bool {
+        guard ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: scope(for: profile), using: config) == .synced else {
+            return false
+        }
+        guard profile.usesEmbeddedCLIProxy else { return true }
+        return EmbeddedCLIProxyService.isProfileRunning(profile, runtimeState: localProxy.runtimeState)
     }
 
     private func visibleTargetLabel() -> String {
@@ -807,6 +928,7 @@ struct ClaudeCodePane: View {
     private func loadSelection() {
         statusMessage = nil
         errorMessage = nil
+        customFeedbackTarget = nil
         guard let p = selectedProvider else {
             haiku = ""; sonnet = ""; opus = ""; disable1M = false; models = []
             return
@@ -963,6 +1085,7 @@ struct ClaudeCodePane: View {
         let target = ClaudeCodeConfigWriter.targetURL(scope: sc, config: config)
         errorMessage = nil
         statusMessage = nil
+        if selectedProfileID != nil { customFeedbackTarget = .claudeCode }
         busy = true
         Task { @MainActor in
             do {
@@ -990,10 +1113,21 @@ struct ClaudeCodePane: View {
     private func loadProfileSelection() {
         statusMessage = nil
         errorMessage = nil
+        customFeedbackTarget = nil
         guard let id = selectedProfileID else { workingProfile = nil; return }
-        guard let profile = profiles.first(where: { $0.id == id }) else {
+        guard var profile = profiles.first(where: { $0.id == id }) else {
             workingProfile = nil
             return
+        }
+        if profile.migrateLegacyLocalProxyToOpenAIIfNeeded() {
+            do {
+                try BirdNionConfigStore.saveClaudeCodeProfile(profile)
+                if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
+                    profiles[index] = profile
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
         loadTarget(scopeValue: profile.claudeCodeScope, projectPath: profile.claudeCodeProjectPath)
         workingProfile = profile
@@ -1003,7 +1137,8 @@ struct ClaudeCodePane: View {
         .init(id: UUID().uuidString, name: "", baseURL: "", token: "",
               tokenEnvKey: "ANTHROPIC_AUTH_TOKEN", apiKeyHelper: nil,
               haikuModel: nil, sonnetModel: nil, opusModel: nil, extraEnv: nil,
-              embeddedLocalProxy: true)
+              compatibilityMode: BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue,
+              embeddedLocalProxy: false)
     }
 
     private func addProfile() {
@@ -1025,10 +1160,69 @@ struct ClaudeCodePane: View {
         }
         selectedProfileID = nil
         workingProfile = nil
+        customFeedbackTarget = nil
         reloadProfiles()
         selectedID = providers.first?.id
         Task { @MainActor in
             await EmbeddedCLIProxyService.shared.reconcileStoredProfiles()
+        }
+    }
+
+    private func startLocalProxy() {
+        guard var profile = workingProfile else { return }
+        customFeedbackTarget = .proxy
+        errorMessage = nil
+        statusMessage = nil
+        guard profile.hasUpstreamConfiguration else {
+            errorMessage = L10n.t("ccx.proxy.error.incomplete", lang)
+            return
+        }
+
+        busy = true
+        Task { @MainActor in
+            do {
+                profile = profileWithCurrentTarget(profile)
+                try BirdNionConfigStore.saveClaudeCodeProfile(profile)
+                profile = try await EmbeddedCLIProxyService.shared.prepare(profile: profile)
+                workingProfile = profile
+                reloadProfiles()
+                statusMessage = L10n.t("ccx.proxy.started", lang)
+            } catch let error as EmbeddedCLIProxyService.ServiceError {
+                errorMessage = embeddedCLIProxyErrorMessage(error)
+            } catch let error as CLIProxyAPIClient.ClientError {
+                errorMessage = cliProxyErrorMessage(error)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func refreshLocalProxyStatus() {
+        customFeedbackTarget = nil
+        Task { @MainActor in
+            await EmbeddedCLIProxyService.shared.refreshRuntimeStatus()
+        }
+    }
+
+    private func stopLocalProxy() {
+        guard var profile = workingProfile else { return }
+        customFeedbackTarget = .proxy
+        errorMessage = nil
+        statusMessage = nil
+        let didStop = EmbeddedCLIProxyService.shared.stopManagedLocalProxy()
+        profile.cliProxyAppliedSignature = nil
+        do {
+            try BirdNionConfigStore.saveClaudeCodeProfile(profile)
+            workingProfile = profile
+            reloadProfiles()
+            errorMessage = nil
+            statusMessage = L10n.t(
+                didStop ? "ccx.proxy.stop.done" : "ccx.proxy.stop.none",
+                lang
+            )
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -1037,26 +1231,34 @@ struct ClaudeCodePane: View {
     private func powerTapProfile(_ profile: BirdNionConfigStore.ClaudeCodeProfile,
                                  state: ClaudeCodePowerButton.PowerState,
                                  scope sc: ClaudeCodeConfigWriter.Scope) {
-        guard state != .needsSetup else { return }
+        customFeedbackTarget = .claudeCode
         errorMessage = nil
         statusMessage = nil
+        guard state != .needsSetup else {
+            errorMessage = profile.usesEmbeddedCLIProxy && profile.hasUpstreamConfiguration
+                ? L10n.t("ccx.proxy.error.startFirst", lang)
+                : L10n.t(profile.usesEmbeddedCLIProxy ? "ccx.needProxyConfig" : "ccx.needConfig", lang)
+            return
+        }
+        if state != .on, profile.usesEmbeddedCLIProxy,
+           (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
+            errorMessage = L10n.t("ccx.proxy.error.startFirst", lang)
+            return
+        }
         busy = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             do {
-                var profile = profileWithCurrentTarget(profile)
+                let profile = profileWithCurrentTarget(profile)
                 try BirdNionConfigStore.saveClaudeCodeProfile(profile)  // persist edits
                 if state == .on {
                     try ClaudeCodeConfigWriter.deactivate(profile: profile, scope: sc, using: config)
                     statusMessage = L10n.t("claudeCode.deactivated", lang)
                 } else {
-                    // Prepare the embedded conversion core before Claude Code
-                    // receives its loopback URL and generated local API key.
-                    if profile.usesEmbeddedCLIProxy {
-                        profile = try await EmbeddedCLIProxyService.shared.prepare(profile: profile)
-                        workingProfile = profile
-                    }
                     try ClaudeCodeConfigWriter.apply(profile: profile, scope: sc, using: config)
+                    if !profile.usesEmbeddedCLIProxy {
+                        EmbeddedCLIProxyService.shared.deactivateForDirectUpstream()
+                    }
                     let target = ClaudeCodeConfigWriter.targetURL(scope: sc, config: config)
                     statusMessage = state == .stale
                         ? L10n.t("claudeCode.updated", lang)

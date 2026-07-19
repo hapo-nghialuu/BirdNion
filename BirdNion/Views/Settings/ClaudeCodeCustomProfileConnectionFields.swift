@@ -3,39 +3,72 @@ import SwiftUI
 /// Connection fields are isolated from the profile form so the upstream stays
 /// concise while BirdNion manages its local conversion core internally.
 struct ClaudeCodeCustomProfileConnectionFields: View {
+    private enum ConnectionMode: String, Hashable {
+        case direct
+        case localProxy
+    }
+
     @Binding var profile: BirdNionConfigStore.ClaudeCodeProfile
     let lang: String
+    var header: String? = nil
+    var onPasteJSON: (() -> Void)? = nil
 
     @State private var visibleSecrets: Set<String> = []
 
     private let tokenEnvKeys = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
 
     var body: some View {
-        SettingsCard {
-            fieldRow(L10n.t("ccx.name", lang)) {
-                TextField(L10n.t("ccx.name.placeholder", lang), text: $profile.name)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
-            }
-            SettingsRowDivider()
-            fieldRow(L10n.t("ccx.compatibility", lang)) {
-                Picker("", selection: compatibilityBinding) {
-                    ForEach(BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.allCases) { mode in
-                        Text(modeLabel(mode)).tag(mode.rawValue)
+        VStack(alignment: .leading, spacing: 6) {
+            if header != nil || onPasteJSON != nil {
+                HStack(spacing: 8) {
+                    if let header {
+                        SettingsSectionHeader(title: header)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if let onPasteJSON {
+                        Button(action: onPasteJSON) {
+                            Label(L10n.t("ccx.pasteJSON", lang), systemImage: "doc.on.clipboard")
+                        }
+                        .controlSize(.small)
+                        .pointingHandCursor()
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 360)
-                .accessibilityLabel(L10n.t("ccx.compatibility", lang))
+                .padding(.horizontal, 4)
             }
-            SettingsRowDivider()
-            upstreamFields
-            SettingsRowDivider()
-            if profile.embeddedLocalProxy == true || profile.isOpenAICompatible {
-                localEndpointRow
-            } else {
-                tokenEnvironmentRow
+
+            SettingsCard {
+                fieldRow(L10n.t("ccx.name", lang)) {
+                    TextField(L10n.t("ccx.name.placeholder", lang), text: $profile.name)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                }
+                SettingsRowDivider()
+                fieldRow(L10n.t("ccx.compatibility", lang)) {
+                    Picker("", selection: compatibilitySelection) {
+                        ForEach(BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.allCases) { mode in
+                            Text(modeLabel(mode)).tag(mode.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    // SegmentedControl caches its previous selection in AppKit.
+                    // Recreate it when moving between custom profiles.
+                    .id(profile.id)
+                    .frame(maxWidth: 360, alignment: .trailing)
+                    .accessibilityLabel(L10n.t("ccx.compatibility", lang))
+                }
+                SettingsRowDivider()
+                if !profile.isOpenAICompatible {
+                    connectionModeRow
+                    SettingsRowDivider()
+                }
+                upstreamFields
+                if !profile.usesEmbeddedCLIProxy {
+                    SettingsRowDivider()
+                    tokenEnvironmentRow
+                }
             }
         }
     }
@@ -87,30 +120,58 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
         }
     }
 
-    private var localEndpointRow: some View {
-        fieldRow(L10n.t("ccx.proxy.localEndpoint", lang)) {
-            Text(EmbeddedCLIProxyService.localEndpoint)
-                .font(.system(size: 12).monospaced())
-                .foregroundStyle(SettingsTheme.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
+    private var compatibilitySelection: Binding<String> {
+        Binding(
+            get: { profile.compatibility.rawValue },
+            set: { rawValue in
+                let next = BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode(rawValue: rawValue) ?? .anthropic
+                selectCompatibility(next)
+            }
+        )
+    }
+
+    private func selectCompatibility(_ next: BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode) {
+        var updated = profile
+        if next == .openAI {
+            if updated.openAIBaseURL?.isEmpty ?? true { updated.openAIBaseURL = nonEmpty(updated.baseURL) }
+            if updated.openAIAPIKey?.isEmpty ?? true { updated.openAIAPIKey = nonEmpty(updated.token) }
+            updated.embeddedLocalProxy = true
+        } else {
+            if updated.baseURL.isEmpty { updated.baseURL = updated.openAIBaseURL ?? "" }
+            if updated.token.isEmpty { updated.token = updated.openAIAPIKey ?? "" }
+        }
+        updated.compatibilityMode = next.rawValue
+        profile = updated
+    }
+
+    private var connectionModeRow: some View {
+        fieldRow(L10n.t("ccx.connection", lang)) {
+            Picker("", selection: connectionModeBinding) {
+                Text(L10n.t("ccx.connection.direct", lang)).tag(ConnectionMode.direct)
+                Text(L10n.t("ccx.connection.proxy", lang)).tag(ConnectionMode.localProxy)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 360, alignment: .trailing)
+            .accessibilityLabel(L10n.t("ccx.connection", lang))
         }
     }
 
-    private var compatibilityBinding: Binding<String> {
+    private var connectionModeBinding: Binding<ConnectionMode> {
         Binding(
-            get: { profile.compatibility.rawValue },
-            set: { value in
-                let next = BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode(rawValue: value) ?? .anthropic
-                if next == .openAI {
-                    if profile.openAIBaseURL?.isEmpty ?? true { profile.openAIBaseURL = nonEmpty(profile.baseURL) }
-                    if profile.openAIAPIKey?.isEmpty ?? true { profile.openAIAPIKey = nonEmpty(profile.token) }
-                } else {
-                    if profile.baseURL.isEmpty { profile.baseURL = profile.openAIBaseURL ?? "" }
-                    if profile.token.isEmpty { profile.token = profile.openAIAPIKey ?? "" }
+            get: { profile.usesEmbeddedCLIProxy ? .localProxy : .direct },
+            set: { mode in
+                var updated = profile
+                // Persist the fallback explicitly before a legacy direct profile
+                // is switched to the local proxy, so future loads stay unambiguous.
+                if updated.compatibilityMode == nil {
+                    updated.compatibilityMode = updated.compatibility.rawValue
                 }
-                profile.compatibilityMode = next == .anthropic ? nil : next.rawValue
-                profile.embeddedLocalProxy = true
+                updated.embeddedLocalProxy = mode == .localProxy
+                if mode == .direct {
+                    updated.cliProxyAppliedSignature = nil
+                }
+                profile = updated
             }
         )
     }
