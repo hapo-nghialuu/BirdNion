@@ -376,4 +376,57 @@ final class CodexConfigWriterTests: XCTestCase {
         let after = try XCTUnwrap(BirdNionConfigStore.codexProfiles(url: url).first { $0.id == "profile-1" })
         XCTAssertEqual(before, after)
     }
+
+    // MARK: - Per-project profile files
+
+    func testProfileFlagNameSanitizesDisplayName() {
+        var p = profile()
+        p.name = "virouter 25$"
+        XCTAssertEqual(CodexConfigWriter.profileFlagName(for: p), "bn-virouter-25")
+        p.name = "  ---  "
+        XCTAssertEqual(CodexConfigWriter.profileFlagName(for: p), "bn-profile-")
+    }
+
+    func testWriteProfileFileCreatesOverlayAndTracksState() throws {
+        let url = tempConfigURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let p = profile()
+        let flag = try CodexConfigWriter.writeProfileFile(for: p, configURL: url)
+        XCTAssertEqual(flag, "bn-virouter")
+        XCTAssertEqual(CodexConfigWriter.profileFlag(forProfileID: p.id, configURL: url), "bn-virouter")
+
+        let overlay = url.deletingLastPathComponent().appendingPathComponent("bn-virouter.config.toml")
+        let contents = try String(contentsOf: overlay, encoding: .utf8)
+        XCTAssertTrue(contents.contains("model = \"example-model\""))
+        XCTAssertTrue(contents.contains("wire_api = \"responses\""))
+    }
+
+    func testWriteProfileFileRenameRemovesPreviousOverlay() throws {
+        let url = tempConfigURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        var p = profile()
+        _ = try CodexConfigWriter.writeProfileFile(for: p, configURL: url)
+        p.name = "Renamed"
+        let flag = try CodexConfigWriter.writeProfileFile(for: p, configURL: url)
+        XCTAssertEqual(flag, "bn-renamed")
+
+        let dir = url.deletingLastPathComponent()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("bn-virouter.config.toml").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("bn-renamed.config.toml").path))
+    }
+
+    func testRemoveProfileFileDeletesOverlayAndMapping() throws {
+        let url = tempConfigURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let p = profile()
+        _ = try CodexConfigWriter.writeProfileFile(for: p, configURL: url)
+        CodexConfigWriter.removeProfileFile(profileID: p.id, configURL: url)
+
+        XCTAssertNil(CodexConfigWriter.profileFlag(forProfileID: p.id, configURL: url))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: url.deletingLastPathComponent().appendingPathComponent("bn-virouter.config.toml").path))
+    }
 }

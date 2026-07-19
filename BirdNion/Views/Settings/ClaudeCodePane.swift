@@ -618,6 +618,10 @@ struct ClaudeCodePane: View {
                 onDelete: { showingDeleteProfileConfirmation = true }
             )
             customFeedbackRow(for: .codex)
+
+            if let flag = CodexConfigWriter.profileFlag(forProfileID: codex.id) {
+                codexProjectUsageCard(flag: flag)
+            }
         }
     }
 
@@ -702,6 +706,43 @@ struct ClaudeCodePane: View {
                 profile.wrappedValue = updated
             }
         )
+    }
+
+    /// Per-project usage: Codex ignores provider keys in project-local config
+    /// (security boundary), so the overlay file + `--profile` flag is the only
+    /// per-repo mechanism. Shown once the file exists (written on Apply).
+    private func codexProjectUsageCard(flag: String) -> some View {
+        let command = "codex --profile \(flag)"
+        return SettingsCard(footer: LocalizedStringKey(L10n.t("codexConfig.projectUse.hint", lang))) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.t("codexConfig.projectUse.title", lang))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.primary)
+                    Text(command)
+                        .font(.system(size: 12).monospaced())
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(command, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .pointingHandCursor()
+                .help(L10n.t("codexConfig.projectUse.copy", lang))
+                .accessibilityLabel(L10n.t("codexConfig.projectUse.copy", lang))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+        }
     }
 
     // MARK: - Codex agent actions
@@ -819,6 +860,11 @@ struct ClaudeCodePane: View {
             do {
                 let prepared = try await localProxy.prepare(codexProfile: profile)
                 workingCodexProfile = prepared
+                // A proxy restart rotates the local bearer; keep an existing
+                // overlay file in sync so --profile runs don't hit 401s.
+                if CodexConfigWriter.profileFlag(forProfileID: prepared.id) != nil {
+                    _ = try? CodexConfigWriter.writeProfileFile(for: prepared)
+                }
                 reloadCodexProfiles()
                 statusMessage = L10n.t("ccx.proxy.started", lang)
             } catch let e as EmbeddedCLIProxyService.ServiceError {
@@ -855,6 +901,9 @@ struct ClaudeCodePane: View {
                     try await localProxy.deactivateCodexProxyProfiles()
                 }
                 workingCodexProfile = profile
+                // Refresh the per-project overlay file alongside the global
+                // apply so `codex --profile` always matches what was applied.
+                _ = try? CodexConfigWriter.writeProfileFile(for: profile)
                 reloadCodexProfiles()
                 statusMessage = L10n.t(replacingActive ? "codexConfig.updated" : "codexConfig.applied", lang)
             } catch let e as EmbeddedCLIProxyService.ServiceError {
@@ -1710,6 +1759,7 @@ struct ClaudeCodePane: View {
                 try BirdNionConfigStore.removeClaudeCodeProfile(id: id)
                 if let codexID {
                     if activeCodexProfileID == codexID { _ = try? CodexConfigWriter.deactivate() }
+                    CodexConfigWriter.removeProfileFile(profileID: codexID)
                     try BirdNionConfigStore.removeCodexProfile(id: codexID)
                 }
                 selectedProfileID = nil
@@ -1717,6 +1767,7 @@ struct ClaudeCodePane: View {
                 selectedID = providers.first?.id
             } else if let provider = selectedProvider, let codexID = provider.codexProfileID {
                 if activeCodexProfileID == codexID { _ = try? CodexConfigWriter.deactivate() }
+                CodexConfigWriter.removeProfileFile(profileID: codexID)
                 try BirdNionConfigStore.removeCodexProfile(id: codexID)
                 var updated = provider
                 updated.codexProfileID = nil
