@@ -76,6 +76,10 @@ enum BirdNionConfigStore {
         var cliProxyAPIKey: String? = nil
         var cliProxyManagementKey: String? = nil
         var cliProxyAppliedSignature: String? = nil
+        /// Optional link to the Claude Code configuration created from the same
+        /// upstream. Keeping each agent's settings independent avoids one CLI
+        /// overwriting the other while still making the target switch reversible.
+        var claudeCodeProfileID: String? = nil
 
         enum UpstreamProtocol: String, CaseIterable, Identifiable {
             case responses
@@ -235,6 +239,10 @@ enum BirdNionConfigStore {
         /// to BirdNion's embedded CLIProxyAPI core, never to Claude Code settings.
         var openAIBaseURL: String? = nil
         var openAIAPIKey: String? = nil
+        /// `responses` preserves an OpenAI Responses upstream when this profile
+        /// was created from a Codex configuration. Nil retains the established
+        /// OpenAI Chat-compatible behavior.
+        var openAIFormat: String? = nil
         /// Explicitly marks a profile as managed by BirdNion's embedded local
         /// proxy. Nil keeps old Anthropic profiles on their direct path, while
         /// older OpenAI profiles migrate automatically on their next apply.
@@ -249,6 +257,8 @@ enum BirdNionConfigStore {
         /// upstream-only edit visibly stale without storing another plaintext
         /// copy of any secret.
         var cliProxyAppliedSignature: String? = nil
+        /// Optional link to the Codex configuration created from this upstream.
+        var codexProfileID: String? = nil
 
         enum CompatibilityMode: String, CaseIterable, Identifiable {
             case anthropic
@@ -331,6 +341,10 @@ enum BirdNionConfigStore {
             [haikuModel, sonnetModel, opusModel].compactMap(BirdNionConfigStore.cleaned)
         }
 
+        var openAIProxyFormat: String? {
+            openAIFormat == "responses" ? "responses" : nil
+        }
+
         var isEmbeddedCLIProxyReady: Bool {
             guard normalizedCLIProxyBaseURL != nil,
                   hasUpstreamConfiguration,
@@ -355,6 +369,7 @@ enum BirdNionConfigStore {
                 "direct-models-v1",
                 cliProxyProviderName,
                 compatibility.rawValue,
+                openAIProxyFormat ?? "openai-chat",
                 proxyBaseURL,
                 upstreamBaseURL,
                 upstreamAPIKey,
@@ -381,6 +396,62 @@ enum BirdNionConfigStore {
         var id: String
         var key: String
         var value: String
+    }
+
+    /// Creates a Codex configuration from a custom Claude Code backend. The
+    /// agent-specific model settings stay separate; only the upstream source is
+    /// copied so users can configure both CLIs without re-entering credentials.
+    static func makeCodexProfile(from claude: ClaudeCodeProfile,
+                                 id: String = UUID().uuidString) -> CodexProfile {
+        let upstreamProtocol: CodexProfile.UpstreamProtocol
+        switch claude.compatibility {
+        case .anthropic:
+            upstreamProtocol = .anthropic
+        case .openAI:
+            upstreamProtocol = claude.openAIProxyFormat == "responses" ? .responses : .openAIChat
+        }
+
+        return CodexProfile(
+            id: id,
+            name: claude.name,
+            baseURL: claude.upstreamBaseURL ?? "",
+            apiKey: claude.upstreamAPIKey ?? "",
+            model: cleaned(claude.sonnetModel) ?? cleaned(claude.haikuModel) ?? cleaned(claude.opusModel) ?? "",
+            upstreamProtocolRaw: upstreamProtocol.rawValue,
+            connectionModeRaw: upstreamProtocol == .responses
+                ? CodexProfile.ConnectionMode.direct.rawValue
+                : CodexProfile.ConnectionMode.localProxy.rawValue,
+            claudeCodeProfileID: claude.id
+        )
+    }
+
+    /// Creates a Claude Code configuration from a Codex backend. OpenAI
+    /// Responses is kept as an explicit proxy format so the embedded helper
+    /// forwards requests using the upstream's real wire protocol.
+    static func makeClaudeCodeProfile(from codex: CodexProfile,
+                                      id: String = UUID().uuidString) -> ClaudeCodeProfile {
+        let isAnthropic = codex.upstreamProtocol == .anthropic
+        let model = cleaned(codex.model)
+        return ClaudeCodeProfile(
+            id: id,
+            name: codex.name,
+            baseURL: isAnthropic ? codex.baseURL : "",
+            token: isAnthropic ? codex.apiKey : "",
+            tokenEnvKey: "ANTHROPIC_AUTH_TOKEN",
+            apiKeyHelper: nil,
+            haikuModel: nil,
+            sonnetModel: model,
+            opusModel: nil,
+            extraEnv: nil,
+            compatibilityMode: isAnthropic
+                ? ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
+                : ClaudeCodeProfile.CompatibilityMode.openAI.rawValue,
+            openAIBaseURL: isAnthropic ? nil : codex.baseURL,
+            openAIAPIKey: isAnthropic ? nil : codex.apiKey,
+            openAIFormat: codex.upstreamProtocol == .responses ? "responses" : nil,
+            embeddedLocalProxy: isAnthropic ? false : true,
+            codexProfileID: codex.id
+        )
     }
 
     /// One provider's configuration. Fields are all optional so partial

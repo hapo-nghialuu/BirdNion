@@ -1,5 +1,50 @@
 import SwiftUI
 
+/// The final setup step selects which coding CLI will consume this upstream.
+/// A target change is handled by the parent pane because it may open a linked
+/// profile with a different model schema and config-file writer.
+struct AICodingAgentSelectionCard: View {
+    let selectedAgent: AICodingAgent
+    let profileID: String
+    let lang: String
+    let onSelect: (AICodingAgent) -> Void
+
+    var body: some View {
+        SettingsCard(header: L10n.t("aiCoding.step.agent", lang)) {
+            HStack(spacing: 12) {
+                Text(L10n.t("aiCoding.target", lang))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
+                    .frame(width: 110, alignment: .leading)
+
+                Picker("", selection: selection) {
+                    ForEach(AICodingAgent.allCases) { agent in
+                        Text(agent.title(language: lang)).tag(agent)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                // AppKit caches segmented selections across profile changes.
+                .id(profileID)
+                .frame(maxWidth: 360, alignment: .trailing)
+                .accessibilityLabel(L10n.t("aiCoding.target", lang))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private var selection: Binding<AICodingAgent> {
+        Binding(
+            get: { selectedAgent },
+            set: { next in
+                guard next != selectedAgent else { return }
+                onSelect(next)
+            }
+        )
+    }
+}
+
 struct CodexProfileActivationCard: View {
     let profile: BirdNionConfigStore.CodexProfile
     let active: Bool

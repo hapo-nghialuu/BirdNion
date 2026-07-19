@@ -6,6 +6,9 @@ struct CodexPane: View {
     @EnvironmentObject var settings: SettingsStore
     @ObservedObject private var localProxy = EmbeddedCLIProxyService.shared
 
+    var initialProfileID: String? = nil
+    var onSwitchToClaudeCode: ((BirdNionConfigStore.CodexProfile) -> Void)? = nil
+
     @State private var profiles: [BirdNionConfigStore.CodexProfile] = []
     @State private var selectedID: String?
     @State private var workingProfile: BirdNionConfigStore.CodexProfile?
@@ -39,7 +42,12 @@ struct CodexPane: View {
         .background(SettingsTheme.background)
         .onAppear {
             reloadProfiles()
-            if selectedID == nil { selectedID = profiles.first?.id }
+            if let initialProfileID,
+               profiles.contains(where: { $0.id == initialProfileID }) {
+                selectedID = initialProfileID
+            } else if selectedID == nil {
+                selectedID = profiles.first?.id
+            }
             loadSelection()
             Task { await localProxy.refreshRuntimeStatus() }
         }
@@ -84,6 +92,18 @@ struct CodexPane: View {
                         runningDetail: L10n.t("codexConfig.proxy.running", lang),
                         stoppedDetail: L10n.t("codexConfig.proxy.stopped", lang)
                     )
+                }
+
+                if let onSwitchToClaudeCode {
+                    AICodingAgentSelectionCard(
+                        selectedAgent: .codex,
+                        profileID: profile.id,
+                        lang: lang
+                    ) { target in
+                        if target == .claudeCode {
+                            onSwitchToClaudeCode(profile)
+                        }
+                    }
                 }
 
                 CodexProfileActivationCard(

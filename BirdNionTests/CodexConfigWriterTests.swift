@@ -160,4 +160,43 @@ final class CodexConfigWriterTests: XCTestCase {
         XCTAssertTrue(yaml.contains("claude-api-key:"))
         XCTAssertTrue(yaml.contains("openai-compatibility:"))
     }
+
+    func testClaudeTargetTransferPreservesResponsesUpstream() throws {
+        var claude = embeddedClaudeProfile()
+        claude.compatibilityMode = BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.openAI.rawValue
+        claude.openAIBaseURL = "https://responses.example/v1"
+        claude.openAIAPIKey = "responses-secret"
+        claude.openAIFormat = "responses"
+
+        let codex = BirdNionConfigStore.makeCodexProfile(from: claude, id: "codex-copy")
+
+        XCTAssertEqual(codex.claudeCodeProfileID, "claude-profile")
+        XCTAssertEqual(codex.baseURL, "https://responses.example/v1")
+        XCTAssertEqual(codex.apiKey, "responses-secret")
+        XCTAssertEqual(codex.upstreamProtocol, .responses)
+        XCTAssertEqual(codex.connectionMode, .direct)
+    }
+
+    func testCodexTargetTransferKeepsResponsesFormatForClaudeProxy() throws {
+        let codex = profile(protocolValue: .responses, connection: .direct)
+        var claude = BirdNionConfigStore.makeClaudeCodeProfile(from: codex, id: "claude-copy")
+        claude.cliProxyBaseURL = CLIProxyAPIConfiguration.localBaseURL
+        claude.cliProxyAPIKey = "claude-local-secret"
+        claude.cliProxyManagementKey = "management-secret"
+        claude.cliProxyAppliedSignature = claude.cliProxyConfigurationSignature
+
+        XCTAssertEqual(claude.codexProfileID, "profile-1")
+        XCTAssertEqual(claude.compatibility, .openAI)
+        XCTAssertEqual(claude.openAIProxyFormat, "responses")
+        XCTAssertEqual(claude.sonnetModel, "example-model")
+
+        let configuration = try XCTUnwrap(
+            CLIProxyAPIConfiguration(
+                claudeProfiles: [claude],
+                codexProfiles: [],
+                authDirectory: FileManager.default.temporaryDirectory
+            )
+        )
+        XCTAssertEqual(configuration.openAICompatibility.first?.format, "responses")
+    }
 }

@@ -205,7 +205,7 @@ struct CLIProxyAPIConfiguration: Encodable {
                   let managementKey = profile.cliProxyManagementKey else { return nil }
             let kind: UpstreamKind = profile.compatibility == .anthropic
                 ? .anthropic
-                : .openAI(format: nil)
+                : .openAI(format: profile.openAIProxyFormat)
             return ManagedProfile(
                 providerName: profile.cliProxyProviderName,
                 kind: kind,

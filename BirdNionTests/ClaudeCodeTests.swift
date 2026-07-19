@@ -605,9 +605,12 @@ final class ClaudeCodeTests: XCTestCase {
 
     func testImportIntoOpenAIProfileReturnsToAnthropicMode() throws {
         let json = #"{"env":{"ANTHROPIC_AUTH_TOKEN":"direct-token","ANTHROPIC_BASE_URL":"https://direct.example"}}"#
-        let profile = try ClaudeCodeConfigWriter.profile(byImporting: json, into: openAIProfile())
+        var source = openAIProfile()
+        source.openAIFormat = "responses"
+        let profile = try ClaudeCodeConfigWriter.profile(byImporting: json, into: source)
 
         XCTAssertEqual(profile.compatibility, .anthropic)
+        XCTAssertNil(profile.openAIFormat)
         XCTAssertNil(profile.embeddedLocalProxy)
         XCTAssertEqual(profile.token, "direct-token")
         XCTAssertEqual(profile.baseURL, "https://direct.example")

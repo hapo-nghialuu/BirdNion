@@ -1,6 +1,102 @@
 import SwiftUI
 import AppKit
 
+/// Unified Settings → AI Coding entry point. Existing Claude Code and Codex
+/// profile records remain separate because each CLI owns different model and
+/// output-file settings. Switching the step-three target creates a linked
+/// counterpart with the upstream copied once, so neither CLI overwrites the
+/// other's working configuration.
+struct AICodingPane: View {
+    @EnvironmentObject private var settings: SettingsStore
+
+    @State private var selectedAgent: AICodingAgent = .claudeCode
+    @State private var selectedClaudeProfileID: String?
+    @State private var selectedCodexProfileID: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: selectedAgent == .claudeCode ? "terminal" : "command")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.accent)
+                    .frame(width: 28, height: 28)
+                    .background(SettingsTheme.selectedSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                Picker("", selection: $selectedAgent) {
+                    ForEach(AICodingAgent.allCases) { agent in
+                        Text(agent.title(language: settings.appLanguage)).tag(agent)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 250)
+                .accessibilityLabel(L10n.t("aiCoding.workspace", settings.appLanguage))
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            .background(SettingsTheme.toolbar)
+
+            Divider().overlay(SettingsTheme.border)
+
+            switch selectedAgent {
+            case .claudeCode:
+                ClaudeCodePane(
+                    initialProfileID: selectedClaudeProfileID,
+                    onSwitchToCodex: openCodexConfiguration
+                )
+                .id("claude-\(selectedClaudeProfileID ?? "preset")")
+            case .codex:
+                CodexPane(
+                    initialProfileID: selectedCodexProfileID,
+                    onSwitchToClaudeCode: openClaudeCodeConfiguration
+                )
+                .id("codex-\(selectedCodexProfileID ?? "new")")
+            }
+        }
+    }
+
+    private func openCodexConfiguration(from source: BirdNionConfigStore.ClaudeCodeProfile) {
+        if let profileID = source.codexProfileID,
+           BirdNionConfigStore.codexProfiles().contains(where: { $0.id == profileID }) {
+            selectedCodexProfileID = profileID
+        } else {
+            var source = source
+            let destination = BirdNionConfigStore.makeCodexProfile(from: source)
+            do {
+                try BirdNionConfigStore.saveCodexProfile(destination)
+                source.codexProfileID = destination.id
+                try BirdNionConfigStore.saveClaudeCodeProfile(source)
+                selectedCodexProfileID = destination.id
+            } catch {
+                return
+            }
+        }
+        selectedAgent = .codex
+    }
+
+    private func openClaudeCodeConfiguration(from source: BirdNionConfigStore.CodexProfile) {
+        if let profileID = source.claudeCodeProfileID,
+           BirdNionConfigStore.claudeCodeProfiles().contains(where: { $0.id == profileID }) {
+            selectedClaudeProfileID = profileID
+        } else {
+            var source = source
+            let destination = BirdNionConfigStore.makeClaudeCodeProfile(from: source)
+            do {
+                try BirdNionConfigStore.saveClaudeCodeProfile(destination)
+                source.claudeCodeProfileID = destination.id
+                try BirdNionConfigStore.saveCodexProfile(source)
+                selectedClaudeProfileID = destination.id
+            } catch {
+                return
+            }
+        }
+        selectedAgent = .claudeCode
+    }
+}
+
 /// Settings → "Claude Code" tab. Two-pane layout: left lists every provider
 /// that has an API key and can back Claude Code; right configures the Claude
 /// Code `env` block (base URL, model tiers, 1M-context flag) and writes it to
@@ -9,6 +105,9 @@ struct ClaudeCodePane: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
     @ObservedObject private var localProxy = EmbeddedCLIProxyService.shared
+
+    var initialProfileID: String? = nil
+    var onSwitchToCodex: ((BirdNionConfigStore.ClaudeCodeProfile) -> Void)? = nil
 
     @State private var providers: [BirdNionConfigStore.Provider] = []
     @State private var selectedID: String?
@@ -80,6 +179,11 @@ struct ClaudeCodePane: View {
         .onAppear {
             reloadProviders()
             reloadProfiles()
+            if let initialProfileID,
+               profiles.contains(where: { $0.id == initialProfileID }) {
+                selectedID = nil
+                selectedProfileID = initialProfileID
+            }
             loadSelection()
             Task { await localProxy.refreshRuntimeStatus() }
         }
@@ -370,6 +474,18 @@ struct ClaudeCodePane: View {
                     )
                 }
 
+                if let onSwitchToCodex {
+                    AICodingAgentSelectionCard(
+                        selectedAgent: .claudeCode,
+                        profileID: binding.wrappedValue.id,
+                        lang: lang
+                    ) { target in
+                        if target == .codex {
+                            onSwitchToCodex(binding.wrappedValue)
+                        }
+                    }
+                }
+
                 ClaudeCodeCustomProfileForm(
                     profile: binding,
                     lang: lang,
@@ -514,8 +630,7 @@ struct ClaudeCodePane: View {
         let scope = currentScope()
         let state = profilePowerState(for: profile, scope: scope)
         let title = profile.name.isEmpty ? L10n.t("ccx.newName", lang) : profile.name
-        let headerKey = profile.usesEmbeddedCLIProxy ? "ccx.step.claudeCode" : "ccx.step.claudeCode.direct"
-        return SettingsCard(header: L10n.t(headerKey, lang)) {
+        return SettingsCard(header: L10n.t("aiCoding.claudeCode.settings", lang)) {
             activationPanelBody(
                 icon: Image(systemName: "terminal.fill"),
                 title: title,

@@ -139,6 +139,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
         } else {
             if updated.baseURL.isEmpty { updated.baseURL = updated.openAIBaseURL ?? "" }
             if updated.token.isEmpty { updated.token = updated.openAIAPIKey ?? "" }
+            updated.openAIFormat = nil
         }
         updated.compatibilityMode = next.rawValue
         profile = updated

@@ -58,8 +58,8 @@ struct SettingsSceneRoot: View {
     /// because a window that re-fits its content on every re-render (e.g. each
     /// QuotaService publish) drives NSHostingView's autoresizing constraints
     /// into an NSISEngine recursion that crashes the whole app.
-    private let contentWidth: CGFloat = 780   // roomier for the Claude Code two-pane layout
-    private let contentHeight: CGFloat = 720   // taller so the Claude Code form isn't clipped
+    private let contentWidth: CGFloat = 780   // roomier for the AI Coding two-pane layout
+    private let contentHeight: CGFloat = 720   // taller so agent forms are never clipped
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,8 +71,7 @@ struct SettingsSceneRoot: View {
                 switch selected {
                 case .general: GeneralPane()
                 case .providers: ProvidersPane()
-                case .claudeCode: ClaudeCodePane()
-                case .codex: CodexPane()
+                case .aiCoding: AICodingPane()
                 case .display: DisplayPane()
                 case .advanced: AdvancedPane()
                 case .about: AboutPane()
@@ -94,7 +93,7 @@ struct SettingsSceneRoot: View {
             if !visibleTabs.contains(selected) { selected = .general }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openClaudeCodeTab)) { _ in
-            if visibleTabs.contains(.claudeCode) { selected = .claudeCode }
+            if visibleTabs.contains(.aiCoding) { selected = .aiCoding }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProvidersTab)) { _ in
             selected = .providers
@@ -103,9 +102,7 @@ struct SettingsSceneRoot: View {
 }
 
 extension Notification.Name {
-    /// Posted to route the Settings window to the "Claude Code" tab. The
-    /// popover quick-apply button uses this when a provider still needs its
-    /// models configured before it can be applied.
+    /// Kept for existing quick-apply callers; the route now opens AI Coding.
     static let openClaudeCodeTab = Notification.Name("birdnion.openClaudeCodeTab")
 }
 
