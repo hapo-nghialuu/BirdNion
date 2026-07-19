@@ -473,8 +473,14 @@ enum BirdNionConfigStore {
         updated.baseURL = newBase
         updated.apiKey = newKey
         updated.upstreamProtocolRaw = newProtocol.rawValue
-        if protocolChanged && newProtocol != .responses {
-            updated.connectionModeRaw = CodexProfile.ConnectionMode.localProxy.rawValue
+        if protocolChanged {
+            // Codex natively speaks Responses, so that protocol defaults to a
+            // direct connection; every other protocol needs the proxy. Only a
+            // protocol CHANGE resets the mode — an explicit direct/proxy
+            // choice on an unchanged protocol is preserved.
+            updated.connectionModeRaw = newProtocol == .responses
+                ? CodexProfile.ConnectionMode.direct.rawValue
+                : CodexProfile.ConnectionMode.localProxy.rawValue
         }
 
         let changed = updated.baseURL != codex.baseURL

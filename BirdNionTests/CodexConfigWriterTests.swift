@@ -241,8 +241,14 @@ final class CodexConfigWriterTests: XCTestCase {
         let (syncedResponses, changedResponses) = BirdNionConfigStore.syncedCodexProfile(from: claude, into: responses)
         XCTAssertTrue(changedResponses)
         XCTAssertEqual(syncedResponses.upstreamProtocol, .responses)
-        // Protocol moved to responses — do not force local-proxy; leave connection as-is.
-        XCTAssertEqual(syncedResponses.connectionMode, .localProxy)
+        // Protocol moved to Codex-native Responses — default to direct so the
+        // proxy is only in the path when a translation is actually needed.
+        XCTAssertEqual(syncedResponses.connectionMode, .direct)
+
+        // An unchanged protocol preserves an explicit connection choice.
+        let keepProxy = profile(protocolValue: .responses, connection: .localProxy)
+        let (syncedKeep, _) = BirdNionConfigStore.syncedCodexProfile(from: claude, into: keepProxy)
+        XCTAssertEqual(syncedKeep.connectionMode, .localProxy)
     }
 
     func testSyncedClaudeCodeProfileFromCodexProtocols() {
