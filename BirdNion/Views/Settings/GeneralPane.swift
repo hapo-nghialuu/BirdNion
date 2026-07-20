@@ -30,6 +30,25 @@ struct GeneralPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
+                    title: L10n.t("settings.appearance.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.appearance.subtitle", settings.appLanguage)
+                ) {
+                    Picker("", selection: $settings.appAppearance) {
+                        ForEach(AppAppearance.allCases) { mode in
+                            Text(mode.title(language: settings.appLanguage)).tag(mode.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                    .onChange(of: settings.appAppearance) { _ in
+                        settings.applyAppearance()
+                    }
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
                     title: L10n.t("settings.launchAtLogin.title", settings.appLanguage),
                     subtitle: L10n.t("settings.launchAtLogin.subtitle", settings.appLanguage)
                 ) {

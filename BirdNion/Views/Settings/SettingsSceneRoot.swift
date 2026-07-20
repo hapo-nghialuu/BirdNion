@@ -85,7 +85,6 @@ struct SettingsSceneRoot: View {
         .background(SettingsTheme.background)
         .overlay(SettingsWindowAppearanceView().frame(width: 0, height: 0))
         .tint(SettingsTheme.accent)
-        .preferredColorScheme(.light)
         .onAppear {
             if !visibleTabs.contains(selected) { selected = .general }
         }
@@ -119,13 +118,15 @@ private struct SettingsWindowAppearanceView: NSViewRepresentable {
 
     private func apply(to view: NSView) {
         guard let window = view.window else { return }
-        window.appearance = NSAppearance(named: .aqua)
-        window.backgroundColor = NSColor(
-            calibratedRed: 244 / 255,
-            green: 245 / 255,
-            blue: 247 / 255,
-            alpha: 1
-        )
+        // Appearance is app-wide (SettingsStore.applyAppearance); here we only
+        // keep the window background matched to the theme's base surface so
+        // AppKit clears to the right color during live resize in both modes.
+        window.appearance = nil
+        window.backgroundColor = NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor(srgbRed: 30 / 255, green: 30 / 255, blue: 32 / 255, alpha: 1)
+                : NSColor(srgbRed: 244 / 255, green: 245 / 255, blue: 247 / 255, alpha: 1)
+        }
     }
 }
 
