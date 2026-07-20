@@ -36,7 +36,7 @@ struct QuotaOverview: View {
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 8) {
                 if quota.displayStatuses.isEmpty {
                     // First-run / opt-in state. The bird logo + title + body
                     // + prominent Settings button are all contained in
@@ -79,6 +79,10 @@ struct QuotaOverview: View {
                         ?? quota.displayStatuses.first {
                         VStack(alignment: .leading, spacing: 8) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
+                            // Summary lives outside the windows card (mockup).
+                            if s.error == nil, !s.windows.isEmpty {
+                                QuotaSummaryStrip(status: s)
+                            }
                             ProviderCard(status: s)
                             // Claude Code backend: round quick-apply / setup button,
                             // shown only for providers with a key that can back Claude Code.
@@ -317,25 +321,49 @@ struct BirdNionHeader: View {
 
     let isRefreshing: Bool
 
+    private var statusTone: Color {
+        isRefreshing ? VocabbyTheme.yellow : VocabbyTheme.success
+    }
+
+    private var statusSurface: Color {
+        isRefreshing ? VocabbyTheme.warningSurface : VocabbyTheme.successSurface
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Image("OriginalImage")
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 24, height: 24)
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("BirdNion")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
+
+            Text("BirdNion")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
+
+            // Status pill from existing ready/updating state — no new status invented.
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(statusTone)
+                    .frame(width: 6, height: 6)
                 Text(isRefreshing
                      ? L10n.t("popover.updating", settings.appLanguage)
                      : L10n.t("popover.ready", settings.appLanguage))
-                    .font(.system(size: 10))
-                    .foregroundStyle(VocabbyTheme.secondary)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(statusTone)
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(statusSurface.opacity(0.85)))
+            .overlay(
+                Capsule().stroke(statusTone.opacity(0.22), lineWidth: 1)
+            )
+            .accessibilityElement(children: .combine)
+
             Spacer(minLength: 8)
+
             Button {
                 NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
             } label: {
@@ -343,11 +371,11 @@ struct BirdNionHeader: View {
                     if isRefreshing {
                         ProgressView()
                             .controlSize(.small)
-                            .tint(VocabbyTheme.blue)
+                            .tint(VocabbyTheme.secondary)
                     } else {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.blue)
+                            .foregroundStyle(VocabbyTheme.secondary)
                     }
                 }
                 .frame(width: 24, height: 24)
@@ -357,15 +385,32 @@ struct BirdNionHeader: View {
             .disabled(isRefreshing)
             .help(L10n.t("popover.refresh", settings.appLanguage))
             .accessibilityLabel(L10n.t("popover.refresh", settings.appLanguage))
+
+            Button {
+                NotificationCenter.default.post(name: .openSettings, object: nil)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L10n.t("popover.settings", settings.appLanguage))
+            .accessibilityLabel(L10n.t("popover.settings", settings.appLanguage))
         }
     }
 }
 
 // MARK: - Provider Tabs
 
-/// Native-feeling segmented provider selector with icon + provider name.
+/// Horizontal pill strip for provider selection (remake mockup).
+/// Selected = accent fill + white label; unselected = segment fill + secondary.
+/// Selection binding + scroll behaviour unchanged — style only.
 struct ProviderTabs: View {
-    static let chipHeight: CGFloat = 30
+    static let chipHeight: CGFloat = 28
+
+    @EnvironmentObject var settings: SettingsStore
 
     let providers: [ProviderStatus]
     @Binding var selectedId: String
@@ -374,71 +419,78 @@ struct ProviderTabs: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
+            HStack(spacing: 6) {
                 if showAllTab {
                     allChip
-                    if !providers.isEmpty {
-                        Divider()
-                            .frame(height: 18)
-                    }
                 }
-                ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
+                ForEach(providers) { provider in
                     chip(for: provider)
-                    if index < providers.count - 1 {
-                        Divider()
-                            .frame(height: 18)
-                    }
                 }
             }
-            .background(VocabbyTheme.segment)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
-            )
+            .padding(.vertical, 1)
         }
     }
 
     /// Combined-overview pseudo-tab (sentinel id "all") — no ProviderStatus
     /// behind it, so it renders its own chip instead of `chip(for:)`.
-    /// Icon-only, like the provider chips; the name lives in the tooltip.
     private var allChip: some View {
         let active = selectedId == "all"
+        let label = L10n.t("popover.allTab", settings.appLanguage)
         return Button {
             selectedId = "all"
         } label: {
-            Image(systemName: "square.grid.2x2.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(active ? VocabbyTheme.blue : VocabbyTheme.secondary)
-                .frame(width: 18, height: 18)
-                .frame(minWidth: 40, minHeight: Self.chipHeight)
-                .background(active ? VocabbyTheme.selectedSurface : Color.clear)
-                .contentShape(Rectangle())
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(active ? Color.white : VocabbyTheme.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .frame(minHeight: Self.chipHeight)
+                .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
+                )
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .contentShape(Rectangle())
-        .help("All")
-        .accessibilityLabel("All")
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active ? .isSelected : [])
     }
 
     @ViewBuilder
     private func chip(for p: ProviderStatus) -> some View {
         let active = p.id == selectedId
-        // Icon-only chip: the provider name moved into the tooltip /
-        // accessibility label so the strip fits more providers.
+        // Brand tint on unselected logos; white on selected so the mark
+        // remains visible against the accent pill fill.
+        let logoTint: Color = active
+            ? Color.white
+            : (VocabbyTheme.providerTint(p.id) ?? VocabbyTheme.secondary)
         Button {
             selectedId = p.id
         } label: {
-            ProviderLogoMark(id: p.id, tint: active ? VocabbyTheme.blue : VocabbyTheme.secondary)
-                .frame(width: 18, height: 18)
-                .frame(minWidth: 40, minHeight: Self.chipHeight)
-                .background(active ? VocabbyTheme.selectedSurface : Color.clear)
-                .contentShape(Rectangle())
+            HStack(spacing: 5) {
+                ProviderLogoMark(id: p.id, tint: logoTint)
+                    .frame(width: 14, height: 14)
+                Text(p.displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(active ? Color.white : VocabbyTheme.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .frame(minHeight: Self.chipHeight)
+            .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule().stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .contentShape(Rectangle())  // whole chip is the click target
         .help(p.displayName)
         .accessibilityLabel(p.displayName)
+        .accessibilityAddTraits(active ? .isSelected : [])
     }
 }
 
@@ -755,29 +807,30 @@ struct ProviderHeaderCard: View {
                 availableCreditsStrip(credits)
             }
         }
-        // Padding is tighter than the standard vocabbyCard (12pt) so the
-        // taller 48pt logo doesn't grow the card height.
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(VocabbyTheme.group)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        // Padding is tighter than the standard vocabbyCard so the logo
+        // doesn't grow the card height past the mockup header card.
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(VocabbyTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 0.5)
         )
     }
 }
 
 // MARK: - Provider Card + Window Row
 
-/// Per-provider card: name + windows.
+/// Per-provider card: windows (or error / loading). Summary strip is rendered
+/// by the parent so it can sit as its own mockup-style card above this one.
 struct ProviderCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let status: ProviderStatus
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
             if let err = status.error {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -802,9 +855,6 @@ struct ProviderCard: View {
             } else if status.windows.isEmpty {
                 LoadingQuotaSkeleton()
             } else {
-                QuotaSummaryStrip(status: status)
-                Divider()
-                    .overlay(VocabbyTheme.border)
                 ForEach(status.windows) { win in
                     WindowRow(window: win, lastUpdated: status.lastUpdated)
                 }
@@ -1400,23 +1450,43 @@ struct QuotaSummaryStrip: View {
         VocabbyTheme.quotaColor(remaining: lowest?.remainingPct ?? 100)
     }
 
+    private var windowCaption: String {
+        guard let lowest else { return status.displayName }
+        let label = L10n.windowLabel(lowest.label, preference: settings.appLanguage)
+        return "\(label) · \(status.displayName)"
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.t("popover.lowestQuota", settings.appLanguage))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                Text(lowest.map { L10n.windowLabel($0.label, preference: settings.appLanguage) } ?? status.displayName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.primary)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("popover.lowestQuota", settings.appLanguage).uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.6)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(tone)
+                        .frame(width: 6, height: 6)
+                    Text(windowCaption)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.primary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             Text("\(lowest?.remainingPct ?? 0)%")
-                .font(.system(size: 18, weight: .semibold).monospacedDigit())
+                .font(.system(size: 22, weight: .semibold).monospacedDigit())
                 .foregroundStyle(tone)
         }
-        .padding(.vertical, 1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(VocabbyTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1489,35 +1559,37 @@ struct WindowRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(VocabbyTheme.secondary)
                 Spacer()
-                Text("\(window.remainingPct)%")
+                // Prefer reset countdown on the right when available (mockup);
+                // fall back to remaining % so the row never goes empty.
+                Text(resetText.isEmpty ? "\(window.remainingPct)%" : resetText)
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(percentTextColor)
+                    .foregroundStyle(VocabbyTheme.secondary)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                    Capsule()
                         .fill(VocabbyTheme.track)
-                        .frame(height: 5)
-                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                        .frame(height: 4)
+                    Capsule()
                         .fill(barFillColor)
-                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 5)
+                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 4)
                 }
             }
-            .frame(height: 5)
+            .frame(height: 4)
             HStack(alignment: .firstTextBaseline) {
                 Text(subtitleText)
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.tertiary)
                 Spacer()
-                Text(resetText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(VocabbyTheme.tertiary)
+                Text("\(window.remainingPct)%")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(percentTextColor)
             }
         }
     }
@@ -1861,37 +1933,84 @@ struct FreemodelAccountsPopoverSection: View {
 
 // MARK: - Actions List
 
-/// Vertical action list (icon + label rows). CodexBar-style, matches the
-/// footer menu of the reference app instead of the compact 4-icon row.
+/// Footer row: last-refresh caption (left) + icon-only action buttons (right).
+/// Actions/menu are unchanged — Settings, About, Quit — only the chrome is
+/// remade to 28pt bordered icon buttons per the popover mockup.
 struct ActionsList: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+
+    /// Most recent provider `lastUpdated` across the live display list.
+    /// Nil when nothing has been fetched yet (don't invent a timestamp).
+    private var lastRefreshCaption: String? {
+        guard let latest = quota.displayStatuses.map(\.lastUpdated).max() else {
+            return nil
+        }
+        let relative = L10n.relativeUpdated(from: latest, preference: settings.appLanguage)
+        return L10n.f("popover.lastUpdated", settings.appLanguage, relative)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ActionRow(icon: "gearshape", label: L10n.t("popover.settings", settings.appLanguage),
-                      shortcut: "⌘,",
-                      isLoading: false) {
+        HStack(spacing: 8) {
+            if let lastRefreshCaption {
+                Text(lastRefreshCaption)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            footerIcon(
+                systemName: "gearshape",
+                label: L10n.t("popover.settings", settings.appLanguage),
+                tint: VocabbyTheme.secondary
+            ) {
                 NotificationCenter.default.post(name: .openSettings, object: nil)
             }
-            Divider().padding(.vertical, 2)
-            ActionRow(icon: "info.circle", label: L10n.t("popover.about", settings.appLanguage),
-                      shortcut: nil,
-                      isLoading: false) {
+            footerIcon(
+                systemName: "info.circle",
+                label: L10n.t("popover.about", settings.appLanguage),
+                tint: VocabbyTheme.secondary
+            ) {
                 AboutPresenter.show()
             }
-            Divider().padding(.vertical, 2)
-            ActionRow(icon: "power", label: L10n.t("popover.quit", settings.appLanguage),
-                      shortcut: "⌘Q",
-                      isLoading: false) {
+            footerIcon(
+                systemName: "power",
+                label: L10n.t("popover.quit", settings.appLanguage),
+                tint: VocabbyTheme.critical
+            ) {
                 NSApp.terminate(nil)
             }
         }
-        .background(VocabbyTheme.group)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 1)
-        )
+        .padding(.top, 8)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(VocabbyTheme.border.opacity(0.7))
+                .frame(height: 0.5)
+        }
+    }
+
+    private func footerIcon(systemName: String,
+                            label: String,
+                            tint: Color,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(VocabbyTheme.segment)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(VocabbyTheme.border, lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -2247,12 +2366,12 @@ enum AboutPresenter {
 struct VocabbyCard: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(10)
-            .background(VocabbyTheme.group)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .padding(12)
+            .background(VocabbyTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 0.5)
             )
     }
 }
