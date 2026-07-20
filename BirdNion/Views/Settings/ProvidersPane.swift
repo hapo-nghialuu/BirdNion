@@ -28,6 +28,11 @@ struct ProvidersPane: View {
     /// On-disk footprint cache for the "Dung lượng" info row (Advanced toggle).
     @ObservedObject var storageScanner = ProviderStorageScanner.shared
 
+    /// Settings nav selection — the pane renders the whole window row
+    /// (sidebar with embedded provider roster + detail), so it needs the
+    /// shared tab binding for the nav block.
+    @Binding var tab: SettingsTab
+
     @State var rows: [BirdNionConfigStore.Provider] = []
     @State var selectedID: String?
     /// Search filter for the provider sidebar. Matches display name + id
@@ -73,20 +78,23 @@ struct ProvidersPane: View {
     var language: String { settings.appLanguage }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SettingsPaneHeader(
-                title: L10n.t("settings.tab.providers", language),
-                subtitle: L10n.t("settings.providers.subtitle", language)
-            )
-            HStack(alignment: .top, spacing: 14) {
+        HStack(spacing: 0) {
+            SettingsSidebar(selected: $tab) {
                 sidebar
-                detail
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                SettingsPaneHeader(
+                    title: L10n.t("settings.tab.providers", language),
+                    subtitle: L10n.t("settings.providers.subtitle", language)
+                )
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(SettingsTheme.background)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SettingsTheme.background)
         // Catch-all: a reorder drag released anywhere in the pane that isn't
         // a row or divider (search field, detail panel, padding) still
         // commits the current preview order and clears the ghosted row —

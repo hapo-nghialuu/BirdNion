@@ -56,19 +56,17 @@ struct SettingsSceneRoot: View {
     private let contentHeight: CGFloat = 620
 
     var body: some View {
-        HStack(spacing: 0) {
-            SettingsSidebar(selected: $selected)
-
-            Group {
-                switch selected {
-                case .general: GeneralPane()
-                case .providers: ProvidersPane()
-                case .aiCoding: AICodingPane()
-                case .advanced: AdvancedPane()
-                case .about: AboutPane()
-                }
+        Group {
+            switch selected {
+            // Providers / AI Coding render the whole row themselves: their
+            // roster list lives inside the sidebar column (below the nav),
+            // so the pane owns both the embedded list state and the detail.
+            case .providers: ProvidersPane(tab: $selected)
+            case .aiCoding: AICodingPane(tab: $selected)
+            case .general: navAndContent { GeneralPane() }
+            case .advanced: navAndContent { AdvancedPane() }
+            case .about: navAndContent { AboutPane() }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: contentWidth, height: contentHeight)
         // Opaque backing so AppKit always has something to clear to.
@@ -80,6 +78,15 @@ struct SettingsSceneRoot: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProvidersTab)) { _ in
             selected = .providers
+        }
+    }
+
+    /// Standard row for single-column tabs: nav-only sidebar + content pane.
+    private func navAndContent<Pane: View>(@ViewBuilder _ pane: () -> Pane) -> some View {
+        HStack(spacing: 0) {
+            SettingsSidebar(selected: $selected)
+            pane()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 }

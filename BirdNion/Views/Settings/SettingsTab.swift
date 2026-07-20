@@ -44,14 +44,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Primary nav group (above the divider).
-    static let primaryGroup: [SettingsTab] = [.general, .providers, .aiCoding]
-
-    /// Secondary nav group (below the divider).
-    static let secondaryGroup: [SettingsTab] = [.advanced, .about]
-
-    /// All sidebar items in display order.
-    static let allSidebar: [SettingsTab] = primaryGroup + secondaryGroup
+    /// All sidebar items in display order — one contiguous block; the
+    /// contextual provider/AI-coding list renders below it when active.
+    static let allSidebar: [SettingsTab] = [.general, .providers, .aiCoding, .advanced, .about]
 }
 
 /// The coding CLI that consumes a custom upstream configuration. Profiles keep

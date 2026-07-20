@@ -6,8 +6,10 @@ import AppKit
 /// switches which agent's model/activation sections are shown, and the linked
 /// per-agent records underneath stay mirrored by the config-store sync.
 struct AICodingPane: View {
+    @Binding var tab: SettingsTab
+
     var body: some View {
-        ClaudeCodePane()
+        ClaudeCodePane(tab: $tab)
     }
 }
 
@@ -19,6 +21,10 @@ struct ClaudeCodePane: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
     @ObservedObject private var localProxy = EmbeddedCLIProxyService.shared
+
+    /// Settings nav selection — the pane renders the whole window row
+    /// (sidebar with embedded config list + detail).
+    @Binding var tab: SettingsTab
 
     var initialProfileID: String? = nil
 
@@ -84,31 +90,36 @@ struct ClaudeCodePane: View {
     }
 
     var body: some View {
-        // Header fixed above the two-pane scroll so the (tall) config form can
-        // still scroll without losing the pane title. Always two-pane so the
-        // "＋ Add config" is reachable even with no preset providers configured.
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsPaneHeader(
-                title: L10n.t("settings.tab.aiCoding", lang),
-                subtitle: L10n.t("settings.aiCoding.subtitle", lang)
-            )
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 8)
-
-            ScrollView {
-                HStack(alignment: .top, spacing: 16) {
+        // The provider/config list lives inside the Settings sidebar column
+        // (below the nav block); the content column keeps a fixed header with
+        // the (tall) config form scrolling underneath it.
+        HStack(spacing: 0) {
+            SettingsSidebar(selected: $tab) {
+                ScrollView {
                     providerList
-                    Divider()
-                        .overlay(SettingsTheme.border)
-                    detail
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 10)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsPaneHeader(
+                    title: L10n.t("settings.tab.aiCoding", lang),
+                    subtitle: L10n.t("settings.aiCoding.subtitle", lang)
+                )
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 8)
+
+                ScrollView {
+                    detail
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 20)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(SettingsTheme.background)
         .onAppear {
             migrateStandaloneCodexProfiles()
@@ -298,7 +309,7 @@ struct ClaudeCodePane: View {
             .help(L10n.t("ccx.add", lang))
             .padding(.top, 2)
         }
-        .frame(width: 240, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     /// Status dot: filled success when activated, outline border otherwise.

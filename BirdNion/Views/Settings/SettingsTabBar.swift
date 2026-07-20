@@ -1,25 +1,31 @@
 import SwiftUI
 
 /// Vertical settings sidebar: search filters nav titles, colored icon tiles,
-/// optional badges, group divider, and version footer. Replaces the former
-/// horizontal `SettingsTabBar` (remake P2; file name kept for pbxproj stability).
-struct SettingsSidebar: View {
+/// optional badges, and version footer. The five nav items form one contiguous
+/// block; `extra` renders a contextual list (provider roster / AI-coding
+/// configs) below them, separated by a divider, while the owning pane keeps
+/// that list's state. (Remake P2; file name kept for pbxproj stability.)
+struct SettingsSidebar<Extra: View>: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
 
     @Binding var selected: SettingsTab
+    private let hasExtra: Bool
+    private let extra: () -> Extra
+
+    init(selected: Binding<SettingsTab>, @ViewBuilder extra: @escaping () -> Extra) {
+        self._selected = selected
+        self.extra = extra
+        self.hasExtra = true
+    }
 
     @State private var searchText = ""
     @State private var providersWithKey = 0
     @State private var activeAgentCount = 0
     @State private var hovering: SettingsTab?
 
-    private var filteredPrimary: [SettingsTab] {
-        filter(SettingsTab.primaryGroup)
-    }
-
-    private var filteredSecondary: [SettingsTab] {
-        filter(SettingsTab.secondaryGroup)
+    private var filteredTabs: [SettingsTab] {
+        filter(SettingsTab.allSidebar)
     }
 
     private var appVersion: String {
@@ -33,24 +39,23 @@ struct SettingsSidebar: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
 
-            ScrollView {
-                VStack(spacing: 2) {
-                    ForEach(filteredPrimary) { tab in
-                        navRow(tab)
-                    }
-
-                    if !filteredPrimary.isEmpty && !filteredSecondary.isEmpty {
-                        Divider()
-                            .overlay(SettingsTheme.border)
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 8)
-                    }
-
-                    ForEach(filteredSecondary) { tab in
-                        navRow(tab)
-                    }
+            // Five fixed rows — no scroll needed; the contextual list below
+            // owns the remaining height instead.
+            VStack(spacing: 2) {
+                ForEach(filteredTabs) { tab in
+                    navRow(tab)
                 }
-                .padding(.horizontal, 8)
+            }
+            .padding(.horizontal, 8)
+
+            if hasExtra {
+                Divider()
+                    .overlay(SettingsTheme.border)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 8)
+
+                extra()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
 
             Spacer(minLength: 0)
@@ -233,5 +238,14 @@ struct SettingsSidebar: View {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty else { return nil }
         return trimmed
+    }
+}
+
+extension SettingsSidebar where Extra == EmptyView {
+    /// Nav-only sidebar (General / Advanced / About tabs).
+    init(selected: Binding<SettingsTab>) {
+        self._selected = selected
+        self.extra = { EmptyView() }
+        self.hasExtra = false
     }
 }

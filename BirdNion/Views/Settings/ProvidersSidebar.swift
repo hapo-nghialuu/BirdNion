@@ -31,6 +31,8 @@ extension ProvidersPane {
         return active + inactive
     }
 
+    /// Provider roster — rendered inside the Settings sidebar column (below
+    /// the nav block), so it fills the column width and scrolls on its own.
     var sidebar: some View {
         VStack(spacing: 6) {
             searchField
@@ -57,16 +59,7 @@ extension ProvidersPane {
                 }
             }
         }
-        .padding(.vertical, 6)
-        .frame(width: 240, alignment: .top)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(SettingsTheme.card)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
-        )
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     /// Move rows as soon as the pointer enters a sibling row. Persistence and
