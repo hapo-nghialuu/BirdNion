@@ -311,7 +311,10 @@ final class FreemodelProvider: QuotaProvider {
     private static func window(label: String, from w: UsageResponse.Window, windowSeconds: Int) -> QuotaWindow {
         let used = Double(w.usedCents) / 100.0
         let limit = Double(w.limitCents) / 100.0
-        let usedPct = limit > 0 ? Int((used / limit * 100).rounded()) : 0
+        // When both used and limit are 0 (e.g. window not yet started), treat
+        // as 0% used (100% remaining) but mark it as inactive so the menu bar
+        // does not show "100%" for an unused window.
+        let usedPct = (limit > 0 && used > 0) ? Int((used / limit * 100).rounded()) : 0
         let clamped = max(0, min(100, usedPct))
         return QuotaWindow(
             label: label,
