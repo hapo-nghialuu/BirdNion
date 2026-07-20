@@ -1,9 +1,9 @@
 {
   "feature_name": "codex-quota-auto-prime",
   "created_at": "2026-07-09T08:54:36+0700",
-  "updated_at": "2026-07-09T11:40:00+0700",
+  "updated_at": "2026-07-20T08:13:52+0700",
   "language": "en",
-  "status": "in_progress",
+  "status": "archived",
   "phase": "tasks",
   "current_phase": "tasks",
   "priority": "P2",
