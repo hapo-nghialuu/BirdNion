@@ -1,95 +1,114 @@
+import AppKit
 import SwiftUI
 
-/// About pane: interactive app icon, name + version, project links, update
-/// check (GitHub Releases — BirdNion doesn't ship Sparkle), copyright.
-/// Mirrors the centered layout of CodexBar's About tab.
+/// About pane: centered branding, update actions, project links + brew install
+/// command, and copyright. Layout follows the remake mockup; UpdateChecker
+/// behaviour is unchanged.
 struct AboutPane: View {
     @EnvironmentObject var settings: SettingsStore
     @ObservedObject private var checker = UpdateChecker.shared
     @State private var iconHover = false
 
-    private var versionString: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "—"
-        let build = info?["CFBundleVersion"] as? String ?? "—"
-        return L10n.f("about.version", settings.appLanguage, short, build)
+    private var architectureLabel: String {
+        #if arch(arm64)
+        return "arm64"
+        #else
+        return "x86_64"
+        #endif
     }
 
-    /// Build date = executable's modification date — no build-phase plumbing.
-    private var buildDateString: String? {
-        guard let url = Bundle.main.executableURL,
-              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let date = attrs[.modificationDate] as? Date else { return nil }
-        let df = DateFormatter()
-        df.dateStyle = .medium
-        df.timeStyle = .short
-        return df.string(from: date)
+    private var versionString: String {
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        return L10n.f("about.version", settings.appLanguage, short, architectureLabel)
     }
 
     private let projectURL = "https://github.com/hapo-nghialuu/BirdNion"
+    private let releasesURL = "https://github.com/hapo-nghialuu/BirdNion/releases"
+    private let brewInstallCommand = "brew install --cask hapo-nghialuu/tap/birdnion"
 
     var body: some View {
-        SettingsPage(maxContentWidth: 430) {
-            SettingsCard {
-                VStack(spacing: 14) {
-                    Button(action: openProjectHome) {
-                        appIcon
-                            .frame(width: 92, height: 92)
-                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .scaleEffect(iconHover ? 1.04 : 1.0)
-                            .shadow(color: iconHover ? SettingsTheme.accent.opacity(0.22) : .black.opacity(0.08),
-                                    radius: iconHover ? 8 : 2)
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor()
-                    .onHover { hovering in
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                            iconHover = hovering
-                        }
-                    }
-                    .help(L10n.t("about.openProject", settings.appLanguage))
-                    .accessibilityLabel(L10n.t("about.openProject", settings.appLanguage))
+        SettingsPage(maxContentWidth: 480) {
+            SettingsPaneHeader(
+                title: L10n.t("settings.tab.about", settings.appLanguage)
+            )
 
-                    VStack(spacing: 4) {
-                        Text("BirdNion")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(SettingsTheme.primary)
-                        Text(versionString)
-                            .font(.system(size: 11))
-                            .foregroundStyle(SettingsTheme.secondary)
-                        if let built = buildDateString {
-                            Text(L10n.f("about.buildDate", settings.appLanguage, built))
-                                .font(.system(size: 10))
-                                .foregroundStyle(SettingsTheme.tertiary)
-                        }
-                        Text(L10n.t("about.tagline", settings.appLanguage))
-                            .font(.system(size: 11))
-                            .foregroundStyle(SettingsTheme.tertiary)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    SettingsRowDivider()
-                        .padding(.leading, 0)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        AboutLinkRow(icon: "chevron.left.slash.chevron.right",
-                                     title: "GitHub",
-                                     url: projectURL)
-                        AboutLinkRow(icon: "globe",
-                                     title: "Website",
-                                     url: projectURL)
-                        AboutLinkRow(icon: "envelope",
-                                     title: "Email",
-                                     url: ProcessInfo.processInfo.environment["BIRDNION_SUPPORT_EMAIL"]
-                                        ?? "mailto:support@localhost")
-                    }
-                    .frame(maxWidth: .infinity)
+            // MARK: Centered branding + primary actions
+            VStack(spacing: 16) {
+                Button(action: openProjectHome) {
+                    appIcon
+                        .frame(width: 96, height: 96)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .scaleEffect(iconHover ? 1.04 : 1.0)
+                        .shadow(
+                            color: iconHover ? SettingsTheme.accent.opacity(0.22) : .black.opacity(0.08),
+                            radius: iconHover ? 8 : 2
+                        )
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 24)
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .onHover { hovering in
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                        iconHover = hovering
+                    }
+                }
+                .help(L10n.t("about.openProject", settings.appLanguage))
+                .accessibilityLabel(L10n.t("about.openProject", settings.appLanguage))
+
+                VStack(spacing: 4) {
+                    Text("BirdNion")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(SettingsTheme.primary)
+                    Text(versionString)
+                        .font(.system(size: 12))
+                        .foregroundStyle(SettingsTheme.secondary)
+                }
+
+                HStack(spacing: 10) {
+                    Button(L10n.t("about.checkNow", settings.appLanguage)) {
+                        Task { await checker.check() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(checker.state == .checking)
+
+                    Button(L10n.t("settings.about.releaseNotes", settings.appLanguage)) {
+                        if let url = URL(string: releasesURL) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                updateStatus
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+
+            // MARK: Links (existing destinations + brew install row)
+            SettingsCard(header: L10n.t("settings.section.links", settings.appLanguage)) {
+                AboutLinkRow(
+                    icon: "chevron.left.slash.chevron.right",
+                    title: "GitHub",
+                    url: projectURL
+                )
+                SettingsRowDivider()
+                AboutLinkRow(
+                    icon: "globe",
+                    title: "Website",
+                    url: projectURL
+                )
+                SettingsRowDivider()
+                AboutLinkRow(
+                    icon: "envelope",
+                    title: "Email",
+                    url: ProcessInfo.processInfo.environment["BIRDNION_SUPPORT_EMAIL"]
+                        ?? "mailto:support@localhost"
+                )
+                SettingsRowDivider()
+                brewInstallRow
             }
 
+            // MARK: Update preferences (behaviour preserved from pre-remake)
             SettingsCard(header: L10n.t("about.section.updates", settings.appLanguage)) {
                 SettingsLabeledRow(
                     title: L10n.t("about.autoCheck.title", settings.appLanguage),
@@ -115,34 +134,56 @@ struct AboutPane: View {
                         Task { await checker.check() }
                     }
                 }
-
-                SettingsRowDivider()
-
-                HStack(spacing: 10) {
-                    updateStatus
-                    Spacer(minLength: 8)
-                    Button(L10n.t("about.checkNow", settings.appLanguage)) {
-                        Task { await checker.check() }
-                    }
-                    .disabled(checker.state == .checking)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
             }
 
-            Text("© 2026 BirdNion · Hapo")
+            Text(L10n.t("settings.about.copyright", settings.appLanguage))
                 .font(.system(size: 10))
                 .foregroundStyle(SettingsTheme.tertiary)
                 .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 8)
         }
     }
 
-    /// Inline result line next to the check button.
+    /// Homebrew install command with copy button (pattern from ClaudeCodePane).
+    private var brewInstallRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("settings.about.brewInstall", settings.appLanguage))
+                    .font(.system(size: 13))
+                    .foregroundStyle(SettingsTheme.primary)
+                Text(brewInstallCommand)
+                    .font(.system(size: 11).monospaced())
+                    .foregroundStyle(SettingsTheme.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(brewInstallCommand, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .pointingHandCursor()
+            .help(L10n.t("settings.about.copyCommand", settings.appLanguage))
+            .accessibilityLabel(L10n.t("settings.about.copyCommand", settings.appLanguage))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(minHeight: 44)
+    }
+
+    /// Inline result line under the check / release-notes buttons.
     @ViewBuilder
     private var updateStatus: some View {
         switch checker.state {
         case .idle:
-            Text("")
+            EmptyView()
         case .checking:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)

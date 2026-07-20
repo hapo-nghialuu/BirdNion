@@ -9,6 +9,11 @@ struct GeneralPane: View {
 
     var body: some View {
         SettingsPage {
+            SettingsPaneHeader(
+                title: L10n.t("settings.tab.general", settings.appLanguage),
+                subtitle: L10n.t("settings.general.subtitle", settings.appLanguage)
+            )
+
             SettingsCard(
                 header: L10n.t("settings.section.system", settings.appLanguage),
                 footer: LocalizedStringKey(L10n.t("settings.display.footer", settings.appLanguage))
@@ -108,7 +113,7 @@ struct GeneralPane: View {
                 }
             }
 
-            SettingsCard(header: L10n.t("settings.section.automation", settings.appLanguage)) {
+            SettingsCard(header: L10n.t("settings.section.notifications", settings.appLanguage)) {
                 SettingsLabeledRow(
                     title: L10n.t("settings.statusChecks.title", settings.appLanguage),
                     subtitle: L10n.t("settings.statusChecks.subtitle", settings.appLanguage)

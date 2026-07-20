@@ -186,6 +186,26 @@ struct SettingsRowDivider: View {
 
 // MARK: - Shared row views
 
+/// Pane-level title + optional subtitle (mockup: "Chung" / "Nâng cao" / …).
+struct SettingsPaneHeader: View {
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(SettingsTheme.primary)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(SettingsTheme.secondary)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+}
+
 /// Bold uppercase section header shown above each `SettingsCard` — matches the
 /// SYSTEM / USAGE / AUTOMATION style in the CodexBar mockup.
 struct SettingsSectionHeader: View {

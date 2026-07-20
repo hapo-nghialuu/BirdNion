@@ -8,6 +8,13 @@ struct AdvancedPane: View {
 
     var body: some View {
         SettingsPage {
+            SettingsPaneHeader(
+                title: L10n.t("settings.tab.advanced", settings.appLanguage),
+                subtitle: L10n.t("settings.advanced.subtitle", settings.appLanguage)
+            )
+
+            // Existing groups only (mockup DỮ LIỆU/CẬP NHẬT rows that do not
+            // exist here — clear quota, update channel — are intentionally omitted).
             SettingsCard(header: L10n.t("settings.section.privacy", settings.appLanguage)) {
                 SettingsLabeledRow(
                     title: L10n.t("settings.hidePersonalInfo.title", settings.appLanguage),
