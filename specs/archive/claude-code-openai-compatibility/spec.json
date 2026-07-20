@@ -1,18 +1,32 @@
 {
   "feature_name": "claude-code-openai-compatibility",
   "created_at": "2026-07-17T15:45:00+0700",
-  "updated_at": "2026-07-17T16:08:46+0700",
+  "updated_at": "2026-07-20T08:13:52+0700",
   "language": "vi",
-  "status": "done",
+  "status": "archived",
   "phase": "validated",
   "current_phase": "validate",
   "priority": "P2",
   "effort": "M",
-  "tags": ["claude-code", "openai-compatible", "cliproxyapi", "macos"],
+  "tags": [
+    "claude-code",
+    "openai-compatible",
+    "cliproxyapi",
+    "macos"
+  ],
   "approvals": {
-    "requirements": { "generated": true, "approved": true },
-    "design": { "generated": true, "approved": true },
-    "tasks": { "generated": true, "approved": true }
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
   },
   "scope_lock": {
     "source": "Thêm lựa chọn Anthropic Compatible và OpenAI Compatible ở Claude Code custom profile; OpenAI Compatible dùng CLIProxyAPI đang chạy để chuyển Claude Code Anthropic requests sang OpenAI upstream.",
@@ -35,7 +49,10 @@
     ],
     "expansion_policy": "requires-user-approval"
   },
-  "dependencies": { "blockedBy": [], "blocks": [] },
+  "dependencies": {
+    "blockedBy": [],
+    "blocks": []
+  },
   "task_files": [
     "tasks/task-R1-01-profile-contract-and-proxy-client.md",
     "tasks/task-R2-01-custom-profile-ui-and-activation.md"
@@ -55,7 +72,9 @@
       "id": "R2-01",
       "title": "Custom profile mode UI and activation wiring",
       "status": "done",
-      "dependencies": ["tasks/task-R1-01-profile-contract-and-proxy-client.md"],
+      "dependencies": [
+        "tasks/task-R1-01-profile-contract-and-proxy-client.md"
+      ],
       "blocker": null,
       "started_at": "2026-07-17T15:52:00+0700",
       "completed_at": "2026-07-17T16:08:46+0700",
@@ -96,6 +115,13 @@
     "questions_asked": 0,
     "last_validated_at": "2026-07-17T16:08:46+0700"
   },
-  "translation": { "enabled": false, "language": null, "language_code": null, "dir": null, "sync": "always", "last_synced_at": null },
+  "translation": {
+    "enabled": false,
+    "language": null,
+    "language_code": null,
+    "dir": null,
+    "sync": "always",
+    "last_synced_at": null
+  },
   "ready_for_implementation": true
 }

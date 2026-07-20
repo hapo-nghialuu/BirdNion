@@ -1,9 +1,9 @@
 {
   "feature_name": "ai-statusbar",
   "created_at": "2026-06-23T04:38:38Z",
-  "updated_at": "2026-06-23T05:45:00Z",
+  "updated_at": "2026-07-20T08:13:52+0700",
   "language": "en",
-  "status": "done",
+  "status": "archived",
   "phase": "validated",
   "current_phase": "validate",
   "priority": "P2",
@@ -39,7 +39,7 @@
       "ConfigService: read/write global ~/.claude/settings.json with 3-deep ring .bak backup",
       "Settings sheet: per-provider token entry, enable/disable toggle, persists to providers.json with atomic write",
       "Keychain storage for provider tokens AND env.ANTHROPIC_API_KEY (no plaintext on disk; settings.json uses KEYCHAIN_REF placeholder for ANTHROPIC_API_KEY)",
-      "API key masking in UI (fe_oa_\u2022\u2022\u2022\u20224a8)",
+      "API key masking in UI (fe_oa_••••4a8)",
       "Post-save banner reminding user to restart Claude Code",
       "xcodebuild produces a runnable .app"
     ],
@@ -48,7 +48,7 @@
       "Multi-user accounts",
       "Auto-update mechanism",
       "Editing Claude Code hooks (view-only in MVP)",
-      "Per-project ~/.claude/projects/<id>/ settings.json editing (v2 \u2014 see decision register)",
+      "Per-project ~/.claude/projects/<id>/ settings.json editing (v2 — see decision register)",
       "Generic JSON-field editor (use typed form fields only)",
       "Additional providers beyond MiniMax and Hapo Hub (extend later via protocol)"
     ],
