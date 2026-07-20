@@ -84,18 +84,29 @@ struct ClaudeCodePane: View {
     }
 
     var body: some View {
-        // Scroll so the (tall) config form is never clipped by the fixed window
-        // height. Always two-pane so the "＋ Add config" is reachable even with
-        // no preset providers configured.
-        ScrollView {
-            HStack(alignment: .top, spacing: 16) {
-                providerList
-                Divider()
-                    .overlay(SettingsTheme.border)
-                detail
+        // Header fixed above the two-pane scroll so the (tall) config form can
+        // still scroll without losing the pane title. Always two-pane so the
+        // "＋ Add config" is reachable even with no preset providers configured.
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsPaneHeader(
+                title: L10n.t("settings.tab.aiCoding", lang),
+                subtitle: L10n.t("settings.aiCoding.subtitle", lang)
+            )
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 8)
+
+            ScrollView {
+                HStack(alignment: .top, spacing: 16) {
+                    providerList
+                    Divider()
+                        .overlay(SettingsTheme.border)
+                    detail
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(SettingsTheme.background)
@@ -255,20 +266,12 @@ struct ClaudeCodePane: View {
                     .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1))
             }
 
-            // Custom user-defined backends.
-            HStack {
+            // Custom user-defined backends. Add control lives under the card
+            // (mockup accent link) — same `addProfile` action as before.
+            if !profiles.isEmpty || providers.isEmpty {
                 SettingsSectionHeader(title: L10n.t("ccx.custom", lang))
-                Spacer()
-                Button { addProfile() } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 15))
-                        .foregroundStyle(SettingsTheme.accent)
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .help(L10n.t("ccx.add", lang))
+                    .padding(.top, providers.isEmpty ? 0 : 4)
             }
-            .padding(.top, 4)
             if !profiles.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(Array(profiles.enumerated()), id: \.element.id) { idx, p in
@@ -280,8 +283,34 @@ struct ClaudeCodePane: View {
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1))
             }
+
+            Button { addProfile() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(L10n.t("ccx.add", lang))
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(SettingsTheme.accent)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(L10n.t("ccx.add", lang))
+            .padding(.top, 2)
         }
         .frame(width: 240, alignment: .top)
+    }
+
+    /// Status dot: filled success when activated, outline border otherwise.
+    private func listStatusDot(activated: Bool) -> some View {
+        Circle()
+            .fill(activated ? SettingsTheme.success : Color.clear)
+            .frame(width: 8, height: 8)
+            .overlay(
+                Circle()
+                    .strokeBorder(activated ? SettingsTheme.success : SettingsTheme.border,
+                                  lineWidth: 1)
+            )
     }
 
     private func profileRow(_ p: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
@@ -318,16 +347,14 @@ struct ClaudeCodePane: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                Image(systemName: activated || ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(activated || ready ? SettingsTheme.success : SettingsTheme.warning)
+                listStatusDot(activated: activated)
                     .accessibilityLabel(profileStatusLabel(p, sync: sync, activated: activated, ready: ready))
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .background(activated
-                        ? SettingsTheme.success.opacity(selected ? 0.18 : 0.11)
+                        ? SettingsTheme.successSurface.opacity(selected ? 1.0 : 0.72)
                         : (selected
                            ? SettingsTheme.selectedSurface
                         : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear))
@@ -377,17 +404,13 @@ struct ClaudeCodePane: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                if configured {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsTheme.success)
-                }
+                listStatusDot(activated: activated)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .background(activated
-                        ? SettingsTheme.success.opacity(active ? 0.18 : 0.11)
+                        ? SettingsTheme.successSurface.opacity(active ? 1.0 : 0.72)
                         : (active
                            ? SettingsTheme.selectedSurface
                            : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear)))
@@ -498,6 +521,10 @@ struct ClaudeCodePane: View {
                 set: { workingProfile = $0 }
             )
             VStack(alignment: .leading, spacing: 14) {
+                // Breadcrumb mirrors existing step numbers (proxy hidden when
+                // direct). Pure reflection of current state — no navigation.
+                customStepsBreadcrumb(for: binding.wrappedValue)
+
                 ClaudeCodeCustomProfileConnectionFields(
                     profile: binding,
                     lang: lang,
@@ -530,6 +557,90 @@ struct ClaudeCodePane: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .sheet(isPresented: $showingPasteJSON) { pasteJSONSheet }
         }
+    }
+
+    /// Reflects the dynamic step list already used by form headers (`stepTitle`
+    /// / proxy skip). Completion marks reuse existing state only.
+    @ViewBuilder
+    private func customStepsBreadcrumb(for profile: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
+        let hasProxy: Bool = {
+            switch detailAgent {
+            case .claudeCode: return profile.usesEmbeddedCLIProxy
+            case .codex: return workingCodexProfile?.usesEmbeddedCLIProxy ?? profile.usesEmbeddedCLIProxy
+            }
+        }()
+        let upstreamDone = profile.hasUpstreamConfiguration
+        // Agent is always selected in the form — no extra completion signal.
+        let agentDone = true
+        let modelDone: Bool = {
+            switch detailAgent {
+            case .claudeCode:
+                return cleaned(profile.haikuModel) != nil
+                    || cleaned(profile.sonnetModel) != nil
+                    || cleaned(profile.opusModel) != nil
+            case .codex:
+                return cleaned(workingCodexProfile?.model) != nil
+            }
+        }()
+        let proxyDone: Bool = {
+            guard hasProxy else { return false }
+            switch detailAgent {
+            case .claudeCode:
+                return localProxy.runtimeState == .running && profile.isCLIProxyConfigurationCurrent
+            case .codex:
+                guard let codex = workingCodexProfile else { return false }
+                return localProxy.runtimeState == .running && codex.isCLIProxyConfigurationCurrent
+            }
+        }()
+        let activateDone: Bool = {
+            switch detailAgent {
+            case .claudeCode:
+                return profilePowerState(for: profile, scope: currentScope()) == .on
+            case .codex:
+                guard let codex = workingCodexProfile else { return false }
+                return activeCodexProfileID == codex.id && CodexConfigWriter.isApplied(codex)
+            }
+        }()
+
+        // (number, labelKey, done) — numbers match form headers exactly.
+        let steps: [(Int, String, Bool)] = {
+            var list: [(Int, String, Bool)] = [
+                (1, "ccx.step.upstream", upstreamDone),
+                (2, "aiCoding.step.agent", agentDone),
+                (3, "claudeCode.model", modelDone),
+            ]
+            if hasProxy {
+                list.append((4, "ccx.step.proxy", proxyDone))
+                list.append((5, detailAgent == .codex ? "codexConfig.target" : "aiCoding.claudeCode.settings",
+                             activateDone))
+            } else {
+                list.append((4, detailAgent == .codex ? "codexConfig.target" : "aiCoding.claudeCode.settings",
+                             activateDone))
+            }
+            return list
+        }()
+
+        HStack(spacing: 6) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { idx, step in
+                if idx > 0 {
+                    Text("·")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(SettingsTheme.border)
+                }
+                HStack(spacing: 2) {
+                    Text("\(step.0).")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(SettingsTheme.accent)
+                    Text((L10n.t(step.1, lang) + (step.2 ? " ✓" : "")).uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .tracking(0.4)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.horizontal, 2)
+        .accessibilityElement(children: .combine)
     }
 
     /// Steps 3-5 when the Agent step targets Claude Code. Numbers shift when
@@ -1001,45 +1112,82 @@ struct ClaudeCodePane: View {
     }
 
     private var emptyState: some View {
-        SettingsCard {
-            VStack(alignment: .center, spacing: 12) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 24, weight: .semibold))
+        let stepLabels = L10n.t("claudeCode.empty.steps", lang)
+            .components(separatedBy: " → ")
+        return SettingsCard {
+            VStack(alignment: .center, spacing: 14) {
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(SettingsTheme.accent)
-                    .frame(width: 52, height: 52)
-                    .background(SettingsTheme.selectedSurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(width: 64, height: 64)
+                    .background(SettingsTheme.accent.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(SettingsTheme.accent.opacity(0.12), lineWidth: 1)
                     )
-                Text(L10n.t("claudeCode.empty.title", lang))
-                    .font(.system(size: 15, weight: .semibold))
+
+                Text(L10n.t("claudeCode.empty.remakeTitle", lang))
+                    .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(SettingsTheme.primary)
-                Text(L10n.t("claudeCode.empty.body", lang))
+                    .multilineTextAlignment(.center)
+
+                Text(L10n.t("claudeCode.empty.remakeBody", lang))
                     .font(.system(size: 12))
                     .foregroundStyle(SettingsTheme.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Button {
-                        NotificationCenter.default.post(name: .openProvidersTab, object: nil)
-                    } label: {
-                        Label(L10n.t("claudeCode.empty.openProviders", lang), systemImage: "key")
-                    }
-                    .controlSize(.small)
+                    .frame(maxWidth: 420)
+
+                HStack(spacing: 10) {
                     Button {
                         addProfile()
                     } label: {
-                        Label(L10n.t("ccx.add", lang), systemImage: "plus.circle")
+                        Label(L10n.t("ccx.add", lang), systemImage: "plus.circle.fill")
                     }
-                    .controlSize(.small)
+                    .controlSize(.regular)
+                    .buttonStyle(.borderedProminent)
+                    .tint(SettingsTheme.accent)
+
+                    Button {
+                        NotificationCenter.default.post(name: .openProvidersTab, object: nil)
+                    } label: {
+                        Label(L10n.t("claudeCode.empty.openProviders", lang), systemImage: "point.3.connected.trianglepath.dotted")
+                    }
+                    .controlSize(.regular)
                 }
-                .padding(.top, 2)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+
+                Divider()
+                    .overlay(SettingsTheme.border.opacity(0.5))
+                    .padding(.horizontal, 12)
+
+                // 3-step onboarding hint (labels from `claudeCode.empty.steps`).
+                HStack(spacing: 18) {
+                    ForEach(Array(stepLabels.enumerated()), id: \.offset) { idx, label in
+                        HStack(spacing: 6) {
+                            Text("\(idx + 1)")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(SettingsTheme.accent)
+                                .frame(width: 20, height: 20)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(SettingsTheme.accent.opacity(0.4), lineWidth: 1)
+                                )
+                            Text(label)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(SettingsTheme.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .padding(.top, 4)
+                .padding(.horizontal, 8)
             }
             .padding(.horizontal, 28)
-            .padding(.vertical, 34)
-            .frame(maxWidth: .infinity, minHeight: 260, alignment: .center)
+            .padding(.vertical, 36)
+            .frame(maxWidth: .infinity, minHeight: 320, alignment: .center)
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }
