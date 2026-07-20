@@ -98,9 +98,6 @@
 		CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCTS0002000000000000F001 /* ClaudeCodeTests.swift */; };
 		CDXW0001000000000000B001 /* CodexConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXW0002000000000000F001 /* CodexConfigWriter.swift */; };
 		CDXD0001000000000000B001 /* CodexConfigDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXD0002000000000000F001 /* CodexConfigDocument.swift */; };
-		CDXP0001000000000000B001 /* CodexPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXP0002000000000000F001 /* CodexPane.swift */; };
-		CDXF0001000000000000B001 /* CodexProfileConnectionFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXF0002000000000000F001 /* CodexProfileConnectionFields.swift */; };
-		CDXL0001000000000000B001 /* CodexProfileList.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXL0002000000000000F001 /* CodexProfileList.swift */; };
 		CDXA0001000000000000B001 /* CodexProfileActivationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */; };
 		CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */; };
 
@@ -249,9 +246,6 @@
 		CCTS0002000000000000F001 /* ClaudeCodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ClaudeCodeTests.swift; sourceTree = "<group>"; };
 		CDXW0002000000000000F001 /* CodexConfigWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConfigWriter.swift; sourceTree = "<group>"; };
 		CDXD0002000000000000F001 /* CodexConfigDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConfigDocument.swift; sourceTree = "<group>"; };
-		CDXP0002000000000000F001 /* CodexPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexPane.swift; sourceTree = "<group>"; };
-		CDXF0002000000000000F001 /* CodexProfileConnectionFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileConnectionFields.swift; sourceTree = "<group>"; };
-		CDXL0002000000000000F001 /* CodexProfileList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileList.swift; sourceTree = "<group>"; };
 		CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileActivationCard.swift; sourceTree = "<group>"; };
 		CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexConfigWriterTests.swift; sourceTree = "<group>"; };
 
@@ -368,7 +362,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nsource_path=\"${CLIPROXYAPI_SOURCE:-$SRCROOT/../CLIProxyAPI}\"\noutput_dir=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\noutput=\"$output_dir/cliproxyapi\"\ntemporary_dir=\"$TARGET_TEMP_DIR/cliproxyapi\"\n\nif [ ! -d \"$source_path\" ]; then\n  echo \"error: CLIProxyAPI source not found at $source_path. Set CLIPROXYAPI_SOURCE before building BirdNion.\" >&2\n  exit 1\nfi\n\ngo_bin=\"$(command -v go || true)\"\nif [ -z \"$go_bin\" ]; then\n  for candidate in /opt/homebrew/bin/go /usr/local/bin/go; do\n    if [ -x \"$candidate\" ]; then\n      go_bin=\"$candidate\"\n      break\n    fi\n  done\nfi\nif [ -z \"$go_bin\" ]; then\n  echo \"error: Go is required to embed CLIProxyAPI.\" >&2\n  exit 1\nfi\n\nmkdir -p \"$output_dir\" \"$temporary_dir\"\ncd \"$source_path\"\nCGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \"$go_bin\" build -o \"$temporary_dir/cliproxyapi-arm64\" ./cmd/server\nCGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \"$go_bin\" build -o \"$temporary_dir/cliproxyapi-x86_64\" ./cmd/server\n/usr/bin/lipo -create -output \"$output\" \"$temporary_dir/cliproxyapi-arm64\" \"$temporary_dir/cliproxyapi-x86_64\"\n/bin/chmod 755 \"$output\"\n/usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$output\"\n";
+			shellScript = "set -eu\nsource_path=\"${CLIPROXYAPI_SOURCE:-$SRCROOT/../CLIProxyAPI}\"\noutput_dir=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\noutput=\"$output_dir/cliproxyapi\"\ntemporary_dir=\"$TARGET_TEMP_DIR/cliproxyapi\"\n\nif [ ! -d \"$source_path\" ]; then\n  echo \"error: CLIProxyAPI source not found at $source_path. Set CLIPROXYAPI_SOURCE before building BirdNion.\" >&2\n  exit 1\nfi\n\ngo_bin=\"$(command -v go || true)\"\nif [ -z \"$go_bin\" ]; then\n  for candidate in /opt/homebrew/bin/go /usr/local/bin/go; do\n    if [ -x \"$candidate\" ]; then\n      go_bin=\"$candidate\"\n      break\n    fi\n  done\nfi\nif [ -z \"$go_bin\" ]; then\n  echo \"error: Go is required to embed CLIProxyAPI.\" >&2\n  exit 1\nfi\n\nmkdir -p \"$output_dir\" \"$temporary_dir\"\ncd \"$source_path\"\ngo_flags=-trimpath\nif [ \"${CONFIGURATION:-}\" = \"Debug\" ] || [ \"${CLIPROXYAPI_UNIVERSAL:-1}\" = \"0\" ]; then\n  case \"$(/usr/bin/uname -m)\" in x86_64) debug_goarch=amd64 ;; *) debug_goarch=arm64 ;; esac\n  /bin/rm -f \"$output\"\n  CGO_ENABLED=0 GOOS=darwin GOARCH=\"$debug_goarch\" \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$output\" ./cmd/server\nelse\n  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$temporary_dir/cliproxyapi-arm64\" ./cmd/server\n  CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$temporary_dir/cliproxyapi-x86_64\" ./cmd/server\n  /usr/bin/lipo -create -output \"$output\" \"$temporary_dir/cliproxyapi-arm64\" \"$temporary_dir/cliproxyapi-x86_64\"\nfi\n/bin/chmod 755 \"$output\"\n/usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$output\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -675,9 +669,6 @@
 				CCPS0001000000000000B001 /* ClaudeCodeLocalProxyStatusCard.swift in Sources */,
 				CDXW0001000000000000B001 /* CodexConfigWriter.swift in Sources */,
 				CDXD0001000000000000B001 /* CodexConfigDocument.swift in Sources */,
-				CDXP0001000000000000B001 /* CodexPane.swift in Sources */,
-				CDXF0001000000000000B001 /* CodexProfileConnectionFields.swift in Sources */,
-				CDXL0001000000000000B001 /* CodexProfileList.swift in Sources */,
 				CDXA0001000000000000B001 /* CodexProfileActivationCard.swift in Sources */,
 
 				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,
