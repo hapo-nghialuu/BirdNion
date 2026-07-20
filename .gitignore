@@ -39,3 +39,4 @@ specs/_shared/
 .cafekit-backup/
 .cafekit.lock
 .opencode/
+.git-wip/
