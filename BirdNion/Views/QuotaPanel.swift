@@ -418,19 +418,27 @@ struct ProviderTabs: View {
     var showAllTab: Bool = false
 
     var body: some View {
-        // Wrapping pill rows instead of a horizontal ScrollView: with a mouse
-        // the strip needed Shift+wheel to reach off-screen tabs. Wrapping keeps
-        // every tab visible/clickable; the popover's auto-height absorbs the
-        // extra rows (no animation, so no NSISEngine hazard).
-        ChipFlowLayout(spacing: 6) {
-            if showAllTab {
-                allChip
+        // Logo-only unselected chips keep a typical roster on one row, so the
+        // ScrollView is a fallback for extreme rosters only (with a mouse it
+        // needs Shift+wheel — acceptable for that edge case).
+        //
+        // The ScrollView wrapper is LOAD-BEARING, not cosmetic: hosting the
+        // chip row bare (plain HStack, report 2026-07-20-141127) or in a
+        // wrapping custom Layout (report 2026-07-20-140946) both recursed
+        // NSISEngine ("invalid baselines") ~6s after launch, when the first
+        // cost-scan publish relayouts the auto-sizing popover host. Keep the
+        // strip inside a ScrollView.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                if showAllTab {
+                    allChip
+                }
+                ForEach(providers) { provider in
+                    chip(for: provider)
+                }
             }
-            ForEach(providers) { provider in
-                chip(for: provider)
-            }
+            .padding(.vertical, 1)
         }
-        .padding(.vertical, 1)
     }
 
     /// Combined-overview pseudo-tab (sentinel id "all") — no ProviderStatus
@@ -471,15 +479,20 @@ struct ProviderTabs: View {
         Button {
             selectedId = p.id
         } label: {
+            // Compact strip: only the selected chip expands to logo + name;
+            // the rest are logo-only pills (brand tint + tooltip), so a
+            // typical roster fits one row without scrolling or tall wraps.
             HStack(spacing: 5) {
                 ProviderLogoMark(id: p.id, tint: logoTint)
                     .frame(width: 14, height: 14)
-                Text(p.displayName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(active ? Color.white : VocabbyTheme.secondary)
-                    .lineLimit(1)
+                if active {
+                    Text(p.displayName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
+                }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, active ? 12 : 9)
             .padding(.vertical, 5)
             .frame(minHeight: Self.chipHeight)
             .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
@@ -493,47 +506,6 @@ struct ProviderTabs: View {
         .help(p.displayName)
         .accessibilityLabel(p.displayName)
         .accessibilityAddTraits(active ? .isSelected : [])
-    }
-}
-
-/// Left-aligned flow layout for the provider tab pills: fills each row up to
-/// the proposed width, then wraps. Row height follows the tallest chip.
-struct ChipFlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var x: CGFloat = 0, y: CGFloat = 0
-        var rowHeight: CGFloat = 0, widest: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > maxWidth {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            x += size.width
-            widest = max(widest, x)
-            x += spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        return CGSize(width: proposal.width ?? widest, height: y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
     }
 }
 
