@@ -47,6 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Fixed width; height is driven by the SwiftUI content's fitting size.
     private let panelWidth: CGFloat = 420
+    /// Hard height cap. Clamping only to the screen still let the panel span
+    /// menu bar → screen bottom on tall displays, leaving a scroll range of a
+    /// few px that reads as "scrolling is broken". Capping guarantees the
+    /// content ScrollView has a real scroll range on tall tabs.
+    private let maxPanelHeight: CGFloat = 640
     /// Pixels the panel is nudged up toward the menu bar from its anchor.
     private let topNudge: CGFloat = 10
 
@@ -130,8 +135,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostingController = host
 
         // Borderless, non-activating panel — no arrow, floats above windows.
+        // contentSize height is capped (maxPanelHeight) so tall tabs scroll;
+        // setting it on creation also seeds the hosting controller's ideal
+        // size before the first preferredContentSize publish, which avoids
+        // the transient state where a borderless panel auto-fits to 0→hug
+        // and trips NSHostingView.setNeedsUpdate →
+        // _postWindowNeedsUpdateConstraints (abort seen in test-runner
+        // bootstrapping, reports 2026-07-20-144255 / -144658 / -145010).
         let p = DropdownPanel(
-            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: maxPanelHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: true
         )
@@ -236,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let vf = screen.visibleFrame
             let margin: CGFloat = 8
             let available = topY - vf.minY - margin
-            height = max(1, min(fittingHeight, available))
+            height = max(1, min(fittingHeight, available, maxPanelHeight))
             originX = min(max(originX, vf.minX + margin), vf.maxX - panelWidth - margin)
         }
         let originY = topY - height
@@ -271,7 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var height = fittingHeight
         if let screen = panel.screen ?? NSScreen.main {
             let available = top - screen.visibleFrame.minY - 8
-            height = max(1, min(fittingHeight, available))
+            height = max(1, min(fittingHeight, available, maxPanelHeight))
         }
         panel.setFrame(
             NSRect(x: frame.origin.x, y: top - height, width: panelWidth, height: height),

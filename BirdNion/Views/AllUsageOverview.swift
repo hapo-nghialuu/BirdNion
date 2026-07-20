@@ -724,7 +724,7 @@ struct CombinedChartCard: View {
             Text("\(dayLabel(detail.date)) · \(AllUsageFormat.tokens(detail.tokens)) · \(AllUsageFormat.usd(detail.usd))")
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.primary)
-            DaySourceModelRows(day: detail)
+            DaySourceModelRows(day: detail, vi: vi)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -739,50 +739,73 @@ struct CombinedChartCard: View {
 /// breakdown names the actual models instead of one opaque "Claude" line.
 private struct DaySourceModelRows: View {
     let day: CombinedDailyUsage
+    let vi: Bool
 
+    /// Rows beyond this fold into one "+N more" summary line — three source
+    /// headers × five models each made the breakdown taller than the chart.
+    private static let maxRows = 6
+
+    /// Source is carried by the dot colour (chart legend explains it), so the
+    /// per-source header rows are gone and models from all sources merge into
+    /// one cost-sorted list.
     var body: some View {
+        let models = day.models.sorted { $0.usd > $1.usd }
+        if models.isEmpty {
+            // Older buckets without model detail: fall back to source totals.
+            sourceFallbackRows
+        } else {
+            ForEach(Array(models.prefix(Self.maxRows))) { m in
+                row(color: tint(m.source),
+                    label: AllUsageFormat.shortName(m.name),
+                    tokens: m.tokens, usd: m.usd)
+            }
+            let rest = models.dropFirst(Self.maxRows)
+            if !rest.isEmpty {
+                HStack(spacing: 8) {
+                    Circle().fill(VocabbyTheme.track).frame(width: 6, height: 6)
+                    Text(vi ? "+\(rest.count) model khác" : "+\(rest.count) more models")
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                    Spacer(minLength: 8)
+                    Text("\(AllUsageFormat.tokensShort(rest.reduce(0) { $0 + $1.tokens })) · \(AllUsageFormat.usd(rest.reduce(0) { $0 + $1.usd }))")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sourceFallbackRows: some View {
         if day.claudeUSD > 0 || day.claudeTokens > 0 {
-            sourceRow(color: VocabbyTheme.chartClaude, label: "Claude",
-                      usd: day.claudeUSD, tokens: day.claudeTokens)
-            modelRows("claude")
+            row(color: VocabbyTheme.chartClaude, label: "Claude",
+                tokens: day.claudeTokens, usd: day.claudeUSD)
         }
         if day.codexUSD > 0 || day.codexTokens > 0 {
-            sourceRow(color: VocabbyTheme.chartCodex, label: "Codex",
-                      usd: day.codexUSD, tokens: day.codexTokens)
-            modelRows("codex")
+            row(color: VocabbyTheme.chartCodex, label: "Codex",
+                tokens: day.codexTokens, usd: day.codexUSD)
         }
         if day.grokUSD > 0 || day.grokTokens > 0 {
-            sourceRow(color: VocabbyTheme.chartGrok, label: "Grok",
-                      usd: day.grokUSD, tokens: day.grokTokens)
-            modelRows("grok")
+            row(color: VocabbyTheme.chartGrok, label: "Grok",
+                tokens: day.grokTokens, usd: day.grokUSD)
         }
     }
 
-    /// One indented line per model under its source row. Scanner daily
-    /// buckets cap at the top 5 models/day, so the list stays short.
-    @ViewBuilder
-    private func modelRows(_ source: String) -> some View {
-        ForEach(day.models.filter { $0.source == source }) { m in
-            HStack(spacing: 8) {
-                Text(AllUsageFormat.shortName(m.name))
-                    .font(.system(size: 9))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Text("\(AllUsageFormat.tokensShort(m.tokens)) · \(AllUsageFormat.usd(m.usd))")
-                    .font(.system(size: 9).monospacedDigit())
-                    .foregroundStyle(VocabbyTheme.tertiary)
-            }
-            .padding(.leading, 14)
+    private func tint(_ source: String) -> Color {
+        switch source {
+        case "claude": return VocabbyTheme.chartClaude
+        case "codex": return VocabbyTheme.chartCodex
+        default: return VocabbyTheme.chartGrok
         }
     }
 
-    private func sourceRow(color: Color, label: String, usd: Double, tokens: Int) -> some View {
+    private func row(color: Color, label: String, tokens: Int, usd: Double) -> some View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 6, height: 6)
             Text(label)
                 .font(.system(size: 10))
                 .foregroundStyle(VocabbyTheme.secondary)
+                .lineLimit(1)
             Spacer(minLength: 8)
             Text("\(AllUsageFormat.tokensShort(tokens)) · \(AllUsageFormat.usd(usd))")
                 .font(.system(size: 10).monospacedDigit())
@@ -863,7 +886,7 @@ struct CombinedHeatmapCard: View {
             Text("\(L10n.dayMonth(day.date, preference: settings.appLanguage)) · \(AllUsageFormat.usd(day.usd)) · \(AllUsageFormat.tokens(day.tokens))")
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.primary)
-            DaySourceModelRows(day: day)
+            DaySourceModelRows(day: day, vi: vi)
             if !day.isActive {
                 Text(vi ? "Không có hoạt động." : "No activity.")
                     .font(.system(size: 10))
