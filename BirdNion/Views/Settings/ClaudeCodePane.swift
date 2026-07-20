@@ -894,9 +894,15 @@ struct ClaudeCodePane: View {
                 workingCodexProfile = profile
                 // Refresh the per-project overlay file alongside the global
                 // apply so `codex --profile` always matches what was applied.
-                _ = try? CodexConfigWriter.writeProfileFile(for: profile)
+                let flag = try? CodexConfigWriter.writeProfileFile(for: profile)
                 reloadCodexProfiles()
-                statusMessage = L10n.t(replacingActive ? "codexConfig.updated" : "codexConfig.applied", lang)
+                var message = L10n.t(replacingActive ? "codexConfig.updated" : "codexConfig.applied", lang)
+                // Surface the exact run command in the success feedback so the
+                // user can start Codex on this profile without hunting for it.
+                if let flag {
+                    message += " " + L10n.f("codexConfig.runWith", lang, "codex --profile \(flag)")
+                }
+                statusMessage = message
             } catch let e as EmbeddedCLIProxyService.ServiceError {
                 errorMessage = embeddedCLIProxyErrorMessage(e)
             } catch let e as CLIProxyAPIClient.ClientError {
