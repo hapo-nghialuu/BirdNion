@@ -32,7 +32,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
             ProviderStatus {
                 id: cfg.id.clone(),
                 display_name: name,
-                windows: vec![QuotaWindow {
+                windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
                     label,
                     used_pct: used,
                     remaining_pct: 100 - used,

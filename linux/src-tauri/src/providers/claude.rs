@@ -240,7 +240,7 @@ async fn fetch_admin_api(cfg: &config::Provider, name: &str) -> ProviderStatus {
         Some(snap) => ProviderStatus {
             id: cfg.id.clone(),
             display_name: name.to_string(),
-            windows: vec![QuotaWindow {
+            windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
                 label: "Chi phí 30 ngày".into(),
                 used_pct: 0,
                 remaining_pct: 100,
@@ -381,7 +381,7 @@ const SEVEN_DAYS_SECS: i64 = 7 * 24 * 3600;
 
 fn to_quota_window(w: RateWindow, label: &str, window_seconds: Option<i64>) -> QuotaWindow {
     let used = w.used_pct.round().clamp(0.0, 100.0) as i32;
-    QuotaWindow {
+    QuotaWindow { semantic_key: None, semantic_kind: None,
         label: label.to_string(),
         used_pct: used,
         remaining_pct: 100 - used,
@@ -462,7 +462,7 @@ fn spend_limit_window(extra: Option<&Value>) -> Option<(QuotaWindow, Option<f64>
     let pct = extra.get("utilization").and_then(Value::as_f64).unwrap_or((used / limit) * 100.0).clamp(0.0, 100.0);
     let remaining = (limit - used).max(0.0);
     Some((
-        QuotaWindow {
+        QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Spend limit".into(),
             used_pct: pct.round() as i32,
             remaining_pct: 100 - pct.round() as i32,

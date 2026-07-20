@@ -389,7 +389,7 @@ fn parse_coding_plan_windows(text: &str) -> Vec<QuotaWindow> {
 
 fn quota_window(label: &str, used: i64, total: i64, reset: Option<i64>) -> QuotaWindow {
     let used_pct = ((used as f64 / total as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
-    QuotaWindow {
+    QuotaWindow { semantic_key: None, semantic_kind: None,
         label: label.to_string(),
         used_pct,
         remaining_pct: 100 - used_pct,
@@ -433,7 +433,7 @@ fn parse_token_plan_window(text: &str) -> Option<QuotaWindow> {
     let used_pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32;
     let rem = remaining.unwrap_or((total - used).max(0.0));
 
-    Some(QuotaWindow {
+    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Token Plan".to_string(),
         used_pct,
         remaining_pct: 100 - used_pct,

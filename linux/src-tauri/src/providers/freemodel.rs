@@ -132,7 +132,7 @@ fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<Q
     if count > 0 {
         subtitle += &format!(" · {count} giới thiệu");
     }
-    Some(QuotaWindow {
+    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Số dư".to_string(),
         used_pct: pct,
         remaining_pct: 100 - pct,
@@ -248,7 +248,7 @@ fn cents_window(label: &str, window: &Value) -> Result<QuotaWindow, String> {
         "Tuần" => Some(7 * 24 * 3600),
         _ => None,
     };
-    Ok(QuotaWindow {
+    Ok(QuotaWindow { semantic_key: None, semantic_kind: None,
         label: label.to_string(),
         used_pct: pct,
         remaining_pct: 100 - pct,

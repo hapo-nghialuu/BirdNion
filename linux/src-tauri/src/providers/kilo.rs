@@ -154,7 +154,7 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
     if let Some(total) = credit_snap.total.filter(|t| *t > 0.0) {
         let used = credit_snap.used.unwrap_or(0.0);
         let used_pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Credits".into(),
             used_pct,
             remaining_pct: 100 - used_pct,
@@ -163,7 +163,7 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
             window_seconds: None,
         });
     } else if credit_snap.total == Some(0.0) {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Credits".into(),
             used_pct: 100,
             remaining_pct: 0,
@@ -182,7 +182,7 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
         if bonus > 0.0 {
             subtitle += &format!(" (+ ${bonus:.2} bonus)");
         }
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Kilo Pass".into(),
             used_pct,
             remaining_pct: 100 - used_pct,

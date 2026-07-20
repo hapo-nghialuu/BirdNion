@@ -140,7 +140,7 @@ fn fmt(n: i64) -> String {
 
 /// Pure aggregate → status mapping (unit-tested).
 fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_name: &str) -> ProviderStatus {
-    let mut windows = vec![QuotaWindow {
+    let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Requests (30d)".into(),
         used_pct: 0,
         remaining_pct: 100,
@@ -154,7 +154,7 @@ fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_
         } else {
             format!("{:.1} giờ", agg.hours)
         };
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Audio (30d)".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -175,7 +175,7 @@ fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_
         extra.push(format!("{:.1} agent giờ", agg.agent_hours));
     }
     if !extra.is_empty() {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Chi tiết (30d)".into(),
             used_pct: 0,
             remaining_pct: 100,

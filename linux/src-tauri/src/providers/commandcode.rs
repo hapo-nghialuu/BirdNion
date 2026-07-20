@@ -136,7 +136,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
         let total = p.monthly_credits_usd;
         let used = (total - monthly).max(0.0);
         let used_pct = if total > 0.0 { ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32 } else { 0 };
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Tháng".to_string(),
             used_pct,
             remaining_pct: 100 - used_pct,
@@ -145,7 +145,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
             window_seconds: None,
         });
     } else {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Số dư tháng".to_string(),
             used_pct: 0,
             remaining_pct: 100,
@@ -156,7 +156,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
     }
 
     if purchased > 0.0 {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Credits mua thêm".to_string(),
             used_pct: 0,
             remaining_pct: 100,
@@ -167,7 +167,7 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
     }
 
     if premium > 0.0 {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Premium".to_string(),
             used_pct: 0,
             remaining_pct: 100,

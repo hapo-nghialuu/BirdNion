@@ -127,7 +127,7 @@ pub fn parse_settings_html(html: &str) -> Result<ProviderStatus, String> {
     let mut windows = Vec::new();
     if let Some(pct) = session {
         let used = pct.round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Session".into(),
             used_pct: used,
             remaining_pct: 100 - used,
@@ -138,7 +138,7 @@ pub fn parse_settings_html(html: &str) -> Result<ProviderStatus, String> {
     }
     if let Some(pct) = weekly {
         let used = pct.round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Tuần".into(),
             used_pct: used,
             remaining_pct: 100 - used,
@@ -190,7 +190,7 @@ async fn fetch_api_tags(token: &str) -> Result<ProviderStatus, String> {
     Ok(ProviderStatus {
         id: "ollama".into(),
         display_name: "Ollama".into(),
-        windows: vec![QuotaWindow {
+        windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Cloud API".into(),
             used_pct: 0,
             remaining_pct: 100,

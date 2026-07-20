@@ -73,7 +73,7 @@ pub fn parse_balance(id: &str, name: &str, account_label: &str, body: &Value) ->
         format!("{symbol}{total_str}")
     };
 
-    let window = QuotaWindow {
+    let window = QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Số dư".into(),
         used_pct: if low_balance { 100 } else { 0 },
         remaining_pct: if low_balance { 0 } else { 100 },

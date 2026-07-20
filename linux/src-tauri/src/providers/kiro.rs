@@ -455,7 +455,7 @@ fn bonus_window(bonus: Option<(f64, f64, Option<i64>)>) -> Option<QuotaWindow> {
     let (used, total, expiry_days) = bonus?;
     let bonus_used_pct = if total > 0.0 { ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32 } else { 0 };
     let bonus_expiry = expiry_days.map(|d| chrono::Utc::now().timestamp() + d * 86_400);
-    Some(QuotaWindow {
+    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Bonus Credits".into(),
         used_pct: bonus_used_pct,
         remaining_pct: 100 - bonus_used_pct,
@@ -483,7 +483,7 @@ fn overage_window(status: Option<&str>, credits_used: Option<f64>, cost_usd: Opt
     } else {
         parts.join(" · ")
     };
-    Some(QuotaWindow {
+    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Vượt hạn mức".into(),
         used_pct: 0,
         remaining_pct: 100,
@@ -552,7 +552,7 @@ pub fn parse_usage(
     if is_new_format && is_managed_plan && !matched_percent && !matched_credits {
         // Managed plans hide plan credits but may still report bonus and
         // overage — keep those windows instead of dropping them.
-        let mut windows = vec![QuotaWindow {
+        let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Credits".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -596,7 +596,7 @@ pub fn parse_usage(
         });
     }
 
-    let mut windows = vec![QuotaWindow {
+    let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Credits".into(),
         used_pct,
         remaining_pct,

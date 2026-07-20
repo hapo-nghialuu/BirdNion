@@ -1,9 +1,10 @@
 //! Hapo AI Hub quota provider — port of `HapoHubProvider.swift` /
 //! `HapoHubConfig.swift`.
 //!
-//! Two HTTP calls per fetch:
+//! Up to two HTTP calls per fetch:
 //!  - `GET <me_url>`   — best-effort identity (`{"email": ...}`), used for
-//!                       `account_label` when available.
+//!                       `account_label` when available. A 404 disables this
+//!                       optional lookup until the app restarts.
 //!  - `GET <base_url>` — weekly budget quota:
 //!    `{"usage_percentage":42.0,"remaining_budget_usd":5.8,
 //!      "weekly_budget_usd":10.0,"budget_week_ends_at":"2026-07-06T00:00:00Z"}`.
@@ -16,6 +17,7 @@
 //! how macOS injects them into Info.plist — still nothing in source.
 
 use serde_json::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config;
 use crate::providers::{shared_client, ProviderStatus, QuotaWindow};
@@ -24,6 +26,16 @@ use crate::providers::{shared_client, ProviderStatus, QuotaWindow};
 const BAKED_BASE_URL: Option<&str> = option_env!("HAPO_BASE_URL");
 const BAKED_ME_URL: Option<&str> = option_env!("HAPO_ME_URL");
 const BAKED_AUTH_TEMPLATE: Option<&str> = option_env!("HAPO_AUTH_TEMPLATE");
+
+// A missing identity endpoint is a configuration mismatch, not a transient
+// quota failure. Avoid sending one 404 per polling cycle until the app restarts.
+static IDENTITY_ENDPOINT_MISSING: AtomicBool = AtomicBool::new(false);
+
+enum EmailLookup {
+    Found(String),
+    EndpointMissing,
+    Unavailable,
+}
 
 fn clean_value(s: &str) -> Option<String> {
     let s = s.trim();
@@ -70,9 +82,13 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 
     // /me is best-effort identity enrichment, fired only when budget succeeded.
     let mut resolved_email = None;
-    if status.error.is_none() {
+    if status.error.is_none() && !IDENTITY_ENDPOINT_MISSING.load(Ordering::Relaxed) {
         if let Some(me_url) = &me_url {
-            resolved_email = fetch_email(&client, me_url, &auth_header).await;
+            let lookup = fetch_email(&client, me_url, &auth_header).await;
+            record_identity_lookup(&lookup);
+            if let EmailLookup::Found(email) = lookup {
+                resolved_email = Some(email);
+            }
         }
     }
     let label = resolved_email
@@ -134,7 +150,7 @@ pub fn parse_budget(id: &str, name: &str, body: &Value) -> ProviderStatus {
     ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
-        windows: vec![QuotaWindow {
+        windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Tuần".into(),
             used_pct,
             remaining_pct,
@@ -147,19 +163,37 @@ pub fn parse_budget(id: &str, name: &str, body: &Value) -> ProviderStatus {
     }
 }
 
-async fn fetch_email(client: &reqwest::Client, me_url: &str, auth_header: &str) -> Option<String> {
-    let resp = client
+async fn fetch_email(client: &reqwest::Client, me_url: &str, auth_header: &str) -> EmailLookup {
+    let resp = match client
         .get(me_url)
         .header("Accept", "application/json")
         .header("Authorization", auth_header)
         .send()
         .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+    {
+        Ok(resp) => resp,
+        Err(_) => return EmailLookup::Unavailable,
+    };
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return EmailLookup::EndpointMissing;
     }
-    let body: Value = resp.json().await.ok()?;
-    body.get("email").and_then(Value::as_str).map(String::from)
+    if !resp.status().is_success() {
+        return EmailLookup::Unavailable;
+    }
+    let body: Value = match resp.json().await {
+        Ok(body) => body,
+        Err(_) => return EmailLookup::Unavailable,
+    };
+    body.get("email")
+        .and_then(Value::as_str)
+        .map(|email| EmailLookup::Found(email.to_string()))
+        .unwrap_or(EmailLookup::Unavailable)
+}
+
+fn record_identity_lookup(result: &EmailLookup) {
+    if matches!(result, EmailLookup::EndpointMissing) {
+        IDENTITY_ENDPOINT_MISSING.store(true, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +225,18 @@ mod tests {
     fn missing_fields_is_error() {
         let s = parse_budget("hapo", "AIHub", &json!({"usage_percentage": 1.0}));
         assert!(s.error.is_some());
+    }
+
+    #[test]
+    fn identity_404_disables_future_identity_lookups() {
+        IDENTITY_ENDPOINT_MISSING.store(false, Ordering::Relaxed);
+
+        record_identity_lookup(&EmailLookup::Unavailable);
+        assert!(!IDENTITY_ENDPOINT_MISSING.load(Ordering::Relaxed));
+
+        record_identity_lookup(&EmailLookup::EndpointMissing);
+        assert!(IDENTITY_ENDPOINT_MISSING.load(Ordering::Relaxed));
+
+        IDENTITY_ENDPOINT_MISSING.store(false, Ordering::Relaxed);
     }
 }

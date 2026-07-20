@@ -463,7 +463,7 @@ fn build_status(
     if let Some(spend) = monthly_spend {
         if let Some(b) = budget.filter(|b| *b > 0.0) {
             let used_pct = ((spend / b) * 100.0).round().clamp(0.0, 100.0) as i32;
-            windows.push(QuotaWindow {
+            windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
                 label: "Ngân sách tháng".into(),
                 used_pct,
                 remaining_pct: 100 - used_pct,
@@ -472,7 +472,7 @@ fn build_status(
                 window_seconds: None,
             });
         } else {
-            windows.push(QuotaWindow {
+            windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
                 label: "Ngân sách tháng".into(),
                 used_pct: 0,
                 remaining_pct: 100,
@@ -491,7 +491,7 @@ fn build_status(
             compact_count(input_tokens),
             compact_count(output_tokens)
         );
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: format!("14 ngày ({region})"),
             used_pct: 0,
             remaining_pct: 100,

@@ -160,7 +160,7 @@ pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> P
             let is_primary = kind == "TOKENS_LIMIT" && Some(i) == primary_idx;
             let used_pct = computed_used_percent(e).round().clamp(0.0, 100.0) as i32;
             let resets_at = e.get("next_reset_time").and_then(Value::as_i64).map(|ms| ms / 1000);
-            QuotaWindow {
+            QuotaWindow { semantic_key: None, semantic_kind: None,
                 label: label(kind, unit, number, is_primary),
                 used_pct,
                 remaining_pct: 100 - used_pct,

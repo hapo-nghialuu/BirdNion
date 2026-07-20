@@ -138,7 +138,7 @@ fn parse_status(
         subtitle.push_str(&format!(" ({symbol}{cash:.2} tiền mặt + {symbol}{gift:.2} quà tặng)"));
     }
 
-    let mut windows = vec![QuotaWindow {
+    let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Số dư".to_string(),
         used_pct: 0,
         remaining_pct: 100,
@@ -165,7 +165,7 @@ fn parse_status(
                 if limit > 0.0 {
                     let pct = (used / limit * 100.0).round().clamp(0.0, 100.0) as i32;
                     let label = plan_name.clone().map(|p| format!("Token Plan · {p}")).unwrap_or_else(|| "Token Plan".to_string());
-                    windows.push(QuotaWindow {
+                    windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
                         label,
                         used_pct: pct,
                         remaining_pct: 100 - pct,

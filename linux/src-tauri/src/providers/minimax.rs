@@ -237,7 +237,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
         let weekly_remaining = m.get("current_weekly_remaining_percent").and_then(Value::as_i64).unwrap_or(0) as i32;
         let interval_reset = m.get("end_time").and_then(Value::as_i64).filter(|ms| *ms > 0).map(|ms| ms / 1000);
         let weekly_reset = m.get("weekly_end_time").and_then(Value::as_i64).filter(|ms| *ms > 0).map(|ms| ms / 1000);
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: format!("{prefix}5 giờ"),
             used_pct: 100 - interval_remaining,
             remaining_pct: interval_remaining,
@@ -245,7 +245,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
             resets_at: interval_reset,
             window_seconds: None,
         });
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: format!("{prefix}Tuần"),
             used_pct: 100 - weekly_remaining,
             remaining_pct: weekly_remaining,
@@ -260,7 +260,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
         let renews_ms = body.get("renewal_trigger_time_ts").and_then(Value::as_i64).filter(|ms| *ms > 0);
         let sub_label = if renews_ms.is_some() { "Gia hạn" } else { "Hết hạn" };
         let resets_at = renews_ms.unwrap_or(expires_ms) / 1000;
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: sub_label.into(),
             used_pct: 0,
             remaining_pct: 100,

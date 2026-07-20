@@ -185,7 +185,7 @@ fn window(label: &str, snap: Option<&Snap>, reset: Option<i64>) -> Option<QuotaW
     };
 
     let used = (100.0 - percent_remaining).round().clamp(0.0, 100.0) as i32;
-    Some(QuotaWindow { label: label.to_string(), used_pct: used, remaining_pct: 100 - used, subtitle: None, resets_at: reset, window_seconds: None })
+    Some(QuotaWindow { semantic_key: None, semantic_kind: None, label: label.to_string(), used_pct: used, remaining_pct: 100 - used, subtitle: None, resets_at: reset, window_seconds: None })
 }
 
 fn parse_reset(value: Option<&str>) -> Option<i64> {
@@ -370,7 +370,7 @@ fn budget_windows(budgets: &[BudgetEntry]) -> Vec<QuotaWindow> {
             let used_raw = b.current_amount / b.budget_amount * 100.0;
             let used = used_raw.round().clamp(0.0, 100.0) as i32;
             let label_name = b.name.clone().unwrap_or_else(|| "Copilot".to_string());
-            Some(QuotaWindow {
+            Some(QuotaWindow { semantic_key: None, semantic_kind: None,
                 label: format!("Budget · {label_name}"),
                 used_pct: used,
                 remaining_pct: 100 - used,

@@ -522,7 +522,7 @@ fn normalize(primary: Option<Window>, secondary: Option<Window>) -> (Option<Wind
 }
 
 fn to_quota_window(w: Window, label: &str) -> QuotaWindow {
-    QuotaWindow {
+    QuotaWindow { semantic_key: None, semantic_kind: None,
         label: label.to_string(),
         used_pct: w.used_percent as i32,
         remaining_pct: (100 - w.used_percent) as i32,

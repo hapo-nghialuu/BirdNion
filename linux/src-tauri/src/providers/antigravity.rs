@@ -402,7 +402,7 @@ fn map_model_windows(quotas: &[ModelQuota]) -> Vec<QuotaWindow> {
             let fraction = q.remaining_fraction.unwrap_or(0.0).clamp(0.0, 1.0);
             let remaining_pct = (fraction * 100.0).round() as i32;
             let id = if q.model_id.is_empty() { &q.label } else { &q.model_id };
-            QuotaWindow {
+            QuotaWindow { semantic_key: None, semantic_kind: None,
                 label: humanize_model_id(id),
                 used_pct: 100 - remaining_pct,
                 remaining_pct,
@@ -468,7 +468,7 @@ fn map_summary_windows(groups: &[Value]) -> Vec<QuotaWindow> {
             let remaining_pct = remaining_fraction.map(|f| (f.clamp(0.0, 1.0) * 100.0).round() as i32).unwrap_or(0);
             let reset_time = bucket.get("resetTime").and_then(Value::as_str).and_then(parse_reset_time);
             let label = format!("{group_title} {bucket_title}").trim().to_string();
-            windows.push(QuotaWindow {
+            windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
                 label,
                 used_pct: 100 - remaining_pct,
                 remaining_pct,
@@ -665,7 +665,7 @@ fn map_buckets_to_windows(buckets: &[Value]) -> Vec<QuotaWindow> {
 fn make_google_window(label: &str, fraction: f64, reset_time: Option<String>) -> QuotaWindow {
     let used_pct = ((1.0 - fraction) * 100.0).round().clamp(0.0, 100.0) as i32;
     let resets_at = reset_time.as_deref().and_then(parse_reset_time);
-    QuotaWindow {
+    QuotaWindow { semantic_key: None, semantic_kind: None,
         label: label.to_string(),
         used_pct,
         remaining_pct: 100 - used_pct,

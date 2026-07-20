@@ -391,7 +391,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
     let weekly_used = (snap.weekly_percent.round() as i32).clamp(0, 100);
 
     let mut windows = vec![
-        QuotaWindow {
+        QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Rolling".into(),
             used_pct: rolling_used,
             remaining_pct: 100 - rolling_used,
@@ -399,7 +399,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
             resets_at: Some(now + snap.rolling_reset_sec),
             window_seconds: None,
         },
-        QuotaWindow {
+        QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Tuần".into(),
             used_pct: weekly_used,
             remaining_pct: 100 - weekly_used,
@@ -410,7 +410,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
     ];
 
     if let Some(renew) = snap.renews_at {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Gia hạn".into(),
             used_pct: 0,
             remaining_pct: 100,

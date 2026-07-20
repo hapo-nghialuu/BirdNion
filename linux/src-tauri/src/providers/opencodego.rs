@@ -288,7 +288,7 @@ fn parse_page(text: &str, zen_balance: Option<f64>) -> Option<ProviderStatus> {
     }
 
     if let Some(renew) = renews_at {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Gia hạn".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -392,7 +392,7 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
 
 fn make_window(label: &str, result: &WindowResult, now: i64) -> QuotaWindow {
     let used = (result.percent.round() as i32).clamp(0, 100);
-    QuotaWindow {
+    QuotaWindow { semantic_key: None, semantic_kind: None,
         label: label.to_string(),
         used_pct: used,
         remaining_pct: 100 - used,

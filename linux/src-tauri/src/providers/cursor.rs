@@ -311,7 +311,7 @@ fn parse_status(id: &str, name: &str, usage_summary_json: &str, request_usage_js
 
 fn pct_window(label: &str, pct: f64, subtitle: Option<String>) -> QuotaWindow {
     let used = pct.round().clamp(0.0, 100.0) as i32;
-    QuotaWindow {
+    QuotaWindow { semantic_key: None, semantic_kind: None,
         label: label.to_string(),
         used_pct: used,
         remaining_pct: 100 - used,

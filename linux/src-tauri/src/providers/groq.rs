@@ -96,7 +96,7 @@ fn build_status(
     let cache_per_min = hits * 60.0;
 
     let mut windows = vec![
-        QuotaWindow {
+        QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Yêu cầu/phút".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -104,7 +104,7 @@ fn build_status(
             resets_at: None,
             window_seconds: None,
         },
-        QuotaWindow {
+        QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Tokens/phút".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -114,7 +114,7 @@ fn build_status(
         },
     ];
     if cache_per_min > 0.0 {
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Cache hit/phút".into(),
             used_pct: 0,
             remaining_pct: 100,

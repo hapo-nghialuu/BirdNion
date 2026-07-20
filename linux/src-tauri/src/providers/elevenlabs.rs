@@ -106,7 +106,7 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
         0
     };
     let resets_at = body.get("next_character_count_reset_unix").and_then(Value::as_i64);
-    windows.push(QuotaWindow {
+    windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
         label: "Credits".into(),
         used_pct: used,
         remaining_pct: 100 - used,
@@ -120,7 +120,7 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
         body.get("voice_limit").and_then(Value::as_i64).filter(|l| *l > 0),
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Voice slots".into(),
             used_pct: p,
             remaining_pct: 100 - p,
@@ -134,7 +134,7 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
         body.get("professional_voice_limit").and_then(Value::as_i64).filter(|l| *l > 0),
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow {
+        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
             label: "Professional voices".into(),
             used_pct: p,
             remaining_pct: 100 - p,

@@ -52,6 +52,12 @@ pub struct QuotaWindow {
     /// `resets_at`, drives the settings pace/reserve line (macOS WindowPace).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_seconds: Option<i64>,
+    /// Stable provider-defined identity for future quota observations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_key: Option<String>,
+    /// Optional provider-defined semantic kind (for example `session`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_kind: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]

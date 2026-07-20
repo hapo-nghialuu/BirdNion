@@ -12,6 +12,14 @@ mod elevenlabs_keys;
 mod freemodel_accounts;
 mod grok_scanner;
 mod providers;
+#[allow(dead_code)]
+mod quota_observation;
+#[allow(dead_code)]
+mod session_usage_slice;
+#[allow(dead_code)]
+mod insights_db;
+#[allow(dead_code)]
+mod control_plane;
 mod storage;
 mod updater;
 mod usage;
