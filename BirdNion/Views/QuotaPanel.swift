@@ -418,17 +418,19 @@ struct ProviderTabs: View {
     var showAllTab: Bool = false
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                if showAllTab {
-                    allChip
-                }
-                ForEach(providers) { provider in
-                    chip(for: provider)
-                }
+        // Wrapping pill rows instead of a horizontal ScrollView: with a mouse
+        // the strip needed Shift+wheel to reach off-screen tabs. Wrapping keeps
+        // every tab visible/clickable; the popover's auto-height absorbs the
+        // extra rows (no animation, so no NSISEngine hazard).
+        ChipFlowLayout(spacing: 6) {
+            if showAllTab {
+                allChip
             }
-            .padding(.vertical, 1)
+            ForEach(providers) { provider in
+                chip(for: provider)
+            }
         }
+        .padding(.vertical, 1)
     }
 
     /// Combined-overview pseudo-tab (sentinel id "all") — no ProviderStatus
@@ -491,6 +493,47 @@ struct ProviderTabs: View {
         .help(p.displayName)
         .accessibilityLabel(p.displayName)
         .accessibilityAddTraits(active ? .isSelected : [])
+    }
+}
+
+/// Left-aligned flow layout for the provider tab pills: fills each row up to
+/// the proposed width, then wraps. Row height follows the tallest chip.
+struct ChipFlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0
+        var rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width
+            widest = max(widest, x)
+            x += spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: proposal.width ?? widest, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
