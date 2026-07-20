@@ -58,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         services.start()
+        // Restore the user's appearance choice before any window shows.
+        services.settings.applyAppearance()
         Task { @MainActor in
             await EmbeddedCLIProxyService.shared.restoreIfConfigured()
         }

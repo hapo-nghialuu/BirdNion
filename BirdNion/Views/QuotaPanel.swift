@@ -36,7 +36,7 @@ struct QuotaOverview: View {
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 8) {
                 if quota.displayStatuses.isEmpty {
                     // First-run / opt-in state. The bird logo + title + body
                     // + prominent Settings button are all contained in
@@ -79,6 +79,10 @@ struct QuotaOverview: View {
                         ?? quota.displayStatuses.first {
                         VStack(alignment: .leading, spacing: 8) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
+                            // Summary lives outside the windows card (mockup).
+                            if s.error == nil, !s.windows.isEmpty {
+                                QuotaSummaryStrip(status: s)
+                            }
                             ProviderCard(status: s)
                             // Claude Code backend: round quick-apply / setup button,
                             // shown only for providers with a key that can back Claude Code.
@@ -317,25 +321,49 @@ struct BirdNionHeader: View {
 
     let isRefreshing: Bool
 
+    private var statusTone: Color {
+        isRefreshing ? VocabbyTheme.yellow : VocabbyTheme.success
+    }
+
+    private var statusSurface: Color {
+        isRefreshing ? VocabbyTheme.warningSurface : VocabbyTheme.successSurface
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Image("OriginalImage")
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 24, height: 24)
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("BirdNion")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
+
+            Text("BirdNion")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
+
+            // Status pill from existing ready/updating state — no new status invented.
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(statusTone)
+                    .frame(width: 6, height: 6)
                 Text(isRefreshing
                      ? L10n.t("popover.updating", settings.appLanguage)
                      : L10n.t("popover.ready", settings.appLanguage))
-                    .font(.system(size: 10))
-                    .foregroundStyle(VocabbyTheme.secondary)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(statusTone)
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(statusSurface.opacity(0.85)))
+            .overlay(
+                Capsule().stroke(statusTone.opacity(0.22), lineWidth: 1)
+            )
+            .accessibilityElement(children: .combine)
+
             Spacer(minLength: 8)
+
             Button {
                 NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
             } label: {
@@ -343,11 +371,11 @@ struct BirdNionHeader: View {
                     if isRefreshing {
                         ProgressView()
                             .controlSize(.small)
-                            .tint(VocabbyTheme.blue)
+                            .tint(VocabbyTheme.secondary)
                     } else {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.blue)
+                            .foregroundStyle(VocabbyTheme.secondary)
                     }
                 }
                 .frame(width: 24, height: 24)
@@ -357,15 +385,32 @@ struct BirdNionHeader: View {
             .disabled(isRefreshing)
             .help(L10n.t("popover.refresh", settings.appLanguage))
             .accessibilityLabel(L10n.t("popover.refresh", settings.appLanguage))
+
+            Button {
+                NotificationCenter.default.post(name: .openSettings, object: nil)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L10n.t("popover.settings", settings.appLanguage))
+            .accessibilityLabel(L10n.t("popover.settings", settings.appLanguage))
         }
     }
 }
 
 // MARK: - Provider Tabs
 
-/// Native-feeling segmented provider selector with icon + provider name.
+/// Horizontal pill strip for provider selection (remake mockup).
+/// Selected = accent fill + white label; unselected = segment fill + secondary.
+/// Selection binding + scroll behaviour unchanged — style only.
 struct ProviderTabs: View {
-    static let chipHeight: CGFloat = 30
+    static let chipHeight: CGFloat = 28
+
+    @EnvironmentObject var settings: SettingsStore
 
     let providers: [ProviderStatus]
     @Binding var selectedId: String
@@ -374,71 +419,78 @@ struct ProviderTabs: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
+            HStack(spacing: 6) {
                 if showAllTab {
                     allChip
-                    if !providers.isEmpty {
-                        Divider()
-                            .frame(height: 18)
-                    }
                 }
-                ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
+                ForEach(providers) { provider in
                     chip(for: provider)
-                    if index < providers.count - 1 {
-                        Divider()
-                            .frame(height: 18)
-                    }
                 }
             }
-            .background(VocabbyTheme.segment)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
-            )
+            .padding(.vertical, 1)
         }
     }
 
     /// Combined-overview pseudo-tab (sentinel id "all") — no ProviderStatus
     /// behind it, so it renders its own chip instead of `chip(for:)`.
-    /// Icon-only, like the provider chips; the name lives in the tooltip.
     private var allChip: some View {
         let active = selectedId == "all"
+        let label = L10n.t("popover.allTab", settings.appLanguage)
         return Button {
             selectedId = "all"
         } label: {
-            Image(systemName: "square.grid.2x2.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(active ? VocabbyTheme.blue : VocabbyTheme.secondary)
-                .frame(width: 18, height: 18)
-                .frame(minWidth: 40, minHeight: Self.chipHeight)
-                .background(active ? VocabbyTheme.selectedSurface : Color.clear)
-                .contentShape(Rectangle())
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(active ? Color.white : VocabbyTheme.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .frame(minHeight: Self.chipHeight)
+                .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
+                )
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .contentShape(Rectangle())
-        .help("All")
-        .accessibilityLabel("All")
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active ? .isSelected : [])
     }
 
     @ViewBuilder
     private func chip(for p: ProviderStatus) -> some View {
         let active = p.id == selectedId
-        // Icon-only chip: the provider name moved into the tooltip /
-        // accessibility label so the strip fits more providers.
+        // Brand tint on unselected logos; white on selected so the mark
+        // remains visible against the accent pill fill.
+        let logoTint: Color = active
+            ? Color.white
+            : (VocabbyTheme.providerTint(p.id) ?? VocabbyTheme.secondary)
         Button {
             selectedId = p.id
         } label: {
-            ProviderLogoMark(id: p.id, tint: active ? VocabbyTheme.blue : VocabbyTheme.secondary)
-                .frame(width: 18, height: 18)
-                .frame(minWidth: 40, minHeight: Self.chipHeight)
-                .background(active ? VocabbyTheme.selectedSurface : Color.clear)
-                .contentShape(Rectangle())
+            HStack(spacing: 5) {
+                ProviderLogoMark(id: p.id, tint: logoTint)
+                    .frame(width: 14, height: 14)
+                Text(p.displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(active ? Color.white : VocabbyTheme.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .frame(minHeight: Self.chipHeight)
+            .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule().stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .contentShape(Rectangle())  // whole chip is the click target
         .help(p.displayName)
         .accessibilityLabel(p.displayName)
+        .accessibilityAddTraits(active ? .isSelected : [])
     }
 }
 
@@ -755,29 +807,30 @@ struct ProviderHeaderCard: View {
                 availableCreditsStrip(credits)
             }
         }
-        // Padding is tighter than the standard vocabbyCard (12pt) so the
-        // taller 48pt logo doesn't grow the card height.
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(VocabbyTheme.group)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        // Padding is tighter than the standard vocabbyCard so the logo
+        // doesn't grow the card height past the mockup header card.
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(VocabbyTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 0.5)
         )
     }
 }
 
 // MARK: - Provider Card + Window Row
 
-/// Per-provider card: name + windows.
+/// Per-provider card: windows (or error / loading). Summary strip is rendered
+/// by the parent so it can sit as its own mockup-style card above this one.
 struct ProviderCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let status: ProviderStatus
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
             if let err = status.error {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -802,9 +855,6 @@ struct ProviderCard: View {
             } else if status.windows.isEmpty {
                 LoadingQuotaSkeleton()
             } else {
-                QuotaSummaryStrip(status: status)
-                Divider()
-                    .overlay(VocabbyTheme.border)
                 ForEach(status.windows) { win in
                     WindowRow(window: win, lastUpdated: status.lastUpdated)
                 }
@@ -1400,23 +1450,43 @@ struct QuotaSummaryStrip: View {
         VocabbyTheme.quotaColor(remaining: lowest?.remainingPct ?? 100)
     }
 
+    private var windowCaption: String {
+        guard let lowest else { return status.displayName }
+        let label = L10n.windowLabel(lowest.label, preference: settings.appLanguage)
+        return "\(label) · \(status.displayName)"
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.t("popover.lowestQuota", settings.appLanguage))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                Text(lowest.map { L10n.windowLabel($0.label, preference: settings.appLanguage) } ?? status.displayName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.primary)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("popover.lowestQuota", settings.appLanguage).uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.6)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(tone)
+                        .frame(width: 6, height: 6)
+                    Text(windowCaption)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.primary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             Text("\(lowest?.remainingPct ?? 0)%")
-                .font(.system(size: 18, weight: .semibold).monospacedDigit())
+                .font(.system(size: 22, weight: .semibold).monospacedDigit())
                 .foregroundStyle(tone)
         }
-        .padding(.vertical, 1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(VocabbyTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1489,35 +1559,37 @@ struct WindowRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(VocabbyTheme.secondary)
                 Spacer()
-                Text("\(window.remainingPct)%")
+                // Prefer reset countdown on the right when available (mockup);
+                // fall back to remaining % so the row never goes empty.
+                Text(resetText.isEmpty ? "\(window.remainingPct)%" : resetText)
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(percentTextColor)
+                    .foregroundStyle(VocabbyTheme.secondary)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                    Capsule()
                         .fill(VocabbyTheme.track)
-                        .frame(height: 5)
-                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                        .frame(height: 4)
+                    Capsule()
                         .fill(barFillColor)
-                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 5)
+                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 4)
                 }
             }
-            .frame(height: 5)
+            .frame(height: 4)
             HStack(alignment: .firstTextBaseline) {
                 Text(subtitleText)
                     .font(.system(size: 10))
                     .foregroundStyle(VocabbyTheme.tertiary)
                 Spacer()
-                Text(resetText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(VocabbyTheme.tertiary)
+                Text("\(window.remainingPct)%")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(percentTextColor)
             }
         }
     }
@@ -1861,37 +1933,84 @@ struct FreemodelAccountsPopoverSection: View {
 
 // MARK: - Actions List
 
-/// Vertical action list (icon + label rows). CodexBar-style, matches the
-/// footer menu of the reference app instead of the compact 4-icon row.
+/// Footer row: last-refresh caption (left) + icon-only action buttons (right).
+/// Actions/menu are unchanged — Settings, About, Quit — only the chrome is
+/// remade to 28pt bordered icon buttons per the popover mockup.
 struct ActionsList: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+
+    /// Most recent provider `lastUpdated` across the live display list.
+    /// Nil when nothing has been fetched yet (don't invent a timestamp).
+    private var lastRefreshCaption: String? {
+        guard let latest = quota.displayStatuses.map(\.lastUpdated).max() else {
+            return nil
+        }
+        let relative = L10n.relativeUpdated(from: latest, preference: settings.appLanguage)
+        return L10n.f("popover.lastUpdated", settings.appLanguage, relative)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ActionRow(icon: "gearshape", label: L10n.t("popover.settings", settings.appLanguage),
-                      shortcut: "⌘,",
-                      isLoading: false) {
+        HStack(spacing: 8) {
+            if let lastRefreshCaption {
+                Text(lastRefreshCaption)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            footerIcon(
+                systemName: "gearshape",
+                label: L10n.t("popover.settings", settings.appLanguage),
+                tint: VocabbyTheme.secondary
+            ) {
                 NotificationCenter.default.post(name: .openSettings, object: nil)
             }
-            Divider().padding(.vertical, 2)
-            ActionRow(icon: "info.circle", label: L10n.t("popover.about", settings.appLanguage),
-                      shortcut: nil,
-                      isLoading: false) {
+            footerIcon(
+                systemName: "info.circle",
+                label: L10n.t("popover.about", settings.appLanguage),
+                tint: VocabbyTheme.secondary
+            ) {
                 AboutPresenter.show()
             }
-            Divider().padding(.vertical, 2)
-            ActionRow(icon: "power", label: L10n.t("popover.quit", settings.appLanguage),
-                      shortcut: "⌘Q",
-                      isLoading: false) {
+            footerIcon(
+                systemName: "power",
+                label: L10n.t("popover.quit", settings.appLanguage),
+                tint: VocabbyTheme.critical
+            ) {
                 NSApp.terminate(nil)
             }
         }
-        .background(VocabbyTheme.group)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 1)
-        )
+        .padding(.top, 8)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(VocabbyTheme.border.opacity(0.7))
+                .frame(height: 0.5)
+        }
+    }
+
+    private func footerIcon(systemName: String,
+                            label: String,
+                            tint: Color,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(VocabbyTheme.segment)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(VocabbyTheme.border, lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -2242,165 +2361,17 @@ enum AboutPresenter {
     }
 }
 
-// MARK: - Theme
-
-/// App color palette.
-enum VocabbyTheme {
-    // Fixed light macOS-style surfaces. Do not follow Dark Mode here because
-    // the menu-bar popover should stay light, dense, and inspectable.
-    static let brandNavy  = Color(red: 31 / 255, green: 36 / 255, blue: 51 / 255)   // #1F2433
-    static let brandBlue  = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255) // #469BE9
-    static let background = Color(red: 244 / 255, green: 245 / 255, blue: 247 / 255) // #F4F5F7
-    static let card       = Color(red: 254 / 255, green: 254 / 255, blue: 255 / 255) // #FEFEFF
-    static let group      = Color(red: 250 / 255, green: 251 / 255, blue: 252 / 255) // #FAFBFC
-    static let segment    = Color(red: 238 / 255, green: 240 / 255, blue: 244 / 255) // #EEF0F4
-    static let primary    = Color(red: 28 / 255, green: 31 / 255, blue: 38 / 255)    // #1C1F26
-    static let secondary  = Color(red: 89 / 255, green: 97 / 255, blue: 109 / 255)   // #59616D
-    static let tertiary   = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255) // #6B7280
-    static let blue       = Color(red: 0 / 255, green: 87 / 255, blue: 184 / 255)    // #0057B8 action
-    static let selectedSurface = Color(red: 231 / 255, green: 241 / 255, blue: 255 / 255) // #E7F1FF
-    static let hoverSurface = Color(red: 231 / 255, green: 234 / 255, blue: 240 / 255) // #E7EAF0
-    static let yellow     = Color(red: 168 / 255, green: 75 / 255, blue: 0 / 255)    // #A84B00 warning text
-    static let warningFill = Color(red: 184 / 255, green: 106 / 255, blue: 0 / 255)  // #B86A00
-    static let warningSurface = Color(red: 255 / 255, green: 241 / 255, blue: 214 / 255) // #FFF1D6
-    static let success    = Color(red: 21 / 255, green: 128 / 255, blue: 61 / 255)   // #15803D
-    static let successSurface = Color(red: 234 / 255, green: 247 / 255, blue: 239 / 255) // #EAF7EF
-    static let critical   = Color(red: 215 / 255, green: 0 / 255, blue: 21 / 255)    // #D70015
-    static let criticalSurface = Color(red: 255 / 255, green: 232 / 255, blue: 234 / 255) // #FFE8EA
-    static let track      = Color(red: 227 / 255, green: 230 / 255, blue: 234 / 255) // #E3E6EA
-    static let chartBar   = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255) // #469BE9
-    // All-tab chart series colours — deliberately distinct from the brand
-    // tints below (which keep coloring the provider logos): Codex blue,
-    // Claude amber-yellow for a clearer stacked-bar split.
-    static let chartCodex  = Color(red: 70 / 255, green: 155 / 255, blue: 233 / 255)  // #469BE9
-    static let chartClaude = Color(red: 204 / 255, green: 124 / 255, blue: 94 / 255)  // #CC7C5E (brand orange)
-    // Grok product brand is black (xAI/Grok mark), not CodexBar's teal placeholder.
-    static let chartGrok   = Color(red: 17 / 255, green: 24 / 255, blue: 39 / 255)    // #111827 near-black
-    static let badge      = group
-    static let border     = Color(red: 215 / 255, green: 220 / 255, blue: 226 / 255) // #D7DCE2
-    static let disabled   = Color(red: 154 / 255, green: 163 / 255, blue: 173 / 255) // #9AA3AD
-
-    // Per-provider brand tints for the monochrome template logos.
-    // Values mirror CodexBar's ProviderBranding.color exactly (see
-    // docs/provider-parity). Exception: ElevenLabs' CodexBar color is near-white
-    // (#EBEBE6) which is invisible on this light popover, so we keep it mono.
-    static let codex      = Color(red: 73 / 255, green: 163 / 255, blue: 176 / 255) // #49A3B0
-    static let minimax    = Color(red: 254 / 255, green: 96 / 255, blue: 60 / 255)  // #FE603C
-    static let openRouter = Color(red: 100 / 255, green: 103 / 255, blue: 242 / 255) // #6467F2
-    static let deepSeek   = Color(red: 0.32, green: 0.49, blue: 0.94)                // #527DF0
-    static let zai        = Color(red: 232 / 255, green: 90 / 255, blue: 106 / 255)  // #E85A6A
-    static let claude     = Color(red: 204 / 255, green: 124 / 255, blue: 94 / 255)  // #CC7C5E
-    static let elevenLabs = Color.primary                                            // CodexBar #EBEBE6 invisible on light → mono
-    static let deepgram   = Color(red: 100 / 255, green: 103 / 255, blue: 242 / 255) // #6467F2 (CodexBar)
-    static let groq       = Color(red: 245 / 255, green: 104 / 255, blue: 68 / 255)  // #F56844
-    static let grok       = Color(red: 17 / 255, green: 24 / 255, blue: 39 / 255)    // #111827 near-black (Grok brand)
-    // CodexBar OpenAI API branding (teal), distinct from Codex chat (#49A3B0).
-    static let openAI     = Color(red: 15 / 255, green: 130 / 255, blue: 110 / 255)  // ~#0F8270
-    static let ollama     = Color(red: 136 / 255, green: 136 / 255, blue: 136 / 255) // #888888 (CodexBar)
-    static let copilot    = Color(red: 168 / 255, green: 85 / 255, blue: 247 / 255)  // #A855F7
-    static let kilo       = Color(red: 242 / 255, green: 112 / 255, blue: 39 / 255)  // #F27027
-    static let commandCode = Color(red: 0, green: 0, blue: 0)                        // #000000 (CodexBar)
-    static let freemodel  = Color(red: 34 / 255, green: 197 / 255, blue: 94 / 255)  // #22C55E (brand green)
-    static let mimo       = Color(red: 255 / 255, green: 105 / 255, blue: 0 / 255)   // #FF6900 (Xiaomi)
-    static let alibaba    = Color(red: 255 / 255, green: 106 / 255, blue: 0 / 255)   // #FF6A00
-    static let cursor     = Color(red: 0, green: 191 / 255, blue: 165 / 255)         // #00BFA5
-    static let gemini     = Color(red: 171 / 255, green: 135 / 255, blue: 234 / 255) // #AB87EA
-    static let kiro       = Color(red: 139 / 255, green: 71 / 255, blue: 249 / 255)  // #8B47F9 (Kiro violet, icon gradient mid)
-    static let openCode   = Color(red: 59 / 255, green: 130 / 255, blue: 246 / 255)  // #3B82F6
-    static let antigravity = Color(red: 96 / 255, green: 186 / 255, blue: 126 / 255) // #60BA7E
-    static let bedrock    = Color(red: 255 / 255, green: 153 / 255, blue: 0 / 255)   // #FF9900 (AWS)
-
-    /// Brand tint for a provider id; nil → caller falls back to default styling.
-    static func providerTint(_ id: String) -> Color? {
-        switch id {
-        case "codex": return codex
-        case "minimax": return minimax
-        case "openrouter": return openRouter
-        case "deepseek": return deepSeek
-        case "zai": return zai
-        case "claude": return claude
-        case "elevenlabs": return primary
-        case "deepgram": return deepgram
-        case "groq": return groq
-        case "grok": return grok
-        case "openai": return openAI
-        case "ollama": return ollama
-        case "copilot": return copilot
-        case "kilo": return kilo
-        case "commandcode": return commandCode
-        case "freemodel": return freemodel
-        case "mimo": return mimo
-        case "alibaba": return alibaba
-        case "cursor": return cursor
-        case "gemini": return gemini
-        case "kiro": return kiro
-        case "opencode", "opencodego": return openCode
-        case "antigravity": return antigravity
-        case "bedrock": return bedrock
-        default: return nil
-        }
-    }
-
-    static func quotaColor(remaining: Int) -> Color {
-        if remaining <= 20 { return critical }
-        if remaining <= 50 { return yellow }
-        return success
-    }
-
-    static func quotaFillColor(remaining: Int) -> Color {
-        if remaining <= 20 { return critical }
-        if remaining <= 50 { return warningFill }
-        return success
-    }
-
-    static func usedFillColor(usedPercent: Int) -> Color {
-        if usedPercent >= 90 { return critical }
-        if usedPercent >= 70 { return warningFill }
-        return success
-    }
-
-    /// Daily-bar fill shared by the per-provider chart cards. `tint` colors
-    /// normal active days (at 72%), `currentTint` marks today's bar — the
-    /// defaults keep the original blue scheme; the Claude card passes its
-    /// brand orange.
-    static func activityChartBarColor(isCurrent: Bool, hasActivity: Bool,
-                                      tint: Color = chartBar,
-                                      currentTint: Color = blue) -> Color {
-        if !hasActivity { return selectedSurface.opacity(0.76) }
-        return isCurrent ? currentTint : tint.opacity(0.72)
-    }
-
-    /// Heatmap cell fill for the All tab's activity grid: 0 → idle track,
-    /// then four intensity steps of the chart blue.
-    /// GitHub-style contribution greens, lightened one step so the popover
-    /// heatmap is softer than the full GitHub calendar palette.
-    /// Empty → L1 pale → L2 mid → L3 strong → L4 deepest (still soft).
-    static let heatEmpty = Color(red: 235 / 255, green: 237 / 255, blue: 240 / 255) // #EBEDF0
-    static let heatL1    = Color(red: 198 / 255, green: 240 / 255, blue: 205 / 255) // #C6F0CD (was #9BE9A8)
-    static let heatL2    = Color(red: 140 / 255, green: 220 / 255, blue: 155 / 255) // #8CDC9B (was #40C463)
-    static let heatL3    = Color(red: 90 / 255, green: 190 / 255, blue: 115 / 255)  // #5ABE73 (was #30A14E)
-    static let heatL4    = Color(red: 55 / 255, green: 155 / 255, blue: 85 / 255)   // #379B55 (was #216E39)
-
-    static func heatColor(fraction: Double) -> Color {
-        guard fraction > 0 else { return heatEmpty }
-        if fraction <= 0.25 { return heatL1 }
-        if fraction <= 0.5 { return heatL2 }
-        if fraction <= 0.75 { return heatL3 }
-        return heatL4
-    }
-}
-
 // MARK: - Card modifier
 
 struct VocabbyCard: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(10)
-            .background(VocabbyTheme.group)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .padding(12)
+            .background(VocabbyTheme.card)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 0.5)
             )
     }
 }

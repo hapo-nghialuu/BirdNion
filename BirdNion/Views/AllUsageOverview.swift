@@ -390,23 +390,50 @@ struct CombinedChartCard: View {
         days == 1 ? "24h" : "\(days) \(vi ? "ngày" : "days")"
     }
 
+    private var periodTotalUSD: Double {
+        is24h
+            ? claude24USD + codexTodayUSD + grokTodayUSD
+            : windowTotals.usd
+    }
+
+    private var periodTotalTokens: Int {
+        is24h
+            ? claude24Tokens + codexTodayTokens + grokTodayTokens
+            : windowTotals.tokens
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 16) {
-                summaryColumn(
-                    label: vi ? "Hôm nay" : "Today",
-                    amount: report.todayUSD,
-                    tokens: report.todayTokens)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: periodLabel(periodDays),
-                    amount: is24h
-                        ? claude24USD + codexTodayUSD + grokTodayUSD
-                        : windowTotals.usd,
-                    tokens: is24h
-                        ? claude24Tokens + codexTodayTokens + grokTodayTokens
-                        : windowTotals.tokens,
-                    alignTrailing: true)
+            // Total-cost hero (mockup: 24px bold) + today secondary.
+            VStack(alignment: .leading, spacing: 2) {
+                Text((vi ? "Tổng chi phí " : "Total cost ") + periodLabel(periodDays))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .tracking(0.2)
+                // .top, not .firstTextBaseline: the trailing VStack has no
+                // valid text baseline, and collecting invalid baselines inside
+                // the auto-sizing popover host recurses NSISEngine (crash
+                // reproduced at launch, report 2026-07-20-131610).
+                HStack(alignment: .top, spacing: 10) {
+                    Text(AllUsageFormat.usd(periodTotalUSD))
+                        .font(.system(size: 24, weight: .bold).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.primary)
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(vi ? "Hôm nay" : "Today")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                        Text(AllUsageFormat.usd(report.todayUSD))
+                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(VocabbyTheme.secondary)
+                        Text(AllUsageFormat.tokens(report.todayTokens))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                }
+                Text(AllUsageFormat.tokens(periodTotalTokens))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.tertiary)
             }
             periodPicker
             Group {
@@ -429,6 +456,11 @@ struct CombinedChartCard: View {
                           label: (is24h ? (vi ? "Grok (hôm nay) " : "Grok (today) ") : "Grok ")
                               + AllUsageFormat.tokensShort(is24h ? grokTodayTokens : windowTotals.grokTokens))
             }
+            // Per-source cost share rows (existing report totals only —
+            // no QuotaService / new data flow).
+            if !is24h {
+                sourceShareRows
+            }
             if is24h {
                 if let hovered = hoveredHour {
                     Text("\(hourLabel(hovered.date)) · \(AllUsageFormat.tokens(hovered.tokens)) · \(AllUsageFormat.usd(hovered.usd))")
@@ -444,10 +476,6 @@ struct CombinedChartCard: View {
                 if let detail = detailDay {
                     detailRows(detail)
                 }
-                Text((vi ? "Ước tính \(periodDays) ngày" : "Est. \(periodDays)-day total")
-                     + ": \(AllUsageFormat.tokens(windowTotals.tokens))")
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(VocabbyTheme.primary)
                 Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex và Grok."
                         : "Estimated from local Claude Code CLI, Codex, and Grok logs.")
                     .font(.system(size: 9))
@@ -458,20 +486,48 @@ struct CombinedChartCard: View {
         .vocabbyCard()
     }
 
+    /// Hairline source rows with mini progress = share of period cost.
+    /// View-only over `windowTotals` — not live quota remaining %.
     @ViewBuilder
-    private func summaryColumn(label: String, amount: Double, tokens: Int,
-                               alignTrailing: Bool = false) -> some View {
-        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
-            Text(label)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .tracking(0.3)
-            Text(AllUsageFormat.usd(amount))
-                .font(.system(size: 16, weight: .semibold).monospacedDigit())
-                .foregroundStyle(VocabbyTheme.primary)
-            Text(AllUsageFormat.tokens(tokens))
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(VocabbyTheme.tertiary)
+    private var sourceShareRows: some View {
+        let rows: [(name: String, usd: Double, color: Color)] = [
+            ("Claude", windowTotals.claudeUSD, VocabbyTheme.chartClaude),
+            ("Codex", windowTotals.codexUSD, VocabbyTheme.chartCodex),
+            ("Grok", windowTotals.grokUSD, VocabbyTheme.chartGrok),
+        ].filter { $0.usd > 0 }
+        let total = max(rows.reduce(0) { $0 + $1.usd }, 0.01)
+        if !rows.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    let share = row.usd / total
+                    HStack(spacing: 10) {
+                        Circle().fill(row.color).frame(width: 8, height: 8)
+                        Text(row.name)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.primary)
+                        Spacer(minLength: 8)
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(VocabbyTheme.track).frame(height: 4)
+                                Capsule()
+                                    .fill(row.color.opacity(0.85))
+                                    .frame(width: max(2, geo.size.width * CGFloat(share)), height: 4)
+                            }
+                        }
+                        .frame(width: 64, height: 4)
+                        Text(AllUsageFormat.usd(row.usd))
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .frame(minWidth: 48, alignment: .trailing)
+                    }
+                    .padding(.vertical, 7)
+                    if index < rows.count - 1 {
+                        Rectangle()
+                            .fill(VocabbyTheme.border.opacity(0.7))
+                            .frame(height: 0.5)
+                    }
+                }
+            }
         }
     }
 

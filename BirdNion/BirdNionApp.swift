@@ -28,6 +28,6 @@ struct BirdNionApp: App {
                 .environmentObject(config)
                 .environmentObject(quota)
         }
-        .defaultSize(width: 780, height: 720)
+        .defaultSize(width: 920, height: 620)
     }
 }

@@ -1,12 +1,11 @@
 import SwiftUI
 
-/// Popover content — single window that hosts three sections:
-/// Quota (default), Providers (token entry), Claude Config (settings.json).
+/// Popover shell — fixed 420 width, auto-height. Hosts `QuotaOverview`.
 ///
-/// Sections swap inline via the `section` state. The Settings button in the
-/// footer's footer-menu posts the `.openSettings` notification; PopoverView
-/// observes it and switches to `.providers`. The header gets a back button
-/// when the user is not on the Quota section so they can return.
+/// Sections swap inline via the `section` state. Footer icon buttons (and the
+/// header gear) post `.openSettings` / terminate; keep switches instant —
+/// animating height while the panel auto-resizes preferredContentSize drove
+/// NSHostingView into an NSISEngine recursion crash (animated = crash).
 ///
 /// Cmd+, routes through `AppDelegate.openSettings(_:)` which ensures the
 /// popover is open before reposting the notification (otherwise the listener
@@ -23,7 +22,7 @@ struct PopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Inline top bar — only shown when not on Quota (Quota has its
-            // own HeaderCard with the logo + status pill).
+            // own BirdNionHeader with the logo + status pill).
             if section != .quota {
                 inlineBar
             }

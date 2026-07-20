@@ -9,7 +9,15 @@ struct GeneralPane: View {
 
     var body: some View {
         SettingsPage {
-            SettingsCard(header: L10n.t("settings.section.system", settings.appLanguage)) {
+            SettingsPaneHeader(
+                title: L10n.t("settings.tab.general", settings.appLanguage),
+                subtitle: L10n.t("settings.general.subtitle", settings.appLanguage)
+            )
+
+            SettingsCard(
+                header: L10n.t("settings.section.system", settings.appLanguage),
+                footer: LocalizedStringKey(L10n.t("settings.display.footer", settings.appLanguage))
+            ) {
                 SettingsLabeledRow(
                     title: L10n.t("settings.language.title", settings.appLanguage),
                     subtitle: L10n.t("settings.language.subtitle", settings.appLanguage)
@@ -25,6 +33,36 @@ struct GeneralPane: View {
                     .onChange(of: settings.appLanguage) { _ in
                         settings.applyLanguage()
                     }
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.appearance.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.appearance.subtitle", settings.appLanguage)
+                ) {
+                    Picker("", selection: $settings.appAppearance) {
+                        ForEach(AppAppearance.allCases) { mode in
+                            Text(mode.title(language: settings.appLanguage)).tag(mode.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                    .onChange(of: settings.appAppearance) { _ in
+                        settings.applyAppearance()
+                    }
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.showPercentInMenuBar.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.showPercentInMenuBar.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.showPercentInMenuBar)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
 
                 SettingsRowDivider()
@@ -75,7 +113,7 @@ struct GeneralPane: View {
                 }
             }
 
-            SettingsCard(header: L10n.t("settings.section.automation", settings.appLanguage)) {
+            SettingsCard(header: L10n.t("settings.section.notifications", settings.appLanguage)) {
                 SettingsLabeledRow(
                     title: L10n.t("settings.statusChecks.title", settings.appLanguage),
                     subtitle: L10n.t("settings.statusChecks.subtitle", settings.appLanguage)

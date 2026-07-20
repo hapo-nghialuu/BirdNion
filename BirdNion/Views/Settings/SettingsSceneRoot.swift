@@ -1,9 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Fixed light palette for the Settings window. The app lives in the menu bar,
-/// so the settings surface should stay close to the popover instead of
-/// inheriting a full black dark-mode appearance from macOS.
+/// Semantic Settings palette (aliases onto VocabbyTheme light/dark tokens).
 enum SettingsTheme {
     static let background = VocabbyTheme.background
     static let toolbar = VocabbyTheme.segment
@@ -39,10 +37,8 @@ enum SettingsTheme {
     }
 }
 
-/// Root view rendered inside AppDelegate's settings NSWindow. Hosts the custom
-/// tab bar on top + a scrollable content pane. When `debugMenuEnabled` toggles,
-/// the tab list rebuilds — keeping `selected` pointing at a hidden tab falls
-/// back to `.general`.
+/// Root view rendered inside AppDelegate's settings NSWindow. Hosts the vertical
+/// sidebar on the left + a scrollable content pane on the right (remake P2).
 struct SettingsSceneRoot: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
@@ -50,32 +46,26 @@ struct SettingsSceneRoot: View {
 
     @State private var selected: SettingsTab = .general
 
-    private var visibleTabs: [SettingsTab] { SettingsTab.visible(settings: settings) }
-
     /// One constant window size for all tabs — wide enough for the providers
     /// sidebar + detail, still fine for the single-column tabs. This MUST stay
     /// constant: the `Settings` scene has no `.windowResizability(.contentSize)`,
     /// because a window that re-fits its content on every re-render (e.g. each
     /// QuotaService publish) drives NSHostingView's autoresizing constraints
     /// into an NSISEngine recursion that crashes the whole app.
-    private let contentWidth: CGFloat = 780   // roomier for the AI Coding two-pane layout
-    private let contentHeight: CGFloat = 720   // taller so agent forms are never clipped
+    private let contentWidth: CGFloat = 920
+    private let contentHeight: CGFloat = 620
 
     var body: some View {
-        VStack(spacing: 0) {
-            SettingsTabBar(selected: $selected, tabs: visibleTabs)
-            Divider()
-                .overlay(SettingsTheme.border)
+        HStack(spacing: 0) {
+            SettingsSidebar(selected: $selected)
 
             Group {
                 switch selected {
                 case .general: GeneralPane()
                 case .providers: ProvidersPane()
                 case .aiCoding: AICodingPane()
-                case .display: DisplayPane()
                 case .advanced: AdvancedPane()
                 case .about: AboutPane()
-                case .debug: DebugPane()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -85,15 +75,8 @@ struct SettingsSceneRoot: View {
         .background(SettingsTheme.background)
         .overlay(SettingsWindowAppearanceView().frame(width: 0, height: 0))
         .tint(SettingsTheme.accent)
-        .preferredColorScheme(.light)
-        .onAppear {
-            if !visibleTabs.contains(selected) { selected = .general }
-        }
-        .onChange(of: settings.debugMenuEnabled) { _ in
-            if !visibleTabs.contains(selected) { selected = .general }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .openClaudeCodeTab)) { _ in
-            if visibleTabs.contains(.aiCoding) { selected = .aiCoding }
+            selected = .aiCoding
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProvidersTab)) { _ in
             selected = .providers
@@ -119,13 +102,15 @@ private struct SettingsWindowAppearanceView: NSViewRepresentable {
 
     private func apply(to view: NSView) {
         guard let window = view.window else { return }
-        window.appearance = NSAppearance(named: .aqua)
-        window.backgroundColor = NSColor(
-            calibratedRed: 244 / 255,
-            green: 245 / 255,
-            blue: 247 / 255,
-            alpha: 1
-        )
+        // Appearance is app-wide (SettingsStore.applyAppearance); here we only
+        // keep the window background matched to the theme's base surface so
+        // AppKit clears to the right color during live resize in both modes.
+        window.appearance = nil
+        window.backgroundColor = NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor(srgbRed: 30 / 255, green: 30 / 255, blue: 32 / 255, alpha: 1)
+                : NSColor(srgbRed: 244 / 255, green: 245 / 255, blue: 247 / 255, alpha: 1)
+        }
     }
 }
 
@@ -200,6 +185,26 @@ struct SettingsRowDivider: View {
 }
 
 // MARK: - Shared row views
+
+/// Pane-level title + optional subtitle (mockup: "Chung" / "Nâng cao" / …).
+struct SettingsPaneHeader: View {
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(SettingsTheme.primary)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(SettingsTheme.secondary)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+}
 
 /// Bold uppercase section header shown above each `SettingsCard` — matches the
 /// SYSTEM / USAGE / AUTOMATION style in the CodexBar mockup.

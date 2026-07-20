@@ -57,6 +57,9 @@ final class SettingsStore: ObservableObject {
     }
 
     @AppStorage("appLanguage") var appLanguage: String = Language.system.rawValue
+    /// App-wide appearance: light / dark / auto (follow macOS). Applied via
+    /// `applyAppearance()` on launch and whenever the picker changes.
+    @AppStorage("appAppearance") var appAppearance: String = AppAppearance.auto.rawValue
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("refreshIntervalSeconds") var refreshIntervalSeconds: Double = RefreshFrequency.twoMinutes.rawValue
     @AppStorage("debugMenuEnabled") var debugMenuEnabled: Bool = false
@@ -190,6 +193,13 @@ final class SettingsStore: ObservableObject {
     /// Writes the language preference into AppleLanguages so the next launch
     /// picks it up. macOS applies locale changes at process start, so this
     /// only takes effect after the app restarts (matches CodexBar behavior).
+    /// Forces the app-wide appearance (or clears the override for `auto`).
+    /// NSApp.appearance cascades to every window including the popover panel.
+    func applyAppearance() {
+        let choice = AppAppearance(rawValue: appAppearance) ?? .auto
+        NSApp.appearance = choice.nsAppearance
+    }
+
     func applyLanguage() {
         objectWillChange.send()
         let key = "AppleLanguages"

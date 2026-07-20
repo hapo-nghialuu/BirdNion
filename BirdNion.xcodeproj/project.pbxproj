@@ -63,6 +63,11 @@
 		CLW00001000000000000B01 /* ClaudeWebCookieReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLW00002000000000000F01 /* ClaudeWebCookieReader.swift */; };
 		CWF00001000000000000B01 /* ClaudeWebAPIFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CWF00002000000000000F01 /* ClaudeWebAPIFetcher.swift */; };
 		MV0001000000000000B001 /* MenuBarVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = MV0002000000000000F001 /* MenuBarVisibility.swift */; };
+		THEM0001000000000000B001 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = THEM0002000000000000F001 /* Theme.swift */; };
+		PRV10001000000000000B001 /* ProvidersSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRV10002000000000000F001 /* ProvidersSidebar.swift */; };
+		PRV20001000000000000B001 /* ProviderDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRV20002000000000000F001 /* ProviderDetail.swift */; };
+		PRV30001000000000000B001 /* ProviderAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRV30002000000000000F001 /* ProviderAccountsSection.swift */; };
+		PRV40001000000000000B001 /* ProviderCostSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRV40002000000000000F001 /* ProviderCostSection.swift */; };
 		LSP0003000000000000BF001 /* CodexBarCore in Frameworks */ = {isa = PBXBuildFile; productRef = LSP0002000000000000PD001 /* CodexBarCore */; };
 		SCK00003000000000000BF02 /* SweetCookieKit in Frameworks */ = {isa = PBXBuildFile; productRef = SCK00002000000000000PD02 /* SweetCookieKit */; };
 		KBS00003000000000000BF03 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = KBS00002000000000000PD03 /* KeyboardShortcuts */; };
@@ -214,6 +219,11 @@
 		PVD0002000000000000F002 /* ClaudeCLIVersionDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeCLIVersionDetector.swift; sourceTree = "<group>"; };
 		CC0001000000000000F001 /* ClaudeCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/ClaudeCostScanner.swift; sourceTree = "<group>"; };
 		MV0002000000000000F001 /* MenuBarVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/MenuBarVisibility.swift; sourceTree = "<group>"; };
+		THEM0002000000000000F001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Theme.swift; sourceTree = "<group>"; };
+		PRV10002000000000000F001 /* ProvidersSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ProvidersSidebar.swift; sourceTree = "<group>"; };
+		PRV20002000000000000F001 /* ProviderDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ProviderDetail.swift; sourceTree = "<group>"; };
+		PRV30002000000000000F001 /* ProviderAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ProviderAccountsSection.swift; sourceTree = "<group>"; };
+		PRV40002000000000000F001 /* ProviderCostSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ProviderCostSection.swift; sourceTree = "<group>"; };
 		DDDD000C000000000000F006 /* HapoHubConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/HapoHubConfig.swift; sourceTree = "<group>"; };
 		DDDD000E000000000000F007 /* HapoHubProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/HapoHubProvider.swift; sourceTree = "<group>"; };
 		DDDD0010000000000000F008 /* MockHapoHubProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/MockHapoHubProvider.swift; sourceTree = "<group>"; };
@@ -687,6 +697,11 @@
 				C0DE00C0000000000000B0C0 /* CodexCostScanner.swift in Sources */,
 				CC0002000000000000B001 /* ClaudeCostScanner.swift in Sources */,
 				MV0001000000000000B001 /* MenuBarVisibility.swift in Sources */,
+				THEM0001000000000000B001 /* Theme.swift in Sources */,
+				PRV10001000000000000B001 /* ProvidersSidebar.swift in Sources */,
+				PRV20001000000000000B001 /* ProviderDetail.swift in Sources */,
+				PRV30001000000000000B001 /* ProviderAccountsSection.swift in Sources */,
+				PRV40001000000000000B001 /* ProviderCostSection.swift in Sources */,
 				C0DE00C2000000000000B0C2 /* CodexAccountStore.swift in Sources */,
 				C0DE00C6000000000000B0C6 /* TextParsing.swift in Sources */,
 				C0DE00C8000000000000B0C8 /* CodexStatusProbe.swift in Sources */,

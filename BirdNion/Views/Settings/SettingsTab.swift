@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Six Settings tabs matching the CodexBar toolbar. Debug is hidden until
-/// "Show Debug Settings" is enabled (mirrors CodexBar's debugMenuEnabled).
+/// Five Settings navigation items for the vertical sidebar (remake P2).
+/// Display folded into General; Debug folded into Advanced.
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, providers, aiCoding, display, advanced, about, debug
+    case general, providers, aiCoding, advanced, about
 
     var id: String { rawValue }
 
@@ -12,32 +12,46 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: L10n.t("settings.tab.general", language)
         case .providers: L10n.t("settings.tab.providers", language)
         case .aiCoding: L10n.t("settings.tab.aiCoding", language)
-        case .display: L10n.t("settings.tab.display", language)
         case .advanced: L10n.t("settings.tab.advanced", language)
         case .about: L10n.t("settings.tab.about", language)
-        case .debug: L10n.t("settings.tab.debug", language)
         }
     }
 
-    /// SF Symbol used in the custom tab bar. Matches the CodexBar mockup.
+    /// SF Symbol used in the sidebar nav row.
     var icon: String {
         switch self {
         case .general: "gearshape"
         case .providers: "square.grid.2x2"
         case .aiCoding: "terminal"
-        case .display: "eye"
         case .advanced: "slider.horizontal.3"
         case .about: "info.circle"
-        case .debug: "ladybug"
         }
     }
 
-    /// Tabs to show given the current SettingsStore. Debug is gated.
-    @MainActor static func visible(settings: SettingsStore) -> [SettingsTab] {
-        var tabs: [SettingsTab] = [.general, .providers, .aiCoding, .display, .advanced, .about]
-        if settings.debugMenuEnabled { tabs.append(.debug) }
-        return tabs
+    /// Fixed icon-tile colors from the approved remake mockup (hardcoded hex OK).
+    var iconBackground: Color {
+        switch self {
+        case .general:
+            return Color(red: 0.55, green: 0.55, blue: 0.58) // gray gear
+        case .providers:
+            return Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255) // #2563eb
+        case .aiCoding:
+            return Color(red: 0.55, green: 0.35, blue: 0.85) // purple terminal
+        case .advanced:
+            return Color(red: 0.55, green: 0.55, blue: 0.58) // gray sliders
+        case .about:
+            return Color(red: 0.20, green: 0.65, blue: 0.35) // green info
+        }
     }
+
+    /// Primary nav group (above the divider).
+    static let primaryGroup: [SettingsTab] = [.general, .providers, .aiCoding]
+
+    /// Secondary nav group (below the divider).
+    static let secondaryGroup: [SettingsTab] = [.advanced, .about]
+
+    /// All sidebar items in display order.
+    static let allSidebar: [SettingsTab] = primaryGroup + secondaryGroup
 }
 
 /// The coding CLI that consumes a custom upstream configuration. Profiles keep
