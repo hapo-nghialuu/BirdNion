@@ -20,15 +20,22 @@ struct PopoverView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Inline top bar — only shown when not on Quota (Quota has its
-            // own BirdNionHeader with the logo + status pill).
-            if section != .quota {
-                inlineBar
-            }
-            Group {
-                switch section {
-                case .quota:  QuotaOverview()
+        // ScrollView wraps content so the panel can clamp to the screen
+        // edge (AppDelegate) while still scrolling tall tabs. Ideal height
+        // stays content-driven — short tabs keep hugging preferredContentSize.
+        // No height animation: animated preferredContentSize relayouts crash
+        // NSHostingView via NSISEngine recursion (instant = ok, animated = crash).
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Inline top bar — only shown when not on Quota (Quota has its
+                // own BirdNionHeader with the logo + status pill).
+                if section != .quota {
+                    inlineBar
+                }
+                Group {
+                    switch section {
+                    case .quota:  QuotaOverview()
+                    }
                 }
             }
         }

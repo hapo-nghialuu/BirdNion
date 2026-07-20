@@ -61,7 +61,7 @@ final class CodexCostScannerTests: XCTestCase {
         return df.string(from: date)
     }
 
-    /// `mapReport` builds a contiguous 90-day series (heatmap window), reads
+    /// `mapReport` builds a contiguous chartWindowDays series (heatmap window), reads
     /// "today" from the most recent active day, sums the strict-30-day totals
     /// from the trailing buckets, sorts per-day models by cost, and picks the
     /// highest-cost top model — matching CodexBar.

@@ -49,7 +49,7 @@ final class CombinedUsageReportTests: XCTestCase {
         let r = CombinedUsageReport.build(claude: claude, codex: codex,
                                           calendar: calendar, now: now)
 
-        XCTAssertEqual(r.daily.count, 90)
+        XCTAssertEqual(r.daily.count, 120)
         XCTAssertEqual(r.daily.last?.date, startOfToday)
         // Yesterday holds both sources, split per origin.
         let yesterday = r.daily[r.daily.count - 2]
@@ -91,7 +91,7 @@ final class CombinedUsageReportTests: XCTestCase {
         let empty = CombinedUsageReport.build(claude: nil, codex: nil,
                                               calendar: calendar, now: now)
         XCTAssertTrue(empty.isEmpty)
-        XCTAssertEqual(empty.daily.count, 90)
+        XCTAssertEqual(empty.daily.count, 120)
         XCTAssertEqual(empty.streakDays, 0)
     }
 

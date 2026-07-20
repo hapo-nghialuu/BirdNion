@@ -61,7 +61,7 @@ struct CombinedUsageReport: Equatable {
     /// All tab always matches the per-provider tabs).
     let last30USD: Double
     let last30Tokens: Int
-    /// Full-window (90d) totals for the heatmap header.
+    /// Full-window (120d) totals for the heatmap header.
     let totalUSD: Double
     let totalTokens: Int
     /// Contiguous daily buckets, oldest → newest, ending today.
@@ -88,7 +88,7 @@ struct CombinedUsageReport: Equatable {
                       includeGrok: Bool = true,
                       calendar: Calendar = .current,
                       now: Date = Date(),
-                      windowDays: Int = 90) -> CombinedUsageReport {
+                      windowDays: Int = 120) -> CombinedUsageReport {
         let startOfToday = calendar.startOfDay(for: now)
         let includedClaude = includeClaude ? claude : nil
         let includedCodex = includeCodex ? codex : nil
@@ -272,7 +272,7 @@ extension CombinedUsageReport {
 // MARK: - All tab root
 
 /// Body of the "All" pseudo-provider tab: combined totals + stacked 30-day
-/// chart, 90-day heatmap, and the merged top-models list. Sources that are
+/// chart, 120-day heatmap, and the merged top-models list. Sources that are
 /// disabled or still scanning simply contribute nothing (nil report).
 struct AllUsageOverview: View {
     @EnvironmentObject var settings: SettingsStore
@@ -329,8 +329,8 @@ struct AllUsageOverview: View {
                 }
             }
             if report.isEmpty {
-                Text(vi ? "Chưa có dữ liệu sử dụng trong 90 ngày qua."
-                        : "No usage recorded in the last 90 days.")
+                Text(vi ? "Chưa có dữ liệu sử dụng trong 120 ngày qua."
+                        : "No usage recorded in the last 120 days.")
                     .font(.system(size: 11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -358,6 +358,10 @@ struct CombinedChartCard: View {
     /// logs only have day resolution, so that period's bars are Claude-only.
     let claudeHourly: [ClaudeHourlyUsage]
     @State private var hoveredDay: CombinedDailyUsage?
+    /// Day pinned by clicking a chart bar — shows the per-source breakdown
+    /// until the same bar is clicked again or the period changes. Hover
+    /// temporarily overrides pin for the detail rows.
+    @State private var pinnedDay: CombinedDailyUsage?
     @State private var hoveredHour: ClaudeHourlyUsage?
     /// Selected chart window in days (1 = the 24 h hourly view); persisted
     /// so the popover re-opens on the period the user last chose.
@@ -382,8 +386,10 @@ struct CombinedChartCard: View {
     private var grokTodayTokens: Int { report.daily.last?.grokTokens ?? 0 }
     private var maxBarHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
 
+    /// Hover temporarily surfaces a day; pin sticks until toggled off.
+    /// No last-active fallback — detail is hidden until the user interacts.
     private var detailDay: CombinedDailyUsage? {
-        hoveredDay ?? windowDaily.last(where: \.isActive)
+        hoveredDay ?? pinnedDay
     }
 
     private func periodLabel(_ days: Int) -> String {
@@ -486,8 +492,8 @@ struct CombinedChartCard: View {
         .vocabbyCard()
     }
 
-    /// Hairline source rows with mini progress = share of period cost.
-    /// View-only over `windowTotals` — not live quota remaining %.
+    /// Full-width cost-share distribution bar (GitHub language-bar style) +
+    /// compact legend rows. View-only over `windowTotals` — no data-path change.
     @ViewBuilder
     private var sourceShareRows: some View {
         let rows: [(name: String, usd: Double, color: Color)] = [
@@ -497,38 +503,85 @@ struct CombinedChartCard: View {
         ].filter { $0.usd > 0 }
         let total = max(rows.reduce(0) { $0 + $1.usd }, 0.01)
         if !rows.isEmpty {
-            VStack(spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                    let share = row.usd / total
-                    HStack(spacing: 10) {
-                        Circle().fill(row.color).frame(width: 8, height: 8)
-                        Text(row.name)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(VocabbyTheme.primary)
-                        Spacer(minLength: 8)
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(VocabbyTheme.track).frame(height: 4)
-                                Capsule()
-                                    .fill(row.color.opacity(0.85))
-                                    .frame(width: max(2, geo.size.width * CGFloat(share)), height: 4)
-                            }
+            VStack(alignment: .leading, spacing: 8) {
+                GeometryReader { geo in
+                    let widths = Self.segmentWidths(
+                        shares: rows.map { CGFloat($0.usd / total) },
+                        totalWidth: geo.size.width,
+                        minWidth: 3)
+                    HStack(spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                            Rectangle()
+                                .fill(row.color)
+                                .frame(width: widths[index])
                         }
-                        .frame(width: 64, height: 4)
-                        Text(AllUsageFormat.usd(row.usd))
-                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(VocabbyTheme.secondary)
-                            .frame(minWidth: 48, alignment: .trailing)
                     }
-                    .padding(.vertical, 7)
-                    if index < rows.count - 1 {
-                        Rectangle()
-                            .fill(VocabbyTheme.border.opacity(0.7))
-                            .frame(height: 0.5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .clipShape(Capsule())
+                }
+                .frame(height: 6)
+
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        let share = row.usd / total
+                        HStack(spacing: 8) {
+                            Circle().fill(row.color).frame(width: 7, height: 7)
+                            Text(row.name)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(VocabbyTheme.primary)
+                            Text(String(format: "%.0f%%", share * 100))
+                                .font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(VocabbyTheme.tertiary)
+                            Spacer(minLength: 8)
+                            Text(AllUsageFormat.usd(row.usd))
+                                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(VocabbyTheme.secondary)
+                        }
+                        .padding(.vertical, 5)
+                        if index < rows.count - 1 {
+                            Rectangle()
+                                .fill(VocabbyTheme.border.opacity(0.7))
+                                .frame(height: 0.5)
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Proportional segment widths with a floor so small shares stay visible.
+    private static func segmentWidths(shares: [CGFloat],
+                                      totalWidth: CGFloat,
+                                      minWidth: CGFloat) -> [CGFloat] {
+        guard !shares.isEmpty, totalWidth > 0 else {
+            return Array(repeating: 0, count: shares.count)
+        }
+        let n = shares.count
+        let minTotal = minWidth * CGFloat(n)
+        if minTotal >= totalWidth {
+            return Array(repeating: totalWidth / CGFloat(n), count: n)
+        }
+        var widths = shares.map { max(minWidth, $0 * totalWidth) }
+        let sum = widths.reduce(0, +)
+        if sum > totalWidth + 0.01 {
+            let excess = sum - totalWidth
+            let flexible = widths.map { max(0, $0 - minWidth) }
+            let flexSum = flexible.reduce(0, +)
+            if flexSum > 0 {
+                for i in widths.indices {
+                    widths[i] -= excess * (flexible[i] / flexSum)
+                }
+            }
+        } else if sum < totalWidth - 0.01 {
+            let deficit = totalWidth - sum
+            let shareSum = shares.reduce(0, +)
+            if shareSum > 0 {
+                for i in widths.indices {
+                    widths[i] += deficit * (shares[i] / shareSum)
+                }
+            }
+        }
+        return widths
     }
 
     /// Compact 7/30/90-day window switcher (CodeBurn-style pills).
@@ -539,6 +592,7 @@ struct CombinedChartCard: View {
                 Button {
                     periodDays = days
                     hoveredDay = nil   // stale hover may fall outside the new window
+                    pinnedDay = nil    // pinned day may fall outside the new window
                     hoveredHour = nil
                 } label: {
                     Text(periodLabel(days))
@@ -604,12 +658,16 @@ struct CombinedChartCard: View {
                         .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(hoveredDay?.id == day.id
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
                                 ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         if inside { hoveredDay = day }
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
+                    }
+                    .onTapGesture {
+                        // Click toggles pin; another bar moves the pin.
+                        pinnedDay = (pinnedDay?.id == day.id) ? nil : day
                     }
                     .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
                 }
@@ -735,7 +793,7 @@ private struct DaySourceModelRows: View {
 
 // MARK: - Heatmap card
 
-/// GitHub-style contribution grid over the 90-day window: columns are weeks
+/// GitHub-style contribution grid over the 120-day window: columns are weeks
 /// (Monday-first), rows are weekdays, cell intensity follows the day's USD.
 /// Peak / average / streak stats sit to the right of the grid to keep the
 /// popover short.
@@ -770,7 +828,7 @@ struct CombinedHeatmapCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(vi ? "Hoạt động 90 ngày" : "90-day activity")
+                Text(vi ? "Hoạt động 120 ngày" : "120-day activity")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .tracking(0.3)
@@ -922,7 +980,7 @@ struct CombinedTopModelsCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(vi ? "Model dùng nhiều (90 ngày)" : "Top models (90 days)")
+            Text(vi ? "Model dùng nhiều (120 ngày)" : "Top models (120 days)")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .tracking(0.3)

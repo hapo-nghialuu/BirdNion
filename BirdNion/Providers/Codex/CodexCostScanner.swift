@@ -38,7 +38,7 @@ struct CodexDailyUsage: Equatable, Identifiable {
 /// values are mapped to match CodexBar's own inline dashboard exactly:
 /// "today" is the most recent **active** day's cost (not the live session), the
 /// bars are daily cost, and the top model is the highest-cost one. The daily
-/// window spans `CodexCostScanner.chartWindowDays` (90) for the combined
+/// window spans `CodexCostScanner.chartWindowDays` (120) for the combined
 /// heatmap; the `last30*` totals stay strictly 30-day.
 struct CodexUsageReport: Equatable {
     /// Most recent active day's estimated cost + exact tokens (CodexBar "Today").
@@ -68,10 +68,10 @@ struct CodexUsageReport: Equatable {
 enum CodexCostScanner {
     private static let cacheTTL: TimeInterval = 300
     static let historyDaysKey = "codexCostHistoryDays"
-    /// Daily-bucket window for `usageReport` (feeds the 90-day heatmap on the
+    /// Daily-bucket window for `usageReport` (feeds the 120-day heatmap on the
     /// All tab). Independent of the user-configurable `historyDays`, which
     /// only drives `summary()`.
-    static let chartWindowDays = 90
+    static let chartWindowDays = 120
 
     /// Rolling history window in days (1...365). Defaults to 30 when unset.
     /// `SettingsStore` writes the same key.
@@ -130,7 +130,7 @@ enum CodexCostScanner {
 
     // MARK: - Full report (chart)
 
-    /// Cached, off-main full report: 30-day totals + 90-day per-day series for
+    /// Cached, off-main full report: 30-day totals + 120-day per-day series for
     /// the usage chart/heatmap. Returns nil only when the scan throws.
     static func usageReport(now: Date = Date()) async -> CodexUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
@@ -193,7 +193,7 @@ enum CodexCostScanner {
 
         var buckets: [Date: DailyAccumulator] = [:]
         // Summed cost+tokens per model over the trailing 30 days → top model.
-        // Gated to 30d (not the full 90d bucket window) so the Codex tab's
+        // Gated to 30d (not the full 120d bucket window) so the Codex tab's
         // top-model line keeps its pre-heatmap value.
         var modelTotals: [String: (cost: Double, tokens: Int)] = [:]
 

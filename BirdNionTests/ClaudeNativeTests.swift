@@ -120,7 +120,7 @@ final class ClaudeNativeTests: XCTestCase {
     }
 
     /// `scanDays` narrows both the entry cutoff and the daily bucket window;
-    /// the default keeps the full 90-day behaviour.
+    /// the default keeps the full 120-day behaviour.
     func testCostScanFullScanDaysNarrowsWindow() throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -148,7 +148,7 @@ final class ClaudeNativeTests: XCTestCase {
 
         // Default window still counts both entries.
         let full = ClaudeCostScanner.scanFull(roots: roots, now: now)
-        XCTAssertEqual(full?.daily.count, 90)
+        XCTAssertEqual(full?.daily.count, 120)
         XCTAssertEqual(full?.daily.map(\.tokens).reduce(0, +), 450)
     }
 

@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Force a layout pass so fittingSize is valid on the first open.
         hostingController.view.layoutSubtreeIfNeeded()
-        let height = max(1, hostingController.view.fittingSize.height)
+        let fittingHeight = max(1, hostingController.view.fittingSize.height)
 
         // Anchor: just below the status item button, centered, nudged up.
         let buttonRect = buttonWindow.convertToScreen(
@@ -226,14 +226,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let topY = buttonRect.minY + topNudge
         panelTopY = topY
         var originX = buttonRect.midX - panelWidth / 2
-        let originY = topY - height
 
+        // Clamp height to the visible screen below the menu-bar anchor so
+        // tall content (e.g. All tab) scrolls instead of running off-screen.
         // Clamp horizontally so the panel stays on screen.
-        if let screen = buttonWindow.screen ?? NSScreen.main {
+        let screen = buttonWindow.screen ?? NSScreen.main
+        var height = fittingHeight
+        if let screen {
             let vf = screen.visibleFrame
             let margin: CGFloat = 8
+            let available = topY - vf.minY - margin
+            height = max(1, min(fittingHeight, available))
             originX = min(max(originX, vf.minX + margin), vf.maxX - panelWidth - margin)
         }
+        let originY = topY - height
 
         panel.setFrame(
             NSRect(x: originX, y: originY, width: panelWidth, height: height),
@@ -254,13 +260,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Keep the top edge fixed and grow/shrink downward when the content
-    /// height changes while the panel is visible.
+    /// height changes while the panel is visible. Height is clamped to the
+    /// visible screen so tall content scrolls instead of overflowing.
     private func resizePanelToContent() {
         guard panel.isVisible else { return }
         hostingController.view.layoutSubtreeIfNeeded()
-        let height = max(1, hostingController.view.fittingSize.height)
+        let fittingHeight = max(1, hostingController.view.fittingSize.height)
         let frame = panel.frame
         let top = panelTopY ?? frame.maxY
+        var height = fittingHeight
+        if let screen = panel.screen ?? NSScreen.main {
+            let available = top - screen.visibleFrame.minY - 8
+            height = max(1, min(fittingHeight, available))
+        }
         panel.setFrame(
             NSRect(x: frame.origin.x, y: top - height, width: panelWidth, height: height),
             display: true

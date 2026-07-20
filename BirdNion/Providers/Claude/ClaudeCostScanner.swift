@@ -48,7 +48,7 @@ struct ClaudeHourlyUsage: Equatable, Identifiable {
 /// Full usage report: the existing today/last30 totals plus per-day buckets
 /// for the chart/heatmap and the most-used model. Built from the same scan
 /// pass that produces `ClaudeCostSummary` so there's no extra I/O cost.
-/// The daily window spans `ClaudeCostScanner.historyDays` (90) for the
+/// The daily window spans `ClaudeCostScanner.historyDays` (120) for the
 /// combined heatmap; the `last30*` totals stay strictly 30-day.
 struct ClaudeUsageReport: Equatable {
     let todayUSD: Double
@@ -191,10 +191,10 @@ private struct ClaudeMessageUsage {
 /// refresh. Mirrors `CodexCostScanner` (which has identical structure).
 enum ClaudeCostScanner {
     private static let cacheTTL: TimeInterval = 300
-    /// Scan window for the per-day buckets (feeds the 90-day heatmap on the
+    /// Scan window for the per-day buckets (feeds the 120-day heatmap on the
     /// All tab). The `last30*` totals keep their own 30-day cutoff so the
     /// Claude tab numbers don't change with this window.
-    static let historyDays = 90
+    static let historyDays = 120
     /// Bump when model pricing changes. Existing persisted days need one full
     /// rescan so old $0 estimates do not survive the high-water merge.
     static let pricingRevision = 1
@@ -335,7 +335,7 @@ enum ClaudeCostScanner {
         let startOfToday = calendar.startOfDay(for: now)
         let cutoff = now.addingTimeInterval(-TimeInterval(scanDays) * 86_400)
         // Separate 30-day cutoff for the totals — the scan window is wider
-        // (90d, for the heatmap) but `last30*` must stay a strict 30 days.
+        // (120d, for the heatmap) but `last30*` must stay a strict 30 days.
         let last30Cutoff = now.addingTimeInterval(-30 * 86_400)
 
         // Collect entries across every root, then dedup by messageId:requestId

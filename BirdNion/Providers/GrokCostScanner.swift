@@ -104,10 +104,10 @@ struct GrokModelPrice {
 // MARK: - Scanner
 
 /// Walks `~/.grok/sessions/**/signals.json` (path overridable via `GROK_HOME`)
-/// and builds a 90-day daily cost report for the All tab.
+/// and builds a 120-day daily cost report for the All tab.
 enum GrokCostScanner {
     private static let cacheTTL: TimeInterval = 300
-    static let chartWindowDays = 90
+    static let chartWindowDays = 120
 
     private actor Cache {
         static let shared = Cache()
@@ -119,7 +119,7 @@ enum GrokCostScanner {
         func storeReport(_ value: GrokUsageReport, at: Date) { reportEntry = (at, value) }
     }
 
-    /// Cached full report (90 daily buckets + strict 30-day totals).
+    /// Cached full report (120 daily buckets + strict 30-day totals).
     /// Merges with `CostHistoryStore` so deleted `~/.grok/sessions` do not
     /// wipe past All-tab bars.
     static func usageReport(now: Date = Date()) async -> GrokUsageReport? {
