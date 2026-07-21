@@ -818,8 +818,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
         ({ base, token } = upstreamCreds(sel.profile));
       }
       if (!base || !token) {
-        statusMsg = { text: t("ccxSubNeedBase"), isError: true };
-        renderDetail();
+        // Silent guard — match macOS (no red banner when creds missing).
         return;
       }
       modelsLoading = true;
@@ -1082,6 +1081,12 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
       input.addEventListener("input", () => {
         onChange(clean(input.value));
         persistDebounced();
+        // Clear stale error banner on edit (parity with SwiftUI auto-reset).
+        // Re-render only when an error was present to avoid focus loss.
+        if (statusMsg?.isError) {
+          statusMsg = null;
+          renderDetail();
+        }
       });
       return input;
     };
