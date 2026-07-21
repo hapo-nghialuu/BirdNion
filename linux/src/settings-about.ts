@@ -262,10 +262,10 @@ export function globalPollingSection(onRefreshNow: () => void): HTMLElement {
   return section;
 }
 
-/** About pane — macOS AboutPane: centered icon + version + links + updates. */
+/** About pane — macOS AboutPane remake: centered branding + link cards. */
 export async function aboutSection(): Promise<HTMLElement> {
-  const page = el("div", "settings-page");
-  page.style.maxWidth = "430px";
+  const page = el("div", "settings-page about-page");
+  page.style.maxWidth = "480px";
   page.style.margin = "0 auto";
 
   let version = "";
@@ -275,7 +275,11 @@ export async function aboutSection(): Promise<HTMLElement> {
     version = "";
   }
 
-  const heroCard = el("div", "sw-card");
+  const header = el("div", "sw-pane-header");
+  header.append(el("div", "sw-pane-title", t("settingsTabAbout")));
+  page.append(header);
+
+  // Centered branding + primary actions (no nested card for hero)
   const hero = el("div", "about-hero");
   const icon = document.createElement("img");
   icon.className = "about-hero-icon";
@@ -290,58 +294,21 @@ export async function aboutSection(): Promise<HTMLElement> {
   }
   hero.append(el("div", "about-hero-tag", t("aboutTagline")));
 
-  const links = el("div", "about-links");
-  for (const [label, url] of [
-    ["GitHub", REPO_URL],
-    ["Website", REPO_URL],
-  ] as const) {
-    const a = document.createElement("a");
-    a.href = url;
-    a.className = "about-link-row";
-    a.textContent = label;
-    a.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      void openUrl(url).catch(() => {});
-    });
-    links.append(a);
-  }
-  hero.append(links);
-  heroCard.append(hero);
-  page.append(heroCard);
-
-  const updates = el("div", "sw-group");
-  updates.append(el("div", "sw-section-header", t("settingsCheckUpdate").toUpperCase()));
-  const updatesCard = el("div", "sw-card");
-  updatesCard.append(updateCheckRow(version));
-  updates.append(updatesCard);
-  page.append(updates);
-
-  return page;
-}
-
-/** "Check for updates" button + result line (up to date / update available
- * with a link to the release page) — port of macOS `UpdateChecker`. */
-function updateCheckRow(currentVersion: string): HTMLElement {
-  const row = el("div", "settings-row");
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "settings-refresh-now-btn";
-  button.textContent = t("settingsCheckUpdate");
-  const result = el("span", "window-subtitle", "");
-  row.append(button, result);
-
-  button.addEventListener("click", () => {
-    if (button.disabled) return;
-    button.disabled = true;
-    result.textContent = t("settingsCheckingUpdate");
+  const actions = el("div", "about-hero-actions");
+  const checkBtn = el("button", "sw-pill-btn ccp-primary", t("aboutCheckNow"));
+  const statusLine = el("div", "about-update-status", "");
+  checkBtn.addEventListener("click", () => {
+    if ((checkBtn as HTMLButtonElement).disabled) return;
+    (checkBtn as HTMLButtonElement).disabled = true;
+    statusLine.textContent = t("settingsCheckingUpdate");
     void invoke<UpdateInfo | null>("check_update", {
       channel: getUpdateChannel(),
-      currentVersion,
+      currentVersion: version,
     })
       .then((info) => {
-        result.textContent = "";
+        statusLine.textContent = "";
         if (info) {
-          result.textContent = `${t("settingsUpdateAvailable")} ${info.version}`;
+          statusLine.textContent = `${t("settingsUpdateAvailable")} ${info.version}`;
           const releaseLink = document.createElement("a");
           releaseLink.href = info.url;
           releaseLink.textContent = t("settingsViewRelease");
@@ -349,18 +316,65 @@ function updateCheckRow(currentVersion: string): HTMLElement {
             ev.preventDefault();
             void openUrl(info.url).catch(() => {});
           });
-          result.append(" · ", releaseLink);
+          statusLine.append(" · ", releaseLink);
         } else {
-          result.textContent = t("settingsUpToDate");
+          statusLine.textContent = t("settingsUpToDate");
         }
       })
       .catch((err) => {
-        result.textContent = `${t("loadError")}: ${err}`;
+        statusLine.textContent = `${t("loadError")}: ${err}`;
       })
       .finally(() => {
-        button.disabled = false;
+        (checkBtn as HTMLButtonElement).disabled = false;
       });
   });
+  const notesBtn = el("button", "sw-pill-btn", t("aboutReleaseNotes"));
+  notesBtn.addEventListener("click", () => {
+    void openUrl(`${REPO_URL}/releases`).catch(() => {});
+  });
+  actions.append(checkBtn, notesBtn);
+  hero.append(actions, statusLine);
+  page.append(hero);
 
-  return row;
+  // Links card
+  const linksGroup = el("div", "sw-group");
+  linksGroup.append(el("div", "sw-section-header", t("settingsSectionLinks")));
+  const linksCard = el("div", "sw-card");
+  const linksBody = el("div", "sw-card-body");
+  const linkRows: [string, string][] = [
+    ["GitHub", REPO_URL],
+    ["Website", REPO_URL],
+  ];
+  linkRows.forEach(([label, url], i) => {
+    if (i > 0) linksBody.append(el("div", "sw-row-divider"));
+    const a = document.createElement("button");
+    a.type = "button";
+    a.className = "pp-link-row";
+    a.append(el("span", "", label));
+    a.append(el("span", "pp-link-arrow", "›"));
+    a.addEventListener("click", () => { void openUrl(url).catch(() => {}); });
+    linksBody.append(a);
+  });
+  // brew install row (copy command)
+  linksBody.append(el("div", "sw-row-divider"));
+  const brewRow = el("div", "sw-row about-brew-row");
+  const brewText = el("div", "sw-row-text");
+  brewText.append(el("div", "sw-row-title", t("aboutBrewInstall")));
+  const brewCmd = "brew install --cask hapo-nghialuu/tap/birdnion";
+  brewText.append(el("div", "sw-row-sub about-brew-cmd", brewCmd));
+  const copyBtn = el("button", "sw-pill-btn", t("aboutCopy"));
+  copyBtn.addEventListener("click", () => {
+    void navigator.clipboard?.writeText(brewCmd).then(() => {
+      copyBtn.textContent = t("aboutCopied");
+      setTimeout(() => { copyBtn.textContent = t("aboutCopy"); }, 1500);
+    }).catch(() => {});
+  });
+  brewRow.append(brewText, copyBtn);
+  linksBody.append(brewRow);
+  linksCard.append(linksBody);
+  linksGroup.append(linksCard);
+  page.append(linksGroup);
+
+  page.append(el("div", "about-copyright", t("aboutCopyright")));
+  return page;
 }

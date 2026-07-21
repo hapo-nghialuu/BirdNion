@@ -46,9 +46,39 @@ export type ProviderCfg = {
   claudeCodeScope?: string | null;
   claudeCodeProjectPath?: string | null;
   source?: string | null;
+  /** Derived Codex record for this preset (macOS `Provider.codexProfileID`). */
+  codexProfileID?: string | null;
 };
 
-export type Settings = { version: number; providers: ProviderCfg[] };
+export type Settings = {
+  version: number;
+  providers: ProviderCfg[];
+  claudeCodeProfiles?: ClaudeCodeProfileLite[];
+  codexProfiles?: CodexProfileLite[];
+};
+
+/** Minimal Claude Code profile shape for shared settings typing. */
+export type ClaudeCodeProfileLite = {
+  id: string;
+  codexProfileID?: string | null;
+  [key: string]: unknown;
+};
+
+/** macOS `BirdNionConfigStore.CodexProfile` JSON shape. */
+export type CodexProfileLite = {
+  id: string;
+  name?: string;
+  baseURL?: string;
+  apiKey?: string;
+  model?: string;
+  upstreamProtocolRaw?: string | null;
+  connectionModeRaw?: string | null;
+  cliProxyBaseURL?: string | null;
+  cliProxyAPIKey?: string | null;
+  cliProxyManagementKey?: string | null;
+  cliProxyAppliedSignature?: string | null;
+  claudeCodeProfileID?: string | null;
+};
 
 /** Providers whose auth is a pasted API key. */
 export const KEYED = new Set([
@@ -139,6 +169,8 @@ export function displayError(error: string): string {
 /** macOS detailInfoGrid: Status / Source / Plan / Plan name / Account /
  * Version / Service status / Error-or-Updated / Storage. */
 export function detailInfoGrid(id: string, enabled: boolean, st: ProviderStatus | undefined): HTMLElement {
+  const group = el("div", "sw-group");
+  group.append(el("div", "sw-section-header", t("settingsSectionInfo")));
   const card = el("div", "sw-card");
   const body = el("div", "sw-card-body");
 
@@ -198,7 +230,8 @@ export function detailInfoGrid(id: string, enabled: boolean, st: ProviderStatus 
   }
 
   card.append(body);
-  return card;
+  group.append(card);
+  return group;
 }
 
 // --- usage section ----------------------------------------------------------
@@ -268,10 +301,12 @@ function creditsValue(st: ProviderStatus): string | null {
   return t("provider.creditsLeft", { n });
 }
 
-/** macOS usageSection: quota windows + credits + local cost rows. */
+/** macOS usageSection: QUOTA card + optional CHI PHÍ card (claude/codex). */
 export function usageSection(id: string, enabled: boolean, st: ProviderStatus | undefined): HTMLElement {
+  const wrap = el("div", "pp-usage-wrap");
+
   const group = el("div", "sw-group");
-  group.append(el("div", "sw-section-header", t("settingsSectionUsage")));
+  group.append(el("div", "sw-section-header", t("settingsSectionQuota")));
   const card = el("div", "sw-card");
   const body = el("div", "sw-card-body");
 
@@ -286,12 +321,22 @@ export function usageSection(id: string, enabled: boolean, st: ProviderStatus | 
     if (credits) body.append(usageKvRow("Credits", credits));
   }
 
-  // Local cost scan rows (codex/claude only — the scanners exist on Linux
-  // and are cached Rust-side, so this is cheap to request per selection).
+  card.append(body);
+  group.append(card);
+  wrap.append(group);
+
+  // CHI PHÍ card — local cost scan (claude/codex only).
   if (id === "claude" || id === "codex") {
+    const costGroup = el("div", "sw-group");
+    costGroup.append(el("div", "sw-section-header", t("settingsSectionCost")));
+    const costCard = el("div", "sw-card");
+    const costBody = el("div", "sw-card-body");
     const todayRow = usageKvRow(t("provider.today"), "…");
     const monthRow = usageKvRow(t("provider.last30"), "…");
-    body.append(todayRow, monthRow);
+    costBody.append(todayRow, monthRow);
+    costCard.append(costBody);
+    costGroup.append(costCard);
+    wrap.append(costGroup);
     void invoke<UsageReport | null>(`${id}_usage_report`)
       .then((report) => {
         const set = (row: HTMLElement, usd: number, tokens: number) => {
@@ -299,22 +344,18 @@ export function usageSection(id: string, enabled: boolean, st: ProviderStatus | 
           if (v) v.textContent = `≈$${usd.toFixed(2)} · ${tokensShort(tokens)}`;
         };
         if (!report) {
-          todayRow.remove();
-          monthRow.remove();
+          costGroup.remove();
           return;
         }
         set(todayRow, report.todayUsd, report.todayTokens);
         set(monthRow, report.last30Usd, report.last30Tokens);
       })
       .catch(() => {
-        todayRow.remove();
-        monthRow.remove();
+        costGroup.remove();
       });
   }
 
-  card.append(body);
-  group.append(card);
-  return group;
+  return wrap;
 }
 
 // --- quota warning card (macOS QuotaWarningCard) ----------------------------
@@ -614,10 +655,11 @@ function refreshEverySelect(cfg: ProviderCfg): HTMLElement {
   return fieldRow(t("settingsRefreshEvery"), select);
 }
 
-/** macOS settingsSection ("THIẾT LẬP"): account label + auth block +
- * per-provider extras + refresh cadence + tray toggle. */
+/** macOS settingsSection: THIẾT LẬP card + MENU BAR card (P4 reskin). */
 export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
   const id = cfg.id;
+  const wrap = el("div", "pp-setup-wrap");
+
   const group = el("div", "sw-group");
   group.append(el("div", "sw-section-header", t("settingsSectionSetup")));
   const card = el("div", "sw-card");
@@ -667,18 +709,29 @@ export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
     body.append(copilotDeviceLoginRow(vi, (label) => { cfg.accountLabel = label; }));
   }
 
-  // 3. Shared extras.
+  // 3. Shared extras (refresh cadence stays in SETUP).
   const region = regionSelect(cfg);
   if (region) body.append(region);
   body.append(refreshEverySelect(cfg));
-  body.append(trayVisibilityToggle(cfg));
 
   const ccSection = claudeCodeSettingsSection(cfg);
   if (ccSection) body.append(ccSection);
 
   card.append(body);
   group.append(card);
-  return group;
+  wrap.append(group);
+
+  // MENU BAR card — tray visibility alone (mockup P4).
+  const menuGroup = el("div", "sw-group");
+  menuGroup.append(el("div", "sw-section-header", t("settingsSectionMenuBar")));
+  const menuCard = el("div", "sw-card");
+  const menuBody = el("div", "sw-card-body pp-setup-body");
+  menuBody.append(trayVisibilityToggle(cfg));
+  menuCard.append(menuBody);
+  menuGroup.append(menuCard);
+  wrap.append(menuGroup);
+
+  return wrap;
 }
 
 /** Standalone Codex accounts card — macOS `CodexAccountsCard` sits as its

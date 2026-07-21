@@ -120,7 +120,9 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     return NAME_BY_ID.get(id) ?? id;
   };
 
-  const subtitleFor = (id: string): { text: string; isError: boolean } => {
+  const subtitleFor = (id: string): {
+    text: string; isError: boolean; quotaClass?: string;
+  } => {
     const st = statusById().get(id);
     const cfg = byId.get(id);
     if (cfg?.enabled !== true) {
@@ -132,7 +134,14 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     }
     if (st && st.windows.length > 0) {
       const lowest = st.windows.reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
-      return { text: t("provider.remainingPct", { n: lowest.remainingPct }), isError: false };
+      const pct = lowest.remainingPct;
+      // Quota % colored by level in the list (P4 reskin).
+      const quotaClass = pct <= 20 ? "critical" : pct <= 50 ? "warning" : "ok";
+      return {
+        text: t("provider.remainingPct", { n: pct }),
+        isError: false,
+        quotaClass,
+      };
     }
     return { text: t("provider.noDataShort"), isError: false };
   };
@@ -182,7 +191,12 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
       const nameEl = el("div", `pp-side-name${enabled ? "" : " off"}`, name);
       text.append(nameEl);
       const sub = subtitleFor(id);
-      const subEl = el("div", `pp-side-sub${sub.isError ? " error" : ""}`, sub.text);
+      const subCls = [
+        "pp-side-sub",
+        sub.isError ? "error" : "",
+        sub.quotaClass ? `quota-${sub.quotaClass}` : "",
+      ].filter(Boolean).join(" ");
+      const subEl = el("div", subCls, sub.text);
       text.append(subEl);
 
       const dot = el("span", `pp-dot${cfg.enabled !== true ? " off" : sub.isError ? " warn" : " ok"}`);

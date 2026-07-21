@@ -13,7 +13,8 @@ export type SettingsIconId =
   | "power"
   | "arrow.clockwise"
   | "person"
-  | "key";
+  | "key"
+  | "trash";
 
 /** Shared outline attrs — SF regular weight optical match at 20pt. */
 const O = 'fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"';
@@ -90,6 +91,13 @@ const PATHS: Record<SettingsIconId, string> = {
     <path ${O} d="M11.2 12h8.3"/>
     <path ${O} d="M16.4 12v2.4"/>
     <path ${O} d="M18.7 12v1.7"/>`,
+  // SF `trash` — lid + can + two vertical ribs.
+  trash: `
+    <path ${O} d="M5.5 7h13"/>
+    <path ${O} d="M9.5 7V5.4c0-.5.4-.9.9-.9h3.2c.5 0 .9.4.9.9V7"/>
+    <path ${O} d="M6.8 7l.7 11.2c.03.6.53 1.05 1.13 1.05h6.74c.6 0 1.1-.45 1.13-1.05L17.2 7"/>
+    <path ${O} d="M10.2 10.2v5.6"/>
+    <path ${O} d="M13.8 10.2v5.6"/>`,
 };
 
 export function settingsIcon(id: SettingsIconId, className = "sw-icon"): SVGSVGElement {

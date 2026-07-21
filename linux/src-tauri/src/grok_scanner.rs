@@ -9,7 +9,8 @@ use walkdir::WalkDir;
 
 use crate::usage::{DailyModel, DailyUsage, UsageReport};
 
-pub const HISTORY_DAYS: i64 = 90;
+/// Trailing daily window for charts / heatmap (macOS CombinedUsageReport 120d).
+pub const HISTORY_DAYS: i64 = 120;
 
 fn grok_home() -> PathBuf {
     if let Ok(h) = std::env::var("GROK_HOME") {

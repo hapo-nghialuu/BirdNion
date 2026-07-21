@@ -394,6 +394,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "futures",
+ "getrandom 0.2.17",
  "hex",
  "hmac",
  "icu_properties",

@@ -204,15 +204,71 @@ pub fn suggested_models(id: &str) -> &'static [&'static str] {
 // MARK: - Custom profiles (macOS `claudeCodeProfiles`)
 
 /// A profile can be applied once it has both a base URL and a token —
-/// macOS `ClaudeCodeConfigWriter.isReady`.
+/// macOS `ClaudeCodeConfigWriter.isReady`. Embedded-proxy profiles only need
+/// upstream credentials; loopback keys are generated at prepare time.
 pub fn profile_ready(p: &ClaudeCodeProfile) -> bool {
+    if crate::cli_proxy::uses_embedded_cli_proxy(p) {
+        return crate::cli_proxy::has_upstream_configuration(p);
+    }
     cleaned(p.base_url.as_deref()).is_some() && cleaned(p.token.as_deref()).is_some()
 }
 
 /// Build the write spec for a custom profile: `env[tokenEnvKey] = token`,
 /// base URL, optional per-tier models, extraEnv rows merged verbatim, and
 /// `apiKeyHelper` as a TOP-LEVEL key — macOS `spec(for profile:)`.
+///
+/// Embedded-proxy profiles point Claude Code at the loopback CLIProxyAPI core;
+/// upstream and management secrets never enter Claude Code's env block.
 pub fn spec_for_profile(p: &ClaudeCodeProfile) -> Option<EnvSpec> {
+    if crate::cli_proxy::uses_embedded_cli_proxy(p) {
+        if !crate::cli_proxy::is_embedded_cli_proxy_ready(p) {
+            return None;
+        }
+        let proxy_key = cleaned(p.cli_proxy_api_key.as_deref())?;
+        let proxy_base =
+            crate::cli_proxy::normalized_cli_proxy_base_url(p.cli_proxy_base_url.as_deref())?;
+        let mut env = Map::new();
+        // Proxy always uses ANTHROPIC_AUTH_TOKEN with the loopback key.
+        env.insert(AUTH_TOKEN_KEY.to_string(), Value::String(proxy_key));
+        env.insert(BASE_URL_KEY.to_string(), Value::String(proxy_base));
+        if let Some(m) = cleaned(p.haiku_model.as_deref()) {
+            env.insert(
+                HAIKU_KEY.to_string(),
+                Value::String(crate::cli_proxy::local_model_alias(&m)),
+            );
+        }
+        if let Some(m) = cleaned(p.sonnet_model.as_deref()) {
+            env.insert(
+                SONNET_KEY.to_string(),
+                Value::String(crate::cli_proxy::local_model_alias(&m)),
+            );
+        }
+        if let Some(m) = cleaned(p.opus_model.as_deref()) {
+            env.insert(
+                OPUS_KEY.to_string(),
+                Value::String(crate::cli_proxy::local_model_alias(&m)),
+            );
+        }
+        let managed = [
+            AUTH_TOKEN_KEY,
+            "ANTHROPIC_API_KEY",
+            BASE_URL_KEY,
+            HAIKU_KEY,
+            SONNET_KEY,
+            OPUS_KEY,
+        ];
+        for row in &p.extra_env {
+            let key = row.key.trim();
+            if !key.is_empty() && !managed.contains(&key) {
+                env.insert(key.to_string(), Value::String(row.value.clone()));
+            }
+        }
+        return Some(EnvSpec {
+            env,
+            api_key_helper: None,
+        });
+    }
+
     let base = cleaned(p.base_url.as_deref())?;
     let token = cleaned(p.token.as_deref())?;
     let token_key = cleaned(p.token_env_key.as_deref()).unwrap_or_else(|| AUTH_TOKEN_KEY.to_string());
@@ -236,6 +292,22 @@ pub fn spec_for_profile(p: &ClaudeCodeProfile) -> Option<EnvSpec> {
         }
     }
     Some(EnvSpec { env, api_key_helper: cleaned(p.api_key_helper.as_deref()) })
+}
+
+/// Sync state for a custom profile, treating a signature mismatch on an
+/// embedded proxy as stale even when settings.json already points at loopback.
+pub fn sync_state_for_profile(p: &ClaudeCodeProfile, scope: &Scope) -> SyncState {
+    let Some(spec) = spec_for_profile(p) else {
+        return SyncState::Off;
+    };
+    let state = sync_state(&spec, scope);
+    if state == SyncState::Synced
+        && crate::cli_proxy::uses_embedded_cli_proxy(p)
+        && !crate::cli_proxy::is_configuration_current(p)
+    {
+        return SyncState::Stale;
+    }
+    state
 }
 
 /// Scope a profile currently targets (same semantics as providers).
@@ -672,6 +744,54 @@ mod tests {
         let mut p = profile();
         p.token = None;
         assert!(!profile_ready(&p));
+    }
+
+    #[test]
+    fn openai_profile_spec_points_at_local_proxy() {
+        let p = ClaudeCodeProfile {
+            id: "oa1".into(),
+            name: Some("OA".into()),
+            compatibility_mode: Some("openai".into()),
+            open_ai_base_url: Some("https://openai.example/v1".into()),
+            open_ai_api_key: Some("upstream-oa".into()),
+            open_ai_format: Some("responses".into()),
+            sonnet_model: Some("gpt-s[1m]".into()),
+            embedded_local_proxy: Some(true),
+            cli_proxy_base_url: Some(crate::cli_proxy::LOCAL_BASE_URL.into()),
+            cli_proxy_api_key: Some("loopback-key".into()),
+            cli_proxy_management_key: Some("mgmt".into()),
+            ..Default::default()
+        };
+        assert!(profile_ready(&p));
+        let spec = spec_for_profile(&p).unwrap();
+        // Claude Code always sees loopback, never the OpenAI upstream secret.
+        assert_eq!(spec.env[AUTH_TOKEN_KEY], "loopback-key");
+        assert_eq!(
+            spec.env[BASE_URL_KEY],
+            crate::cli_proxy::LOCAL_BASE_URL
+        );
+        assert_eq!(spec.env[SONNET_KEY], "gpt-s"); // [1m] stripped for local alias
+        assert!(spec.api_key_helper.is_none());
+        // Upstream OpenAI credentials must never leak into the env block.
+        let env_str = serde_json::to_string(&spec.env).unwrap();
+        assert!(!env_str.contains("upstream-oa"));
+        assert!(!env_str.contains("openai.example"));
+    }
+
+    #[test]
+    fn openai_profile_never_direct_even_without_explicit_flag() {
+        let p = ClaudeCodeProfile {
+            id: "oa2".into(),
+            compatibility_mode: Some("openai".into()),
+            open_ai_base_url: Some("https://chat.example/v1".into()),
+            open_ai_api_key: Some("k".into()),
+            embedded_local_proxy: None,
+            // Not prepared yet — missing loopback keys.
+            ..Default::default()
+        };
+        assert!(crate::cli_proxy::uses_embedded_cli_proxy(&p));
+        assert!(profile_ready(&p)); // upstream present
+        assert!(spec_for_profile(&p).is_none()); // not ready until prepare stamps keys
     }
 
     #[test]

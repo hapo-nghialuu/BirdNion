@@ -175,8 +175,8 @@ async function main() {
     await page.screenshot({ path: path.join(OUT, '04-claude.png'), fullPage: true });
   }
 
-  // Settings
-  await page.locator('button.tab', { hasText: '⚙' }).click();
+  // Settings (popover has no gear tab in some builds — best-effort)
+  await page.locator('button.tab', { hasText: '⚙' }).click({ timeout: 2000 }).catch(() => {});
   await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(OUT, '05-settings-providers.png'), fullPage: true });
 

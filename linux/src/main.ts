@@ -5,6 +5,7 @@ import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
 import { providerCard, claudeCodeQuickApplyCard, loadingSkeleton, ProviderStatus } from "./provider-tab";
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
+import { codexAccountsPopoverCard } from "./codex-accounts-popover";
 import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
@@ -15,16 +16,17 @@ import {
 } from "./settings-about";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize, PhysicalSize } from "@tauri-apps/api/dpi";
-import { logoMark, logoUrl } from "./logos";
+import { logoMark, logoUrl, providerTintCss } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
+import { initTheme } from "./theme";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
 const POPOVER_WIDTH = 420;
-/** Cap so a huge All-tab never overflows the screen. */
-const POPOVER_MAX_HEIGHT = 900;
+/** Hard height cap (macOS AppDelegate.maxPanelHeight = 640). All-tab scrolls. */
+const POPOVER_MAX_HEIGHT = 640;
 const POPOVER_MIN_HEIGHT = 220;
-/** Extra logical px so the last footer row ("Thoát") is never clipped. */
+/** Extra logical px so the footer is never clipped under the cap. */
 const FIT_SAFETY_PX = 18;
 
 const TAB_KEY = "birdnion.selectedTab";
@@ -105,14 +107,19 @@ function openSettings(section?: string) {
 
 /** Update only the header spinner/status without wiping the whole DOM. */
 function paintRefreshChrome() {
-  const btn = document.querySelector<HTMLButtonElement>(".header-refresh");
-  const status = document.querySelector(".app-status");
+  const btn = document.querySelector<HTMLButtonElement>(".header-refresh:not(.header-settings)");
   if (btn) {
     btn.classList.toggle("spinning", state.refreshing);
     btn.disabled = state.refreshing;
   }
-  if (status) {
-    status.textContent = state.refreshing
+  const pill = document.querySelector(".status-pill");
+  const pillText = document.querySelector(".status-pill-text");
+  if (pill) {
+    pill.classList.toggle("updating", state.refreshing);
+    pill.classList.toggle("ready", !state.refreshing);
+  }
+  if (pillText) {
+    pillText.textContent = state.refreshing
       ? t("popoverUpdating")
       : state.loadedOnce ? t("popoverReady") : "…";
   }
@@ -157,7 +164,7 @@ function goTab(id: string) {
   render();
 }
 
-/** macOS BirdNionHeader: logo + title + Ready/Updating + refresh. */
+/** macOS BirdNionHeader remake: logo + title + status pill + refresh + settings. */
 function appHeader(): HTMLElement {
   const head = el("header", "app-header");
   const brand = el("div", "app-brand");
@@ -168,21 +175,37 @@ function appHeader(): HTMLElement {
   icon.draggable = false;
   const titles = el("div", "app-titles");
   titles.append(el("div", "app-title", "BirdNion"));
-  titles.append(el("div", "app-status",
-    state.refreshing ? t("popoverUpdating")
-      : state.loadedOnce ? t("popoverReady") : "…"));
   brand.append(icon, titles);
 
+  // Status pill (ready / updating)
+  const refreshing = state.refreshing;
+  const pill = el("div", `status-pill${refreshing ? " updating" : " ready"}`);
+  pill.append(el("span", "status-pill-dot"));
+  pill.append(el("span", "status-pill-text",
+    refreshing ? t("popoverUpdating")
+      : state.loadedOnce ? t("popoverReady") : "…"));
+  brand.append(pill);
+
+  const actions = el("div", "header-actions");
   const refresh = document.createElement("button");
   refresh.type = "button";
-  refresh.className = `header-refresh${state.refreshing ? " spinning" : ""}`;
+  refresh.className = `header-refresh${refreshing ? " spinning" : ""}`;
   refresh.title = t("popoverRefresh");
   refresh.setAttribute("aria-label", t("popoverRefresh"));
-  refresh.disabled = state.refreshing;
+  refresh.disabled = refreshing;
   refresh.append(settingsIcon("arrow.clockwise", "header-refresh-icon"));
   refresh.addEventListener("click", () => { void refreshNow(); });
 
-  head.append(brand, refresh);
+  const settingsBtn = document.createElement("button");
+  settingsBtn.type = "button";
+  settingsBtn.className = "header-refresh header-settings";
+  settingsBtn.title = t("footerSettings");
+  settingsBtn.setAttribute("aria-label", t("footerSettings"));
+  settingsBtn.append(settingsIcon("gearshape", "header-refresh-icon"));
+  settingsBtn.addEventListener("click", () => openSettings("general"));
+
+  actions.append(refresh, settingsBtn);
+  head.append(brand, actions);
   return head;
 }
 
@@ -193,64 +216,97 @@ function appHeader(): HTMLElement {
  * Logos are monochrome: secondary when idle, blue when active.
  */
 function tabsStrip(): HTMLElement {
-  const strip = el("nav", "tabs");
+  const strip = el("nav", "tabs tabs-pills");
 
   const addIconTab = (id: string, label: string, mark: Element) => {
-    const tab = el("button", `tab tab-icon${state.tab === id ? " active" : ""}`);
+    const active = state.tab === id;
+    // Compact (d2852ed4): unselected = logo-only; selected = logo + name.
+    const tab = el("button", active ? "tab tab-pill tab-icon active" : "tab tab-pill tab-icon");
     tab.title = label;
     tab.setAttribute("aria-label", label);
     tab.append(mark);
+    if (active) tab.append(el("span", "tab-pill-label", label));
     tab.addEventListener("click", () => goTab(id));
     strip.append(tab);
   };
 
   // All = SF square.grid.2x2.fill (macOS allChip)
-  addIconTab("all", t("tabAll"), settingsIcon("square.grid.2x2", "tab-sf-icon"));
-
-  const providers = state.statuses;
-  if (providers.length > 0) {
-    strip.append(el("span", "tab-divider"));
+  // Text-only All pill (no logo) — macOS allChip.
+  {
+    const allActive = state.tab === "all";
+    const allTab = el("button", allActive ? "tab tab-pill active" : "tab tab-pill");
+    allTab.title = t("tabAll");
+    allTab.setAttribute("aria-label", t("tabAll"));
+    allTab.append(el("span", "tab-pill-label", t("tabAll")));
+    allTab.addEventListener("click", () => goTab("all"));
+    strip.append(allTab);
   }
-  providers.forEach((s, i) => {
-    // Mono mask logo — tinted via CSS (.tab-icon / .active) like ProviderLogoMark tint
-    addIconTab(s.id, s.displayName, logoMark(s.id, "tab-logo-mono"));
-    if (i < providers.length - 1) {
-      strip.append(el("span", "tab-divider"));
+
+  for (const s of state.statuses) {
+    const active = state.tab === s.id;
+    const mark = logoMark(s.id, active ? "tab-logo-mono tab-logo-on-accent" : "tab-logo-mono");
+    if (!active) {
+      // Brand tint on idle chips (macOS providerTint); falls back to secondary.
+      const tint = providerTintCss(s.id);
+      if (tint) mark.style.setProperty("--tab-tint", tint);
     }
-  });
+    addIconTab(s.id, s.displayName, mark);
+  }
 
   return strip;
 }
 
-/** macOS popover footer: gearshape / info.circle / power + shortcuts.
- *  Settings opens a SEPARATE window (not an in-popover tab). */
+/** Compact footer (macOS ActionsList remake): "Updated …" left + icon buttons right. */
 function popoverFooter(): HTMLElement {
-  const foot = el("footer", "popover-footer");
+  const foot = el("footer", "popover-footer footer-compact");
+
+  // Most recent provider lastUpdated across live statuses.
+  let latest = 0;
+  for (const s of state.statuses) {
+    if (s.lastUpdated && s.lastUpdated > latest) latest = s.lastUpdated;
+  }
+  if (latest > 0) {
+    const rel = relativeTime(latest);
+    if (rel) foot.append(el("span", "footer-updated", t("lastUpdated", { time: rel })));
+  } else {
+    foot.append(el("span", "footer-updated", ""));
+  }
+
+  const actions = el("div", "footer-actions");
   const mk = (
     iconId: "gearshape" | "info.circle" | "power",
     label: string,
-    shortcut: string | null,
+    extraClass: string,
     onClick: () => void,
   ) => {
-    const btn = el("button", "footer-row");
-    const left = el("span", "footer-left");
-    left.append(settingsIcon(iconId, "footer-icon-svg"));
-    left.append(el("span", "footer-label", label));
-    btn.append(left);
-    if (shortcut) btn.append(el("span", "footer-shortcut", shortcut));
+    const btn = el("button", `footer-icon-btn${extraClass ? ` ${extraClass}` : ""}`);
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.append(settingsIcon(iconId, "footer-icon-svg"));
     btn.addEventListener("click", onClick);
     return btn;
   };
-  const isMac = navigator.platform.toLowerCase().includes("mac");
-  const mod = isMac ? "⌘" : "Ctrl+";
-  foot.append(
-    mk("gearshape", t("footerSettings"), `${mod},`, () => openSettings("general")),
-    mk("info.circle", t("footerAbout"), null, () => openSettings("about")),
-    mk("power", t("footerQuit"), `${mod}Q`, () => {
+  actions.append(
+    mk("gearshape", t("footerSettings"), "", () => openSettings("general")),
+    mk("info.circle", t("footerAbout"), "", () => openSettings("about")),
+    mk("power", t("footerQuit"), "quit", () => {
       void invoke("quit_app").catch(() => { window.close(); });
     }),
   );
+  foot.append(actions);
   return foot;
+}
+
+/** Relative "vừa cập nhật" / "N phút trước" from unix seconds or ms. */
+function relativeTime(ts: number): string | null {
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  const ms = ts > 1e12 ? ts : ts * 1000;
+  if (Number.isNaN(new Date(ms).getTime())) return null;
+  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (seconds < 5) return t("time.justUpdated");
+  if (seconds < 60) return t("time.secondsAgo", { n: seconds });
+  if (seconds < 3600) return t("time.minutesAgo", { n: Math.floor(seconds / 60) });
+  return t("time.hoursAgo", { n: Math.floor(seconds / 3600) });
 }
 
 /** Sources whose scan is in flight AND that have no report yet — macOS
@@ -458,6 +514,14 @@ function render() {
     } else if (state.tab === "grok" && state.grok) {
       body.append(sourceChartCard(state.grok, "grok"));
     }
+    // Codex: account switcher BELOW the cost chart (macOS CodexAccountsPopoverSection).
+    if (state.tab === "codex") {
+      body.append(codexAccountsPopoverCard(
+        () => scheduleFitWindow(),
+        () => { void refetchProvider("codex"); },
+      ));
+    }
+
   }
   app.append(popoverFooter());
   scheduleFitWindow();
@@ -1022,6 +1086,7 @@ window.addEventListener("storage", (e) => {
 window.addEventListener("birdnion-tray-display-changed", onTrayDisplayPrefChanged);
 
 window.addEventListener("DOMContentLoaded", () => {
+  initTheme();
   if (isSettingsWindow()) {
     document.title = "BirdNion Settings";
     window.__BIRDNION_MODE__ = "settings";

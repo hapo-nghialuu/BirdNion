@@ -4,7 +4,9 @@
 
 mod claude_code;
 mod claude_scanner;
+mod cli_proxy;
 mod codex_accounts;
+mod codex_config;
 mod codex_scanner;
 mod config;
 mod cost_history;
@@ -12,14 +14,6 @@ mod elevenlabs_keys;
 mod freemodel_accounts;
 mod grok_scanner;
 mod providers;
-#[allow(dead_code)]
-mod quota_observation;
-#[allow(dead_code)]
-mod session_usage_slice;
-#[allow(dead_code)]
-mod insights_db;
-#[allow(dead_code)]
-mod control_plane;
 mod storage;
 mod updater;
 mod usage;
@@ -275,9 +269,7 @@ fn claude_code_profile_state_for(profile_id: &str) -> ClaudeCodeState {
     let configured = scope.is_some() && claude_code::profile_ready(&profile);
     let (sync, target) = match (&scope, configured) {
         (Some(sc), true) => {
-            let sync = claude_code::spec_for_profile(&profile)
-                .map(|s| claude_code::sync_state(&s, sc))
-                .unwrap_or(claude_code::SyncState::Off);
+            let sync = claude_code::sync_state_for_profile(&profile, sc);
             (sync, Some(claude_code::target_path(sc).to_string_lossy().to_string()))
         }
         (Some(sc), false) => (
@@ -517,9 +509,199 @@ fn get_settings() -> config::Settings {
 }
 
 /// Persist the whole settings document (atomic write, 0600).
+/// Runs Claude→Codex upstream mirror sync so linked records stay consistent
+/// even when the frontend bulk-saves the whole settings blob.
 #[tauri::command]
-fn save_settings(settings: config::Settings) -> Result<(), String> {
+fn save_settings(mut settings: config::Settings) -> Result<(), String> {
+    let _ = config::migrate_standalone_codex_profiles(&mut settings);
+    config::mirror_claude_to_codex(&mut settings);
     config::save(&settings)
+}
+
+// --- Codex CLI profile activation (macOS CodexConfigWriter parity) -----------
+
+#[tauri::command]
+fn codex_profile_state(id: String) -> codex_config::CodexProfileState {
+    codex_config::profile_state(&id)
+}
+
+#[tauri::command]
+fn codex_active_id() -> Option<String> {
+    codex_config::active_profile_id(None)
+}
+
+#[tauri::command]
+async fn codex_apply(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
+    let mut profile =
+        config::find_codex_profile(&id).ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
+    if !profile.has_upstream_configuration() {
+        return Err("Thiếu Base URL, API key hoặc model cho Codex".into());
+    }
+
+    if profile.uses_embedded_cli_proxy() {
+        let st = cli_proxy::prepare_codex_profile_cmd(&app, &id).await?;
+        if st.state != "running" {
+            return Err("Không khởi động được proxy local cho Codex".into());
+        }
+        // Reload after prepare stamped loopback keys + signature.
+        profile = config::find_codex_profile(&id)
+            .ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
+        codex_config::apply(&profile, None)?;
+    } else {
+        profile.cli_proxy_applied_signature = None;
+        config::save_codex_profile(profile.clone())?;
+        codex_config::apply(&profile, None)?;
+        let _ = cli_proxy::deactivate_codex_proxy_profiles(&app).await;
+    }
+
+    // Per-project overlay — same content as global apply.
+    let _ = codex_config::write_profile_file(&profile, None);
+    Ok(codex_config::profile_state(&id))
+}
+
+#[tauri::command]
+async fn codex_deactivate(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
+    let _ = codex_config::deactivate(None)?;
+    if let Some(mut profile) = config::find_codex_profile(&id) {
+        profile.cli_proxy_applied_signature = None;
+        config::save_codex_profile(profile)?;
+    }
+    let _ = cli_proxy::deactivate_codex_proxy_profiles(&app).await;
+    Ok(codex_config::profile_state(&id))
+}
+
+#[tauri::command]
+async fn codex_delete(
+    app: tauri::AppHandle,
+    id: String,
+    delete_linked_claude: bool,
+) -> Result<(), String> {
+    // Best-effort: if this was the active proxy codex profile, drop it from helper.
+    if let Some(p) = config::find_codex_profile(&id) {
+        if p.uses_embedded_cli_proxy() {
+            let _ = cli_proxy::deactivate_codex_proxy_profiles(&app).await;
+        }
+    }
+    codex_config::delete_profile(&id, delete_linked_claude)
+}
+
+/// Ensure a custom Claude profile has a linked Codex counterpart (create if needed).
+#[tauri::command]
+fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexProfile, String> {
+    let mut settings = config::load();
+    let claude = settings
+        .claude_code_profiles
+        .iter()
+        .find(|p| p.id == claude_profile_id)
+        .cloned()
+        .ok_or_else(|| "Không tìm thấy config Claude".to_string())?;
+
+    if let Some(cid) = claude.codex_profile_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(existing) = settings.codex_profiles.iter().find(|c| c.id == cid) {
+            return Ok(existing.clone());
+        }
+    }
+
+    let created = config::make_codex_profile_from_claude(&claude, uuid_v4());
+    let created_id = created.id.clone();
+    settings.codex_profiles.push(created.clone());
+    if let Some(c) = settings
+        .claude_code_profiles
+        .iter_mut()
+        .find(|p| p.id == claude_profile_id)
+    {
+        c.codex_profile_id = Some(created_id);
+    }
+    config::save(&settings)?;
+    Ok(created)
+}
+
+/// Ensure a preset provider has a derived Codex profile (Anthropic + local proxy).
+#[tauri::command]
+fn codex_ensure_preset(provider_id: String) -> Result<config::CodexProfile, String> {
+    let mut settings = config::load();
+    let provider = settings
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .cloned()
+        .ok_or_else(|| "Không tìm thấy provider".to_string())?;
+    let base = claude_code::base_url_for_provider(&provider_id, &provider)
+        .ok_or_else(|| "Thiếu Base URL, API key hoặc model cho Codex".to_string())?;
+    let key = provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Thiếu Base URL, API key hoặc model cho Codex".to_string())?
+        .to_string();
+
+    if let Some(cid) = provider
+        .codex_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(idx) = settings.codex_profiles.iter().position(|c| c.id == cid) {
+            let mut existing = settings.codex_profiles[idx].clone();
+            if existing.base_url != base || existing.api_key != key {
+                existing.base_url = base;
+                existing.api_key = key;
+                existing.cli_proxy_applied_signature = None;
+                settings.codex_profiles[idx] = existing.clone();
+                config::save(&settings)?;
+            }
+            return Ok(existing);
+        }
+    }
+
+    let name = provider
+        .display_name
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| provider_id.clone());
+    let created = config::CodexProfile {
+        id: uuid_v4(),
+        name,
+        base_url: base,
+        api_key: key,
+        model: String::new(),
+        upstream_protocol_raw: Some(config::CodexProfile::PROTOCOL_ANTHROPIC.into()),
+        connection_mode_raw: Some(config::CodexProfile::MODE_LOCAL_PROXY.into()),
+        ..Default::default()
+    };
+    let created_id = created.id.clone();
+    settings.codex_profiles.push(created.clone());
+    if let Some(p) = settings.providers.iter_mut().find(|p| p.id == provider_id) {
+        p.codex_profile_id = Some(created_id);
+    }
+    config::save(&settings)?;
+    Ok(created)
+}
+
+/// Minimal UUID v4 (no extra crate) — same approach as codex_accounts.
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut bytes = [0u8; 16];
+    let _ = getrandom::getrandom(&mut bytes);
+    // Mix time for uniqueness when getrandom is weak in tests.
+    let t = nanos.to_le_bytes();
+    for i in 0..8 {
+        bytes[i] ^= t[i % t.len()];
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11],
+        bytes[12], bytes[13], bytes[14], bytes[15]
+    )
 }
 
 /// OS notification (quota warnings) — the JS side owns the threshold logic,
@@ -640,10 +822,11 @@ fn open_settings_window_impl(app: &tauri::AppHandle, section: Option<&str>) -> R
             serde_json::to_string(sec).unwrap_or_else(|_| "\"general\"".into())
         ));
     }
+    // macOS SettingsSceneRoot remake: 920×620 (was 780×720).
     let win = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("BirdNion Settings")
-        .inner_size(780.0, 720.0)
-        .min_inner_size(640.0, 520.0)
+        .inner_size(920.0, 760.0)
+        .min_inner_size(780.0, 520.0)
         .resizable(true)
         .initialization_script(&init)
         .build()
@@ -700,6 +883,19 @@ pub fn run() {
             claude_code_profile_apply,
             claude_code_profile_deactivate,
             claude_code_profile_remove_env,
+            cli_proxy::cli_proxy_status,
+            cli_proxy::cli_proxy_prepare,
+            cli_proxy::cli_proxy_codex_status,
+            cli_proxy::cli_proxy_codex_prepare,
+            cli_proxy::cli_proxy_stop,
+            cli_proxy::cli_proxy_restore,
+            codex_profile_state,
+            codex_active_id,
+            codex_apply,
+            codex_deactivate,
+            codex_delete,
+            codex_ensure_counterpart,
+            codex_ensure_preset,
             codex_accounts_list,
             codex_account_save_current,
             codex_account_switch,
@@ -773,6 +969,14 @@ pub fn run() {
             }
 
             tray.build(app)?;
+
+            // Restore the loopback CLIProxyAPI helper when a previously
+            // activated embedded profile is still registered (non-blocking).
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                cli_proxy::restore_if_configured(&handle).await;
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {

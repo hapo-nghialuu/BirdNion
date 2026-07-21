@@ -5,6 +5,16 @@
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BirdNion</title>
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem("birdnion.appearance") || "auto";
+          var dark = m === "dark" || (m === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+          document.documentElement.setAttribute("data-appearance", m);
+        } catch (e) {}
+      })();
+    </script>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 

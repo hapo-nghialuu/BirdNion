@@ -1,6 +1,6 @@
 //! Shared usage-report shapes serialized to the web UI. Mirrors the macOS
 //! app's `ClaudeUsageReport`/`CodexUsageReport` so both platforms speak the
-//! same numbers (daily 90-day window, strict 30-day totals, 24 hour buckets).
+//! same numbers (daily 120-day window, strict 30-day totals, 24 hour buckets).
 
 use serde::Serialize;
 
@@ -37,7 +37,7 @@ pub struct UsageReport {
     /// Strict 30-day totals — independent of the wider daily window.
     pub last30_usd: f64,
     pub last30_tokens: i64,
-    /// 90 daily buckets, oldest → newest, one entry per calendar day.
+    /// 120 daily buckets, oldest → newest, one entry per calendar day.
     pub daily: Vec<DailyUsage>,
     /// 24 hour buckets for the trailing 24 h, oldest → newest.
     pub hourly: Vec<HourlyUsage>,

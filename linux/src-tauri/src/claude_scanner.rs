@@ -2,7 +2,7 @@
 //! session logs (`~/.claude/projects/**/*.jsonl`) and rolls token usage up
 //! into the shared `UsageReport`. Semantics deliberately mirror the Swift
 //! original so both apps show identical numbers:
-//! - 90-day daily buckets, but `last30*` totals keep a strict 30-day cutoff
+//! - 120-day daily buckets, but `last30*` totals keep a strict 30-day cutoff
 //! - trailing-24 h hour buckets from per-line timestamps
 //! - keep-last dedup by `messageId:requestId` (same assistant message is
 //!   logged in both the parent session and subagent files)
@@ -18,7 +18,8 @@ use walkdir::WalkDir;
 
 use crate::usage::{DailyModel, DailyUsage, HourlyUsage, UsageReport};
 
-pub const HISTORY_DAYS: i64 = 90;
+/// Trailing daily window for charts / heatmap (macOS CombinedUsageReport 120d).
+pub const HISTORY_DAYS: i64 = 120;
 
 /// Per-million-token USD prices (input / cache-write / cache-read / output).
 /// Same table as the Swift scanner — revisit when Anthropic revises pricing.
@@ -211,7 +212,7 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
         }
     }
 
-    // Contiguous 90-day array so the chart has a slot for every day.
+    // Contiguous HISTORY_DAYS array so the chart has a slot for every day.
     let mut daily = Vec::with_capacity(HISTORY_DAYS as usize);
     for offset in (0..HISTORY_DAYS).rev() {
         let day = start_of_today - Duration::days(offset);
@@ -398,7 +399,7 @@ mod tests {
         assert_eq!(report.daily.len(), HISTORY_DAYS as usize);
         assert!((report.last30_usd - 5.0).abs() < 0.001); // 40d-old entry excluded
         let daily_total: f64 = report.daily.iter().map(|d| d.usd).sum();
-        assert!((daily_total - 10.0).abs() < 0.001); // but still on the 90d chart
+        assert!((daily_total - 10.0).abs() < 0.001); // but still on the history chart
         assert_eq!(report.top_model.as_deref(), Some("claude-opus-4-8"));
         fs::remove_dir_all(&base).ok();
     }

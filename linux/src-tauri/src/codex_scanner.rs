@@ -15,7 +15,8 @@ use walkdir::WalkDir;
 
 use crate::usage::{DailyModel, DailyUsage, HourlyUsage, UsageReport};
 
-pub const HISTORY_DAYS: i64 = 90;
+/// Trailing daily window for charts / heatmap (macOS CombinedUsageReport 120d).
+pub const HISTORY_DAYS: i64 = 120;
 
 /// Per-token USD rates, mirroring CodexBar's built-in `CostUsagePricing`
 /// table (models.dev live refresh is skipped — static table only).
@@ -448,7 +449,7 @@ mod tests {
         assert_eq!(report.daily.len(), HISTORY_DAYS as usize);
         assert!((report.last30_usd - 1.25).abs() < 0.001);
         let daily_total: f64 = report.daily.iter().map(|d| d.usd).sum();
-        assert!((daily_total - 2.5).abs() < 0.001); // both on the 90d chart
+        assert!((daily_total - 2.5).abs() < 0.001); // both on the history chart
         let hourly_tokens: i64 = report.hourly.iter().map(|h| h.tokens).sum();
         assert_eq!(hourly_tokens, 1_000_000); // 40d-old entry outside 24h
         fs::remove_dir_all(&base).ok();

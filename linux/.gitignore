@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Bundled CLIProxyAPI helper (built by scripts/build-cliproxy.sh)
+src-tauri/binaries/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

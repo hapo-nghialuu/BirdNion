@@ -1,8 +1,9 @@
-// Dedicated Settings window — port of macOS SettingsSceneRoot (780×720):
-// icon tab bar (General / Providers / Claude Code / Display / Advanced / About)
-// + card-style panes.
+// Dedicated Settings window — port of macOS SettingsSceneRoot (920×620):
+// vertical sidebar (General / Providers / Claude Code / Advanced / About)
+// + card-style panes. Display folded into General; Debug into Advanced.
 
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { t, currentLang, setLang, type Lang } from "./i18n";
 import {
   getPollSeconds, setPollSeconds, isManualRefresh, isRefreshOnOpenEnabled,
@@ -17,22 +18,39 @@ import {
 } from "./settings-about";
 import { providersPane } from "./settings-tab";
 import { claudeCodePane } from "./claude-code-pane";
+import { isClaudeCodeSupported } from "./claude-code";
 import { settingsIcon, type SettingsIconId } from "./settings-icons";
+import { getAppearance, setAppearance, type Appearance } from "./theme";
 
 const TAB_KEY = "birdnion.settingsSection";
 
 type SettingsTabId =
-  | "general" | "providers" | "claudeCode" | "display" | "advanced" | "about";
+  | "general" | "providers" | "claudeCode" | "advanced" | "about"
+  // legacy ids still routed from tray / older localStorage
+  | "display" | "debug";
 
-/** SF Symbol names from macOS SettingsTab.icon */
-const TABS: { id: SettingsTabId; icon: SettingsIconId; titleKey: string }[] = [
-  { id: "general", icon: "gearshape", titleKey: "settingsTabGeneral" },
-  { id: "providers", icon: "square.grid.2x2", titleKey: "settingsTabProviders" },
-  { id: "claudeCode", icon: "terminal", titleKey: "settingsTabClaudeCode" },
-  { id: "display", icon: "eye", titleKey: "settingsTabDisplay" },
-  { id: "advanced", icon: "slider.horizontal.3", titleKey: "settingsTabAdvanced" },
-  { id: "about", icon: "info.circle", titleKey: "settingsTabAbout" },
+type NavItem = {
+  id: SettingsTabId;
+  icon: SettingsIconId;
+  titleKey: string;
+  iconBg: string;
+};
+
+/** Five sidebar items — Display→General, Debug→Advanced (macOS P2). */
+const NAV: NavItem[] = [
+  { id: "general", icon: "gearshape", titleKey: "settingsTabGeneral", iconBg: "#8C8C94" },
+  { id: "providers", icon: "square.grid.2x2", titleKey: "settingsTabProviders", iconBg: "#2563EB" },
+  { id: "claudeCode", icon: "terminal", titleKey: "settingsTabClaudeCode", iconBg: "#8C59D9" },
+  { id: "advanced", icon: "slider.horizontal.3", titleKey: "settingsTabAdvanced", iconBg: "#8C8C94" },
+  { id: "about", icon: "info.circle", titleKey: "settingsTabAbout", iconBg: "#33A659" },
 ];
+
+function normalizeTab(id: string | null): SettingsTabId {
+  if (id === "display") return "general";
+  if (id === "debug") return "advanced";
+  if (NAV.some((n) => n.id === id)) return id as SettingsTabId;
+  return "general";
+}
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -65,7 +83,6 @@ function labeledRow(
 
 /**
  * macOS SettingsCard: section header sits OUTSIDE the white card.
- * Card = rounded 8, fill #FEFEFF, border #D7DCE2 @ 0.75, light shadow.
  */
 function card(header: string | null, rows: HTMLElement[], footer?: string): HTMLElement {
   const group = el("div", "sw-group");
@@ -80,6 +97,13 @@ function card(header: string | null, rows: HTMLElement[], footer?: string): HTML
   group.append(c);
   if (footer) group.append(el("div", "sw-card-footer-note", footer));
   return group;
+}
+
+function paneHeader(title: string, subtitle?: string): HTMLElement {
+  const h = el("div", "sw-pane-header");
+  h.append(el("div", "sw-pane-title", title));
+  if (subtitle) h.append(el("div", "sw-pane-subtitle", subtitle));
+  return h;
 }
 
 function page(...children: HTMLElement[]): HTMLElement {
@@ -117,8 +141,25 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
   langSelect.value = currentLang();
   langSelect.addEventListener("change", () => {
     setLang(langSelect.value as Lang);
-    // One remount for i18n — not a loop (listener is registered once).
     void mountSettingsWindow(onRefreshMain);
+  });
+
+  // Appearance — light | dark | auto
+  const appearanceSelect = document.createElement("select");
+  appearanceSelect.className = "sw-select";
+  for (const [val, labelKey] of [
+    ["light", "settingsAppearanceLight"],
+    ["dark", "settingsAppearanceDark"],
+    ["auto", "settingsAppearanceAuto"],
+  ] as const) {
+    const o = document.createElement("option");
+    o.value = val;
+    o.textContent = t(labelKey);
+    appearanceSelect.append(o);
+  }
+  appearanceSelect.value = getAppearance();
+  appearanceSelect.addEventListener("change", () => {
+    setAppearance(appearanceSelect.value as Appearance);
   });
 
   // Autostart — never block first paint if plugin is slow/unavailable.
@@ -127,6 +168,9 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     autostartOn,
     (v) => { void invoke("set_autostart", { enabled: v }).catch(() => {}); },
   );
+
+  // Menu bar % (folded from Display pane)
+  const showPct = switchToggle(isShowTrayPercentEnabled(), setShowTrayPercentEnabled);
 
   // Refresh frequency picker
   const freq = document.createElement("select");
@@ -138,7 +182,6 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     o.textContent = vi ? opt.vi : opt.en;
     freq.append(o);
   }
-  // Snap to nearest known option
   const known = REFRESH_OPTIONS.map((o) => o.value);
   freq.value = String(known.includes(current) ? current : 120);
   freq.addEventListener("change", () => setPollSeconds(Number(freq.value)));
@@ -153,8 +196,10 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
 
   const system = card(t("settingsSectionSystem"), [
     labeledRow(t("settingsLanguage"), t("settingsLanguageSub"), langSelect),
+    labeledRow(t("settingsAppearance"), t("settingsAppearanceSub"), appearanceSelect),
+    labeledRow(t("settingsShowTrayPercent"), t("settingsShowTrayPercentSub"), showPct),
     labeledRow(t("settingsLaunchAtLogin"), t("settingsLaunchAtLoginSub"), autostart),
-  ]);
+  ], t("settingsDisplayFooter"));
 
   const usageRows = [
     labeledRow(t("settingsRefreshFrequency"), t("settingsRefreshFrequencySub"), freq),
@@ -195,14 +240,12 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
   }
   const automation = card(t("settingsSectionAutomation"), autoRows);
 
-  // Shortcut note (no global hotkey on Linux Wayland — document in-window)
   const shortcutNote = el("div", "sw-shortcut-pill",
     vi ? "Ctrl+, (trong cửa sổ chính)" : "Ctrl+, (in main window)");
   const shortcut = card(t("settingsSectionShortcut"), [
     labeledRow(t("settingsHotkey"), t("settingsHotkeySub"), shortcutNote),
   ]);
 
-  // Quit row — macOS puts a single trailing button in an empty card.
   const quitGroup = el("div", "sw-group");
   const quitCard = el("div", "sw-card sw-card-quit");
   const quitBtn = el("button", "sw-quit-btn", t("footerQuit"));
@@ -212,29 +255,23 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
   quitCard.append(quitBtn);
   quitGroup.append(quitCard);
 
-  // Refresh now (Linux convenience; macOS uses header refresh on popover)
   const refreshNow = el("button", "sw-pill-btn", t("settingsRefreshNow"));
   refreshNow.addEventListener("click", onRefreshMain);
   const refreshCard = card(null, [
     labeledRow(t("settingsRefreshNow"), t("settingsRefreshFrequencySub"), refreshNow),
   ]);
 
-  return page(system, usage, automation, shortcut, refreshCard, quitGroup);
-}
-
-async function displayPane(): Promise<HTMLElement> {
-  const showPct = switchToggle(isShowTrayPercentEnabled(), setShowTrayPercentEnabled);
-  return page(card(
-    t("settingsSectionMenuBar"),
-    [labeledRow(t("settingsShowTrayPercent"), t("settingsShowTrayPercentSub"), showPct)],
-    t("settingsDisplayFooter"),
-  ));
+  return page(
+    paneHeader(t("settingsTabGeneral"), t("settingsGeneralSubtitle")),
+    system, usage, automation, shortcut, refreshCard, quitGroup,
+  );
 }
 
 async function advancedPane(): Promise<HTMLElement> {
   const hide = switchToggle(isHidePersonalInfo(), setHidePersonalInfo);
   const storage = switchToggle(isProviderStorageEnabled(), setProviderStorageEnabledPublic);
   return page(
+    paneHeader(t("settingsTabAdvanced"), t("settingsAdvancedSubtitle")),
     card(t("settingsSectionPrivacy"), [
       labeledRow(t("settingsHidePersonal"), t("settingsHidePersonalSub"), hide),
     ]),
@@ -248,14 +285,95 @@ async function advancedPane(): Promise<HTMLElement> {
 
 export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
   const root = el("div", "settings-window");
-  let active = (localStorage.getItem(TAB_KEY) as SettingsTabId) || "general";
-  if (!TABS.some((tab) => tab.id === active)) active = "general";
+  let active = normalizeTab(localStorage.getItem(TAB_KEY));
+  let searchQuery = "";
+  /** Providers with a non-empty API key (macOS SettingsSidebar.providersWithKey). */
+  let providersWithKey = 0;
+  /** Active AI agents, max 2: Codex active + any Claude Code on/synced. */
+  let activeAgentCount = 0;
+  let badgeSeq = 0;
 
-  const bar = el("nav", "sw-tabbar");
+  const sidebar = el("aside", "sw-sidebar");
+  const nav = el("nav", "sw-sidebar-nav");
   const content = el("div", "sw-content");
-  // Paint chrome immediately so the window is never a blank white sheet
-  // while async panes resolve (was the "Settings trắng" bug).
   content.append(el("div", "loading", "…"));
+
+  // Search filters nav titles only (KISS — plan unresolved Q#2).
+  const searchWrap = el("div", "sw-sidebar-search");
+  searchWrap.append(el("span", "sw-sidebar-search-icon", "⌕"));
+  const searchInput = document.createElement("input");
+  searchInput.type = "search";
+  searchInput.className = "sw-sidebar-search-input";
+  searchInput.placeholder = t("settingsSidebarSearch");
+  searchInput.value = searchQuery;
+  searchInput.addEventListener("input", () => {
+    searchQuery = searchInput.value;
+    renderNav();
+  });
+  searchWrap.append(searchInput);
+
+  const footer = el("div", "sw-sidebar-footer", "BirdNion");
+  void getVersion().then((v) => {
+    footer.textContent = v ? `BirdNion ${v}` : "BirdNion";
+  }).catch(() => {});
+
+  // Contextual roster slot below the nav (macOS c993e80a): Providers /
+  // AI Coding embed their list here; the content column keeps only the detail.
+  const extra = el("div", "sw-sidebar-extra");
+
+  type SettingsSnap = {
+    providers?: Array<{ id: string; apiKey?: string | null }>;
+    claudeCodeProfiles?: Array<{ id: string }>;
+  };
+
+  /** macOS SettingsSidebar.refreshBadges — async, then re-paint nav pills. */
+  const refreshBadges = async () => {
+    const seq = ++badgeSeq;
+    const settings = await invokeTimeout<SettingsSnap>("get_settings", {}, 2000);
+    if (seq !== badgeSeq) return;
+
+    const providers = settings?.providers ?? [];
+    providersWithKey = providers.filter((p) => !!(p.apiKey ?? "").trim()).length;
+
+    let agents = 0;
+    const codexActive = await invokeTimeout<string | null>("codex_active_id", {}, 1500);
+    if (seq !== badgeSeq) return;
+    if (codexActive) agents += 1;
+
+    let claudeOn = false;
+    // Prefer state commands already on the wire — stop at first "on".
+    // Only Claude Code-capable backends with a key (macOS isFullyConfigured gate).
+    for (const p of providers) {
+      if (!isClaudeCodeSupported(p.id) || !(p.apiKey ?? "").trim()) continue;
+      const st = await invokeTimeout<{ state: string }>(
+        "claude_code_state",
+        { providerId: p.id },
+        800,
+      );
+      if (seq !== badgeSeq) return;
+      if (st?.state === "on") {
+        claudeOn = true;
+        break;
+      }
+    }
+    if (!claudeOn) {
+      for (const p of settings?.claudeCodeProfiles ?? []) {
+        const st = await invokeTimeout<{ state: string }>(
+          "claude_code_profile_state",
+          { profileId: p.id },
+          800,
+        );
+        if (seq !== badgeSeq) return;
+        if (st?.state === "on") {
+          claudeOn = true;
+          break;
+        }
+      }
+    }
+    if (claudeOn) agents += 1;
+    activeAgentCount = agents;
+    renderNav();
+  };
 
   let paneSeq = 0;
   const renderPane = async () => {
@@ -266,6 +384,7 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
     try {
       switch (active) {
         case "general":
+        case "display":
           pane = await generalPane(onProvidersSaved);
           break;
         case "providers":
@@ -274,10 +393,8 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
         case "claudeCode":
           pane = await claudeCodePane(onProvidersSaved);
           break;
-        case "display":
-          pane = await displayPane();
-          break;
         case "advanced":
+        case "debug":
           pane = await advancedPane();
           break;
         case "about":
@@ -289,31 +406,64 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
     } catch (err) {
       pane = el("div", "empty", `${t("loadError")}: ${err}`);
     }
-    if (seq !== paneSeq) return; // superseded by another tab click
+    if (seq !== paneSeq) return;
+    extra.textContent = "";
+    extra.classList.remove("visible");
+    // Moving the node keeps the pane's listeners + closure refs intact, so
+    // its internal re-renders keep targeting the same (now embedded) element.
+    const roster = pane.querySelector(".pp-sidebar");
+    if (roster && (active === "providers" || active === "claudeCode")) {
+      extra.append(roster);
+      extra.classList.add("visible");
+    }
     content.textContent = "";
     content.append(pane);
+    // Re-count badges after pane work (activate/deactivate may have changed).
+    void refreshBadges();
   };
 
-  for (const tab of TABS) {
-    const btn = el("button", `sw-tab${active === tab.id ? " active" : ""}`);
-    btn.dataset.tab = tab.id;
-    btn.title = t(tab.titleKey);
-    btn.setAttribute("aria-label", t(tab.titleKey));
-    btn.append(settingsIcon(tab.icon, "sw-tab-icon"));
-    btn.append(el("span", "sw-tab-label", t(tab.titleKey)));
-    btn.addEventListener("click", () => {
-      active = tab.id;
-      localStorage.setItem(TAB_KEY, active);
-      bar.querySelectorAll(".sw-tab").forEach((b) => {
-        b.classList.toggle("active", (b as HTMLElement).dataset.tab === active);
-      });
-      void renderPane();
-    });
-    bar.append(btn);
-  }
+  const setActive = (id: SettingsTabId) => {
+    active = normalizeTab(id);
+    localStorage.setItem(TAB_KEY, active);
+    renderNav();
+    void renderPane();
+  };
 
-  root.append(bar, el("div", "sw-divider"), content);
-  void renderPane(); // don't await — shell already visible
+  const badgeText = (id: SettingsTabId): string | null => {
+    if (id === "providers") return providersWithKey > 0 ? String(providersWithKey) : null;
+    if (id === "claudeCode") return activeAgentCount > 0 ? `${activeAgentCount} ON` : null;
+    return null;
+  };
+
+  const renderNav = () => {
+    nav.textContent = "";
+    const q = searchQuery.trim().toLowerCase();
+    const items = NAV.filter((item) => {
+      if (!q) return true;
+      return t(item.titleKey).toLowerCase().includes(q);
+    });
+    for (const item of items) {
+      const btn = el("button", `sw-nav-row${active === item.id ? " active" : ""}`);
+      btn.dataset.tab = item.id;
+      btn.title = t(item.titleKey);
+      btn.setAttribute("aria-label", t(item.titleKey));
+      const tile = el("span", "sw-nav-icon-tile");
+      tile.style.background = item.iconBg;
+      tile.append(settingsIcon(item.icon, "sw-tab-icon"));
+      btn.append(tile);
+      btn.append(el("span", "sw-nav-label", t(item.titleKey)));
+      const badge = badgeText(item.id);
+      if (badge) btn.append(el("span", "sw-nav-badge", badge));
+      btn.addEventListener("click", () => setActive(item.id));
+      nav.append(btn);
+    }
+  };
+
+  sidebar.append(searchWrap, nav, extra, footer);
+  root.append(sidebar, content);
+  renderNav();
+  void refreshBadges();
+  void renderPane();
   return root;
 }
 
@@ -331,7 +481,6 @@ export async function mountSettingsWindow(onProvidersSaved: () => void = () => {
   const remount = () => {
     app.className = "settings-root-container";
     app.textContent = "";
-    // Sync paint: tab bar appears immediately, panes fill in async.
     app.append(settingsWindowRoot(onProvidersSaved));
   };
   settingsRemount = remount;
@@ -340,12 +489,11 @@ export async function mountSettingsWindow(onProvidersSaved: () => void = () => {
   if (settingsMounted) return;
   settingsMounted = true;
 
-  // Tray "Giới thiệu" / already-open settings: switch tab once (no listener stack).
   const goSection = (sec: string) => {
     if (!sec) return;
-    // Same section already showing — skip full remount flash/spin.
-    if (sec === localStorage.getItem(TAB_KEY) && app.querySelector(".settings-window")) return;
-    localStorage.setItem(TAB_KEY, sec);
+    const normalized = normalizeTab(sec);
+    if (normalized === localStorage.getItem(TAB_KEY) && app.querySelector(".settings-window")) return;
+    localStorage.setItem(TAB_KEY, normalized);
     settingsRemount?.();
   };
   window.addEventListener("birdnion-settings-section", ((ev: CustomEvent<string>) => {

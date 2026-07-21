@@ -66,3 +66,42 @@ function monogram(id: string, className: string): HTMLElement {
   span.textContent = (id[0] ?? "?").toUpperCase();
   return span;
 }
+
+/**
+ * Brand tint per provider — mirrors macOS VocabbyTheme.providerTint.
+ * [light, dark] pairs where the dark scheme needs a lifted tone
+ * (grok #111827 and commandcode #000 vanish on dark surfaces).
+ */
+const PROVIDER_TINT: Record<string, [string, string]> = {
+  codex: ["#49A3B0", "#49A3B0"],
+  minimax: ["#FE603C", "#FE603C"],
+  openrouter: ["#6467F2", "#6467F2"],
+  deepseek: ["#527DF0", "#527DF0"],
+  zai: ["#E85A6A", "#E85A6A"],
+  claude: ["#CC7C5E", "#CC7C5E"],
+  deepgram: ["#6467F2", "#6467F2"],
+  groq: ["#F56844", "#F56844"],
+  grok: ["#111827", "#C8CCD6"],
+  openai: ["#0F826E", "#0F826E"],
+  ollama: ["#888888", "#888888"],
+  copilot: ["#A855F7", "#A855F7"],
+  kilo: ["#F27027", "#F27027"],
+  commandcode: ["#000000", "#E5E5E5"],
+  freemodel: ["#22C55E", "#22C55E"],
+  mimo: ["#FF6900", "#FF6900"],
+  alibaba: ["#FF6A00", "#FF6A00"],
+  cursor: ["#00BFA5", "#00BFA5"],
+  gemini: ["#AB87EA", "#AB87EA"],
+  kiro: ["#8B47F9", "#8B47F9"],
+  opencode: ["#3B82F6", "#3B82F6"],
+  opencodego: ["#3B82F6", "#3B82F6"],
+  antigravity: ["#60BA7E", "#60BA7E"],
+  bedrock: ["#FF9900", "#FF9900"],
+};
+
+/** CSS light-dark() pair for the chip tint; undefined → fall back to secondary. */
+export function providerTintCss(id: string): string | undefined {
+  const pair = PROVIDER_TINT[id];
+  if (!pair) return undefined;
+  return pair[0] === pair[1] ? pair[0] : `light-dark(${pair[0]}, ${pair[1]})`;
+}
