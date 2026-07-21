@@ -58,9 +58,6 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-
       - name: Download bundled CLIProxyAPI helper
         shell: bash
         run: |
@@ -81,6 +78,9 @@ jobs:
           )
           chmod 755 src-tauri/binaries/cliproxyapi
           file src-tauri/binaries/cliproxyapi
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build bundles (.deb / .rpm / AppImage)
         env:
