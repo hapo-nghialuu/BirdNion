@@ -292,8 +292,8 @@ final class HiyoProvider: QuotaProvider {
             lastUpdated: Date(),
             error: nil,
             accountLabel: accountLabel,
-            planName: r.planName,
-            creditsRemaining: balance)
+            creditsRemaining: balance,
+            planName: r.planName)
     }
 
     // Internal — exposed for unit testing without a live network call.

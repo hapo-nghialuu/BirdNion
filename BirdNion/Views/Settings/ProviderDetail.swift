@@ -413,9 +413,9 @@ extension ProvidersPane {
                 // Manual / Off) + an optional manual Cookie-header field, mirroring
                 // CodexBar (no token box).
                 cookieProviderControls(row.id)
-            } else if row.id == "elevenlabs" {
-                // Multi-key store (ElevenLabsKeyStore) — managed in the card
-                // below settingsSection; skip the single TokenField.
+            } else if row.id == "elevenlabs" || row.id == "hiyo" {
+                // Multi-key store (ElevenLabsKeyStore / HiyoKeyStore) — managed
+                // in the card below settingsSection; skip the single TokenField.
                 EmptyView()
             } else {
                 TokenField(
