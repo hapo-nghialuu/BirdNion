@@ -168,6 +168,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in self?.resizePanelToContent() }
         }
 
+        // Pre-expand to cap height when the user opens the All tab, before
+        // SwiftUI mutates selected tab and lays out AllUsageOverview.
+        // Synchronous on the posting thread (main) — must not wrap in Task.
+        NotificationCenter.default.publisher(for: .birdnionAllTabWillOpen)
+            .sink { [weak self] _ in self?.preExpandPanelForTallTab() }
+            .store(in: &cancellables)
+
         // Re-render the menu bar title whenever QuotaService publishes.
         services.quotaService.$displayStatuses
             .receive(on: RunLoop.main)
@@ -284,6 +291,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let screen = panel.screen ?? NSScreen.main {
             let available = top - screen.visibleFrame.minY - 8
             height = max(1, min(fittingHeight, available, maxPanelHeight))
+        }
+        panel.setFrame(
+            NSRect(x: frame.origin.x, y: top - height, width: panelWidth, height: height),
+            display: true
+        )
+    }
+
+    /// Expand the panel to cap height *before* the tall All tab content
+    /// renders. The hosting view must have stable bounds during that layout
+    /// pass; if HostingScrollView's PlatformContainer changes frame mid-pass
+    /// while NSISEngine flushes pending removals, constraint cleanup can
+    /// recurse until the thread stack overflows.
+    /// Called synchronously from the `.birdnionAllTabWillOpen` publisher
+    /// (NotificationCenter posts are sync) so resize completes before the
+    /// Binding setter mutates `selectedProviderId`.
+    private func preExpandPanelForTallTab() {
+        guard panel.isVisible else { return }
+        let frame = panel.frame
+        let top = panelTopY ?? frame.maxY
+        var height = maxPanelHeight
+        if let screen = panel.screen ?? NSScreen.main {
+            let available = top - screen.visibleFrame.minY - 8
+            height = max(1, min(maxPanelHeight, available))
         }
         panel.setFrame(
             NSRect(x: frame.origin.x, y: top - height, width: panelWidth, height: height),

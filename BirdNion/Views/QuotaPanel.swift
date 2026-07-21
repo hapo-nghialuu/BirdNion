@@ -57,6 +57,14 @@ struct QuotaOverview: View {
                         selectedId: Binding(
                             get: { selected },
                             set: {
+                                // Pre-expand panel to cap height BEFORE state
+                                // mutates so NSHostingView has stable bounds
+                                // while AllUsageOverview lays out (avoids
+                                // NSISEngine recursion on HostingScrollView).
+                                if $0 == "all", selected != "all" {
+                                    NotificationCenter.default.post(
+                                        name: .birdnionAllTabWillOpen, object: nil)
+                                }
                                 selectedProviderId = $0
                                 UserDefaults.standard.set($0, forKey: Self.selectedTabKey)
                             }
@@ -3166,6 +3174,11 @@ extension Notification.Name {
     /// Posted by `HiyoKeyStore` when keys are added/removed/switched so
     /// Settings + the popover switcher re-list immediately (no app restart).
     static let birdnionHiyoKeysChanged = Notification.Name("com.local.birdnion.hiyoKeysChanged")
+    /// Posted when the user switches the popover tab to "all", before the
+    /// selected-tab state mutates. AppDelegate pre-expands the panel to
+    /// max height so the hosting view has stable bounds for the tall All
+    /// content layout pass.
+    static let birdnionAllTabWillOpen = Notification.Name("com.local.birdnion.allTabWillOpen")
 }
 
 // MARK: - Empty State
