@@ -45,13 +45,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                         .font(.system(size: 12))
                 }
                 SettingsRowDivider()
-                // Full labels need the whole card width — inline next to the
-                // 150pt label column the three segments clip (the original
-                // Codex-pane overflow bug).
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L10n.t("ccx.compatibility", lang))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(SettingsTheme.primary)
+                fieldRow(L10n.t("ccx.compatibility", lang)) {
                     Picker("", selection: protocolSelection) {
                         Text(L10n.t("codexConfig.protocol.anthropic", lang)).tag("anthropic")
                         Text(L10n.t("codexConfig.protocol.openaiChat", lang)).tag("chat")
@@ -62,12 +56,10 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                     // SegmentedControl caches its previous selection in AppKit.
                     // Recreate it when moving between custom profiles.
                     .id(profile.id)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                     .help(L10n.t("ccx.compatibility.hint", lang))
                     .accessibilityLabel(L10n.t("ccx.compatibility", lang))
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
                 SettingsRowDivider()
                 if !profile.isOpenAICompatible {
                     connectionModeRow
@@ -112,7 +104,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .frame(maxWidth: 240)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
@@ -169,7 +161,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(maxWidth: 360, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityLabel(L10n.t("ccx.connection", lang))
         }
     }
@@ -239,7 +231,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
             Text(label)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
-                .frame(width: 150, alignment: .leading)
+                .frame(width: 110, alignment: .leading)
             trailing()
         }
         .padding(.horizontal, 14)
