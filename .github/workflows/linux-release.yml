@@ -61,6 +61,27 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Download bundled CLIProxyAPI helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper_name="cliproxyapi-linux-x86_64"
+          asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          mkdir -p src-tauri/binaries
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "${asset_base}/${helper_name}" \
+            -o "src-tauri/binaries/${helper_name}"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "${asset_base}/${helper_name}.sha256" \
+            -o "src-tauri/binaries/${helper_name}.sha256"
+          (
+            cd src-tauri/binaries
+            sha256sum -c "${helper_name}.sha256"
+            mv "${helper_name}" cliproxyapi
+          )
+          chmod 755 src-tauri/binaries/cliproxyapi
+          file src-tauri/binaries/cliproxyapi
+
       - name: Build bundles (.deb / .rpm / AppImage)
         env:
           HAPO_BASE_URL: ${{ secrets.HAPO_BASE_URL }}
