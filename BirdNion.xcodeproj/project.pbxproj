@@ -24,6 +24,7 @@
 		DDDD00E3000000000000B0E0 /* ZaiProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD00F3000000000000F0E0 /* ZaiProvider.swift */; };
 		DDDD00E4000000000000B0E0 /* ClaudeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD00F4000000000000F0E0 /* ClaudeProvider.swift */; };
 		ELP00001000000000000B01 /* ElevenLabsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = ELP00002000000000000F01 /* ElevenLabsProvider.swift */; };
+		HIY00001000000000000B01 /* HiyoProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = HIY00002000000000000F01 /* HiyoProvider.swift */; };
 		DGP00001000000000000B01 /* DeepgramProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DGP00002000000000000F01 /* DeepgramProvider.swift */; };
 		GRP00001000000000000B01 /* GroqProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRP00002000000000000F01 /* GroqProvider.swift */; };
 		CPL00001000000000000B01 /* CopilotProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPL00002000000000000F01 /* CopilotProvider.swift */; };
@@ -190,6 +191,7 @@
 		DDDD00F3000000000000F0E0 /* ZaiProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ZaiProvider.swift; sourceTree = "<group>"; };
 		DDDD00F4000000000000F0E0 /* ClaudeProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeProvider.swift; sourceTree = "<group>"; };
 		ELP00002000000000000F01 /* ElevenLabsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ElevenLabsProvider.swift; sourceTree = "<group>"; };
+		HIY00002000000000000F01 /* HiyoProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/HiyoProvider.swift; sourceTree = "<group>"; };
 		DGP00002000000000000F01 /* DeepgramProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DeepgramProvider.swift; sourceTree = "<group>"; };
 		GRP00002000000000000F01 /* GroqProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GroqProvider.swift; sourceTree = "<group>"; };
 		CPL00002000000000000F01 /* CopilotProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/CopilotProvider.swift; sourceTree = "<group>"; };
@@ -625,6 +627,7 @@
 				DDDD00E3000000000000B0E0 /* ZaiProvider.swift in Sources */,
 				DDDD00E4000000000000B0E0 /* ClaudeProvider.swift in Sources */,
 				ELP00001000000000000B01 /* ElevenLabsProvider.swift in Sources */,
+				HIY00001000000000000B01 /* HiyoProvider.swift in Sources */,
 				DGP00001000000000000B01 /* DeepgramProvider.swift in Sources */,
 				GRP00001000000000000B01 /* GroqProvider.swift in Sources */,
 				CPL00001000000000000B01 /* CopilotProvider.swift in Sources */,

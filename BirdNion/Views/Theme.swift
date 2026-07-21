@@ -116,6 +116,7 @@ enum VocabbyTheme {
     static let openCode   = fixed(0x3B82F6)
     static let antigravity = fixed(0x60BA7E)
     static let bedrock    = fixed(0xFF9900)    // AWS
+    static let hiyo       = fixed(0x00A8E8)
 
     /// Brand tint for a provider id; nil → caller falls back to default styling.
     static func providerTint(_ id: String) -> Color? {
@@ -144,6 +145,7 @@ enum VocabbyTheme {
         case "opencode", "opencodego": return openCode
         case "antigravity": return antigravity
         case "bedrock": return bedrock
+        case "hiyo": return hiyo
         default: return nil
         }
     }

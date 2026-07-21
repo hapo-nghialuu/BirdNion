@@ -585,6 +585,8 @@ struct ProviderLogoMark: View {
             logo("AntigravityLogo", brand: VocabbyTheme.antigravity)
         case "bedrock":
             logo("BedrockLogo", brand: VocabbyTheme.bedrock)
+        case "hiyo":
+            logo("HiyoLogo", brand: VocabbyTheme.hiyo)
         default:
             Image(systemName: "circle.fill")
                 .foregroundStyle(tint ?? VocabbyTheme.secondary)
@@ -2279,6 +2281,7 @@ struct ClaudeCodeQuickApplyButton: View {
         case "minimax": return "MiniMax"
         case "deepseek": return "DeepSeek"
         case "zai": return "z.ai"
+        case "hiyo": return "Hiyo"
         default: return p?.displayName ?? providerID
         }
     }
@@ -3160,6 +3163,9 @@ extension Notification.Name {
     /// Posted by `ElevenLabsKeyStore` when keys are added/removed/switched so
     /// Settings + the popover switcher re-list immediately (no app restart).
     static let birdnionElevenLabsKeysChanged = Notification.Name("com.local.birdnion.elevenLabsKeysChanged")
+    /// Posted by `HiyoKeyStore` when keys are added/removed/switched so
+    /// Settings + the popover switcher re-list immediately (no app restart).
+    static let birdnionHiyoKeysChanged = Notification.Name("com.local.birdnion.hiyoKeysChanged")
 }
 
 // MARK: - Empty State

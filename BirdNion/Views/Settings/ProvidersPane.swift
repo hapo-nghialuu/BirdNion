@@ -264,6 +264,7 @@ extension ProvidersPane {
         case "antigravity": "Antigravity"
         case "bedrock": "AWS Bedrock"
         case "freemodel": "FreeModel"
+        case "hiyo": "Hiyo"
         default: row.displayName ?? row.id
         }
     }
@@ -438,6 +439,8 @@ struct ProviderLogoView: View {
             logo("AntigravityLogo", brand: VocabbyTheme.antigravity)
         case "bedrock":
             logo("BedrockLogo", brand: VocabbyTheme.bedrock)
+        case "hiyo":
+            logo("HiyoLogo", brand: VocabbyTheme.hiyo)
         default:
             Image(systemName: "circle.dotted")
                 .resizable()
@@ -789,6 +792,163 @@ struct ElevenLabsKeysCard: View {
         defer { busy = false }
         do {
             try ElevenLabsKeyStore.remove(key.id)
+            reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Hiyo multi-key card
+
+/// Settings card for managing multiple Hiyo API keys — add / switch /
+/// remove. Secrets live in `hiyo-keys.json`; the active id is in
+/// UserDefaults (`activeHiyoKey`).
+struct HiyoKeysCard: View {
+    @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+
+    @State var keys: [HiyoKey] = []
+    @State var activeID: String?
+    @State var newKey = ""
+    @State var newLabel = ""
+    @State var errorText: String?
+    @State var busy = false
+
+    var body: some View {
+        SettingsCard(
+            header: L10n.t("hiyo.keysLabel", settings.appLanguage),
+            footer: LocalizedStringKey(L10n.t("hiyo.keysFooter", settings.appLanguage))
+        ) {
+            if keys.isEmpty {
+                Text(L10n.t("hiyo.keysEmpty", settings.appLanguage))
+                    .font(.system(size: 12))
+                    .foregroundStyle(SettingsTheme.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                SettingsRowDivider()
+            }
+            ForEach(keys) { key in
+                keyRow(key)
+                SettingsRowDivider()
+            }
+            addRow
+            if let errorText {
+                Text(errorText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(SettingsTheme.critical)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+            }
+        }
+        .onAppear(perform: reload)
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionHiyoKeysChanged)) { _ in
+            reload()
+        }
+    }
+
+    func displayName(_ key: HiyoKey) -> String {
+        if let label = key.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
+        return key.preview
+    }
+
+    func keyRow(_ key: HiyoKey) -> some View {
+        let isActive = key.id == activeID
+        return HStack(spacing: 10) {
+            Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(isActive ? SettingsTheme.accent : SettingsTheme.secondary)
+                .onTapGesture { switchTo(key) }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayName(key))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
+                Text(key.preview + "…")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(SettingsTheme.secondary)
+            }
+
+            Spacer(minLength: 6)
+
+            if isActive {
+                Text(L10n.t("hiyo.activeBadge", settings.appLanguage))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.accent)
+            } else {
+                Button(L10n.t("hiyo.switchKey", settings.appLanguage)) {
+                    switchTo(key)
+                }
+                .controlSize(.small)
+                .disabled(busy)
+            }
+
+            Button(role: .destructive) {
+                removeKey(key)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .controlSize(.small)
+            .disabled(busy)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    var addRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SecureField(L10n.t("hiyo.keyPlaceholder", settings.appLanguage), text: $newKey)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12).monospacedDigit())
+            HStack(spacing: 8) {
+                TextField(L10n.t("hiyo.labelPlaceholder", settings.appLanguage), text: $newLabel)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                Button(L10n.t("hiyo.addKey", settings.appLanguage)) {
+                    addKey()
+                }
+                .controlSize(.small)
+                .disabled(busy || newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    func reload() {
+        keys = HiyoKeyStore.allKeys()
+        activeID = HiyoKeyStore.activeID()
+    }
+
+    func switchTo(_ key: HiyoKey) {
+        // Store posts keys-changed + birdnionRefresh (force fetch).
+        HiyoKeyStore.setActive(key.id)
+        reload()
+        errorText = nil
+    }
+
+    func addKey() {
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            // Store notifies Settings + popover to re-list immediately.
+            _ = try HiyoKeyStore.add(apiKey: newKey, label: newLabel.isEmpty ? nil : newLabel)
+            newKey = ""
+            newLabel = ""
+            reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    func removeKey(_ key: HiyoKey) {
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            try HiyoKeyStore.remove(key.id)
             reload()
         } catch {
             errorText = error.localizedDescription

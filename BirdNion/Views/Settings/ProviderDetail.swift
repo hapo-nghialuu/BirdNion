@@ -96,6 +96,9 @@ extension ProvidersPane {
                     if rows[idx].id == "elevenlabs" {
                         ElevenLabsKeysCard()
                     }
+                    if rows[idx].id == "hiyo" {
+                        HiyoKeysCard()
+                    }
                     if rows[idx].id == "antigravity" {
                         antigravityOAuthAccountsSection()
                     }

@@ -117,6 +117,8 @@ final class ServicesContainer: ObservableObject {
                 result.append(AntigravityProvider())
             case "bedrock":
                 result.append(BedrockProvider())
+            case "hiyo":
+                result.append(HiyoProvider())
             default:
                 break
             }

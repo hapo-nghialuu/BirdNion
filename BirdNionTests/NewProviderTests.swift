@@ -755,7 +755,7 @@ final class NewProviderTests: XCTestCase {
             "minimax", "hapo", "codex", "claude", "openrouter", "deepseek", "zai",
             "elevenlabs", "deepgram", "groq", "grok", "openai", "ollama", "copilot",
             "kilo", "commandcode", "freemodel", "mimo", "cursor", "alibaba", "opencode",
-            "opencodego", "gemini", "kiro", "antigravity", "bedrock",
+            "opencodego", "gemini", "kiro", "antigravity", "bedrock", "hiyo",
         ]
 
         for id in providerIDs {
@@ -1075,5 +1075,81 @@ final class NewProviderTests: XCTestCase {
         XCTAssertThrowsError(try ElevenLabsKeyStore.add(apiKey: "   ", label: nil,
                                                         url: store.url, defaults: store.defaults))
         XCTAssertTrue(ElevenLabsKeyStore.allKeys(url: store.url, defaults: store.defaults).isEmpty)
+    }
+
+    func testHiyoParse() {
+        let json = """
+        {
+          "balance": 3.98917248,
+          "remaining": 3.98917248,
+          "unit": "USD",
+          "isValid": true,
+          "mode": "unrestricted",
+          "planName": "钱包余额",
+          "usage": {
+            "total": { "cost": 0.0135344, "total_tokens": 26935, "requests": 6 },
+            "today": { "cost": 0, "total_tokens": 0, "requests": 0 }
+          }
+        }
+        """.data(using: .utf8)!
+        let s = HiyoProvider()._parseForTesting(json, accountLabel: "u")
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.count, 1)
+        XCTAssertEqual(s.windows.first?.label, "Số dư")
+        XCTAssertEqual(s.creditsRemaining ?? 0, 3.98917248, accuracy: 0.0001)
+        XCTAssertTrue(s.windows.first?.subtitle?.contains("$") == true)
+    }
+
+    /// Isolated store: temp metadata file + throwaway UserDefaults suite so
+    /// tests never touch the real key store or the app's active selection.
+    private func makeTempHiyoStore() throws -> (url: URL, defaults: UserDefaults, cleanup: () -> Void) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hiyo-keys-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("hiyo-keys.json")
+        // Pre-create an empty store so ensureLegacyImport never copies the
+        // machine's real legacy apiKey into the temp store.
+        try Data(#"{"accounts":[]}"#.utf8).write(to: url)
+        let suite = "hiyo-keys-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        return (url, defaults, {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: dir)
+        })
+    }
+
+    func testHiyoKeyStoreAddSwitchRemoveRoundtrip() throws {
+        let store = try makeTempHiyoStore()
+        defer { store.cleanup() }
+        let url = store.url, defaults = store.defaults
+
+        XCTAssertTrue(HiyoKeyStore.allKeys(url: url, defaults: defaults).isEmpty)
+        XCTAssertNil(HiyoKeyStore.activeApiKey(url: url, defaults: defaults))
+
+        let k1 = try HiyoKeyStore.add(apiKey: "sk-hiyo-test-one-aaaa", label: "Work",
+                                      url: url, defaults: defaults)
+        XCTAssertEqual(k1.label, "Work")
+        XCTAssertEqual(k1.preview, "sk-hiyo-")
+        // First key auto-activates.
+        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k1.id)
+
+        let k2 = try HiyoKeyStore.add(apiKey: "sk-hiyo-test-two-bbbb", label: "Personal",
+                                      url: url, defaults: defaults)
+        // Adding a second key must NOT steal active.
+        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k1.id)
+
+        HiyoKeyStore.setActive(k2.id, url: url, defaults: defaults)
+        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k2.id)
+        XCTAssertEqual(HiyoKeyStore.activeApiKey(url: url, defaults: defaults), "sk-hiyo-test-two-bbbb")
+        XCTAssertEqual(HiyoKeyStore.activeDisplayLabel(url: url, defaults: defaults), "Personal")
+
+        try HiyoKeyStore.remove(k2.id, url: url, defaults: defaults)
+        // Active falls back to the first remaining key.
+        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k1.id)
+        XCTAssertEqual(HiyoKeyStore.allKeys(url: url, defaults: defaults).count, 1)
+
+        try HiyoKeyStore.remove(k1.id, url: url, defaults: defaults)
+        XCTAssertTrue(HiyoKeyStore.allKeys(url: url, defaults: defaults).isEmpty)
+        XCTAssertNil(HiyoKeyStore.activeApiKey(url: url, defaults: defaults))
     }
 }
