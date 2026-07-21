@@ -886,6 +886,19 @@ struct ClaudeCodePane: View {
             codexModels = []
         }
         detailAgent = agent
+        // Persist preferred agent so reopening/switching entries restores it.
+        if selectedProfileID != nil, var profile = workingProfile {
+            profile.preferredAgent = agent.rawValue
+            workingProfile = profile
+            try? BirdNionConfigStore.saveClaudeCodeProfile(profile)
+            if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
+                profiles[index] = profile
+            }
+        } else if var provider = selectedProvider {
+            provider.preferredAgent = agent.rawValue
+            try? BirdNionConfigStore.save(provider)
+            reloadProviders()
+        }
     }
 
     /// Preset providers back Codex through a derived record: upstream comes
@@ -1667,15 +1680,22 @@ struct ClaudeCodePane: View {
         statusMessage = nil
         errorMessage = nil
         customFeedbackTarget = nil
-        detailAgent = .claudeCode
         codexModels = []
         guard let p = selectedProvider else {
+            detailAgent = .claudeCode
             haiku = ""; sonnet = ""; opus = ""; disable1M = false; models = []
             workingCodexProfile = nil
             return
         }
         workingCodexProfile = p.codexProfileID.flatMap { id in
             codexProfiles.first { $0.id == id }
+        }
+        // Restore last-selected agent; only honor Codex when a counterpart exists.
+        let restored = AICodingAgent(rawValue: p.preferredAgent ?? "") ?? .claudeCode
+        if restored == .codex, workingCodexProfile != nil {
+            detailAgent = .codex
+        } else {
+            detailAgent = .claudeCode
         }
         haiku = p.claudeHaikuModel ?? ""
         sonnet = p.claudeSonnetModel ?? ""
@@ -1859,20 +1879,28 @@ struct ClaudeCodePane: View {
         statusMessage = nil
         errorMessage = nil
         customFeedbackTarget = nil
-        detailAgent = .claudeCode
         codexModels = []
         guard let id = selectedProfileID else {
+            detailAgent = .claudeCode
             workingProfile = nil
             workingCodexProfile = nil
             return
         }
         guard var profile = profiles.first(where: { $0.id == id }) else {
+            detailAgent = .claudeCode
             workingProfile = nil
             workingCodexProfile = nil
             return
         }
         workingCodexProfile = profile.codexProfileID.flatMap { codexID in
             codexProfiles.first { $0.id == codexID }
+        }
+        // Restore last-selected agent; only honor Codex when a counterpart exists.
+        let restored = AICodingAgent(rawValue: profile.preferredAgent ?? "") ?? .claudeCode
+        if restored == .codex, workingCodexProfile != nil {
+            detailAgent = .codex
+        } else {
+            detailAgent = .claudeCode
         }
         if profile.migrateLegacyLocalProxyToOpenAIIfNeeded() {
             do {

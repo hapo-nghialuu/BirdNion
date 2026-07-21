@@ -259,6 +259,9 @@ enum BirdNionConfigStore {
         var cliProxyAppliedSignature: String? = nil
         /// Optional link to the Codex configuration created from this upstream.
         var codexProfileID: String? = nil
+        /// Last selected AI Coding agent for this profile (`AICodingAgent` rawValue:
+        /// "claudeCode" or "codex"). Optional keeps older config files valid.
+        var preferredAgent: String? = nil
 
         enum CompatibilityMode: String, CaseIterable, Identifiable {
             case anthropic
@@ -534,6 +537,9 @@ enum BirdNionConfigStore {
         /// Derived Codex record backing this preset through the embedded
         /// proxy (Anthropic wire protocol). Nil until the user targets Codex.
         var codexProfileID: String?
+        /// Last selected AI Coding agent for this provider (`AICodingAgent` rawValue:
+        /// "claudeCode" or "codex"). Optional keeps older config files valid.
+        var preferredAgent: String? = nil
 
         /// Default value used when a provider entry has no `enabled` flag.
         /// First-run user-revision (2026-06-25): opt-in, so default off.
