@@ -25,6 +25,9 @@ pub struct Settings {
     /// Active ElevenLabs multi-key id — keys live in `elevenlabs-keys.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_elevenlabs_key: Option<String>,
+    /// Active Hiyo multi-key id — keys live in `hiyo-keys.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hiyo_key: Option<String>,
     /// Custom Claude Code backends (Settings → Claude Code → "TUỲ CHỈNH") —
     /// same schema and top-level key as macOS `BirdNionConfigStore`.
     #[serde(default, rename = "claudeCodeProfiles", skip_serializing_if = "Vec::is_empty")]
@@ -560,6 +563,7 @@ pub fn api_key(provider: &Provider) -> Option<String> {
         "openrouter" => Some("OPENROUTER_API_KEY"),
         "deepseek" => Some("DEEPSEEK_API_KEY"),
         "elevenlabs" => Some("ELEVENLABS_API_KEY"),
+        "hiyo" => Some("HIYO_API_KEY"),
         "minimax" => Some("MINIMAX_CODING_API_KEY"),
         "openai" => Some("OPENAI_ADMIN_KEY"),
         "ollama" => Some("OLLAMA_API_KEY"),

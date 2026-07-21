@@ -10,7 +10,7 @@ import { logoMark } from "./logos";
 import type { ProviderStatus } from "./provider-tab";
 import {
   detailInfoGrid, usageSection, setupSection, quotaWarningCard, linksSection,
-  codexAccountsCard, freemodelAccountsCard, elevenlabsKeysCard, relativeUpdated, displayError,
+  codexAccountsCard, freemodelAccountsCard, elevenlabsKeysCard, hiyoKeysCard, relativeUpdated, displayError,
   type ProviderCfg, type Settings,
 } from "./settings-provider-detail";
 
@@ -27,7 +27,7 @@ async function persistProvidersAndNotify(settings: Settings): Promise<void> {
 const ROSTER: [string, string][] = [
   ["claude", "Claude"], ["codex", "Codex"], ["minimax", "MiniMax"],
   ["hapo", "Hapo AI Hub"], ["openrouter", "OpenRouter"], ["deepseek", "DeepSeek"],
-  ["zai", "z.ai"], ["elevenlabs", "ElevenLabs"], ["deepgram", "Deepgram"],
+  ["zai", "z.ai"], ["elevenlabs", "ElevenLabs"], ["hiyo", "Hiyo"], ["deepgram", "Deepgram"],
   ["groq", "Groq"], ["grok", "Grok"], ["openai", "OpenAI"], ["ollama", "Ollama"],
   ["copilot", "Copilot"], ["kilo", "Kilo"],
   ["commandcode", "CommandCode"], ["freemodel", "Freemodel"], ["mimo", "MiMo"],
@@ -304,6 +304,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     if (selectedId === "codex") scroll.append(codexAccountsCard());
     if (selectedId === "freemodel") scroll.append(freemodelAccountsCard());
     if (selectedId === "elevenlabs") scroll.append(elevenlabsKeysCard());
+    if (selectedId === "hiyo") scroll.append(hiyoKeysCard());
     scroll.append(quotaWarningCard(selectedId));
     const links = linksSection(selectedId);
     if (links) scroll.append(links);

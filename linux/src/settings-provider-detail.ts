@@ -19,6 +19,7 @@ import { copilotDeviceLoginRow } from "./settings-copilot-login";
 import { codexAccountsSection } from "./settings-codex-accounts";
 import { freemodelAccountsSection } from "./settings-freemodel-accounts";
 import { elevenlabsKeysSection } from "./settings-elevenlabs-keys";
+import { hiyoKeysSection } from "./settings-hiyo-keys";
 
 /** settings.json provider entry (shared schema with macOS). */
 export type ProviderCfg = {
@@ -82,7 +83,7 @@ export type CodexProfileLite = {
 
 /** Providers whose auth is a pasted API key. */
 export const KEYED = new Set([
-  "minimax", "hapo", "openrouter", "deepseek", "zai", "elevenlabs",
+  "minimax", "hapo", "openrouter", "deepseek", "zai", "elevenlabs", "hiyo",
   "deepgram", "groq", "kiro", "kilo", "alibaba", "bedrock", "openai", "ollama",
 ]);
 /** Providers that can use browser cookies. */
@@ -460,6 +461,7 @@ const PROVIDER_LINKS: Record<string, LinkSpec[]> = {
     L("link.subscription", "https://elevenlabs.io/app/subscription"),
     L("link.status", "https://status.elevenlabs.io"),
   ],
+  hiyo: [L("link.usage", "https://codex.hiyo.top")],
   deepgram: [
     L("link.dashboard", "https://console.deepgram.com/project/"),
     L("link.status", "https://status.deepgram.com"),
@@ -674,9 +676,9 @@ export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
   // 2. Auth block per provider type.
   if (id === "bedrock") {
     body.append(bedrockAuthSection(cfg));
-  } else if (KEYED.has(id) && id !== "grok" && id !== "elevenlabs") {
-    // ElevenLabs uses the multi-key card (elevenlabsKeysCard) instead of a
-    // single TokenField — keys live in elevenlabs-keys.json.
+  } else if (KEYED.has(id) && id !== "grok" && id !== "elevenlabs" && id !== "hiyo") {
+    // ElevenLabs / Hiyo use multi-key cards instead of a single TokenField —
+    // keys live in elevenlabs-keys.json / hiyo-keys.json.
     body.append(fieldRow(
       t("settingsApiKey"),
       textInput(cfg.apiKey, id === "openai" ? "OPENAI_ADMIN_KEY / API key" : t("settingsApiKey"), (v) => { cfg.apiKey = v; }, true),
@@ -767,6 +769,18 @@ export function elevenlabsKeysCard(): HTMLElement {
   const card = el("div", "sw-card");
   const body = el("div", "sw-card-body");
   body.append(elevenlabsKeysSection());
+  card.append(body);
+  group.append(card);
+  return group;
+}
+
+/** Standalone Hiyo multi-key card — add / switch / remove API keys. */
+export function hiyoKeysCard(): HTMLElement {
+  const group = el("div", "sw-group");
+  group.append(el("div", "sw-section-header", t("hiyoKeysLabel").toUpperCase()));
+  const card = el("div", "sw-card");
+  const body = el("div", "sw-card-body");
+  body.append(hiyoKeysSection());
   card.append(body);
   group.append(card);
   return group;

@@ -453,6 +453,22 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     en: "Store multiple API keys and switch from the popover. Keys live in a separate file (elevenlabs-keys.json).",
   },
 
+  // Hiyo multi-key
+  hiyoKeysLabel: { vi: "API keys Hiyo", en: "Hiyo API keys" },
+  hiyoKeysEmpty: {
+    vi: "Chưa có API key — dán key bên dưới để thêm.",
+    en: "No API keys yet — paste a key below to add one.",
+  },
+  hiyoKeyPlaceholder: { vi: "Dán API key Hiyo…", en: "Paste Hiyo API key…" },
+  hiyoKeyLabelPlaceholder: { vi: "Nhãn (tuỳ chọn)", en: "Label (optional)" },
+  hiyoKeyAdd: { vi: "Thêm key", en: "Add key" },
+  hiyoKeySwitch: { vi: "Dùng key này", en: "Use this key" },
+  hiyoKeyActive: { vi: "Đang dùng", en: "Active" },
+  hiyoKeysAddHint: {
+    vi: "Lưu nhiều API key và chuyển nhanh. Key được lưu riêng (hiyo-keys.json).",
+    en: "Store multiple API keys and switch between them. Keys live in a separate file (hiyo-keys.json).",
+  },
+
   // Claude Code pane (macOS ClaudeCodePane)
   ccxSelectProvider: {
     vi: "Dùng provider bất kỳ làm backend cho Claude Code và Codex CLI",

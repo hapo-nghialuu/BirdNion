@@ -23,6 +23,7 @@ pub mod gemini;
 pub mod grok;
 pub mod groq;
 pub mod hapo;
+pub mod hiyo;
 pub mod ollama;
 pub mod openai;
 pub mod kilo;
@@ -139,6 +140,7 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "zai" => "z.ai",
         "minimax" => "MiniMax",
         "hapo" => "Hapo AI Hub",
+        "hiyo" => "Hiyo",
         "elevenlabs" => "ElevenLabs",
         "deepgram" => "Deepgram",
         "groq" => "Groq",
@@ -174,6 +176,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         "zai" => zai::fetch(cfg).await,
         "minimax" => minimax::fetch(cfg).await,
         "hapo" => hapo::fetch(cfg).await,
+        "hiyo" => hiyo::fetch(cfg).await,
         "elevenlabs" => elevenlabs::fetch(cfg).await,
         "deepgram" => deepgram::fetch(cfg).await,
         "groq" => groq::fetch(cfg).await,
