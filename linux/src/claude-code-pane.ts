@@ -46,6 +46,9 @@ type ClaudeCodeProfile = {
   cliProxyAppliedSignature?: string | null;
   /** Link to the Codex counterpart (macOS `codexProfileID`). */
   codexProfileID?: string | null;
+  /** Last selected AI Coding agent (`AICodingAgent`: "claudeCode" | "codex").
+   *  Optional keeps older config files valid. macOS `preferredAgent`. */
+  preferredAgent?: string | null;
 };
 
 /** macOS `BirdNionConfigStore.CodexProfile`. */
@@ -303,6 +306,14 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
       codexModels = [];
     }
     detailAgent = agent;
+    // Persist preferred agent so reopening/switching entries restores it (macOS parity).
+    if (selected?.kind === "profile") {
+      selected.profile.preferredAgent = agent;
+      void persist();
+    } else if (selected?.kind === "provider") {
+      selected.cfg.preferredAgent = agent;
+      void persist();
+    }
     renderDetail();
   };
 
@@ -345,7 +356,10 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
     selected = { kind: "provider", cfg };
     statusMsg = null;
     proxyFeedback = null;
-    detailAgent = "claudeCode";
+    // Restore last-selected agent; honor Codex only when a counterpart exists (macOS parity).
+    detailAgent = (cfg.preferredAgent === "codex" && !!clean(cfg.codexProfileID ?? null))
+      ? "codex"
+      : "claudeCode";
     workingCodex = null;
     codexModels = [];
     void seedModels(cfg);
@@ -355,7 +369,10 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
     selected = { kind: "profile", profile };
     statusMsg = null;
     proxyFeedback = null;
-    detailAgent = "claudeCode";
+    // Restore last-selected agent; honor Codex only when a counterpart exists (macOS parity).
+    detailAgent = (profile.preferredAgent === "codex" && !!clean(profile.codexProfileID))
+      ? "codex"
+      : "claudeCode";
     workingCodex = null;
     codexModels = [];
     renderAll();

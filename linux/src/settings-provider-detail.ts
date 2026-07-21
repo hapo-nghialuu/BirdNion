@@ -49,6 +49,8 @@ export type ProviderCfg = {
   source?: string | null;
   /** Derived Codex record for this preset (macOS `Provider.codexProfileID`). */
   codexProfileID?: string | null;
+  /** Last selected AI Coding agent (macOS `Provider.preferredAgent`). */
+  preferredAgent?: string | null;
 };
 
 export type Settings = {
