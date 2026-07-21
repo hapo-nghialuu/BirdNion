@@ -1,8 +1,8 @@
 cask "birdnion" do
-  version "0.10.1"
-  sha256 "d7c1e2b74b7ed4fcfac7c914100eee7e23cd24a63983ae75b2f5be865c81dff6"
+  version "0.10.1,1"
+  sha256 "0cfd593292800ec317e56d8820e91733123e5c2efe493be0035c8d17a98c3232"
 
-  url "https://github.com/hapo-nghialuu/BirdNion/releases/download/v#{version}/BirdNion-#{version}.zip"
+  url "https://github.com/hapo-nghialuu/BirdNion/releases/download/v#{version.csv.first}/BirdNion-#{version.csv.first}.zip"
   name "BirdNion"
   desc "AI quota menu bar app — tracks MiniMax, Codex, Claude, Hapo AI Hub and more"
   homepage "https://github.com/hapo-nghialuu/BirdNion"
