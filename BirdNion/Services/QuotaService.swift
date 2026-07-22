@@ -297,7 +297,14 @@ final class QuotaService: ObservableObject {
                 // snapshot that would mask an ongoing failure (R3.5).
                 evaluateFailureEpisode(id: id, displayName: status.displayName,
                                        error: status.error)
-                if status.error != nil, previous?.isRenderableSnapshot == true {
+                // Preserve a good snapshot across a *transient* refresh error
+                // (timeout, rate-limit, 5xx) so the popover doesn't flicker to
+                // empty. But a credential error (401/403 / invalid token) means
+                // the shown numbers are no longer trustworthy — the key was
+                // revoked, rotated, or replaced — so surface the error instead
+                // of a stale "still fine" reading.
+                let isCredentialError = classify(rawError: status.error) == .tokenInvalidOrMissing
+                if status.error != nil, previous?.isRenderableSnapshot == true, !isCredentialError {
                     log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
                 } else {
                     pending[id] = status

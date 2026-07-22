@@ -38,6 +38,25 @@ final class QuotaServicePollingTests: XCTestCase {
     }
 
     @MainActor
+    func testCredentialErrorClearsPreviousGoodStatus() async {
+        // A 401 means the shown numbers can't be trusted (key revoked/rotated),
+        // so the stale good snapshot must be replaced by the error — unlike a
+        // transient timeout, which preserves the last-good reading.
+        let provider = GoodThenUnauthorizedProvider(id: "minimax", displayName: "MiniMax")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 80)
+
+        await svc.refresh(forceProviderIDs: ["minimax"])
+
+        let status = svc.statuses.first
+        XCTAssertNotNil(status?.error)
+        XCTAssertTrue(status?.windows.isEmpty ?? false)
+        XCTAssertTrue(svc.displayStatuses.first?.windows.isEmpty ?? false)
+    }
+
+    @MainActor
     func testForcedRefreshBypassesProviderInterval() async {
         let provider = CountingProvider(id: "codex", displayName: "Codex")
         let svc = QuotaService(providers: [provider], interval: 3_600)
@@ -242,5 +261,36 @@ private final class GoodThenErrorProvider: QuotaProvider {
             windows: [],
             lastUpdated: Date(),
             error: "\(displayName): timeout")
+    }
+}
+
+/// First fetch succeeds, every later fetch returns an HTTP 401. Used to prove
+/// a credential error clears the preserved stale snapshot instead of masking a
+/// revoked/rotated key behind the last-good numbers.
+private final class GoodThenUnauthorizedProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    private var fetchCount = 0
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        fetchCount += 1
+        if fetchCount == 1 {
+            return ProviderStatus(
+                id: id,
+                displayName: displayName,
+                windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+                lastUpdated: Date())
+        }
+        return ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: [],
+            lastUpdated: Date(),
+            error: "HTTP 401")
     }
 }
