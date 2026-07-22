@@ -92,9 +92,27 @@ function planLabel(status: ProviderStatus): string | null {
   return null;
 }
 
-function lowestWindow(status: ProviderStatus): QuotaWindow | null {
+/** Bonus-credit window labels (FreeModel referral balance, Kiro bonus
+ * credits) — expected to sit at 0% once spent, unlike a recurring
+ * rate-limit window, so they must not outrank a healthy primary quota as
+ * the "lowest" summary (popover strip, tray tooltip, Settings badge).
+ * Mirrors macOS `QuotaWindow.isSupplementary`. */
+const SUPPLEMENTARY_WINDOW_LABELS = new Set(["Số dư", "Bonus Credits"]);
+
+/** Windows excluding supplementary ones; falls back to all windows when
+ * every window is supplementary (never returns an empty set for a status
+ * that has data). */
+function primaryWindows(windows: QuotaWindow[]): QuotaWindow[] {
+  const primary = windows.filter((w) => !SUPPLEMENTARY_WINDOW_LABELS.has(w.label));
+  return primary.length > 0 ? primary : windows;
+}
+
+/** Lowest-remaining window across the status, ignoring supplementary
+ * bonus-credit windows — shared by the popover strip, tray tooltip
+ * (`main.ts`), and Settings quota badge (`settings-tab.ts`). */
+export function lowestWindow(status: ProviderStatus): QuotaWindow | null {
   if (!status.windows.length) return null;
-  return status.windows.reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
+  return primaryWindows(status.windows).reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
 }
 
 /** macOS `WindowRow` — label · % · 5px bar · used · reset. */

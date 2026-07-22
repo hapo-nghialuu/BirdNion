@@ -7,7 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import { t, currentLang } from "./i18n";
 import { reorderControls } from "./settings-provider-row";
 import { logoMark } from "./logos";
-import type { ProviderStatus } from "./provider-tab";
+import { lowestWindow, type ProviderStatus } from "./provider-tab";
 import {
   detailInfoGrid, usageSection, setupSection, quotaWarningCard, linksSection,
   codexAccountsCard, freemodelAccountsCard, elevenlabsKeysCard, hiyoKeysCard, relativeUpdated, displayError,
@@ -133,7 +133,8 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
       return { text: msg.slice(0, 40) + (msg.length > 40 ? "…" : ""), isError: true };
     }
     if (st && st.windows.length > 0) {
-      const lowest = st.windows.reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
+      // `st.windows.length > 0` guarantees lowestWindow returns non-null.
+      const lowest = lowestWindow(st)!;
       const pct = lowest.remainingPct;
       // Quota % colored by level in the list (P4 reskin).
       const quotaClass = pct <= 20 ? "critical" : pct <= 50 ? "warning" : "ok";

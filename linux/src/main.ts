@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { combine, UsageReport } from "./usage";
 import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
-import { providerCard, claudeCodeQuickApplyCard, loadingSkeleton, ProviderStatus } from "./provider-tab";
+import { providerCard, claudeCodeQuickApplyCard, loadingSkeleton, lowestWindow, ProviderStatus } from "./provider-tab";
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
 import { codexAccountsPopoverCard } from "./codex-accounts-popover";
@@ -766,7 +766,9 @@ function buildTrayFrames(statuses: ProviderStatus[], hidden: Set<string>): Omit<
   return statuses
     .filter((s) => !hidden.has(s.id) && !s.error && s.windows.length > 0)
     .map((s) => {
-      const lowest = s.windows.reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
+      // `.filter` above guarantees s.windows.length > 0, so lowestWindow
+      // always returns non-null here.
+      const lowest = lowestWindow(s)!;
       return {
         providerId: s.id,
         percentText: trayPercentText(s),
