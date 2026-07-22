@@ -976,7 +976,8 @@ final class KiroProvider: QuotaProvider {
             usedPct: bonusUsedPct,
             remainingPct: 100 - bonusUsedPct,
             subtitle: String(format: "%.2f / %.0f bonus", bonus.used, bonus.total),
-            resetDate: bonusExpiry)
+            resetDate: bonusExpiry,
+            isSupplementary: true)
     }
 
     /// Overage window — shown when the plan reports pay-as-you-go usage or an

@@ -623,8 +623,16 @@ struct ProviderLogoMark: View {
 }
 
 enum ProviderStatusSummary {
+    /// Lowest-remaining window across the status, ignoring supplementary
+    /// bonus-credit windows (see `QuotaWindow.isSupplementary`) so an
+    /// exhausted referral bonus doesn't outrank a healthy primary quota as
+    /// the "Lowest Quota" headline. Falls back to considering every window
+    /// when all of them are supplementary (never silently returns nil for a
+    /// status that has data).
     static func lowestWindow(_ status: ProviderStatus) -> QuotaWindow? {
-        status.windows.min { $0.remainingPct < $1.remainingPct }
+        let primary = status.windows.filter { !$0.isSupplementary }
+        let candidates = primary.isEmpty ? status.windows : primary
+        return candidates.min { $0.remainingPct < $1.remainingPct }
     }
 }
 

@@ -303,7 +303,8 @@ final class FreemodelProvider: QuotaProvider {
             label: "Số dư",
             usedPct: usedPct,
             remainingPct: 100 - usedPct,
-            subtitle: subtitle)
+            subtitle: subtitle,
+            isSupplementary: true)
     }
 
     /// Map one freemodel dollar window into a QuotaWindow with a "$used / $limit"

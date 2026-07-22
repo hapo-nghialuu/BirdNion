@@ -657,6 +657,7 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNil(s.error)
         XCTAssertEqual(s.windows.map(\.label), ["Credits", "Bonus Credits", "Vượt hạn mức"])
         XCTAssertEqual(s.windows[0].remainingPct, 100)
+        XCTAssertTrue(s.windows[1].isSupplementary)
         XCTAssertEqual(s.windows[2].subtitle, "Disabled")
         XCTAssertEqual(s.kiroMenu?.overagesStatus, "Disabled")
     }
@@ -742,6 +743,38 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(
             MenuBarIconRenderer.freemodelMenuBarPercents([w("Số dư", remaining: 64)]),
             [64])
+    }
+
+    /// "Lowest Quota" card bug: an exhausted bonus-credit window (referral
+    /// balance run out — expected once spent, not urgent) must not outrank a
+    /// healthy primary quota. Reproduces the reported screenshot: 5h 92%,
+    /// week 78%, bonus balance 0% — the card should read "Tuần · 78%", not
+    /// "Số dư · 0%".
+    func testLowestWindowIgnoresSupplementaryBonusWindow() {
+        let status = ProviderStatus(
+            id: "freemodel", displayName: "FreeModel",
+            windows: [
+                QuotaWindow(label: "5 giờ", usedPct: 8, remainingPct: 92),
+                QuotaWindow(label: "Tuần", usedPct: 22, remainingPct: 78),
+                QuotaWindow(label: "Số dư", usedPct: 100, remainingPct: 0, isSupplementary: true),
+            ],
+            lastUpdated: Date())
+        let lowest = ProviderStatusSummary.lowestWindow(status)
+        XCTAssertEqual(lowest?.label, "Tuần")
+        XCTAssertEqual(lowest?.remainingPct, 78)
+    }
+
+    /// When every window is supplementary (degenerate case), fall back to
+    /// considering all of them rather than returning nil for a status that
+    /// does have data.
+    func testLowestWindowFallsBackWhenAllWindowsSupplementary() {
+        let status = ProviderStatus(
+            id: "freemodel", displayName: "FreeModel",
+            windows: [
+                QuotaWindow(label: "Số dư", usedPct: 100, remainingPct: 0, isSupplementary: true),
+            ],
+            lastUpdated: Date())
+        XCTAssertEqual(ProviderStatusSummary.lowestWindow(status)?.remainingPct, 0)
     }
 
     func testMenuBarPercentTitleIncludesUnit() {
@@ -927,6 +960,7 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(balance.subtitle, "$67.22 / $187.84 · 8 giới thiệu")
         XCTAssertEqual(balance.usedPct, 36)          // 67.22/187.84 ≈ 35.8% → 36
         XCTAssertEqual(balance.remainingPct, 64)
+        XCTAssertTrue(balance.isSupplementary)
 
         // No referral data (endpoint failed) → no third window.
         let noRef = FreemodelProvider._parseForTesting(

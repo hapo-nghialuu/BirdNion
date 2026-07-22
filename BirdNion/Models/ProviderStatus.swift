@@ -17,6 +17,15 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
     /// Full window length in seconds (e.g. 18000 for 5h, 604800 for a week).
     /// Used with `resetDate` to compute consumption pace. nil when unknown.
     let windowSeconds: Int?
+    /// True for supplementary/bonus-credit windows (referral bonuses, one-off
+    /// signup credits) that are expected to sit at 0% once spent — unlike a
+    /// recurring rate-limit window, running out isn't an urgent signal.
+    /// `ProviderStatusSummary.lowestWindow` excludes these so an exhausted
+    /// bonus doesn't outrank a healthy primary quota as the popover headline
+    /// (mirrors `MenuBarIconRenderer.freemodelMenuBarPercents`, which already
+    /// keeps FreeModel's balance window out of the menu-bar percent for the
+    /// same reason).
+    let isSupplementary: Bool
 
     init(id: UUID = UUID(),
          label: String,
@@ -24,7 +33,8 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
          remainingPct: Int,
          subtitle: String? = nil,
          resetDate: Date? = nil,
-         windowSeconds: Int? = nil) {
+         windowSeconds: Int? = nil,
+         isSupplementary: Bool = false) {
         self.id = id
         self.label = label
         self.usedPct = usedPct
@@ -32,6 +42,26 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
         self.subtitle = subtitle
         self.resetDate = resetDate
         self.windowSeconds = windowSeconds
+        self.isSupplementary = isSupplementary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, usedPct, remainingPct, subtitle, resetDate, windowSeconds, isSupplementary
+    }
+
+    /// Custom decode so cached snapshots written before this field existed
+    /// (`CodexAccountSnapshotStore`'s on-disk JSON) still decode — a missing
+    /// key defaults to `false` instead of failing the whole decode.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        label = try c.decode(String.self, forKey: .label)
+        usedPct = try c.decode(Int.self, forKey: .usedPct)
+        remainingPct = try c.decode(Int.self, forKey: .remainingPct)
+        subtitle = try c.decodeIfPresent(String.self, forKey: .subtitle)
+        resetDate = try c.decodeIfPresent(Date.self, forKey: .resetDate)
+        windowSeconds = try c.decodeIfPresent(Int.self, forKey: .windowSeconds)
+        isSupplementary = try c.decodeIfPresent(Bool.self, forKey: .isSupplementary) ?? false
     }
 }
 
