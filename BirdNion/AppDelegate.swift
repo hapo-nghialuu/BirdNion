@@ -40,12 +40,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
-    /// Most recent natural content height reported by PopoverView (via
-    /// `.birdnionPopoverContentHeightChanged`). 0 until the first report;
-    /// `showPanel`/`resizePanelToContent` fall back to a one-off
-    /// `fittingSize` measurement then — that call is safe because it runs
-    /// from our own code, never inside AppKit's update-constraints flush.
-    private var contentHeight: CGFloat = 0
     /// Screen-space Y of the panel's top edge while shown, so height changes
     /// (e.g. switching to the settings section) grow downward, not upward.
     private var panelTopY: CGFloat?
@@ -153,9 +147,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // raises an NSException (`_postWindowNeedsUpdateConstraints`) that
         // crashes the app — reproduced deterministically at launch whenever
         // boot-time data changed what the popover renders (2026-07-23).
-        // Height now flows the other way: PopoverView measures its content
-        // and posts `.birdnionPopoverContentHeightChanged`; the panel is
-        // resized explicitly from that value (see `contentHeight`).
+        // Height now flows the other way: PopoverView posts
+        // `.birdnionPopoverContentHeightChanged` as a change trigger, and the
+        // panel resizes explicitly via `hostingController.view.fittingSize`
+        // (see `resizePanelToContent`).
         hostingController = host
 
         // Borderless, non-activating panel — no arrow, floats above windows.
@@ -182,14 +177,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = p
 
         // Resize the panel whenever the SwiftUI content's natural height
-        // changes (loading -> loaded, tab switch, data landing). The value
-        // comes from PopoverView's GeometryReader preference — measured on
-        // our own render path, never from inside AppKit's constraint flush.
+        // changes (loading -> loaded, tab switch, data landing). This
+        // notification (PopoverView's GeometryReader preference) is only the
+        // trigger — a plain SwiftUI value change, safe to observe. The actual
+        // height comes from `hostingController.view.fittingSize`, AppKit's own
+        // Auto Layout measurement, which the GeometryReader route under-reports
+        // by the ScrollView's own content margins (left the popover a few
+        // points short of its content, showing a spurious scrollbar). Deferred
+        // via Task so it runs on a fresh run-loop turn, after the SwiftUI
+        // update pass that triggered the preference has fully completed —
+        // never inside AppKit's own update-constraints flush.
         NotificationCenter.default.publisher(for: .birdnionPopoverContentHeightChanged)
-            .sink { [weak self] note in
-                guard let height = note.userInfo?[PopoverContentHeightKey.userInfoKey] as? CGFloat
-                else { return }
-                self?.contentHeight = height
+            .sink { [weak self] _ in
                 Task { @MainActor in self?.resizePanelToContent() }
             }
             .store(in: &cancellables)
@@ -277,16 +276,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isAllTabActive = true
         }
 
-        // Prefer the height PopoverView reported; before the first report
-        // (cold first open), measure once — safe here, outside any AppKit
-        // constraint flush.
-        let fittingHeight: CGFloat
-        if contentHeight > 0 {
-            fittingHeight = contentHeight
-        } else {
-            hostingController.view.layoutSubtreeIfNeeded()
-            fittingHeight = max(1, hostingController.view.fittingSize.height)
-        }
+        // Measure via AppKit's own Auto Layout fitting size — safe here,
+        // outside any AppKit constraint flush.
+        hostingController.view.layoutSubtreeIfNeeded()
+        let fittingHeight = max(1, hostingController.view.fittingSize.height)
 
         // Anchor: just below the status item button, centered, nudged up.
         let buttonRect = buttonWindow.convertToScreen(
@@ -343,9 +336,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// visible screen so tall content scrolls instead of overflowing.
     private func resizePanelToContent() {
         guard panel.isVisible else { return }
-        // Reported content height only — re-measuring fittingSize here would
-        // re-enter SwiftUI layout from a resize we may be mid-way through.
-        let fittingHeight = max(1, contentHeight)
+        // Deferred here via the caller's `Task { @MainActor in ... }`, so this
+        // runs on a fresh run-loop turn — safe to re-measure fittingSize
+        // rather than trust the GeometryReader-reported value, which under-
+        // reports by the ScrollView's own content margins.
+        hostingController.view.layoutSubtreeIfNeeded()
+        let fittingHeight = max(1, hostingController.view.fittingSize.height)
         let frame = panel.frame
         let top = panelTopY ?? frame.maxY
         let height = clampedHeight(fittingHeight: fittingHeight, top: top, screen: panel.screen ?? NSScreen.main)
