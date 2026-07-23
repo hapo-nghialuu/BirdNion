@@ -3,9 +3,20 @@
 //! like the macOS app does. Per rollout file we track the active model from
 //! `turn_context` events and price each `token_count` event's
 //! `last_token_usage` (the turn's own delta), bucketing by the event's local
-//! timestamp. Validated against the macOS app: 7-day totals agree within ~3%
-//! (the vendored scanner additionally reconciles forked-session baselines,
-//! which this port deliberately skips — YAGNI until numbers drift).
+//! timestamp. Validated against the macOS app: 7-day totals agree within ~3%.
+//!
+//! Forked/resumed sessions (`session_meta.forked_from_id`) replay the parent
+//! thread's full history into the new rollout file with every replayed line
+//! re-stamped to the fork moment. Left unhandled, that inflates the fork
+//! day's usage by the parent's entire lifetime total (561M phantom tokens
+//! observed in production, 2026-07-23). We mirror the vendored scanner's
+//! fix: resolve the parent's cumulative `total_token_usage` at-or-before the
+//! fork moment and subtract it from the fork file's own cumulative totals,
+//! counting only the genuinely-new delta. Baselines are looked up purely
+//! from data already read in this same scan (no extra file I/O), which also
+//! makes multi-level fork chains resolve correctly without recursion: a
+//! fork-of-a-fork's raw cumulative total already reflects its own parent's
+//! full history.
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
 use serde_json::Value;
@@ -144,6 +155,112 @@ fn cost_usd(model: &str, input: i64, cached: i64, output: i64) -> f64 {
     non_cached as f64 * ir + cached as f64 * cr + output.max(0) as f64 * or
 }
 
+/// A `token_count` event's input/cached/output/total fields, read from
+/// either `last_token_usage` (a turn's own delta) or `total_token_usage`
+/// (the session's running cumulative counter) — same shape, different
+/// semantics depending on which JSON object it was read from.
+#[derive(Clone, Copy, Default)]
+struct CodexTotals {
+    input: i64,
+    cached: i64,
+    output: i64,
+    total: i64,
+}
+
+impl CodexTotals {
+    fn from_value(v: &Value) -> Self {
+        let get = |k: &str| v.get(k).and_then(Value::as_i64).unwrap_or(0);
+        Self {
+            input: get("input_tokens"),
+            cached: get("cached_input_tokens"),
+            output: get("output_tokens"),
+            total: get("total_tokens"),
+        }
+    }
+
+    /// Component-wise `self - baseline`, clamped to zero per field so a
+    /// stale/short baseline never produces a negative count.
+    fn saturating_sub(&self, baseline: &CodexTotals) -> CodexTotals {
+        CodexTotals {
+            input: (self.input - baseline.input).max(0),
+            cached: (self.cached - baseline.cached).max(0),
+            output: (self.output - baseline.output).max(0),
+            total: (self.total - baseline.total).max(0),
+        }
+    }
+}
+
+/// One `token_count` event as read from a rollout file: the model active at
+/// that point, the turn's own delta (`last`), and the session's cumulative
+/// counter at that point (`total`, when the line carries `total_token_usage`
+/// — real Codex CLI output always does, but older/malformed lines might not).
+struct CodexTokenEvent {
+    ts: DateTime<Local>,
+    model: String,
+    last: CodexTotals,
+    total: Option<CodexTotals>,
+}
+
+/// One rollout file's parsed identity + event stream. `session_id` is this
+/// file's own identity (see `parse_codex_session_meta` for why `id` must be
+/// checked before the `session_id` JSON key); `forked_from_id`/`fork_ts`
+/// are populated only when this file is a fork/resume of another session.
+#[derive(Default)]
+struct CodexFileScan {
+    session_id: Option<String>,
+    forked_from_id: Option<String>,
+    fork_ts: Option<DateTime<Local>>,
+    events: Vec<CodexTokenEvent>,
+}
+
+/// Extracts a `session_meta` line's own identity, fork parent, and
+/// timestamp. Returns `None` for any other line type.
+///
+/// `id` must be checked BEFORE `session_id`/`sessionId`: for a normal or
+/// forked top-level session the two match, but a spawned-subagent thread's
+/// `session_meta` carries the ROOT conversation's id in `session_id` while
+/// `id` holds the subagent's own identity. Preferring `session_id` would
+/// collapse every subagent belonging to the same root onto one index key,
+/// corrupting the fork-baseline lookup below (it would resolve to a random
+/// subagent transcript instead of the true parent).
+fn parse_codex_session_meta(obj: &Value) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    if obj.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    let payload = obj.get("payload")?;
+    let field = |v: &Value, keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|k| v.get(*k).and_then(Value::as_str)).map(String::from)
+    };
+    let id = field(payload, &["id", "session_id", "sessionId"]);
+    let forked_from_id = field(payload, &["forked_from_id", "forkedFromId"]);
+    let timestamp = field(payload, &["timestamp"]).or_else(|| field(obj, &["timestamp"]));
+    Some((id, forked_from_id, timestamp))
+}
+
+/// This file's direct parent's cumulative totals at-or-before the fork
+/// moment — the baseline to subtract from the fork file's own cumulative
+/// counter. `None` when the parent wasn't among the files scanned this run
+/// (e.g. outside the history window); callers fall back to per-turn deltas
+/// in that case, same as an unforked file.
+fn resolve_codex_fork_baseline(
+    scans: &[CodexFileScan],
+    id_index: &HashMap<String, usize>,
+    parent_id: &str,
+    fork_ts: DateTime<Local>,
+) -> Option<CodexTotals> {
+    let parent = &scans[*id_index.get(parent_id)?];
+    let mut baseline = None;
+    for ev in &parent.events {
+        if ev.ts > fork_ts {
+            break;
+        }
+        if let Some(total) = ev.total {
+            baseline = Some(total);
+        }
+    }
+    baseline
+}
+
 /// Session roots under the active Codex account's home (system `~/.codex`/
 /// `$CODEX_HOME`, or a managed account's private home) — so cost tracking
 /// follows account switches the same way the quota provider does. Managed
@@ -186,6 +303,13 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
     let mut month_usd = 0.0;
     let mut month_tokens: i64 = 0;
 
+    // Pass 1: read every file once, capturing its identity/fork lineage and
+    // full event stream (not yet bucketed — a forked file's events need its
+    // parent's baseline resolved first, and that parent may be discovered
+    // later in this same loop).
+    let mut scans: Vec<CodexFileScan> = Vec::new();
+    let mut id_index: HashMap<String, usize> = HashMap::new();
+
     for root in roots {
         if !root.is_dir() {
             continue;
@@ -213,12 +337,26 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
             let Ok(content) = std::fs::read_to_string(&file) else {
                 continue;
             };
+            let mut file_scan = CodexFileScan::default();
             // Model comes from the most recent turn_context line in the file.
             let mut model = String::from("gpt-5");
             for line in content.lines() {
                 let Ok(obj) = serde_json::from_str::<Value>(line) else {
                     continue;
                 };
+                if let Some((id, forked_from_id, ts_str)) = parse_codex_session_meta(&obj) {
+                    if file_scan.session_id.is_none() {
+                        file_scan.session_id = id;
+                    }
+                    if file_scan.forked_from_id.is_none() && forked_from_id.is_some() {
+                        file_scan.forked_from_id = forked_from_id;
+                        file_scan.fork_ts = ts_str
+                            .as_deref()
+                            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                            .map(|d| d.with_timezone(&Local));
+                    }
+                    continue;
+                }
                 let payload = obj.get("payload");
                 match obj.get("type").and_then(Value::as_str) {
                     Some("turn_context") => {
@@ -234,67 +372,94 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
                         if p.get("type").and_then(Value::as_str) != Some("token_count") {
                             continue;
                         }
-                        let Some(last) = p.get("info").and_then(|i| i.get("last_token_usage"))
-                        else {
-                            continue;
-                        };
-                        let get =
-                            |k: &str| last.get(k).and_then(Value::as_i64).unwrap_or(0);
+                        let Some(info) = p.get("info") else { continue };
+                        let Some(last) = info.get("last_token_usage") else { continue };
                         let ts = obj
                             .get("timestamp")
                             .and_then(Value::as_str)
                             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                             .map(|d| d.with_timezone(&Local));
                         let Some(ts) = ts else { continue };
-                        if ts < cutoff || ts > now {
-                            continue;
-                        }
-
-                        let usd = cost_usd(
-                            &model,
-                            get("input_tokens"),
-                            get("cached_input_tokens"),
-                            get("output_tokens"),
-                        );
-                        let tokens = get("total_tokens");
-                        if usd == 0.0 && tokens == 0 {
-                            continue;
-                        }
-
-                        let day = ts.date_naive();
-                        let acc = buckets.entry(day).or_default();
-                        acc.usd += usd;
-                        acc.tokens += tokens;
-                        let m = acc.models.entry(model.clone()).or_insert((0.0, 0));
-                        m.0 += usd;
-                        m.1 += tokens;
-
-                        if ts >= last30_cutoff {
-                            month_usd += usd;
-                            month_tokens += tokens;
-                            let t = model_totals.entry(model.clone()).or_insert((0.0, 0));
-                            t.0 += usd;
-                            t.1 += tokens;
-                        }
-                        if day >= start_of_today {
-                            today_usd += usd;
-                            today_tokens += tokens;
-                        }
-                        if ts >= hour_cutoff {
-                            let h = hour_buckets
-                                .entry((day, ts.hour()))
-                                .or_insert((0.0, 0));
-                            h.0 += usd;
-                            h.1 += tokens;
-                        }
+                        file_scan.events.push(CodexTokenEvent {
+                            ts,
+                            model: model.clone(),
+                            last: CodexTotals::from_value(last),
+                            total: info.get("total_token_usage").map(CodexTotals::from_value),
+                        });
                     }
                     _ => {}
                 }
             }
+            if let Some(id) = file_scan.session_id.clone() {
+                id_index.entry(id).or_insert(scans.len());
+            }
+            scans.push(file_scan);
         }
     }
     if !any_root {
         return None;
+    }
+
+    // Pass 2: bucket each file's events, subtracting a resolved fork
+    // baseline from cumulative totals where applicable (see module docs).
+    for scan_index in 0..scans.len() {
+        let baseline = scans[scan_index]
+            .forked_from_id
+            .as_deref()
+            .zip(scans[scan_index].fork_ts)
+            .and_then(|(parent_id, fork_ts)| {
+                resolve_codex_fork_baseline(&scans, &id_index, parent_id, fork_ts)
+            });
+
+        let mut previous_adjusted = CodexTotals::default();
+        for ev in &scans[scan_index].events {
+            // Unresolved baseline (parent outside the scan window, or no
+            // fork at all) falls back to the turn's own delta — identical
+            // to this file's pre-fork-handling behavior.
+            let counted = match (baseline, ev.total) {
+                (Some(base), Some(total)) => {
+                    let adjusted = total.saturating_sub(&base);
+                    let delta = adjusted.saturating_sub(&previous_adjusted);
+                    previous_adjusted = adjusted;
+                    delta
+                }
+                _ => ev.last,
+            };
+
+            if ev.ts < cutoff || ev.ts > now {
+                continue;
+            }
+            let usd = cost_usd(&ev.model, counted.input, counted.cached, counted.output);
+            let tokens = counted.total;
+            if usd == 0.0 && tokens == 0 {
+                continue;
+            }
+
+            let day = ev.ts.date_naive();
+            let acc = buckets.entry(day).or_default();
+            acc.usd += usd;
+            acc.tokens += tokens;
+            let m = acc.models.entry(ev.model.clone()).or_insert((0.0, 0));
+            m.0 += usd;
+            m.1 += tokens;
+
+            if ev.ts >= last30_cutoff {
+                month_usd += usd;
+                month_tokens += tokens;
+                let t = model_totals.entry(ev.model.clone()).or_insert((0.0, 0));
+                t.0 += usd;
+                t.1 += tokens;
+            }
+            if day >= start_of_today {
+                today_usd += usd;
+                today_tokens += tokens;
+            }
+            if ev.ts >= hour_cutoff {
+                let h = hour_buckets.entry((day, ev.ts.hour())).or_insert((0.0, 0));
+                h.0 += usd;
+                h.1 += tokens;
+            }
+        }
     }
 
     let mut daily = Vec::with_capacity(HISTORY_DAYS as usize);
@@ -386,6 +551,30 @@ mod tests {
         )
     }
 
+    fn session_meta(ts: &str, id: &str, forked_from_id: Option<&str>) -> String {
+        let fork_field = forked_from_id
+            .map(|p| format!(r#","forked_from_id":"{p}""#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"{id}","timestamp":"{ts}"{fork_field}}}}}"#
+        )
+    }
+
+    /// Like `token_count`, but with an explicit cumulative `total_token_usage`
+    /// (needed to exercise fork-baseline resolution, which only looks at
+    /// the cumulative counter, not `last_token_usage`).
+    fn token_count_cumulative(
+        ts: &str,
+        last: (i64, i64, i64, i64),
+        total: (i64, i64, i64, i64),
+    ) -> String {
+        format!(
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{ti},"cached_input_tokens":{tc},"output_tokens":{to},"total_tokens":{tt}}},"last_token_usage":{{"input_tokens":{li},"cached_input_tokens":{lc},"output_tokens":{lo},"total_tokens":{lt}}}}}}}}}"#,
+            li = last.0, lc = last.1, lo = last.2, lt = last.3,
+            ti = total.0, tc = total.1, to = total.2, tt = total.3,
+        )
+    }
+
     #[test]
     fn prices_turns_with_the_active_model() {
         let base = temp_base("pricing");
@@ -459,5 +648,68 @@ mod tests {
     fn returns_none_without_any_root() {
         let missing = PathBuf::from("/nonexistent/birdnion-codex-root");
         assert!(scan(&[missing], Local::now()).is_none());
+    }
+
+    /// Regression for the 561M-phantom-token bug (2026-07-23): forking/
+    /// resuming an old thread replays the parent's entire history into the
+    /// new rollout file, all re-stamped to the fork moment. Without
+    /// baseline subtraction this counts the parent's full lifetime total
+    /// as new usage on the fork day. With it, only genuinely-new turns
+    /// after the fork should be counted.
+    #[test]
+    fn fork_baseline_excludes_replayed_parent_history() {
+        let base = temp_base("fork");
+        let now = Local::now();
+        let fork_ts = now.to_rfc3339();
+
+        // Parent session: one real turn totalling 1M tokens ($1.25 on gpt-5).
+        write_lines(
+            &base.join("sessions/2026/01/01"),
+            "rollout-parent.jsonl",
+            &[
+                session_meta(&fork_ts, "parent-id", None),
+                turn_context("gpt-5"),
+                token_count_cumulative(
+                    &fork_ts,
+                    (1_000_000, 0, 0, 1_000_000),
+                    (1_000_000, 0, 0, 1_000_000),
+                ),
+            ],
+        );
+
+        // Fork: replays the parent's turn (cumulative total unchanged —
+        // same 1M) then adds exactly one genuinely-new turn of 50K tokens
+        // (cumulative total 1,050,000). Only the 50K delta should be priced.
+        write_lines(
+            &base.join("sessions/2026/01/01"),
+            "rollout-fork.jsonl",
+            &[
+                session_meta(&fork_ts, "fork-id", Some("parent-id")),
+                turn_context("gpt-5"),
+                token_count_cumulative(
+                    &fork_ts,
+                    (1_000_000, 0, 0, 1_000_000), // replayed line
+                    (1_000_000, 0, 0, 1_000_000),
+                ),
+                token_count_cumulative(
+                    &fork_ts,
+                    (50_000, 0, 0, 50_000), // genuinely new turn
+                    (1_050_000, 0, 0, 1_050_000),
+                ),
+            ],
+        );
+
+        let report = scan(&[base.join("sessions")], now).unwrap();
+        // Parent's 1M ($1.25) + fork's real 50K delta ($0.0625) = $1.3125.
+        // Without the fix this would double the parent's total again via
+        // the fork's replayed line: $1.25 (parent) + $1.25 (bogus replay)
+        // + $0.0625 (real) = $2.5625.
+        assert!(
+            (report.last30_usd - 1.3125).abs() < 0.001,
+            "expected fork replay to be excluded, got {}",
+            report.last30_usd
+        );
+        assert_eq!(report.last30_tokens, 1_050_000);
+        fs::remove_dir_all(&base).ok();
     }
 }
