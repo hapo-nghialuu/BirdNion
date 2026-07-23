@@ -22,9 +22,9 @@ struct PopoverView: View {
     var body: some View {
         // ScrollView wraps content so the panel can clamp to the screen
         // edge (AppDelegate) while still scrolling tall tabs. Ideal height
-        // stays content-driven — short tabs keep hugging preferredContentSize.
-        // No height animation: animated preferredContentSize relayouts crash
-        // NSHostingView via NSISEngine recursion (instant = ok, animated = crash).
+        // stays content-driven — short tabs keep hugging the content.
+        // No height animation: animated height relayouts crash NSHostingView
+        // via NSISEngine recursion (instant = ok, animated = crash).
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // Inline top bar — only shown when not on Quota (Quota has its
@@ -38,11 +38,36 @@ struct PopoverView: View {
                     }
                 }
             }
+            // Content-height reporting for AppDelegate's manual panel sizing.
+            // The hosting controller deliberately does NOT use the
+            // `.preferredContentSize` sizing option: with it, AppKit queries
+            // `preferredContentSize` DURING its update-constraints pass, the
+            // query runs a SwiftUI graph update, and any resulting
+            // `setNeedsUpdateConstraints` re-post mid-flush raises an
+            // NSException (`_postWindowNeedsUpdateConstraints`) that AppKit
+            // escalates to a crash — reproduced deterministically at launch
+            // whenever boot-time data changed what the popover renders.
+            // Measuring the ScrollView's content here and pushing the value
+            // out via NotificationCenter keeps sizing entirely on our own
+            // safe code path (AppDelegate resizes the panel explicitly).
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: PopoverContentHeightKey.self,
+                        value: proxy.size.height)
+                }
+            )
         }
-        // Width is fixed; height is left unconstrained so the hosting
-        // controller reports its fitting height and the popover shrinks to
-        // hug the content. The fixed 480 height used to leave dead space
-        // below the cards (a Spacer absorbed it into a visible gap).
+        .onPreferenceChange(PopoverContentHeightKey.self) { height in
+            NotificationCenter.default.post(
+                name: .birdnionPopoverContentHeightChanged,
+                object: nil,
+                userInfo: [PopoverContentHeightKey.userInfoKey: height])
+        }
+        // Width is fixed; height is driven by AppDelegate from the reported
+        // content height so the popover shrinks to hug the content. The fixed
+        // 480 height used to leave dead space below the cards (a Spacer
+        // absorbed it into a visible gap).
         .frame(width: 420)
         .background(VocabbyTheme.background)
     }
@@ -93,4 +118,20 @@ struct PopoverView: View {
 
 extension Notification.Name {
     static let openSettings = Notification.Name("com.local.birdnion.openSettings")
+    /// Posted whenever the popover content's natural (unclamped) height
+    /// changes. AppDelegate stores the value and resizes the panel manually —
+    /// see the sizing comment in `PopoverView.body` for why the hosting
+    /// controller must not use `.preferredContentSize`.
+    static let birdnionPopoverContentHeightChanged =
+        Notification.Name("com.local.birdnion.popoverContentHeightChanged")
+}
+
+/// Preference carrying the ScrollView content's natural height up to the
+/// root, where it is republished through NotificationCenter for AppDelegate.
+struct PopoverContentHeightKey: PreferenceKey {
+    static let userInfoKey = "height"
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }
