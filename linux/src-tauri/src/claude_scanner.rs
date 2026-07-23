@@ -4,11 +4,12 @@
 //! original so both apps show identical numbers:
 //! - 120-day daily buckets, but `last30*` totals keep a strict 30-day cutoff
 //! - trailing-24 h hour buckets from per-line timestamps
-//! - keep-last dedup by `messageId:requestId` (same assistant message is
-//!   logged in both the parent session and subagent files)
+//! - keep-last dedup by `messageId` alone (same assistant message is logged
+//!   in both the parent session and subagent files; Claude Code dropped
+//!   `requestId` from JSONL)
 //! - Vertex AI lines skipped; unknown models count tokens but cost $0
-//! - provider-backed Claude Code models with public pricing (Fable 5,
-//!   MiniMax-M3) are priced instead of falling through to $0
+//! - provider-backed Claude Code models with public pricing (Hapo gpt-5.6 /
+//!   MiniMax-M2.5, Fable 5, MiniMax-M3) are priced instead of falling through to $0
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
 use serde_json::Value;
@@ -32,6 +33,10 @@ struct Price {
 
 fn price_for(model: &str, input_side_tokens: i64) -> Option<Price> {
     let m = model.to_lowercase();
+    // Hapo first (matches macOS `hapoPrice` prefix checks before Opus/Haiku/Sonnet).
+    if let Some(p) = hapo_price(&m, input_side_tokens) {
+        return Some(p);
+    }
     if m.contains("fable-5") {
         return Some(Price { input: 10.0, cache_write: 12.5, cache_read: 1.0, output: 50.0 });
     }
@@ -58,6 +63,53 @@ fn price_for(model: &str, input_side_tokens: i64) -> Option<Price> {
     None // non-Claude model routed through Claude Code — tokens counted, $0
 }
 
+/// Hapo Anthropic-compatible ids from `/v1/models`. Prefix-matched (not
+/// substring) so unrelated backends do not gain an inferred price. Mirrors
+/// macOS `ClaudeModelPrice.hapoPrice`.
+fn hapo_price(m: &str, input_side_tokens: i64) -> Option<Price> {
+    if m.starts_with("openai.gpt-5.6-") {
+        let long = input_side_tokens > 272_000;
+        if m.contains("luna") {
+            return Some(Price {
+                input: if long { 2.0 } else { 1.0 },
+                cache_write: if long { 2.0 } else { 1.0 },
+                cache_read: if long { 0.20 } else { 0.10 },
+                output: if long { 9.0 } else { 6.0 },
+            });
+        }
+        if m.contains("terra") {
+            return Some(Price {
+                input: if long { 5.0 } else { 2.5 },
+                cache_write: if long { 5.0 } else { 2.5 },
+                cache_read: if long { 0.50 } else { 0.25 },
+                output: if long { 22.5 } else { 15.0 },
+            });
+        }
+        if m.contains("sol") {
+            return Some(Price {
+                input: if long { 10.0 } else { 5.0 },
+                cache_write: if long { 10.0 } else { 5.0 },
+                cache_read: if long { 1.0 } else { 0.5 },
+                output: if long { 45.0 } else { 30.0 },
+            });
+        }
+        return None;
+    }
+
+    // Current id `minimax.minimax-m2.5`; keep older `minimax-m2.5-ultra-*`
+    // so existing session logs reprice.
+    if m.starts_with("minimax.minimax-m2.5") || m.starts_with("minimax-m2.5-ultra") {
+        let high_speed = m.contains("highspeed");
+        return Some(Price {
+            input: if high_speed { 0.60 } else { 0.30 },
+            cache_write: 0.375,
+            cache_read: 0.03,
+            output: if high_speed { 2.40 } else { 1.20 },
+        });
+    }
+    None
+}
+
 /// One assistant turn's per-day accounting.
 struct Entry {
     ts: DateTime<Local>,
@@ -65,7 +117,7 @@ struct Entry {
     usd: f64,
     tokens: i64,
     model: String,
-    /// `messageId:requestId` for cross-file dedup; None → counted individually.
+    /// `messageId` for cross-file / multi-block dedup; None → counted individually.
     key: Option<String>,
 }
 
@@ -141,7 +193,7 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
                 continue;
             };
             for line in content.lines() {
-                if let Some(entry) = parse_line(line, now) {
+                if let Some(entry) = parse_line(line) {
                     match &entry.key {
                         Some(k) => {
                             keyed.insert(k.clone(), entry);
@@ -270,9 +322,10 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
     })
 }
 
-/// Parses one jsonl line into a priced entry. None for non-usage lines and
-/// Vertex AI lines (separately billed — "_vrtx_" ids or "model@version").
-fn parse_line(line: &str, now: DateTime<Local>) -> Option<Entry> {
+/// Parses one jsonl line into a priced entry. None for non-usage lines,
+/// Vertex AI lines (separately billed — "_vrtx_" ids or "model@version"),
+/// and lines whose timestamp is missing/unparseable (cannot attribute a day).
+fn parse_line(line: &str) -> Option<Entry> {
     let obj: Value = serde_json::from_str(line).ok()?;
     let message = obj.get("message")?;
     let usage = message.get("usage")?;
@@ -311,19 +364,17 @@ fn parse_line(line: &str, now: DateTime<Local>) -> Option<Entry> {
         None => 0.0,
     };
 
-    // Bucket by the line's own timestamp so long-running sessions land
-    // tokens on the correct days/hours.
+    // Bucket by the line's own timestamp. Missing/unparseable timestamps used
+    // to fall back to "now" and inflate today's totals — drop the line instead.
     let ts = obj
         .get("timestamp")
         .and_then(Value::as_str)
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|d| d.with_timezone(&Local))
-        .unwrap_or(now);
+        .map(|d| d.with_timezone(&Local))?;
 
-    let key = match (message_id, request_id) {
-        (Some(m), Some(r)) => Some(format!("{m}:{r}")),
-        _ => None,
-    };
+    // Dedup by messageId alone — Claude Code no longer writes requestId;
+    // mid is unique per API response (retries get a new id).
+    let key = message_id.map(|m| m.to_string());
     Some(Entry {
         day: ts.date_naive(),
         ts,
@@ -361,6 +412,14 @@ mod tests {
         )
     }
 
+    /// Same shape as `line` but without `requestId` — matches current Claude
+    /// Code JSONL schema (requestId was dropped from the log format).
+    fn line_no_request_id(ts: &str, id: &str, model: &str, input: i64, output: i64) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","message":{{"id":"{id}","model":"{model}","usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}"#
+        )
+    }
+
     #[test]
     fn dedups_same_message_across_roots() {
         let base = temp_base("dedup");
@@ -377,6 +436,42 @@ mod tests {
         .unwrap();
         assert_eq!(report.last30_tokens, 150); // 100+50 deduped, not 300
         assert_eq!(report.today_tokens, 150);
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// Multi-content-block assistant turns repeat the same usage on 3 lines
+    /// with the same message.id and no requestId — must count once.
+    #[test]
+    fn dedups_same_message_id_without_request_id_in_one_file() {
+        let base = temp_base("dedup-mid-only");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        let l = line_no_request_id(&ts, "m1", "claude-sonnet", 100, 50);
+        write_lines(
+            &base.join("projects/enc"),
+            "p.jsonl",
+            &[l.clone(), l.clone(), l],
+        );
+
+        let report = scan(&[base.join("projects")], now).unwrap();
+        assert_eq!(report.last30_tokens, 150); // not 450
+        assert_eq!(report.today_tokens, 150);
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// Parent session + subagent file both log the same message.id without
+    /// requestId — must count once.
+    #[test]
+    fn dedups_same_message_id_without_request_id_across_files() {
+        let base = temp_base("dedup-mid-files");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        let l = line_no_request_id(&ts, "m1", "claude-sonnet", 100, 50);
+        write_lines(&base.join("projects/enc"), "parent.jsonl", &[l.clone()]);
+        write_lines(&base.join("projects/enc"), "agent.jsonl", &[l]);
+
+        let report = scan(&[base.join("projects")], now).unwrap();
+        assert_eq!(report.last30_tokens, 150); // not 300
         fs::remove_dir_all(&base).ok();
     }
 
@@ -450,5 +545,67 @@ mod tests {
     fn returns_none_without_any_root() {
         let missing = PathBuf::from("/nonexistent/birdnion-test-root");
         assert!(scan(&[missing], Local::now()).is_none());
+    }
+
+    /// Hapo rate card parity with macOS `hapoPrice` (prefix match + long-context).
+    #[test]
+    fn hapo_model_prices() {
+        // openai.gpt-5.6-terra @ 100k input-side → $2.50/M → $0.25 for 100k.
+        let terra = price_for("openai.gpt-5.6-terra", 100_000).unwrap();
+        assert!((terra.input - 2.5).abs() < 0.001);
+        assert!((terra.cache_write - 2.5).abs() < 0.001);
+        assert!((terra.cache_read - 0.25).abs() < 0.001);
+        assert!((terra.output - 15.0).abs() < 0.001);
+        let terra_cost = 100_000.0 * terra.input / 1_000_000.0;
+        assert!((terra_cost - 0.25).abs() < 0.001);
+
+        // Long-context terra (>272k) doubles.
+        let terra_long = price_for("openai.gpt-5.6-terra", 272_001).unwrap();
+        assert!((terra_long.input - 5.0).abs() < 0.001);
+        assert!((terra_long.output - 22.5).abs() < 0.001);
+
+        let luna = price_for("openai.gpt-5.6-luna", 0).unwrap();
+        assert!((luna.input - 1.0).abs() < 0.001);
+        assert!((luna.output - 6.0).abs() < 0.001);
+        let sol = price_for("openai.gpt-5.6-sol", 0).unwrap();
+        assert!((sol.input - 5.0).abs() < 0.001);
+        assert!((sol.output - 30.0).abs() < 0.001);
+        // Prefix match without a known variant → $0 (None).
+        assert!(price_for("openai.gpt-5.6-unknown", 0).is_none());
+        // Not a Hapo prefix (no `openai.`).
+        assert!(price_for("gpt-5.6-luna", 0).is_none());
+
+        // MiniMax-M2.5: base 0.30/M, highspeed 0.60/M.
+        let m25 = price_for("minimax.minimax-m2.5", 0).unwrap();
+        assert!((m25.input - 0.30).abs() < 0.001);
+        assert!((m25.cache_write - 0.375).abs() < 0.001);
+        assert!((m25.cache_read - 0.03).abs() < 0.001);
+        assert!((m25.output - 1.20).abs() < 0.001);
+        let m25_hs = price_for("minimax.minimax-m2.5-highspeed", 0).unwrap();
+        assert!((m25_hs.input - 0.60).abs() < 0.001);
+        assert!((m25_hs.output - 2.40).abs() < 0.001);
+        assert!(price_for("minimax-m2.5-ultra-5", 0).is_some());
+    }
+
+    /// Lines without a parseable timestamp must not fall into "today".
+    #[test]
+    fn drops_lines_without_parseable_timestamp() {
+        let base = temp_base("bad-ts");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        // Valid line (150 tokens) + lines with missing / garbage timestamps.
+        let good = line(&ts, "m1", "claude-sonnet", 100, 50);
+        let no_ts = r#"{"type":"assistant","message":{"id":"m2","model":"claude-sonnet","usage":{"input_tokens":900,"output_tokens":0}}}"#.to_string();
+        let bad_ts = r#"{"type":"assistant","timestamp":"not-a-date","message":{"id":"m3","model":"claude-sonnet","usage":{"input_tokens":800,"output_tokens":0}}}"#.to_string();
+        write_lines(
+            &base.join("projects/enc"),
+            "s.jsonl",
+            &[good, no_ts, bad_ts],
+        );
+
+        let report = scan(&[base.join("projects")], now).unwrap();
+        assert_eq!(report.today_tokens, 150);
+        assert_eq!(report.last30_tokens, 150);
+        fs::remove_dir_all(&base).ok();
     }
 }

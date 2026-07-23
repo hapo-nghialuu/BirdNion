@@ -119,6 +119,52 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(report?.last30Tokens, 150)   // 100 + 50, deduped (not 300)
     }
 
+    /// Multi-content-block assistant turns repeat identical usage on 3 lines
+    /// with the same message.id and no requestId — must count once.
+    func testCostScanDedupsSameMessageIdWithoutRequestIdInOneFile() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("projects/enc")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = """
+        {"type":"assistant","timestamp":"\(ts)",\
+        "message":{"id":"m1","model":"claude-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+        """
+        let body = [line, line, line].joined(separator: "\n")
+        try body.write(to: root.appendingPathComponent("p.jsonl"), atomically: true, encoding: .utf8)
+
+        let report = ClaudeCostScanner.scanFull(
+            roots: [base.appendingPathComponent("projects")],
+            now: Date())
+        XCTAssertEqual(report?.last30Tokens, 150)   // not 450
+    }
+
+    /// Parent session + subagent file both log the same message.id without
+    /// requestId — must count once.
+    func testCostScanDedupsSameMessageIdWithoutRequestIdAcrossFiles() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("projects/enc")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let line = """
+        {"type":"assistant","timestamp":"\(ts)",\
+        "message":{"id":"m1","model":"claude-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+        """
+        try line.write(to: root.appendingPathComponent("parent.jsonl"), atomically: true, encoding: .utf8)
+        try line.write(to: root.appendingPathComponent("agent.jsonl"), atomically: true, encoding: .utf8)
+
+        let report = ClaudeCostScanner.scanFull(
+            roots: [base.appendingPathComponent("projects")],
+            now: Date())
+        XCTAssertEqual(report?.last30Tokens, 150)   // not 300
+    }
+
     /// `scanDays` narrows both the entry cutoff and the daily bucket window;
     /// the default keeps the full 120-day behaviour.
     func testCostScanFullScanDaysNarrowsWindow() throws {
@@ -182,5 +228,31 @@ final class ClaudeNativeTests: XCTestCase {
             storedPricingRevision: 0, incrementalDays: 7), ClaudeCostScanner.historyDays)
         XCTAssertEqual(ClaudeCostScanner.scanDaysForHistory(
             storedPricingRevision: ClaudeCostScanner.pricingRevision, incrementalDays: 7), 7)
+    }
+
+    /// Lines without a parseable timestamp must not fall into "today".
+    func testCostScanDropsLinesWithoutParseableTimestamp() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("projects/enc")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let ts = ISO8601DateFormatter().string(from: Date())
+        let lines = """
+        {"type":"assistant","timestamp":"\(ts)","requestId":"r1",\
+        "message":{"id":"m1","model":"claude-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+        {"type":"assistant",\
+        "message":{"id":"m2","model":"claude-sonnet","usage":{"input_tokens":900,"output_tokens":0}}}
+        {"type":"assistant","timestamp":"not-a-date","requestId":"r3",\
+        "message":{"id":"m3","model":"claude-sonnet","usage":{"input_tokens":800,"output_tokens":0}}}
+        """
+        try lines.write(to: root.appendingPathComponent("p.jsonl"), atomically: true, encoding: .utf8)
+
+        let report = ClaudeCostScanner.scanFull(
+            roots: [base.appendingPathComponent("projects")],
+            now: Date())
+        XCTAssertEqual(report?.todayTokens, 150)
+        XCTAssertEqual(report?.last30Tokens, 150)
     }
 }

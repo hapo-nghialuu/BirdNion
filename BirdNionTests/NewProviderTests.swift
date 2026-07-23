@@ -160,6 +160,50 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(CostHistoryStore.preferHigher(high, low).tokens, 20)
     }
 
+    /// `replacingSource: true` writes live totals even when lower than the
+    /// stored high-water mark, and drops stored days absent from live —
+    /// without an intermediate empty-source file write.
+    func testCostHistoryApplyReplacingSourceOverwritesLowerTotals() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        _ = CostHistoryStore.apply(
+            source: .claude,
+            liveDays: [
+                (yesterday, 10.0, 1000, [("claude-opus", 10.0, 1000)]),
+                (today, 5.0, 1000, [("claude-sonnet", 5.0, 1000)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url)
+
+        // Replace with lower today; omit yesterday entirely.
+        let window = CostHistoryStore.apply(
+            source: .claude,
+            liveDays: [
+                (today, 1.0, 100, [("claude-sonnet", 1.0, 100)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url,
+            replacingSource: true)
+
+        // Lower live totals win (not preferHigher's 1000).
+        XCTAssertEqual(window.last?.tokens ?? -1, 100)
+        XCTAssertEqual(window.last?.usd ?? -1, 1.0, accuracy: 0.001)
+        // Day absent from live is gone (not kept as high-water).
+        XCTAssertEqual(window[window.count - 2].tokens, 0)
+        XCTAssertEqual(window[window.count - 2].usd, 0, accuracy: 0.001)
+
+        // Disk matches: only today under claude; other sources untouched.
+        let stored = CostHistoryStore.read(url: url).sources?["claude"] ?? [:]
+        XCTAssertEqual(stored[CostHistoryStore.dayKey(today, calendar: cal)]?.tokens, 100)
+        XCTAssertNil(stored[CostHistoryStore.dayKey(yesterday, calendar: cal)])
+    }
+
     /// Read-only `window()` must return the same buckets `apply` produced,
     /// leave other sources zeroed, and never create a missing file.
     func testCostHistoryWindowReadOnly() throws {
@@ -386,6 +430,7 @@ final class NewProviderTests: XCTestCase {
         let session = base.appendingPathComponent("sessions/proj/sess-1")
         try fm.createDirectory(at: session, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: base) }
+        let baselineURL = base.appendingPathComponent("baselines.json")
 
         let signals = """
         {"totalTokensBeforeCompaction":0,"contextTokensUsed":1000000,\
@@ -405,11 +450,144 @@ final class NewProviderTests: XCTestCase {
         try summary.write(to: session.appendingPathComponent("summary.json"),
                           atomically: true, encoding: .utf8)
 
-        let report = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+        let report = GrokCostScanner.scanFull(
+            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
         XCTAssertEqual(report.todayTokens, 1_000_000)
         XCTAssertEqual(report.todayUSD, 3.0, accuracy: 0.01) // 1M × $3 blended
         XCTAssertEqual(report.last30Tokens, 1_000_000)
         XCTAssertEqual(report.topModel, "grok-4.5")
+    }
+
+    /// Baseline store: load/save roundtrip + prune of deleted session keys.
+    func testGrokSessionBaselineStoreRoundtripAndPrune() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("grok-session-baselines.json")
+
+        XCTAssertTrue(GrokSessionBaselineStore.load(url: url).isEmpty)
+
+        GrokSessionBaselineStore.save(
+            ["sess-a": 1000, "sess-b": 2000, "sess-gone": 999],
+            keepKeys: ["sess-a", "sess-b"],
+            url: url)
+
+        let loaded = GrokSessionBaselineStore.load(url: url)
+        XCTAssertEqual(loaded["sess-a"], 1000)
+        XCTAssertEqual(loaded["sess-b"], 2000)
+        XCTAssertNil(loaded["sess-gone"])
+
+        let attrs = try fm.attributesOfItem(atPath: url.path)
+        let perms = attrs[.posixPermissions] as? NSNumber
+        XCTAssertEqual(perms?.intValue, 0o600)
+    }
+
+    /// Delta attribution: second scan with same data is 0; growth only; dip
+    /// after compaction yields 0 and keeps max-seen baseline.
+    func testGrokCostScannerDeltaAttributionIdempotentAndDip() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let session = base.appendingPathComponent("sessions/proj/sess-delta")
+        try fm.createDirectory(at: session, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let baselineURL = base.appendingPathComponent("baselines.json")
+
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let summary = """
+        {"current_model_id":"grok-4.5","last_active_at":"\(iso.string(from: now))"}
+        """
+        try summary.write(to: session.appendingPathComponent("summary.json"),
+                          atomically: true, encoding: .utf8)
+
+        func writeSignals(before: Int, context: Int) throws {
+            let signals = """
+            {"totalTokensBeforeCompaction":\(before),"contextTokensUsed":\(context),\
+            "modelsUsed":["grok-4.5"],"primaryModelId":"grok-4.5"}
+            """
+            try signals.write(to: session.appendingPathComponent("signals.json"),
+                              atomically: true, encoding: .utf8)
+        }
+
+        // First scan: empty baseline → full lifetime.
+        try writeSignals(before: 800_000, context: 200_000)
+        let first = GrokCostScanner.scanFull(
+            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        XCTAssertEqual(first.todayTokens, 1_000_000)
+
+        // Second scan, same T → delta 0 (idempotent).
+        let second = GrokCostScanner.scanFull(
+            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        XCTAssertEqual(second.todayTokens, 0)
+        XCTAssertEqual(second.last30Tokens, 0)
+
+        // Growth: only the increase is counted.
+        try writeSignals(before: 900_000, context: 300_000) // T = 1_200_000
+        let growth = GrokCostScanner.scanFull(
+            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        XCTAssertEqual(growth.todayTokens, 200_000)
+
+        // Dip after compaction (T shrinks) → delta 0; baseline stays max-seen.
+        try writeSignals(before: 1_100_000, context: 50_000) // T = 1_150_000 < 1_200_000
+        let dip = GrokCostScanner.scanFull(
+            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        XCTAssertEqual(dip.todayTokens, 0)
+        XCTAssertEqual(GrokSessionBaselineStore.load(url: baselineURL)["sess-delta"], 1_200_000)
+
+        // Recover toward max-seen still yields 0 (already counted).
+        try writeSignals(before: 1_000_000, context: 200_000) // T = 1_200_000
+        let recover = GrokCostScanner.scanFull(
+            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        XCTAssertEqual(recover.todayTokens, 0)
+
+        // Climb past max-seen → only new growth.
+        try writeSignals(before: 1_000_000, context: 300_000) // T = 1_300_000
+        let climb = GrokCostScanner.scanFull(
+            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        XCTAssertEqual(climb.todayTokens, 100_000)
+        XCTAssertEqual(GrokSessionBaselineStore.load(url: baselineURL)["sess-delta"], 1_300_000)
+    }
+
+    /// `replacingSource: true` on Grok clears inflated multi-day double-count
+    /// days (pattern matches Claude revision reset).
+    func testGrokCostHistoryReplacingSourceClearsInflatedDays() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        // Simulate pre-fix double-count: full lifetime on both days.
+        _ = CostHistoryStore.apply(
+            source: .grok,
+            liveDays: [
+                (yesterday, 7.71, 2_570_000, [("grok-4.5", 7.71, 2_570_000)]),
+                (today, 7.71, 2_570_000, [("grok-4.5", 7.71, 2_570_000)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url)
+
+        // One-shot reset: empty baselines → delta = full lifetime once at
+        // last-active (today only). Atomic replace, no empty intermediate.
+        let window = CostHistoryStore.apply(
+            source: .grok,
+            liveDays: [
+                (today, 7.71, 2_570_000, [("grok-4.5", 7.71, 2_570_000)]),
+            ],
+            now: now, calendar: cal, windowDays: 90, url: url,
+            replacingSource: true)
+
+        XCTAssertEqual(window.last?.tokens ?? -1, 2_570_000)
+        XCTAssertEqual(window[window.count - 2].tokens, 0)
+
+        let stored = CostHistoryStore.read(url: url).sources?["grok"] ?? [:]
+        XCTAssertEqual(stored[CostHistoryStore.dayKey(today, calendar: cal)]?.tokens, 2_570_000)
+        XCTAssertNil(stored[CostHistoryStore.dayKey(yesterday, calendar: cal)])
     }
 
     // MARK: - Parity additions (Wave 2-3)

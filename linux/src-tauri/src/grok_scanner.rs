@@ -1,5 +1,13 @@
 //! Local Grok session cost scanner — port of macOS `GrokCostScanner`.
 //! Walks `~/.grok/sessions/**/signals.json`.
+//!
+//! Day attribution differs from macOS: Linux has no persisted day-history store,
+//! so each scan still attributes a session's full lifetime total
+//! (`totalTokensBeforeCompaction + contextTokensUsed`) to its last-active day.
+//! macOS uses per-session max-seen baselines and only charges the delta, then
+//! merges into `CostHistoryStore`. Applying that delta model here would empty
+//! past days on every rescan (nothing keeps the older totals). Totals remain
+//! correct on Linux; only multi-day distribution differs.
 
 use chrono::{DateTime, Duration, Local};
 use serde_json::Value;

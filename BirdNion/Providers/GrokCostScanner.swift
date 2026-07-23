@@ -101,13 +101,87 @@ struct GrokModelPrice {
     }
 }
 
+// MARK: - Per-session max-seen baseline
+
+/// Persists the highest lifetime token total (`before + context`) seen per
+/// Grok session so each scan only attributes the **delta** to the session's
+/// current last-active day. Without this, multi-day sessions re-count their
+/// full lifetime total every day they stay active (CostHistoryStore high-water
+/// then keeps the inflated older days forever).
+///
+/// Baseline is max-seen (never decreases): `T = before + context` can dip after
+/// compaction, so a non-monotonic T must not produce negative deltas or
+/// re-count recovery tokens.
+///
+/// File: Application Support `BirdNion/grok-session-baselines.json`, atomic
+/// write + 0600. Tests inject a temp `url:`.
+enum GrokSessionBaselineStore {
+    static func defaultURL() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base
+            .appendingPathComponent("BirdNion", isDirectory: true)
+            .appendingPathComponent("grok-session-baselines.json")
+    }
+
+    /// Load session-key → max-seen lifetime total. Empty when missing/corrupt.
+    static func load(url: URL = defaultURL()) -> [String: Int] {
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sessions = json["sessions"] as? [String: Any]
+        else { return [:] }
+        var out: [String: Int] = [:]
+        out.reserveCapacity(sessions.count)
+        for (key, raw) in sessions {
+            switch raw {
+            case let i as Int: out[key] = i
+            case let n as NSNumber: out[key] = n.intValue
+            case let d as Double: out[key] = Int(d)
+            default: break
+            }
+        }
+        return out
+    }
+
+    /// Persist baselines, keeping only keys in `keepKeys` so deleted sessions
+    /// do not inflate the file forever. Empty `keepKeys` writes an empty map.
+    static func save(_ sessions: [String: Int],
+                     keepKeys: Set<String>,
+                     url: URL = defaultURL()) {
+        var pruned: [String: Int] = [:]
+        pruned.reserveCapacity(keepKeys.count)
+        for key in keepKeys {
+            if let v = sessions[key] { pruned[key] = v }
+        }
+        let payload: [String: Any] = ["sessions": pruned]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
 // MARK: - Scanner
 
 /// Walks `~/.grok/sessions/**/signals.json` (path overridable via `GROK_HOME`)
 /// and builds a 120-day daily cost report for the All tab.
+///
+/// Each session signal file only exposes a **lifetime** token snapshot
+/// (`totalTokensBeforeCompaction + contextTokensUsed`), overwritten in place
+/// with no time series. Attribution is therefore **per-session delta** against
+/// `GrokSessionBaselineStore` (max-seen T); only growth since the last scan is
+/// charged to the session's current last-active calendar day. Past days already
+/// live in `CostHistoryStore`.
 enum GrokCostScanner {
     private static let cacheTTL: TimeInterval = 300
     static let chartWindowDays = 120
+    /// Bump when Grok counting semantics change. Existing persisted days need
+    /// one full rescan; `usageReport` then applies with `replacingSource: true`
+    /// so inflated high-water marks are replaced atomically by the fresh
+    /// delta-based scan (never an empty source on disk mid-flight).
+    static let countingRevision = 1
+    private static let countingRevisionKey = "grokCostCountingRevision"
 
     private actor Cache {
         static let shared = Cache()
@@ -126,18 +200,36 @@ enum GrokCostScanner {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
         let value = await Task.detached(priority: .utility) {
             // Only rescan days that can still change persisted history; the
-            // store supplies the older days.
-            let scanDays = CostHistoryStore.scanBackDays(source: .grok, now: now)
+            // store supplies the older days. On a counting-revision bump, scan
+            // the full chart window once so `replacingSource` can rebuild
+            // every day from clean deltas (baselines still empty → full
+            // lifetime once per session at last-active).
+            let incrementalDays = CostHistoryStore.scanBackDays(source: .grok, now: now)
+            let storedRevision = UserDefaults.standard.integer(forKey: countingRevisionKey)
+            let replacing = storedRevision < countingRevision
+            // A revision bump must also restart the per-session baselines:
+            // max-seen totals left over from the previous counting scheme
+            // would shrink every delta to ~0, and `replacingSource` below
+            // would then rebuild the whole history from near-empty days.
+            // Clearing first makes the full-window rescan re-charge each
+            // session's lifetime exactly once at its last-active day.
+            if replacing {
+                GrokSessionBaselineStore.save([:], keepKeys: [])
+            }
+            let scanDays = replacing ? chartWindowDays : incrementalDays
             let live = scanFull(now: now, windowDays: scanDays)
             let liveDays = live.daily.map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
             }
+            // Live scan always succeeds for Grok (`scanFull` never returns nil).
             let window = CostHistoryStore.apply(
                 source: .grok,
                 liveDays: liveDays,
                 now: now,
-                windowDays: chartWindowDays)
+                windowDays: chartWindowDays,
+                replacingSource: replacing)
+            UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
             return CostHistoryStore.makeGrokReport(window: window)
         }.value
         await Cache.shared.storeReport(value, at: now)
@@ -158,17 +250,20 @@ enum GrokCostScanner {
         }.value
     }
 
-    /// Pure filesystem scan — unit-testable via `homeURL` override.
+    /// Pure filesystem scan — unit-testable via `homeURL` / `baselineURL` overrides.
     static func scanFull(
         env: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
         homeURL: URL? = nil,
         now: Date = Date(),
-        windowDays: Int = chartWindowDays) -> GrokUsageReport
+        windowDays: Int = chartWindowDays,
+        baselineURL: URL = GrokSessionBaselineStore.defaultURL()) -> GrokUsageReport
     {
         let root = (homeURL ?? GrokCredentialsStore.grokHomeURL(env: env, fileManager: fileManager))
             .appendingPathComponent("sessions", isDirectory: true)
-        let sessions = loadSessions(root: root, fileManager: fileManager, now: now, windowDays: windowDays)
+        let sessions = loadSessions(
+            root: root, fileManager: fileManager, now: now, windowDays: windowDays,
+            baselineURL: baselineURL)
         return buildReport(sessions: sessions, now: now, windowDays: windowDays)
     }
 
@@ -181,50 +276,79 @@ enum GrokCostScanner {
         let model: String
     }
 
+    /// Result of parsing one session: optional day contribution (delta > 0 and
+    /// within window) plus baseline bookkeeping for every readable session.
+    struct ParseResult: Equatable {
+        let point: SessionPoint?
+        let sessionKey: String
+        /// Max-seen lifetime total after this parse (`max(priorBaseline, T)`).
+        let newMaxSeen: Int
+    }
+
     /// Walk session directories; one point per `signals.json` attributed to the
     /// session's last-active calendar day (from `summary.json` when present,
-    /// else signals mtime).
+    /// else signals mtime). Token contribution is the **delta** against the
+    /// persisted max-seen baseline (not the full lifetime total).
     static func loadSessions(
         root: URL,
         fileManager: FileManager = .default,
         now: Date = Date(),
         windowDays: Int = chartWindowDays,
-        calendar: Calendar = .current) -> [SessionPoint]
+        calendar: Calendar = .current,
+        baselineURL: URL = GrokSessionBaselineStore.defaultURL()) -> [SessionPoint]
     {
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
             options: [.skipsHiddenFiles])
-        else { return [] }
+        else {
+            // No sessions on disk — prune all stored baselines.
+            GrokSessionBaselineStore.save([:], keepKeys: [], url: baselineURL)
+            return []
+        }
 
         let startOfToday = calendar.startOfDay(for: now)
         let cutoff = calendar.date(byAdding: .day, value: -(windowDays - 1), to: startOfToday)
             ?? startOfToday.addingTimeInterval(-Double(windowDays) * 86_400)
 
+        var baselines = GrokSessionBaselineStore.load(url: baselineURL)
+        var keepKeys = Set<String>()
         var points: [SessionPoint] = []
         while let url = enumerator.nextObject() as? URL {
             guard url.lastPathComponent == "signals.json" else { continue }
-            guard let point = parseSession(
+            guard let result = parseSession(
                 signalsURL: url,
+                baselines: baselines,
                 fileManager: fileManager,
                 calendar: calendar,
                 cutoff: cutoff)
             else { continue }
-            points.append(point)
+            keepKeys.insert(result.sessionKey)
+            baselines[result.sessionKey] = result.newMaxSeen
+            if let point = result.point {
+                points.append(point)
+            }
         }
+        GrokSessionBaselineStore.save(baselines, keepKeys: keepKeys, url: baselineURL)
         return points
     }
 
+    /// Parse one session. Always updates max-seen when signals are readable and
+    /// T > 0 (even outside the chart window) so re-opening an old session later
+    /// only charges growth. Emits a `SessionPoint` only when the last-active day
+    /// is inside the window and delta > 0.
     static func parseSession(
         signalsURL: URL,
+        baselines: [String: Int] = [:],
         fileManager: FileManager = .default,
         calendar: Calendar = .current,
-        cutoff: Date) -> SessionPoint?
+        cutoff: Date) -> ParseResult?
     {
         let attrs = try? signalsURL.resourceValues(forKeys: [.contentModificationDateKey])
         let mtime = attrs?.contentModificationDate ?? Date.distantPast
 
         let sessionDir = signalsURL.deletingLastPathComponent()
+        let sessionKey = sessionDir.lastPathComponent
         let summaryURL = sessionDir.appendingPathComponent("summary.json")
         var model = "grok-4.5"
         var activeAt = mtime
@@ -244,9 +368,6 @@ enum GrokCostScanner {
             }
         }
 
-        let day = calendar.startOfDay(for: activeAt)
-        guard day >= calendar.startOfDay(for: cutoff) else { return nil }
-
         guard let data = try? Data(contentsOf: signalsURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -265,11 +386,24 @@ enum GrokCostScanner {
         let before = intValue(json["totalTokensBeforeCompaction"])
         let context = intValue(json["contextTokensUsed"])
         // Match CodexBar GrokLocalSessionScanner token aggregation.
-        let tokens = max(0, before + context)
-        guard tokens > 0 else { return nil }
+        // T is not monotonic: contextTokensUsed shrinks after compaction.
+        let lifetime = max(0, before + context)
+        guard lifetime > 0 else { return nil }
 
-        let usd = GrokModelPrice.estimateUSD(tokens: tokens, model: model)
-        return SessionPoint(day: day, tokens: tokens, usd: usd, model: model)
+        let prior = baselines[sessionKey] ?? 0
+        let delta = max(0, lifetime - prior)
+        let newMaxSeen = max(prior, lifetime)
+
+        let day = calendar.startOfDay(for: activeAt)
+        let inWindow = day >= calendar.startOfDay(for: cutoff)
+        let point: SessionPoint?
+        if inWindow, delta > 0 {
+            let usd = GrokModelPrice.estimateUSD(tokens: delta, model: model)
+            point = SessionPoint(day: day, tokens: delta, usd: usd, model: model)
+        } else {
+            point = nil
+        }
+        return ParseResult(point: point, sessionKey: sessionKey, newMaxSeen: newMaxSeen)
     }
 
     // MARK: - Report build

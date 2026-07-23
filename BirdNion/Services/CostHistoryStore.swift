@@ -105,6 +105,11 @@ enum CostHistoryStore {
 
     /// Merge live day buckets into the document for one source. Returns the
     /// updated document and the contiguous daily series for the UI window.
+    ///
+    /// When `replacingSource` is true, ignore previously stored days for that
+    /// source and write only the live set (atomic wipe+replace in one write
+    /// via `apply`). Used after a counting/pricing revision so high-water
+    /// cannot keep inflated pre-fix totals.
     static func merge(
         document: Document,
         source: Source,
@@ -112,10 +117,11 @@ enum CostHistoryStore {
         now: Date = Date(),
         calendar: Calendar = .current,
         windowDays: Int = 90,
-        retainDays: Int = retainDays) -> (document: Document, window: [DayBucket])
+        retainDays: Int = retainDays,
+        replacingSource: Bool = false) -> (document: Document, window: [DayBucket])
     {
         var sources = document.sources ?? [:]
-        var byDay = sources[source.rawValue] ?? [:]
+        var byDay: [String: Day] = replacingSource ? [:] : (sources[source.rawValue] ?? [:])
 
         for live in liveDays {
             let key = dayKey(live.date, calendar: calendar)
@@ -123,7 +129,7 @@ enum CostHistoryStore {
                 usd: live.usd,
                 tokens: live.tokens,
                 models: live.models.map { Model(name: $0.name, usd: $0.usd, tokens: $0.tokens) })
-            if let existing = byDay[key] {
+            if !replacingSource, let existing = byDay[key] {
                 byDay[key] = preferHigher(existing, incoming)
             } else if incoming.tokens > 0 || incoming.usd > 0 {
                 byDay[key] = incoming
@@ -179,6 +185,8 @@ enum CostHistoryStore {
     }
 
     /// Apply live days for a source: merge into disk and return the window.
+    /// Pass `replacingSource: true` to atomically replace that source's days
+    /// with the live set (no high-water against prior disk state).
     @discardableResult
     static func apply(
         source: Source,
@@ -186,7 +194,8 @@ enum CostHistoryStore {
         now: Date = Date(),
         calendar: Calendar = .current,
         windowDays: Int = 90,
-        url: URL = historyURL()) -> [DayBucket]
+        url: URL = historyURL(),
+        replacingSource: Bool = false) -> [DayBucket]
     {
         ioLock.lock()
         defer { ioLock.unlock() }
@@ -198,7 +207,8 @@ enum CostHistoryStore {
             liveDays: liveDays,
             now: now,
             calendar: calendar,
-            windowDays: windowDays)
+            windowDays: windowDays,
+            replacingSource: replacingSource)
         try? write(updated, url: url)
         return window
     }

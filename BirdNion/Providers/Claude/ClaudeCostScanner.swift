@@ -195,9 +195,11 @@ enum ClaudeCostScanner {
     /// All tab). The `last30*` totals keep their own 30-day cutoff so the
     /// Claude tab numbers don't change with this window.
     static let historyDays = 120
-    /// Bump when model pricing changes. Existing persisted days need one full
-    /// rescan so old $0 estimates do not survive the high-water merge.
-    static let pricingRevision = 1
+    /// Bump when model pricing or counting semantics change. Existing
+    /// persisted days need one full rescan; `usageReport` then applies with
+    /// `replacingSource: true` so inflated high-water marks are replaced
+    /// atomically by the fresh scan (never an empty source on disk mid-flight).
+    static let pricingRevision = 2
     private static let pricingRevisionKey = "claudeCostPricingRevision"
 
     static func scanDaysForHistory(storedPricingRevision: Int,
@@ -276,19 +278,25 @@ enum ClaudeCostScanner {
             // Only rescan logs that can still change persisted history; the
             // store supplies the older days.
             let incrementalDays = CostHistoryStore.scanBackDays(source: .claude, now: now)
+            let storedPricingRevision = UserDefaults.standard.integer(forKey: pricingRevisionKey)
             let scanDays = scanDaysForHistory(
-                storedPricingRevision: UserDefaults.standard.integer(forKey: pricingRevisionKey),
+                storedPricingRevision: storedPricingRevision,
                 incrementalDays: incrementalDays)
             let live = scanFull(roots: roots, now: now, scanDays: scanDays)
             let liveDays = (live?.daily ?? []).map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
             }
+            // Revision bump + successful scan: replace Claude days in one
+            // atomic write. If live is nil, keep prior history and leave
+            // revision unset so the next run can still rescan.
+            let replacing = storedPricingRevision < pricingRevision && live != nil
             let window = CostHistoryStore.apply(
                 source: .claude,
                 liveDays: liveDays,
                 now: now,
-                windowDays: historyDays)
+                windowDays: historyDays,
+                replacingSource: replacing)
             let report = CostHistoryStore.makeClaudeReport(
                 window: window,
                 hourly: live?.hourly ?? [],
@@ -338,10 +346,12 @@ enum ClaudeCostScanner {
         // (120d, for the heatmap) but `last30*` must stay a strict 30 days.
         let last30Cutoff = now.addingTimeInterval(-30 * 86_400)
 
-        // Collect entries across every root, then dedup by messageId:requestId
+        // Collect entries across every root, then dedup by messageId alone
         // (the same assistant message is logged in both the parent session and
-        // any subagent/sidechain file — summing twice over-counts). Keep-last
-        // wins; entries without IDs are kept individually. Mirrors CodexBar.
+        // any subagent/sidechain file, and multi-content-block responses repeat
+        // the same usage). Claude Code dropped requestId from JSONL; mid is
+        // unique per API response. Keep-last wins; entries without IDs are
+        // kept individually.
         var keyed: [String: DayEntry] = [:]
         var unkeyed: [DayEntry] = []
         var anyRoot = false
@@ -481,26 +491,7 @@ enum ClaudeCostScanner {
         return result.reversed()
     }
 
-    private static func estimatedUSD(_ a: FileAggregates, price: ClaudeModelPrice) -> Double {
-        let fresh = max(0, a.input - a.cacheRead)
-        return (Double(fresh) * price.inputPerM
-                + Double(a.cacheCreation) * price.cacheWritePerM
-                + Double(a.cacheRead) * price.cacheReadPerM
-                + Double(a.output) * price.outputPerM) / 1_000_000
-    }
-
     // MARK: - Per-file aggregation
-
-    /// Per-file cumulative usage + most-recent model seen.
-    private struct FileAggregates {
-        var input: Int = 0
-        var cacheCreation: Int = 0
-        var cacheRead: Int = 0
-        var output: Int = 0
-        var model: String?
-        var totalTokens: Int { input + output }
-        var isEmpty: Bool { input == 0 && output == 0 }
-    }
 
     /// Walks the jsonl once and emits a per-line accumulator for the chart.
     /// Each entry already has its per-day bucket pre-computed so the caller
@@ -566,13 +557,15 @@ enum ClaudeCostScanner {
 
         // Bucket by the line's actual timestamp so a long-running session
         // spread across multiple days lands tokens on the correct bars.
+        // Missing/unparseable timestamps used to fall back to Date() and
+        // inflate today's totals — drop the line instead (cannot attribute a day).
         let timestampStr = obj["timestamp"] as? String
-        let parsedDate = parseISODate(timestampStr) ?? Date()
+        guard let parsedDate = parseISODate(timestampStr) else { return }
         let day = calendar.startOfDay(for: parsedDate)
-        // Dedup key: the same assistant message logged in multiple files shares
-        // messageId + requestId. nil when either is absent (then it's counted
-        // individually).
-        let key: String? = (messageId != nil && requestId != nil) ? "\(messageId!):\(requestId!)" : nil
+        // Dedup key: messageId alone. Claude Code no longer writes requestId;
+        // mid is unique per API response (retries get a new id). nil when
+        // messageId is absent (then counted individually).
+        let key: String? = messageId
         // Total tokens INCLUDE cache (read + creation) — they dominate Claude
         // usage (~99%); excluding them under-counts ~70× and lets a non-Claude
         // model win the "top model" vote. Mirrors CodexBar's token total.
@@ -591,34 +584,8 @@ enum ClaudeCostScanner {
         let usd: Double
         let tokens: Int
         let model: String
-        /// `messageId:requestId` for cross-file dedup; nil when unavailable.
+        /// `messageId` for cross-file / multi-block dedup; nil when unavailable.
         let key: String?
-    }
-
-    /// Legacy file scan (kept for `summary()` callers that don't need
-    /// per-day buckets). Walks the file once and returns the highest
-    /// cumulative token snapshot — old behaviour matches Codex parity tests.
-    private static func scanFile(_ url: URL) -> FileAggregates {
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
-            return FileAggregates()
-        }
-        var agg = FileAggregates()
-        content.enumerateLines { line, _ in
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { return }
-            guard let message = obj["message"] as? [String: Any] else { return }
-            if let usage = message["usage"] as? [String: Any] {
-                agg.input += usage["input_tokens"] as? Int ?? 0
-                agg.cacheCreation += usage["cache_creation_input_tokens"] as? Int ?? 0
-                agg.cacheRead += usage["cache_read_input_tokens"] as? Int ?? 0
-                agg.output += usage["output_tokens"] as? Int ?? 0
-            }
-            if let model = message["model"] as? String, model != "<synthetic>" {
-                agg.model = model
-            }
-        }
-        return agg
     }
 
     private static func parseISODate(_ s: String?) -> Date? {
