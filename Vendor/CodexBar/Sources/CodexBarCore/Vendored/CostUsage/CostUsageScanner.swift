@@ -1023,13 +1023,25 @@ enum CostUsageScanner {
         return nil
     }
 
+    /// Extracts THIS FILE's own session identity. `id` must be checked before
+    /// `session_id`/`sessionId`: for a normal top-level session the two match,
+    /// but a spawned-subagent thread's `session_meta.payload` carries its OWN
+    /// identity in `id` while `session_id` points at the ROOT conversation it
+    /// belongs to. Preferring `session_id` there made every subagent file
+    /// belonging to the same root index under the ROOT's id — collapsing
+    /// distinct files onto one key (last-enumerated file silently wins) and
+    /// corrupting anything keyed by session id, notably
+    /// `CodexInheritedTotalsResolver`'s fork-baseline lookup (it would parse
+    /// a random subagent transcript instead of the true parent, computing a
+    /// baseline orders of magnitude too small and inflating the fork's
+    /// counted usage by its entire replayed history).
     private static func codexSessionId(
         from bytes: UnsafeBufferPointer<UInt8>,
         in rootRange: Range<Int>,
         payloadRange: Range<Int>?) -> String?
     {
         if let payloadRange {
-            for key in [self.codexJSONFieldSessionId, self.codexJSONFieldSessionIdCamel, self.codexJSONFieldId] {
+            for key in [self.codexJSONFieldId, self.codexJSONFieldSessionId, self.codexJSONFieldSessionIdCamel] {
                 if let value = extractJSONByteStringField(key, from: bytes, in: payloadRange, atDepth: 1),
                    !value.isEmpty
                 {
@@ -1037,7 +1049,7 @@ enum CostUsageScanner {
                 }
             }
         }
-        for key in [Self.codexJSONFieldSessionId, Self.codexJSONFieldSessionIdCamel, Self.codexJSONFieldId] {
+        for key in [Self.codexJSONFieldId, Self.codexJSONFieldSessionId, Self.codexJSONFieldSessionIdCamel] {
             if let value = Self.extractJSONByteStringField(key, from: bytes, in: rootRange, atDepth: 1),
                !value.isEmpty
             {
@@ -1254,12 +1266,18 @@ enum CostUsageScanner {
                 guard obj["type"] as? String == "session_meta" else { return nil }
                 let payload = obj["payload"] as? [String: Any]
                 return CodexSessionMetadata(
-                    sessionId: payload?["session_id"] as? String
+                    // `id` first: it's this file's own identity for every
+                    // session_meta shape. `session_id` matches `id` for a
+                    // normal/forked top-level session but points at the ROOT
+                    // conversation for a spawned-subagent thread — preferring
+                    // it there collapses every subagent file belonging to the
+                    // same root onto one key (see `codexSessionId` above).
+                    sessionId: payload?["id"] as? String
+                        ?? payload?["session_id"] as? String
                         ?? payload?["sessionId"] as? String
-                        ?? payload?["id"] as? String
+                        ?? obj["id"] as? String
                         ?? obj["session_id"] as? String
-                        ?? obj["sessionId"] as? String
-                        ?? obj["id"] as? String,
+                        ?? obj["sessionId"] as? String,
                     forkedFromId: Self.codexForkParentId(from: payload),
                     forkTimestamp: payload?["timestamp"] as? String
                         ?? obj["timestamp"] as? String)

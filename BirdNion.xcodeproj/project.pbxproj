@@ -14,6 +14,7 @@
 		CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */; };
 		CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0008000000000000F004 /* HapoHubProviderTests.swift */; };
 		CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC000A000000000000F005 /* QuotaServicePollingTests.swift */; };
+		CFKB0001000000000000B777 /* CodexForkBaselineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFKB0002000000000000F777 /* CodexForkBaselineTests.swift */; };
 		CCCC000D000000000000B007 /* StubURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC000E000000000000F007 /* StubURLProtocol.swift */; };
 		CCCC000F000000000000B008 /* BirdNionTests.xctest in Frameworks */ = {isa = PBXBuildFile; fileRef = CCCC001000000000000F008 /* BirdNionTests.xctest */; };
 		DDDD0003000000000000B002 /* ConfigService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD0004000000000000F002 /* ConfigService.swift */; };
@@ -176,6 +177,7 @@
 		CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/MiniMaxProviderParserTests.swift; sourceTree = "<group>"; };
 		CCCC0008000000000000F004 /* HapoHubProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/HapoHubProviderTests.swift; sourceTree = "<group>"; };
 		CCCC000A000000000000F005 /* QuotaServicePollingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/QuotaServicePollingTests.swift; sourceTree = "<group>"; };
+		CFKB0002000000000000F777 /* CodexForkBaselineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexForkBaselineTests.swift; sourceTree = "<group>"; };
 		CCCC000E000000000000F007 /* StubURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/StubURLProtocol.swift; sourceTree = "<group>"; };
 		C0DE0008000000000000F004 /* CodexProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexProviderTests.swift; sourceTree = "<group>"; };
 		CCST0002000000000000F001 /* CodexCostScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexCostScannerTests.swift; sourceTree = "<group>"; };
@@ -328,6 +330,7 @@
 				CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */,
 				CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */,
 				CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */,
+				CFKB0001000000000000B777 /* CodexForkBaselineTests.swift in Sources */,
 				CCCC000D000000000000B007 /* StubURLProtocol.swift in Sources */,
 				C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */,
 				CCST0001000000000000B001 /* CodexCostScannerTests.swift in Sources */,
