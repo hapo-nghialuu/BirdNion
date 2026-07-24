@@ -14,8 +14,8 @@ import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled,
 } from "./settings-about";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { LogicalSize, PhysicalSize } from "@tauri-apps/api/dpi";
+import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { logoMark, logoUrl, providerTintCss } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
@@ -23,11 +23,11 @@ import { initTheme } from "./theme";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
 const POPOVER_WIDTH = 420;
-/** Hard height cap (macOS AppDelegate.maxPanelHeight = 640). All-tab scrolls. */
-const POPOVER_MAX_HEIGHT = 640;
+/** Last-resort cap when neither Tauri nor the DOM exposes screen bounds. */
+const POPOVER_FALLBACK_MAX_HEIGHT = 640;
 const POPOVER_MIN_HEIGHT = 220;
-/** Extra logical px so the footer is never clipped under the cap. */
-const FIT_SAFETY_PX = 18;
+/** Keeps decorated window chrome just inside the monitor work area. */
+const MONITOR_SAFETY_PX = 8;
 
 const TAB_KEY = "birdnion.selectedTab";
 /** How often the tick loop runs; each provider is only re-fetched once its
@@ -354,9 +354,8 @@ function measurePopoverContentHeight(app: HTMLElement): number {
 /**
  * Resize the main popover to hug its content (macOS DropdownPanel fittingSize).
  *
- * No internal scrollbar on normal tabs. `setSize` is the **outer** window
- * (includes title-bar chrome), so we add outer−inner and then verify the
- * footer is fully inside `window.innerHeight`.
+ * No internal scrollbar on normal tabs. Tauri `setSize` accepts the inner
+ * window size; outer−inner chrome is used only to derive the monitor limit.
  */
 async function fitMainWindowToContent() {
   if (isSettingsWindow()) return;
@@ -369,33 +368,48 @@ async function fitMainWindowToContent() {
   const natural = measurePopoverContentHeight(app);
   if (natural < 80) return;
 
-  const contentH = Math.ceil(natural + FIT_SAFETY_PX);
+  const contentH = Math.ceil(natural);
   const win = getCurrentWindow();
 
-  // Outer − inner = title bar / borders (logical px). setSize uses outer size.
+  // Outer and inner sizes are physical; convert their difference to logical px.
   let chromeLogical = 0;
-  let scale = 1;
   try {
-    scale = await win.scaleFactor();
+    const scale = await win.scaleFactor();
     const outer = await win.outerSize();
     const inner = await win.innerSize();
     if (outer.height > 0 && inner.height > 0 && outer.height >= inner.height) {
       chromeLogical = (outer.height - inner.height) / scale;
     }
   } catch {
-    // mock / first paint — assume a typical macOS titlebar if decorated.
-    chromeLogical = 28;
+    // Browser/mock: no native window chrome to account for.
   }
 
-  const screenCap = typeof window.screen?.availHeight === "number"
-    ? Math.floor(window.screen.availHeight * 0.95)
-    : POPOVER_MAX_HEIGHT;
-  const maxOuter = Math.min(POPOVER_MAX_HEIGHT + chromeLogical, screenCap);
-  let outerH = Math.ceil(contentH + chromeLogical);
-  outerH = Math.max(POPOVER_MIN_HEIGHT + chromeLogical, Math.min(maxOuter, outerH));
+  let availableOuterHeight: number | null = null;
+  try {
+    const monitor = await currentMonitor();
+    if (monitor) {
+      availableOuterHeight = monitor.workArea.size.toLogical(monitor.scaleFactor).height;
+    }
+  } catch {
+    // Browser/mock: fall through to the DOM screen bounds.
+  }
+  if (!(availableOuterHeight && availableOuterHeight > 0)) {
+    const domAvailable = window.screen?.availHeight;
+    availableOuterHeight = typeof domAvailable === "number" && domAvailable > 0
+      ? domAvailable
+      : null;
+  }
+
+  const maxInner = availableOuterHeight === null
+    ? POPOVER_FALLBACK_MAX_HEIGHT
+    : Math.max(1, Math.floor(availableOuterHeight - MONITOR_SAFETY_PX - chromeLogical));
+  const targetInner = Math.min(
+    maxInner,
+    Math.max(POPOVER_MIN_HEIGHT, contentH),
+  );
 
   try {
-    await win.setSize(new LogicalSize(POPOVER_WIDTH, outerH));
+    await win.setSize(new LogicalSize(POPOVER_WIDTH, targetInner));
   } catch {
     // Browser/mock
   }
@@ -409,37 +423,59 @@ async function fitMainWindowToContent() {
     const clip = footer.getBoundingClientRect().bottom - window.innerHeight;
     if (clip <= 0.5) break;
     try {
-      scale = await win.scaleFactor();
-      const outer = await win.outerSize();
-      const growPx = Math.ceil(clip * scale) + Math.ceil(6 * scale);
-      await win.setSize(new PhysicalSize(outer.width, outer.height + growPx));
+      const scale = await win.scaleFactor();
+      const inner = (await win.innerSize()).toLogical(scale);
+      const nextHeight = Math.min(maxInner, Math.ceil(inner.height + clip + 6));
+      if (nextHeight <= inner.height) break;
+      await win.setSize(new LogicalSize(inner.width, nextHeight));
     } catch {
       break;
     }
   }
 
   app.style.height = "";
-  // Scroll only if content truly exceeds the screen cap (rare).
-  const capped = contentH + chromeLogical > maxOuter;
+  // Scroll only when the natural content truly exceeds the available inner area.
+  const capped = contentH > maxInner;
   document.documentElement.classList.toggle("popover-capped", capped);
   document.body.classList.toggle("popover-capped", capped);
 }
 
+let fitWindowInFlight = false;
+let fitWindowPending = false;
+
+function waitForPopoverLayout(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
+/** Serialize fits so only the newest DOM state can write the final window size. */
+async function runPendingWindowFits() {
+  if (fitWindowInFlight) return;
+  fitWindowInFlight = true;
+  try {
+    while (fitWindowPending) {
+      fitWindowPending = false;
+      await waitForPopoverLayout();
+      await fitMainWindowToContent();
+    }
+  } finally {
+    fitWindowInFlight = false;
+    if (fitWindowPending) void runPendingWindowFits();
+  }
+}
+
 function scheduleFitWindow() {
   if (isSettingsWindow()) return;
-  // Double rAF: wait for layout after DOM paint (logos, fonts, charts).
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      void fitMainWindowToContent();
-      // Logos may load late and change measured height — re-fit once.
-      document.querySelectorAll("#app img").forEach((node) => {
-        const img = node as HTMLImageElement;
-        if (!img.complete) {
-          img.addEventListener("load", () => { void fitMainWindowToContent(); }, { once: true });
-        }
-      });
-    });
+  // Logos may load late; their re-fit joins the same coalesced queue.
+  document.querySelectorAll("#app img").forEach((node) => {
+    const img = node as HTMLImageElement;
+    if (!img.complete) {
+      img.addEventListener("load", scheduleFitWindow, { once: true });
+    }
   });
+  fitWindowPending = true;
+  if (!fitWindowInFlight) void runPendingWindowFits();
 }
 
 function render() {
