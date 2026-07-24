@@ -11,10 +11,8 @@ import AppKit
 struct QuotaOverview: View {
     @EnvironmentObject var quota: QuotaService
     /// Persisted so re-opening the popover lands on the tab the user last
-    /// chose — either the "all" pseudo-tab or a provider id. Not `private`:
-    /// `AppDelegate.showPanel()` reads it to detect a bootstrap launch
-    /// directly onto the "all" tab (see `isAllTabActive`).
-    static let selectedTabKey = "popover.selectedTab"
+    /// chose — either the "all" pseudo-tab or a provider id.
+    private static let selectedTabKey = "popover.selectedTab"
     @State private var selectedProviderId: String? =
         UserDefaults.standard.string(forKey: QuotaOverview.selectedTabKey)
     /// Lazy-scanned Claude usage report (per-day buckets + top model) for
@@ -59,21 +57,15 @@ struct QuotaOverview: View {
                         selectedId: Binding(
                             get: { selected },
                             set: {
-                                // Pre-expand panel to cap height BEFORE state
+                                // Pre-expand panel to a safe seed BEFORE state
                                 // mutates so NSHostingView has stable bounds
                                 // while AllUsageOverview lays out (avoids
                                 // NSISEngine recursion on HostingScrollView).
-                                // AppDelegate also pins the panel at that cap
-                                // for as long as "all" stays selected, so
-                                // in-tab interactions (period picker, bar
-                                // pin, heatmap cell select) never resize the
-                                // panel either — see `isAllTabActive`.
+                                // The deferred fitting-size path then resumes
+                                // normal auto-fit after the layout pass.
                                 if $0 == "all", selected != "all" {
                                     NotificationCenter.default.post(
                                         name: .birdnionAllTabWillOpen, object: nil)
-                                } else if $0 != "all", selected == "all" {
-                                    NotificationCenter.default.post(
-                                        name: .birdnionAllTabDidClose, object: nil)
                                 }
                                 selectedProviderId = $0
                                 UserDefaults.standard.set($0, forKey: Self.selectedTabKey)
@@ -3194,14 +3186,9 @@ extension Notification.Name {
     static let birdnionHiyoKeysChanged = Notification.Name("com.local.birdnion.hiyoKeysChanged")
     /// Posted when the user switches the popover tab to "all", before the
     /// selected-tab state mutates. AppDelegate pre-expands the panel to
-    /// max height so the hosting view has stable bounds for the tall All
+    /// a safe seed so the hosting view has stable bounds for the tall All
     /// content layout pass.
     static let birdnionAllTabWillOpen = Notification.Name("com.local.birdnion.allTabWillOpen")
-    /// Posted when the user switches the popover tab AWAY from "all", before
-    /// the selected-tab state mutates. AppDelegate releases the height pin
-    /// installed by `birdnionAllTabWillOpen` so the panel resumes hugging
-    /// the newly selected tab's real content height.
-    static let birdnionAllTabDidClose = Notification.Name("com.local.birdnion.allTabDidClose")
 }
 
 // MARK: - Empty State

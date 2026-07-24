@@ -16,6 +16,28 @@ final class DropdownPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+enum PopoverPanelSizing {
+    private static let screenBottomMargin: CGFloat = 8
+
+    static func height(
+        fittingHeight: CGFloat,
+        top: CGFloat,
+        visibleFrameMinY: CGFloat?
+    ) -> CGFloat {
+        guard let visibleFrameMinY else { return max(1, fittingHeight) }
+        let available = max(1, top - visibleFrameMinY - screenBottomMargin)
+        return max(1, min(fittingHeight, available))
+    }
+
+    static func needsResize(
+        currentHeight: CGFloat,
+        targetHeight: CGFloat,
+        tolerance: CGFloat = 0.5
+    ) -> Bool {
+        abs(currentHeight - targetHeight) > tolerance
+    }
+}
+
 /// AppDelegate creates the NSStatusItem (menu bar icon) programmatically and
 /// manages a borderless DropdownPanel for the popover content. The menu bar
 /// icon is a dynamic NSImage redrawn from the latest QuotaService statuses.
@@ -38,29 +60,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: DropdownPanel!
     private var hostingController: NSHostingController<AnyView>!
     private var cancellables = Set<AnyCancellable>()
+    private var pendingPanelResizeTask: Task<Void, Never>?
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     /// Screen-space Y of the panel's top edge while shown, so height changes
     /// (e.g. switching to the settings section) grow downward, not upward.
     private var panelTopY: CGFloat?
-    /// True for as long as the popover's "all" tab is selected. While true,
-    /// the panel is pinned at `maxPanelHeight` regardless of the tall All
-    /// content's own fitting size, so no in-tab interaction (period picker,
-    /// bar pin, heatmap cell select — anything that changes what
-    /// `AllUsageOverview` renders) ever resizes the outer panel. That outer
-    /// resize is what raced with SwiftUI's own layout pass and recursed
-    /// NSISEngine to a stack overflow (see `preExpandPanelForTallTab`); by
-    /// keeping the frame constant for the tab's whole lifetime, the internal
-    /// ScrollView absorbs every content-height change instead.
-    private var isAllTabActive = false
 
     // Fixed width; height is driven by the SwiftUI content's fitting size.
     private let panelWidth: CGFloat = 420
-    /// Hard height cap. Clamping only to the screen still let the panel span
-    /// menu bar → screen bottom on tall displays, leaving a scroll range of a
-    /// few px that reads as "scrolling is broken". Capping guarantees the
-    /// content ScrollView has a real scroll range on tall tabs.
-    private let maxPanelHeight: CGFloat = 640
+    /// Stable starting height for panel creation and the synchronous
+    /// pre-expansion performed before the tall All tab starts laying out.
+    private let initialTallTabSeedHeight: CGFloat = 640
     /// Pixels the panel is nudged up toward the menu bar from its anchor.
     private let topNudge: CGFloat = 10
 
@@ -154,11 +165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostingController = host
 
         // Borderless, non-activating panel — no arrow, floats above windows.
-        // contentSize height is capped (maxPanelHeight) so tall tabs scroll;
-        // seeding it on creation gives the hosting view a stable initial
-        // size before the first content-height report lands.
+        // Seed a stable initial height before the first fitting-size report;
+        // subsequent runtime sizing follows the content and visible screen.
         let p = DropdownPanel(
-            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: maxPanelHeight),
+            contentRect: NSRect(
+                x: 0, y: 0, width: panelWidth, height: initialTallTabSeedHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: true
         )
@@ -183,30 +194,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // height comes from `hostingController.view.fittingSize`, AppKit's own
         // Auto Layout measurement, which the GeometryReader route under-reports
         // by the ScrollView's own content margins (left the popover a few
-        // points short of its content, showing a spurious scrollbar). Deferred
-        // via Task so it runs on a fresh run-loop turn, after the SwiftUI
-        // update pass that triggered the preference has fully completed —
-        // never inside AppKit's own update-constraints flush.
+        // points short of its content, showing a spurious scrollbar).
+        // Coalesced and deferred to a fresh run-loop turn so bursts use the
+        // latest layout and never resize inside AppKit's constraints flush.
         NotificationCenter.default.publisher(for: .birdnionPopoverContentHeightChanged)
-            .sink { [weak self] _ in
-                Task { @MainActor in self?.resizePanelToContent() }
-            }
+            .sink { [weak self] _ in self?.schedulePanelResize() }
             .store(in: &cancellables)
 
-        // Pre-expand to cap height when the user opens the All tab, before
+        // Pre-expand to a safe seed when the user opens the All tab, before
         // SwiftUI mutates selected tab and lays out AllUsageOverview.
         // Synchronous on the posting thread (main) — must not wrap in Task.
         NotificationCenter.default.publisher(for: .birdnionAllTabWillOpen)
             .sink { [weak self] _ in self?.preExpandPanelForTallTab() }
-            .store(in: &cancellables)
-
-        // Release the height pin when the user leaves the All tab. Just
-        // flips the flag — the content-height subscriber above fires its own
-        // resizePanelToContent() once PopoverView reports the new (non-all)
-        // tab's real content height, which by then reads the flag as false
-        // and hugs that content instead of staying pinned to the cap.
-        NotificationCenter.default.publisher(for: .birdnionAllTabDidClose)
-            .sink { [weak self] _ in self?.isAllTabActive = false }
             .store(in: &cancellables)
 
         // Re-render the menu bar title whenever QuotaService publishes.
@@ -268,16 +267,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showPanel() {
         guard let button = statusItem.button, let buttonWindow = button.window else { return }
 
-        // Bootstrap: the popover can open directly onto a persisted "all"
-        // selection with no tab-switch transition to fire the will-open
-        // notification, so check the persisted tab before the first layout
-        // pass and pin the height the same way a live switch would.
-        if UserDefaults.standard.string(forKey: QuotaOverview.selectedTabKey) == "all" {
-            isAllTabActive = true
-        }
-
         // Measure via AppKit's own Auto Layout fitting size — safe here,
-        // outside any AppKit constraint flush.
+        // outside any AppKit constraint flush. This applies equally when the
+        // persisted selection opens directly on the All tab.
         hostingController.view.layoutSubtreeIfNeeded()
         let fittingHeight = max(1, hostingController.view.fittingSize.height)
 
@@ -315,61 +307,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hidePanel() {
+        pendingPanelResizeTask?.cancel()
+        pendingPanelResizeTask = nil
         panel.orderOut(nil)
         panelTopY = nil
     }
 
-    /// Height to use for the panel given the content's own `fittingHeight`,
-    /// clamped to the visible screen below `top` and to `maxPanelHeight`.
-    /// While `isAllTabActive`, the cap itself is used as the baseline
-    /// instead of `fittingHeight` — see `isAllTabActive` for why the panel
-    /// must not track the All tab's fluctuating content height.
+    /// Height to use for every tab given the content's own `fittingHeight`,
+    /// limited only by the visible screen below `top`.
     private func clampedHeight(fittingHeight: CGFloat, top: CGFloat, screen: NSScreen?) -> CGFloat {
-        let baseline = isAllTabActive ? maxPanelHeight : fittingHeight
-        guard let screen else { return max(1, baseline) }
-        let available = top - screen.visibleFrame.minY - 8
-        return max(1, min(baseline, available, maxPanelHeight))
+        PopoverPanelSizing.height(
+            fittingHeight: fittingHeight,
+            top: top,
+            visibleFrameMinY: screen?.visibleFrame.minY
+        )
+    }
+
+    private func schedulePanelResize() {
+        pendingPanelResizeTask?.cancel()
+        pendingPanelResizeTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            self.pendingPanelResizeTask = nil
+            self.resizePanelToContent()
+        }
     }
 
     /// Keep the top edge fixed and grow/shrink downward when the content
-    /// height changes while the panel is visible. Height is clamped to the
-    /// visible screen so tall content scrolls instead of overflowing.
+    /// height changes while the panel is visible. Every tab hugs its fitting
+    /// content height up to the available screen space.
     private func resizePanelToContent() {
         guard panel.isVisible else { return }
-        // Deferred here via the caller's `Task { @MainActor in ... }`, so this
-        // runs on a fresh run-loop turn — safe to re-measure fittingSize
-        // rather than trust the GeometryReader-reported value, which under-
-        // reports by the ScrollView's own content margins.
+        // schedulePanelResize deferred this to a fresh run-loop turn, so it is
+        // safe to re-measure fittingSize rather than trust the GeometryReader
+        // value, which under-reports by the ScrollView's content margins.
         hostingController.view.layoutSubtreeIfNeeded()
         let fittingHeight = max(1, hostingController.view.fittingSize.height)
         let frame = panel.frame
         let top = panelTopY ?? frame.maxY
         let height = clampedHeight(fittingHeight: fittingHeight, top: top, screen: panel.screen ?? NSScreen.main)
+        guard PopoverPanelSizing.needsResize(
+            currentHeight: frame.height,
+            targetHeight: height
+        ) else { return }
         panel.setFrame(
             NSRect(x: frame.origin.x, y: top - height, width: panelWidth, height: height),
             display: true
         )
     }
 
-    /// Expand the panel to cap height *before* the tall All tab content
-    /// renders, and pin it there via `isAllTabActive` for as long as "all"
-    /// stays selected. The hosting view must have stable bounds during that
-    /// layout pass; if HostingScrollView's PlatformContainer changes frame
-    /// mid-pass while NSISEngine flushes pending removals, constraint
-    /// cleanup can recurse until the thread stack overflows. Pinning the
-    /// frame (rather than only pre-expanding once) also covers every later
-    /// in-tab interaction that changes what `AllUsageOverview` renders —
-    /// the period picker, pinning a chart bar, selecting a heatmap cell —
-    /// none of which may resize the panel while the flag is set.
+    /// Seed the panel to a stable height *before* the tall All tab renders.
+    /// This avoids changing HostingScrollView's bounds during the initial
+    /// layout pass while NSISEngine flushes pending removals. Once layout
+    /// completes, the deferred fitting-size path resumes normal auto-fit.
     /// Called synchronously from the `.birdnionAllTabWillOpen` publisher
     /// (NotificationCenter posts are sync) so resize completes before the
     /// Binding setter mutates `selectedProviderId`.
     private func preExpandPanelForTallTab() {
-        isAllTabActive = true
+        pendingPanelResizeTask?.cancel()
+        pendingPanelResizeTask = nil
         guard panel.isVisible else { return }
         let frame = panel.frame
         let top = panelTopY ?? frame.maxY
-        let height = clampedHeight(fittingHeight: maxPanelHeight, top: top, screen: panel.screen ?? NSScreen.main)
+        let screen = panel.screen ?? NSScreen.main
+        let height: CGFloat
+        if let screen {
+            let available = max(1, top - screen.visibleFrame.minY - 8)
+            height = min(initialTallTabSeedHeight, available)
+        } else {
+            height = initialTallTabSeedHeight
+        }
         panel.setFrame(
             NSRect(x: frame.origin.x, y: top - height, width: panelWidth, height: height),
             display: true

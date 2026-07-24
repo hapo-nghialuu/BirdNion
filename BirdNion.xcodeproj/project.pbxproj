@@ -107,6 +107,7 @@
 		CDXD0001000000000000B001 /* CodexConfigDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXD0002000000000000F001 /* CodexConfigDocument.swift */; };
 		CDXA0001000000000000B001 /* CodexProfileActivationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */; };
 		CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */; };
+		PPST0001000000000000B001 /* PopoverPanelSizingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPST0002000000000000F001 /* PopoverPanelSizingTests.swift */; };
 
 		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
 		SET0005000000000000B003 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0006000000000000F003 /* SettingsTab.swift */; };
@@ -262,6 +263,7 @@
 		CDXD0002000000000000F001 /* CodexConfigDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConfigDocument.swift; sourceTree = "<group>"; };
 		CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileActivationCard.swift; sourceTree = "<group>"; };
 		CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexConfigWriterTests.swift; sourceTree = "<group>"; };
+		PPST0002000000000000F001 /* PopoverPanelSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/PopoverPanelSizingTests.swift; sourceTree = "<group>"; };
 
 		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
 		SET0006000000000000F003 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsTab.swift; sourceTree = "<group>"; };
@@ -342,6 +344,7 @@
 				NPT00001000000000000B01 /* NewProviderTests.swift in Sources */,
 				CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */,
 				CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */,
+				PPST0001000000000000B001 /* PopoverPanelSizingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
