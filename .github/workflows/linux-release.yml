@@ -120,3 +120,19 @@ jobs:
             linux/src-tauri/target/release/bundle/rpm/*.rpm
             linux/src-tauri/target/release/bundle/appimage/*.AppImage
           fail_on_unmatched_files: true
+
+      - name: Remove build-only CLIProxyAPI assets
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_api="repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+          for asset_name in cliproxyapi-linux-x86_64 cliproxyapi-linux-x86_64.sha256; do
+            asset_id="$(gh api "$release_api" --jq ".assets[] | select(.name == \"${asset_name}\") | .id")"
+            if [[ -n "$asset_id" ]]; then
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+            fi
+          done
