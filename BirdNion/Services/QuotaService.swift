@@ -34,6 +34,23 @@ final class QuotaService: ObservableObject {
     private(set) var providers: [QuotaProvider] = []
     private var interval: TimeInterval
     private var loopTask: Task<Void, Never>?
+    private var refreshPassIsRunning = false
+    private var pendingRefreshRequested = false
+    private var pendingForceProviderIDs: Set<String> = []
+    private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
+
+    typealias FailureNotificationPost = @MainActor (
+        _ id: String, _ title: String, _ body: String
+    ) -> Void
+    typealias FailureNotificationRemove = @MainActor (_ id: String) -> Void
+    typealias LegacyFailureNotificationCleanup = @MainActor (_ providerID: String) -> Void
+    typealias AllFailureNotificationCleanup = @MainActor () -> Void
+    private let failureNotificationPost: FailureNotificationPost
+    private let failureNotificationRemove: FailureNotificationRemove
+    private let legacyFailureNotificationCleanup: LegacyFailureNotificationCleanup
+    private let allFailureNotificationCleanup: AllFailureNotificationCleanup
+    private let failureNotificationNow: () -> Date
+    private var didSweepFailureNotifications = false
 
     /// HH:mm formatter for the Codex auto-prime notification body.
     private static let timeFormatter: DateFormatter = {
@@ -42,9 +59,30 @@ final class QuotaService: ObservableObject {
         return f
     }()
 
-    init(providers: [QuotaProvider] = [], interval: TimeInterval = 120) {
+    init(
+        providers: [QuotaProvider] = [],
+        interval: TimeInterval = 120,
+        failureNotificationPost: @escaping FailureNotificationPost = {
+            QuotaNotifier.post(id: $0, title: $1, body: $2)
+        },
+        failureNotificationRemove: @escaping FailureNotificationRemove = {
+            QuotaNotifier.remove(id: $0)
+        },
+        legacyFailureNotificationCleanup: @escaping LegacyFailureNotificationCleanup = {
+            QuotaNotifier.removeLegacyFailureNotifications(providerID: $0)
+        },
+        allFailureNotificationCleanup: @escaping AllFailureNotificationCleanup = {
+            QuotaNotifier.removeAllFailureNotifications()
+        },
+        failureNotificationNow: @escaping () -> Date = Date.init
+    ) {
         self.providers = providers
         self.interval = interval
+        self.failureNotificationPost = failureNotificationPost
+        self.failureNotificationRemove = failureNotificationRemove
+        self.legacyFailureNotificationCleanup = legacyFailureNotificationCleanup
+        self.allFailureNotificationCleanup = allFailureNotificationCleanup
+        self.failureNotificationNow = failureNotificationNow
     }
 
     /// Update the polling interval. The running loop reads `self.interval`
@@ -60,8 +98,6 @@ final class QuotaService: ObservableObject {
 
     /// Replace the entire provider list with `newProviders`. Used after the
     /// user reorders or toggles providers in the Settings sidebar so the
-    /// Replace the entire provider list with `newProviders`. Used after the
-    /// user reorders or toggles providers in the Settings sidebar so the
     /// popover tabs + menu-bar percent rotation pick up the new arrangement
     /// without an app restart. **Cached statuses are preserved** across
     /// this call — we only drop entries for providers that are no longer
@@ -72,8 +108,10 @@ final class QuotaService: ObservableObject {
     /// popover shows the *previous* good data for unchanged providers
     /// while a single click of the Refresh button races.
     func setProviders(_ newProviders: [QuotaProvider]) {
-        providers = newProviders
         let keep = Set(newProviders.map(\.id))
+        let removedIDs = Set(providers.map(\.id)).subtracting(keep)
+        removedIDs.forEach(cleanupRemovedProvider)
+        providers = newProviders
         statuses = statuses.filter { keep.contains($0.id) }
         // Drop cached last-fetched timestamps for providers no longer in
         // the list, otherwise the per-provider throttle could skip a fresh
@@ -88,17 +126,25 @@ final class QuotaService: ObservableObject {
     }
 
     func remove(id: String) {
+        guard providers.contains(where: { $0.id == id }) else { return }
+        cleanupRemovedProvider(id)
         providers.removeAll { $0.id == id }
         statuses.removeAll { $0.id == id }
         rebuildDisplayStatuses()
     }
 
+    private func cleanupRemovedProvider(_ id: String) {
+        failureNotificationRemove(Self.failureNotificationID(for: id))
+        legacyFailureNotificationCleanup(id)
+        failureEpisode.removeValue(forKey: id)
+        warnState.removeValue(forKey: id)
+    }
+
     /// Move a provider to a new position in the polling + tab order. The
     /// move is purely positional — `statuses` is not refetched here, just
     /// rebuilt from cached entries in the new order so the menu-bar
-    /// popover immediately reflects the change. Callers that want fresh
-    /// data should also post `.birdnionRefresh` (the ProvidersPane
-    /// sidebar does this on every reorder).
+    /// popover immediately reflects the change. Provider-change observers
+    /// schedule the canonical forced refresh after rebuilding the list.
     func reorder(id: String, toIndex: Int) {
         guard let from = providers.firstIndex(where: { $0.id == id }) else { return }
         let p = providers.remove(at: from)
@@ -122,6 +168,10 @@ final class QuotaService: ObservableObject {
 
     func start() {
         guard loopTask == nil else { return }
+        if !didSweepFailureNotifications {
+            didSweepFailureNotifications = true
+            allFailureNotificationCleanup()
+        }
         // Manual refresh hook from footer button (.birdnionRefresh)
         NotificationCenter.default.addObserver(
             forName: .birdnionRefresh, object: nil, queue: .main
@@ -214,8 +264,39 @@ final class QuotaService: ObservableObject {
     }
 
     func refresh(forceProviderIDs: Set<String> = []) async {
+        if refreshPassIsRunning {
+            pendingRefreshRequested = true
+            pendingForceProviderIDs.formUnion(forceProviderIDs)
+            await withCheckedContinuation { continuation in
+                refreshWaiters.append(continuation)
+            }
+            return
+        }
+
+        refreshPassIsRunning = true
         isRefreshing = true
-        defer { isRefreshing = false }
+        var nextForceProviderIDs = forceProviderIDs
+        repeat {
+            await runRefreshPass(forceProviderIDs: nextForceProviderIDs)
+            guard pendingRefreshRequested else { break }
+            nextForceProviderIDs = pendingForceProviderIDs
+            pendingForceProviderIDs.removeAll()
+            pendingRefreshRequested = false
+        } while true
+        isRefreshing = false
+        refreshPassIsRunning = false
+
+        let waiters = refreshWaiters
+        refreshWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    /// Test seam for deterministic fan-in assertions.
+    func refreshCoordinatorState() -> (running: Bool, pending: Bool, forcedProviderIDs: Set<String>) {
+        (refreshPassIsRunning, pendingRefreshRequested, pendingForceProviderIDs)
+    }
+
+    private func runRefreshPass(forceProviderIDs: Set<String>) async {
         let snapshot = providers
         let startedAt = Date()
         let log = Logger(subsystem: "com.local.birdnion", category: "quota.refresh")
@@ -272,15 +353,18 @@ final class QuotaService: ObservableObject {
             uniqueKeysWithValues: statuses.map { ($0.id, $0) }
         )
         let isFirstRefresh = statuses.isEmpty
-        await withTaskGroup(of: (String, ProviderStatus, TimeInterval).self) { group in
+        await withTaskGroup(
+            of: (String, ObjectIdentifier, ProviderStatus, TimeInterval).self
+        ) { group in
             for p in due {
                 group.addTask {
                     let t0 = Date()
+                    let providerIdentity = ObjectIdentifier(p)
                     do {
                         let status = try await p.fetch()
-                        return (p.id, status, Date().timeIntervalSince(t0))
+                        return (p.id, providerIdentity, status, Date().timeIntervalSince(t0))
                     } catch {
-                        return (p.id,
+                        return (p.id, providerIdentity,
                                 ProviderStatus(id: p.id, displayName: p.displayName,
                                                windows: [], lastUpdated: Date(),
                                                error: "\(error)"),
@@ -290,7 +374,13 @@ final class QuotaService: ObservableObject {
             }
             var timings: [(String, TimeInterval)] = []
             var firstCompletionAt: Date?
-            for await (id, status, elapsed) in group {
+            for await (id, providerIdentity, status, elapsed) in group {
+                guard providers.contains(where: {
+                    $0.id == id && ObjectIdentifier($0) == providerIdentity
+                }) else {
+                    log.info("discard removed or replaced provider result: \(id, privacy: .public)")
+                    continue
+                }
                 let previous = pending[id]
                 // Failure-episode bookkeeping reads the AWAITED status only —
                 // `pending`/`statuses` may keep a preserved stale good
@@ -365,14 +455,31 @@ final class QuotaService: ObservableObject {
 
     // MARK: - Failure-transition notification (R3)
 
-    /// Per-provider failure-episode state, SEPARATE from `warnState` — the
-    /// quota-threshold system is untouched. `consecutive` counts consecutive
-    /// failing FETCHES (skipped/throttled cycles never reach the evaluator);
-    /// `notified` prevents re-notifying within one episode; `episodeSeq`
-    /// makes each episode's notification id unique so macOS doesn't dedup a
-    /// later episode against an earlier one.
-    private var failureEpisode: [String: (consecutive: Int, notified: Bool, episodeSeq: Int)] = [:]
+    private struct FailureEpisodeState {
+        var consecutiveFailures = 0
+        var consecutiveSuccesses = 0
+        var isFailureActive = false
+        var hasActiveNotification = false
+        var episodeSeq = 0
+        var lastNotificationAt: Date?
+        var didRunLegacyCleanup = false
+        var didRemoveOrphanStableNotification = false
+    }
+
+    /// State is separate from quota threshold warnings. A provider enters an
+    /// active failure after three failures and only recovers after two
+    /// consecutive successes, preventing a single lucky poll from re-arming.
+    private var failureEpisode: [String: FailureEpisodeState] = [:]
     private static let failureNotifyThreshold = 3
+    private static let failureRecoveryThreshold = 2
+    private static let failureNotificationCooldown: TimeInterval = 10 * 60
+    private static let failureLog = Logger(
+        subsystem: "com.local.birdnion",
+        category: "quota.failure-notifications")
+
+    static func failureNotificationID(for providerID: String) -> String {
+        "provider.failure.\(providerID)"
+    }
 
     /// Dedicated flag, default ON — reliability alerts must work out of the
     /// box and are NOT coupled to the quota-warning master toggle
@@ -382,33 +489,122 @@ final class QuotaService: ObservableObject {
     }
 
     /// Called once per FETCHED provider per refresh cycle with the awaited
-    /// fetch result. Fires exactly one notification at the Nth consecutive
-    /// failure, stays silent while the episode continues, and re-arms on
-    /// recovery (a fresh episode notifies again under a new id).
+    /// result. Posts with one stable provider ID and removes pending/delivered
+    /// copies only after recovery is confirmed.
     func evaluateFailureEpisode(id: String, displayName: String, error: String?) {
-        var st = failureEpisode[id] ?? (consecutive: 0, notified: false, episodeSeq: 0)
+        var state = failureEpisode[id] ?? FailureEpisodeState()
+        let notificationID = Self.failureNotificationID(for: id)
+        if !state.didRunLegacyCleanup {
+            legacyFailureNotificationCleanup(id)
+            state.didRunLegacyCleanup = true
+            Self.failureLog.info(
+                "cleanup legacy provider=\(id, privacy: .public)")
+        }
+
         guard let error, !error.isEmpty else {
-            failureEpisode[id] = (consecutive: 0, notified: false, episodeSeq: st.episodeSeq)
+            state.consecutiveFailures = 0
+            guard state.isFailureActive else {
+                if !state.didRemoveOrphanStableNotification {
+                    state.consecutiveSuccesses += 1
+                    if state.consecutiveSuccesses >= Self.failureRecoveryThreshold {
+                        failureNotificationRemove(notificationID)
+                        state.didRemoveOrphanStableNotification = true
+                        state.consecutiveSuccesses = 0
+                        Self.failureLog.info(
+                            "recovery confirmed provider=\(id, privacy: .public) remove-orphan=\(notificationID, privacy: .public)")
+                    }
+                } else {
+                    state.consecutiveSuccesses = 0
+                }
+                failureEpisode[id] = state
+                return
+            }
+
+            state.consecutiveSuccesses += 1
+            guard state.consecutiveSuccesses >= Self.failureRecoveryThreshold else {
+                Self.failureLog.info(
+                    "recovery pending provider=\(id, privacy: .public) successes=\(state.consecutiveSuccesses, privacy: .public)")
+                failureEpisode[id] = state
+                return
+            }
+
+            state.isFailureActive = false
+            state.consecutiveSuccesses = 0
+            failureNotificationRemove(notificationID)
+            state.hasActiveNotification = false
+            state.didRemoveOrphanStableNotification = true
+            Self.failureLog.info(
+                "recovery confirmed provider=\(id, privacy: .public) removeID=\(notificationID, privacy: .public)")
+            failureEpisode[id] = state
             return
         }
-        st.consecutive += 1
-        if st.consecutive >= Self.failureNotifyThreshold, !st.notified, Self.failureNotificationsEnabled {
-            st.episodeSeq += 1
-            let kind = classify(rawError: error) ?? .unknown
-            QuotaNotifier.post(
-                id: "\(id).failing.\(st.episodeSeq)",
-                title: displayName,
-                body: L10n.f("notification.providerFailing", nil,
-                             L10n.t(kind.titleKey), L10n.t(kind.hintKey)))
-            st.notified = true
+
+        state.consecutiveSuccesses = 0
+        state.consecutiveFailures += 1
+        let kind = classify(rawError: error) ?? .unknown
+        Self.failureLog.warning(
+            "failure provider=\(id, privacy: .public) kind=\(kind.rawValue, privacy: .public) count=\(state.consecutiveFailures, privacy: .public)")
+
+        if state.consecutiveFailures >= Self.failureNotifyThreshold {
+            state.isFailureActive = true
         }
-        failureEpisode[id] = st
+        guard state.isFailureActive, !state.hasActiveNotification else {
+            if state.hasActiveNotification {
+                Self.failureLog.info(
+                    "suppressed provider=\(id, privacy: .public) reason=active-notification")
+            }
+            failureEpisode[id] = state
+            return
+        }
+        guard Self.failureNotificationsEnabled else {
+            Self.failureLog.info(
+                "suppressed provider=\(id, privacy: .public) reason=disabled")
+            failureEpisode[id] = state
+            return
+        }
+
+        let now = failureNotificationNow()
+        if let lastNotificationAt = state.lastNotificationAt {
+            let elapsed = now.timeIntervalSince(lastNotificationAt)
+            if elapsed < Self.failureNotificationCooldown {
+                let remaining = max(0, Self.failureNotificationCooldown - elapsed)
+                Self.failureLog.info(
+                    "suppressed provider=\(id, privacy: .public) reason=cooldown remaining=\(remaining, privacy: .public)")
+                failureEpisode[id] = state
+                return
+            }
+        }
+
+        failureNotificationPost(
+            notificationID,
+            displayName,
+            L10n.f("notification.providerFailing", nil,
+                   L10n.t(kind.titleKey), L10n.t(kind.hintKey)))
+        state.hasActiveNotification = true
+        state.lastNotificationAt = now
+        state.episodeSeq += 1
+        Self.failureLog.notice(
+            "posted provider=\(id, privacy: .public) kind=\(kind.rawValue, privacy: .public) id=\(notificationID, privacy: .public)")
+        failureEpisode[id] = state
     }
 
-    /// Test seam: expose the episode tuple so unit tests can assert
-    /// consecutive/notified/episodeSeq transitions without a notifier mock.
-    func failureEpisodeState(for id: String) -> (consecutive: Int, notified: Bool, episodeSeq: Int)? {
-        failureEpisode[id]
+    /// Test seam for deterministic state-machine assertions.
+    func failureEpisodeState(for id: String) -> (
+        consecutive: Int,
+        consecutiveSuccesses: Int,
+        active: Bool,
+        notified: Bool,
+        episodeSeq: Int,
+        lastNotificationAt: Date?
+    )? {
+        guard let state = failureEpisode[id] else { return nil }
+        return (
+            state.consecutiveFailures,
+            state.consecutiveSuccesses,
+            state.isFailureActive,
+            state.hasActiveNotification,
+            state.episodeSeq,
+            state.lastNotificationAt)
     }
 }
 
@@ -507,23 +703,123 @@ enum QuotaWarnConfig {
 
 // MARK: - Notifications
 
+/// Serializes async side effects in invocation order. Notification removal
+/// must never overtake a delayed authorization/add operation.
+@MainActor
+final class OrderedAsyncOperationQueue {
+    private var tail: Task<Void, Never>?
+
+    func enqueue(_ operation: @escaping @MainActor () async -> Void) {
+        let previous = tail
+        tail = Task { @MainActor in
+            await previous?.value
+            await operation()
+        }
+    }
+
+    func drain() async {
+        await tail?.value
+    }
+}
+
 /// Thin wrapper over UNUserNotificationCenter. Requests authorization lazily on
 /// first use (the system caches the decision, so repeat calls don't re-prompt).
+@MainActor
 enum QuotaNotifier {
+    private static let operations = OrderedAsyncOperationQueue()
+
     static func post(id: String, title: String, body: String) {
         let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        let soundEnabled = QuotaWarnConfig.soundEnabled
+        operations.enqueue {
+            let granted = await requestAuthorization(center)
             guard granted else { return }
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
-            content.sound = QuotaWarnConfig.soundEnabled ? .default : nil
+            content.sound = soundEnabled ? .default : nil
             let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
-            center.add(request)
+            await add(request, to: center)
         }
         if QuotaWarnConfig.onScreenAlertEnabled {
-            Task { @MainActor in
-                QuotaAlertOverlay.shared.show(title: title, message: body)
+            QuotaAlertOverlay.shared.show(title: title, message: body)
+        }
+    }
+
+    static func remove(id: String) {
+        let center = UNUserNotificationCenter.current()
+        operations.enqueue {
+            center.removePendingNotificationRequests(withIdentifiers: [id])
+            center.removeDeliveredNotifications(withIdentifiers: [id])
+        }
+    }
+
+    static func removeLegacyFailureNotifications(providerID: String) {
+        let center = UNUserNotificationCenter.current()
+        let prefix = "\(providerID).failing."
+        operations.enqueue {
+            let requests = await pendingRequests(center)
+            let pendingIDs = requests.map(\.identifier).filter { $0.hasPrefix(prefix) }
+            center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
+            let notifications = await deliveredNotifications(center)
+            let deliveredIDs = notifications.map(\.request.identifier).filter {
+                $0.hasPrefix(prefix)
+            }
+            center.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
+        }
+    }
+
+    static func removeAllFailureNotifications() {
+        let center = UNUserNotificationCenter.current()
+        operations.enqueue {
+            let requests = await pendingRequests(center)
+            let pendingIDs = requests.map(\.identifier).filter(isFailureNotificationID)
+            center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
+            let notifications = await deliveredNotifications(center)
+            let deliveredIDs = notifications.map(\.request.identifier).filter(isFailureNotificationID)
+            center.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
+        }
+    }
+
+    private static func isFailureNotificationID(_ id: String) -> Bool {
+        id.hasPrefix("provider.failure.") || id.contains(".failing.")
+    }
+
+    private static func requestAuthorization(_ center: UNUserNotificationCenter) async -> Bool {
+        await withCheckedContinuation { continuation in
+            center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                continuation.resume(returning: granted)
+            }
+        }
+    }
+
+    private static func add(
+        _ request: UNNotificationRequest,
+        to center: UNUserNotificationCenter
+    ) async {
+        await withCheckedContinuation { continuation in
+            center.add(request) { _ in
+                continuation.resume()
+            }
+        }
+    }
+
+    private static func pendingRequests(
+        _ center: UNUserNotificationCenter
+    ) async -> [UNNotificationRequest] {
+        await withCheckedContinuation { continuation in
+            center.getPendingNotificationRequests {
+                continuation.resume(returning: $0)
+            }
+        }
+    }
+
+    private static func deliveredNotifications(
+        _ center: UNUserNotificationCenter
+    ) async -> [UNNotification] {
+        await withCheckedContinuation { continuation in
+            center.getDeliveredNotifications {
+                continuation.resume(returning: $0)
             }
         }
     }

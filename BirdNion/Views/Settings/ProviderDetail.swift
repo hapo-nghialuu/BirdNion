@@ -692,7 +692,6 @@ extension ProvidersPane {
                 set: { newValue in
                     Self.setProviderRefreshSeconds(row.id, newValue)
                     NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                 }
             )) {
                 ForEach(Self.providerRefreshOptions, id: \.self) { seconds in
@@ -1457,4 +1456,3 @@ extension ProvidersPane {
         }
     }
 }
-

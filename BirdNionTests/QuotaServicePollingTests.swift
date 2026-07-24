@@ -71,14 +71,153 @@ final class QuotaServicePollingTests: XCTestCase {
         XCTAssertEqual(provider.fetchCount, 2)
     }
 
+    @MainActor
+    func testConcurrentRefreshCoalescesAndMergesLateForcedProviderIDs() async {
+        let gate = GatedProvider(id: "slow", displayName: "Slow")
+        let lateForced = CountingProvider(id: "late", displayName: "Late")
+        let svc = QuotaService(providers: [gate, lateForced], interval: 3_600)
+
+        let first = Task { @MainActor in
+            await svc.refresh()
+        }
+        await gate.waitUntilFirstFetchStarts()
+
+        let second = Task { @MainActor in
+            await svc.refresh(forceProviderIDs: ["late"])
+        }
+        for _ in 0..<100 where !svc.refreshCoordinatorState().pending {
+            await Task.yield()
+        }
+        let pending = svc.refreshCoordinatorState()
+        XCTAssertTrue(pending.running)
+        XCTAssertTrue(pending.pending)
+        XCTAssertEqual(pending.forcedProviderIDs, ["late"])
+
+        await gate.releaseFirstFetch()
+        await first.value
+        await second.value
+
+        XCTAssertEqual(lateForced.fetchCount, 2)
+        let gateFetchCount = await gate.fetchCount()
+        let maximumConcurrentFetches = await gate.maximumConcurrentFetches()
+        XCTAssertEqual(gateFetchCount, 1)
+        XCTAssertEqual(maximumConcurrentFetches, 1)
+        XCTAssertFalse(svc.refreshCoordinatorState().running)
+    }
+
+    @MainActor
+    func testRemovedProviderCleansNotificationsAndFailureState() {
+        var removedIDs: [String] = []
+        var legacyCleanupIDs: [String] = []
+        let provider = CountingProvider(id: "removed", displayName: "Removed")
+        let svc = QuotaService(
+            providers: [provider],
+            interval: 60,
+            failureNotificationPost: { _, _, _ in },
+            failureNotificationRemove: { removedIDs.append($0) },
+            legacyFailureNotificationCleanup: { legacyCleanupIDs.append($0) })
+
+        svc.evaluateFailureEpisode(id: "removed", displayName: "Removed", error: "timeout")
+        XCTAssertNotNil(svc.failureEpisodeState(for: "removed"))
+
+        svc.setProviders([])
+
+        XCTAssertEqual(removedIDs, ["provider.failure.removed"])
+        XCTAssertEqual(legacyCleanupIDs, ["removed", "removed"])
+        XCTAssertNil(svc.failureEpisodeState(for: "removed"))
+    }
+
+    @MainActor
+    func testInFlightResultForRemovedProviderIsIgnored() async {
+        var legacyCleanupIDs: [String] = []
+        var postedIDs: [String] = []
+        let provider = GatedProvider(
+            id: "removed",
+            displayName: "Removed",
+            error: "timeout")
+        let svc = QuotaService(
+            providers: [provider],
+            interval: 60,
+            failureNotificationPost: { id, _, _ in postedIDs.append(id) },
+            failureNotificationRemove: { _ in },
+            legacyFailureNotificationCleanup: { legacyCleanupIDs.append($0) })
+
+        svc.evaluateFailureEpisode(id: "removed", displayName: "Removed", error: "timeout")
+        let refresh = Task { @MainActor in await svc.refresh() }
+        await provider.waitUntilFirstFetchStarts()
+        svc.setProviders([])
+        await provider.releaseFirstFetch()
+        await refresh.value
+
+        XCTAssertTrue(postedIDs.isEmpty)
+        XCTAssertNil(svc.failureEpisodeState(for: "removed"))
+        XCTAssertEqual(legacyCleanupIDs, ["removed", "removed"])
+        XCTAssertTrue(svc.statuses.isEmpty)
+    }
+
+    @MainActor
+    func testInFlightResultForSameIDReplacementIsIgnored() async {
+        var postedIDs: [String] = []
+        let original = GatedProvider(
+            id: "replaced",
+            displayName: "Original",
+            error: "timeout")
+        let replacement = StubProvider(
+            id: "replaced",
+            displayName: "Replacement",
+            status: ProviderStatus(
+                id: "replaced",
+                displayName: "Replacement",
+                windows: [],
+                lastUpdated: Date()))
+        let svc = QuotaService(
+            providers: [original],
+            interval: 60,
+            failureNotificationPost: { id, _, _ in postedIDs.append(id) },
+            failureNotificationRemove: { _ in },
+            legacyFailureNotificationCleanup: { _ in })
+
+        let refresh = Task { @MainActor in await svc.refresh() }
+        await original.waitUntilFirstFetchStarts()
+        svc.setProviders([replacement])
+        await original.releaseFirstFetch()
+        await refresh.value
+
+        XCTAssertTrue(postedIDs.isEmpty)
+        XCTAssertNil(svc.failureEpisodeState(for: "replaced"))
+        XCTAssertTrue(svc.statuses.isEmpty)
+    }
+
+    @MainActor
+    func testStartSweepsAllHistoricalFailureNotificationsOnce() {
+        var sweepCount = 0
+        let svc = QuotaService(
+            providers: [],
+            interval: 0,
+            allFailureNotificationCleanup: { sweepCount += 1 })
+
+        svc.start()
+        svc.start()
+        svc.stop()
+
+        XCTAssertEqual(sweepCount, 1)
+    }
+
     // MARK: - Failure-transition episodes (R3)
 
-    /// Fire exactly once at the 3rd consecutive failing fetch, stay silent on
-    /// the 4th, reset + re-arm on recovery, and a fresh episode bumps the seq
-    /// (per-episode-unique notification id, Finding 3).
     @MainActor
-    func testFailureEpisodeFiresOnceAtThresholdAndReArms() {
-        let svc = QuotaService(providers: [], interval: 0.1)
+    func testFailureEpisodeUsesStableIDAndConfirmedRecovery() {
+        var postedIDs: [String] = []
+        var removedIDs: [String] = []
+        var legacyCleanupIDs: [String] = []
+        var now = Date(timeIntervalSince1970: 1_000)
+        let svc = QuotaService(
+            providers: [],
+            interval: 0.1,
+            failureNotificationPost: { id, _, _ in postedIDs.append(id) },
+            failureNotificationRemove: { removedIDs.append($0) },
+            legacyFailureNotificationCleanup: { legacyCleanupIDs.append($0) },
+            failureNotificationNow: { now })
 
         svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "HTTP 401")
         svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "HTTP 401")
@@ -91,26 +230,82 @@ final class QuotaServicePollingTests: XCTestCase {
         XCTAssertEqual(st?.consecutive, 3)
         XCTAssertEqual(st?.notified, true)    // fired at the 3rd
         XCTAssertEqual(st?.episodeSeq, 1)
+        XCTAssertEqual(postedIDs, ["provider.failure.p"])
+        XCTAssertEqual(legacyCleanupIDs, ["p"])
 
         svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "HTTP 401")
         st = svc.failureEpisodeState(for: "p")
         XCTAssertEqual(st?.notified, true)    // no re-fire on the 4th
         XCTAssertEqual(st?.episodeSeq, 1)     // same episode, same seq
 
-        // Recovery resets + re-arms, seq preserved.
+        // One success is not enough to recover or remove the alert.
         svc.evaluateFailureEpisode(id: "p", displayName: "P", error: nil)
         st = svc.failureEpisodeState(for: "p")
         XCTAssertEqual(st?.consecutive, 0)
+        XCTAssertEqual(st?.consecutiveSuccesses, 1)
+        XCTAssertEqual(st?.active, true)
+        XCTAssertEqual(st?.notified, true)
+        XCTAssertTrue(removedIDs.isEmpty)
+
+        // The second consecutive success confirms recovery and removes both
+        // pending and delivered copies through the notifier seam.
+        svc.evaluateFailureEpisode(id: "p", displayName: "P", error: nil)
+        st = svc.failureEpisodeState(for: "p")
+        XCTAssertEqual(st?.consecutiveSuccesses, 0)
+        XCTAssertEqual(st?.active, false)
         XCTAssertEqual(st?.notified, false)
         XCTAssertEqual(st?.episodeSeq, 1)
+        XCTAssertEqual(removedIDs, ["provider.failure.p"])
 
-        // Second episode notifies again with a NEW seq.
+        // A new episode inside the cooldown is tracked but suppressed.
         for _ in 0..<3 {
             svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "timeout sau 12s")
         }
         st = svc.failureEpisodeState(for: "p")
+        XCTAssertEqual(st?.active, true)
+        XCTAssertEqual(st?.notified, false)
+        XCTAssertEqual(postedIDs, ["provider.failure.p"])
+
+        // Continued failure after cooldown re-posts with the same stable ID.
+        now.addTimeInterval(601)
+        svc.evaluateFailureEpisode(id: "p", displayName: "P", error: "timeout sau 12s")
+        st = svc.failureEpisodeState(for: "p")
         XCTAssertEqual(st?.notified, true)
         XCTAssertEqual(st?.episodeSeq, 2)
+        XCTAssertEqual(postedIDs, ["provider.failure.p", "provider.failure.p"])
+    }
+
+    @MainActor
+    func testHealthyObservationsRemoveOrphanNotificationAfterRestart() {
+        var removedIDs: [String] = []
+        var legacyCleanupIDs: [String] = []
+        let svc = QuotaService(
+            providers: [],
+            interval: 0.1,
+            failureNotificationPost: { _, _, _ in },
+            failureNotificationRemove: { removedIDs.append($0) },
+            legacyFailureNotificationCleanup: { legacyCleanupIDs.append($0) })
+
+        svc.evaluateFailureEpisode(id: "codex", displayName: "Codex", error: nil)
+        XCTAssertTrue(removedIDs.isEmpty)
+        XCTAssertEqual(legacyCleanupIDs, ["codex"])
+
+        svc.evaluateFailureEpisode(id: "codex", displayName: "Codex", error: nil)
+        XCTAssertEqual(removedIDs, ["provider.failure.codex"])
+
+        svc.evaluateFailureEpisode(id: "codex", displayName: "Codex", error: nil)
+        XCTAssertEqual(removedIDs, ["provider.failure.codex"])
+        XCTAssertEqual(legacyCleanupIDs, ["codex"])
+    }
+
+    @MainActor
+    func testProviderFailureNotificationsDefaultRemainsEnabled() {
+        UserDefaults.standard.removeObject(forKey: "providerFailureNotificationsEnabled")
+        defer { UserDefaults.standard.removeObject(forKey: "providerFailureNotificationsEnabled") }
+
+        let settings = SettingsStore()
+        XCTAssertTrue(settings.providerFailureNotificationsEnabled)
+        XCTAssertTrue(QuotaService.failureNotificationsEnabled)
     }
 
     /// Disabled flag: the counter still tracks, but `notified` stays false
@@ -233,6 +428,120 @@ private final class CountingProvider: QuotaProvider {
             displayName: displayName,
             windows: [QuotaWindow(label: "5 giờ", usedPct: count, remainingPct: 100 - count)],
             lastUpdated: Date())
+    }
+}
+
+private final class GatedProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    private let gate = FetchGate()
+    private let error: String?
+
+    init(id: String, displayName: String, error: String? = nil) {
+        self.id = id
+        self.displayName = displayName
+        self.error = error
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        let count = await gate.beginFetch()
+        return ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: error == nil
+                ? [QuotaWindow(label: "5 giờ", usedPct: count, remainingPct: 100 - count)]
+                : [],
+            lastUpdated: Date(),
+            error: error)
+    }
+
+    func waitUntilFirstFetchStarts() async {
+        await gate.waitUntilFirstFetchStarts()
+    }
+
+    func releaseFirstFetch() async {
+        await gate.releaseFirstFetch()
+    }
+
+    func fetchCount() async -> Int {
+        await gate.fetchCount
+    }
+
+    func maximumConcurrentFetches() async -> Int {
+        await gate.maximumConcurrentFetches
+    }
+}
+
+final class OrderedAsyncOperationQueueTests: XCTestCase {
+    @MainActor
+    func testLaterRemoveWaitsForDelayedPostOperation() async {
+        let queue = OrderedAsyncOperationQueue()
+        let gate = AsyncTestGate()
+        var events: [String] = []
+
+        queue.enqueue {
+            await gate.wait()
+            events.append("post")
+        }
+        queue.enqueue {
+            events.append("remove")
+        }
+
+        await Task.yield()
+        XCTAssertTrue(events.isEmpty)
+        await gate.release()
+        await queue.drain()
+
+        XCTAssertEqual(events, ["post", "remove"])
+    }
+}
+
+private actor AsyncTestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+}
+
+private actor FetchGate {
+    private(set) var fetchCount = 0
+    private(set) var maximumConcurrentFetches = 0
+    private var activeFetches = 0
+    private var firstFetchStartedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var firstFetchRelease: CheckedContinuation<Void, Never>?
+
+    func beginFetch() async -> Int {
+        fetchCount += 1
+        activeFetches += 1
+        maximumConcurrentFetches = max(maximumConcurrentFetches, activeFetches)
+        if fetchCount == 1 {
+            let waiters = firstFetchStartedWaiters
+            firstFetchStartedWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { firstFetchRelease = $0 }
+        }
+        activeFetches -= 1
+        return fetchCount
+    }
+
+    func waitUntilFirstFetchStarts() async {
+        guard fetchCount == 0 else { return }
+        await withCheckedContinuation { firstFetchStartedWaiters.append($0) }
+    }
+
+    func releaseFirstFetch() {
+        firstFetchRelease?.resume()
+        firstFetchRelease = nil
     }
 }
 

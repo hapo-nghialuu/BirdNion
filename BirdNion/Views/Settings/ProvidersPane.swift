@@ -216,7 +216,6 @@ extension ProvidersPane {
                 // enabling a provider here didn't show it in the popover until
                 // an app restart.
                 NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
             }
         )
     }

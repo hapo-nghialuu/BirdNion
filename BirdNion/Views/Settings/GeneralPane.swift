@@ -133,6 +133,17 @@ struct GeneralPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
+                    title: L10n.t("settings.providerFailureNotifications.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.providerFailureNotifications.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.providerFailureNotificationsEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
                     title: L10n.t("settings.quotaWarningNotifications.title", settings.appLanguage),
                     subtitle: L10n.t("settings.quotaWarningNotifications.subtitle", settings.appLanguage)
                 ) {

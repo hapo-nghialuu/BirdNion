@@ -65,6 +65,9 @@ final class SettingsStore: ObservableObject {
     @AppStorage("debugMenuEnabled") var debugMenuEnabled: Bool = false
     @AppStorage("statusChecksEnabled") var statusChecksEnabled: Bool = true
     @AppStorage("sessionQuotaNotificationsEnabled") var sessionQuotaNotificationsEnabled: Bool = true
+    /// Reliability alerts for repeated provider fetch failures. Default true
+    /// preserves the behavior from before this preference was visible.
+    @AppStorage("providerFailureNotificationsEnabled") var providerFailureNotificationsEnabled: Bool = true
     @AppStorage("quotaWarningNotificationsEnabled") var quotaWarningNotificationsEnabled: Bool = false
     /// Global quota-warning thresholds (remaining %). Two levels: warning then
     /// critical. `QuotaWarnConfig` reads the same keys; providers may override.

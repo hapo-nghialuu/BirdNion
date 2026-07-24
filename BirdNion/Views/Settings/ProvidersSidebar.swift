@@ -84,8 +84,9 @@ extension ProvidersPane {
             return
         }
         saveAll()
+        // Provider-change is the canonical rebuild + forced-fetch path in
+        // AppDelegate; posting birdnionRefresh as well would fetch twice.
         NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
         dragStartRows = nil
     }
 
@@ -260,10 +261,9 @@ extension ProvidersPane {
         rows[idx].enabled = enabled
         saveAll()
         // Rebuild providers via ServicesContainer so the menu-bar popover +
-        // percent rotation pick up the new state. Use the notification path so
-        // the rebuild happens on the main thread via AppDelegate.
+        // percent rotation pick up the new state, then force-fetch once through
+        // AppDelegate's canonical provider-change path.
         NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
     }
 
     func sidebarCheckbox(for row: BirdNionConfigStore.Provider) -> some View {
