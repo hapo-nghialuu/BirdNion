@@ -121,15 +121,14 @@ fi
 # 3. Build (Release, ad-hoc)
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> xcodebuild"
-  # Apple-Silicon-only release: halves both the app binary and the embedded
-  # Go proxy (~49MB → ~25MB zip). For a universal build, drop the two
-  # ONLY_ACTIVE_ARCH / CLIPROXYAPI_UNIVERSAL overrides below.
+  # Publish a universal macOS app so both Apple Silicon and Intel users can
+  # install the same release asset.
   run xcodebuild -quiet -project "$REPO_ROOT/BirdNion.xcodeproj" \
       -scheme BirdNion -configuration Release \
       -destination 'platform=macOS' \
       -derivedDataPath "$REPO_ROOT/build/DerivedData" \
-      ONLY_ACTIVE_ARCH=YES \
-      CLIPROXYAPI_UNIVERSAL=0 \
+      ONLY_ACTIVE_ARCH=NO \
+      CLIPROXYAPI_UNIVERSAL=1 \
       HAPO_BASE_URL="${HAPO_BASE_URL:-}" \
       HAPO_ME_URL="${HAPO_ME_URL:-}" \
       HAPO_AUTH_TEMPLATE="$HAPO_AUTH_TEMPLATE_VALUE" \
