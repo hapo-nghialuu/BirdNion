@@ -265,6 +265,10 @@ final class FreemodelProvider: QuotaProvider {
         ]
         if let balance = Self.balanceWindow(referralData: referralData, billingData: billingData) {
             windows.append(balance)
+        } else {
+            // Byte counts only (never bodies — they carry account data): enough
+            // to tell "endpoint failed" (-1) from "decode/shape change" (>0).
+            Self.log.info("balance window unavailable: referralBytes=\(referralData?.count ?? -1, privacy: .public) billingBytes=\(billingData?.count ?? -1, privacy: .public)")
         }
 
         return ProviderStatus(
@@ -401,8 +405,13 @@ final class FreemodelProvider: QuotaProvider {
     /// (enrichment endpoints must never fail the fetch).
     private static func optionalFetch(url: URL, cookieHeader: String,
                                       session: URLSession) async -> Data? {
-        try? await fetchEndpoint(url: url, cookieHeader: cookieHeader,
-                                 timeout: accountTimeout, session: session)
+        do {
+            return try await fetchEndpoint(url: url, cookieHeader: cookieHeader,
+                                           timeout: accountTimeout, session: session)
+        } catch {
+            log.info("optional fetch failed: \(url.lastPathComponent, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// Static so the account store / add flow can validate arbitrary cookies.
