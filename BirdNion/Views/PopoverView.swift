@@ -58,6 +58,10 @@ struct PopoverView: View {
                 }
             )
         }
+        // Hide the scroller knob only — scrolling itself still works. The
+        // popover resizes to content, so the bar just flickers during panel
+        // height changes without adding information.
+        .scrollIndicators(.hidden)
         .onPreferenceChange(PopoverContentHeightKey.self) { height in
             NotificationCenter.default.post(
                 name: .birdnionPopoverContentHeightChanged,
