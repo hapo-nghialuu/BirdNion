@@ -10,6 +10,15 @@ enum ClaudeCLIRateLimitGate {
 
     static let message = "Claude CLI usage endpoint is rate limited right now. Please try again later."
 
+    /// Gate entry point mirroring CodexBar: background fetches respect the
+    /// cooldown, user-initiated fetches bypass it entirely.
+    static func blockedUntil(
+        interaction: ProviderInteraction = ProviderInteractionContext.current,
+        now: Date = Date()) -> Date? {
+        guard interaction != .userInitiated else { return nil }
+        return currentBlockedUntil(now: now)
+    }
+
     /// Returns the date until which background automatic fetches are blocked.
     /// User-initiated fetches bypass the gate entirely.
     static func currentBlockedUntil(now: Date = Date()) -> Date? {

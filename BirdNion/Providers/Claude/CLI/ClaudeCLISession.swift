@@ -744,13 +744,40 @@ actor ClaudeCLISession {
         return try await loadSnapshot(binary: binary, timeout: timeout)
     }
 
+    /// `timeout` is the TOTAL budget for the whole probe (usage + retry +
+    /// status), mirroring CodexBar's ClaudeStatusProbe semantics — previously
+    /// it applied per capture, so a "12s" auto probe could legally burn ~38s.
+    /// The PTY session is always torn down afterwards (success or failure):
+    /// a kept-alive `claude` TUI burns CPU nonstop and, once wedged, makes
+    /// every subsequent capture fail until app restart.
     static func loadSnapshot(binary: String, timeout: TimeInterval = 20.0) async throws -> ClaudeStatusSnapshot {
+        do {
+            let snapshot = try await runProbe(binary: binary, timeout: timeout)
+            await current.reset()
+            return snapshot
+        } catch {
+            await current.reset()
+            throw error
+        }
+    }
+
+    private static func runProbe(binary: String, timeout: TimeInterval) async throws -> ClaudeStatusSnapshot {
+        let deadline = Date().addingTimeInterval(timeout)
         var usageText = try await captureUsageText(binary: binary, timeout: timeout)
         if !ClaudeStatusProbe.usageOutputLooksRelevant(usageText) {
-            // Retry once — the TUI may not have been fully initialised
-            usageText = try await captureUsageText(binary: binary, timeout: max(timeout, 14))
+            // Retry once with the remaining budget — the TUI may not have been
+            // fully initialised. No budget left → treat as a probe timeout so
+            // the orchestrator's retry (fresh session) takes over.
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 2 else { throw ClaudeStatusProbeError.timedOut }
+            usageText = try await captureUsageText(binary: binary, timeout: remaining)
         }
-        let statusText = try? await captureStatusText(binary: binary, timeout: min(timeout, 12))
+        // Status capture (account email / login method) is best-effort and
+        // never exceeds what's left of the budget.
+        let statusBudget = min(deadline.timeIntervalSinceNow, 12)
+        let statusText = statusBudget > 2
+            ? try? await captureStatusText(binary: binary, timeout: statusBudget)
+            : nil
         return try ClaudeStatusProbe.parse(text: usageText, statusText: statusText)
     }
 
@@ -787,6 +814,97 @@ actor ClaudeCLISession {
             stopWhenNormalized: nil,
             settleAfterStop: 0.25,
             sendEnterEvery: nil)
+    }
+
+    // MARK: - Direct (non-PTY) fallback
+
+    /// Runs `claude /usage` as a plain subprocess (stdin = /dev/null, no PTY)
+    /// and parses stdout. Fallback for when the PTY probe times out or can't
+    /// render the usage panel — mirrors CodexBar's `loadViaDirectCLI`.
+    static func loadSnapshotDirect(timeout: TimeInterval) async throws -> ClaudeStatusSnapshot {
+        guard let binary = ClaudeCLIResolver.resolvedBinaryPath(),
+              FileManager.default.isExecutableFile(atPath: binary)
+        else {
+            throw ClaudeStatusProbeError.claudeNotInstalled
+        }
+        let text = try await runDirectUsageProcess(binary: binary, timeout: timeout)
+        return try ClaudeStatusProbe.parse(text: text, statusText: nil)
+    }
+
+    private static func runDirectUsageProcess(binary: String,
+                                              timeout: TimeInterval) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result {
+                    try runDirectUsageProcessSync(binary: binary, timeout: timeout)
+                })
+            }
+        }
+    }
+
+    /// Blocking subprocess run with a wall-clock timeout. Output is streamed
+    /// into a locked buffer via `readabilityHandler` so a chatty CLI can't
+    /// deadlock the 64KB pipe buffer while we wait for exit.
+    private static func runDirectUsageProcessSync(binary: String,
+                                                  timeout: TimeInterval) throws -> String {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.arguments = ["/usage"]
+        proc.environment = launchEnvironment()
+        proc.currentDirectoryURL = preparedProbeWorkingDirectoryURL()
+        proc.standardInput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+
+        let outPipe = Pipe()
+        proc.standardOutput = outPipe
+        let buffer = DirectRunOutputBuffer()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            buffer.append(chunk)
+        }
+        defer { outPipe.fileHandleForReading.readabilityHandler = nil }
+
+        do {
+            try proc.run()
+        } catch {
+            throw ClaudeStatusProbeError.parseFailed(
+                "direct claude /usage launch failed: \(error.localizedDescription)")
+        }
+        let exited = DispatchSemaphore(value: 0)
+        proc.terminationHandler = { _ in exited.signal() }
+        guard exited.wait(timeout: .now() + timeout) == .success else {
+            proc.terminate()
+            throw ClaudeStatusProbeError.timedOut
+        }
+        // Drain any bytes still buffered after exit.
+        buffer.append(outPipe.fileHandleForReading.readDataToEndOfFile())
+        let data = buffer.snapshot()
+        guard let text = String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1) else {
+            throw ClaudeStatusProbeError.parseFailed("direct claude /usage produced no decodable output")
+        }
+        return text
+    }
+
+    /// Lock-guarded accumulator for the direct-run readability handler, which
+    /// fires on a background queue while the spawning thread waits for exit.
+    private final class DirectRunOutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func append(_ chunk: Data) {
+            guard !chunk.isEmpty else { return }
+            lock.lock()
+            data.append(chunk)
+            lock.unlock()
+        }
+
+        func snapshot() -> Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return data
+        }
     }
 
     // MARK: - Core capture loop

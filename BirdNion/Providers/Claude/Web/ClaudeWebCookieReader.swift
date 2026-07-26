@@ -22,6 +22,15 @@ enum ClaudeWebCookieReader {
 
     // MARK: - Public API
 
+    /// True while browser cookie reads are in the denial-cooldown window.
+    /// The source planner uses this to drop the web step from the auto plan —
+    /// otherwise the step runs, fails instantly on the suppressed cookie read,
+    /// and its error masks the (more informative) CLI error.
+    static var isAutoSuppressed: Bool {
+        guard let until = cooldownDate() else { return false }
+        return Date() < until
+    }
+
     /// Auto-detect the claude.ai sessionKey across browsers.
     ///
     /// Tries Safari first (no Keychain prompt), then iterates Browser.defaultImportOrder.

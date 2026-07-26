@@ -31,6 +31,57 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(plan.executionSteps.map(\.dataSource), [.web])
     }
 
+    // MARK: - CLI timeout + retry policy (CodexBar parity)
+
+    func testDirectCLIUsageTimeoutClamp() {
+        // 1/3 of the PTY budget, clamped to 6–8s — same as CodexBar.
+        XCTAssertEqual(ClaudeUsageOrchestrator.directCLIUsageTimeout(for: 12), 6)
+        XCTAssertEqual(ClaudeUsageOrchestrator.directCLIUsageTimeout(for: 24), 8)
+        XCTAssertEqual(ClaudeUsageOrchestrator.directCLIUsageTimeout(for: 60), 8)
+    }
+
+    func testShouldRetryCLIProbePolicy() {
+        XCTAssertTrue(ClaudeUsageOrchestrator.shouldRetryCLIProbe(after: ClaudeStatusProbeError.timedOut))
+        XCTAssertTrue(ClaudeUsageOrchestrator.shouldRetryCLIProbe(
+            after: ClaudeStatusProbeError.parseFailed("Claude CLI still loading usage panel")))
+        XCTAssertFalse(ClaudeUsageOrchestrator.shouldRetryCLIProbe(
+            after: ClaudeStatusProbeError.parseFailed("missing session data")))
+    }
+
+    func testShouldTryDirectCLIUsagePolicy() {
+        XCTAssertTrue(ClaudeUsageOrchestrator.shouldTryDirectCLIUsage(after: ClaudeStatusProbeError.timedOut))
+        XCTAssertTrue(ClaudeUsageOrchestrator.shouldTryDirectCLIUsage(
+            after: ClaudeStatusProbeError.parseFailed("could not load usage data")))
+        XCTAssertFalse(ClaudeUsageOrchestrator.shouldTryDirectCLIUsage(
+            after: ClaudeStatusProbeError.parseFailed("missing session data")))
+    }
+
+    // MARK: - Rate-limit gate interaction bypass
+
+    func testCLIRateLimitGateBypassesUserInitiated() {
+        ClaudeCLIRateLimitGate.resetForTesting()
+        defer { ClaudeCLIRateLimitGate.resetForTesting() }
+        ClaudeCLIRateLimitGate.recordRateLimit()
+        // Background fetches respect the cooldown; user-initiated bypass it.
+        XCTAssertNotNil(ClaudeCLIRateLimitGate.blockedUntil(interaction: .background))
+        XCTAssertNil(ClaudeCLIRateLimitGate.blockedUntil(interaction: .userInitiated))
+        ClaudeCLIRateLimitGate.recordSuccess()
+        XCTAssertNil(ClaudeCLIRateLimitGate.blockedUntil(interaction: .background))
+    }
+
+    // MARK: - Keychain prompt gating
+
+    func testAllowKeychainPromptMatrix() {
+        // `.never` never prompts, `.always` always does, `.onlyOnUserAction`
+        // only during a user-forced refresh — mirrors CodexBar.
+        XCTAssertFalse(ClaudeProvider.allowKeychainPrompt(mode: .never, interaction: .background))
+        XCTAssertFalse(ClaudeProvider.allowKeychainPrompt(mode: .never, interaction: .userInitiated))
+        XCTAssertTrue(ClaudeProvider.allowKeychainPrompt(mode: .always, interaction: .background))
+        XCTAssertTrue(ClaudeProvider.allowKeychainPrompt(mode: .always, interaction: .userInitiated))
+        XCTAssertFalse(ClaudeProvider.allowKeychainPrompt(mode: .onlyOnUserAction, interaction: .background))
+        XCTAssertTrue(ClaudeProvider.allowKeychainPrompt(mode: .onlyOnUserAction, interaction: .userInitiated))
+    }
+
     // MARK: - OAuth usage mapping
 
     func testMapOAuthUsageWindowsCostRoutines() throws {

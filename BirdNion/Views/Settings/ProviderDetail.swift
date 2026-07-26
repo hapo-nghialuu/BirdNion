@@ -860,7 +860,11 @@ extension ProvidersPane {
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
                     get: { settings.claudeUsageDataSource },
-                    set: { settings.claudeUsageDataSource = $0; Task { await quota.refresh() } }
+                    // Forced: bypasses the per-provider throttle (Claude may
+                    // poll every 30m) and marks the fetch user-initiated so
+                    // rate-limit/Keychain gates don't suppress it.
+                    set: { settings.claudeUsageDataSource = $0
+                           Task { await quota.refresh(forceProviderIDs: ["claude"]) } }
                 )) {
                     ForEach(ClaudeUsageDataSource.allCases) { src in
                         Text(claudeUsageSourceName(src)).tag(src.rawValue)
@@ -958,7 +962,8 @@ extension ProvidersPane {
             Spacer(minLength: 8)
             Picker("", selection: Binding(
                 get: { settings.claudeCookieSource },
-                set: { settings.claudeCookieSource = $0; Task { await quota.refresh() } }
+                set: { settings.claudeCookieSource = $0
+                       Task { await quota.refresh(forceProviderIDs: ["claude"]) } }
             )) {
                 ForEach(ClaudeCookieSource.allCases) { src in
                     Text(cookieSourceName(src)).tag(src.rawValue)
@@ -1009,7 +1014,8 @@ extension ProvidersPane {
             Spacer(minLength: 8)
             Picker("", selection: Binding(
                 get: { settings.claudeOAuthKeychainPromptMode },
-                set: { settings.claudeOAuthKeychainPromptMode = $0; Task { await quota.refresh() } }
+                set: { settings.claudeOAuthKeychainPromptMode = $0
+                       Task { await quota.refresh(forceProviderIDs: ["claude"]) } }
             )) {
                 Text(L10n.t("prompt.never", language)).tag(ClaudeOAuthKeychainPromptMode.never.rawValue)
                 Text(L10n.t("prompt.onlyOnUserAction", language)).tag(ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue)

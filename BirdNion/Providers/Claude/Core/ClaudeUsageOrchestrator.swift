@@ -23,7 +23,9 @@ enum ClaudeUsageOrchestrator {
         let input = ClaudeSourcePlanningInput(
             selectedDataSource: selected,
             webExtrasEnabled: webEnabled,
-            hasWebSession: cookieSource == .manual ? (manualCookie != nil) : (cookieSource == .auto),
+            hasWebSession: cookieSource == .manual
+                ? (manualCookie != nil)
+                : (cookieSource == .auto && !ClaudeWebCookieReader.isAutoSuppressed),
             hasCLI: ClaudeCLIResolver.isAvailable(),
             hasOAuthCredentials: true)   // OAuth is the default; the fetch reports real availability
         let plan = ClaudeSourcePlanner.resolve(input: input)
@@ -33,7 +35,8 @@ enum ClaudeUsageOrchestrator {
             do {
                 var snapshot = try await fetch(
                     step.dataSource, session: session, cookieSource: cookieSource,
-                    manualCookie: manualCookie, allowKeychainPrompt: allowKeychainPrompt)
+                    manualCookie: manualCookie, allowKeychainPrompt: allowKeychainPrompt,
+                    isAutoPlan: selected == .auto)
                 if webEnabled, step.dataSource != .web {
                     snapshot = await applyWebExtras(
                         to: snapshot, cookieSource: cookieSource, manualCookie: manualCookie, session: session)
@@ -48,11 +51,23 @@ enum ClaudeUsageOrchestrator {
 
     // MARK: - Per-source fetch
 
+    /// CLI PTY probe budgets — retry structure mirrors CodexBar's
+    /// ClaudeUsageFetcher. One deviation: CodexBar's auto probe is 12s, but a
+    /// cold `claude` TUI (spawn + /usage render) reliably needs longer than
+    /// that here, so the 12s attempt only ever wasted its budget plus a second
+    /// cold start on the retry. 24s lets the first attempt succeed in one
+    /// session; a probe that still timed out (or was mid-load) is retried once
+    /// with the generous budget.
+    private static let cliAutoProbeTimeout: TimeInterval = 24
+    private static let cliProbeTimeout: TimeInterval = 24
+    private static let cliRetryProbeTimeout: TimeInterval = 60
+
     private static func fetch(_ source: ClaudeUsageDataSource,
                              session: URLSession,
                              cookieSource: ClaudeCookieSource,
                              manualCookie: String?,
-                             allowKeychainPrompt: Bool) async throws -> ClaudeUsageSnapshot {
+                             allowKeychainPrompt: Bool,
+                             isAutoPlan: Bool) async throws -> ClaudeUsageSnapshot {
         switch source {
         case .oauth:
             return try await ClaudeOAuthUsageAPI.loadSnapshot(
@@ -60,12 +75,94 @@ enum ClaudeUsageOrchestrator {
         case .web:
             return try await fetchWeb(cookieSource: cookieSource, manualCookie: manualCookie, session: session)
         case .cli:
-            return mapCLI(try await ClaudeCLISession.loadSnapshot())
+            let first = isAutoPlan ? cliAutoProbeTimeout : cliProbeTimeout
+            return mapCLI(try await loadViaCLIWithRetry(firstTimeout: first))
         case .api:
             return try await fetchAdmin(session: session)
         case .auto:
             throw ClaudeUsageError.parseFailed("auto không phải nguồn cụ thể")
         }
+    }
+
+    // MARK: - CLI chain (gate + PTY + direct fallback + retry, mirrors CodexBar)
+
+    /// One PTY attempt at `firstTimeout`; if it timed out / was still loading,
+    /// a single retry with the 60s budget.
+    private static func loadViaCLIWithRetry(firstTimeout: TimeInterval) async throws -> ClaudeStatusSnapshot {
+        do {
+            return try await loadViaCLI(timeout: firstTimeout)
+        } catch {
+            if error is CancellationError { throw error }
+            guard shouldRetryCLIProbe(after: error) else { throw error }
+            return try await loadViaCLI(timeout: cliRetryProbeTimeout)
+        }
+    }
+
+    /// Rate-limit gate → PTY probe → direct (non-PTY) `claude /usage` fallback
+    /// when the PTY path timed out or couldn't render usage.
+    private static func loadViaCLI(timeout: TimeInterval) async throws -> ClaudeStatusSnapshot {
+        if ClaudeCLIRateLimitGate.blockedUntil() != nil {
+            throw ClaudeStatusProbeError.parseFailed(ClaudeCLIRateLimitGate.message)
+        }
+        let snapshot: ClaudeStatusSnapshot
+        do {
+            snapshot = try await ClaudeCLISession.loadSnapshot(timeout: timeout)
+        } catch {
+            if error is CancellationError { throw error }
+            if ClaudeCLIRateLimitGate.isRateLimitError(error) {
+                ClaudeCLIRateLimitGate.recordRateLimit()
+                throw error
+            }
+            guard shouldTryDirectCLIUsage(after: error) else { throw error }
+            do {
+                snapshot = try await ClaudeCLISession.loadSnapshotDirect(
+                    timeout: directCLIUsageTimeout(for: timeout))
+            } catch let directError {
+                if directError is CancellationError { throw directError }
+                if ClaudeCLIRateLimitGate.isRateLimitError(directError) {
+                    ClaudeCLIRateLimitGate.recordRateLimit()
+                    throw directError
+                }
+                // Keep the (richer) PTY error unless the direct run surfaced a
+                // subscription-level notice worth showing instead.
+                guard directCLIErrorShouldReplacePTYError(directError) else { throw error }
+                throw directError
+            }
+        }
+        ClaudeCLIRateLimitGate.recordSuccess()
+        return snapshot
+    }
+
+    /// Same clamp as CodexBar: the direct fallback gets 1/3 of the PTY budget,
+    /// bounded to 6–8s.
+    static func directCLIUsageTimeout(for ptyTimeout: TimeInterval) -> TimeInterval {
+        min(max(ptyTimeout / 3, 6), 8)
+    }
+
+    static func shouldRetryCLIProbe(after error: Error) -> Bool {
+        if case ClaudeStatusProbeError.timedOut = error { return true }
+        if case let ClaudeStatusProbeError.parseFailed(message) = error {
+            return message.lowercased().contains("still loading usage")
+        }
+        let message = error.localizedDescription.lowercased()
+        return message.contains("timed out") || message.contains("timeout")
+    }
+
+    static func shouldTryDirectCLIUsage(after error: Error) -> Bool {
+        if case ClaudeStatusProbeError.timedOut = error { return true }
+        if case let ClaudeStatusProbeError.parseFailed(message) = error {
+            let lower = message.lowercased()
+            return lower.contains("still loading usage") || lower.contains("could not load usage data")
+        }
+        let message = error.localizedDescription.lowercased()
+        return message.contains("timed out") || message.contains("timeout")
+    }
+
+    private static func directCLIErrorShouldReplacePTYError(_ error: Error) -> Bool {
+        if case let ClaudeStatusProbeError.parseFailed(message) = error {
+            return message.lowercased().contains("subscription")
+        }
+        return false
     }
 
     private static func fetchWeb(cookieSource: ClaudeCookieSource,

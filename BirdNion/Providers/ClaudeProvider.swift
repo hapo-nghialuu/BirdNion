@@ -28,34 +28,40 @@ final class ClaudeProvider: QuotaProvider {
         BirdNionConfigStore.accountLabel(provider: id)
     }
 
-    /// Hard cap on a single Claude fetch so a hung source (cookie Keychain
-    /// prompt, slow status endpoint) can't stall the whole refresh cycle — the
-    /// outer QuotaService TaskGroup waits for every provider.
-    private static let fetchTimeout: TimeInterval = 12
-
+    // No global fetch cap — mirrors CodexBar. Each source carries its own
+    // budget (OAuth request 30s, CLI PTY 12/24s + 60s retry, web 15s, status
+    // badge 6s), so the chain is bounded without an outer race that would
+    // kill a legitimately slow CLI probe mid-flight. QuotaService publishes
+    // provider results incrementally, so a slow Claude fetch never blocks
+    // the other providers' UI.
     func fetch() async throws -> ProviderStatus {
-        try await withThrowingTaskGroup(of: ProviderStatus?.self) { group in
-            group.addTask { [self] in await runFetch() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(Self.fetchTimeout * 1_000_000_000))
-                return nil
-            }
-            let result = try await group.next() ?? nil
-            group.cancelAll()
-            if let result { return result }
-            return failure("Claude: timeout sau \(Int(Self.fetchTimeout))s")
+        await runFetch()
+    }
+
+    /// Keychain prompting mirrors CodexBar: `.always` may prompt anywhere,
+    /// `.onlyOnUserAction` only during a user-forced refresh (background polls
+    /// stay silent), `.never` never prompts.
+    static func allowKeychainPrompt(mode: ClaudeOAuthKeychainPromptMode,
+                                    interaction: ProviderInteraction) -> Bool {
+        switch mode {
+        case .never: false
+        case .always: true
+        case .onlyOnUserAction: interaction == .userInitiated
         }
     }
 
     private func runFetch() async -> ProviderStatus {
-        let allowPrompt = ClaudeOAuthKeychainPromptPreference.current() != .never
+        let allowPrompt = Self.allowKeychainPrompt(
+            mode: ClaudeOAuthKeychainPromptPreference.current(),
+            interaction: ProviderInteractionContext.current)
         async let statusAsync = Self.fetchServiceStatus()
         do {
             let result = try await ClaudeUsageOrchestrator.loadLatestUsage(
                 session: session, allowKeychainPrompt: allowPrompt)
             let status = await statusAsync
             return Self.materialize(from: result.snapshot, override: override(),
-                                    sourceLabel: result.sourceLabel, status: status)
+                                    sourceLabel: result.sourceLabel, status: status,
+                                    allowKeychainRead: allowPrompt)
         } catch {
             let status = await statusAsync
             return failure("Claude: \(error.localizedDescription)", status: status)
@@ -65,10 +71,15 @@ final class ClaudeProvider: QuotaProvider {
     // MARK: - Materialize
 
     /// Converts a native `ClaudeUsageSnapshot` into the app-facing `ProviderStatus`.
+    /// `allowKeychainRead` follows the same prompt gating as the OAuth path —
+    /// background refreshes with mode `.never`/`.onlyOnUserAction` must not
+    /// touch the Keychain (it can pop an auth dialog); they reuse the last
+    /// successfully read blob instead.
     static func materialize(from snapshot: ClaudeUsageSnapshot,
                             override: String?,
                             sourceLabel: String,
-                            status: ClaudeServiceStatus?) -> ProviderStatus {
+                            status: ClaudeServiceStatus?,
+                            allowKeychainRead: Bool = true) -> ProviderStatus {
         var windows: [QuotaWindow] = []
         if let primary = snapshot.primary {
             let label = snapshot.primaryWindowKind == .spendLimit ? "Spend" : "5 giờ"
@@ -84,8 +95,12 @@ final class ClaudeProvider: QuotaProvider {
                                   resetsAt: opus.resetsAt, seconds: 7 * 24 * 3600))
         }
 
-        // Plan + account email come from the same Keychain blob the token lives in.
-        let keychain = KeychainRoot.decode(keychainData: readKeychainData())
+        // Plan + account email come from the same Keychain blob the token lives
+        // in. Only read when prompting is allowed; otherwise reuse the cache.
+        if allowKeychainRead, let fresh = readKeychainData() {
+            cachedKeychainBlob = fresh
+        }
+        let keychain = KeychainRoot.decode(keychainData: cachedKeychainBlob)
         let planName = ClaudePlanLabeler.label(subscriptionType: keychain?.subscriptionType,
                                                rateLimitTier: keychain?.rateLimitTier)
             ?? ClaudePlanLabeler.label(fromLoginMethod: snapshot.loginMethod)
@@ -149,6 +164,11 @@ final class ClaudeProvider: QuotaProvider {
     }
 
     // MARK: - Keychain (plan + email)
+
+    /// Last successfully read Keychain blob — lets background refreshes keep
+    /// showing plan + email without re-touching the Keychain (same memoization
+    /// pattern as `cachedClaudeVersion`).
+    private static var cachedKeychainBlob: Data?
 
     /// Reads the raw `Claude Code-credentials` keychain blob so the plan + email
     /// can be surfaced. Returns nil if absent or access is denied.
