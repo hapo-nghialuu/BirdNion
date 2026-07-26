@@ -94,10 +94,13 @@ final class ClaudeProvider: QuotaProvider {
             windows.append(window(label: "Opus", utilization: opus.usedPercent,
                                   resetsAt: opus.resetsAt, seconds: 7 * 24 * 3600))
         }
-        // Extra product / model-scoped weekly windows ("Daily Routines",
-        // "Sonnet only", …) render as bars like CodexBar's menu card.
-        // Supplementary: they never take over the lowest-quota headline.
-        for extra in snapshot.extraRateWindows {
+        // Extra product windows ("Daily Routines") render as bars like
+        // CodexBar's menu card. Model-scoped weekly limits ("X only") stay out
+        // of the popover by user preference — they remain visible in the
+        // Settings cost section via webExtras. Supplementary: they never take
+        // over the lowest-quota headline.
+        for extra in snapshot.extraRateWindows
+        where !extra.id.hasPrefix("claude-weekly-scoped-") {
             let used = max(0, min(100, Int(extra.window.usedPercent.rounded())))
             windows.append(QuotaWindow(
                 label: extra.title, usedPct: used, remainingPct: 100 - used,
