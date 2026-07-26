@@ -101,6 +101,24 @@ final class ClaudeNativeTests: XCTestCase {
             after: ClaudeStatusProbeError.parseFailed("missing session data")))
     }
 
+    // MARK: - CLI quota-unsupported gate
+
+    func testCLIQuotaUnsupportedGateRecordsAndClears() {
+        ClaudeCLIQuotaUnsupportedGate.resetForTesting()
+        defer { ClaudeCLIQuotaUnsupportedGate.resetForTesting() }
+        XCTAssertNil(ClaudeCLIQuotaUnsupportedGate.blockedUntil())
+        // The deterministic "no quota panel" parse failure arms the gate…
+        XCTAssertTrue(ClaudeCLIQuotaUnsupportedGate.isQuotaUnsupportedError(
+            ClaudeStatusProbeError.parseFailed("Missing Current session.")))
+        XCTAssertFalse(ClaudeCLIQuotaUnsupportedGate.isQuotaUnsupportedError(
+            ClaudeStatusProbeError.timedOut))
+        ClaudeCLIQuotaUnsupportedGate.recordUnsupported()
+        XCTAssertNotNil(ClaudeCLIQuotaUnsupportedGate.blockedUntil())
+        // …and a later successful probe clears it.
+        ClaudeCLIQuotaUnsupportedGate.recordSuccess()
+        XCTAssertNil(ClaudeCLIQuotaUnsupportedGate.blockedUntil())
+    }
+
     // MARK: - Rate-limit gate interaction bypass
 
     func testCLIRateLimitGateBypassesUserInitiated() {

@@ -75,6 +75,13 @@ enum ClaudeUsageOrchestrator {
         case .web:
             return try await fetchWeb(cookieSource: cookieSource, manualCookie: manualCookie, session: session)
         case .cli:
+            // Skip the whole probe chain (~90s of doomed PTY attempts) when a
+            // previous probe proved /usage has no quota panel on this machine.
+            // Only for the auto plan — explicitly selecting the CLI source
+            // always probes for real (and clears the gate on success).
+            if isAutoPlan, ClaudeCLIQuotaUnsupportedGate.blockedUntil() != nil {
+                throw ClaudeStatusProbeError.parseFailed(ClaudeCLIQuotaUnsupportedGate.message)
+            }
             let first = isAutoPlan ? cliAutoProbeTimeout : cliProbeTimeout
             return mapCLI(try await loadViaCLIWithRetry(firstTimeout: first))
         case .api:
@@ -109,6 +116,10 @@ enum ClaudeUsageOrchestrator {
             snapshot = try await ClaudeCLISession.loadSnapshot(timeout: timeout)
         } catch {
             if error is CancellationError { throw error }
+            if ClaudeCLIQuotaUnsupportedGate.isQuotaUnsupportedError(error) {
+                ClaudeCLIQuotaUnsupportedGate.recordUnsupported()
+                throw error
+            }
             if ClaudeCLIRateLimitGate.isRateLimitError(error) {
                 ClaudeCLIRateLimitGate.recordRateLimit()
                 throw error
@@ -119,6 +130,10 @@ enum ClaudeUsageOrchestrator {
                     timeout: directCLIUsageTimeout(for: timeout))
             } catch let directError {
                 if directError is CancellationError { throw directError }
+                if ClaudeCLIQuotaUnsupportedGate.isQuotaUnsupportedError(directError) {
+                    ClaudeCLIQuotaUnsupportedGate.recordUnsupported()
+                    throw directError
+                }
                 if ClaudeCLIRateLimitGate.isRateLimitError(directError) {
                     ClaudeCLIRateLimitGate.recordRateLimit()
                     throw directError
@@ -130,6 +145,7 @@ enum ClaudeUsageOrchestrator {
             }
         }
         ClaudeCLIRateLimitGate.recordSuccess()
+        ClaudeCLIQuotaUnsupportedGate.recordSuccess()
         return snapshot
     }
 

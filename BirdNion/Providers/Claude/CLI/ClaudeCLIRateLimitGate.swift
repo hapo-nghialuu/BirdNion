@@ -67,3 +67,52 @@ enum ClaudeCLIRateLimitGate {
     }
     #endif
 }
+
+/// Capability gate: remembers that `claude /usage` on this machine renders NO
+/// subscription-quota panel at all (API-key / apiKeyHelper auth instead of a
+/// subscription login). That verdict is deterministic — retrying doesn't help —
+/// yet each doomed probe chain burns ~90s (PTY attempt + direct fallback +
+/// 60s retry) before the auto plan reaches the web source. While the gate is
+/// armed the AUTO plan skips the CLI step entirely; an explicit CLI source
+/// selection still probes for real, and any successful probe clears the gate.
+enum ClaudeCLIQuotaUnsupportedGate {
+    private static let blockedUntilKey = "claudeCLIQuotaUnsupportedUntilV1"
+    private static let cooldown: TimeInterval = 6 * 60 * 60
+
+    static let message =
+        "Claude CLI /usage has no subscription quota panel (API-key auth) — skipping the CLI probe."
+
+    static func blockedUntil(now: Date = Date()) -> Date? {
+        guard let raw = UserDefaults.standard.object(forKey: blockedUntilKey) as? Double else {
+            return nil
+        }
+        let until = Date(timeIntervalSince1970: raw)
+        guard until > now else {
+            UserDefaults.standard.removeObject(forKey: blockedUntilKey)
+            return nil
+        }
+        return until
+    }
+
+    static func recordUnsupported(now: Date = Date()) {
+        UserDefaults.standard.set(
+            now.addingTimeInterval(cooldown).timeIntervalSince1970, forKey: blockedUntilKey)
+    }
+
+    static func recordSuccess() {
+        UserDefaults.standard.removeObject(forKey: blockedUntilKey)
+    }
+
+    /// True for the deterministic "usage panel has no quota" parse failure —
+    /// the probe rendered /usage fine but there was no "Current session" data.
+    static func isQuotaUnsupportedError(_ error: Error) -> Bool {
+        guard case let ClaudeStatusProbeError.parseFailed(message) = error else { return false }
+        return message.contains("Missing Current session")
+    }
+
+    #if DEBUG
+    static func resetForTesting() {
+        UserDefaults.standard.removeObject(forKey: blockedUntilKey)
+    }
+    #endif
+}
