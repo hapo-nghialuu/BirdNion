@@ -245,7 +245,12 @@ final class FreemodelProvider: QuotaProvider {
         let billingData = await billingTask
 
         #if DEBUG
-        Self.debugDumpIfRequested(referral: referralData, billing: billingData, usage: usageData)
+        if UserDefaults.standard.bool(forKey: "debugDumpFreemodelPayloads") {
+            let meData = await Self.optionalFetch(
+                url: Self.meURL, cookieHeader: cookieHeader, session: session)
+            Self.debugDumpIfRequested(
+                referral: referralData, billing: billingData, usage: usageData, me: meData)
+        }
         #endif
 
         return parse(usageData: usageData, accountLabel: accountLabel,
@@ -296,28 +301,26 @@ final class FreemodelProvider: QuotaProvider {
     }
 
     /// Dashboard "Current balance" (§ Extra usage) — bonus credits applied
-    /// automatically before plan credits. remaining = referral credits +
-    /// signup credit; total = remaining + used (matches the web card's
-    /// "$used / $total" readout). nil when nothing was ever earned.
+    /// automatically before plan credits. 2026 schema: `referral.credits` is
+    /// always 0; the remaining bonus lives in `billing.creditCents` (with
+    /// `signupCreditCents` mirroring it). total = remaining + used matches the
+    /// web card's "$used / $total" readout. When billing is missing/timed out,
+    /// remaining collapses to 0 and total would equal `used` — that renders a
+    /// bogus "100% used" bar, so return nil and let the caller's sticky cache
+    /// keep the last good reading instead.
     static func balanceWindow(referralData: Data?, billingData: Data?) -> QuotaWindow? {
         guard let referralData,
               let referral = try? JSONDecoder().decode(ReferralResponse.self, from: referralData)
         else { return nil }
-        let signupUSD = billingData
+        let billing = billingData
             .flatMap { try? JSONDecoder().decode(BillingResponse.self, from: $0) }
-            .flatMap(\.signupCreditCents)
+        let billingRemainingUSD = (billing?.creditCents ?? billing?.signupCreditCents)
             .map { Double($0) / 100.0 } ?? 0
 
         let used = referral.used ?? 0
-        let remaining = (referral.credits ?? 0) + signupUSD
+        let remaining = (referral.credits ?? 0) + billingRemainingUSD
         let total = remaining + used
-        guard total > 0 else { return nil }
-        // freemodel.dev intermittently serves a newer schema where `count` and
-        // `credits` are always 0 while `used` still carries a value — total
-        // would collapse to `used` and render a bogus "100% used" bar. Only
-        // trust the payload when it shows real referrals or real remaining
-        // credits; otherwise let the sticky cache / a good cycle fill in.
-        guard (referral.count ?? 0) > 0 || remaining > 0 else { return nil }
+        guard total > 0, remaining > 0 else { return nil }
 
         let usedPct = max(0, min(100, Int((used / total * 100).rounded())))
         var subtitle = "\(UsageFormatter.usdString(used)) / \(UsageFormatter.usdString(total))"
@@ -429,13 +432,15 @@ final class FreemodelProvider: QuotaProvider {
     /// to Application Support when the user opts in via
     /// `defaults write com.local.birdnion debugDumpFreemodelPayloads -bool YES`.
     /// DEBUG builds only; files are 0600 and never leave the machine.
-    private static func debugDumpIfRequested(referral: Data?, billing: Data?, usage: Data? = nil) {
+    private static func debugDumpIfRequested(referral: Data?, billing: Data?,
+                                             usage: Data? = nil, me: Data? = nil) {
         guard UserDefaults.standard.bool(forKey: "debugDumpFreemodelPayloads") else { return }
         let fm = FileManager.default
         guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
         let dir = base.appendingPathComponent("BirdNion/freemodel-debug", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        for (name, data) in [("referral.json", referral), ("billing.json", billing), ("usage.json", usage)] {
+        for (name, data) in [("referral.json", referral), ("billing.json", billing),
+                             ("usage.json", usage), ("me.json", me)] {
             guard let data else { continue }
             let url = dir.appendingPathComponent(name)
             try? data.write(to: url, options: .atomic)
@@ -509,7 +514,10 @@ private struct ReferralResponse: Decodable {
     let used: Double?
 }
 
-/// `/api/billing` — only `signupCreditCents` is consumed here.
+/// `/api/billing` — `creditCents` is the remaining bonus balance (2026 schema);
+/// `signupCreditCents` mirrors it on current payloads and was the signup-credit
+/// field on older ones.
 private struct BillingResponse: Decodable {
+    let creditCents: Int?
     let signupCreditCents: Int?
 }

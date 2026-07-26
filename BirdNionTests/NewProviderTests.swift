@@ -1157,6 +1157,25 @@ final class NewProviderTests: XCTestCase {
             usageData: usage, accountLabel: nil,
             referralData: Data(#"{"count":0,"credits":0,"used":155.53}"#.utf8), billingData: nil)
         XCTAssertEqual(newSchema.windows.count, 2)
+
+        // 2026 schema (live payload shape): referral.credits is always 0; the
+        // remaining bonus lives in billing.creditCents. Dashboard readout was
+        // "$189.79 / $323.52" for these exact numbers.
+        let referral2026 = Data(#"{"code":"x","count":8,"credits":0,"used":189.79,"pendingCents":6000}"#.utf8)
+        let billing2026 = Data(#"{"creditCents":13373,"signupCreditCents":13373}"#.utf8)
+        let live = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            referralData: referral2026, billingData: billing2026)
+        XCTAssertEqual(live.windows.count, 3)
+        XCTAssertEqual(live.windows[2].subtitle, "$189.79 / $323.52 · 8 giới thiệu")
+        XCTAssertEqual(live.windows[2].usedPct, 59)  // 189.79/323.52 ≈ 58.7% → 59
+
+        // Billing timed out under the 2026 schema (credits stuck at 0) →
+        // remaining unknown, bar hidden for the cycle instead of "100% used".
+        let billingDown = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            referralData: referral2026, billingData: nil)
+        XCTAssertEqual(billingDown.windows.count, 2)
     }
 
     /// The cookie filter forwards every pair but only proceeds when `bm_session`
