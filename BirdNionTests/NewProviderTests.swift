@@ -1150,6 +1150,13 @@ final class NewProviderTests: XCTestCase {
             usageData: usage, accountLabel: nil,
             referralData: Data(#"{"count":0,"credits":0,"used":0}"#.utf8), billingData: nil)
         XCTAssertEqual(zero.windows.count, 2)
+
+        // New flapping schema: count/credits always 0 but used > 0 — total
+        // would collapse to `used` and render a bogus 100%-used bar. Hidden.
+        let newSchema = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            referralData: Data(#"{"count":0,"credits":0,"used":155.53}"#.utf8), billingData: nil)
+        XCTAssertEqual(newSchema.windows.count, 2)
     }
 
     /// The cookie filter forwards every pair but only proceeds when `bm_session`

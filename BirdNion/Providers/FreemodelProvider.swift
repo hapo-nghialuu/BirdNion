@@ -193,6 +193,12 @@ final class FreemodelProvider: QuotaProvider {
     private var cachedEmail: String?
     private var cachedEmailCookie: String?
 
+    /// Last successfully built "Số dư" window. The referral/billing endpoints
+    /// are best-effort with a short timeout and freemodel.dev is flaky — reuse
+    /// the last-known balance instead of dropping the bar for one bad cycle
+    /// (bonus balances change rarely). Cleared implicitly on process restart.
+    private var cachedBalanceWindow: QuotaWindow?
+
     init(session: URLSession = .shared) {
         self.session = session
     }
@@ -238,6 +244,10 @@ final class FreemodelProvider: QuotaProvider {
         let referralData = await referralTask
         let billingData = await billingTask
 
+        #if DEBUG
+        Self.debugDumpIfRequested(referral: referralData, billing: billingData, usage: usageData)
+        #endif
+
         return parse(usageData: usageData, accountLabel: accountLabel,
                      referralData: referralData, billingData: billingData)
     }
@@ -264,7 +274,12 @@ final class FreemodelProvider: QuotaProvider {
             Self.window(label: "Tuần", from: usage.windowWeek, windowSeconds: 7 * 24 * 3600),
         ]
         if let balance = Self.balanceWindow(referralData: referralData, billingData: billingData) {
+            cachedBalanceWindow = balance
             windows.append(balance)
+        } else if let cached = cachedBalanceWindow {
+            // Sticky: a transient referral/billing failure keeps the last-known
+            // balance bar instead of silently dropping it for this cycle.
+            windows.append(cached)
         } else {
             // Byte counts only (never bodies — they carry account data): enough
             // to tell "endpoint failed" (-1) from "decode/shape change" (>0).
@@ -297,6 +312,12 @@ final class FreemodelProvider: QuotaProvider {
         let remaining = (referral.credits ?? 0) + signupUSD
         let total = remaining + used
         guard total > 0 else { return nil }
+        // freemodel.dev intermittently serves a newer schema where `count` and
+        // `credits` are always 0 while `used` still carries a value — total
+        // would collapse to `used` and render a bogus "100% used" bar. Only
+        // trust the payload when it shows real referrals or real remaining
+        // credits; otherwise let the sticky cache / a good cycle fill in.
+        guard (referral.count ?? 0) > 0 || remaining > 0 else { return nil }
 
         let usedPct = max(0, min(100, Int((used / total * 100).rounded())))
         var subtitle = "\(UsageFormatter.usdString(used)) / \(UsageFormatter.usdString(total))"
@@ -403,6 +424,26 @@ final class FreemodelProvider: QuotaProvider {
 
     /// Best-effort GET with the short account timeout — nil on any failure
     /// (enrichment endpoints must never fail the fetch).
+    #if DEBUG
+    /// Local-only schema diagnostics — dumps the raw referral/billing payloads
+    /// to Application Support when the user opts in via
+    /// `defaults write com.local.birdnion debugDumpFreemodelPayloads -bool YES`.
+    /// DEBUG builds only; files are 0600 and never leave the machine.
+    private static func debugDumpIfRequested(referral: Data?, billing: Data?, usage: Data? = nil) {
+        guard UserDefaults.standard.bool(forKey: "debugDumpFreemodelPayloads") else { return }
+        let fm = FileManager.default
+        guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let dir = base.appendingPathComponent("BirdNion/freemodel-debug", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        for (name, data) in [("referral.json", referral), ("billing.json", billing), ("usage.json", usage)] {
+            guard let data else { continue }
+            let url = dir.appendingPathComponent(name)
+            try? data.write(to: url, options: .atomic)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+    }
+    #endif
+
     private static func optionalFetch(url: URL, cookieHeader: String,
                                       session: URLSession) async -> Data? {
         do {

@@ -2547,7 +2547,12 @@ struct ClaudeUsageChartCard: View {
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
-                            Text("\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
+                            // Unpriced models (cost scanner prices non-Claude
+                            // models at $0) show tokens only — a "$0.00" reads
+                            // like real spend data that is simply wrong.
+                            Text(m.usd < 0.005
+                                ? formatTokensShort(m.tokens)
+                                : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
                                 .font(.system(size: 10).monospacedDigit())
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
@@ -2716,7 +2721,12 @@ struct CodexUsageChartCard: View {
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
-                            Text("\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
+                            // Unpriced models (cost scanner prices non-Claude
+                            // models at $0) show tokens only — a "$0.00" reads
+                            // like real spend data that is simply wrong.
+                            Text(m.usd < 0.005
+                                ? formatTokensShort(m.tokens)
+                                : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
                                 .font(.system(size: 10).monospacedDigit())
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
@@ -3032,7 +3042,12 @@ struct GrokUsageChartCard: View {
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
-                            Text("\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
+                            // Unpriced models (cost scanner prices non-Claude
+                            // models at $0) show tokens only — a "$0.00" reads
+                            // like real spend data that is simply wrong.
+                            Text(m.usd < 0.005
+                                ? formatTokensShort(m.tokens)
+                                : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
                                 .font(.system(size: 10).monospacedDigit())
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
