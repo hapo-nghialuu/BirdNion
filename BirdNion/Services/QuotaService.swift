@@ -74,10 +74,12 @@ final class QuotaService: ObservableObject {
         allFailureNotificationCleanup: @escaping AllFailureNotificationCleanup = {
             QuotaNotifier.removeAllFailureNotifications()
         },
-        failureNotificationNow: @escaping () -> Date = Date.init
+        failureNotificationNow: @escaping () -> Date = Date.init,
+        statusCacheURL: URL? = nil
     ) {
         self.providers = providers
         self.interval = interval
+        self.statusCacheURL = statusCacheURL
         self.failureNotificationPost = failureNotificationPost
         self.failureNotificationRemove = failureNotificationRemove
         self.legacyFailureNotificationCleanup = legacyFailureNotificationCleanup
@@ -103,8 +105,8 @@ final class QuotaService: ObservableObject {
     /// this call — we only drop entries for providers that are no longer
     /// in the list. Clearing `statuses` entirely would leave every pill
     /// showing "Chưa tải" until the next refresh cycle completes, which
-    /// can take 10–15s when Codex + Claude both time out (see the Claude
-    /// 12s timeout in `ClaudeProvider`). Preserving the cache means the
+    /// can take tens of seconds when Codex + Claude both hit their
+    /// per-source timeouts. Preserving the cache means the
     /// popover shows the *previous* good data for unchanged providers
     /// while a single click of the Refresh button races.
     func setProviders(_ newProviders: [QuotaProvider]) {
@@ -231,6 +233,38 @@ final class QuotaService: ObservableObject {
     private var providerIntervals: [String: TimeInterval] = [:]
     private var providerLastFetched: [String: Date] = [:]
 
+    /// Where the last published statuses are cached across launches (nil =
+    /// persistence disabled, e.g. in unit tests). See ProviderStatusCache.
+    private let statusCacheURL: URL?
+
+    // MARK: - Status persistence (CodexBar parity)
+
+    /// Restore the previous session's snapshots so a relaunch shows data
+    /// immediately instead of empty placeholders — and seed the per-provider
+    /// throttle from each snapshot's own timestamp so an expensive provider
+    /// (Claude's CLI probe runs ~1–2 min) isn't refetched on every app start
+    /// while its data is still fresh. Only renderable (non-error) snapshots
+    /// for currently-enabled providers are restored; a stale error banner
+    /// from a previous session is never resurrected.
+    func restorePersistedStatuses() {
+        guard let url = statusCacheURL, statuses.isEmpty else { return }
+        let known = Set(providers.map(\.id))
+        let restored = ProviderStatusCache.read(url: url)
+            .filter { known.contains($0.id) && $0.isRenderableSnapshot }
+        guard !restored.isEmpty else { return }
+        var byId = Dictionary(uniqueKeysWithValues: restored.map { ($0.id, $0) })
+        statuses = providers.compactMap { byId.removeValue(forKey: $0.id) }
+        for status in statuses {
+            providerLastFetched[status.id] = status.lastUpdated
+        }
+        rebuildDisplayStatuses()
+    }
+
+    private func persistStatuses() {
+        guard let url = statusCacheURL, !statuses.isEmpty else { return }
+        ProviderStatusCache.write(statuses, url: url)
+    }
+
     /// Read a provider's refresh override from UserDefaults (0 = use
     /// global). Used by `refresh()` to decide whether to fetch this cycle.
     private static func overrideInterval(for providerId: String) -> TimeInterval {
@@ -279,7 +313,16 @@ final class QuotaService: ObservableObject {
         repeat {
             await runRefreshPass(forceProviderIDs: nextForceProviderIDs)
             guard pendingRefreshRequested else { break }
-            nextForceProviderIDs = pendingForceProviderIDs
+            // A forced request that queued up WHILE the pass was fetching that
+            // same provider is already satisfied by the result that just
+            // landed. Without this filter, clicking Refresh during a slow
+            // provider fetch (Claude CLI probe can take a minute) chains a
+            // second full fetch right after the first — the popover then shows
+            // "Updating" for several minutes straight.
+            nextForceProviderIDs = pendingForceProviderIDs.filter { id in
+                guard let last = providerLastFetched[id] else { return true }
+                return Date().timeIntervalSince(last) > 30
+            }
             pendingForceProviderIDs.removeAll()
             pendingRefreshRequested = false
         } while true
@@ -357,11 +400,17 @@ final class QuotaService: ObservableObject {
             of: (String, ObjectIdentifier, ProviderStatus, TimeInterval).self
         ) { group in
             for p in due {
+                // Forced providers (user clicked Refresh / changed a source in
+                // Settings) fetch as `.userInitiated` — providers use this to
+                // bypass rate-limit cooldowns and allow Keychain prompts.
+                let interaction: ProviderInteraction =
+                    forceProviderIDs.contains(p.id) ? .userInitiated : .background
                 group.addTask {
                     let t0 = Date()
                     let providerIdentity = ObjectIdentifier(p)
                     do {
-                        let status = try await p.fetch()
+                        let status = try await ProviderInteractionContext.$current
+                            .withValue(interaction) { try await p.fetch() }
                         return (p.id, providerIdentity, status, Date().timeIntervalSince(t0))
                     } catch {
                         return (p.id, providerIdentity,
@@ -421,6 +470,7 @@ final class QuotaService: ObservableObject {
             }
             log.info("refresh done — total=\(String(format: "%.2f", total), privacy: .public)s slow=\(sortedByDuration.filter { $0.1 > 2.0 }.count, privacy: .public)")
         }
+        persistStatuses()
     }
 
     // MARK: - Quota warnings
@@ -608,10 +658,39 @@ final class QuotaService: ObservableObject {
     }
 }
 
+// MARK: - Status cache (disk)
+
+/// Disk cache of the last published statuses, stored next to the config file
+/// (like cost-history.json). Read at launch by `restorePersistedStatuses()`,
+/// written after every completed refresh pass. Best-effort — a missing or
+/// corrupt file just means the popover starts empty like before.
+enum ProviderStatusCache {
+    static func cacheURL(configURL: URL = BirdNionConfigStore.configURL()) -> URL {
+        configURL.deletingLastPathComponent().appendingPathComponent("status-cache.json")
+    }
+
+    static func read(url: URL = cacheURL()) -> [ProviderStatus] {
+        guard let data = try? Data(contentsOf: url),
+              let list = try? JSONDecoder().decode([ProviderStatus].self, from: data)
+        else { return [] }
+        return list
+    }
+
+    static func write(_ statuses: [ProviderStatus], url: URL = cacheURL()) {
+        guard let data = try? JSONEncoder().encode(statuses) else { return }
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: [.atomic])
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
 private extension ProviderStatus {
     /// A previous non-error snapshot that has meaningful UI content. When a
     /// follow-up refresh times out, keep this around so the popover does not
-    /// collapse quota rows or chart payloads into an error-only card.
+    /// collapse quota rows or chart payloads into an error-only card. Also
+    /// the restore filter for the disk cache.
     var isRenderableSnapshot: Bool {
         guard error == nil else { return false }
         return !windows.isEmpty

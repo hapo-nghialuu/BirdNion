@@ -72,6 +72,53 @@ final class QuotaServicePollingTests: XCTestCase {
     }
 
     @MainActor
+    func testStatusCacheRestoresSnapshotsAndSeedsThrottle() async {
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        let first = CountingProvider(id: "cachetest", displayName: "CacheTest")
+        let svc = QuotaService(providers: [first], interval: 3_600, statusCacheURL: cacheURL)
+        await svc.refresh()
+        XCTAssertEqual(first.fetchCount, 1)
+
+        // A fresh service (relaunch) restores the persisted snapshot and seeds
+        // the per-provider throttle from its timestamp — no immediate refetch.
+        let second = CountingProvider(id: "cachetest", displayName: "CacheTest")
+        let restored = QuotaService(providers: [second], interval: 3_600, statusCacheURL: cacheURL)
+        restored.restorePersistedStatuses()
+        XCTAssertEqual(restored.statuses.count, 1)
+        XCTAssertEqual(restored.displayStatuses.first?.windows.first?.usedPct, 1)
+
+        await restored.refresh()
+        XCTAssertEqual(second.fetchCount, 0)
+
+        // A forced refresh still fetches for real.
+        await restored.refresh(forceProviderIDs: ["cachetest"])
+        XCTAssertEqual(second.fetchCount, 1)
+    }
+
+    @MainActor
+    func testStatusCacheNeverRestoresErrorSnapshots() async {
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        ProviderStatusCache.write([
+            ProviderStatus(id: "cachetest", displayName: "CacheTest",
+                           windows: [], lastUpdated: Date(), error: "Claude: timeout"),
+        ], url: cacheURL)
+
+        let provider = CountingProvider(id: "cachetest", displayName: "CacheTest")
+        let svc = QuotaService(providers: [provider], interval: 3_600, statusCacheURL: cacheURL)
+        svc.restorePersistedStatuses()
+        // A stale error banner is never resurrected; the provider stays due.
+        XCTAssertTrue(svc.statuses.isEmpty)
+        await svc.refresh()
+        XCTAssertEqual(provider.fetchCount, 1)
+    }
+
+    @MainActor
     func testConcurrentRefreshCoalescesAndMergesLateForcedProviderIDs() async {
         let gate = GatedProvider(id: "slow", displayName: "Slow")
         let lateForced = CountingProvider(id: "late", displayName: "Late")
@@ -97,7 +144,10 @@ final class QuotaServicePollingTests: XCTestCase {
         await first.value
         await second.value
 
-        XCTAssertEqual(lateForced.fetchCount, 2)
+        // "late" was already fetched by the first pass moments before the
+        // chained pass ran, so the queued forced request is considered
+        // satisfied — no duplicate back-to-back fetch (dedupe window 30s).
+        XCTAssertEqual(lateForced.fetchCount, 1)
         let gateFetchCount = await gate.fetchCount()
         let maximumConcurrentFetches = await gate.maximumConcurrentFetches()
         XCTAssertEqual(gateFetchCount, 1)

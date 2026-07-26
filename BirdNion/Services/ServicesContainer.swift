@@ -33,8 +33,12 @@ final class ServicesContainer: ObservableObject {
         self.settings = store
         self.quotaService = QuotaService(
             providers: Self.makeProviders(),
-            interval: store.refreshIntervalSeconds
+            interval: store.refreshIntervalSeconds,
+            statusCacheURL: ProviderStatusCache.cacheURL()
         )
+        // Show the previous session's data immediately (and skip refetching
+        // providers whose snapshot is still within their refresh interval).
+        quotaService.restorePersistedStatuses()
         // Bind so settings.pushRefreshInterval() can push changes into the loop.
         store.bind(quotaService: quotaService)
     }
