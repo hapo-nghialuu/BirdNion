@@ -362,6 +362,11 @@ struct CombinedChartCard: View {
     /// until the same bar is clicked again or the period changes. Hover
     /// temporarily overrides pin for the detail rows.
     @State private var pinnedDay: CombinedDailyUsage?
+    /// Click-toggled visibility of the day-detail block: clicking the bar
+    /// whose detail is showing hides the block; any bar click brings it back.
+    /// While hidden, hover must NOT resurrect it — hover-driven height
+    /// changes are the relayout loop this card just got cured of.
+    @State private var detailHidden = false
     @State private var hoveredHour: ClaudeHourlyUsage?
     /// Selected chart window in days (1 = the 24 h hourly view); persisted
     /// so the popover re-opens on the period the user last chose.
@@ -393,7 +398,8 @@ struct CombinedChartCard: View {
     /// height → the popover panel resized → content shifted under the cursor
     /// → hover flipped again — a visible relayout loop.
     private var detailDay: CombinedDailyUsage? {
-        hoveredDay ?? pinnedDay
+        guard !detailHidden else { return nil }
+        return hoveredDay ?? pinnedDay
             ?? windowDaily.last(where: \.isActive) ?? windowDaily.last
     }
 
@@ -499,13 +505,17 @@ struct CombinedChartCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 // Constant-height slot (see detailSlotHeight) so hover/pin can
-                // swap the content without ever resizing the popover.
-                Group {
-                    if let detail = detailDay {
-                        detailRows(detail)
+                // swap the content without ever resizing the popover. Hiding
+                // via bar-click collapses the slot — a single intentional
+                // resize, unlike the hover-driven feedback loop.
+                if !detailHidden {
+                    Group {
+                        if let detail = detailDay {
+                            detailRows(detail)
+                        }
                     }
+                    .frame(height: detailSlotHeight, alignment: .topLeading)
                 }
-                .frame(height: detailSlotHeight, alignment: .topLeading)
                 Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex và Grok."
                         : "Estimated from local Claude Code CLI, Codex, and Grok logs.")
                     .font(.system(size: 9))
@@ -618,6 +628,7 @@ struct CombinedChartCard: View {
                     hoveredDay = nil   // stale hover may fall outside the new window
                     pinnedDay = nil    // pinned day may fall outside the new window
                     hoveredHour = nil
+                    detailHidden = false   // fresh window starts with detail visible
                 } label: {
                     Text(periodLabel(days))
                         .font(.system(size: 9, weight: active ? .semibold : .regular))
@@ -690,8 +701,18 @@ struct CombinedChartCard: View {
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
                     }
                     .onTapGesture {
-                        // Click toggles pin; another bar moves the pin.
-                        pinnedDay = (pinnedDay?.id == day.id) ? nil : day
+                        // Click = toggle: hidden → show this day; clicking the
+                        // day already on display → hide the block; any other
+                        // bar → move the pin there.
+                        if detailHidden {
+                            detailHidden = false
+                            pinnedDay = day
+                        } else if detailDay?.id == day.id {
+                            detailHidden = true
+                            pinnedDay = nil
+                        } else {
+                            pinnedDay = day
+                        }
                     }
                     .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
                 }
