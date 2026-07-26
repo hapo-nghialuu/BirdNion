@@ -1563,11 +1563,23 @@ struct WindowRow: View {
         VocabbyTheme.quotaColor(remaining: window.remainingPct)
     }
 
-    private var subtitleText: String {
-        if let s = window.subtitle, !s.isEmpty {
-            return L10n.providerText(s, preference: settings.appLanguage)
-        }
-        return L10n.f("quota.used", settings.appLanguage, window.usedPct)
+    /// Linear pace vs the window's elapsed time — powers the CodexBar-style
+    /// marker stripe on the bar and the reserve/deficit detail line.
+    private var pace: WindowPace? { WindowPace(window: window, now: Date()) }
+
+    /// "X% in reserve" / "X% in deficit" / "On pace" — CodexBar wording.
+    private func paceLeftText(_ pace: WindowPace) -> String {
+        if pace.isOnTrack { return L10n.t("pace.onPace", settings.appLanguage) }
+        return pace.deltaPct > 0
+            ? L10n.f("pace.deficit", settings.appLanguage, pace.deltaPct)
+            : L10n.f("pace.reserve", settings.appLanguage, -pace.deltaPct)
+    }
+
+    /// "Lasts until reset" / "Runs out in ~X" — projection at the current rate.
+    private func paceRightText(_ pace: WindowPace) -> String? {
+        if pace.lastsUntilReset { return L10n.t("pace.lastsToReset", settings.appLanguage) }
+        guard let eta = pace.etaSeconds else { return nil }
+        return L10n.f("pace.runsOutIn", settings.appLanguage, WindowPace.format(eta))
     }
 
     private var resetText: String {
@@ -1594,39 +1606,82 @@ struct WindowRow: View {
     }
 
     var body: some View {
+        // CodexBar MetricRow layout: title on top, bar with pace marker,
+        // then "N% left … reset countdown", then the pace detail line
+        // ("X% in reserve … Lasts until reset").
+        let pace = self.pace
         VStack(alignment: .leading, spacing: 5) {
+            Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(VocabbyTheme.secondary)
+            QuotaBarWithPaceMarker(
+                remainingPct: window.remainingPct,
+                fillColor: barFillColor,
+                // Marker only when meaningfully off pace (CodexBar hides it
+                // on-track). Bar shows REMAINING, so the expected-usage marker
+                // sits at 100 − expectedUsed.
+                markerPct: (pace?.isOnTrack == false) ? pace.map { 100 - $0.expectedUsedPct } : nil)
             HStack(alignment: .firstTextBaseline) {
-                Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                Spacer()
-                // Prefer reset countdown on the right when available (mockup);
-                // fall back to remaining % so the row never goes empty.
-                Text(resetText.isEmpty ? "\(window.remainingPct)%" : resetText)
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(VocabbyTheme.secondary)
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(VocabbyTheme.track)
-                        .frame(height: 4)
-                    Capsule()
-                        .fill(barFillColor)
-                        .frame(width: max(0, geo.size.width * CGFloat(window.remainingPct) / 100), height: 4)
-                }
-            }
-            .frame(height: 4)
-            HStack(alignment: .firstTextBaseline) {
-                Text(subtitleText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                Spacer()
-                Text("\(window.remainingPct)%")
+                Text(L10n.f("quota.left", settings.appLanguage, window.remainingPct))
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(percentTextColor)
+                Spacer()
+                if !resetText.isEmpty {
+                    Text(resetText)
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+            if let sub = window.subtitle, !sub.isEmpty {
+                Text(L10n.providerText(sub, preference: settings.appLanguage))
+                    .font(.system(size: 10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            } else if let pace {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(paceLeftText(pace))
+                        .font(.system(size: 10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                    Spacer()
+                    if let right = paceRightText(pace) {
+                        Text(right)
+                            .font(.system(size: 10))
+                            .foregroundStyle(pace.lastsUntilReset
+                                ? VocabbyTheme.tertiary : VocabbyTheme.quotaColor(remaining: 0))
+                    }
+                }
             }
         }
+    }
+}
+
+/// Remaining-quota capsule bar with an optional CodexBar-style pace marker: a
+/// thin neutral stripe at the position usage "should" be if consumption were
+/// linear over the window. Fill left of the stripe = reserve, right = deficit.
+struct QuotaBarWithPaceMarker: View {
+    let remainingPct: Int
+    let fillColor: Color
+    /// Marker position in REMAINING coordinates (0–100). nil = no marker.
+    let markerPct: Double?
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(VocabbyTheme.track)
+                    .frame(height: 4)
+                Capsule()
+                    .fill(fillColor)
+                    .frame(width: max(0, geo.size.width * CGFloat(remainingPct) / 100), height: 4)
+                if let marker = markerPct, marker > 0.5, marker < 99.5 {
+                    // Taller-than-bar stripe like CodexBar's pace tip.
+                    RoundedRectangle(cornerRadius: 0.5)
+                        .fill(Color.primary.opacity(0.55))
+                        .frame(width: 1.5, height: 8)
+                        .offset(x: geo.size.width * CGFloat(marker) / 100 - 0.75, y: -2)
+                }
+            }
+        }
+        .frame(height: 4)
     }
 }
 

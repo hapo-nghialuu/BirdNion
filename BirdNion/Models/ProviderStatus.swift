@@ -72,10 +72,23 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
 struct WindowPace: Equatable {
     /// Percentage points you're under the linear pace (>= 0).
     let reservePct: Int
+    /// Signed distance from the linear pace, CodexBar-style: actual − expected.
+    /// Positive = burning faster than the window allows ("in deficit"),
+    /// negative = slower ("in reserve").
+    let deltaPct: Int
+    /// Where usage "should" be right now if consumption were perfectly linear
+    /// over the window (0–100). Rendered as the pace marker on the bar.
+    let expectedUsedPct: Double
     /// Whether the current burn rate leaves budget until the window resets.
     let lastsUntilReset: Bool
+    /// Projected time until the quota hits 100% at the current burn rate.
+    /// nil when the rate is zero or the budget lasts until reset.
+    let etaSeconds: TimeInterval?
     /// Human countdown to reset, e.g. "20h 46m" / "2d 3h". nil if unknown.
     let resetText: String?
+
+    /// CodexBar treats |delta| ≤ 2 as "on pace" — no marker, no deficit text.
+    var isOnTrack: Bool { abs(deltaPct) <= 2 }
 
     init?(window: QuotaWindow, now: Date = Date()) {
         guard let reset = window.resetDate, let seconds = window.windowSeconds, seconds > 0 else {
@@ -88,13 +101,26 @@ struct WindowPace: Equatable {
 
         if elapsed <= 0 {
             self.reservePct = 0
+            self.deltaPct = 0
+            self.expectedUsedPct = 0
             self.lastsUntilReset = true
+            self.etaSeconds = nil
         } else {
             let expectedUsed = elapsed / duration * 100
+            self.expectedUsedPct = expectedUsed
+            self.deltaPct = Int((actualUsed - expectedUsed).rounded())
             self.reservePct = max(0, Int((expectedUsed - actualUsed).rounded()))
             // Project usage to the reset moment at the current burn rate.
             let projectedAtReset = actualUsed * (duration / elapsed)
             self.lastsUntilReset = projectedAtReset <= 100
+            if actualUsed >= 100 {
+                self.etaSeconds = 0
+            } else if actualUsed > 0, !self.lastsUntilReset {
+                let rate = actualUsed / elapsed
+                self.etaSeconds = (100 - actualUsed) / rate
+            } else {
+                self.etaSeconds = nil
+            }
         }
         self.resetText = Self.format(timeUntilReset)
     }

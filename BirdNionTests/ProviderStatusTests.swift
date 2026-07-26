@@ -119,8 +119,13 @@ final class ProviderStatusTests: XCTestCase {
         let pace = WindowPace(window: w, now: now)
         XCTAssertNotNil(pace)
         XCTAssertEqual(pace?.reservePct, 51)        // 87.63 - 37 ≈ 50.6 → 51
+        XCTAssertEqual(pace?.deltaPct, -51)         // signed CodexBar delta (reserve)
+        XCTAssertEqual(pace?.isOnTrack, false)
         XCTAssertEqual(pace?.lastsUntilReset, true) // burn rate leaves headroom
+        XCTAssertNil(pace?.etaSeconds)              // lasts → no run-out ETA
         XCTAssertEqual(pace?.resetText, "20h 46m")
+        // Expected-used marker sits at the elapsed fraction of the window.
+        XCTAssertEqual(pace.map { Int($0.expectedUsedPct.rounded()) }, 88)
     }
 
     func testWindowPaceOverPaceWillNotLast() {
@@ -131,7 +136,10 @@ final class ProviderStatusTests: XCTestCase {
                             resetDate: reset, windowSeconds: 604_800)
         let pace = WindowPace(window: w, now: now)
         XCTAssertEqual(pace?.reservePct, 0)          // way over linear pace
+        XCTAssertEqual(pace?.deltaPct, 76)           // 90 used vs ~14 expected
         XCTAssertEqual(pace?.lastsUntilReset, false)
+        // 90% in 1 day → remaining 10% burns in ~9600s (2h40m).
+        XCTAssertEqual(pace?.etaSeconds.map { Int($0.rounded()) }, 9_600)
         XCTAssertEqual(pace?.resetText, "6d 0h")
     }
 
