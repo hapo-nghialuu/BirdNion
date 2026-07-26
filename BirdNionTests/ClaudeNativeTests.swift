@@ -31,6 +31,51 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(plan.executionSteps.map(\.dataSource), [.web])
     }
 
+    // MARK: - Web usage: weekly from the `limits` array (2026 schema)
+
+    func testWebUsageWeeklyFallsBackToAllModelsLimit() throws {
+        // No flat `seven_day` — weekly lives only in `limits`. The account-wide
+        // "All models" entry becomes the main weekly window; model-scoped
+        // entries become "X only" extra bars.
+        let json = """
+        {"five_hour":{"utilization":12.0,"resets_at":"2026-07-26T18:00:00Z"},
+         "seven_day_routines":{"utilization":3.0},
+         "limits":[
+           {"kind":"weekly_scoped","group":"weekly","percent":41.5,
+            "resets_at":"2026-07-30T00:00:00Z",
+            "scope":{"model":{"id":"all-models","display_name":"All models"}}},
+           {"kind":"weekly_scoped","group":"weekly","percent":9.0,
+            "scope":{"model":{"id":"claude-sonnet-4-5","display_name":"Sonnet"}}},
+           {"kind":"weekly_scoped","group":"weekly","percent":null,
+            "scope":{"model":{"id":"claude-haiku-4-5","display_name":"Haiku"}}}
+         ]}
+        """.data(using: .utf8)!
+        let parsed = try ClaudeWebAPIFetcher.parseUsageForTesting(json)
+        XCTAssertEqual(parsed.sessionPercentUsed, 12.0)
+        XCTAssertEqual(parsed.weeklyPercentUsed, 41.5)
+        XCTAssertNotNil(parsed.weeklyResetsAt)
+        XCTAssertTrue(parsed.extraRateWindows.contains {
+            $0.title == "Sonnet only" && $0.window.usedPercent == 9.0
+        })
+        // All-models feeds the main window, never an extra bar; null percents drop.
+        XCTAssertFalse(parsed.extraRateWindows.contains { $0.title.contains("All models") })
+        XCTAssertFalse(parsed.extraRateWindows.contains { $0.title.contains("Haiku") })
+    }
+
+    func testWebUsageSevenDayStillWinsOverLimits() throws {
+        // Old schema intact: the flat seven_day takes precedence.
+        let json = """
+        {"five_hour":{"utilization":1.0},
+         "seven_day":{"utilization":55.0,"resets_at":"2026-07-29T00:00:00Z"},
+         "limits":[
+           {"kind":"weekly_scoped","group":"weekly","percent":41.5,
+            "scope":{"model":{"id":"all-models","display_name":"All models"}}}
+         ]}
+        """.data(using: .utf8)!
+        let parsed = try ClaudeWebAPIFetcher.parseUsageForTesting(json)
+        XCTAssertEqual(parsed.weeklyPercentUsed, 55.0)
+    }
+
     // MARK: - CLI timeout + retry policy (CodexBar parity)
 
     func testDirectCLIUsageTimeoutClamp() {

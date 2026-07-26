@@ -94,6 +94,17 @@ final class ClaudeProvider: QuotaProvider {
             windows.append(window(label: "Opus", utilization: opus.usedPercent,
                                   resetsAt: opus.resetsAt, seconds: 7 * 24 * 3600))
         }
+        // Extra product / model-scoped weekly windows ("Daily Routines",
+        // "Sonnet only", …) render as bars like CodexBar's menu card.
+        // Supplementary: they never take over the lowest-quota headline.
+        for extra in snapshot.extraRateWindows {
+            let used = max(0, min(100, Int(extra.window.usedPercent.rounded())))
+            windows.append(QuotaWindow(
+                label: extra.title, usedPct: used, remainingPct: 100 - used,
+                resetDate: extra.window.resetsAt,
+                windowSeconds: (extra.window.windowMinutes ?? 7 * 24 * 60) * 60,
+                isSupplementary: true))
+        }
 
         // Plan + account email come from the same Keychain blob the token lives
         // in. Only read when prompting is allowed; otherwise reuse the cache.

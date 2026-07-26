@@ -232,6 +232,14 @@ enum ClaudeWebAPIFetcher {
             weeklyPercent = percentValue(from: sevenDay["utilization"])
             weeklyResets = (sevenDay["resets_at"] as? String).flatMap(parseISO8601Date)
         }
+        // 2026 schema: some accounts no longer return a flat `seven_day` —
+        // weekly limits live only in the `limits` array. Use the account-wide
+        // ("All models") weekly entry as the main weekly window in that case.
+        if weeklyPercent == nil,
+           let allModels = ClaudeWebExtraRateWindowParser.allModelsWeeklyLimit(from: json) {
+            weeklyPercent = allModels.percent
+            weeklyResets = allModels.resetsAt
+        }
 
         // seven_day_sonnet preferred over seven_day_opus
         var opusPercent: Double?
@@ -255,6 +263,11 @@ enum ClaudeWebAPIFetcher {
     }
 
     /// Public parse entry point for unit tests (canned JSON, no network).
+    /// Test entry point — parses a canned usage JSON payload (no network).
+    static func parseUsageForTesting(_ data: Data) throws -> ClaudeWebUsageData {
+        try parseUsageResponse(data)
+    }
+
     private static func parseUsageResponse(_ data: Data) throws -> ClaudeWebUsageData {
         let raw = try parseUsageData(from: data)
         return ClaudeWebUsageData(
@@ -552,7 +565,98 @@ private enum ClaudeWebExtraRateWindowParser {
                 sourceKeys[def.id] = key
             }
         }
+        windows.append(contentsOf: scopedWeeklyLimitWindows(from: json))
         return (windows, sourceKeys)
+    }
+
+    // MARK: Model-scoped weekly limits (`limits` array, ClaudeScopedWeeklyLimitMapper port)
+
+    /// One decoded entry of the `limits` array:
+    /// `{kind, group, percent, resets_at, scope: {model: {id, display_name}}}`.
+    private struct WeeklyLimit {
+        let percent: Double?
+        let resetsAt: Date?
+        let modelID: String?
+        let modelName: String?
+    }
+
+    private static func weeklyLimits(from json: [String: Any]) -> [WeeklyLimit] {
+        guard let limits = json["limits"] as? [[String: Any]] else { return [] }
+        // `is_active` is intentionally not a filter: CodexBar observed
+        // enforceable scoped limits that report false.
+        return limits.compactMap { entry in
+            guard (entry["group"] as? String) == "weekly",
+                  (entry["kind"] as? String) == "weekly_scoped" else { return nil }
+            let model = (entry["scope"] as? [String: Any])?["model"] as? [String: Any]
+            return WeeklyLimit(
+                percent: percentValue(from: entry["percent"]),
+                resetsAt: (entry["resets_at"] as? String).flatMap(parseISO8601Date),
+                modelID: model?["id"] as? String,
+                modelName: model?["display_name"] as? String)
+        }
+    }
+
+    /// Per-model weekly bars ("Sonnet only", "Opus only", …). The account-wide
+    /// "All models" entry is excluded here — it feeds the main weekly window.
+    private static func scopedWeeklyLimitWindows(from json: [String: Any]) -> [NamedRateWindow] {
+        var seenIDs: Set<String> = []
+        return weeklyLimits(from: json).compactMap { limit in
+            guard let percent = limit.percent, percent.isFinite,
+                  let modelName = nonEmpty(limit.modelName),
+                  !isAllModelsScope(modelID: limit.modelID, modelName: modelName)
+            else { return nil }
+            let idSlug = slug(nonEmpty(limit.modelID) ?? modelName)
+            guard !idSlug.isEmpty, seenIDs.insert("claude-weekly-scoped-\(idSlug)").inserted else { return nil }
+            return NamedRateWindow(
+                id: "claude-weekly-scoped-\(idSlug)",
+                title: "\(modelName) only",
+                window: RateWindow(
+                    usedPercent: percent,
+                    windowMinutes: 7 * 24 * 60,
+                    resetsAt: limit.resetsAt,
+                    resetDescription: nil))
+        }
+    }
+
+    /// The account-wide weekly entry, when present ("All models" scope or no
+    /// model scope at all).
+    static func allModelsWeeklyLimit(from json: [String: Any]) -> (percent: Double, resetsAt: Date?)? {
+        for limit in weeklyLimits(from: json) {
+            guard let percent = limit.percent, percent.isFinite else { continue }
+            let name = nonEmpty(limit.modelName)
+            if name == nil || isAllModelsScope(modelID: limit.modelID, modelName: name ?? "") {
+                return (percent, limit.resetsAt)
+            }
+        }
+        return nil
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty { return trimmed }
+        return nil
+    }
+
+    private static func slug(_ value: String) -> String {
+        var result = ""
+        var lastWasDash = false
+        for scalar in value.lowercased().unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                result.unicodeScalars.append(scalar)
+                lastWasDash = false
+            } else if !lastWasDash {
+                result.append("-")
+                lastWasDash = true
+            }
+        }
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private static func isAllModelsScope(modelID: String?, modelName: String) -> Bool {
+        if slug(modelName) == "all-models" { return true }
+        guard let modelID = nonEmpty(modelID) else { return false }
+        let idSlug = slug(modelID)
+        return idSlug == "all-models" || idSlug.hasSuffix("-all-models")
     }
 
     private static func namedWindow(id: String, title: String, usedPercent: Double, resetsAt: Date?) -> NamedRateWindow {

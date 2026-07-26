@@ -69,27 +69,30 @@ enum ClaudeWebCookieReader {
     private static func extractFromBrowsers() throws -> SessionKeyInfo? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: ["claude.ai"])
+        var sawAccessDenied = false
 
-        // Safari first — no Keychain prompt needed on macOS.
-        if let info = tryBrowser(.safari, client: client, query: query) {
-            return info
-        }
-
-        // Remaining browsers in default order (skipping safari — already tried).
-        let remaining = Browser.defaultImportOrder.filter { $0 != .safari }
-        for browser in remaining {
-            if let info = tryBrowser(browser, client: client, query: query) {
+        // Safari first (no Keychain prompt), then the default import order.
+        // The cooldown is only armed when the WHOLE sweep ends empty-handed
+        // with at least one Keychain refusal — one denied browser must not
+        // poison the gate while another browser still serves the cookie.
+        var browsers: [Browser] = [.safari]
+        browsers += Browser.defaultImportOrder.filter { $0 != .safari }
+        for browser in browsers {
+            if let info = tryBrowser(browser, client: client, query: query,
+                                     sawAccessDenied: &sawAccessDenied) {
+                UserDefaults.standard.removeObject(forKey: deniedUntilKey)
                 return info
             }
         }
-
+        if sawAccessDenied { recordCooldown() }
         return nil
     }
 
     private static func tryBrowser(
         _ browser: Browser,
         client: BrowserCookieClient,
-        query: BrowserCookieQuery) -> SessionKeyInfo?
+        query: BrowserCookieQuery,
+        sawAccessDenied: inout Bool) -> SessionKeyInfo?
     {
         do {
             let storeRecords = try client.records(matching: query, in: browser)
@@ -112,8 +115,8 @@ enum ClaudeWebCookieReader {
                 }
             }
         } catch let error as BrowserCookieError {
-            // Record access-denied errors for the cooldown gate.
-            recordCooldownIfNeeded(error)
+            // Flag access-denied for the caller's cooldown decision.
+            if case .accessDenied = error { sawAccessDenied = true }
         } catch {
             // notFound / loadFailed — browser not installed or store unreadable, skip silently.
         }
@@ -158,12 +161,10 @@ enum ClaudeWebCookieReader {
         return ts
     }
 
-    private static func recordCooldownIfNeeded(_ error: BrowserCookieError) {
-        // Only suppress on access-denied (Keychain refusal). Short 5-min cooldown
-        // so a user-initiated Refresh / "Always Allow" gets a fresh attempt fast.
-        if case .accessDenied = error {
-            let suppressUntil = Date().addingTimeInterval(5 * 60)
-            UserDefaults.standard.set(suppressUntil, forKey: deniedUntilKey)
-        }
+    /// Short 5-min cooldown after a fully-denied sweep, so a user-initiated
+    /// Refresh / "Always Allow" gets a fresh attempt fast.
+    private static func recordCooldown() {
+        let suppressUntil = Date().addingTimeInterval(5 * 60)
+        UserDefaults.standard.set(suppressUntil, forKey: deniedUntilKey)
     }
 }
