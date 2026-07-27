@@ -5,7 +5,7 @@
 
 import {
   Combined, CombinedDay, HourlyUsage,
-  usd, tokens, tokensShort, dayLabel,
+  usd, tokens, tokensShort, tokensAndUsd, dayLabel,
 } from "./usage";
 import { t, currentLang } from "./i18n";
 
@@ -35,8 +35,10 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
   const card = el("section", "card");
   let period = Number(localStorage.getItem(PERIOD_KEY)) || 30;
   if (!PERIODS.includes(period)) period = 30;
-  // Click-to-pin day detail (macOS pinnedDay) — no auto last-active fallback.
+  // Click-to-pin day detail (macOS pinnedDay) with the latest-active-day
+  // fallback; clicking the day on display hides the block (macOS parity).
   let pinnedDay: CombinedDay | null = null;
+  let detailHidden = false;
 
   const render = () => {
     card.textContent = "";
@@ -85,6 +87,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       pill.addEventListener("click", () => {
         period = days;
         pinnedDay = null;
+        detailHidden = false;
         localStorage.setItem(PERIOD_KEY, String(days));
         render();
       });
@@ -106,6 +109,8 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       card.append(stackedBarChart(windowDaily, detail, {
         getPinned: () => pinnedDay,
         setPinned: (d) => { pinnedDay = d; },
+        getHidden: () => detailHidden,
+        setHidden: (hidden) => { detailHidden = hidden; },
       }));
       const legend = el("div", "legend");
       legend.append(
@@ -119,7 +124,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
         { name: "Codex", usd: wCodexUsd, css: "codex" },
         { name: "Grok", usd: wGrokUsd, css: "grok" },
       ]));
-      if (pinnedDay && windowDaily.some((d) => d.date === pinnedDay!.date)) {
+      if (!detailHidden && pinnedDay && windowDaily.some((d) => d.date === pinnedDay!.date)) {
         showDayDetail(detail, pinnedDay);
       }
       card.append(detail);
@@ -212,13 +217,15 @@ function compactModelRow(
   const left = el("span", "legend-item");
   left.append(el("span", `dot ${css === "muted" ? "muted" : css}`));
   left.append(el("span", "model-name", label));
-  row.append(left, el("span", "model-amount", `${tokensShort(tokenCount)} · ${usd(amount)}`));
+  row.append(left, el("span", "model-amount", tokensAndUsd(tokenCount, amount)));
   return row;
 }
 
 type PinApi = {
   getPinned: () => CombinedDay | null;
   setPinned: (d: CombinedDay | null) => void;
+  getHidden: () => boolean;
+  setHidden: (hidden: boolean) => void;
 };
 
 /** Stacked per-source bars: Claude → Codex → Grok; height by tokens.
@@ -228,8 +235,9 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
   const chart = el("div", `bar-chart${days.length > 45 ? " dense" : ""}`);
   let hoverDay: CombinedDay | null = null;
 
+  const latestActive = [...days].reverse().find((d) => d.tokens > 0) ?? days[days.length - 1] ?? null;
   const paintDetail = () => {
-    const day = hoverDay ?? pin.getPinned();
+    const day = pin.getHidden() ? null : (hoverDay ?? pin.getPinned() ?? latestActive);
     if (day) showDayDetail(detail, day);
     else detail.textContent = "";
     // Highlight pinned bar.
@@ -270,8 +278,18 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
       paintDetail();
     });
     col.addEventListener("click", () => {
-      const cur = pin.getPinned();
-      pin.setPinned(cur && cur.date === day.date ? null : day);
+      if (pin.getHidden()) {
+        pin.setHidden(false);
+        pin.setPinned(day);
+      } else {
+        const shown = hoverDay ?? pin.getPinned() ?? latestActive;
+        if (shown && shown.date === day.date) {
+          pin.setHidden(true);
+          pin.setPinned(null);
+        } else {
+          pin.setPinned(day);
+        }
+      }
       paintDetail();
     });
     chart.append(col);
@@ -485,7 +503,7 @@ export function topModelsCard(combined: Combined): HTMLElement {
     );
     head.append(
       left,
-      el("span", "top-model-amount", `${tokensShort(model.tokens)} · ${usd(model.usd)}`),
+      el("span", "top-model-amount", tokensAndUsd(model.tokens, model.usd)),
     );
     const track = el("div", "model-track");
     const fill = el("div", `model-fill ${model.source}`);

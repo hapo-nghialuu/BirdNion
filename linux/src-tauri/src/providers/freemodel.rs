@@ -108,21 +108,25 @@ async fn optional_json(client: &reqwest::Client, url: &str, cookie_header: &str)
     resp.json().await.ok()
 }
 
-/// Dashboard "Current balance" (§ Extra usage) — remaining = referral
-/// `credits` + billing `signupCreditCents`; total = remaining + `used`
-/// (matches the web card's "$used / $total"). None when nothing was earned.
+/// Dashboard "Current balance" (§ Extra usage). 2026 schema: referral
+/// `credits` is always 0 — the remaining bonus lives in billing
+/// `creditCents` (`signupCreditCents` mirrors it and was the legacy
+/// signup-credit field). remaining = referral credits + billing credit;
+/// total = remaining + `used` (matches the web card's "$used / $total").
+/// Renders from referral alone when billing is missing — billing tops the
+/// total up when it answers. None when nothing was earned.
 fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<QuotaWindow> {
     let referral = referral?;
     let credits = referral.get("credits").and_then(Value::as_f64).unwrap_or(0.0);
     let used = referral.get("used").and_then(Value::as_f64).unwrap_or(0.0);
     let count = referral.get("count").and_then(Value::as_i64).unwrap_or(0);
-    let signup_usd = billing
-        .and_then(|b| b.get("signupCreditCents"))
+    let billing_usd = billing
+        .and_then(|b| b.get("creditCents").or_else(|| b.get("signupCreditCents")))
         .and_then(Value::as_f64)
         .unwrap_or(0.0)
         / 100.0;
 
-    let remaining = credits + signup_usd;
+    let remaining = credits + billing_usd;
     let total = remaining + used;
     if total <= 0.0 {
         return None;
@@ -292,6 +296,25 @@ mod tests {
         assert!(balance_window(None, Some(&billing)).is_none());
         let zero: Value = serde_json::from_str(r#"{"count":0,"credits":0,"used":0}"#).unwrap();
         assert!(balance_window(Some(&zero), None).is_none());
+    }
+
+    #[test]
+    fn balance_window_2026_schema_credit_cents() {
+        // 2026 schema: referral.credits is always 0 — the remaining bonus
+        // lives in billing.creditCents. Live capture: $189.79 used +
+        // creditCents 13373 → "$189.79 / $323.52".
+        let referral: Value =
+            serde_json::from_str(r#"{"code":"x","count":8,"credits":0,"used":189.79}"#).unwrap();
+        let billing: Value =
+            serde_json::from_str(r#"{"creditCents":13373,"signupCreditCents":13373}"#).unwrap();
+        let w = balance_window(Some(&referral), Some(&billing)).unwrap();
+        assert_eq!(w.subtitle.as_deref(), Some("$189.79 / $323.52 · 8 giới thiệu"));
+        assert_eq!(w.used_pct, 59);
+
+        // Billing timed out: referral-only figure still renders (used/used).
+        let w = balance_window(Some(&referral), None).unwrap();
+        assert_eq!(w.subtitle.as_deref(), Some("$189.79 / $189.79 · 8 giới thiệu"));
+        assert_eq!(w.used_pct, 100);
     }
 
     #[test]

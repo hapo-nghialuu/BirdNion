@@ -2,7 +2,7 @@
 // CodexUsageChartCard: today + 30d summary, per-day USD bars, hovered-day
 // per-model breakdown, estimated-total footer.
 
-import { DailyUsage, UsageReport, usd, tokens, tokensShort, dayLabel } from "./usage";
+import { DailyUsage, UsageReport, usd, tokens, tokensAndUsd, dayLabel } from "./usage";
 import { t } from "./i18n";
 
 function el(tag: string, className: string, text?: string): HTMLElement {
@@ -27,7 +27,7 @@ function showDetail(detail: HTMLElement, day: DailyUsage) {
   for (const m of day.models) {
     const row = el("div", "source-row");
     row.append(el("span", "model-name", m.name));
-    row.append(el("span", "source-amount", `${tokensShort(m.tokens)} · ${usd(m.usd)}`));
+    row.append(el("span", "source-amount", tokensAndUsd(m.tokens, m.usd)));
     detail.append(row);
   }
 }

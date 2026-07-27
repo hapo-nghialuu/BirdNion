@@ -376,6 +376,49 @@ fn parse_window(v: Option<&Value>) -> Option<RateWindow> {
     Some(RateWindow { used_pct, resets_at })
 }
 
+/// 2026 schema: some accounts no longer return a flat `seven_day` — weekly
+/// limits live only in the `limits` array (`kind: "weekly_scoped"`,
+/// `group: "weekly"`, `scope.model`). Returns the account-wide ("All models"
+/// / unscoped) entry as the main weekly fallback. Model-scoped entries are
+/// deliberately NOT surfaced as bars — same call as the macOS popover
+/// ("Fable only" bars were rejected as noise). `is_active` is intentionally
+/// not a filter: observed enforceable scoped limits report false.
+fn all_models_weekly_limit(body: &Value) -> Option<RateWindow> {
+    let limits = body.get("limits").and_then(Value::as_array)?;
+    for entry in limits {
+        if entry.get("group").and_then(Value::as_str) != Some("weekly")
+            || entry.get("kind").and_then(Value::as_str) != Some("weekly_scoped")
+        {
+            continue;
+        }
+        let Some(percent) = entry.get("percent").and_then(Value::as_f64) else { continue };
+        if !percent.is_finite() {
+            continue;
+        }
+        let model = entry.get("scope").and_then(|s| s.get("model"));
+        let model_name = model
+            .and_then(|m| m.get("display_name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let model_id = model
+            .and_then(|m| m.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let is_all_models = model_name.is_none()
+            || model_name == Some("All models")
+            || model_id == "all-models"
+            || model_id.ends_with("-all-models");
+        if is_all_models {
+            return Some(RateWindow {
+                used_pct: percent,
+                resets_at: parse_iso8601(entry.get("resets_at").and_then(Value::as_str)),
+            });
+        }
+    }
+    None
+}
+
 const FIVE_HOURS_SECS: i64 = 5 * 3600;
 const SEVEN_DAYS_SECS: i64 = 7 * 24 * 3600;
 
@@ -410,7 +453,10 @@ fn build_status(id: &str, name: &str, body: &Value, subscription_type: Option<&s
     if let Some(w) = primary {
         windows.push(to_quota_window(w, "5 giờ", Some(FIVE_HOURS_SECS)));
     }
-    if let Some(w) = seven_day {
+    // Weekly limits moved into the `limits` array on some accounts (2026
+    // schema): the account-wide entry backs the main weekly window when
+    // seven_day is absent.
+    if let Some(w) = seven_day.or_else(|| all_models_weekly_limit(body)) {
         windows.push(to_quota_window(w, "Tuần", Some(SEVEN_DAYS_SECS)));
     }
     if let Some(w) = seven_day_opus {
@@ -499,6 +545,41 @@ fn plan_label(subscription_type: Option<&str>) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn weekly_falls_back_to_all_models_limit() {
+        // 2026 schema: no flat seven_day — the account-wide entry in `limits`
+        // backs the main weekly window; model-scoped entries stay hidden.
+        let body = json!({
+            "five_hour": {"utilization": 12.0, "resets_at": "2026-07-26T18:00:00Z"},
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 41.5,
+                 "resets_at": "2026-07-30T00:00:00Z",
+                 "scope": {"model": {"id": "all-models", "display_name": "All models"}}},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 9.0,
+                 "scope": {"model": {"id": "claude-sonnet-4-5", "display_name": "Sonnet"}}}
+            ]
+        });
+        let status = build_status("claude", "Claude", &body, None);
+        let labels: Vec<_> = status.windows.iter().map(|w| w.label.as_str()).collect();
+        assert_eq!(labels, vec!["5 giờ", "Tuần"]);
+        assert_eq!(status.windows[1].used_pct, 42); // 41.5 rounded
+    }
+
+    #[test]
+    fn flat_seven_day_still_wins_over_limits() {
+        let body = json!({
+            "five_hour": {"utilization": 1.0},
+            "seven_day": {"utilization": 55.0},
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 41.5,
+                 "scope": {"model": {"id": "all-models", "display_name": "All models"}}}
+            ]
+        });
+        let status = build_status("claude", "Claude", &body, None);
+        assert_eq!(status.windows[1].label, "Tuần");
+        assert_eq!(status.windows[1].used_pct, 55);
+    }
 
     #[test]
     fn parses_oauth_credentials_blob() {

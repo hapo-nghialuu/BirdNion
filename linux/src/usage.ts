@@ -160,6 +160,13 @@ export function tokensShort(n: number): string {
   return `${n}`;
 }
 
+// Model-row readout: unpriced models (the cost scanners price non-Claude
+// models at $0) show tokens only — "$0.00" reads like real spend data that
+// is simply wrong. Mirrors macOS `AllUsageFormat.tokensAndUSD`.
+export function tokensAndUsd(tokenCount: number, amount: number): string {
+  return amount < 0.005 ? tokensShort(tokenCount) : `${tokensShort(tokenCount)} · ${usd(amount)}`;
+}
+
 export function dayLabel(date: string): string {
   const d = new Date(date + "T12:00:00");
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
