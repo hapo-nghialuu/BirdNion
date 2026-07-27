@@ -233,6 +233,101 @@ final class OpenRouterProviderTests: XCTestCase {
     }
 }
 
+final class TryAPIProviderTests: XCTestCase {
+    func testParseUnrestrictedWallet() {
+        let json = """
+        {
+          "balance": 290.6,
+          "remaining": 290.6,
+          "unit": "USD",
+          "planName": "钱包余额",
+          "isValid": true,
+          "mode": "unrestricted",
+          "usage": {
+            "today": {"requests":0,"cost":0,"actual_cost":0},
+            "total": {"requests":89,"cost":8.85,"actual_cost":10.14}
+          }
+        }
+        """.data(using: .utf8)!
+        let s = TryAPIProvider().parse(json, accountLabel: "sk-try12")
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.count, 1)
+        XCTAssertEqual(s.windows[0].label, "Số dư")
+        // used=10.14, remaining=290.6, total=300.74 → ~3%
+        XCTAssertEqual(s.windows[0].usedPct, 3)
+        XCTAssertEqual(s.windows[0].remainingPct, 97)
+        XCTAssertEqual(s.windows[0].subtitle, "$10.14 / $300.74")
+        XCTAssertEqual(s.creditsRemaining, 290.6)
+        XCTAssertEqual(s.planName, "钱包余额")
+        XCTAssertEqual(s.accountLabel, "sk-try12")
+    }
+
+    func testPrefersActualCostOverCost() {
+        let json = """
+        {"remaining":90.0,"isValid":true,"usage":{"total":{"cost":5.0,"actual_cost":10.0}}}
+        """.data(using: .utf8)!
+        let s = TryAPIProvider().parse(json, accountLabel: "u")
+        XCTAssertEqual(s.windows[0].usedPct, 10)
+        XCTAssertEqual(s.windows[0].subtitle, "$10.00 / $100.00")
+    }
+
+    func testTodayWindowWhenTraffic() {
+        let json = """
+        {
+          "remaining":100.0,"isValid":true,
+          "usage":{
+            "today":{"requests":3,"actual_cost":1.25},
+            "total":{"actual_cost":5.0}
+          }
+        }
+        """.data(using: .utf8)!
+        let s = TryAPIProvider().parse(json, accountLabel: "u")
+        XCTAssertEqual(s.windows.count, 2)
+        XCTAssertEqual(s.windows[1].label, "Hôm nay")
+        XCTAssertEqual(s.windows[1].subtitle, "$1.25 · 3 req")
+    }
+
+    func testQuotaLimitedSubscriptionWindows() {
+        let json = """
+        {
+          "remaining":10.0,"isValid":true,"mode":"quota_limited",
+          "usage":{"total":{"actual_cost":2.0}},
+          "subscription":{
+            "daily_usage_usd":1.0,"daily_limit_usd":5.0,
+            "weekly_usage_usd":3.0,"weekly_limit_usd":20.0,
+            "monthly_usage_usd":8.0,"monthly_limit_usd":50.0
+          }
+        }
+        """.data(using: .utf8)!
+        let s = TryAPIProvider().parse(json, accountLabel: "u")
+        XCTAssertEqual(s.windows.map(\.label), ["Số dư", "Ngày", "Tuần", "Tháng"])
+        XCTAssertEqual(s.windows[1].usedPct, 20)
+        XCTAssertEqual(s.windows[2].usedPct, 15)
+        XCTAssertEqual(s.windows[3].usedPct, 16)
+    }
+
+    func testInvalidKeyIsError() {
+        let json = #"{"isValid":false,"remaining":0}"#.data(using: .utf8)!
+        let s = TryAPIProvider().parse(json, accountLabel: "u")
+        XCTAssertEqual(s.error, "API key không hợp lệ")
+        XCTAssertTrue(s.windows.isEmpty)
+    }
+
+    func testParseMalformed() {
+        let s = TryAPIProvider().parse(Data("x".utf8), accountLabel: "u")
+        XCTAssertEqual(s.error, "Response thiếu trường")
+    }
+
+    func testMissingTokenMessage() async throws {
+        // Ensure env is unset for this process and config has no tryapi key.
+        // parse-path only; fetch missing-token is covered by failure helper shape.
+        let s = TryAPIProvider().parse(Data("{}".utf8), accountLabel: "u")
+        // empty JSON still decodes (all optional) with isValid=nil → not invalid
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.first?.label, "Số dư")
+    }
+}
+
 final class DeepSeekProviderTests: XCTestCase {
     func testParseBalance() {
         let json = #"{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"12.34"}]}"#

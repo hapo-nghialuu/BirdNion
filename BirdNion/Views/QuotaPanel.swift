@@ -551,6 +551,8 @@ struct ProviderLogoMark: View {
             logo("HapoLogo")
         case "openrouter":
             logo("OpenRouterLogo", brand: VocabbyTheme.openRouter)
+        case "tryapi":
+            logo("TryAPILogo", brand: VocabbyTheme.tryAPI)
         case "deepseek":
             logo("DeepSeekLogo", brand: VocabbyTheme.deepSeek)
         case "zai":

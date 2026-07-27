@@ -564,6 +564,7 @@ pub fn api_key(provider: &Provider) -> Option<String> {
         "deepseek" => Some("DEEPSEEK_API_KEY"),
         "elevenlabs" => Some("ELEVENLABS_API_KEY"),
         "hiyo" => Some("HIYO_API_KEY"),
+        "tryapi" => Some("TRYAPI_API_KEY"),
         "minimax" => Some("MINIMAX_CODING_API_KEY"),
         "openai" => Some("OPENAI_ADMIN_KEY"),
         "ollama" => Some("OLLAMA_API_KEY"),

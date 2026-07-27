@@ -85,7 +85,7 @@ export type CodexProfileLite = {
 
 /** Providers whose auth is a pasted API key. */
 export const KEYED = new Set([
-  "minimax", "hapo", "openrouter", "deepseek", "zai", "elevenlabs", "hiyo",
+  "minimax", "hapo", "openrouter", "tryapi", "deepseek", "zai", "elevenlabs", "hiyo",
   "deepgram", "groq", "kiro", "kilo", "alibaba", "bedrock", "openai", "ollama",
 ]);
 /** Providers that can use browser cookies. */
@@ -452,6 +452,10 @@ const PROVIDER_LINKS: Record<string, LinkSpec[]> = {
     L("link.billing", "https://openrouter.ai/settings/credits"),
     L("link.apiKeys", "https://openrouter.ai/keys"),
     L("link.status", "https://status.openrouter.ai"),
+  ],
+  tryapi: [
+    L("link.dashboard", "https://tryapi.tryai.chat/dashboard"),
+    L("link.apiKeys", "https://tryapi.tryai.chat/keys"),
   ],
   deepseek: [
     L("link.usage", "https://platform.deepseek.com/usage"),

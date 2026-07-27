@@ -963,7 +963,7 @@ final class NewProviderTests: XCTestCase {
 
     func testMenuBarProviderLogosAreMonochromeTemplates() {
         let providerIDs = [
-            "minimax", "hapo", "codex", "claude", "openrouter", "deepseek", "zai",
+            "minimax", "hapo", "codex", "claude", "openrouter", "tryapi", "deepseek", "zai",
             "elevenlabs", "deepgram", "groq", "grok", "openai", "ollama", "copilot",
             "kilo", "commandcode", "freemodel", "mimo", "cursor", "alibaba", "opencode",
             "opencodego", "gemini", "kiro", "antigravity", "bedrock", "hiyo",

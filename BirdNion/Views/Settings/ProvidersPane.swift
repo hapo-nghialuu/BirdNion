@@ -242,6 +242,7 @@ extension ProvidersPane {
         case "hapo": row.displayName ?? "Hapo Hub"
         case "claude": "Claude"
         case "openrouter": "OpenRouter"
+        case "tryapi": "TryAPI"
         case "deepseek": "DeepSeek"
         case "zai": "z.ai"
         case "elevenlabs": "ElevenLabs"
@@ -394,6 +395,8 @@ struct ProviderLogoView: View {
             logo("CodexLogo", brand: VocabbyTheme.codex)
         case "openrouter":
             logo("OpenRouterLogo", brand: VocabbyTheme.openRouter)
+        case "tryapi":
+            logo("TryAPILogo", brand: VocabbyTheme.tryAPI)
         case "deepseek":
             logo("DeepSeekLogo", brand: VocabbyTheme.deepSeek)
         case "zai":

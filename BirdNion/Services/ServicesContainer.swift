@@ -73,6 +73,8 @@ final class ServicesContainer: ObservableObject {
                     config: hapoConfig))
             case "openrouter":
                 result.append(OpenRouterProvider())
+            case "tryapi":
+                result.append(TryAPIProvider())
             case "deepseek":
                 result.append(DeepSeekProvider())
             case "zai":

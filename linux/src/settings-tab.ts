@@ -26,7 +26,7 @@ async function persistProvidersAndNotify(settings: Settings): Promise<void> {
 /** Full roster (macOS parity), in default display order. */
 const ROSTER: [string, string][] = [
   ["claude", "Claude"], ["codex", "Codex"], ["minimax", "MiniMax"],
-  ["hapo", "Hapo AI Hub"], ["openrouter", "OpenRouter"], ["deepseek", "DeepSeek"],
+  ["hapo", "Hapo AI Hub"], ["openrouter", "OpenRouter"], ["tryapi", "TryAPI"], ["deepseek", "DeepSeek"],
   ["zai", "z.ai"], ["elevenlabs", "ElevenLabs"], ["hiyo", "Hiyo"], ["deepgram", "Deepgram"],
   ["groq", "Groq"], ["grok", "Grok"], ["openai", "OpenAI"], ["ollama", "Ollama"],
   ["copilot", "Copilot"], ["kilo", "Kilo"],

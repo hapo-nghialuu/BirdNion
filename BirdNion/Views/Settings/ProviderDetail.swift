@@ -1406,6 +1406,11 @@ extension ProvidersPane {
                 u("https://openrouter.ai/keys").map { DashboardLink(title: L10n.t("provider.link.apiKeys", language), icon: "key", url: $0) },
                 stat("https://status.openrouter.ai"),
             ].compactMap { $0 }
+        case "tryapi":
+            return [
+                dash("https://tryapi.tryai.chat/dashboard"),
+                u("https://tryapi.tryai.chat/keys").map { DashboardLink(title: L10n.t("provider.link.apiKeys", language), icon: "key", url: $0) },
+            ].compactMap { $0 }
         case "deepseek":
             return [
                 u("https://platform.deepseek.com/usage").map { DashboardLink(title: L10n.t("provider.link.deepSeekBalance", language), icon: "chart.bar", url: $0) },

@@ -95,6 +95,7 @@ enum VocabbyTheme {
     static let codex      = fixed(0x49A3B0)
     static let minimax    = fixed(0xFE603C)
     static let openRouter = fixed(0x6467F2)
+    static let tryAPI     = fixed(0x5B6CFF)
     static let deepSeek   = fixed(0x527DF0)
     static let zai        = fixed(0xE85A6A)
     static let claude     = fixed(0xCC7C5E)
@@ -124,6 +125,7 @@ enum VocabbyTheme {
         case "codex": return codex
         case "minimax": return minimax
         case "openrouter": return openRouter
+        case "tryapi": return tryAPI
         case "deepseek": return deepSeek
         case "zai": return zai
         case "claude": return claude

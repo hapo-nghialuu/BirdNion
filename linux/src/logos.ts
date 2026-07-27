@@ -10,7 +10,7 @@ const EXT: Record<string, "svg" | "png"> = {
 export function logoUrl(id: string): string | null {
   const known = new Set([
     "claude", "codex", "grok", "openai", "ollama", "minimax", "hapo",
-    "openrouter", "deepseek", "zai", "elevenlabs", "hiyo", "deepgram", "groq",
+    "openrouter", "tryapi", "deepseek", "zai", "elevenlabs", "hiyo", "deepgram", "groq",
     "copilot", "kilo", "commandcode", "freemodel", "mimo", "alibaba",
     "cursor", "gemini", "kiro", "opencode", "opencodego", "antigravity", "bedrock",
   ]);
@@ -76,6 +76,7 @@ const PROVIDER_TINT: Record<string, [string, string]> = {
   codex: ["#49A3B0", "#49A3B0"],
   minimax: ["#FE603C", "#FE603C"],
   openrouter: ["#6467F2", "#6467F2"],
+  tryapi: ["#5B6CFF", "#5B6CFF"],
   deepseek: ["#527DF0", "#527DF0"],
   hiyo: ["#527DF0", "#527DF0"],
   zai: ["#E85A6A", "#E85A6A"],

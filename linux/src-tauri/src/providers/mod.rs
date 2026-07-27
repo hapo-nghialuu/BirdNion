@@ -33,6 +33,7 @@ pub mod minimax;
 pub mod opencode;
 pub mod opencodego;
 pub mod openrouter;
+pub mod tryapi;
 pub mod zai;
 
 use serde::{Deserialize, Serialize};
@@ -162,6 +163,7 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "freemodel" => "FreeModel",
         "gemini" => "Gemini",
         "antigravity" => "Antigravity",
+        "tryapi" => "TryAPI",
         other => other,
     }
     .to_string()
@@ -197,6 +199,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         "mimo" => mimo::fetch(cfg).await,
         "alibaba" => alibaba::fetch(cfg).await,
         "freemodel" => freemodel::fetch(cfg).await,
+        "tryapi" => tryapi::fetch(cfg).await,
         "copilot" => copilot::fetch(cfg).await,
         other => ProviderStatus::failure(
             other,
