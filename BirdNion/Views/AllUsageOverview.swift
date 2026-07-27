@@ -791,7 +791,9 @@ private struct DaySourceModelRows: View {
                         .font(.system(size: 10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                     Spacer(minLength: 8)
-                    Text("\(AllUsageFormat.tokensShort(rest.reduce(0) { $0 + $1.tokens })) · \(AllUsageFormat.usd(rest.reduce(0) { $0 + $1.usd }))")
+                    Text(AllUsageFormat.tokensAndUSD(
+                        rest.reduce(0) { $0 + $1.tokens },
+                        rest.reduce(0) { $0 + $1.usd }))
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
@@ -831,7 +833,7 @@ private struct DaySourceModelRows: View {
                 .foregroundStyle(VocabbyTheme.secondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            Text("\(AllUsageFormat.tokensShort(tokens)) · \(AllUsageFormat.usd(usd))")
+            Text(AllUsageFormat.tokensAndUSD(tokens, usd))
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
@@ -1042,7 +1044,7 @@ struct CombinedTopModelsCard: View {
                             .foregroundStyle(VocabbyTheme.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 8)
-                        Text("\(AllUsageFormat.tokensShort(model.tokens)) · \(AllUsageFormat.usd(model.usd))")
+                        Text(AllUsageFormat.tokensAndUSD(model.tokens, model.usd))
                             .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(VocabbyTheme.tertiary)
                     }
@@ -1079,6 +1081,13 @@ struct CombinedTopModelsCard: View {
 /// chart cards): thousands-grouped dollars ("$13,236", "$547.58") and
 /// human-scale token counts with a B tier ("14.5B" instead of "14465.0M").
 enum AllUsageFormat {
+    /// Model-row readout: unpriced models (the cost scanner prices non-Claude
+    /// models at $0) show tokens only — "$0.00" reads like real spend data
+    /// that is simply wrong.
+    static func tokensAndUSD(_ tokens: Int, _ usd: Double) -> String {
+        usd < 0.005 ? tokensShort(tokens) : "\(tokensShort(tokens)) · \(self.usd(usd))"
+    }
+
     /// US-style grouping regardless of app locale — matches the fixed "$"
     /// symbol the cards already use.
     private static let wholeUSD: NumberFormatter = makeFormatter(fractionDigits: 0)
