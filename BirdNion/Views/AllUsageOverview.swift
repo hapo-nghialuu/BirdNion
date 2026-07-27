@@ -391,30 +391,15 @@ struct CombinedChartCard: View {
     private var grokTodayTokens: Int { report.daily.last?.grokTokens ?? 0 }
     private var maxBarHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
 
-    /// Hover temporarily surfaces a day; pin sticks until toggled off; with
-    /// neither, fall back to the latest active day (same as the provider
-    /// charts). The block being ALWAYS present is load-bearing: when it
-    /// appeared only on interaction, every hover/click changed the card
-    /// height → the popover panel resized → content shifted under the cursor
-    /// → hover flipped again — a visible relayout loop.
+    /// The day whose breakdown renders below the chart: the pinned day, else
+    /// the latest active day. Deliberately NOT hover-driven — hover changing
+    /// the block (and with it the card height mid-mouse-move) is what caused
+    /// the popover relayout loop; clicks resize once, intentionally, so the
+    /// block can hug its natural content height. Hover keeps the bar
+    /// highlight and the `.help` tooltip.
     private var detailDay: CombinedDailyUsage? {
         guard !detailHidden else { return nil }
-        return hoveredDay ?? pinnedDay
-            ?? windowDaily.last(where: \.isActive) ?? windowDaily.last
-    }
-
-    /// Fixed height for the day-detail slot, sized for the tallest detail in
-    /// the current window so hovering across bars never changes the card
-    /// height (period switches already reset hover/pin).
-    private var detailSlotHeight: CGFloat {
-        let rows = windowDaily.map { day -> Int in
-            let models = day.models.count
-            guard models > 0 else { return 3 }   // source-fallback rows (≤3)
-            return min(models, DaySourceModelRows.maxRows)
-                + (models > DaySourceModelRows.maxRows ? 1 : 0)
-        }.max() ?? 1
-        // Header line ≈ 18pt, each model row ≈ 17pt incl. spacing.
-        return 18 + CGFloat(max(rows, 1)) * 17
+        return pinnedDay ?? windowDaily.last(where: \.isActive) ?? windowDaily.last
     }
 
     private func periodLabel(_ days: Int) -> String {
@@ -504,17 +489,11 @@ struct CombinedChartCard: View {
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                // Constant-height slot (see detailSlotHeight) so hover/pin can
-                // swap the content without ever resizing the popover. Hiding
-                // via bar-click collapses the slot — a single intentional
-                // resize, unlike the hover-driven feedback loop.
-                if !detailHidden {
-                    Group {
-                        if let detail = detailDay {
-                            detailRows(detail)
-                        }
-                    }
-                    .frame(height: detailSlotHeight, alignment: .topLeading)
+                // Natural content height: the block only changes on click
+                // (pin / hide), never on hover, so each resize is a single
+                // intentional one — not the hover feedback loop.
+                if let detail = detailDay {
+                    detailRows(detail)
                 }
                 Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex và Grok."
                         : "Estimated from local Claude Code CLI, Codex, and Grok logs.")
@@ -788,8 +767,7 @@ private struct DaySourceModelRows: View {
 
     /// Rows beyond this fold into one "+N more" summary line — three source
     /// headers × five models each made the breakdown taller than the chart.
-    /// Not private: CombinedChartCard sizes its fixed detail slot from it.
-    static let maxRows = 6
+    private static let maxRows = 6
 
     /// Source is carried by the dot colour (chart legend explains it), so the
     /// per-source header rows are gone and models from all sources merge into
