@@ -292,7 +292,12 @@ final class FreemodelProvider: QuotaProvider {
         ]
         if let balance = Self.balanceWindow(referralData: referralData, billingData: billingData) {
             cachedBalanceWindow = balance
-            if usePersistentBalanceCache { Self.persistBalanceWindow(balance) }
+            // Persist only complete readings (remaining known): a billing-less
+            // cycle renders live as used/used but must not overwrite the last
+            // full $used/$total snapshot used after restarts.
+            if usePersistentBalanceCache, balance.remainingPct > 0 {
+                Self.persistBalanceWindow(balance)
+            }
             windows.append(balance)
         } else if let cached = cachedBalanceWindow
             ?? (usePersistentBalanceCache ? Self.persistedBalanceWindow() : nil) {
@@ -322,10 +327,9 @@ final class FreemodelProvider: QuotaProvider {
     /// automatically before plan credits. 2026 schema: `referral.credits` is
     /// always 0; the remaining bonus lives in `billing.creditCents` (with
     /// `signupCreditCents` mirroring it). total = remaining + used matches the
-    /// web card's "$used / $total" readout. When billing is missing/timed out,
-    /// remaining collapses to 0 and total would equal `used` — that renders a
-    /// bogus "100% used" bar, so return nil and let the caller's sticky cache
-    /// keep the last good reading instead.
+    /// web card's "$used / $total" readout. Renders as soon as referral
+    /// answers; a cycle without billing shows the referral-only figure (the
+    /// caller keeps full readings sticky for restarts).
     static func balanceWindow(referralData: Data?, billingData: Data?) -> QuotaWindow? {
         guard let referralData,
               let referral = try? JSONDecoder().decode(ReferralResponse.self, from: referralData)
@@ -338,7 +342,10 @@ final class FreemodelProvider: QuotaProvider {
         let used = referral.used ?? 0
         let remaining = (referral.credits ?? 0) + billingRemainingUSD
         let total = remaining + used
-        guard total > 0, remaining > 0 else { return nil }
+        // User preference: render from referral alone as soon as it answers —
+        // billing (creditCents) tops the total up when it arrives; a cycle
+        // without billing just shows the referral-only figure.
+        guard total > 0 else { return nil }
 
         let usedPct = max(0, min(100, Int((used / total * 100).rounded())))
         var subtitle = "\(UsageFormatter.usdString(used)) / \(UsageFormatter.usdString(total))"

@@ -1151,12 +1151,13 @@ final class NewProviderTests: XCTestCase {
             referralData: Data(#"{"count":0,"credits":0,"used":0}"#.utf8), billingData: nil)
         XCTAssertEqual(zero.windows.count, 2)
 
-        // New flapping schema: count/credits always 0 but used > 0 — total
-        // would collapse to `used` and render a bogus 100%-used bar. Hidden.
+        // 2026 schema without billing: referral still renders on its own
+        // (user preference) — used-only figure, remaining unknown → 100% used.
         let newSchema = FreemodelProvider._parseForTesting(
             usageData: usage, accountLabel: nil,
             referralData: Data(#"{"count":0,"credits":0,"used":155.53}"#.utf8), billingData: nil)
-        XCTAssertEqual(newSchema.windows.count, 2)
+        XCTAssertEqual(newSchema.windows.count, 3)
+        XCTAssertEqual(newSchema.windows[2].usedPct, 100)
 
         // 2026 schema (live payload shape): referral.credits is always 0; the
         // remaining bonus lives in billing.creditCents. Dashboard readout was
@@ -1170,12 +1171,13 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(live.windows[2].subtitle, "$189.79 / $323.52 · 8 giới thiệu")
         XCTAssertEqual(live.windows[2].usedPct, 59)  // 189.79/323.52 ≈ 58.7% → 59
 
-        // Billing timed out under the 2026 schema (credits stuck at 0) →
-        // remaining unknown, bar hidden for the cycle instead of "100% used".
+        // Billing timed out under the 2026 schema: referral-only figure still
+        // renders immediately (billing tops the total up when it arrives).
         let billingDown = FreemodelProvider._parseForTesting(
             usageData: usage, accountLabel: nil,
             referralData: referral2026, billingData: nil)
-        XCTAssertEqual(billingDown.windows.count, 2)
+        XCTAssertEqual(billingDown.windows.count, 3)
+        XCTAssertEqual(billingDown.windows[2].subtitle, "$189.79 / $189.79 · 8 giới thiệu")
     }
 
     /// The cookie filter forwards every pair but only proceeds when `bm_session`
