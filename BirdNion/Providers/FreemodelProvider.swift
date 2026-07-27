@@ -183,6 +183,9 @@ final class FreemodelProvider: QuotaProvider {
     /// `/api/auth/me` only enriches the account label — keep its timeout short so a
     /// slow/hung email lookup never delays the quota `/api/usage` already returned.
     private static let accountTimeout: TimeInterval = 5
+    /// /api/referral + /api/billing routinely take longer than 5s on
+    /// freemodel.dev; they run concurrently under usage's 15s ceiling.
+    private static let bonusTimeout: TimeInterval = 10
 
     private let session: URLSession
     private static let log = Logger(subsystem: "com.local.birdnion", category: "provider.freemodel")
@@ -235,11 +238,16 @@ final class FreemodelProvider: QuotaProvider {
         }
 
         // Account email + bonus-balance cards are best-effort enrichment —
-        // never block the budget windows on them.
+        // never block the budget windows on them. The bonus endpoints get a
+        // longer leash than /auth/me: freemodel.dev regularly needs >5s to
+        // answer them, and they run concurrently under usage's 15s ceiling,
+        // so the extra wait never extends the fetch.
         async let referralTask = Self.optionalFetch(
-            url: Self.referralURL, cookieHeader: cookieHeader, session: session)
+            url: Self.referralURL, cookieHeader: cookieHeader,
+            timeout: Self.bonusTimeout, session: session)
         async let billingTask = Self.optionalFetch(
-            url: Self.billingURL, cookieHeader: cookieHeader, session: session)
+            url: Self.billingURL, cookieHeader: cookieHeader,
+            timeout: Self.bonusTimeout, session: session)
         let accountLabel = await resolveAccountLabel(cookieHeader: cookieHeader)
         let referralData = await referralTask
         let billingData = await billingTask
@@ -263,11 +271,15 @@ final class FreemodelProvider: QuotaProvider {
                                  referralData: Data? = nil,
                                  billingData: Data? = nil) -> ProviderStatus {
         FreemodelProvider().parse(usageData: usageData, accountLabel: accountLabel,
-                                  referralData: referralData, billingData: billingData)
+                                  referralData: referralData, billingData: billingData,
+                                  usePersistentBalanceCache: false)
     }
 
+    /// `usePersistentBalanceCache` = false in unit tests so canned parses never
+    /// read or write the real UserDefaults sticky entry.
     private func parse(usageData: Data, accountLabel: String?,
-                       referralData: Data?, billingData: Data?) -> ProviderStatus {
+                       referralData: Data?, billingData: Data?,
+                       usePersistentBalanceCache: Bool = true) -> ProviderStatus {
         guard let usage = try? JSONDecoder().decode(UsageResponse.self, from: usageData) else {
             // Never log the raw body — it may carry account/billing/auth data.
             Self.log.error("parse: decode failed (bytes=\(usageData.count, privacy: .public))")
@@ -280,10 +292,16 @@ final class FreemodelProvider: QuotaProvider {
         ]
         if let balance = Self.balanceWindow(referralData: referralData, billingData: billingData) {
             cachedBalanceWindow = balance
+            if usePersistentBalanceCache { Self.persistBalanceWindow(balance) }
             windows.append(balance)
-        } else if let cached = cachedBalanceWindow {
+        } else if let cached = cachedBalanceWindow
+            ?? (usePersistentBalanceCache ? Self.persistedBalanceWindow() : nil) {
             // Sticky: a transient referral/billing failure keeps the last-known
-            // balance bar instead of silently dropping it for this cycle.
+            // balance bar instead of silently dropping it for this cycle. The
+            // persisted copy survives app restarts — freemodel's /api/billing
+            // times out often enough that a fresh launch could otherwise sit
+            // bar-less until the first good cycle.
+            cachedBalanceWindow = cached
             windows.append(cached)
         } else {
             // Byte counts only (never bodies — they carry account data): enough
@@ -449,11 +467,40 @@ final class FreemodelProvider: QuotaProvider {
     }
     #endif
 
+    // MARK: - Persistent balance sticky (survives app restarts)
+
+    /// Stored per active account so switching accounts never shows the other
+    /// account's balance; entries older than 48h are treated as gone (bonus
+    /// balances move slowly, but not THAT slowly).
+    private struct PersistedBalance: Codable {
+        let window: QuotaWindow
+        let savedAt: Date
+    }
+
+    private static var persistedBalanceKey: String {
+        "freemodelCachedBalanceWindow.\(FreemodelAccountStore.activeID())"
+    }
+
+    private static func persistBalanceWindow(_ window: QuotaWindow) {
+        let entry = PersistedBalance(window: window, savedAt: Date())
+        guard let data = try? JSONEncoder().encode(entry) else { return }
+        UserDefaults.standard.set(data, forKey: persistedBalanceKey)
+    }
+
+    private static func persistedBalanceWindow(now: Date = Date()) -> QuotaWindow? {
+        guard let data = UserDefaults.standard.data(forKey: persistedBalanceKey),
+              let entry = try? JSONDecoder().decode(PersistedBalance.self, from: data),
+              now.timeIntervalSince(entry.savedAt) < 48 * 3600
+        else { return nil }
+        return entry.window
+    }
+
     private static func optionalFetch(url: URL, cookieHeader: String,
+                                      timeout: TimeInterval = accountTimeout,
                                       session: URLSession) async -> Data? {
         do {
             return try await fetchEndpoint(url: url, cookieHeader: cookieHeader,
-                                           timeout: accountTimeout, session: session)
+                                           timeout: timeout, session: session)
         } catch {
             log.info("optional fetch failed: \(url.lastPathComponent, privacy: .public) — \(error.localizedDescription, privacy: .public)")
             return nil
