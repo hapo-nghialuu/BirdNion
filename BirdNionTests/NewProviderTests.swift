@@ -1180,6 +1180,28 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(billingDown.windows[2].subtitle, "$189.79 / $189.79 · 8 giới thiệu")
     }
 
+    func testFreemodelStickyBalanceWindowMarksStaleExactlyOnce() {
+        let usage = """
+        {"window5h":{"usedCents":100,"limitCents":20000,"resetsAt":0},
+         "windowWeek":{"usedCents":100,"limitCents":132000,"resetsAt":0}}
+        """.data(using: .utf8)!
+        let referral = Data(#"{"code":"x","count":8,"credits":0,"used":189.79}"#.utf8)
+        let billing = Data(#"{"creditCents":13373,"signupCreditCents":13373}"#.utf8)
+        let provider = FreemodelProvider()
+
+        let fresh = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            referralData: referral, billingData: billing, provider: provider)
+        XCTAssertEqual(fresh.windows[2].subtitle, "$189.79 / $323.52 · 8 giới thiệu")
+        XCTAssertFalse(fresh.windows[2].subtitle?.contains("số cũ") ?? false)
+
+        for _ in 0..<2 {
+            let stale = FreemodelProvider._parseForTesting(
+                usageData: usage, accountLabel: nil, provider: provider)
+            XCTAssertEqual(stale.windows[2].subtitle, "$189.79 / $323.52 · 8 giới thiệu · số cũ")
+        }
+    }
+
     /// The cookie filter forwards every pair but only proceeds when `bm_session`
     /// is present, and tolerates a full "Cookie: …" header line pasted from devtools.
     func testFreemodelCookieHeaderFilter() {

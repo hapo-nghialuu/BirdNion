@@ -35,10 +35,10 @@ pub mod opencodego;
 pub mod openrouter;
 pub mod zai;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use crate::config;
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaWindow {
     pub label: String,

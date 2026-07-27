@@ -269,10 +269,12 @@ final class FreemodelProvider: QuotaProvider {
 
     static func _parseForTesting(usageData: Data, accountLabel: String?,
                                  referralData: Data? = nil,
-                                 billingData: Data? = nil) -> ProviderStatus {
-        FreemodelProvider().parse(usageData: usageData, accountLabel: accountLabel,
-                                  referralData: referralData, billingData: billingData,
-                                  usePersistentBalanceCache: false)
+                                 billingData: Data? = nil,
+                                 provider: FreemodelProvider? = nil) -> ProviderStatus {
+        (provider ?? FreemodelProvider()).parse(
+            usageData: usageData, accountLabel: accountLabel,
+            referralData: referralData, billingData: billingData,
+            usePersistentBalanceCache: false)
     }
 
     /// `usePersistentBalanceCache` = false in unit tests so canned parses never
@@ -307,7 +309,7 @@ final class FreemodelProvider: QuotaProvider {
             // times out often enough that a fresh launch could otherwise sit
             // bar-less until the first good cycle.
             cachedBalanceWindow = cached
-            windows.append(cached)
+            windows.append(Self.staleBalanceWindow(from: cached))
         } else {
             // Byte counts only (never bodies — they carry account data): enough
             // to tell "endpoint failed" (-1) from "decode/shape change" (>0).
@@ -321,6 +323,20 @@ final class FreemodelProvider: QuotaProvider {
             lastUpdated: Date(),
             error: nil,
             accountLabel: accountLabel)
+    }
+
+    /// Mark a fallback-only display copy without contaminating the in-memory
+    /// or persisted sticky source used by later failed refreshes.
+    private static func staleBalanceWindow(from window: QuotaWindow) -> QuotaWindow {
+        QuotaWindow(
+            id: window.id,
+            label: window.label,
+            usedPct: window.usedPct,
+            remainingPct: window.remainingPct,
+            subtitle: window.subtitle.map { "\($0) · số cũ" } ?? "số cũ",
+            resetDate: window.resetDate,
+            windowSeconds: window.windowSeconds,
+            isSupplementary: window.isSupplementary)
     }
 
     /// Dashboard "Current balance" (§ Extra usage) — bonus credits applied
