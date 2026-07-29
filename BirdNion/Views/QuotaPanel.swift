@@ -891,6 +891,8 @@ struct ProviderCard: View {
                 )
             } else if status.windows.isEmpty {
                 LoadingQuotaSkeleton()
+            } else if status.id == "antigravity" {
+                AntigravitySemanticQuotaRows(windows: status.windows, lastUpdated: status.lastUpdated)
             } else {
                 ForEach(status.windows) { win in
                     WindowRow(window: win, lastUpdated: status.lastUpdated)
@@ -1684,6 +1686,118 @@ struct QuotaBarWithPaceMarker: View {
             }
         }
         .frame(height: 4)
+    }
+}
+
+// MARK: - Antigravity semantic quota rows
+
+/// Flat semantic rows for Antigravity. Raw model windows never reach this view.
+struct AntigravitySemanticQuotaRows: View {
+    let windows: [QuotaWindow]
+    let lastUpdated: Date
+
+    private static let order = [
+        "Gemini 5-hour",
+        "Gemini weekly",
+        "Claude/GPT 5-hour",
+        "Claude/GPT weekly",
+        "Gemini",
+        "Claude/GPT",
+    ]
+
+    private var semanticWindows: [QuotaWindow] {
+        windows
+            .filter { Self.order.contains($0.label) }
+            .sorted {
+                guard let lhs = Self.order.firstIndex(of: $0.label),
+                      let rhs = Self.order.firstIndex(of: $1.label)
+                else { return false }
+                return lhs < rhs
+            }
+            .prefix(4)
+            .map { $0 }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(semanticWindows) { window in
+                AntigravitySemanticQuotaRow(window: window, lastUpdated: lastUpdated)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AntigravitySemanticQuotaRow: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let window: QuotaWindow
+    let lastUpdated: Date
+
+    private var fillColor: Color {
+        VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
+    }
+
+    private var percentColor: Color {
+        VocabbyTheme.quotaColor(remaining: window.remainingPct)
+    }
+
+    private var resetText: String {
+        if let resetDate = window.resetDate {
+            return L10n.resetCountdown(to: resetDate, preference: settings.appLanguage)
+        }
+        if let seconds = window.windowSeconds, seconds > 0 {
+            let estimate = lastUpdated.addingTimeInterval(TimeInterval(seconds))
+            return L10n.resetCountdown(to: estimate, preference: settings.appLanguage)
+        }
+        return ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            AntigravityQuotaBar(remainingPct: window.remainingPct, fillColor: fillColor)
+            HStack(alignment: .firstTextBaseline) {
+                Text(L10n.f("quota.left", settings.appLanguage, window.remainingPct))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(percentColor)
+                Spacer(minLength: 8)
+                if !resetText.isEmpty {
+                    Text(resetText)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(L10n.windowLabel(window.label, preference: settings.appLanguage)), "
+                + "\(window.remainingPct) percent left"
+                + (resetText.isEmpty ? "" : ", resets \(resetText)")
+        )
+    }
+}
+
+private struct AntigravityQuotaBar: View {
+    let remainingPct: Int
+    let fillColor: Color
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(VocabbyTheme.track)
+                Capsule()
+                    .fill(fillColor)
+                    .frame(width: geometry.size.width * CGFloat(max(0, min(100, remainingPct))) / 100)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 6)
     }
 }
 

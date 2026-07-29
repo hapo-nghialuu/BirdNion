@@ -83,23 +83,78 @@ enum MenuBarIconRenderer {
         visibility: (String) -> Bool
     ) -> Frame? {
         guard visibility(status.id) else { return nil }
-        let windows = status.id == "codex"
-            ? CodexMenuBarMetric.current.filter(status.windows)
-            : MenuBarMetricStore.filter(status.windows, id: status.id)
+        let windows: [QuotaWindow]
+        if status.id == "codex" {
+            windows = CodexMenuBarMetric.current.filter(status.windows)
+        } else if status.id == "antigravity" {
+            windows = status.windows
+        } else {
+            windows = MenuBarMetricStore.filter(status.windows, id: status.id)
+        }
         guard !windows.isEmpty else { return nil }
         let text = status.id == "kiro"
             ? kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
             : nil
         if text == "" { return nil }
-        let percents = status.id == "freemodel"
-            ? freemodelMenuBarPercents(windows)
-            : windows.map { $0.remainingPct }
+        let percents: [Int]
+        if status.id == "freemodel" {
+            percents = freemodelMenuBarPercents(windows)
+        } else if status.id == "antigravity" {
+            percents = antigravityMenuBarPercents(windows)
+        } else {
+            percents = windows.map { $0.remainingPct }
+        }
+        guard !percents.isEmpty else { return nil }
         return .provider(
             id: status.id,
             name: status.displayName,
             percents: percents,
             text: text
         )
+    }
+
+    /// Antigravity follows CodexBar's single semantic representative: choose
+    /// the most-used Gemini window, then Claude/GPT, then the lowest known pool.
+    static func antigravityMenuBarPercents(_ windows: [QuotaWindow]) -> [Int] {
+        let semantic = windows.filter { window in
+            !window.isSupplementary && [
+                "Gemini 5-hour",
+                "Gemini weekly",
+                "Claude/GPT 5-hour",
+                "Claude/GPT weekly",
+                "Gemini",
+                "Claude/GPT",
+            ].contains(window.label)
+        }
+        guard !semantic.isEmpty else { return [] }
+
+        func pool(_ label: String) -> String? {
+            if label.hasPrefix("Gemini") { return "gemini" }
+            if label.hasPrefix("Claude/GPT") { return "claudeGPT" }
+            return nil
+        }
+
+        func intervalRank(_ label: String) -> Int {
+            label.hasSuffix("5-hour") ? 0 : label.hasSuffix("weekly") ? 1 : 2
+        }
+
+        func representative(_ candidates: [QuotaWindow]) -> QuotaWindow? {
+            candidates.max { lhs, rhs in
+                if lhs.usedPct != rhs.usedPct { return lhs.usedPct < rhs.usedPct }
+                let lhsRank = intervalRank(lhs.label)
+                let rhsRank = intervalRank(rhs.label)
+                if lhsRank != rhsRank { return lhsRank < rhsRank }
+                return lhs.remainingPct > rhs.remainingPct
+            }
+        }
+
+        let gemini = semantic.filter { pool($0.label) == "gemini" }
+        let claudeGPT = semantic.filter { pool($0.label) == "claudeGPT" }
+        let selected = representative(gemini)
+            ?? representative(claudeGPT)
+            ?? semantic.min { lhs, rhs in lhs.remainingPct < rhs.remainingPct }
+        guard let selected else { return [] }
+        return [max(0, min(100, selected.remainingPct))]
     }
 
     /// FreeModel: the bonus "Số dư" window stays out of the menu bar (it is

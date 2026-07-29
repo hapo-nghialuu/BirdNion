@@ -414,88 +414,229 @@ private enum AgCLIWarmSession {
 // MARK: - ProviderStatus mapping helpers
 
 private extension AntigravityProvider {
-    /// Map a list of AgModelQuota → [QuotaWindow], grouped by model family.
-    /// Windows with unknown remaining fraction are still included so the user
-    /// knows they exist; they show 0 % used / subtitle "Unknown".
+    private enum SemanticPool: CaseIterable, Hashable {
+        case gemini
+        case claudeGPT
+
+        var label: String {
+            switch self {
+            case .gemini: return "Gemini"
+            case .claudeGPT: return "Claude/GPT"
+            }
+        }
+    }
+
+    private enum SemanticInterval: CaseIterable, Hashable {
+        case session
+        case weekly
+
+        var label: String {
+            switch self {
+            case .session: return "5-hour"
+            case .weekly: return "weekly"
+            }
+        }
+
+        var windowSeconds: Int {
+            switch self {
+            case .session: return 300
+            case .weekly: return 604_800
+            }
+        }
+    }
+
+    private struct SemanticKey: Hashable {
+        let pool: SemanticPool
+        let interval: SemanticInterval
+    }
+
+    /// Reduce legacy model quotas to pool/interval windows. A missing interval
+    /// marker stays an aggregate pool row instead of becoming a guessed 5-hour
+    /// or weekly row.
     func quotaWindows(from quotas: [AgModelQuota]) -> [QuotaWindow] {
-        // Filter: only text models (no image/lite/autocomplete)
-        let textModels = quotas.filter { q in
-            let lower = (q.modelId + " " + q.label).lowercased()
-            return !lower.contains("image") && !lower.contains("lite") && !lower.contains("autocomplete")
+        let models = quotas.filter { q in
+            let text = (q.modelId + " " + q.label).lowercased()
+            return !text.contains("image") && !text.contains("lite") && !text.contains("autocomplete")
         }
-        // Sort: Claude > GPT > Gemini Pro > Gemini Flash > Other
-        let sorted = textModels.sorted { lhs, rhs in
-            familyRank(lhs) < familyRank(rhs)
-        }
-        return sorted.map { q in
-            let subtitle: String?
-            if let resetDate = q.resetTime {
-                let remaining = max(0, resetDate.timeIntervalSinceNow)
-                subtitle = "Resets in \(WindowPace.format(remaining))"
-            } else {
-                subtitle = q.resetDescription
+        var windowsByKey: [SemanticKey: QuotaWindow] = [:]
+        var markedPools: Set<SemanticPool> = []
+
+        for quota in models {
+            let text = quota.modelId + " " + quota.label
+            guard let pool = semanticPool(in: text) else { continue }
+            guard let interval = semanticInterval(in: text) else { continue }
+            markedPools.insert(pool)
+            guard quota.remainingFraction != nil else { continue }
+            let key = SemanticKey(pool: pool, interval: interval)
+            let window = makeQuotaWindow(
+                label: semanticLabel(pool: pool, interval: interval),
+                quota: quota,
+                windowSeconds: interval.windowSeconds)
+            if let existing = windowsByKey[key], prefer(window, over: existing) {
+                windowsByKey[key] = window
+            } else if windowsByKey[key] == nil {
+                windowsByKey[key] = window
             }
-            return QuotaWindow(
-                label: humanizeModelID(q.modelId.isEmpty ? q.label : q.modelId),
-                usedPct: q.usedPct,
-                remainingPct: q.remainingPct,
-                subtitle: subtitle,
-                resetDate: q.resetTime,
-                windowSeconds: nil
-            )
         }
-    }
 
-    private func familyRank(_ q: AgModelQuota) -> Int {
-        let lower = (q.modelId + " " + q.label).lowercased()
-        if lower.contains("claude") { return 0 }
-        if lower.contains("gpt") || lower.contains("openai") { return 1 }
-        if lower.contains("gemini") && lower.contains("pro") { return 2 }
-        if lower.contains("gemini") && lower.contains("flash") { return 3 }
-        return 4
-    }
-
-    private func humanizeModelID(_ id: String) -> String {
-        id.split(separator: "-")
-            .map { String($0).prefix(1).uppercased() + String($0).dropFirst() }
-            .joined(separator: " ")
-    }
-
-    /// Map quota summary groups JSON → [QuotaWindow] (for the newer quota-summary API path).
-    func quotaWindowsFromSummary(_ groups: [[String: Any]]) -> [QuotaWindow] {
         var windows: [QuotaWindow] = []
-        for group in groups {
-            let groupTitle = (group["displayName"] as? String ?? "Quota")
-                .trimmingCharacters(in: .whitespaces)
-            let buckets = group["buckets"] as? [[String: Any]] ?? []
-            for bucket in buckets {
-                guard bucket["disabled"] as? Bool != true else { continue }
-                let bucketTitle = bucket["displayName"] as? String ?? ""
-                let remaining = bucket["remainingFraction"] as? Double
-                let remainingPct = remaining.map { Int((max(0, min(1, $0)) * 100).rounded()) } ?? 0
-                let usedPct = 100 - remainingPct
-                let resetTime: Date?
-                if let rt = bucket["resetTime"] as? String {
-                    resetTime = ISO8601DateFormatter().date(from: rt)
-                } else { resetTime = nil }
-                let subtitle: String?
-                if let resetDate = resetTime {
-                    let remaining = max(0, resetDate.timeIntervalSinceNow)
-                    subtitle = "Resets in \(WindowPace.format(remaining))"
-                } else {
-                    subtitle = bucket["resetDescription"] as? String
-                }
-                windows.append(QuotaWindow(
-                    label: "\(groupTitle) \(bucketTitle)".trimmingCharacters(in: .whitespaces),
-                    usedPct: usedPct,
-                    remainingPct: remainingPct,
-                    subtitle: subtitle,
-                    resetDate: resetTime,
-                    windowSeconds: nil
-                ))
+        for pool in SemanticPool.allCases {
+            for interval in SemanticInterval.allCases {
+                let key = SemanticKey(pool: pool, interval: interval)
+                if let window = windowsByKey[key] { windows.append(window) }
             }
+            if markedPools.contains(pool) { continue }
+            let poolModels = models.filter {
+                semanticPool(in: $0.modelId + " " + $0.label) == pool && $0.remainingFraction != nil
+            }
+            guard let representative = poolModels.sorted(by: prefer).first else { continue }
+            windows.append(makeQuotaWindow(label: pool.label, quota: representative, windowSeconds: nil))
         }
         return windows
+    }
+
+    private func semanticPool(in text: String) -> SemanticPool? {
+        let lower = text.lowercased()
+        if lower.contains("gemini") { return .gemini }
+        if lower.contains("claude") || lower.contains("gpt") || lower.contains("openai") {
+            return .claudeGPT
+        }
+        return nil
+    }
+
+    private func semanticInterval(in text: String) -> SemanticInterval? {
+        let lower = text.lowercased()
+        if lower.contains("5h") || lower.contains("5-hour") || lower.contains("5 hour") || lower.contains("five hour") {
+            return .session
+        }
+        if lower.contains("weekly") || lower.contains("week") {
+            return .weekly
+        }
+        return nil
+    }
+
+    private func semanticLabel(pool: SemanticPool, interval: SemanticInterval) -> String {
+        "\(pool.label) \(interval.label)"
+    }
+
+    private func makeQuotaWindow(label: String, quota: AgModelQuota, windowSeconds: Int?) -> QuotaWindow {
+        let subtitle: String?
+        if let resetDate = quota.resetTime {
+            subtitle = "Resets in \(WindowPace.format(max(0, resetDate.timeIntervalSinceNow)))"
+        } else {
+            subtitle = quota.resetDescription
+        }
+        return QuotaWindow(
+            label: label,
+            usedPct: quota.usedPct,
+            remainingPct: quota.remainingPct,
+            subtitle: subtitle,
+            resetDate: quota.resetTime,
+            windowSeconds: windowSeconds)
+    }
+
+    private func prefer(_ lhs: AgModelQuota, _ rhs: AgModelQuota) -> Bool {
+        if lhs.usedPct != rhs.usedPct { return lhs.usedPct > rhs.usedPct }
+        switch (lhs.resetTime, rhs.resetTime) {
+        case let (.some(left), .some(right)) where left != right: return left < right
+        case (.some, .none): return true
+        case (.none, .some): return false
+        default:
+            let left = (lhs.modelId + " " + lhs.label).lowercased()
+            let right = (rhs.modelId + " " + rhs.label).lowercased()
+            return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+        }
+    }
+
+    func quotaWindowsFromSummary(_ groups: [[String: Any]]) -> [QuotaWindow] {
+        var windowsByKey: [SemanticKey: QuotaWindow] = [:]
+        for group in groups {
+            let groupTitle = (group["displayName"] as? String ?? "Quota")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let groupDescription = group["description"] as? String ?? ""
+            let buckets = group["buckets"] as? [[String: Any] ] ?? []
+            for bucket in buckets {
+                guard bucket["disabled"] as? Bool != true,
+                      let remaining = remainingFraction(from: bucket)
+                else { continue }
+                let bucketTitle = bucket["displayName"] as? String ?? ""
+                let bucketID = bucket["bucketId"] as? String ?? ""
+                let resetDescription = bucket["resetDescription"] as? String
+                let markerText = [groupTitle, groupDescription, bucketID, bucketTitle, resetDescription ?? ""]
+                    .joined(separator: " ")
+                guard let pool = semanticPool(in: markerText),
+                      let interval = semanticInterval(in: markerText)
+                else { continue }
+                let resetDate = (bucket["resetTime"] as? String).flatMap(parseDate)
+                let window = makeQuotaWindow(
+                    label: semanticLabel(pool: pool, interval: interval),
+                    remainingFraction: remaining,
+                    resetDate: resetDate,
+                    resetDescription: resetDescription,
+                    windowSeconds: interval.windowSeconds)
+                let key = SemanticKey(pool: pool, interval: interval)
+                if let existing = windowsByKey[key] {
+                    if prefer(window, over: existing) { windowsByKey[key] = window }
+                } else {
+                    windowsByKey[key] = window
+                }
+            }
+        }
+
+        return SemanticPool.allCases.flatMap { pool in
+            SemanticInterval.allCases.compactMap { interval in
+                windowsByKey[SemanticKey(pool: pool, interval: interval)]
+            }
+        }
+    }
+
+    private func remainingFraction(from bucket: [String: Any]) -> Double? {
+        func number(_ value: Any?) -> Double? {
+            if let value = value as? NSNumber { return value.doubleValue }
+            return value as? Double
+        }
+        if let value = number(bucket["remainingFraction"]) { return value }
+        guard let remaining = bucket["remaining"] as? [String: Any] else { return nil }
+        if let value = number(remaining["remainingFraction"]) { return value }
+        guard remaining["case"] as? String == "remainingFraction" else { return nil }
+        return number(remaining["value"])
+    }
+
+    private func parseDate(_ value: String) -> Date? {
+        ISO8601DateFormatter().date(from: value)
+    }
+
+    private func makeQuotaWindow(
+        label: String,
+        remainingFraction: Double,
+        resetDate: Date?,
+        resetDescription: String?,
+        windowSeconds: Int?
+    ) -> QuotaWindow {
+        let remainingPct = Int((max(0, min(1, remainingFraction)) * 100).rounded())
+        let subtitle: String?
+        if let resetDate {
+            subtitle = "Resets in \(WindowPace.format(max(0, resetDate.timeIntervalSinceNow)))"
+        } else {
+            subtitle = resetDescription
+        }
+        return QuotaWindow(
+            label: label,
+            usedPct: 100 - remainingPct,
+            remainingPct: remainingPct,
+            subtitle: subtitle,
+            resetDate: resetDate,
+            windowSeconds: windowSeconds)
+    }
+
+    private func prefer(_ lhs: QuotaWindow, over rhs: QuotaWindow) -> Bool {
+        if lhs.usedPct != rhs.usedPct { return lhs.usedPct > rhs.usedPct }
+        switch (lhs.resetDate, rhs.resetDate) {
+        case let (.some(left), .some(right)) where left != right: return left < right
+        case (.some, .none): return true
+        case (.none, .some): return false
+        default: return false
+        }
     }
 }
 
