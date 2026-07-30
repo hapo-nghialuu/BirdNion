@@ -128,6 +128,9 @@ final class SettingsStore: ObservableObject {
     /// How Kiro's quota is shown in the menu bar (credits/percent/used÷total/
     /// overage). `MenuBarIconRenderer` reads the same key.
     @AppStorage(KiroMenuBarDisplayMode.defaultsKey) var kiroMenuBarDisplayMode: String = KiroMenuBarDisplayMode.automatic.rawValue
+    /// Per-provider menu bar metric preference (automatic/primary/secondary/tertiary/average/etc).
+    /// Stored as JSON string; Automatic = key absent or empty string.
+    @AppStorage("menuBarMetricPreferencesJSON") var menuBarMetricPreferencesJSON: String = "{}"
 
     /// OpenAI web extras for Codex (off by default — loads chatgpt.com in a
     /// hidden WebView, heavier on battery/network). `CodexWebDashboard` reads
@@ -228,6 +231,94 @@ final class SettingsStore: ObservableObject {
             // Surface to console — SwiftUI binding still reflects user intent
             // even if the OS rejected the request (e.g. not signed).
             print("SMAppService error: \(error)")
+        }
+    }
+
+    // MARK: - Menu Bar Metric Preferences
+
+    /// Returns the menu bar metric preference for a provider id. Defaults to `.automatic`.
+    func metricPreference(for id: String) -> MenuBarMetricPreference {
+        let json = menuBarMetricPreferencesJSON
+        guard let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              let raw = dict[id],
+              !raw.isEmpty else { return .automatic }
+        return MenuBarMetricPreference(rawValue: raw) ?? .automatic
+    }
+
+    /// Sets the menu bar metric preference for a provider id. Writes nil for `.automatic`.
+    func setMetricPreference(_ pref: MenuBarMetricPreference, for id: String) {
+        let json = menuBarMetricPreferencesJSON
+        var dict = (try? JSONSerialization.jsonObject(with: json.data(using: .utf8) ?? Data()) as? [String: String]) ?? [:]
+        if pref == .automatic {
+            dict[id] = nil
+        } else {
+            dict[id] = pref.rawValue
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: dict, options: []),
+           let jsonString = String(data: data, encoding: .utf8) {
+            menuBarMetricPreferencesJSON = jsonString
+        }
+        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+    }
+
+    /// Capability matrix: which metric preferences a provider supports.
+    /// Mirrors CodexBar's provider capability logic.
+    struct ProviderCapabilities {
+        var hasPrimary = true
+        var hasSecondary = false
+        var hasTertiary = false
+        var hasExtraUsage = false
+        var supportsAverage = false
+        var hasMonthlyPlan = false
+    }
+
+    /// Returns capabilities for a provider id based on known provider window counts.
+    func providerCapabilities(for id: String) -> ProviderCapabilities {
+        var caps = ProviderCapabilities()
+        switch id {
+        case "codex":
+            caps.hasSecondary = true
+        case "claude":
+            caps.hasSecondary = true
+            caps.supportsAverage = true  // Admin API spend
+        case "gemini":
+            caps.hasSecondary = true
+            caps.supportsAverage = true
+        case "kiro":
+            caps.hasSecondary = true
+        case "cursor":
+            caps.hasSecondary = true
+            caps.hasTertiary = true
+        case "zai":
+            caps.hasSecondary = true
+            caps.hasTertiary = true
+        case "openrouter":
+            caps.hasSecondary = false
+        case "mistral":
+            caps.hasMonthlyPlan = true
+        case "bedrock":
+            caps.hasSecondary = true
+        case "antigravity":
+            caps.hasSecondary = true
+        default:
+            caps.hasSecondary = false
+        }
+        return caps
+    }
+
+    /// Returns true if the given preference is supported by the provider.
+    func supportsMetric(_ preference: MenuBarMetricPreference, for providerId: String) -> Bool {
+        let caps = providerCapabilities(for: providerId)
+        switch preference {
+        case .automatic: return true
+        case .primary: return caps.hasPrimary
+        case .secondary: return caps.hasSecondary
+        case .primaryAndSecondary: return caps.hasPrimary && caps.hasSecondary
+        case .tertiary: return caps.hasTertiary
+        case .extraUsage: return caps.hasExtraUsage
+        case .average: return caps.supportsAverage
+        case .monthlyPlan: return caps.hasMonthlyPlan
         }
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// Builds the frame shown by the menu bar status item. AppDelegate owns the
 /// timer fallback; this type only describes each frame and renders the images
@@ -8,6 +9,7 @@ import AppKit
 /// percentages, provider quota frames rotate in sorted order: **active**
 /// providers first (any window with remaining under 100% / used over 0), then
 /// alphabetically by `displayName`.
+@MainActor
 enum MenuBarIconRenderer {
     static let assetName = "MenuBarIcon"
 
@@ -92,10 +94,41 @@ enum MenuBarIconRenderer {
             windows = MenuBarMetricStore.filter(status.windows, id: status.id)
         }
         guard !windows.isEmpty else { return nil }
+
         let text = status.id == "kiro"
             ? kiroDisplayText(status: status, mode: KiroMenuBarDisplayMode.current)
             : nil
         if text == "" { return nil }
+
+        // Use the new generic resolver for all providers except Kiro (which has its own mode)
+        // and providers with special logic (Codex, Antigravity, FreeModel).
+        if status.id == "kiro" || status.id == "freemodel" || status.id == "antigravity" {
+            // Keep existing special handling
+        } else {
+            let settings = ServicesContainer.shared?.settings ?? SettingsStore()
+            let pref = settings.metricPreference(for: status.id)
+            let caps = settings.providerCapabilities(for: status.id)
+            let hasMonthlyPlan = caps.hasMonthlyPlan
+
+            if pref == .average {
+                let avg = windows.map(\.remainingPct).reduce(0, +) / max(1, windows.count)
+                return .provider(id: status.id, name: status.displayName, percents: [avg], text: "Avg \(avg)%")
+            }
+
+            if let window = MenuBarMetricResolver.resolve(
+                windows: windows,
+                preference: pref,
+                supportsAverage: caps.supportsAverage,
+                supportsPrimaryAndSecondary: caps.hasPrimary && caps.hasSecondary,
+                supportsTertiary: caps.hasTertiary,
+                supportsExtraUsage: caps.hasExtraUsage,
+                hasMonthlyPlan: hasMonthlyPlan
+            ) {
+                return .provider(id: status.id, name: status.displayName, percents: [window.remainingPct], text: nil)
+            }
+            return nil
+        }
+
         let percents: [Int]
         if status.id == "freemodel" {
             percents = freemodelMenuBarPercents(windows)
@@ -343,7 +376,87 @@ enum KiroMenuBarDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Generic per-provider menu-bar metric
+// MARK: - Generic per-provider menu-bar metric (CodexBar parity)
+
+/// Per-provider selection of which window drives the menu bar percent.
+/// Mirrors CodexBar's `MenuBarMetricPreference` (8 cases). Persisted in
+/// SettingsStore under `menuBarMetricPreferences[providerId]`.
+enum MenuBarMetricPreference: String, CaseIterable, Identifiable {
+    case automatic
+    case primary
+    case secondary
+    case primaryAndSecondary
+    case tertiary
+    case extraUsage
+    case average
+    case monthlyPlan
+
+    var id: String { rawValue }
+    var label: String { L10n.t("metric_pref_\(rawValue)") }
+}
+
+/// Pure resolver: given a provider's windows, the user's preference, and
+/// capability flags, return the single window that should drive the menu bar
+/// (or nil for `.average` which is rendered as text by the caller).
+enum MenuBarMetricResolver {
+    static func resolve(
+        windows: [QuotaWindow],
+        preference: MenuBarMetricPreference,
+        supportsAverage: Bool,
+        supportsPrimaryAndSecondary: Bool,
+        supportsTertiary: Bool,
+        supportsExtraUsage: Bool,
+        hasMonthlyPlan: Bool
+    ) -> QuotaWindow? {
+        // Fallback to automatic if the selected preference isn't supported.
+        let effectivePref: MenuBarMetricPreference
+        switch preference {
+        case .average where !supportsAverage:
+            effectivePref = .automatic
+        case .primaryAndSecondary where !supportsPrimaryAndSecondary:
+            effectivePref = .automatic
+        case .tertiary where !supportsTertiary:
+            effectivePref = .automatic
+        case .extraUsage where !supportsExtraUsage:
+            effectivePref = .automatic
+        case .monthlyPlan where !hasMonthlyPlan:
+            effectivePref = .automatic
+        default:
+            effectivePref = preference
+        }
+
+        switch effectivePref {
+        case .automatic:
+            return automaticWindow(windows)
+        case .primary:
+            return windows.first
+        case .secondary:
+            return windows.dropFirst().first
+        case .primaryAndSecondary:
+            // Show primary for icon; tooltip shows both. Return primary window.
+            return windows.first
+        case .tertiary:
+            return windows.dropFirst(2).first
+        case .extraUsage:
+            return windows.first { $0.label.localizedCaseInsensitiveContains("extra") }
+        case .average:
+            // Average is rendered as text by the caller; return nil sentinel.
+            return nil
+        case .monthlyPlan:
+            return windows.first { w in
+                w.label.localizedCaseInsensitiveContains("monthly") || w.label.localizedCaseInsensitiveContains("plan")
+            }
+        }
+    }
+
+    /// CodexBar parity: prefer exhausted window, then highest usage.
+    private static func automaticWindow(_ windows: [QuotaWindow]) -> QuotaWindow? {
+        windows.max { lhs, rhs in
+            if lhs.remainingPct != rhs.remainingPct { return lhs.remainingPct > rhs.remainingPct }
+            return lhs.usedPct < rhs.usedPct
+        }
+    }
+}
 
 /// Per-provider selection of which window drives the menu bar, persisted under
 /// `menuBarMetric.<id>`. "" (the default) means Automatic — show every window.

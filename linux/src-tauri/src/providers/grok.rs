@@ -48,6 +48,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
                 // macOS parity: planName = loginMethod, source "grok-web".
                 plan_name: creds.login_method,
                 source_label: Some("grok-web".to_string()),
+                menu_bar_metric: cfg.menu_bar_metric.clone(),
                 ..Default::default()
             }
         }

@@ -39,6 +39,7 @@ const TICK_MS = 10_000;
 type ProviderCfg = {
   id: string; enabled?: boolean | null; refreshInterval?: number | null;
   showInTray?: boolean | null; displayName?: string | null;
+  menuBarMetric?: string | null;
 };
 type Settings = { version: number; providers: ProviderCfg[] };
 
@@ -664,17 +665,16 @@ function clampPct(n: number): number {
 
 /** macOS `MenuBarIconRenderer.percentTitle` — digits only, no provider name. */
 function trayPercentText(s: ProviderStatus): string {
-  return trayPercents(s)
-    .map((p) => `${clampPct(p)}%`)
+  return resolveTrayMetric(s, null)
+    .map((p: number) => `${clampPct(p)}%`)
     .join("  ");
 }
 
-/** FreeModel: the bonus "Số dư" window stays out of the tray (not a rate
- * window). Once the 5-hour window is exhausted and bonus balance remains,
- * the readout collapses to JUST the balance percent — credits apply
- * automatically at that point (macOS `freemodelMenuBarPercents` parity).
- * Other providers: all windows. */
-function trayPercents(s: ProviderStatus): number[] {
+/** Pure resolver for tray metric preference.
+ * Mirrors macOS `MenuBarIconRenderer.resolveTrayMetric`.
+ * Does NOT mutate `s.windows`; operates on copied array.
+ * Antigravity and FreeModel keep their special semantics. */
+function resolveTrayMetric(s: ProviderStatus, metricPref: string | null | undefined): number[] {
   if (s.id === "antigravity") {
     const labels = new Set([
       "Gemini 5-hour",
@@ -703,15 +703,75 @@ function trayPercents(s: ProviderStatus): number[] {
     const selected = representative(gemini) ?? representative(claudeGpt);
     return selected ? [clampPct(selected.remainingPct)] : [];
   }
-  if (s.id !== "freemodel") return s.windows.map((w) => w.remainingPct);
-  const balance = s.windows.find((w) => w.label === "Số dư");
-  const fiveH = s.windows.find((w) => w.label === "5 giờ");
-  if (fiveH && fiveH.remainingPct <= 0 && balance && balance.remainingPct > 0) {
-    return [balance.remainingPct];
+  if (s.id === "freemodel") {
+    const balance = s.windows.find((w) => w.label === "Số dư");
+    const fiveH = s.windows.find((w) => w.label === "5 giờ");
+    if (fiveH && fiveH.remainingPct <= 0 && balance && balance.remainingPct > 0) {
+      return [balance.remainingPct];
+    }
+    const out = s.windows.filter((w) => w.label !== "Số dư").map((w) => w.remainingPct);
+    if (out.length === 0 && balance) return [balance.remainingPct];
+    return out;
   }
-  const out = s.windows.filter((w) => w.label !== "Số dư").map((w) => w.remainingPct);
-  if (out.length === 0 && balance) return [balance.remainingPct];
-  return out;
+
+  // Generic providers: resolve metric preference
+  // If no preference or "automatic", use default usable-first logic
+  if (!metricPref || metricPref === "automatic") {
+    const primaryWindows = s.windows.filter(w => w.label !== "Số dư" && !/bonus|balance/i.test(w.label));
+    const candidates = primaryWindows.length > 0 ? primaryWindows : s.windows;
+    if (candidates.length === 0) return [];
+    // Copy array before sorting to avoid mutation
+    const sorted = [...candidates].sort((a, b) => {
+      const aExhausted = a.remainingPct <= 0;
+      const bExhausted = b.remainingPct <= 0;
+      if (aExhausted !== bExhausted) return aExhausted ? -1 : 1;
+      return (b.usedPct ?? 0) - (a.usedPct ?? 0);
+    });
+    return [clampPct(sorted[0].remainingPct)];
+  }
+
+  // Apply metric preference: primary, secondary, primaryAndSecondary, tertiary, extraUsage, average, monthlyPlan
+  const windows = s.windows.filter(w => w.label !== "Số dư" && !/bonus|balance/i.test(w.label));
+  if (windows.length === 0) return [];
+
+  switch (metricPref) {
+    case "primary":
+      return [clampPct(windows[0].remainingPct)];
+    case "secondary":
+      return windows.length > 1 ? [clampPct(windows[1].remainingPct)] : [clampPct(windows[0].remainingPct)];
+    case "primaryAndSecondary":
+      if (windows.length > 1) {
+        return [clampPct(windows[0].remainingPct), clampPct(windows[1].remainingPct)];
+      }
+      return [clampPct(windows[0].remainingPct)];
+    case "tertiary":
+      return windows.length > 2 ? [clampPct(windows[2].remainingPct)] : [clampPct(windows[0].remainingPct)];
+    case "extraUsage": {
+      const extra = windows.find(w => /extra/i.test(w.label));
+      return extra ? [clampPct(extra.remainingPct)] : [clampPct(windows[0].remainingPct)];
+    }
+    case "average": {
+      const avg = windows.reduce((sum, w) => sum + w.remainingPct, 0) / windows.length;
+      return [clampPct(avg)];
+    }
+    case "monthlyPlan": {
+      const monthly = windows.find(w => /monthly|plan/i.test(w.label));
+      return monthly ? [clampPct(monthly.remainingPct)] : [clampPct(windows[0].remainingPct)];
+    }
+    default:
+      // Unknown preference: fallback to automatic
+      const primaryWindows = s.windows.filter(w => w.label !== "Số dư" && !/bonus|balance/i.test(w.label));
+      const candidates = primaryWindows.length > 0 ? primaryWindows : s.windows;
+      if (candidates.length === 0) return [];
+      // Copy array before sorting
+      const sorted = [...candidates].sort((a, b) => {
+        const aExhausted = a.remainingPct <= 0;
+        const bExhausted = b.remainingPct <= 0;
+        if (aExhausted !== bExhausted) return aExhausted ? -1 : 1;
+        return (b.usedPct ?? 0) - (a.usedPct ?? 0);
+      });
+      return [clampPct(sorted[0].remainingPct)];
+  }
 }
 
 /** Active = any window still consuming quota (remaining under 100 or used over 0).
@@ -824,19 +884,38 @@ async function renderPercentProviderIcon(
 /**
  * Tray frames: active first, then A→Z by displayName
  * (macOS `MenuBarIconRenderer.providerFrames` parity).
+ *
+ * Reads `menuBarMetric` from ProviderStatus if present, otherwise
+ * falls back to settings lookup. Uses pure `resolveTrayMetric` resolver.
  */
-function buildTrayFrames(statuses: ProviderStatus[], hidden: Set<string>): Omit<TrayFrame, "iconPng">[] {
+async function buildTrayFrames(statuses: ProviderStatus[], hidden: Set<string>): Promise<Omit<TrayFrame, "iconPng">[]> {
   if (!isShowTrayPercentEnabled()) return [];
+
+  // Try to read metric from ProviderStatus first (if wired from Rust)
+  // Fall back to settings lookup only if needed
+  const settings = await invoke<Settings>("get_settings").catch(() => null);
+  const metricById = new Map<string, string | null>();
+  if (settings) {
+    for (const p of settings.providers) {
+      metricById.set(p.id, p.menuBarMetric ?? null);
+    }
+  }
+
   return statuses
     .filter((s) => !hidden.has(s.id) && !s.error && s.windows.length > 0
-      && (s.id !== "antigravity" || trayPercents(s).length > 0))
+      && (s.id !== "antigravity" || resolveTrayMetric(s, metricById.get(s.id)).length > 0))
     .map((s) => {
+      const metric = metricById.get(s.id) ?? null;
+      const percents = resolveTrayMetric(s, metric);
+      const pctText = percents.length > 0
+        ? percents.map((p) => `${clampPct(p)}%`).join("  ")
+        : (lowestWindow(s) ? `${clampPct(lowestWindow(s)!.remainingPct)}%` : "");
       // `.filter` above guarantees s.windows.length > 0, so lowestWindow
       // always returns non-null here.
       const lowest = lowestWindow(s)!;
       return {
         providerId: s.id,
-        percentText: trayPercentText(s),
+        percentText: pctText || trayPercentText(s),
         tooltipPart: `${s.displayName} ${clampPct(lowest.remainingPct)}%`,
         active: isActiveTrayProvider(s),
         sortName: s.displayName,
@@ -897,7 +976,7 @@ function stopTrayRotation() {
  * Providers with `showInTray === false` are skipped (`MenuBarVisibility`).
  * When Display → show-% is off, restore the default logo only. */
 async function updateTrayTooltip(statuses: ProviderStatus[], hidden: Set<string>) {
-  const built = buildTrayFrames(statuses, hidden);
+  const built = await buildTrayFrames(statuses, hidden);
   const withIcons: TrayFrame[] = await Promise.all(
     built.map(async (f) => ({
       ...f,

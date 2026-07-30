@@ -337,6 +337,7 @@ fn build_status(cfg: &config::Provider, name: &str, windows: Vec<QuotaWindow>, e
         windows,
         last_updated: chrono::Utc::now().timestamp(),
         account_label: Some(account_label),
+        menu_bar_metric: cfg.menu_bar_metric.clone(),
         ..Default::default()
     }
 }
@@ -730,6 +731,7 @@ async fn fetch_via_oauth(cfg: &config::Provider, name: &str) -> Option<ProviderS
         windows,
         last_updated: chrono::Utc::now().timestamp(),
         account_label: Some(account_label),
+        menu_bar_metric: cfg.menu_bar_metric.clone(),
         ..Default::default()
     })
 }

@@ -300,6 +300,19 @@ pub struct Provider {
     /// Derived Codex record for this preset (Anthropic → local proxy).
     #[serde(default, rename = "codexProfileID", skip_serializing_if = "Option::is_none")]
     pub codex_profile_id: Option<String>,
+    /// Menu bar metric preference: "automatic" | "primary" | "secondary" | "primaryAndSecondary" | "tertiary" | "extraUsage" | "average" | "monthlyPlan"
+    /// Mirrors macOS `MenuBarMetricPreference` enum stored in UserDefaults `menuBarMetric.<provider>`.
+    #[serde(default, rename = "menuBarMetric", skip_serializing_if = "Option::is_none")]
+    pub menu_bar_metric: Option<String>,
+}
+
+/// Resolve menu bar metric preference from provider config.
+/// Returns the preference string if valid, None for missing/invalid (fallback to automatic).
+pub fn resolve_menu_bar_metric(provider: &Provider) -> Option<&str> {
+    match provider.menu_bar_metric.as_deref() {
+        Some(m) if !m.trim().is_empty() => Some(m.trim()),
+        _ => None,
+    }
 }
 
 fn cleaned_str(value: &str) -> Option<String> {

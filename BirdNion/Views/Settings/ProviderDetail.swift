@@ -1085,6 +1085,9 @@ extension ProvidersPane {
     func menuBarMetricPicker(for id: String) -> some View {
         let vi = L10n.languageCode(language) == "vi"
         let windows = status(for: id)?.windows ?? []
+        let settings = settings
+        let caps = settings.providerCapabilities(for: id)
+        let pref = settings.metricPreference(for: id)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Text(L10n.t("provider.menuBarMetric", language))
@@ -1092,17 +1095,20 @@ extension ProvidersPane {
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
-                    get: { _ = menuBarMetricTick; return MenuBarMetricStore.metric(id) },
+                    get: { _ = menuBarMetricTick; return pref },
                     set: {
-                        MenuBarMetricStore.setMetric(id, $0)
+                        settings.setMetricPreference($0, for: id)
                         menuBarMetricTick += 1
-                        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                     }
                 )) {
-                    Text(vi ? "Tự động" : "Automatic").tag("")
-                    ForEach(windows) { w in
-                        Text(w.label).tag(w.label)
-                    }
+                    Text(vi ? "Tự động" : "Automatic").tag(MenuBarMetricPreference.automatic)
+                    if caps.hasPrimary { Text(vi ? "Chính" : "Primary").tag(MenuBarMetricPreference.primary) }
+                    if caps.hasSecondary { Text(vi ? "Phụ" : "Secondary").tag(MenuBarMetricPreference.secondary) }
+                    if caps.hasPrimary && caps.hasSecondary { Text(vi ? "Chính + Phụ" : "Primary + Secondary").tag(MenuBarMetricPreference.primaryAndSecondary) }
+                    if caps.hasTertiary { Text(vi ? "Thứ ba" : "Tertiary").tag(MenuBarMetricPreference.tertiary) }
+                    if caps.hasExtraUsage { Text(vi ? "Sử dụng thêm" : "Extra Usage").tag(MenuBarMetricPreference.extraUsage) }
+                    if caps.supportsAverage { Text(vi ? "Trung bình" : "Average").tag(MenuBarMetricPreference.average) }
+                    if caps.hasMonthlyPlan { Text(vi ? "Gói tháng" : "Monthly Plan").tag(MenuBarMetricPreference.monthlyPlan) }
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)

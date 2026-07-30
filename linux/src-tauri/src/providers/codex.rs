@@ -463,6 +463,7 @@ async fn build_success(
         source_label: Some("OAuth".to_string()),
         credits_unlimited: credits_unlimited(body)
             || cookie_enrichment.map(credits_unlimited).unwrap_or(false),
+        menu_bar_metric: cfg.menu_bar_metric.clone(),
         ..Default::default()
     }
 }

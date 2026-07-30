@@ -252,6 +252,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         // Email and plan ride in separate fields (macOS grid parity).
         account_label: email,
         plan_name,
+        menu_bar_metric: cfg.menu_bar_metric.clone(),
         ..Default::default()
     }
 }

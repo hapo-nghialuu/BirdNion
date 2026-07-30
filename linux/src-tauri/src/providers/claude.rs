@@ -230,6 +230,7 @@ async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
     status.service_status = service.as_ref().map(|(d, _)| d.clone());
     status.service_status_level = service.map(|(_, i)| i);
     status.source_label = Some("OAuth".to_string());
+    status.menu_bar_metric = cfg.menu_bar_metric.clone();
     status
 }
 
