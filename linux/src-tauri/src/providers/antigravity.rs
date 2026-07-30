@@ -1038,8 +1038,8 @@ mod tests {
         // 0.204 remaining = 79.6% used → rounds to 20% remaining (80% used)
         // Should pick 0.201 (higher raw usage = lower remaining_fraction) even if its reset is later
         let buckets = json!([
-            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.204, "resetTime": "2026-07-30T10:00:00Z"},  // later reset, less used
-            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.201, "resetTime": "2026-07-30T12:00:00Z"}   // earlier reset, MORE used (0.201 < 0.204)
+            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.204, "resetTime": "2026-07-30T10:00:00Z"},  // earlier reset, less used
+            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.201, "resetTime": "2026-07-30T12:00:00Z"}   // later reset, MORE used (0.201 < 0.204)
         ]);
         let windows = map_buckets_to_windows(buckets.as_array().unwrap());
         assert_eq!(windows.len(), 1);
@@ -1048,7 +1048,7 @@ mod tests {
         assert_eq!(windows[0].used_pct, 80);
         // And since raw usage differs, earlier reset should NOT win - higher raw usage wins
         // 0.201 resets at 12:00 (later), but it's more used so it wins
-        assert_eq!(windows[0].resets_at, Some(1_759_147_200)); // 2026-07-30T12:00:00Z
+        assert_eq!(windows[0].resets_at, Some(1_785_412_800)); // 2026-07-30T12:00:00Z
     }
 
     #[test]
@@ -1063,6 +1063,6 @@ mod tests {
         assert_eq!(windows[0].remaining_pct, 20);
         assert_eq!(windows[0].used_pct, 80);
         // Equal raw usage → earlier reset wins
-        assert_eq!(windows[0].resets_at, Some(1_759_137_600)); // 2026-07-30T10:00:00Z
+        assert_eq!(windows[0].resets_at, Some(1_785_405_600)); // 2026-07-30T10:00:00Z
     }
 }
