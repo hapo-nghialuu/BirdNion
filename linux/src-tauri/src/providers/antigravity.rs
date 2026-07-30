@@ -491,26 +491,29 @@ fn normalize_candidates(candidates: impl IntoIterator<Item = SemanticCandidate>)
         }
     }
 
-    [SemanticPool::Gemini, SemanticPool::ClaudeGpt]
-        .into_iter()
-        .flat_map(|pool| {
-            [SemanticInterval::FiveHour, SemanticInterval::Weekly]
-                .into_iter()
-                .filter_map(move |interval| {
-                    let candidate = by_key.get(&(pool, interval))?;
-                    Some(QuotaWindow {
-                        semantic_key: Some(format!("antigravity-{}-{}", pool.label().to_lowercase().replace('/', "-"), interval.label())),
-                        semantic_kind: Some("antigravity".to_string()),
-                        label: semantic_label(pool, interval),
-                        used_pct: candidate.used_pct,
-                        remaining_pct: candidate.remaining_pct,
-                        subtitle: None,
-                        resets_at: candidate.resets_at,
-                        window_seconds: Some(interval.seconds()),
-                    })
-                })
-        })
-        .collect()
+    let mut windows = Vec::with_capacity(4);
+    for pool in [SemanticPool::Gemini, SemanticPool::ClaudeGpt] {
+        for interval in [SemanticInterval::FiveHour, SemanticInterval::Weekly] {
+            let Some(candidate) = by_key.get(&(pool, interval)) else {
+                continue;
+            };
+            windows.push(QuotaWindow {
+                semantic_key: Some(format!(
+                    "antigravity-{}-{}",
+                    pool.label().to_lowercase().replace('/', "-"),
+                    interval.label()
+                )),
+                semantic_kind: Some("antigravity".to_string()),
+                label: semantic_label(pool, interval),
+                used_pct: candidate.used_pct,
+                remaining_pct: candidate.remaining_pct,
+                subtitle: None,
+                resets_at: candidate.resets_at,
+                window_seconds: Some(interval.seconds()),
+            });
+        }
+    }
+    windows
 }
 
 /// Pure: parse `GetUserStatus` JSON → (model quotas, email).
