@@ -675,6 +675,34 @@ function trayPercentText(s: ProviderStatus): string {
  * automatically at that point (macOS `freemodelMenuBarPercents` parity).
  * Other providers: all windows. */
 function trayPercents(s: ProviderStatus): number[] {
+  if (s.id === "antigravity") {
+    const labels = new Set([
+      "Gemini 5-hour",
+      "Gemini weekly",
+      "Claude/GPT 5-hour",
+      "Claude/GPT weekly",
+    ]);
+    const semantic = s.windows.filter((w) => labels.has(w.label));
+    const representative = (candidates: typeof semantic) => {
+      let selected = candidates[0];
+      for (const candidate of candidates.slice(1)) {
+        if (!selected || candidate.usedPct > selected.usedPct) {
+          selected = candidate;
+          continue;
+        }
+        if (candidate.usedPct === selected.usedPct) {
+          const candidateFiveHour = candidate.label.endsWith("5-hour");
+          const selectedFiveHour = selected.label.endsWith("5-hour");
+          if (candidateFiveHour && !selectedFiveHour) selected = candidate;
+        }
+      }
+      return selected;
+    };
+    const gemini = semantic.filter((w) => w.label.startsWith("Gemini "));
+    const claudeGpt = semantic.filter((w) => w.label.startsWith("Claude/GPT "));
+    const selected = representative(gemini) ?? representative(claudeGpt);
+    return selected ? [clampPct(selected.remainingPct)] : [];
+  }
   if (s.id !== "freemodel") return s.windows.map((w) => w.remainingPct);
   const balance = s.windows.find((w) => w.label === "Số dư");
   const fiveH = s.windows.find((w) => w.label === "5 giờ");
@@ -800,7 +828,8 @@ async function renderPercentProviderIcon(
 function buildTrayFrames(statuses: ProviderStatus[], hidden: Set<string>): Omit<TrayFrame, "iconPng">[] {
   if (!isShowTrayPercentEnabled()) return [];
   return statuses
-    .filter((s) => !hidden.has(s.id) && !s.error && s.windows.length > 0)
+    .filter((s) => !hidden.has(s.id) && !s.error && s.windows.length > 0
+      && (s.id !== "antigravity" || trayPercents(s).length > 0))
     .map((s) => {
       // `.filter` above guarantees s.windows.length > 0, so lowestWindow
       // always returns non-null here.

@@ -336,6 +336,13 @@ function providerBodyCard(status: ProviderStatus): HTMLElement {
     return card;
   }
 
+  if (status.id === "antigravity") {
+    for (const win of status.windows.slice(0, 4)) {
+      card.append(windowRow(win, status.lastUpdated));
+    }
+    return card;
+  }
+
   card.append(quotaSummaryStrip(status));
   card.append(el("div", "provider-divider", ""));
   for (const win of status.windows) {

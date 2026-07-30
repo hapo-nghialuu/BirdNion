@@ -341,11 +341,176 @@ fn build_status(cfg: &config::Provider, name: &str, windows: Vec<QuotaWindow>, e
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SemanticPool {
+    Gemini,
+    ClaudeGpt,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SemanticInterval {
+    FiveHour,
+    Weekly,
+}
+
+impl SemanticPool {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Gemini => "Gemini",
+            Self::ClaudeGpt => "Claude/GPT",
+        }
+    }
+}
+
+impl SemanticInterval {
+    fn label(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5-hour",
+            Self::Weekly => "weekly",
+        }
+    }
+
+    fn seconds(self) -> i64 {
+        match self {
+            Self::FiveHour => 18_000,
+            Self::Weekly => 604_800,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SemanticCandidate {
+    pool: SemanticPool,
+    interval: SemanticInterval,
+    used_pct: i32,
+    remaining_pct: i32,
+    raw_remaining_fraction: f64,
+    resets_at: Option<i64>,
+    stable_label: String,
+}
+
 struct ModelQuota {
     label: String,
     model_id: String,
     remaining_fraction: Option<f64>,
     reset_time: Option<i64>,
+}
+
+fn ignored_marker(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("image")
+        || lower.contains("lite")
+        || lower.contains("autocomplete")
+        || lower.contains("unknown")
+        || lower.contains("model_placeholder")
+        || lower.contains("model-placeholder")
+}
+
+fn semantic_pool(text: &str) -> Option<SemanticPool> {
+    let lower = text.to_lowercase();
+    if lower.contains("gemini") {
+        Some(SemanticPool::Gemini)
+    } else if lower.contains("claude") || lower.contains("gpt") || lower.contains("openai") {
+        Some(SemanticPool::ClaudeGpt)
+    } else {
+        None
+    }
+}
+
+fn semantic_interval(text: &str) -> Option<SemanticInterval> {
+    let lower = text.to_lowercase();
+    if lower.contains("5h")
+        || lower.contains("5-hour")
+        || lower.contains("5 hour")
+        || lower.contains("five hour")
+    {
+        Some(SemanticInterval::FiveHour)
+    } else if lower.contains("weekly") || lower.contains("week") {
+        Some(SemanticInterval::Weekly)
+    } else {
+        None
+    }
+}
+
+fn semantic_candidate(
+    marker: &str,
+    remaining_fraction: Option<f64>,
+    resets_at: Option<i64>,
+    stable_label: impl Into<String>,
+) -> Option<SemanticCandidate> {
+    if ignored_marker(marker) {
+        return None;
+    }
+    let fraction = remaining_fraction.filter(|value| value.is_finite())?;
+    let pool = semantic_pool(marker)?;
+    let interval = semantic_interval(marker)?;
+    let remaining_pct = (fraction.clamp(0.0, 1.0) * 100.0).round() as i32;
+    Some(SemanticCandidate {
+        pool,
+        interval,
+        used_pct: 100 - remaining_pct,
+        remaining_pct,
+        raw_remaining_fraction: fraction,
+        resets_at,
+        stable_label: stable_label.into(),
+    })
+}
+
+fn prefer_candidate(lhs: &SemanticCandidate, rhs: &SemanticCandidate) -> bool {
+    if lhs.used_pct != rhs.used_pct {
+        return lhs.used_pct > rhs.used_pct;
+    }
+    // Same rounded percentage: compare raw remaining_fraction (lower = more used = prefer)
+    if (lhs.raw_remaining_fraction - rhs.raw_remaining_fraction).abs() > f64::EPSILON {
+        return lhs.raw_remaining_fraction < rhs.raw_remaining_fraction;
+    }
+    // Equal raw usage: earlier reset wins
+    match (lhs.resets_at, rhs.resets_at) {
+        (Some(left), Some(right)) if left != right => return left < right,
+        (Some(_), None) => return true,
+        (None, Some(_)) => return false,
+        _ => {}
+    }
+    lhs.stable_label.to_lowercase() < rhs.stable_label.to_lowercase()
+}
+
+fn semantic_label(pool: SemanticPool, interval: SemanticInterval) -> String {
+    format!("{} {}", pool.label(), interval.label())
+}
+
+fn normalize_candidates(candidates: impl IntoIterator<Item = SemanticCandidate>) -> Vec<QuotaWindow> {
+    let mut by_key: std::collections::HashMap<(SemanticPool, SemanticInterval), SemanticCandidate> =
+        std::collections::HashMap::new();
+    for candidate in candidates {
+        let key = (candidate.pool, candidate.interval);
+        match by_key.get(&key) {
+            Some(existing) if !prefer_candidate(&candidate, existing) => {}
+            _ => {
+                by_key.insert(key, candidate);
+            }
+        }
+    }
+
+    [SemanticPool::Gemini, SemanticPool::ClaudeGpt]
+        .into_iter()
+        .flat_map(|pool| {
+            [SemanticInterval::FiveHour, SemanticInterval::Weekly]
+                .into_iter()
+                .filter_map(move |interval| {
+                    let candidate = by_key.get(&(pool, interval))?;
+                    Some(QuotaWindow {
+                        semantic_key: Some(format!("antigravity-{}-{}", pool.label().to_lowercase().replace('/', "-"), interval.label())),
+                        semantic_kind: Some("antigravity".to_string()),
+                        label: semantic_label(pool, interval),
+                        used_pct: candidate.used_pct,
+                        remaining_pct: candidate.remaining_pct,
+                        subtitle: None,
+                        resets_at: candidate.resets_at,
+                        window_seconds: Some(interval.seconds()),
+                    })
+                })
+        })
+        .collect()
 }
 
 /// Pure: parse `GetUserStatus` JSON → (model quotas, email).
@@ -377,7 +542,7 @@ fn parse_model_config(config: &Value) -> Option<ModelQuota> {
         .map(String::from)
         .unwrap_or_else(|| label.clone());
     let remaining_fraction = quota_info.get("remainingFraction").and_then(Value::as_f64);
-    let reset_time = quota_info.get("resetTime").and_then(Value::as_str).and_then(parse_reset_time);
+    let reset_time = quota_info.get("resetTime").and_then(parse_reset_value);
     Some(ModelQuota { label, model_id, remaining_fraction, reset_time })
 }
 
@@ -385,61 +550,17 @@ fn parse_reset_time(s: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp()).or_else(|| s.parse::<f64>().ok().map(|t| t as i64))
 }
 
-/// Pure: filter text models, sort by family (Claude > GPT > Gemini Pro > Gemini
-/// Flash > other), map to QuotaWindow.
+/// Pure: normalize `GetUserStatus` model quotas to canonical semantic windows.
 fn map_model_windows(quotas: &[ModelQuota]) -> Vec<QuotaWindow> {
-    let mut text_models: Vec<&ModelQuota> = quotas
-        .iter()
-        .filter(|q| {
-            let lower = format!("{} {}", q.model_id, q.label).to_lowercase();
-            !lower.contains("image") && !lower.contains("lite") && !lower.contains("autocomplete")
-        })
-        .collect();
-    text_models.sort_by_key(|q| family_rank(q));
-    text_models
-        .into_iter()
-        .map(|q| {
-            let fraction = q.remaining_fraction.unwrap_or(0.0).clamp(0.0, 1.0);
-            let remaining_pct = (fraction * 100.0).round() as i32;
-            let id = if q.model_id.is_empty() { &q.label } else { &q.model_id };
-            QuotaWindow { semantic_key: None, semantic_kind: None,
-                label: humanize_model_id(id),
-                used_pct: 100 - remaining_pct,
-                remaining_pct,
-                subtitle: None,
-                resets_at: q.reset_time,
-                window_seconds: None,
-            }
-        })
-        .collect()
-}
-
-fn family_rank(q: &ModelQuota) -> i32 {
-    let lower = format!("{} {}", q.model_id, q.label).to_lowercase();
-    if lower.contains("claude") {
-        0
-    } else if lower.contains("gpt") || lower.contains("openai") {
-        1
-    } else if lower.contains("gemini") && lower.contains("pro") {
-        2
-    } else if lower.contains("gemini") && lower.contains("flash") {
-        3
-    } else {
-        4
-    }
-}
-
-fn humanize_model_id(id: &str) -> String {
-    id.split('-')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    normalize_candidates(quotas.iter().filter_map(|quota| {
+        let marker = format!("{} {}", quota.model_id, quota.label);
+        semantic_candidate(
+            &marker,
+            quota.remaining_fraction,
+            quota.reset_time,
+            marker.clone(),
+        )
+    }))
 }
 
 /// Pure: parse `RetrieveUserQuotaSummary` JSON → group list.
@@ -453,32 +574,71 @@ fn parse_quota_summary(json: &Value) -> Option<Vec<Value>> {
     Some(summary.get("groups").and_then(Value::as_array).cloned().unwrap_or_default())
 }
 
-/// Pure: map quota-summary groups → QuotaWindow list.
+/// Pure: map quota-summary groups to canonical semantic windows.
 fn map_summary_windows(groups: &[Value]) -> Vec<QuotaWindow> {
-    let mut windows = Vec::new();
+    let mut candidates = Vec::new();
     for group in groups {
-        let group_title = group.get("displayName").and_then(Value::as_str).unwrap_or("Quota").trim().to_string();
-        let buckets = group.get("buckets").and_then(Value::as_array).cloned().unwrap_or_default();
-        for bucket in &buckets {
+        let group_title = group
+            .get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let group_description = group.get("description").and_then(Value::as_str).unwrap_or("");
+        let Some(buckets) = group.get("buckets").and_then(Value::as_array) else {
+            continue;
+        };
+        for bucket in buckets {
             if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
                 continue;
             }
-            let bucket_title = bucket.get("displayName").and_then(Value::as_str).unwrap_or("");
-            let remaining_fraction = bucket.get("remainingFraction").and_then(Value::as_f64);
-            let remaining_pct = remaining_fraction.map(|f| (f.clamp(0.0, 1.0) * 100.0).round() as i32).unwrap_or(0);
-            let reset_time = bucket.get("resetTime").and_then(Value::as_str).and_then(parse_reset_time);
-            let label = format!("{group_title} {bucket_title}").trim().to_string();
-            windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
-                label,
-                used_pct: 100 - remaining_pct,
-                remaining_pct,
-                subtitle: None,
-                resets_at: reset_time,
-                window_seconds: None,
-            });
+            let bucket_title = bucket
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let bucket_id = bucket.get("bucketId").and_then(Value::as_str).unwrap_or("");
+            let reset_description = bucket
+                .get("resetDescription")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let marker = format!(
+                "{group_title} {group_description} {bucket_id} {bucket_title} {reset_description}"
+            );
+            let stable_label = format!("{group_title} {bucket_id} {bucket_title}");
+            if let Some(candidate) = semantic_candidate(
+                &marker,
+                remaining_fraction(bucket),
+                bucket.get("resetTime").and_then(parse_reset_value),
+                stable_label,
+            ) {
+                candidates.push(candidate);
+            }
         }
     }
-    windows
+    normalize_candidates(candidates)
+}
+
+fn remaining_fraction(value: &Value) -> Option<f64> {
+    value
+        .get("remainingFraction")
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            let remaining = value.get("remaining")?;
+            remaining
+                .get("remainingFraction")
+                .and_then(Value::as_f64)
+                .or_else(|| {
+                    (remaining.get("case").and_then(Value::as_str) == Some("remainingFraction"))
+                        .then(|| remaining.get("value").and_then(Value::as_f64))
+                        .flatten()
+                })
+        })
+}
+
+fn parse_reset_value(value: &Value) -> Option<i64> {
+    value
+        .as_str()
+        .and_then(parse_reset_time)
+        .or_else(|| value.as_f64().map(|timestamp| timestamp as i64))
 }
 
 // MARK: - Google OAuth remote fallback (port of `AntigravityRemoteUsage` +
@@ -608,71 +768,33 @@ async fn fetch_quota_windows(client: &reqwest::Client, access_token: &str) -> Re
     Ok(map_buckets_to_windows(&buckets))
 }
 
-/// Pure: groups buckets by modelId (min remainingFraction per model), then
-/// tiers into Pro/Flash/Flash Lite (flash-lite checked before flash) plus any
-/// other models sorted by label — mirrors Swift's `mapBucketsToWindows`.
+/// Pure: normalize OAuth buckets to canonical semantic windows.
 fn map_buckets_to_windows(buckets: &[Value]) -> Vec<QuotaWindow> {
-    let mut by_model: std::collections::HashMap<String, (f64, Option<String>)> = std::collections::HashMap::new();
-    for b in buckets {
-        let Some(mid) = b.get("modelId").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else { continue };
-        let Some(frac) = b.get("remainingFraction").and_then(Value::as_f64) else { continue };
-        let reset_time = b.get("resetTime").and_then(Value::as_str).map(String::from);
-        match by_model.get(mid) {
-            Some((existing, _)) if frac >= *existing => {}
-            _ => {
-                by_model.insert(mid.to_string(), (frac, reset_time));
-            }
+    normalize_candidates(buckets.iter().filter_map(|bucket| {
+        if bucket.get("disabled").and_then(Value::as_bool) == Some(true) {
+            return None;
         }
-    }
-
-    let mut pro_min: Option<(f64, Option<String>)> = None;
-    let mut flash_min: Option<(f64, Option<String>)> = None;
-    let mut flash_lite_min: Option<(f64, Option<String>)> = None;
-    let mut others: Vec<(String, f64, Option<String>)> = Vec::new();
-
-    for (mid, (frac, reset_time)) in by_model {
-        let lower = mid.to_lowercase();
-        if lower.contains("flash-lite") || lower.contains("flash_lite") {
-            if flash_lite_min.as_ref().map(|(f, _)| frac < *f).unwrap_or(true) {
-                flash_lite_min = Some((frac, reset_time));
-            }
-        } else if lower.contains("flash") {
-            if flash_min.as_ref().map(|(f, _)| frac < *f).unwrap_or(true) {
-                flash_min = Some((frac, reset_time));
-            }
-        } else if lower.contains("pro") {
-            if pro_min.as_ref().map(|(f, _)| frac < *f).unwrap_or(true) {
-                pro_min = Some((frac, reset_time));
-            }
-        } else {
-            others.push((humanize_model_id(&mid), frac, reset_time));
-        }
-    }
-
-    let mut windows = Vec::new();
-    for (label, entry) in [("Pro", pro_min), ("Flash", flash_min), ("Flash Lite", flash_lite_min)] {
-        if let Some((frac, reset_time)) = entry {
-            windows.push(make_google_window(label, frac, reset_time));
-        }
-    }
-    others.sort_by(|a, b| a.0.cmp(&b.0));
-    for (label, frac, reset_time) in others {
-        windows.push(make_google_window(&label, frac, reset_time));
-    }
-    windows
-}
-
-fn make_google_window(label: &str, fraction: f64, reset_time: Option<String>) -> QuotaWindow {
-    let used_pct = ((1.0 - fraction) * 100.0).round().clamp(0.0, 100.0) as i32;
-    let resets_at = reset_time.as_deref().and_then(parse_reset_time);
-    QuotaWindow { semantic_key: None, semantic_kind: None,
-        label: label.to_string(),
-        used_pct,
-        remaining_pct: 100 - used_pct,
-        subtitle: None,
-        resets_at,
-        window_seconds: None,
-    }
+        let model_id = bucket
+            .get("modelId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())?;
+        let quota_type = bucket
+            .get("quotaType")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        // Marker chỉ dùng identity/model fields (modelId + quotaType) để pool.
+        // KHÔNG dùng description/metadata khác — tránh custom-model bị phân loại sai
+        // khi description chứa "Gemini"/"Claude"/"GPT".
+        let marker = format!("{} {}", model_id, quota_type);
+        semantic_candidate(
+            &marker,
+            remaining_fraction(bucket),
+            bucket.get("resetTime").and_then(parse_reset_value),
+            marker.clone(),
+        )
+    }))
 }
 
 #[cfg(test)]
@@ -723,8 +845,8 @@ mod tests {
                 "email": "user@example.com",
                 "cascadeModelConfigData": {
                     "clientModelConfigs": [
-                        {"label": "claude-sonnet", "modelOrAlias": {"model": "claude-sonnet-4"}, "quotaInfo": {"remainingFraction": 0.75}},
-                        {"label": "gemini-flash", "modelOrAlias": {"model": "gemini-flash"}, "quotaInfo": {"remainingFraction": 0.5}}
+                        {"label": "claude 5-hour", "modelOrAlias": {"model": "claude-sonnet-4"}, "quotaInfo": {"remainingFraction": 0.75}},
+                        {"label": "gemini weekly", "modelOrAlias": {"model": "gemini-flash"}, "quotaInfo": {"remainingFraction": 0.5}}
                     ]
                 }
             }
@@ -733,8 +855,8 @@ mod tests {
         assert_eq!(quotas.len(), 2);
         assert_eq!(email.as_deref(), Some("user@example.com"));
         let windows = map_model_windows(&quotas);
-        assert_eq!(windows[0].label, "Claude Sonnet 4");
-        assert_eq!(windows[0].remaining_pct, 75);
+        assert_eq!(windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), vec!["Gemini weekly", "Claude/GPT 5-hour"]);
+        assert_eq!(windows[0].remaining_pct, 50);
     }
 
     #[test]
@@ -744,15 +866,26 @@ mod tests {
     }
 
     #[test]
-    fn image_and_lite_models_are_filtered_out() {
+    fn image_lite_and_non_target_models_are_filtered_out() {
         let quotas = vec![
-            ModelQuota { label: "image-gen".into(), model_id: "image-model".into(), remaining_fraction: Some(1.0), reset_time: None },
-            ModelQuota { label: "claude-lite".into(), model_id: "claude-lite".into(), remaining_fraction: Some(1.0), reset_time: None },
-            ModelQuota { label: "gpt-5".into(), model_id: "gpt-5".into(), remaining_fraction: Some(0.9), reset_time: None },
+            ModelQuota { label: "image-gen 5h".into(), model_id: "image-model".into(), remaining_fraction: Some(1.0), reset_time: None },
+            ModelQuota { label: "claude-lite 5h".into(), model_id: "claude-lite".into(), remaining_fraction: Some(1.0), reset_time: None },
+            ModelQuota { label: "custom 5h".into(), model_id: "custom-model".into(), remaining_fraction: Some(1.0), reset_time: None },
+            ModelQuota { label: "gpt 5h".into(), model_id: "gpt-5".into(), remaining_fraction: Some(0.9), reset_time: None },
         ];
         let windows = map_model_windows(&quotas);
         assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0].label, "Gpt 5");
+        assert_eq!(windows[0].label, "Claude/GPT 5-hour");
+    }
+
+    #[test]
+    fn unknown_placeholder_and_missing_fraction_are_filtered_out() {
+        let quotas = vec![
+            ModelQuota { label: "unknown 5h".into(), model_id: "unknown".into(), remaining_fraction: Some(0.1), reset_time: None },
+            ModelQuota { label: "placeholder 5h".into(), model_id: "MODEL_PLACEHOLDER".into(), remaining_fraction: Some(0.1), reset_time: None },
+            ModelQuota { label: "gemini 5h".into(), model_id: "gemini-pro".into(), remaining_fraction: None, reset_time: None },
+        ];
+        assert!(map_model_windows(&quotas).is_empty());
     }
 
     #[test]
@@ -760,8 +893,8 @@ mod tests {
         let body = json!({
             "quotaSummary": {
                 "groups": [
-                    {"displayName": "Models", "buckets": [
-                        {"displayName": "Claude", "remainingFraction": 0.6},
+                    {"displayName": "Gemini", "description": "weekly quota", "buckets": [
+                        {"displayName": "Weekly", "remainingFraction": 0.6},
                         {"displayName": "Disabled", "disabled": true, "remainingFraction": 0.1}
                     ]}
                 ]
@@ -770,8 +903,9 @@ mod tests {
         let groups = parse_quota_summary(&body).unwrap();
         let windows = map_summary_windows(&groups);
         assert_eq!(windows.len(), 1);
-        assert_eq!(windows[0].label, "Models Claude");
+        assert_eq!(windows[0].label, "Gemini weekly");
         assert_eq!(windows[0].remaining_pct, 60);
+        assert_eq!(windows[0].window_seconds, Some(604_800));
     }
 
     #[test]
@@ -818,35 +952,114 @@ mod tests {
     }
 
     #[test]
-    fn maps_buckets_grouping_by_tier_and_min_fraction() {
-        let buckets = json!([
-            {"modelId": "gemini-pro-1", "remainingFraction": 0.8},
-            {"modelId": "gemini-pro-2", "remainingFraction": 0.3},
-            {"modelId": "gemini-flash-lite", "remainingFraction": 0.9},
-            {"modelId": "gemini-flash", "remainingFraction": 0.5},
-        ]);
-        let windows = map_buckets_to_windows(buckets.as_array().unwrap());
-        let labels: Vec<&str> = windows.iter().map(|w| w.label.as_str()).collect();
-        assert_eq!(labels, vec!["Pro", "Flash", "Flash Lite"]);
-        let pro = windows.iter().find(|w| w.label == "Pro").unwrap();
-        assert_eq!(pro.remaining_pct, 30); // min fraction across the two "pro" models
+    fn semantic_windows_use_canonical_order_and_cap_at_four() {
+        let quotas = vec![
+            ModelQuota { label: "claude weekly".into(), model_id: "claude".into(), remaining_fraction: Some(0.8), reset_time: None },
+            ModelQuota { label: "gemini 5h".into(), model_id: "gemini".into(), remaining_fraction: Some(0.7), reset_time: None },
+            ModelQuota { label: "gpt 5-hour".into(), model_id: "gpt".into(), remaining_fraction: Some(0.6), reset_time: None },
+            ModelQuota { label: "gemini weekly".into(), model_id: "gemini".into(), remaining_fraction: Some(0.5), reset_time: None },
+            ModelQuota { label: "claude 5h".into(), model_id: "claude".into(), remaining_fraction: Some(0.4), reset_time: None },
+        ];
+        let windows = map_model_windows(&quotas);
+        assert_eq!(windows.len(), 4);
+        assert_eq!(
+            windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(),
+            vec!["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"]
+        );
     }
 
     #[test]
-    fn maps_buckets_other_models_sorted_by_label() {
-        let buckets = json!([
-            {"modelId": "custom-b", "remainingFraction": 0.5},
-            {"modelId": "custom-a", "remainingFraction": 0.5},
-        ]);
-        let windows = map_buckets_to_windows(buckets.as_array().unwrap());
-        assert_eq!(windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), vec!["Custom A", "Custom B"]);
+    fn duplicate_keeps_higher_usage_then_earlier_reset() {
+        let quotas = vec![
+            ModelQuota { label: "gemini 5h late".into(), model_id: "gemini".into(), remaining_fraction: Some(0.2), reset_time: Some(200) },
+            ModelQuota { label: "gemini 5h early".into(), model_id: "gemini".into(), remaining_fraction: Some(0.2), reset_time: Some(100) },
+            ModelQuota { label: "gemini 5h unused".into(), model_id: "gemini".into(), remaining_fraction: Some(0.9), reset_time: Some(50) },
+        ];
+        let windows = map_model_windows(&quotas);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].used_pct, 80);
+        assert_eq!(windows[0].remaining_pct, 20);
+        assert_eq!(windows[0].resets_at, Some(100));
     }
 
     #[test]
-    fn make_google_window_clamps_and_sets_24h_style_fields() {
-        let w = make_google_window("Pro", 0.75, None);
-        assert_eq!(w.used_pct, 25);
-        assert_eq!(w.remaining_pct, 75);
-        assert!(w.resets_at.is_none());
+    fn known_interval_sets_duration_but_explicit_reset_wins() {
+        let quotas = vec![
+            ModelQuota { label: "gemini 5-hour".into(), model_id: "gemini".into(), remaining_fraction: Some(0.75), reset_time: Some(1_700_000_000) },
+            ModelQuota { label: "claude weekly".into(), model_id: "claude".into(), remaining_fraction: Some(0.5), reset_time: None },
+        ];
+        let windows = map_model_windows(&quotas);
+        assert_eq!(windows[0].resets_at, Some(1_700_000_000));
+        assert_eq!(windows[0].window_seconds, Some(18_000));
+        assert_eq!(windows[1].resets_at, None);
+        assert_eq!(windows[1].window_seconds, Some(604_800));
+    }
+
+    #[test]
+    fn maps_oauth_buckets_to_semantic_windows_and_filters_invalid_rows() {
+        let buckets = json!([
+            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.8},
+            {"modelId": "gemini-pro", "quotaType": "weekly", "remainingFraction": 0.6},
+            {"modelId": "gemini-lite", "quotaType": "5h", "remainingFraction": 0.1},
+            {"modelId": "MODEL_PLACEHOLDER", "quotaType": "5h", "remainingFraction": 0.1},
+            {"modelId": "custom", "quotaType": "5h", "remainingFraction": 0.1}
+        ]);
+        let windows = map_buckets_to_windows(buckets.as_array().unwrap());
+        assert_eq!(windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), vec!["Gemini 5-hour", "Gemini weekly"]);
+        assert_eq!(windows[0].remaining_pct, 80);
+    }
+
+    #[test]
+    fn unknown_interval_does_not_guess_duration_or_emit_row() {
+        let buckets = json!([
+            {"modelId": "gemini-pro", "remainingFraction": 0.8}
+        ]);
+        assert!(map_buckets_to_windows(buckets.as_array().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn oauth_custom_model_bucket_with_gemini_description_drops() {
+        // Custom model bucket with "Gemini" in description should be dropped (not classified as Gemini pool)
+        let buckets = json!([
+            {"modelId": "custom-model-123", "quotaType": "5h", "remainingFraction": 0.5, "description": "Custom model with Gemini description"}
+        ]);
+        let windows = map_buckets_to_windows(buckets.as_array().unwrap());
+        // Custom model without gemini/claude/gpt in modelId should be dropped
+        assert!(windows.is_empty(), "Custom model with 'Gemini' in description should not be classified as Gemini pool");
+    }
+
+    #[test]
+    fn duplicate_fraction_prefers_higher_raw_usage_then_earlier_reset() {
+        // Two buckets with same rounded percentage (20% = 80% used), but different raw fractions
+        // 0.201 remaining = 79.9% used → rounds to 20% remaining (80% used)
+        // 0.204 remaining = 79.6% used → rounds to 20% remaining (80% used)
+        // Should pick 0.201 (higher raw usage = lower remaining_fraction) even if its reset is later
+        let buckets = json!([
+            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.204, "resetTime": "2026-07-30T10:00:00Z"},  // later reset, less used
+            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.201, "resetTime": "2026-07-30T12:00:00Z"}   // earlier reset, MORE used (0.201 < 0.204)
+        ]);
+        let windows = map_buckets_to_windows(buckets.as_array().unwrap());
+        assert_eq!(windows.len(), 1);
+        // Should pick the one with higher raw usage (0.201 remaining = more used)
+        assert_eq!(windows[0].remaining_pct, 20);
+        assert_eq!(windows[0].used_pct, 80);
+        // And since raw usage differs, earlier reset should NOT win - higher raw usage wins
+        // 0.201 resets at 12:00 (later), but it's more used so it wins
+        assert_eq!(windows[0].resets_at, Some(1_759_147_200)); // 2026-07-30T12:00:00Z
+    }
+
+    #[test]
+    fn duplicate_exact_raw_usage_prefers_earlier_reset() {
+        // Same raw remaining_fraction, same rounded percentage - earlier reset should win
+        let buckets = json!([
+            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.200, "resetTime": "2026-07-30T12:00:00Z"},
+            {"modelId": "gemini-pro", "quotaType": "5h", "remainingFraction": 0.200, "resetTime": "2026-07-30T10:00:00Z"}  // earlier reset
+        ]);
+        let windows = map_buckets_to_windows(buckets.as_array().unwrap());
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].remaining_pct, 20);
+        assert_eq!(windows[0].used_pct, 80);
+        // Equal raw usage → earlier reset wins
+        assert_eq!(windows[0].resets_at, Some(1_759_137_600)); // 2026-07-30T10:00:00Z
     }
 }
