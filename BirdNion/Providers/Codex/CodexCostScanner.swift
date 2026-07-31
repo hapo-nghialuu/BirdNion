@@ -137,14 +137,11 @@ enum CodexCostScanner {
         // Same as `summary()`: the machine-wide ~/.codex is the only place
         // session logs actually accumulate.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
-        // Only rescan days that can still change persisted history; the
-        // store supplies the older days.
-        let scanDays = CostHistoryStore.scanBackDays(source: .codex, now: now)
         let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,
             codexHomePath: codexHome,
-            historyDays: scanDays)
+            historyDays: chartWindowDays)
         let live = snapshot.map { mapReport($0, now: now) }
         let liveDays = (live?.daily ?? []).map {
             ($0.date, $0.usd, $0.tokens,

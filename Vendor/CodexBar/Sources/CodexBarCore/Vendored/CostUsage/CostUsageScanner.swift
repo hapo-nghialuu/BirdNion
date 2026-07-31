@@ -2268,7 +2268,10 @@ enum CostUsageScanner {
         options: Options,
         checkCancellation: CancellationCheck?) throws -> CostUsageDailyReport
     {
-        var cache = CostUsageCacheIO.load(provider: .codex, cacheRoot: options.cacheRoot)
+        var cache = CostUsageCacheIO.load(
+            provider: .codex,
+            cacheRoot: options.cacheRoot,
+            calendar: Calendar.current)
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
         let plan = Self.makeCodexRefreshPlan(cache: cache, range: range, now: now, nowMs: nowMs, options: options)
 
@@ -2347,10 +2350,12 @@ enum CostUsageScanner {
                     context: CodexFileScanContext(
                         range: range,
                         forceFullScan: options
-                            .forceRescan || plan.windowExpanded || plan.pricingChanged || plan.priorityMetadataChanged,
+                            .forceRescan || plan.windowExpanded || plan.pricingChanged || plan.priorityMetadataChanged
+                            || plan.needsCostCacheMigration,
                         dropDeferredCodexRows: options.forceRescan || plan.pricingChanged || plan
                             .priorityMetadataChanged
-                            || plan.needsTurnIDCacheMigration,
+                            || plan.needsTurnIDCacheMigration
+                            || plan.needsCostCacheMigration,
                         requiresTurnIDCache: plan.needsTurnIDCacheMigration,
                         changedPriorityTurnIDs: plan.changedPriorityTurnIDs,
                         resources: resources,
