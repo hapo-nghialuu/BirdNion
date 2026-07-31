@@ -233,21 +233,33 @@ enum ClaudeOAuthKeychainPromptPreference {
 enum ClaudePlanLabeler {
     /// Exact label from the Keychain blob's subscriptionType + rateLimitTier.
     static func label(subscriptionType sub: String?, rateLimitTier tier: String?) -> String? {
-        if let t = tier?.lowercased() {
-            if t.contains("max") { return "Max" }
-            if t.contains("ultra") { return "Ultra" }
-        }
         if let s = sub?.lowercased() {
-            if s.contains("max") { return "Max" }
+            if s.contains("max") {
+                if let multiplier = maxUsageMultiplier(rateLimitTier: tier) {
+                    return "Max \(multiplier)"
+                }
+                return "Max"
+            }
             if s.contains("ultra") { return "Ultra" }
             if s.contains("pro") { return "Pro" }
             if s.contains("team") { return "Team" }
             if s.contains("enterprise") { return "Enterprise" }
         }
+        if let t = tier?.lowercased() {
+            if let multiplier = maxUsageMultiplier(rateLimitTier: t) { return "Max \(multiplier)" }
+            if t.contains("max") { return "Max" }
+            if t.contains("ultra") { return "Ultra" }
+        }
         return nil
     }
 
-    /// Coarse plan hint from a free-form login-method string (web/CLI paths).
+    private static func maxUsageMultiplier(rateLimitTier tier: String?) -> String? {
+        let normalized = tier?.lowercased() ?? ""
+        if normalized.contains("default_claude_max_5x") { return "5x" }
+        if normalized.contains("default_claude_max_20x") { return "20x" }
+        return nil
+    }
+
     static func label(fromLoginMethod method: String?) -> String? {
         guard let m = method?.lowercased(), !m.isEmpty else { return nil }
         if m.contains("max") { return "Max" }
@@ -259,8 +271,8 @@ enum ClaudePlanLabeler {
     }
 
     /// Login-method label for the OAuth path (Keychain-derived).
-    static func oauthLoginMethod(subscriptionType sub: String?) -> String {
-        if let plan = label(subscriptionType: sub, rateLimitTier: nil) { return "Claude \(plan)" }
+    static func oauthLoginMethod(subscriptionType sub: String?, rateLimitTier tier: String? = nil) -> String {
+        if let plan = label(subscriptionType: sub, rateLimitTier: tier) { return "Claude \(plan)" }
         return "Claude account"
     }
 

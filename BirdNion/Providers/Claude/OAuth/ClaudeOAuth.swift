@@ -318,7 +318,9 @@ enum ClaudeOAuthUsageAPI {
                               resetsAt: parseISO8601(w.resetsAt), resetDescription: nil)
         }
 
-        let loginMethod = ClaudePlanLabeler.oauthLoginMethod(subscriptionType: credentials.subscriptionType)
+        let loginMethod = ClaudePlanLabeler.oauthLoginMethod(
+            subscriptionType: credentials.subscriptionType,
+            rateLimitTier: credentials.rateLimitTier)
         let primary = makeWindow(usage.fiveHour, minutes: 5 * 60)
             ?? makeWindow(usage.sevenDay, minutes: 7 * 24 * 60)
             ?? makeWindow(usage.sevenDayOAuthApps, minutes: 7 * 24 * 60)

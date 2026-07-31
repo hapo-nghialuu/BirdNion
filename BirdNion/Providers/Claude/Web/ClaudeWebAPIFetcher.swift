@@ -25,6 +25,7 @@ struct ClaudeWebUsageData: Sendable {
 /// - `GET https://claude.ai/api/organizations/{id}/usage`               → session/weekly/opus + extra windows
 /// - `GET https://claude.ai/api/account`                                → email + loginMethod
 /// - `GET https://claude.ai/api/organizations/{id}/overage_spend_limit` → extraUsageCost (best-effort)
+/// - `GET https://claude.ai/api/organizations/{id}/prepaid/credits` → prepaid Extra balance (best-effort)
 ///
 /// No CodexBarCore import — SweetCookieKit is accessed via ClaudeWebCookieReader only.
 enum ClaudeWebAPIFetcher {
@@ -104,8 +105,10 @@ enum ClaudeWebAPIFetcher {
         // Parallel best-effort fetches — failures do not abort the main result.
         async let accountInfoAsync = fetchAccountInfo(orgId: org.id, tracker: tracker, session: session)
         async let overageAsync = fetchOverageSpendLimit(orgId: org.id, tracker: tracker, session: session)
+        async let prepaidAsync = fetchPrepaidBalance(orgId: org.id, tracker: tracker, session: session)
         let accountInfo = await accountInfoAsync
         let overage = await overageAsync
+        let prepaid = await prepaidAsync
 
         // Merge account info.
         let email = accountInfo?.email
@@ -119,6 +122,7 @@ enum ClaudeWebAPIFetcher {
 
         // Merge extra usage cost from usage body; prefer overage_spend_limit endpoint.
         let finalCost = overage ?? data.extraUsageCost
+        let mergedCost = prepaid.map { applyingPrepaidBalance($0, to: finalCost) } ?? finalCost
 
         return ClaudeWebUsageData(
             sessionPercentUsed: data.sessionPercentUsed,
@@ -127,7 +131,7 @@ enum ClaudeWebAPIFetcher {
             weeklyResetsAt: data.weeklyResetsAt,
             opusPercentUsed: data.opusPercentUsed,
             extraRateWindows: data.extraRateWindows,
-            extraUsageCost: finalCost,
+            extraUsageCost: mergedCost,
             accountEmail: email,
             accountOrganization: orgName,
             loginMethod: loginMethod)
@@ -413,7 +417,102 @@ enum ClaudeWebAPIFetcher {
             updatedAt: Date())
     }
 
-    // MARK: - extra_usage embedded in usage response
+    // MARK: - Prepaid Extra usage balance (best-effort)
+
+    private static func fetchPrepaidBalance(
+        orgId: String,
+        tracker: SessionKeyTracker,
+        session: URLSession) async -> PrepaidBalance?
+    {
+        let url = URL(string: "\(baseURL)/organizations/\(orgId)/prepaid/credits")!
+        var request = makeRequest(url: url, tracker: tracker)
+        request.timeoutInterval = 2
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return nil }
+            tracker.observe(response: http)
+            return parsePrepaidResponse(data, statusCode: http.statusCode)
+        } catch {
+            return nil
+        }
+    }
+
+    private struct PrepaidBalance {
+        let amount: Double
+        let currencyCode: String
+    }
+
+    private struct PrepaidCreditsResponse: Decodable {
+        let amount: Double
+        let currency: String
+    }
+
+    private static func parsePrepaidBalance(_ data: Data) -> PrepaidBalance? {
+        guard let response = try? JSONDecoder().decode(PrepaidCreditsResponse.self, from: data),
+              response.amount.isFinite,
+              response.amount >= 0
+        else { return nil }
+        let currency = response.currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !currency.isEmpty else { return nil }
+        return PrepaidBalance(amount: response.amount / 100.0, currencyCode: currency)
+    }
+
+    private static func parsePrepaidResponse(_ data: Data, statusCode: Int) -> PrepaidBalance? {
+        guard statusCode == 200 else { return nil }
+        return parsePrepaidBalance(data)
+    }
+
+    /// Mirrors CodexBar's applyingPrepaidBalance semantics using BirdNion's
+    /// existing cost snapshot fields: billing usage/limit stay intact and the
+    /// prepaid amount is carried in `balance` for Claude's credits cell.
+    private static func applyingPrepaidBalance(
+        _ balance: PrepaidBalance,
+        to cost: ProviderCostSnapshot?) -> ProviderCostSnapshot
+    {
+        guard let cost else {
+            return ProviderCostSnapshot(
+                used: 0,
+                limit: 0,
+                currencyCode: balance.currencyCode,
+                period: "Extra usage",
+                balance: balance.amount,
+                updatedAt: Date())
+        }
+        guard cost.currencyCode.caseInsensitiveCompare(balance.currencyCode) == .orderedSame else {
+            return cost
+        }
+        return ProviderCostSnapshot(
+            used: cost.used,
+            limit: cost.limit,
+            currencyCode: cost.currencyCode,
+            period: cost.period,
+            resetsAt: cost.resetsAt,
+            nextRegenAmount: cost.nextRegenAmount,
+            personalUsed: cost.personalUsed,
+            balance: balance.amount,
+            updatedAt: cost.updatedAt)
+    }
+
+    #if DEBUG
+    static func parsePrepaidBalanceForTesting(
+        _ data: Data) -> (amount: Double, currencyCode: String)? {
+        guard let balance = parsePrepaidBalance(data) else { return nil }
+        return (balance.amount, balance.currencyCode)
+    }
+
+    static func prepaidResponseFailureForTesting(_ data: Data) -> Bool {
+        parsePrepaidResponse(data, statusCode: 500) == nil
+    }
+
+    static func applyingPrepaidBalanceForTesting(
+        _ data: Data,
+        to cost: ProviderCostSnapshot?) -> ProviderCostSnapshot?
+    {
+        guard let balance = parsePrepaidBalance(data) else { return nil }
+        return applyingPrepaidBalance(balance, to: cost)
+    }
+    #endif
+
 
     private static func parseExtraUsageCost(_ value: Any?) -> ProviderCostSnapshot? {
         guard let dict = value as? [String: Any],

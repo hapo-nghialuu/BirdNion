@@ -159,6 +159,7 @@ final class ClaudeProvider: QuotaProvider {
     /// Remaining spend balance for the credits cell, when the cost snapshot is
     /// credit-style (used < limit).
     private static func spendRemainingFromCost(_ cost: ProviderCostSnapshot?) -> Double? {
+        if let prepaid = cost?.balance { return prepaid }
         guard let cost, cost.limit > 0 else { return nil }
         return max(0, cost.limit - cost.used)
     }

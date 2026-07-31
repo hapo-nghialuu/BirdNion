@@ -19,6 +19,8 @@ struct ProviderCostSnapshot: Equatable, Codable, Sendable {
     /// This account's own contribution when `used`/`limit` describe a
     /// shared/pooled budget. nil when the budget is already personal.
     let personalUsed: Double?
+    /// Remaining prepaid/credit balance, distinct from `personalUsed`.
+    let balance: Double?
     let updatedAt: Date
 
     init(used: Double,
@@ -28,6 +30,7 @@ struct ProviderCostSnapshot: Equatable, Codable, Sendable {
          resetsAt: Date? = nil,
          nextRegenAmount: Double? = nil,
          personalUsed: Double? = nil,
+         balance: Double? = nil,
          updatedAt: Date) {
         self.used = used
         self.limit = limit
@@ -36,6 +39,7 @@ struct ProviderCostSnapshot: Equatable, Codable, Sendable {
         self.resetsAt = resetsAt
         self.nextRegenAmount = nextRegenAmount
         self.personalUsed = personalUsed
+        self.balance = balance
         self.updatedAt = updatedAt
     }
 }

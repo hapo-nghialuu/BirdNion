@@ -184,7 +184,68 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(snap.providerCost?.limit, 10.0)
     }
 
-    // MARK: - Admin API parsing
+    // MARK: - Prepaid Extra usage balance
+
+    func testPrepaidBalanceParsesMinorUnits() throws {
+        let data = #"{"amount":12345,"currency":"usd"}"#.data(using: .utf8)!
+        let balance = try XCTUnwrap(ClaudeWebAPIFetcher.parsePrepaidBalanceForTesting(data))
+        XCTAssertEqual(balance.amount, 123.45, accuracy: 0.001)
+        XCTAssertEqual(balance.currencyCode, "USD")
+    }
+
+    func testPrepaidBalanceMergesWithBillingCost() throws {
+        let balanceData = #"{"amount":1250,"currency":"USD"}"#.data(using: .utf8)!
+        let cost = ProviderCostSnapshot(
+            used: 2.5, limit: 20, currencyCode: "USD", period: "Monthly cap", updatedAt: Date())
+        let merged = try XCTUnwrap(
+            ClaudeWebAPIFetcher.applyingPrepaidBalanceForTesting(balanceData, to: cost))
+        XCTAssertEqual(merged.balance, 12.5)
+        let snapshot = ClaudeUsageSnapshot(
+            primary: nil, secondary: nil, opus: nil, providerCost: merged)
+        let status = ClaudeProvider.materialize(
+            from: snapshot, override: nil, sourceLabel: "Web", status: nil)
+        XCTAssertEqual(status.creditsRemaining, 12.5)
+    }
+
+    func testPrepaidBalanceWorksWithoutBillingCost() throws {
+        let data = #"{"amount":875,"currency":"USD"}"#.data(using: .utf8)!
+        let merged = try XCTUnwrap(
+            ClaudeWebAPIFetcher.applyingPrepaidBalanceForTesting(data, to: nil))
+        XCTAssertEqual(merged.limit, 0)
+        XCTAssertEqual(merged.balance, 8.75)
+        let snapshot = ClaudeUsageSnapshot(
+            primary: nil, secondary: nil, opus: nil, providerCost: merged)
+        let status = ClaudeProvider.materialize(
+            from: snapshot, override: nil, sourceLabel: "Web", status: nil)
+        XCTAssertEqual(status.creditsRemaining, 8.75)
+    }
+
+    func testPrepaidEndpointFailureIsNoOp() {
+        XCTAssertNil(ClaudeWebAPIFetcher.parsePrepaidBalanceForTesting(Data("not json".utf8)))
+        let valid = #"{"amount":100,"currency":"USD"}"#.data(using: .utf8)!
+        XCTAssertTrue(ClaudeWebAPIFetcher.prepaidResponseFailureForTesting(valid))
+    }
+
+    // MARK: - Max multiplier labels
+
+    func testClaudeMaxMultiplierLabels() {
+        XCTAssertEqual(
+            ClaudePlanLabeler.label(subscriptionType: nil, rateLimitTier: "default_claude_max_5x"),
+            "Max 5x")
+        XCTAssertEqual(
+            ClaudePlanLabeler.label(subscriptionType: nil, rateLimitTier: "default_claude_max_20x"),
+            "Max 20x")
+        XCTAssertEqual(
+            ClaudePlanLabeler.label(subscriptionType: nil, rateLimitTier: "v2_default_claude_max_20x"),
+            "Max 20x")
+        XCTAssertEqual(
+            ClaudePlanLabeler.label(subscriptionType: "team", rateLimitTier: "default_claude_max_5x"),
+            "Team")
+        XCTAssertEqual(
+            ClaudePlanLabeler.label(subscriptionType: nil, rateLimitTier: nil),
+            nil)
+    }
+
 
     func testAdminSnapshotRollup() throws {
         let costs = """
