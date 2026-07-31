@@ -877,7 +877,7 @@ struct XAISpendCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
-                Text(settings.appLanguage == SettingsStore.Language.vietnamese.rawValue ? "Chi tiêu" : "Spend")
+                Text(L10n.t("xai.spend", settings.appLanguage))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .tracking(0.6)

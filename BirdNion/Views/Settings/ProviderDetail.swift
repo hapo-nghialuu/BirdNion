@@ -1292,14 +1292,11 @@ extension ProvidersPane {
 
     @ViewBuilder
     func xaiTeamIDSection(_ idx: Int) -> some View {
-        let vi = L10n.languageCode(language) == "vi"
         VStack(alignment: .leading, spacing: 4) {
-            Text(vi ? "xAI Team ID" : "xAI Team ID")
+            Text(L10n.t("xai.teamId.title", language))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
-            Text(vi
-                 ? "Bắt buộc cho Management API. Có thể đặt XAI_TEAM_ID; giá trị môi trường được ưu tiên."
-                 : "Required for the Management API. You can set XAI_TEAM_ID; the environment value takes precedence.")
+            Text(L10n.t("xai.teamId.hint", language))
                 .font(.system(size: 11))
                 .foregroundStyle(SettingsTheme.secondary)
                 .fixedSize(horizontal: false, vertical: true)

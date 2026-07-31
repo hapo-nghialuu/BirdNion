@@ -528,6 +528,7 @@ fn build_status(
     }
 
     // Plan rides in `plan_name` (settings "Tên gói" row + popover meta) —
+    // bare label ("Max 5x", "Pro", "Team", …), matching macOS `ClaudePlanLabeler.label()`.
     // `account_label` stays free for the config override, macOS parity.
     ProviderStatus {
         id: id.to_string(),
@@ -582,6 +583,10 @@ fn max_usage_multiplier(rate_limit_tier: &str) -> Option<&'static str> {
     }
 }
 
+/// Bare plan label ("Max 5x", "Pro", "Team", …) — matches macOS
+/// `ClaudePlanLabeler.label()`. Callers that need a "Claude "-prefixed
+/// login-method/source label (e.g. the OAuth/web login row) should add the
+/// prefix at the call site, mirroring `ClaudePlanLabeler.oauthLoginMethod()`.
 fn plan_label(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) -> String {
     let sub = subscription_type.unwrap_or("").to_lowercase();
     let tier = rate_limit_tier.unwrap_or("").to_lowercase();
@@ -608,7 +613,7 @@ fn plan_label(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) ->
         None
     };
     match plan {
-        Some(p) => format!("Claude {p}"),
+        Some(p) => p.to_string(),
         None => "Claude account".to_string(),
     }
 }
@@ -695,7 +700,7 @@ mod tests {
         assert_eq!(s.windows[0].label, "5 giờ");
         assert_eq!(s.windows[0].used_pct, 42);
         assert_eq!(s.windows[1].label, "Tuần");
-        assert_eq!(s.plan_name.as_deref(), Some("Claude Max"));
+        assert_eq!(s.plan_name.as_deref(), Some("Max"));
         assert_eq!(s.windows[0].window_seconds, Some(FIVE_HOURS_SECS));
         assert_eq!(s.windows[1].window_seconds, Some(SEVEN_DAYS_SECS));
     }
@@ -727,9 +732,14 @@ mod tests {
 
     #[test]
     fn max_multiplier_labels_prefer_subscription_and_support_v2_tier() {
-        assert_eq!(plan_label(None, Some("default_claude_max_5x")), "Claude Max 5x");
-        assert_eq!(plan_label(None, Some("v2_default_claude_max_20x")), "Claude Max 20x");
-        assert_eq!(plan_label(Some("team"), Some("default_claude_max_5x")), "Claude Team");
+        // Bare plan labels — macOS parity. The "Claude " prefix is added by
+        // callers (e.g. settings row) when a login-method/source label is
+        // needed, not baked into `plan_name`.
+        assert_eq!(plan_label(None, Some("default_claude_max_5x")), "Max 5x");
+        assert_eq!(plan_label(None, Some("v2_default_claude_max_20x")), "Max 20x");
+        assert_eq!(plan_label(Some("team"), Some("default_claude_max_5x")), "Team");
+        assert_eq!(plan_label(Some("max"), None), "Max");
+        assert_eq!(plan_label(Some("pro"), None), "Pro");
         assert_eq!(plan_label(None, None), "Claude account");
     }
 
