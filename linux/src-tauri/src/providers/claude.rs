@@ -6,9 +6,7 @@
 //!     `api.anthropic.com/api/oauth/usage`.
 //!   - `"web"` — `ClaudeWebAPIFetcher.swift` port (portable subset): browser
 //!     `sessionKey` cookie for claude.ai, `/api/organizations` +
-//!     `/api/organizations/{id}/usage`. Account-info/overage-spend-limit
-//!     enrichment calls are intentionally not ported (best-effort extras,
-//!     out of scope per YAGNI).
+//!     `/api/organizations/{id}/usage` plus best-effort prepaid credits enrichment.
 //!   - `"api"` — Admin API org snapshot (`claude_admin.rs`), mapped onto the
 //!     30-day cost total as a single window.
 //!   - `"cli"` — no PTY/CLI-session equivalent on Linux; always fails with a
@@ -41,6 +39,7 @@ struct Credentials {
     /// Unix seconds; None means "treat as non-expiring" (env-supplied tokens).
     expires_at: Option<i64>,
     subscription_type: Option<String>,
+    rate_limit_tier: Option<String>,
 }
 
 impl Credentials {
@@ -68,7 +67,8 @@ fn parse_oauth_credentials(contents: &str) -> Option<Credentials> {
     let expires_at = oauth.get("expiresAt").and_then(Value::as_f64).map(|ms| (ms / 1000.0) as i64);
     let refresh_token = oauth.get("refreshToken").and_then(Value::as_str).map(String::from);
     let subscription_type = oauth.get("subscriptionType").and_then(Value::as_str).map(String::from);
-    Some(Credentials { access_token: token.to_string(), refresh_token, expires_at, subscription_type })
+    let rate_limit_tier = oauth.get("rateLimitTier").and_then(Value::as_str).map(String::from);
+    Some(Credentials { access_token: token.to_string(), refresh_token, expires_at, subscription_type, rate_limit_tier })
 }
 
 fn load_from_env() -> Option<Credentials> {
@@ -81,6 +81,7 @@ fn load_from_env() -> Option<Credentials> {
                     refresh_token: None,
                     expires_at: None,
                     subscription_type: None,
+                    rate_limit_tier: None,
                 });
             }
         }
@@ -224,7 +225,13 @@ async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
         Ok(b) => b,
         Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
     };
-    let mut status = build_status(&cfg.id, name, &body, creds.subscription_type.as_deref());
+    let mut status = build_status(
+        &cfg.id,
+        name,
+        &body,
+        creds.subscription_type.as_deref(),
+        creds.rate_limit_tier.as_deref(),
+    );
     status.account_label = cfg.account_label.clone();
     status.version = version.unwrap_or(None);
     status.service_status = service.as_ref().map(|(d, _)| d.clone());
@@ -293,13 +300,31 @@ async fn fetch_web(cfg: &config::Provider, name: &str) -> ProviderStatus {
         return ProviderStatus::failure(&cfg.id, name, "Không tìm thấy tổ chức Claude cho tài khoản này.");
     };
 
-    let usage_body =
-        match fetch_web_json(&client, &format!("{CLAUDE_AI_BASE}/organizations/{org_id}/usage"), &cookie).await {
-            Ok(b) => b,
-            Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
-        };
+    let usage_url = format!("{CLAUDE_AI_BASE}/organizations/{org_id}/usage");
+    let prepaid_url = format!("{CLAUDE_AI_BASE}/organizations/{org_id}/prepaid/credits");
+    let prepaid_request = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            fetch_web_json(&client, &prepaid_url, &cookie),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+    };
+    let (usage_result, prepaid_body) = futures::join!(
+        fetch_web_json(&client, &usage_url, &cookie),
+        prepaid_request,
+    );
+    let usage_body = match usage_result {
+        Ok(b) => b,
+        Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
+    };
+    let prepaid = prepaid_body.and_then(|body| parse_prepaid_balance(&body));
 
-    let mut status = build_status(&cfg.id, name, &usage_body, None);
+    let mut status = build_status(&cfg.id, name, &usage_body, None, None);
+    if let Some(balance) = prepaid {
+        status.credits_remaining = Some(balance.amount);
+    }
     status.account_label = cfg.account_label.clone();
     status.source_label = Some("Web".to_string());
     status
@@ -377,6 +402,24 @@ fn parse_window(v: Option<&Value>) -> Option<RateWindow> {
     Some(RateWindow { used_pct, resets_at })
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct PrepaidBalance {
+    amount: f64,
+    currency: String,
+}
+
+fn parse_prepaid_balance(body: &Value) -> Option<PrepaidBalance> {
+    let amount = body.get("amount").and_then(Value::as_f64)?;
+    if !amount.is_finite() || amount < 0.0 {
+        return None;
+    }
+    let currency = body.get("currency").and_then(Value::as_str)?.trim().to_uppercase();
+    if currency.is_empty() {
+        return None;
+    }
+    Some(PrepaidBalance { amount: amount / 100.0, currency })
+}
+
 /// 2026 schema: some accounts no longer return a flat `seven_day` — weekly
 /// limits live only in the `limits` array (`kind: "weekly_scoped"`,
 /// `group: "weekly"`, `scope.model`). Returns the account-wide ("All models"
@@ -440,7 +483,13 @@ fn to_quota_window(w: RateWindow, label: &str, window_seconds: Option<i64>) -> Q
 /// seven_day fallbacks), secondary from seven_day, plus Opus/Sonnet/Routines
 /// as named extra windows. Falls back to an `extra_usage` spend-limit window
 /// when no rate-limit window is present at all.
-fn build_status(id: &str, name: &str, body: &Value, subscription_type: Option<&str>) -> ProviderStatus {
+fn build_status(
+    id: &str,
+    name: &str,
+    body: &Value,
+    subscription_type: Option<&str>,
+    rate_limit_tier: Option<&str>,
+) -> ProviderStatus {
     let five_hour = parse_window(body.get("five_hour"));
     let seven_day = parse_window(body.get("seven_day"));
     let seven_day_oauth_apps = parse_window(body.get("seven_day_oauth_apps"));
@@ -485,7 +534,9 @@ fn build_status(id: &str, name: &str, body: &Value, subscription_type: Option<&s
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        plan_name: subscription_type.map(|s| plan_label(Some(s))),
+        plan_name: subscription_type
+            .or(rate_limit_tier)
+            .map(|_| plan_label(subscription_type, rate_limit_tier)),
         credits_remaining,
         ..Default::default()
     }
@@ -521,10 +572,24 @@ fn spend_limit_window(extra: Option<&Value>) -> Option<(QuotaWindow, Option<f64>
     ))
 }
 
-fn plan_label(subscription_type: Option<&str>) -> String {
+fn max_usage_multiplier(rate_limit_tier: &str) -> Option<&'static str> {
+    if rate_limit_tier.contains("default_claude_max_5x") {
+        Some("Max 5x")
+    } else if rate_limit_tier.contains("default_claude_max_20x") {
+        Some("Max 20x")
+    } else {
+        None
+    }
+}
+
+fn plan_label(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) -> String {
     let sub = subscription_type.unwrap_or("").to_lowercase();
+    let tier = rate_limit_tier.unwrap_or("").to_lowercase();
     let plan = if sub.contains("max") {
-        Some("Max")
+        match max_usage_multiplier(&tier) {
+            Some(multiplier) => Some(multiplier),
+            None => Some("Max"),
+        }
     } else if sub.contains("ultra") {
         Some("Ultra")
     } else if sub.contains("pro") {
@@ -533,6 +598,12 @@ fn plan_label(subscription_type: Option<&str>) -> String {
         Some("Team")
     } else if sub.contains("enterprise") {
         Some("Enterprise")
+    } else if let Some(multiplier) = max_usage_multiplier(&tier) {
+        Some(multiplier)
+    } else if tier.contains("max") {
+        Some("Max")
+    } else if tier.contains("ultra") {
+        Some("Ultra")
     } else {
         None
     };
@@ -561,7 +632,7 @@ mod tests {
                  "scope": {"model": {"id": "claude-sonnet-4-5", "display_name": "Sonnet"}}}
             ]
         });
-        let status = build_status("claude", "Claude", &body, None);
+        let status = build_status("claude", "Claude", &body, None, None);
         let labels: Vec<_> = status.windows.iter().map(|w| w.label.as_str()).collect();
         assert_eq!(labels, vec!["5 giờ", "Tuần"]);
         assert_eq!(status.windows[1].used_pct, 42); // 41.5 rounded
@@ -577,7 +648,7 @@ mod tests {
                  "scope": {"model": {"id": "all-models", "display_name": "All models"}}}
             ]
         });
-        let status = build_status("claude", "Claude", &body, None);
+        let status = build_status("claude", "Claude", &body, None, None);
         assert_eq!(status.windows[1].label, "Tuần");
         assert_eq!(status.windows[1].used_pct, 55);
     }
@@ -606,10 +677,10 @@ mod tests {
 
     #[test]
     fn is_expired_checks_epoch() {
-        let creds = Credentials { access_token: "a".into(), refresh_token: None, expires_at: Some(1000), subscription_type: None };
+        let creds = Credentials { access_token: "a".into(), refresh_token: None, expires_at: Some(1000), subscription_type: None, rate_limit_tier: None };
         assert!(creds.is_expired(1000));
         assert!(!creds.is_expired(999));
-        let never = Credentials { access_token: "a".into(), refresh_token: None, expires_at: None, subscription_type: None };
+        let never = Credentials { access_token: "a".into(), refresh_token: None, expires_at: None, subscription_type: None, rate_limit_tier: None };
         assert!(!never.is_expired(999_999_999));
     }
 
@@ -619,7 +690,7 @@ mod tests {
             "five_hour": {"utilization": 42.0, "resets_at": "2026-01-01T00:00:00Z"},
             "seven_day": {"utilization": 10.0, "resets_at": "2026-01-08T00:00:00Z"},
         });
-        let s = build_status("claude", "Claude", &body, Some("max"));
+        let s = build_status("claude", "Claude", &body, Some("max"), None);
         assert_eq!(s.windows.len(), 2);
         assert_eq!(s.windows[0].label, "5 giờ");
         assert_eq!(s.windows[0].used_pct, 42);
@@ -634,7 +705,7 @@ mod tests {
         let body = json!({
             "extra_usage": {"is_enabled": true, "used_credits": 500.0, "monthly_limit": 2000.0, "utilization": 25.0}
         });
-        let s = build_status("claude", "Claude", &body, None);
+        let s = build_status("claude", "Claude", &body, None, None);
         assert_eq!(s.windows.len(), 1);
         assert_eq!(s.windows[0].label, "Spend limit");
         assert_eq!(s.windows[0].used_pct, 25);
@@ -648,15 +719,36 @@ mod tests {
             "seven_day_opus": {"utilization": 5.0, "resets_at": null},
             "seven_day_sonnet": {"utilization": 6.0, "resets_at": null},
         });
-        let s = build_status("claude", "Claude", &body, None);
+        let s = build_status("claude", "Claude", &body, None, None);
         assert_eq!(s.windows.len(), 3);
         assert_eq!(s.windows[1].label, "Opus");
         assert_eq!(s.windows[2].label, "Sonnet");
     }
 
     #[test]
+    fn max_multiplier_labels_prefer_subscription_and_support_v2_tier() {
+        assert_eq!(plan_label(None, Some("default_claude_max_5x")), "Claude Max 5x");
+        assert_eq!(plan_label(None, Some("v2_default_claude_max_20x")), "Claude Max 20x");
+        assert_eq!(plan_label(Some("team"), Some("default_claude_max_5x")), "Claude Team");
+        assert_eq!(plan_label(None, None), "Claude account");
+    }
+
+    #[test]
+    fn prepaid_balance_parses_minor_units() {
+        let balance = parse_prepaid_balance(&json!({"amount": 12345.0, "currency": "usd"})).unwrap();
+        assert!((balance.amount - 123.45).abs() < 0.001);
+        assert_eq!(balance.currency, "USD");
+    }
+
+    #[test]
+    fn prepaid_balance_failure_is_noop() {
+        assert_eq!(parse_prepaid_balance(&json!({"amount": "bad", "currency": "USD"})), None);
+        assert_eq!(parse_prepaid_balance(&json!({"amount": 100, "currency": ""})), None);
+    }
+
+    #[test]
     fn empty_payload_yields_no_windows() {
-        let s = build_status("claude", "Claude", &json!({}), None);
+        let s = build_status("claude", "Claude", &json!({}), None, None);
         assert!(s.windows.is_empty());
         // No subscription type → no plan row (config label stays separate).
         assert!(s.plan_name.is_none());
