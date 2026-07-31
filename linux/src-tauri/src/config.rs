@@ -580,6 +580,7 @@ pub fn api_key(provider: &Provider) -> Option<String> {
         "tryapi" => Some("TRYAPI_API_KEY"),
         "minimax" => Some("MINIMAX_CODING_API_KEY"),
         "openai" => Some("OPENAI_ADMIN_KEY"),
+        "xai" => Some("XAI_MANAGEMENT_API_KEY"),
         "ollama" => Some("OLLAMA_API_KEY"),
         _ => None,
     };

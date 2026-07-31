@@ -34,6 +34,7 @@ pub mod opencode;
 pub mod opencodego;
 pub mod openrouter;
 pub mod tryapi;
+pub mod xai;
 pub mod zai;
 
 use serde::{Deserialize, Serialize};
@@ -150,6 +151,7 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "deepgram" => "Deepgram",
         "groq" => "Groq",
         "grok" => "Grok",
+        "xai" => "xAI",
         "openai" => "OpenAI",
         "ollama" => "Ollama",
         "kiro" => "Kiro",
@@ -187,6 +189,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         "deepgram" => deepgram::fetch(cfg).await,
         "groq" => groq::fetch(cfg).await,
         "grok" => grok::fetch(cfg).await,
+        "xai" => xai::fetch(cfg).await,
         "openai" => openai::fetch(cfg).await,
         "ollama" => ollama::fetch(cfg).await,
         "kiro" => kiro::fetch(cfg).await,
