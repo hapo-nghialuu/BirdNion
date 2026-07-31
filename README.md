@@ -12,7 +12,7 @@
 [![Homebrew](https://img.shields.io/badge/brew-hapo--nghialuu%2Ftap%2Fbirdnion-orange?style=flat-square)](https://github.com/hapo-nghialuu/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/license-MIT-6e5aff?style=flat-square)](LICENSE)
 
-25+ providers. BirdNion is a small macOS 14+ menu-bar app and Linux tray app that keeps AI coding limits visible, shows when each window resets, and centralizes how each coding agent is read. Codex, Claude, MiniMax, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, Grok, OpenAI, Ollama, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, and FreeModel.
+25+ providers. BirdNion is a small macOS 14+ menu-bar app and Linux tray app that keeps AI coding limits visible, shows when each window resets, and centralizes how each coding agent is read. Codex, Claude, MiniMax, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, Grok, xAI, OpenAI, Ollama, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, and FreeModel.
 
 The native macOS app uses SwiftUI/AppKit and a vendored, trimmed `CodexBarCore` subset. The Linux port lives in `linux/` and uses Tauri v2 with a Rust core and vanilla TypeScript UI. Both platforms share the same XDG provider configuration schema.
 
@@ -129,7 +129,7 @@ Planned direction:
 ## Providers
 
 - **Codex** - OAuth API from `~/.codex/auth.json`, API-key fallback, local `codex app-server` fallback, service status, version, credits, reset credits, optional OpenAI web extras, and managed account switching.
-- **Claude** - OAuth API, browser cookies, CLI, or Admin API; 5-hour/weekly/Opus/Sonnet windows, local cost scans, web extras, and admin 30-day chart.
+- **Claude** - OAuth API, browser cookies, CLI, or Admin API; 5-hour/weekly/Opus/Sonnet windows, Daily Routines, local cost scans, web extras (extra-usage spend plus remaining prepaid credits), and admin 30-day chart. Max plans show their usage multiplier (Max 5x / Max 20x).
 - **MiniMax** - API token, environment token, or cookie fallback for coding-plan usage, plan name, points/subscription, and global/CN region.
 - **OpenRouter** - API token for prepaid credits plus optional per-key spending limit.
 - **DeepSeek** - API token for USD/CNY balance with paid/granted split and low-balance warning.
@@ -138,6 +138,7 @@ Planned direction:
 - **Deepgram** - API key with optional Project ID for usage summaries and aggregate-all-project mode.
 - **Groq** - API key for Prometheus-backed request, token, and cache-hit metrics.
 - **Grok** - Zero-config from `~/.grok/auth.json` (`grok login`); CLI `x.ai/billing` RPC then grok.com billing gRPC-web via Chrome cookies / auth bearer; SuperGrok identity and credit windows. Local cost on the All tab from `~/.grok/sessions/**/signals.json` (token totals × blended model price table).
+- **xAI** - Management API key plus Team ID for the developer platform (separate from the Grok consumer subscription); prepaid balance and 30-day platform spend.
 - **OpenAI** - Platform Admin API (`OPENAI_ADMIN_KEY` / config) for org spend Today/7d/30d; optional Project ID; legacy credit-grants fallback for user API keys. Not ChatGPT/Codex subscription (use Codex for that).
 - **Ollama** - Cloud Session/Weekly usage via ollama.com cookies (Auto/Manual); optional `OLLAMA_API_KEY` verifies Cloud API access.
 - **GitHub Copilot** - GitHub Device Flow or PAT fallback, enterprise host, premium usage, username, and budget extras via web cookies.

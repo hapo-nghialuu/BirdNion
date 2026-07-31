@@ -135,6 +135,7 @@ Chọn một hướng khi Phase 7–8 xong:
 
 | Date | Milestone |
 |---|---|
+| 2026-07-31 | 4 tính năng CodexBar: menu-bar metric resolver, bounded Codex cost scan (120 ngày, resumable), xAI Platform provider, Claude prepaid credits + Max multiplier |
 | 2026-07-07 | v0.8.6 — Settings parity CodexBar (hotkey, update check, storage footprint…) |
 | 2026-07-06 | Per-model breakdown tab All + fix drag-reorder + fix token clobber |
 | 2026-07-01 | v0.6.x — provider reordering, FreeModel, color system |
