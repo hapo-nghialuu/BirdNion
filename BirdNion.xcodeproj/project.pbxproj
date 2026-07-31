@@ -46,6 +46,10 @@
 		GRK00001000000000000B01 /* GrokProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00002000000000000F01 /* GrokProvider.swift */; };
 		GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00004000000000000F01 /* GrokCostScanner.swift */; };
 		CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHS00002000000000000F01 /* CostHistoryStore.swift */; };
+		XAI0001000000000000B001 /* XAIBillingFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAI0002000000000000F001 /* XAIBillingFetcher.swift */; };
+		XAI0003000000000000B001 /* XAIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAI0004000000000000F001 /* XAIProvider.swift */; };
+		XAIT0001000000000000B001 /* XAIBillingFetcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAIT0002000000000000F001 /* XAIBillingFetcherTests.swift */; };
+		XAIT0003000000000000B001 /* XAIProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAIT0004000000000000F001 /* XAIProviderTests.swift */; };
 		OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OAI00002000000000000F01 /* OpenAIProvider.swift */; };
 		OLA00001000000000000B01 /* OllamaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = OLA00002000000000000F01 /* OllamaProvider.swift */; };
 		KRO00001000000000000B01 /* KiroProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = KRO00002000000000000F01 /* KiroProvider.swift */; };
@@ -217,6 +221,10 @@
 		GRK00004000000000000F01 /* GrokCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokCostScanner.swift; sourceTree = "<group>"; };
 		CHS00002000000000000F01 /* CostHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CostHistoryStore.swift; sourceTree = "<group>"; };
 		OAI00002000000000000F01 /* OpenAIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenAIProvider.swift; sourceTree = "<group>"; };
+		XAI0002000000000000F001 /* XAIBillingFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XAIBillingFetcher.swift; sourceTree = "<group>"; };
+		XAI0004000000000000F001 /* XAIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XAIProvider.swift; sourceTree = "<group>"; };
+		XAIT0002000000000000F001 /* XAIBillingFetcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/XAIBillingFetcherTests.swift; sourceTree = "<group>"; };
+		XAIT0004000000000000F001 /* XAIProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/XAIProviderTests.swift; sourceTree = "<group>"; };
 		OLA00002000000000000F01 /* OllamaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OllamaProvider.swift; sourceTree = "<group>"; };
 		KRO00002000000000000F01 /* KiroProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/KiroProvider.swift; sourceTree = "<group>"; };
 		KRO00004000000000000F01 /* KiroCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/KiroCostScanner.swift; sourceTree = "<group>"; };
@@ -344,6 +352,8 @@
 				CWDT0001000000000000B001 /* CodexWebDashboardTests.swift in Sources */,
 				CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */,
 				NPT00001000000000000B01 /* NewProviderTests.swift in Sources */,
+				XAIT0001000000000000B001 /* XAIBillingFetcherTests.swift in Sources */,
+				XAIT0003000000000000B001 /* XAIProviderTests.swift in Sources */,
 				CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */,
 				CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */,
 				PPST0001000000000000B001 /* PopoverPanelSizingTests.swift in Sources */,
@@ -453,6 +463,8 @@
 			isa = PBXGroup;
 			children = (
 				BBBB0004000000000000F002 /* QuotaProvider.swift */,
+				XAI0002000000000000F001 /* XAIBillingFetcher.swift */,
+					XAI0004000000000000F001 /* XAIProvider.swift */,
 			);
 			path = Providers;
 			sourceTree = "<group>";
@@ -657,6 +669,8 @@
 				GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
 				OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */,
+				XAI0001000000000000B001 /* XAIBillingFetcher.swift in Sources */,
+					XAI0003000000000000B001 /* XAIProvider.swift in Sources */,
 				OLA00001000000000000B01 /* OllamaProvider.swift in Sources */,
 				KRO00001000000000000B01 /* KiroProvider.swift in Sources */,
 				KRO00003000000000000B01 /* KiroCostScanner.swift in Sources */,

@@ -249,6 +249,7 @@ extension ProvidersPane {
         case "deepgram": "Deepgram"
         case "groq": "Groq"
         case "grok": "Grok"
+        case "xai": "xAI"
         case "openai": "OpenAI"
         case "ollama": "Ollama"
         case "copilot": "Copilot"
@@ -411,6 +412,8 @@ struct ProviderLogoView: View {
             logo("GroqLogo", brand: VocabbyTheme.groq)
         case "grok":
             logo("GrokLogo", brand: VocabbyTheme.grok)
+        case "xai":
+            logo("XAILogo", brand: VocabbyTheme.xai)
         case "openai":
             logo("CodexLogo", brand: VocabbyTheme.openAI)
         case "ollama":

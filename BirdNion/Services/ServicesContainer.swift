@@ -91,6 +91,8 @@ final class ServicesContainer: ObservableObject {
             case "grok":
                 // Zero-config: reads ~/.grok/auth.json + CLI/web billing.
                 result.append(GrokProvider())
+            case "xai":
+                result.append(XAIProvider())
             case "openai":
                 // Admin API spend (OPENAI_ADMIN_KEY) + legacy credit grants fallback.
                 result.append(OpenAIProvider())

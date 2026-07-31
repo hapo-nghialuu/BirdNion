@@ -300,6 +300,7 @@ enum MenuBarIconRenderer {
         case "deepgram": providerAsset = "DeepgramLogo"
         case "groq": providerAsset = "GroqLogo"
         case "grok": providerAsset = "GrokLogo"
+        case "xai": providerAsset = "XAILogo"
         case "ollama": providerAsset = "OllamaLogo"
         case "copilot": providerAsset = "CopilotLogo"
         case "kilo": providerAsset = "KiloLogo"

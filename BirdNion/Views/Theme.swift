@@ -103,6 +103,7 @@ enum VocabbyTheme {
     static let deepgram   = fixed(0x6467F2)
     static let groq       = fixed(0xF56844)
     static let grok       = dyn(0x111827, 0xC8CCD6)
+    static let xai        = dyn(0x8E8E93, 0xF5F5F7)
     static let openAI     = fixed(0x0F826E)    // OpenAI API teal, distinct from Codex chat
     static let ollama     = fixed(0x888888)
     static let copilot    = fixed(0xA855F7)
@@ -133,6 +134,7 @@ enum VocabbyTheme {
         case "deepgram": return deepgram
         case "groq": return groq
         case "grok": return grok
+        case "xai": return xai
         case "openai": return openAI
         case "ollama": return ollama
         case "copilot": return copilot

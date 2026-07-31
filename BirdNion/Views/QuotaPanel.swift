@@ -94,6 +94,9 @@ struct QuotaOverview: View {
                                 QuotaSummaryStrip(status: s)
                             }
                             ProviderCard(status: s)
+                            if s.id == "xai", let cost = s.cost {
+                                XAISpendCard(cost: cost)
+                            }
                             // Claude Code backend: round quick-apply / setup button,
                             // shown only for providers with a key that can back Claude Code.
                             if ClaudeCodeQuickApplyButton.shouldShow(providerID: s.id) {
@@ -567,6 +570,8 @@ struct ProviderLogoMark: View {
             logo("GroqLogo", brand: VocabbyTheme.groq)
         case "grok":
             logo("GrokLogo", brand: VocabbyTheme.grok)
+        case "xai":
+            logo("XAILogo", brand: VocabbyTheme.xai)
         case "openai":
             logo("CodexLogo", brand: VocabbyTheme.openAI)
         case "ollama":
@@ -848,6 +853,43 @@ struct ProviderHeaderCard: View {
         // doesn't grow the card height past the mockup header card.
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .background(VocabbyTheme.card)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 0.5)
+        )
+    }
+}
+
+// MARK: - xAI spend
+
+/// xAI exposes money spend without a recurring quota limit. Keep it separate
+/// from quota bars so a zero limit never renders as a fake budget.
+struct XAISpendCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let cost: ProviderCostSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(settings.appLanguage == SettingsStore.Language.vietnamese.rawValue ? "Chi tiêu" : "Spend")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.6)
+                Spacer()
+                Text(UsageFormatter.usdString(cost.used))
+                    .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.primary)
+            }
+            Text(L10n.providerText(cost.period ?? "Last 30 days", preference: settings.appLanguage))
+                .font(.system(size: 10))
+                .foregroundStyle(VocabbyTheme.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(VocabbyTheme.card)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(

@@ -87,6 +87,9 @@ extension ProvidersPane {
                     detailHeader(idx)
                     detailInfoGrid(rows[idx])
                     usageSection(rows[idx])
+                    if rows[idx].id == "xai" {
+                        xaiCostSection(status(for: rows[idx].id))
+                    }
                     settingsSection(idx)
                     menuBarDisplaySection(for: rows[idx].id)
                     if rows[idx].id == "codex" {
@@ -432,6 +435,11 @@ extension ProvidersPane {
                 )
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+            }
+
+            if row.id == "xai" {
+                SettingsRowDivider()
+                xaiTeamIDSection(idx)
             }
 
             if row.id == "codex" {
@@ -1283,6 +1291,63 @@ extension ProvidersPane {
     }
 
     @ViewBuilder
+    func xaiTeamIDSection(_ idx: Int) -> some View {
+        let vi = L10n.languageCode(language) == "vi"
+        VStack(alignment: .leading, spacing: 4) {
+            Text(vi ? "xAI Team ID" : "xAI Team ID")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
+            Text(vi
+                 ? "Bắt buộc cho Management API. Có thể đặt XAI_TEAM_ID; giá trị môi trường được ưu tiên."
+                 : "Required for the Management API. You can set XAI_TEAM_ID; the environment value takes precedence.")
+                .font(.system(size: 11))
+                .foregroundStyle(SettingsTheme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("team_…", text: Binding(
+                get: { rows[idx].region ?? "" },
+                set: { raw in
+                    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    rows[idx].region = value.isEmpty ? nil : value
+                    saveAll()
+                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 12).monospacedDigit())
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    func xaiCostSection(_ status: ProviderStatus?) -> some View {
+        if let cost = status?.cost {
+            SettingsCard(header: L10n.t("settings.section.cost", language)) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(L10n.languageCode(language) == "vi" ? "Chi tiêu" : "Spend")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .tracking(0.5)
+                    Spacer(minLength: 8)
+                    Text(UsageFormatter.usdString(cost.used))
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(SettingsTheme.primary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                HStack {
+                    Text(L10n.providerText(cost.period ?? "Last 30 days", preference: language))
+                    Spacer()
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(SettingsTheme.tertiary)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+            }
+        }
+    }
+
+    @ViewBuilder
     func bedrockAuthSection(_ idx: Int) -> some View {
         let vi = L10n.languageCode(language) == "vi"
         let mode = rows[idx].awsAuthMode ?? "keys"
@@ -1437,6 +1502,8 @@ extension ProvidersPane {
             return [usage("https://grok.com/?_s=usage"),
                     changelog("https://x.ai/news"),
                     stat("https://status.x.ai")].compactMap { $0 }
+        case "xai":
+            return [dash("https://console.x.ai"), stat("https://status.x.ai")].compactMap { $0 }
         case "openai":
             return [usage("https://platform.openai.com/usage"),
                     dash("https://platform.openai.com/settings/organization/admin-keys"),

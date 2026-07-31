@@ -27,6 +27,8 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertEqual(classify(rawError: "HTTP 401"), .tokenInvalidOrMissing)
         XCTAssertEqual(classify(rawError: "HTTP 403"), .tokenInvalidOrMissing)
         XCTAssertEqual(classify(rawError: "unauthorized"), .tokenInvalidOrMissing)
+        XCTAssertEqual(classify(rawError: "xAI team was not found (HTTP 404). Check the Team ID."), .tokenInvalidOrMissing)
+        XCTAssertEqual(classify(rawError: "Không tìm thấy xAI team (HTTP 404). Kiểm tra Team ID."), .tokenInvalidOrMissing)
     }
 
     func testSchemaChanged() {

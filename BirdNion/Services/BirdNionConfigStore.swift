@@ -568,6 +568,7 @@ enum BirdNionConfigStore {
             Provider(id: "deepgram", enabled: false),
             Provider(id: "groq", enabled: false),
             Provider(id: "grok", enabled: false),
+            Provider(id: "xai", enabled: false),
             Provider(id: "openai", enabled: false),
             Provider(id: "ollama", enabled: false),
             Provider(id: "copilot", enabled: false),

@@ -45,11 +45,12 @@ func classify(rawError: String?) -> ProviderErrorKind? {
     let tokenMarkers = ["token", "api key", "unauthorized", "chưa cấu hình", "hết hạn"]
     let schemaMarkers = ["không hợp lệ", "invalid", "thiếu trường", "missing field",
                          "parse", "json", "không nhận ra", "không có model"]
+    let xAITeamNotFound = codes.contains(404) && s.contains("xai team")
 
     if cookieMarkers.contains(where: s.contains) { return .cookieExpiredOrMissing }
     if rateMarkers.contains(where: s.contains) || codes.contains(429) { return .rateLimited }
     if networkMarkers.contains(where: s.contains) { return .networkUnreachableOrTimeout }
-    if tokenMarkers.contains(where: s.contains) || codes.contains(401) || codes.contains(403) {
+    if tokenMarkers.contains(where: s.contains) || codes.contains(401) || codes.contains(403) || xAITeamNotFound {
         return .tokenInvalidOrMissing
     }
     if schemaMarkers.contains(where: s.contains) || codes.contains(where: { (500..<600).contains($0) }) {
