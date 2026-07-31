@@ -198,11 +198,14 @@ enum MenuBarIconRenderer {
     static func freemodelMenuBarPercents(_ windows: [QuotaWindow]) -> [Int] {
         let balance = windows.first { $0.label == "Số dư" }
         if let fiveH = windows.first(where: { $0.label == "5 giờ" }),
+           !fiveH.isInactive,
            fiveH.remainingPct <= 0,
            let balance, balance.remainingPct > 0 {
             return [balance.remainingPct]
         }
-        let percents = windows.filter { $0.label != "Số dư" }.map(\.remainingPct)
+        let percents = windows
+            .filter { $0.label != "Số dư" && !$0.isInactive }
+            .map(\.remainingPct)
         // The menu-bar metric picker isolated the balance window itself →
         // show it as-is instead of an empty title.
         if percents.isEmpty, let balance { return [balance.remainingPct] }

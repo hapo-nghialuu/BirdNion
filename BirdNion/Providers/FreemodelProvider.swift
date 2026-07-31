@@ -336,7 +336,8 @@ final class FreemodelProvider: QuotaProvider {
             subtitle: window.subtitle.map { "\($0) · số cũ" } ?? "số cũ",
             resetDate: window.resetDate,
             windowSeconds: window.windowSeconds,
-            isSupplementary: window.isSupplementary)
+            isSupplementary: window.isSupplementary,
+            isInactive: window.isInactive)
     }
 
     /// Dashboard "Current balance" (§ Extra usage) — bonus credits applied
@@ -381,9 +382,9 @@ final class FreemodelProvider: QuotaProvider {
     private static func window(label: String, from w: UsageResponse.Window, windowSeconds: Int) -> QuotaWindow {
         let used = Double(w.usedCents) / 100.0
         let limit = Double(w.limitCents) / 100.0
-        // When both used and limit are 0 (e.g. window not yet started), treat
-        // as 0% used (100% remaining) but mark it as inactive so the menu bar
-        // does not show "100%" for an unused window.
+        // A zero-sized window means no plan exists for that period, not a
+        // genuine 100% remaining quota.
+        let isInactive = w.usedCents == 0 && w.limitCents == 0
         let usedPct = (limit > 0 && used > 0) ? Int((used / limit * 100).rounded()) : 0
         let clamped = max(0, min(100, usedPct))
         return QuotaWindow(
@@ -392,7 +393,8 @@ final class FreemodelProvider: QuotaProvider {
             remainingPct: 100 - clamped,
             subtitle: "\(UsageFormatter.usdString(used)) / \(UsageFormatter.usdString(limit))",
             resetDate: w.resetsAt > 0 ? Date(timeIntervalSince1970: TimeInterval(w.resetsAt)) : nil,
-            windowSeconds: windowSeconds)
+            windowSeconds: windowSeconds,
+            isInactive: isInactive)
     }
 
     // MARK: - Account label

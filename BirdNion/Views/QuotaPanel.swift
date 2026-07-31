@@ -632,16 +632,19 @@ struct ProviderLogoMark: View {
 }
 
 enum ProviderStatusSummary {
-    /// Lowest-remaining window across the status, ignoring supplementary
-    /// bonus-credit windows (see `QuotaWindow.isSupplementary`) so an
-    /// exhausted referral bonus doesn't outrank a healthy primary quota as
-    /// the "Lowest Quota" headline. Falls back to considering every window
-    /// when all of them are supplementary (never silently returns nil for a
-    /// status that has data).
+    /// Lowest-remaining active window across the status, ignoring supplementary
+    /// bonus-credit windows (see `QuotaWindow.isSupplementary`) and inactive
+    /// zero-sized windows (see `QuotaWindow.isInactive`) so neither can outrank
+    /// a healthy primary quota as the "Lowest Quota" headline. Falls back to any
+    /// noninactive window only when no active primary exists.
     static func lowestWindow(_ status: ProviderStatus) -> QuotaWindow? {
-        let primary = status.windows.filter { !$0.isSupplementary }
-        let candidates = primary.isEmpty ? status.windows : primary
-        return candidates.min { $0.remainingPct < $1.remainingPct }
+        let primary = status.windows.filter { !$0.isSupplementary && !$0.isInactive }
+        if let lowest = primary.min(by: { $0.remainingPct < $1.remainingPct }) {
+            return lowest
+        }
+        return status.windows
+            .filter { !$0.isInactive }
+            .min { $0.remainingPct < $1.remainingPct }
     }
 }
 
@@ -1602,11 +1605,11 @@ struct WindowRow: View {
     let lastUpdated: Date
 
     private var barFillColor: Color {
-        VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
+        window.isInactive ? VocabbyTheme.track : VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
     }
 
     private var percentTextColor: Color {
-        VocabbyTheme.quotaColor(remaining: window.remainingPct)
+        window.isInactive ? VocabbyTheme.tertiary : VocabbyTheme.quotaColor(remaining: window.remainingPct)
     }
 
     /// Linear pace vs the window's elapsed time — powers the CodexBar-style
@@ -1661,14 +1664,16 @@ struct WindowRow: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(VocabbyTheme.secondary)
             QuotaBarWithPaceMarker(
-                remainingPct: window.remainingPct,
+                remainingPct: window.isInactive ? 0 : window.remainingPct,
                 fillColor: barFillColor,
                 // Marker only when meaningfully off pace (CodexBar hides it
                 // on-track). Bar shows REMAINING, so the expected-usage marker
                 // sits at 100 − expectedUsed.
                 markerPct: (pace?.isOnTrack == false) ? pace.map { 100 - $0.expectedUsedPct } : nil)
             HStack(alignment: .firstTextBaseline) {
-                Text(L10n.f("quota.left", settings.appLanguage, window.remainingPct))
+                Text(window.isInactive
+                     ? "—"
+                     : L10n.f("quota.left", settings.appLanguage, window.remainingPct))
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
                     .foregroundStyle(percentTextColor)
                 Spacer()

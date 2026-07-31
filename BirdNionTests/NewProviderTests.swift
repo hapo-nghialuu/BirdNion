@@ -1107,16 +1107,53 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(fiveH.remainingPct, 89)
         XCTAssertEqual(fiveH.subtitle, "$22.50 / $200.00")
         XCTAssertNotNil(fiveH.resetDate)
+        XCTAssertFalse(fiveH.isInactive)
 
         let week = s.windows[1]
         XCTAssertEqual(week.label, "Tuần")
         XCTAssertEqual(week.usedPct, 0)              // 8/132000 ≈ 0.006% → 0
         XCTAssertEqual(week.subtitle, "$0.08 / $1,320.00")
+        XCTAssertFalse(week.isInactive)
 
         // Malformed payload → error, no windows.
         let bad = FreemodelProvider._parseForTesting(usageData: Data("{}".utf8), accountLabel: nil)
         XCTAssertNotNil(bad.error)
         XCTAssertTrue(bad.windows.isEmpty)
+    }
+
+    func testFreemodelInactiveWindowsDoNotLookLikeFullQuota() throws {
+        let zeroPlan = """
+        {"window5h":{"usedCents":0,"limitCents":0,"resetsAt":0},
+         "windowWeek":{"usedCents":0,"limitCents":0,"resetsAt":0}}
+        """.data(using: .utf8)!
+        let status = FreemodelProvider._parseForTesting(
+            usageData: zeroPlan,
+            accountLabel: nil,
+            referralData: Data(#"{"credits":64,"used":36}"#.utf8))
+
+        XCTAssertEqual(status.windows.count, 3)
+        XCTAssertTrue(status.windows[0].isInactive)
+        XCTAssertTrue(status.windows[1].isInactive)
+        XCTAssertEqual(status.windows[0].remainingPct, 100)
+        XCTAssertEqual(status.windows[0].subtitle, "$0.00 / $0.00")
+        XCTAssertEqual(MenuBarIconRenderer.freemodelMenuBarPercents(status.windows), [64])
+        XCTAssertEqual(ProviderStatusSummary.lowestWindow(status)?.label, "Số dư")
+
+        let encoded = try JSONEncoder().encode(status.windows[0])
+        let decoded = try JSONDecoder().decode(QuotaWindow.self, from: encoded)
+        XCTAssertTrue(decoded.isInactive)
+    }
+
+    func testFreemodelZeroUsedWithPlanRemainsActiveAndFull() {
+        let json = """
+        {"window5h":{"usedCents":0,"limitCents":20000,"resetsAt":0},
+         "windowWeek":{"usedCents":100,"limitCents":1000,"resetsAt":0}}
+        """.data(using: .utf8)!
+        let status = FreemodelProvider._parseForTesting(usageData: json, accountLabel: nil)
+
+        XCTAssertFalse(status.windows[0].isInactive)
+        XCTAssertEqual(status.windows[0].remainingPct, 100)
+        XCTAssertEqual(MenuBarIconRenderer.freemodelMenuBarPercents(status.windows), [100, 90])
     }
 
     /// Dashboard "Current balance" → "Số dư" window: remaining = referral

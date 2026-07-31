@@ -26,6 +26,9 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
     /// keeps FreeModel's balance window out of the menu-bar percent for the
     /// same reason).
     let isSupplementary: Bool
+    /// True when provider returned a zero-sized window, meaning no quota plan
+    /// exists for that period. Inactive windows must not look like 100% quota.
+    let isInactive: Bool
 
     init(id: UUID = UUID(),
          label: String,
@@ -34,7 +37,8 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
          subtitle: String? = nil,
          resetDate: Date? = nil,
          windowSeconds: Int? = nil,
-         isSupplementary: Bool = false) {
+         isSupplementary: Bool = false,
+         isInactive: Bool = false) {
         self.id = id
         self.label = label
         self.usedPct = usedPct
@@ -43,15 +47,16 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
         self.resetDate = resetDate
         self.windowSeconds = windowSeconds
         self.isSupplementary = isSupplementary
+        self.isInactive = isInactive
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, label, usedPct, remainingPct, subtitle, resetDate, windowSeconds, isSupplementary
+        case id, label, usedPct, remainingPct, subtitle, resetDate, windowSeconds, isSupplementary, isInactive
     }
 
-    /// Custom decode so cached snapshots written before this field existed
-    /// (`CodexAccountSnapshotStore`'s on-disk JSON) still decode — a missing
-    /// key defaults to `false` instead of failing the whole decode.
+    /// Custom decode so cached snapshots written before these fields existed
+    /// (`CodexAccountSnapshotStore`'s on-disk JSON) still decode — missing
+    /// keys default to `false` instead of failing the whole decode.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -62,6 +67,7 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
         resetDate = try c.decodeIfPresent(Date.self, forKey: .resetDate)
         windowSeconds = try c.decodeIfPresent(Int.self, forKey: .windowSeconds)
         isSupplementary = try c.decodeIfPresent(Bool.self, forKey: .isSupplementary) ?? false
+        isInactive = try c.decodeIfPresent(Bool.self, forKey: .isInactive) ?? false
     }
 }
 
