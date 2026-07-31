@@ -28,7 +28,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         .clone()
         .unwrap_or_else(|| token.chars().take(8).collect());
 
-    match fetch_admin_usage(&token, project.as_deref()).await {
+    let mut status = match fetch_admin_usage(&token, project.as_deref()).await {
         Ok(status) => status.with_account(account),
         Err(admin_err) => {
             if project.is_some() {
@@ -39,7 +39,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
                 Err(e) => ProviderStatus::failure(&cfg.id, &name, format!("{admin_err}; fallback: {e}")),
             }
         }
-    }
+    };
+    status.menu_bar_metric = cfg.menu_bar_metric.clone();
+    status
 }
 
 fn resolve_token(cfg: &config::Provider) -> Option<String> {
@@ -168,6 +170,7 @@ pub fn parse_admin_status(
         source_label: Some("Admin API".into()),
         credits_unlimited: false,
         kiro_context_percent: None,
+        menu_bar_metric: None,
     }
     .with_plan_label(plan)
 }

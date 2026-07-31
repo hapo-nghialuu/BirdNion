@@ -318,7 +318,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     );
     let version = version.unwrap_or(None);
     let side = SideInfo { version, service };
-    match usage {
+    let mut status = match usage {
         Ok(body) => {
             build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref(), &side).await
         }
@@ -331,7 +331,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
                     creds.last_refresh = Some(now);
                     let _ = save_auth_json(&path, &creds);
                     if let Ok(body) = fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
-                        return build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref(), &side).await;
+                        let mut status = build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref(), &side).await;
+                        status.menu_bar_metric = cfg.menu_bar_metric.clone();
+                        return status;
                     }
                 }
             }
@@ -340,7 +342,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         Err(UsageError::Server(code)) => ProviderStatus::failure(&cfg.id, &name, format!("HTTP {code}")),
         Err(UsageError::Invalid(e)) => ProviderStatus::failure(&cfg.id, &name, format!("Response không hợp lệ: {e}")),
         Err(UsageError::Network(e)) => ProviderStatus::failure(&cfg.id, &name, format!("Network: {e}")),
-    }
+    };
+    status.menu_bar_metric = cfg.menu_bar_metric.clone();
+    status
 }
 
 /// Best-effort side-channel info shown in the settings detail grid.
@@ -463,7 +467,6 @@ async fn build_success(
         source_label: Some("OAuth".to_string()),
         credits_unlimited: credits_unlimited(body)
             || cookie_enrichment.map(credits_unlimited).unwrap_or(false),
-        menu_bar_metric: cfg.menu_bar_metric.clone(),
         ..Default::default()
     }
 }
