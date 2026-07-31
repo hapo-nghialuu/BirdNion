@@ -4,6 +4,7 @@ import XCTest
 /// Parser tests for the natively-authored new providers (fixture-driven, no
 /// network). Cookie/OAuth/CLI providers expose their own `_parseForTesting`
 /// hooks; these cover the three hand-written API-key parsers.
+@MainActor
 final class NewProviderTests: XCTestCase {
 
     func testElevenLabsParse() {
