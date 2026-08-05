@@ -940,7 +940,10 @@ struct ProviderCard: View {
                 AntigravitySemanticQuotaRows(windows: status.windows, lastUpdated: status.lastUpdated)
             } else {
                 ForEach(status.windows) { win in
-                    WindowRow(window: win, lastUpdated: status.lastUpdated)
+                    WindowRow(
+                        window: win,
+                        providerID: status.id,
+                        lastUpdated: status.lastUpdated)
                 }
             }
         }
@@ -1599,13 +1602,21 @@ struct WindowRow: View {
     @EnvironmentObject var settings: SettingsStore
 
     let window: QuotaWindow
+    /// Provider id used to keep the quota fill aligned with the provider's
+    /// brand color. The quota percentage still controls the fill length and
+    /// the semantic text color remains independent.
+    let providerID: String
     /// Fetch timestamp from the parent `ProviderStatus` — used as the
     /// anchor for the `lastUpdated + windowSeconds` reset estimate when
     /// the API didn't return an explicit reset timestamp.
     let lastUpdated: Date
 
     private var barFillColor: Color {
-        window.isInactive ? VocabbyTheme.track : VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
+        guard !window.isInactive else { return VocabbyTheme.track }
+        if providerID == "codex" { return VocabbyTheme.brandBlue }
+        if providerID == "claude" { return VocabbyTheme.claude }
+        return VocabbyTheme.providerTint(providerID)
+            ?? VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
     }
 
     private var percentTextColor: Color {
@@ -1738,7 +1749,8 @@ struct QuotaBarWithPaceMarker: View {
 
 // MARK: - Antigravity semantic quota rows
 
-/// Flat semantic rows for Antigravity. Raw model windows never reach this view.
+/// Semantic quota rows for Antigravity, grouped by the model pool that shares
+/// each limit. Raw model windows never reach this view.
 struct AntigravitySemanticQuotaRows: View {
     let windows: [QuotaWindow]
     let lastUpdated: Date
@@ -1765,11 +1777,37 @@ struct AntigravitySemanticQuotaRows: View {
             .map { $0 }
     }
 
+    private var geminiWindows: [QuotaWindow] {
+        semanticWindows.filter { $0.label.hasPrefix("Gemini") }
+    }
+
+    private var claudeGPTWindows: [QuotaWindow] {
+        semanticWindows.filter { $0.label.hasPrefix("Claude/GPT") }
+    }
+
+    @ViewBuilder
+    private func quotaGroup(title: String, windows: [QuotaWindow]) -> some View {
+        if !windows.isEmpty {
+            VStack(alignment: .leading, spacing: 9) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                ForEach(windows) { window in
+                    AntigravitySemanticQuotaRow(window: window, lastUpdated: lastUpdated)
+                }
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(semanticWindows) { window in
-                AntigravitySemanticQuotaRow(window: window, lastUpdated: lastUpdated)
+            quotaGroup(title: "Gemini", windows: geminiWindows)
+            if !geminiWindows.isEmpty && !claudeGPTWindows.isEmpty {
+                Divider()
+                    .overlay(VocabbyTheme.border.opacity(0.8))
+                    .padding(.vertical, 1)
             }
+            quotaGroup(title: "Claude/GPT", windows: claudeGPTWindows)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1780,10 +1818,6 @@ private struct AntigravitySemanticQuotaRow: View {
 
     let window: QuotaWindow
     let lastUpdated: Date
-
-    private var fillColor: Color {
-        VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
-    }
 
     private var percentColor: Color {
         VocabbyTheme.quotaColor(remaining: window.remainingPct)
@@ -1806,7 +1840,7 @@ private struct AntigravitySemanticQuotaRow: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            AntigravityQuotaBar(remainingPct: window.remainingPct, fillColor: fillColor)
+            AntigravityQuotaBar(remainingPct: window.remainingPct)
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.f("quota.left", settings.appLanguage, window.remainingPct))
                     .font(.system(size: 11).monospacedDigit())
@@ -1831,7 +1865,18 @@ private struct AntigravitySemanticQuotaRow: View {
 
 private struct AntigravityQuotaBar: View {
     let remainingPct: Int
-    let fillColor: Color
+
+    private var googleGradient: LinearGradient {
+        LinearGradient(
+            gradient: Gradient(colors: [
+                VocabbyTheme.googleBlue,
+                VocabbyTheme.googleRed,
+                VocabbyTheme.googleYellow,
+                VocabbyTheme.googleGreen,
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing)
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1839,8 +1884,11 @@ private struct AntigravityQuotaBar: View {
                 Capsule()
                     .fill(VocabbyTheme.track)
                 Capsule()
-                    .fill(fillColor)
-                    .frame(width: geometry.size.width * CGFloat(max(0, min(100, remainingPct))) / 100)
+                    .fill(googleGradient)
+                    .frame(
+                        width: geometry.size.width * CGFloat(max(0, min(100, remainingPct))) / 100,
+                        height: geometry.size.height,
+                        alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity)
@@ -2634,14 +2682,21 @@ extension View {
     func vocabbyCard() -> some View { modifier(VocabbyCard()) }
 }
 
+// MARK: - Usage chart scaling
+
+enum UsageChartScaling {
+    static func fraction(value: Double, maximum: Double) -> Double {
+        guard value > 0 else { return 0 }
+        return value / max(maximum, 1)
+    }
+}
+
 // MARK: - Claude usage chart
 
 /// 30-day bar chart card sourced from `ClaudeCostScanner.usageReport()`.
 /// Mirrors CodexBar's compact "Today / 30d cost / tokens / latest tokens"
-/// header + a per-day USD bar series. The chart uses USD as the y-axis
-/// (matches the screenshot reference) since token counts vary too wildly
-/// between idle and busy days; tokens go in the top-right summary so
-/// both signals are visible at a glance.
+/// header + a per-day token bar series. USD remains in summary and hover
+/// details so both volume and spend stay visible.
 struct ClaudeUsageChartCard: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -2654,8 +2709,8 @@ struct ClaudeUsageChartCard: View {
     /// only exists for the All tab's heatmap.
     private var daily30: [ClaudeDailyUsage] { Array(report.daily.suffix(30)) }
 
-    private var maxBarUSD: Double {
-        max(daily30.map(\.usd).max() ?? 0, 0.01)
+    private var maxBarTokens: Int {
+        max(daily30.map(\.tokens).max() ?? 0, 1)
     }
 
     /// Day whose per-model breakdown is shown: the hovered bar, else the most
@@ -2754,17 +2809,17 @@ struct ClaudeUsageChartCard: View {
         }
     }
 
-    /// 30 vertical bars, one per day, height proportional to USD. Inactive
+    /// 30 vertical bars, one per day, height proportional to tokens. Inactive
     /// days render as a faint 2pt baseline so the chart doesn't look broken
     /// when usage is sparse.
     private var barChart: some View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(daily30) { day in
-                    let heightFraction = day.usd > 0
-                        ? CGFloat(day.usd / maxBarUSD)
-                        : 0
-                    let barHeight = max(geo.size.height * heightFraction, day.usd > 0 ? 3 : 1)
+                    let hasTokens = day.tokens > 0
+                    let heightFraction = UsageChartScaling.fraction(
+                        value: Double(day.tokens), maximum: Double(maxBarTokens))
+                    let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     // Full-height hover column so even tiny bars are easy to
                     // target; the bar itself sits at the bottom.
                     VStack(spacing: 0) {
@@ -2790,7 +2845,7 @@ struct ClaudeUsageChartCard: View {
     private func barColor(for day: ClaudeDailyUsage) -> Color {
         VocabbyTheme.activityChartBarColor(
             isCurrent: day.date == daily30.last?.date,
-            hasActivity: day.usd > 0,
+            hasActivity: day.tokens > 0,
             tint: VocabbyTheme.chartClaude,
             currentTint: VocabbyTheme.chartClaude
         )
@@ -2818,7 +2873,7 @@ struct ClaudeUsageChartCard: View {
 // MARK: - Codex usage chart
 
 /// 30-day bar chart card sourced from `CodexCostScanner.usageReport()`. Mirrors
-/// `ClaudeUsageChartCard` (Today / 30d cost / latest tokens + per-day cost bars +
+/// `ClaudeUsageChartCard` (Today / 30d cost / latest tokens + per-day token bars +
 /// hover per-model breakdown) but the numbers are mapped to match CodexBar's own
 /// inline Codex dashboard. Labels are inline VI/EN (no shared L10n keys needed).
 struct CodexUsageChartCard: View {
@@ -2833,8 +2888,8 @@ struct CodexUsageChartCard: View {
     /// only exists for the All tab's heatmap.
     private var daily30: [CodexDailyUsage] { Array(report.daily.suffix(30)) }
 
-    private var maxBarUSD: Double {
-        max(daily30.map(\.usd).max() ?? 0, 0.01)
+    private var maxBarTokens: Int {
+        max(daily30.map(\.tokens).max() ?? 0, 1)
     }
 
     /// Day whose per-model breakdown is shown: the hovered bar, else the most
@@ -2935,10 +2990,10 @@ struct CodexUsageChartCard: View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(daily30) { day in
-                    let heightFraction = day.usd > 0
-                        ? CGFloat(day.usd / maxBarUSD)
-                        : 0
-                    let barHeight = max(geo.size.height * heightFraction, day.usd > 0 ? 3 : 1)
+                    let hasTokens = day.tokens > 0
+                    let heightFraction = UsageChartScaling.fraction(
+                        value: Double(day.tokens), maximum: Double(maxBarTokens))
+                    let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -2962,7 +3017,7 @@ struct CodexUsageChartCard: View {
     private func barColor(for day: CodexDailyUsage) -> Color {
         VocabbyTheme.activityChartBarColor(
             isCurrent: day.date == daily30.last?.date,
-            hasActivity: day.usd > 0
+            hasActivity: day.tokens > 0
         )
     }
 
@@ -3095,9 +3150,8 @@ struct KiroUsageChartCard: View {
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(daily30) { day in
                     let hasTokens = day.tokens > 0
-                    let heightFraction = hasTokens
-                        ? CGFloat(Double(day.tokens) / Double(maxBarTokens))
-                        : 0
+                    let heightFraction = UsageChartScaling.fraction(
+                        value: Double(day.tokens), maximum: Double(maxBarTokens))
                     let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
@@ -3159,12 +3213,12 @@ struct GrokUsageChartCard: View {
 
     private var daily30: [GrokDailyUsage] { Array(report.daily.suffix(30)) }
 
-    private var maxBarUSD: Double {
-        max(daily30.map(\.usd).max() ?? 0, 0.01)
+    private var maxBarTokens: Int {
+        max(daily30.map(\.tokens).max() ?? 0, 1)
     }
 
     private var detailDay: GrokDailyUsage? {
-        hoveredDay ?? daily30.last(where: { $0.tokens > 0 || $0.usd > 0 })
+        hoveredDay ?? daily30.last(where: { $0.tokens > 0 })
     }
 
     private var latestDayTokens: Int {
@@ -3259,10 +3313,10 @@ struct GrokUsageChartCard: View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(daily30) { day in
-                    let heightFraction = day.usd > 0
-                        ? CGFloat(day.usd / maxBarUSD)
-                        : 0
-                    let barHeight = max(geo.size.height * heightFraction, day.usd > 0 ? 3 : 1)
+                    let hasTokens = day.tokens > 0
+                    let heightFraction = UsageChartScaling.fraction(
+                        value: Double(day.tokens), maximum: Double(maxBarTokens))
+                    let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -3285,7 +3339,7 @@ struct GrokUsageChartCard: View {
 
     private func barColor(for day: GrokDailyUsage) -> Color {
         // Grok brand near-black; slightly lift the current day for readability.
-        if day.usd <= 0 { return VocabbyTheme.track }
+        if day.tokens <= 0 { return VocabbyTheme.track }
         if day.date == daily30.last?.date {
             return VocabbyTheme.chartGrok
         }
@@ -3315,14 +3369,14 @@ struct GrokUsageChartCard: View {
 /// `ClaudeUsageChartCard` but the data comes from `ClaudeAdminAPIUsageSnapshot`
 /// (real billed cost from Anthropic's org Usage & Cost API, not a local
 /// estimate) — so no "≈ estimate" footnote. Shows 30-day + latest-day cost +
-/// tokens, a per-day cost bar series, and the top model + top cost item.
+/// tokens, a per-day token bar series, and the top model + top cost item.
 struct ClaudeAdminUsageChartCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let snapshot: ClaudeAdminAPIUsageSnapshot
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    private var maxBarUSD: Double { max(snapshot.daily.map(\.costUSD).max() ?? 0, 0.01) }
+    private var maxBarTokens: Int { max(snapshot.daily.map(\.totalTokens).max() ?? 0, 1) }
 
     var body: some View {
         let last30 = snapshot.last30Days
@@ -3374,12 +3428,14 @@ struct ClaudeAdminUsageChartCard: View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(snapshot.daily) { day in
-                    let fraction = day.costUSD > 0 ? CGFloat(day.costUSD / maxBarUSD) : 0
-                    let barHeight = max(geo.size.height * fraction, day.costUSD > 0 ? 3 : 1)
+                    let hasTokens = day.totalTokens > 0
+                    let fraction = UsageChartScaling.fraction(
+                        value: Double(day.totalTokens), maximum: Double(maxBarTokens))
+                    let barHeight = max(geo.size.height * fraction, hasTokens ? 3 : 1)
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(VocabbyTheme.activityChartBarColor(
                             isCurrent: day.id == snapshot.daily.last?.id,
-                            hasActivity: day.costUSD > 0
+                            hasActivity: day.totalTokens > 0
                         ))
                         .frame(maxWidth: .infinity, maxHeight: geo.size.height, alignment: .bottom)
                         .frame(height: barHeight, alignment: .bottom)

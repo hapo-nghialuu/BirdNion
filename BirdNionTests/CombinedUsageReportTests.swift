@@ -222,6 +222,27 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertTrue(r.topModels.contains { $0.source == "grok" && $0.name == "grok-4.5" })
     }
 
+    func testTokenOnlyUsageRemainsActive() {
+        let claude = claudeReport(
+            daily: [claudeDay(0, usd: 0, tokens: 1234)],
+            last30Tokens: 1234)
+
+        let r = CombinedUsageReport.build(claude: claude, codex: nil,
+                                          calendar: calendar, now: now)
+
+        XCTAssertFalse(r.isEmpty)
+        XCTAssertEqual(r.activeDays, 1)
+        XCTAssertTrue(r.daily.last?.isActive == true)
+        XCTAssertEqual(r.totalTokens, 1234)
+    }
+    func testUsageChartScalingUsesTokensNotCost() {
+        let tokenHeavy = UsageChartScaling.fraction(value: 10_000, maximum: 10_000)
+        let costHeavy = UsageChartScaling.fraction(value: 100, maximum: 10_000)
+
+        XCTAssertEqual(tokenHeavy, 1, accuracy: 0.001)
+        XCTAssertEqual(costHeavy, 0.01, accuracy: 0.001)
+        XCTAssertGreaterThan(tokenHeavy, costHeavy)
+    }
     func testDisabledSourcesExcludePreviouslyLoadedReports() {
         let claude = claudeReport(
             daily: [claudeDay(0, usd: 1, tokens: 10)],

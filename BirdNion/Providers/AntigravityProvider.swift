@@ -91,6 +91,23 @@ private struct AgProcessInfo {
     let extensionServerCSRFToken: String?
 }
 
+private final class AgPipeCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var capturedData = Data()
+
+    func store(_ data: Data) {
+        lock.lock()
+        capturedData = data
+        lock.unlock()
+    }
+
+    var data: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedData
+    }
+}
+
 private enum AgProcessDetector {
     static func detect(timeout: TimeInterval) async throws -> AgProcessInfo {
         let result = try await runCommand(
@@ -208,14 +225,31 @@ private enum AgProcessDetector {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: binary)
                 process.arguments = args
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = Pipe()
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
                 do {
                     try process.run()
                 } catch {
                     continuation.resume(throwing: AntigravityProviderError.portDetectionFailed("Không chạy được \(label): \(error.localizedDescription)"))
                     return
+                }
+                // Drain both pipes while the child is running. `ps` can emit
+                // more than a pipe buffer when Chromium/IDE processes have
+                // long command lines; waiting for exit before reading would
+                // deadlock and hide the Antigravity language server row.
+                let captures = (stdout: AgPipeCapture(), stderr: AgPipeCapture())
+                let readers = DispatchGroup()
+                readers.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    captures.stdout.store(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+                    readers.leave()
+                }
+                readers.enter()
+                DispatchQueue.global(qos: .utility).async {
+                    captures.stderr.store(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                    readers.leave()
                 }
                 // Respect timeout by terminating the process
                 let deadline = DispatchTime.now() + timeout
@@ -223,8 +257,8 @@ private enum AgProcessDetector {
                     if process.isRunning { process.terminate() }
                 }
                 process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
+                readers.wait()
+                let output = String(data: captures.stdout.data, encoding: .utf8) ?? ""
                 continuation.resume(returning: output)
             }
         }
@@ -252,7 +286,10 @@ private enum AgResponseParser {
         return (quotas, email, planName)
     }
 
-    /// Parse RetrieveUserQuotaSummary JSON response → quota groups
+    /// Parse RetrieveUserQuotaSummary JSON response → quota groups.
+    /// Server variants wrap groups under `quotaSummary`, `response`, or `summary`,
+    /// or emit them at the root (Vendor accepts response ?? summary ?? root).
+    /// A wrapper counts only when it actually contains groups.
     static func parseQuotaSummary(_ data: Data) throws -> (groups: [[String: Any]], email: String?, plan: String?) {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw AntigravityProviderError.parseFailed("Invalid JSON")
@@ -260,8 +297,14 @@ private enum AgResponseParser {
         if let code = json["code"] as? Int, code != 0 {
             throw AntigravityProviderError.apiError("gRPC code \(code)")
         }
-        let summary = json["quotaSummary"] as? [String: Any] ?? json
-        let groups = summary["groups"] as? [[String: Any]] ?? []
+        for key in ["quotaSummary", "response", "summary"] {
+            if let wrapper = json[key] as? [String: Any],
+               let groups = wrapper["groups"] as? [[String: Any]],
+               !groups.isEmpty {
+                return (groups, nil, nil)
+            }
+        }
+        let groups = json["groups"] as? [[String: Any]] ?? []
         return (groups, nil, nil)
     }
 
@@ -365,8 +408,10 @@ private enum AgCLIWarmSession {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = []
-        proc.standardOutput = Pipe()
-        proc.standardError = Pipe()
+        // agy is a long-lived warm-session process; discard logs so inherited
+        // pipes cannot fill up and block the process before it opens its port.
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
         // Chạy trong home directory để agy không bị lỗi chdir
         proc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         try proc.run()
@@ -439,7 +484,7 @@ private extension AntigravityProvider {
 
         var windowSeconds: Int {
             switch self {
-            case .session: return 300
+            case .session: return 18_000
             case .weekly: return 604_800
             }
         }
@@ -450,13 +495,22 @@ private extension AntigravityProvider {
         let interval: SemanticInterval
     }
 
+    private func isIgnoredQuotaMarker(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("image")
+            || lower.contains("lite")
+            || lower.contains("autocomplete")
+            || lower.contains("unknown")
+            || lower.contains("model_placeholder")
+            || lower.contains("model-placeholder")
+    }
+
     /// Reduce legacy model quotas to pool/interval windows. A missing interval
     /// marker stays an aggregate pool row instead of becoming a guessed 5-hour
     /// or weekly row.
     func quotaWindows(from quotas: [AgModelQuota]) -> [QuotaWindow] {
         let models = quotas.filter { q in
-            let text = (q.modelId + " " + q.label).lowercased()
-            return !text.contains("image") && !text.contains("lite") && !text.contains("autocomplete")
+            !isIgnoredQuotaMarker(q.modelId + " " + q.label)
         }
         var windowsByKey: [SemanticKey: QuotaWindow] = [:]
         var markedPools: Set<SemanticPool> = []
@@ -564,7 +618,8 @@ private extension AntigravityProvider {
                 let resetDescription = bucket["resetDescription"] as? String
                 let markerText = [groupTitle, groupDescription, bucketID, bucketTitle, resetDescription ?? ""]
                     .joined(separator: " ")
-                guard let pool = semanticPool(in: markerText),
+                guard !isIgnoredQuotaMarker(markerText),
+                      let pool = semanticPool(in: markerText),
                       let interval = semanticInterval(in: markerText)
                 else { continue }
                 let resetDate = (bucket["resetTime"] as? String).flatMap(parseDate)
@@ -899,5 +954,11 @@ final class AntigravityProvider: QuotaProvider {
 
     private func failure(_ message: String) -> ProviderStatus {
         ProviderStatus(id: id, displayName: displayName, windows: [], lastUpdated: Date(), error: message)
+    }
+
+    /// Test-only: parse a RetrieveUserQuotaSummary body into semantic windows.
+    func _parseQuotaSummaryForTesting(_ data: Data) throws -> [QuotaWindow] {
+        let (groups, _, _) = try AgResponseParser.parseQuotaSummary(data)
+        return quotaWindowsFromSummary(groups)
     }
 }

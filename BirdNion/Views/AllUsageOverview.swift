@@ -472,7 +472,7 @@ struct CombinedChartCard: View {
                           label: (is24h ? (vi ? "Grok (hôm nay) " : "Grok (today) ") : "Grok ")
                               + AllUsageFormat.tokensShort(is24h ? grokTodayTokens : windowTotals.grokTokens))
             }
-            // Per-source cost share rows (existing report totals only —
+            // Per-source token-share rows (existing report totals only —
             // no QuotaService / new data flow).
             if !is24h {
                 sourceShareRows
@@ -505,21 +505,21 @@ struct CombinedChartCard: View {
         .vocabbyCard()
     }
 
-    /// Full-width cost-share distribution bar (GitHub language-bar style) +
+    /// Full-width token-share distribution bar (GitHub language-bar style) +
     /// compact legend rows. View-only over `windowTotals` — no data-path change.
     @ViewBuilder
     private var sourceShareRows: some View {
-        let rows: [(name: String, usd: Double, color: Color)] = [
-            ("Claude", windowTotals.claudeUSD, VocabbyTheme.chartClaude),
-            ("Codex", windowTotals.codexUSD, VocabbyTheme.chartCodex),
-            ("Grok", windowTotals.grokUSD, VocabbyTheme.chartGrok),
-        ].filter { $0.usd > 0 }
-        let total = max(rows.reduce(0) { $0 + $1.usd }, 0.01)
+        let rows: [(name: String, usd: Double, tokens: Int, color: Color)] = [
+            ("Claude", windowTotals.claudeUSD, windowTotals.claudeTokens, VocabbyTheme.chartClaude),
+            ("Codex", windowTotals.codexUSD, windowTotals.codexTokens, VocabbyTheme.chartCodex),
+            ("Grok", windowTotals.grokUSD, windowTotals.grokTokens, VocabbyTheme.chartGrok),
+        ].filter { $0.tokens > 0 }
+        let total = max(rows.reduce(0) { $0 + $1.tokens }, 1)
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 GeometryReader { geo in
                     let widths = Self.segmentWidths(
-                        shares: rows.map { CGFloat($0.usd / total) },
+                        shares: rows.map { CGFloat(Double($0.tokens) / Double(total)) },
                         totalWidth: geo.size.width,
                         minWidth: 3)
                     HStack(spacing: 0) {
@@ -536,7 +536,7 @@ struct CombinedChartCard: View {
 
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        let share = row.usd / total
+                        let share = Double(row.tokens) / Double(total)
                         HStack(spacing: 8) {
                             Circle().fill(row.color).frame(width: 7, height: 7)
                             Text(row.name)

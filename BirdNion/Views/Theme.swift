@@ -117,6 +117,10 @@ enum VocabbyTheme {
     static let kiro       = fixed(0x8B47F9)    // Kiro violet, icon gradient mid
     static let openCode   = fixed(0x3B82F6)
     static let antigravity = fixed(0x60BA7E)
+    static let googleBlue = fixed(0x4285F4)
+    static let googleRed = fixed(0xEA4335)
+    static let googleYellow = fixed(0xFBBC05)
+    static let googleGreen = fixed(0x34A853)
     static let bedrock    = fixed(0xFF9900)    // AWS
     static let hiyo       = fixed(0x00A8E8)
 

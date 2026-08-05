@@ -1452,4 +1452,83 @@ final class NewProviderTests: XCTestCase {
         XCTAssertTrue(HiyoKeyStore.allKeys(url: url, defaults: defaults).isEmpty)
         XCTAssertNil(HiyoKeyStore.activeApiKey(url: url, defaults: defaults))
     }
+
+    // MARK: Antigravity quota-summary parsing
+
+    /// Server wraps groups under "response" (Vendor-accepted variant). All four
+    /// semantic windows must come out in canonical order with correct values.
+    func testAntigravitySummaryResponseWrapperFourBuckets() throws {
+        let json = """
+        {"response":{"groups":[
+          {"displayName":"Gemini","buckets":[
+            {"bucketId":"gemini-5h","displayName":"5-hour","remainingFraction":0.8,
+             "resetTime":"2099-01-01T00:00:00Z"},
+            {"bucketId":"gemini-weekly","displayName":"Weekly","remainingFraction":0.6},
+            {"bucketId":"gemini-lite-weekly","displayName":"Weekly","remainingFraction":0.1},
+            {"bucketId":"gemini-weekly-disabled","displayName":"Weekly","disabled":true,
+             "remainingFraction":0.1}]},
+          {"displayName":"Claude/GPT","buckets":[
+            {"bucketId":"claude-gpt-5h","displayName":"5-hour",
+             "remaining":{"case":"remainingFraction","value":0.45}},
+            {"bucketId":"claude-gpt-weekly","displayName":"Weekly","remainingFraction":0.25}]}]}}
+        """.data(using: .utf8)!
+        let windows = try AntigravityProvider()._parseQuotaSummaryForTesting(json)
+        XCTAssertEqual(windows.map(\.label),
+                       ["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"])
+        XCTAssertEqual(windows.map(\.remainingPct), [80, 60, 45, 25])
+        XCTAssertEqual(windows.map(\.windowSeconds), [18_000, 604_800, 18_000, 604_800])
+        XCTAssertNotNil(windows.first?.resetDate)
+    }
+
+    /// "summary" wrapper and bare root groups must also parse (legacy variants).
+    func testAntigravitySummaryAndRootWrappersParse() throws {
+        let group = """
+        {"displayName":"Gemini","buckets":[
+          {"bucketId":"gemini-5h","displayName":"5-hour","remainingFraction":0.5}]}
+        """
+        for body in ["{\"summary\":{\"groups\":[\(group)]}}", "{\"groups\":[\(group)]}"] {
+            let windows = try AntigravityProvider()
+                ._parseQuotaSummaryForTesting(body.data(using: .utf8)!)
+            XCTAssertEqual(windows.map(\.label), ["Gemini 5-hour"], "body: \(body)")
+            XCTAssertEqual(windows.first?.remainingPct, 50)
+        }
+    }
+
+    func testAntigravityActualSummaryShapeMapsSemanticBuckets() throws {
+        let json = """
+        {"response":{"groups":[
+          {"displayName":"Gemini Models",
+           "description":"Models within this group: Gemini Flash, Gemini Pro",
+           "buckets":[
+             {"bucketId":"gemini-weekly","displayName":"Weekly Limit",
+              "remainingFraction":0.6380629},
+             {"bucketId":"gemini-5h","displayName":"Five Hour Limit",
+              "remainingFraction":1}]},
+          {"displayName":"Claude and GPT models","buckets":[
+             {"bucketId":"3p-weekly","displayName":"Weekly Limit",
+              "remainingFraction":1},
+             {"bucketId":"3p-5h","displayName":"Five Hour Limit",
+              "remainingFraction":1}]}]}}
+        """.data(using: .utf8)!
+        let windows = try AntigravityProvider()._parseQuotaSummaryForTesting(json)
+        XCTAssertEqual(windows.map(\.label),
+                       ["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"])
+        XCTAssertEqual(windows.map(\.remainingPct), [100, 64, 100, 100])
+        XCTAssertEqual(windows.map(\.windowSeconds), [18_000, 604_800, 18_000, 604_800])
+    }
+
+    /// No weekly/week marker anywhere → no weekly row may be synthesized, even
+    /// with a 7-day-style reset countdown text.
+    func testAntigravityNoWeeklyMarkerEmitsNoWeeklyRow() throws {
+        let json = """
+        {"response":{"groups":[
+          {"displayName":"Gemini","buckets":[
+            {"bucketId":"gemini-prompts","displayName":"Prompts","remainingFraction":0.9,
+             "description":"Resets in 7 days"}]}]}}
+        """.data(using: .utf8)!
+        let windows = try AntigravityProvider()._parseQuotaSummaryForTesting(json)
+        XCTAssertFalse(windows.contains { $0.label.lowercased().contains("week") })
+        XCTAssertTrue(windows.isEmpty)
+    }
+
 }

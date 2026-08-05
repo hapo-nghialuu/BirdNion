@@ -1,6 +1,6 @@
 // The "All" overview tab — port of the macOS AllUsageOverview cards
 // (remake polish d2852ed4 / 4852ab68 / 986f49a8):
-// total-cost hero + period picker + stacked bars + cost share bar,
+// total-cost hero + period picker + stacked bars + token-share bar,
 // click-to-pin day detail (compact model rows), 120-day heatmap, top models.
 
 import {
@@ -118,11 +118,11 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
         legendDot("codex", `Codex ${tokensShort(wCodexTokens)}`),
         legendDot("grok", `Grok ${tokensShort(wGrokTokens)}`));
       card.append(legend);
-      // Cost share bar + rows (macOS sourceShareRows) — period USD split.
+      // Token-share bar + rows (macOS sourceShareRows) — USD stays in row labels.
       card.append(sourceShareSection([
-        { name: "Claude", usd: wClaudeUsd, css: "claude" },
-        { name: "Codex", usd: wCodexUsd, css: "codex" },
-        { name: "Grok", usd: wGrokUsd, css: "grok" },
+        { name: "Claude", usd: wClaudeUsd, tokens: wClaudeTokens, css: "claude" },
+        { name: "Codex", usd: wCodexUsd, tokens: wCodexTokens, css: "codex" },
+        { name: "Grok", usd: wGrokUsd, tokens: wGrokTokens, css: "grok" },
       ]));
       if (!detailHidden && pinnedDay && windowDaily.some((d) => d.date === pinnedDay!.date)) {
         showDayDetail(detail, pinnedDay);
@@ -135,19 +135,19 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
   return card;
 }
 
-/** Full-width cost-share capsule + compact % / $ rows (view-only over totals). */
+/** Full-width token-share capsule + compact % / USD rows (view-only over totals). */
 function sourceShareSection(
-  rows: { name: string; usd: number; css: string }[],
+  rows: { name: string; usd: number; tokens: number; css: string }[],
 ): HTMLElement {
   const wrap = el("div", "share-section");
-  const active = rows.filter((r) => r.usd > 0);
+  const active = rows.filter((r) => r.tokens > 0);
   if (active.length === 0) return wrap;
-  const total = Math.max(active.reduce((s, r) => s + r.usd, 0), 0.01);
+  const total = Math.max(active.reduce((s, r) => s + r.tokens, 0), 1);
 
   const bar = el("div", "share-bar");
   for (const r of active) {
     const seg = el("div", `share-seg ${r.css}`);
-    const pct = Math.max((r.usd / total) * 100, 1.5);
+    const pct = Math.max((r.tokens / total) * 100, 1.5);
     seg.style.flexGrow = String(pct);
     seg.style.flexBasis = "0";
     bar.append(seg);
@@ -160,7 +160,7 @@ function sourceShareSection(
     const row = el("div", "share-row");
     const left = el("span", "legend-item");
     left.append(el("span", `dot ${r.css}`), el("span", "share-name", r.name));
-    const sharePct = Math.round((r.usd / total) * 100);
+    const sharePct = Math.round((r.tokens / total) * 100);
     row.append(
       left,
       el("span", "share-pct", `${sharePct}%`),

@@ -1,5 +1,5 @@
 // Claude Admin API org dashboard card — port of `ClaudeAdminUsageChartCard`
-// in QuotaPanel.swift: 30d + latest cost/tokens columns, per-day cost bars,
+// in QuotaPanel.swift: 30d + latest cost/tokens columns, per-day token bars,
 // top model + top cost line. Rendered on the claude tab only when an admin
 // key is configured and the snapshot fetch succeeds.
 
@@ -45,18 +45,17 @@ export function adminChartCard(snapshot: ClaudeAdminSnapshot): HTMLElement {
   summary.append(summaryColumn(vi ? "Mới nhất" : "Latest", snapshot.latestDay.costUsd, snapshot.latestDay.totalTokens, true));
   card.append(summary);
 
-  const max = Math.max(...snapshot.daily.map((d) => d.costUsd), 0.01);
+  const max = Math.max(...snapshot.daily.map((d) => d.totalTokens), 1);
   const chart = el("div", "bar-chart");
   for (const day of snapshot.daily) {
     const col = el("div", "bar-col");
     col.title = `${day.day}: ${usd(day.costUsd)} · ${tokens(day.totalTokens)}`;
-    if (day.costUsd > 0) {
-      const bar = el("div", "bar-seg solo mono");
-      bar.style.height = `${Math.max((day.costUsd / max) * 100, 5)}%`;
-      col.append(bar);
-    } else {
-      col.append(el("div", "bar-idle"));
+    const hasTokens = day.totalTokens > 0;
+    const bar = hasTokens ? el("div", "bar-seg solo mono") : el("div", "bar-idle");
+    if (hasTokens) {
+      bar.style.height = `${Math.max((day.totalTokens / max) * 100, 5)}%`;
     }
+    col.append(bar);
     chart.append(col);
   }
   card.append(chart);

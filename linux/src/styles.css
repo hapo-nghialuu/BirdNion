@@ -372,7 +372,7 @@ html.popover-capped .app-body {
   color: var(--text3);
 }
 
-/* Cost share bar + rows */
+/* Token-share bar + rows; USD stays in row labels */
 .share-section {
   display: flex;
   flex-direction: column;

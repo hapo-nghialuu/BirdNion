@@ -1,5 +1,5 @@
 // Single-source 30-day chart card — port of the macOS ClaudeUsageChartCard /
-// CodexUsageChartCard: today + 30d summary, per-day USD bars, hovered-day
+// CodexUsageChartCard: today + 30d summary, per-day token bars, hovered-day
 // per-model breakdown, estimated-total footer.
 
 import { DailyUsage, UsageReport, usd, tokens, tokensAndUsd, dayLabel } from "./usage";
