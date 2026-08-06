@@ -138,6 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // System monospaced digit font so the quota numbers keep a stable
             // width as the digits change frame to frame.
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+            button.cell?.wraps = true
+            button.cell?.usesSingleLineMode = false
+            button.cell?.lineBreakMode = .byWordWrapping
         }
         applyCurrentFrame()
 
@@ -479,6 +482,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// brand mark right). Bird frame is image-only (no title).
     private func applyCurrentFrame() {
         guard let button = statusItem?.button else { return }
+        // Clear any stacked-title attributes before rendering the next frame.
+        button.attributedTitle = NSAttributedString(string: "")
         let frame = frames.indices.contains(frameIndex) ? frames[frameIndex] : .bird
         switch frame {
         case .bird:
@@ -489,14 +494,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Percent on the left, brand logo on the right — never the
             // provider display name in the title (that lives in the tooltip
             // / popover). Trailing space keeps the last digit off the logo.
+            let isStacked = text == nil && percents.count == 2
+            if isStacked {
+                button.imagePosition = .imageOnly
+                button.image = MenuBarIconRenderer.stackedProviderImage(
+                    for: id, percents: percents)
+                button.title = ""
+                break
+            }
+
             button.imagePosition = .imageRight
             button.image = MenuBarIconRenderer.providerLogo(for: id)
+            let menuBarFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+            button.font = menuBarFont
             if let text {
                 // Display-mode override (Kiro credits). Empty = logo only.
                 button.title = text.isEmpty ? "" : "\(text) "
             } else {
-                let numbers = MenuBarIconRenderer.percentTitle(for: percents)
-                button.title = "\(numbers) "
+                let numbers = MenuBarIconRenderer.percentTitle(for: percents, layout: .inline)
+                let title = "\(numbers) "
+                button.title = title
             }
         }
     }

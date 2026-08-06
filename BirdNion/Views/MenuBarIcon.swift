@@ -25,10 +25,89 @@ enum MenuBarIconRenderer {
         case provider(id: String, name: String, percents: [Int], text: String?)
     }
 
-    static func percentTitle(for percents: [Int]) -> String {
+    enum PercentTitleLayout {
+        case inline
+        case stacked
+
+        var separator: String {
+            switch self {
+            case .inline: return "  "
+            case .stacked: return "\n"
+            }
+        }
+    }
+
+    static func percentTitle(
+        for percents: [Int],
+        layout: PercentTitleLayout = .inline
+    ) -> String {
         percents
             .map { value in "\(max(0, min(100, value)))%" }
-            .joined(separator: "  ")
+            .joined(separator: layout.separator)
+    }
+
+    static let stackedTitleBaselineOffset: CGFloat = 0
+    static let stackedTitleFontSize: CGFloat = 9
+    static let stackedTitleLineSpacing: CGFloat = -4
+    static let stackedProviderLogoGap: CGFloat = 1
+    static let stackedProviderImageHeight: CGFloat = 22
+    static let providerLogoBasePointSize: CGFloat = 18
+    static let freemodelLogoScale: CGFloat = 1.1
+
+    static func attributedStackedTitle(_ title: String, font: NSFont) -> NSAttributedString {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = stackedTitleLineSpacing
+        return NSAttributedString(
+            string: title,
+            attributes: [
+                .baselineOffset: stackedTitleBaselineOffset,
+                .font: font,
+                .paragraphStyle: paragraphStyle,
+                .foregroundColor: NSColor.controlTextColor,
+            ])
+    }
+
+    /// Render the exact-two-value provider frame as one template image. This
+    /// avoids AppKit's relaunch-dependent multiline title positioning while
+    /// keeping the native status-button cell for all other frames.
+    static func stackedProviderImage(for id: String, percents: [Int]) -> NSImage {
+        let title = percentTitle(for: Array(percents.prefix(2)), layout: .stacked)
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: stackedTitleFontSize, weight: .semibold)
+        let attributedTitle = attributedStackedTitle(title, font: font)
+        let measured = attributedTitle.boundingRect(
+            with: NSSize(width: 200, height: stackedProviderImageHeight),
+            options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let textWidth = ceil(max(1, measured.width))
+        let logoSize = providerLogoPointSize(for: id)
+        let targetSize = NSSize(
+            width: textWidth + stackedProviderLogoGap + logoSize,
+            height: stackedProviderImageHeight)
+        let image = NSImage(size: targetSize)
+
+        image.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        attributedTitle.draw(
+            with: NSRect(
+                x: 0,
+                y: 2,
+                width: textWidth,
+                height: targetSize.height - 2),
+            options: [.usesLineFragmentOrigin, .usesFontLeading])
+
+        let logo = providerLogo(for: id, pointSize: logoSize)
+        logo.draw(
+            in: NSRect(
+                x: textWidth + stackedProviderLogoGap,
+                y: (targetSize.height - logoSize) / 2,
+                width: logoSize,
+                height: logoSize),
+            from: NSRect(origin: .zero, size: logo.size),
+            operation: .sourceOver,
+            fraction: 1)
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
     }
 
     /// Build the displayed frames. With the global setting off, or with no
@@ -115,7 +194,7 @@ enum MenuBarIconRenderer {
                 return .provider(id: status.id, name: status.displayName, percents: [avg], text: "Avg \(avg)%")
             }
 
-            if let window = MenuBarMetricResolver.resolve(
+            if let selectedWindows = MenuBarMetricResolver.resolve(
                 windows: windows,
                 preference: pref,
                 supportsAverage: caps.supportsAverage,
@@ -124,7 +203,9 @@ enum MenuBarIconRenderer {
                 supportsExtraUsage: caps.hasExtraUsage,
                 hasMonthlyPlan: hasMonthlyPlan
             ) {
-                return .provider(id: status.id, name: status.displayName, percents: [window.remainingPct], text: nil)
+                let percents = selectedWindows.map(\.remainingPct)
+                guard !percents.isEmpty else { return nil }
+                return .provider(id: status.id, name: status.displayName, percents: percents, text: nil)
             }
             return nil
         }
@@ -288,7 +369,18 @@ enum MenuBarIconRenderer {
 
     /// Brand logo for a provider id, scaled as a monochrome template so AppKit
     /// applies the correct menu-bar foreground color in every appearance.
-    static func providerLogo(for id: String, pointSize: CGFloat = 18) -> NSImage {
+    static func providerLogoPointSize(
+        for id: String,
+        base: CGFloat = 18
+    ) -> CGFloat {
+        ["freemodel", "claude"].contains(id) ? base * freemodelLogoScale : base
+    }
+
+    static func providerLogo(
+        for id: String,
+        pointSize: CGFloat = 18
+    ) -> NSImage {
+        let effectivePointSize = providerLogoPointSize(for: id, base: pointSize)
         let providerAsset: String
         switch id {
         case "minimax": providerAsset = "MiniMaxLogo"
@@ -320,10 +412,10 @@ enum MenuBarIconRenderer {
         case "bedrock": providerAsset = "BedrockLogo"
         case "hiyo": providerAsset = "HiyoLogo"
         default:
-            return fallbackLogo(pointSize)
+            return fallbackLogo(effectivePointSize)
         }
-        return scaled(NSImage(named: providerAsset), to: pointSize, isTemplate: true)
-            ?? fallbackLogo(pointSize)
+        return scaled(NSImage(named: providerAsset), to: effectivePointSize, isTemplate: true)
+            ?? fallbackLogo(effectivePointSize)
     }
 
     /// Neutral, theme-aware logo for providers without a brand asset.
@@ -400,7 +492,7 @@ enum MenuBarMetricPreference: String, CaseIterable, Identifiable {
 }
 
 /// Pure resolver: given a provider's windows, the user's preference, and
-/// capability flags, return the single window that should drive the menu bar
+/// capability flags, return the windows that should drive the menu bar
 /// (or nil for `.average` which is rendered as text by the caller).
 enum MenuBarMetricResolver {
     static func resolve(
@@ -411,7 +503,7 @@ enum MenuBarMetricResolver {
         supportsTertiary: Bool,
         supportsExtraUsage: Bool,
         hasMonthlyPlan: Bool
-    ) -> QuotaWindow? {
+    ) -> [QuotaWindow]? {
         // Fallback to automatic if the selected preference isn't supported.
         let effectivePref: MenuBarMetricPreference
         switch preference {
@@ -431,25 +523,26 @@ enum MenuBarMetricResolver {
 
         switch effectivePref {
         case .automatic:
-            return automaticWindow(windows)
+            return automaticWindow(windows).map { [$0] }
         case .primary:
-            return windows.first
+            return windows.first.map { [$0] }
         case .secondary:
-            return windows.dropFirst().first
+            return windows.dropFirst().first.map { [$0] }
         case .primaryAndSecondary:
-            // Show primary for icon; tooltip shows both. Return primary window.
-            return windows.first
+            let selected = Array(windows.prefix(2))
+            return selected.isEmpty ? nil : selected
         case .tertiary:
-            return windows.dropFirst(2).first
+            return windows.dropFirst(2).first.map { [$0] }
         case .extraUsage:
             return windows.first { $0.label.localizedCaseInsensitiveContains("extra") }
+                .map { [$0] }
         case .average:
             // Average is rendered as text by the caller; return nil sentinel.
             return nil
         case .monthlyPlan:
             return windows.first { w in
                 w.label.localizedCaseInsensitiveContains("monthly") || w.label.localizedCaseInsensitiveContains("plan")
-            }
+            }.map { [$0] }
         }
     }
 
