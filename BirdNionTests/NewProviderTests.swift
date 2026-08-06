@@ -1053,6 +1053,10 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(resolved, [window])
     }
 
+    func testAntigravityQuotaBarUsesCompactHeight() {
+        XCTAssertEqual(QuotaBarLayout.compactHeight, 4, accuracy: 0.001)
+    }
+
     func testMenuBarFramesRenderConfiguredPrimaryAndSecondaryValues() {
         let key = "menuBarMetricPreferencesJSON"
         let previous = UserDefaults.standard.object(forKey: key)

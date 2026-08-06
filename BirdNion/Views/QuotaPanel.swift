@@ -1719,6 +1719,10 @@ struct WindowRow: View {
 /// Remaining-quota capsule bar with an optional CodexBar-style pace marker: a
 /// thin neutral stripe at the position usage "should" be if consumption were
 /// linear over the window. Fill left of the stripe = reserve, right = deficit.
+enum QuotaBarLayout {
+    static let compactHeight: CGFloat = 4
+}
+
 struct QuotaBarWithPaceMarker: View {
     let remainingPct: Int
     let fillColor: Color
@@ -1730,10 +1734,12 @@ struct QuotaBarWithPaceMarker: View {
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(VocabbyTheme.track)
-                    .frame(height: 4)
+                    .frame(height: QuotaBarLayout.compactHeight)
                 Capsule()
                     .fill(fillColor)
-                    .frame(width: max(0, geo.size.width * CGFloat(remainingPct) / 100), height: 4)
+                    .frame(
+                        width: max(0, geo.size.width * CGFloat(remainingPct) / 100),
+                        height: QuotaBarLayout.compactHeight)
                 if let marker = markerPct, marker > 0.5, marker < 99.5 {
                     // Taller-than-bar stripe like CodexBar's pace tip.
                     RoundedRectangle(cornerRadius: 0.5)
@@ -1743,7 +1749,7 @@ struct QuotaBarWithPaceMarker: View {
                 }
             }
         }
-        .frame(height: 4)
+        .frame(height: QuotaBarLayout.compactHeight)
     }
 }
 
@@ -1892,7 +1898,7 @@ private struct AntigravityQuotaBar: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 6)
+        .frame(height: QuotaBarLayout.compactHeight)
     }
 }
 
