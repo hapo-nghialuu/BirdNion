@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import BirdNion
 
@@ -960,6 +961,124 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [76]), "76%")
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [93, 82]), "93%  82%")
         XCTAssertEqual(MenuBarIconRenderer.percentTitle(for: [-4, 120]), "0%  100%")
+    }
+
+    func testMenuBarStackedTitleUsesDownwardBaselineAndDynamicTextColor() {
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: MenuBarIconRenderer.stackedTitleFontSize, weight: .semibold)
+        let title = MenuBarIconRenderer.attributedStackedTitle("93%\n82% ", font: font)
+
+        XCTAssertEqual(MenuBarIconRenderer.stackedTitleBaselineOffset, 0)
+        XCTAssertEqual(MenuBarIconRenderer.stackedTitleFontSize, 9)
+        XCTAssertEqual(MenuBarIconRenderer.stackedTitleLineSpacing, -4)
+        XCTAssertEqual(title.string, "93%\n82% ")
+        XCTAssertEqual(
+            title.attribute(.baselineOffset, at: 0, effectiveRange: nil) as? CGFloat,
+            MenuBarIconRenderer.stackedTitleBaselineOffset)
+        XCTAssertEqual(title.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, font)
+        XCTAssertEqual(
+            (title.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing,
+            MenuBarIconRenderer.stackedTitleLineSpacing)
+        XCTAssertEqual(
+            title.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            NSColor.controlTextColor)
+    }
+
+    func testMenuBarStackedProviderImageUsesCompactTemplateCanvas() {
+        let image = MenuBarIconRenderer.stackedProviderImage(
+            for: "claude", percents: [93, 82])
+
+        XCTAssertTrue(image.isTemplate)
+        XCTAssertEqual(image.size.height, MenuBarIconRenderer.stackedProviderImageHeight)
+        XCTAssertGreaterThan(image.size.width, image.size.height)
+    }
+
+    func testSelectedProviderLogosAreTenPercentLarger() {
+        XCTAssertEqual(
+            MenuBarIconRenderer.providerLogoPointSize(for: "freemodel"),
+            19.8,
+            accuracy: 0.001)
+        XCTAssertEqual(
+            MenuBarIconRenderer.providerLogoPointSize(for: "claude"),
+            19.8,
+            accuracy: 0.001)
+        XCTAssertEqual(
+            MenuBarIconRenderer.providerLogoPointSize(for: "codex"),
+            18,
+            accuracy: 0.001)
+    }
+
+    func testMenuBarPlainTitleClearsStackedAttributes() {
+        let button = NSButton()
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        button.attributedTitle = MenuBarIconRenderer.attributedStackedTitle(
+            "93%\n82% ", font: font)
+
+        button.attributedTitle = NSAttributedString(string: "")
+        button.title = "76% "
+
+        XCTAssertEqual(button.title, "76% ")
+        XCTAssertEqual(button.attributedTitle.string, "76% ")
+        XCTAssertNil(button.attributedTitle.attribute(.baselineOffset, at: 0, effectiveRange: nil))
+    }
+
+    func testMenuBarMetricResolverPreservesPrimaryAndSecondaryValues() {
+        let windows = [
+            QuotaWindow(label: "5h", usedPct: 7, remainingPct: 93),
+            QuotaWindow(label: "Week", usedPct: 18, remainingPct: 82),
+        ]
+        let resolved = MenuBarMetricResolver.resolve(
+            windows: windows,
+            preference: .primaryAndSecondary,
+            supportsAverage: false,
+            supportsPrimaryAndSecondary: true,
+            supportsTertiary: false,
+            supportsExtraUsage: false,
+            hasMonthlyPlan: false)
+
+        XCTAssertEqual(resolved, windows)
+    }
+
+    func testMenuBarMetricResolverUsesSingleValueWhenSecondaryMissing() {
+        let window = QuotaWindow(label: "5h", usedPct: 7, remainingPct: 93)
+        let resolved = MenuBarMetricResolver.resolve(
+            windows: [window],
+            preference: .primaryAndSecondary,
+            supportsAverage: false,
+            supportsPrimaryAndSecondary: true,
+            supportsTertiary: false,
+            supportsExtraUsage: false,
+            hasMonthlyPlan: false)
+
+        XCTAssertEqual(resolved, [window])
+    }
+
+    func testMenuBarFramesRenderConfiguredPrimaryAndSecondaryValues() {
+        let key = "menuBarMetricPreferencesJSON"
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        UserDefaults.standard.set(
+            "{\"claude\":\"primaryAndSecondary\"}", forKey: key)
+
+        let status = ProviderStatus(
+            id: "claude",
+            displayName: "Claude",
+            windows: [
+                QuotaWindow(label: "5h", usedPct: 7, remainingPct: 93),
+                QuotaWindow(label: "Week", usedPct: 18, remainingPct: 82),
+            ],
+            lastUpdated: Date())
+
+        XCTAssertEqual(
+            MenuBarIconRenderer.frames(
+                from: [status], showPercent: true, visibility: { _ in true }),
+            [.provider(id: "claude", name: "Claude", percents: [93, 82], text: nil)])
     }
 
     func testMenuBarProviderLogosAreMonochromeTemplates() {
