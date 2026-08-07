@@ -56,6 +56,7 @@ enum MenuBarIconRenderer {
 
     static func attributedStackedTitle(_ title: String, font: NSFont) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .right
         paragraphStyle.lineSpacing = stackedTitleLineSpacing
         return NSAttributedString(
             string: title,

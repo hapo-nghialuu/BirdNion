@@ -984,6 +984,16 @@ final class NewProviderTests: XCTestCase {
             NSColor.controlTextColor)
     }
 
+    func testMenuBarStackedTitleRightAlignsPercentColumns() {
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: MenuBarIconRenderer.stackedTitleFontSize, weight: .semibold)
+        let title = MenuBarIconRenderer.attributedStackedTitle("100%\n64%", font: font)
+        let paragraphStyle = title.attribute(
+            .paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+
+        XCTAssertEqual(paragraphStyle?.alignment, .right)
+    }
+
     func testMenuBarStackedProviderImageUsesCompactTemplateCanvas() {
         let image = MenuBarIconRenderer.stackedProviderImage(
             for: "claude", percents: [93, 82])
