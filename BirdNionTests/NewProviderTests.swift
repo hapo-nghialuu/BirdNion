@@ -968,20 +968,24 @@ final class NewProviderTests: XCTestCase {
             ofSize: MenuBarIconRenderer.stackedTitleFontSize, weight: .semibold)
         let title = MenuBarIconRenderer.attributedStackedTitle("93%\n82% ", font: font)
 
-        XCTAssertEqual(MenuBarIconRenderer.stackedTitleBaselineOffset, 0)
         XCTAssertEqual(MenuBarIconRenderer.stackedTitleFontSize, 9)
-        XCTAssertEqual(MenuBarIconRenderer.stackedTitleLineSpacing, -4)
         XCTAssertEqual(title.string, "93%\n82% ")
-        XCTAssertEqual(
-            title.attribute(.baselineOffset, at: 0, effectiveRange: nil) as? CGFloat,
-            MenuBarIconRenderer.stackedTitleBaselineOffset)
         XCTAssertEqual(title.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, font)
         XCTAssertEqual(
             (title.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing,
-            MenuBarIconRenderer.stackedTitleLineSpacing)
+            0)
         XCTAssertEqual(
             title.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
             NSColor.controlTextColor)
+    }
+
+    func testMenuBarStackedPercentLinesKeepFiveHourAboveWeekly() {
+        XCTAssertEqual(
+            MenuBarIconRenderer.stackedPercentLines(for: [96, 98]),
+            ["96%", "98%"])
+        XCTAssertEqual(
+            MenuBarIconRenderer.stackedPercentLines(for: [-4, 120, 42]),
+            ["0%", "100%"])
     }
 
     func testMenuBarStackedTitleRightAlignsPercentColumns() {
@@ -1093,6 +1097,96 @@ final class NewProviderTests: XCTestCase {
             MenuBarIconRenderer.frames(
                 from: [status], showPercent: true, visibility: { _ in true }),
             [.provider(id: "claude", name: "Claude", percents: [93, 82], text: nil)])
+    }
+
+    func testClaudeAutomaticMenuBarFramesShowFiveHourAndWeeklyValues() {
+        let key = "menuBarMetricPreferencesJSON"
+        let legacyKey = "menuBarMetric.claude"
+        let previous = UserDefaults.standard.object(forKey: key)
+        let previousLegacy = UserDefaults.standard.object(forKey: legacyKey)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+            if let previousLegacy {
+                UserDefaults.standard.set(previousLegacy, forKey: legacyKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: legacyKey)
+            }
+        }
+        UserDefaults.standard.set("{}", forKey: key)
+        UserDefaults.standard.removeObject(forKey: legacyKey)
+
+        let status = ProviderStatus(
+            id: "claude",
+            displayName: "Claude",
+            windows: [
+                QuotaWindow(label: "5 giờ", usedPct: 7, remainingPct: 93),
+                QuotaWindow(label: "Tuần", usedPct: 18, remainingPct: 82),
+                QuotaWindow(label: "Opus", usedPct: 1, remainingPct: 99),
+            ],
+            lastUpdated: Date())
+
+        XCTAssertEqual(
+            MenuBarIconRenderer.frames(
+                from: [status], showPercent: true, visibility: { _ in true }),
+            [.provider(id: "claude", name: "Claude", percents: [93, 82], text: nil)])
+    }
+
+    func testClaudeAutomaticMenuBarFramesFallBackWhenWeeklyWindowMissing() {
+        let key = "menuBarMetricPreferencesJSON"
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        UserDefaults.standard.set("{}", forKey: key)
+
+        let status = ProviderStatus(
+            id: "claude",
+            displayName: "Claude",
+            windows: [
+                QuotaWindow(label: "5 giờ", usedPct: 7, remainingPct: 93),
+                QuotaWindow(label: "Opus", usedPct: 1, remainingPct: 99),
+            ],
+            lastUpdated: Date())
+
+        XCTAssertEqual(
+            MenuBarIconRenderer.frames(
+                from: [status], showPercent: true, visibility: { _ in true }),
+            [.provider(id: "claude", name: "Claude", percents: [93], text: nil)])
+    }
+
+    func testClaudeSecondaryMetricStillShowsOnlyWeeklyValue() {
+        let key = "menuBarMetricPreferencesJSON"
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        UserDefaults.standard.set("{\"claude\":\"secondary\"}", forKey: key)
+
+        let status = ProviderStatus(
+            id: "claude",
+            displayName: "Claude",
+            windows: [
+                QuotaWindow(label: "5 giờ", usedPct: 7, remainingPct: 93),
+                QuotaWindow(label: "Tuần", usedPct: 18, remainingPct: 82),
+            ],
+            lastUpdated: Date())
+
+        XCTAssertEqual(
+            MenuBarIconRenderer.frames(
+                from: [status], showPercent: true, visibility: { _ in true }),
+            [.provider(id: "claude", name: "Claude", percents: [82], text: nil)])
     }
 
     func testMenuBarProviderLogosAreMonochromeTemplates() {

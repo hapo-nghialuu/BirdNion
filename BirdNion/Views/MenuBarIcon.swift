@@ -46,40 +46,43 @@ enum MenuBarIconRenderer {
             .joined(separator: layout.separator)
     }
 
-    static let stackedTitleBaselineOffset: CGFloat = 0
     static let stackedTitleFontSize: CGFloat = 9
-    static let stackedTitleLineSpacing: CGFloat = -4
     static let stackedProviderLogoGap: CGFloat = 1
-    static let stackedProviderImageHeight: CGFloat = 22
+    static let stackedProviderImageHeight: CGFloat = 24
     static let providerLogoBasePointSize: CGFloat = 18
     static let freemodelLogoScale: CGFloat = 1.1
 
     static func attributedStackedTitle(_ title: String, font: NSFont) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.alignment = .right
-        paragraphStyle.lineSpacing = stackedTitleLineSpacing
         return NSAttributedString(
             string: title,
             attributes: [
-                .baselineOffset: stackedTitleBaselineOffset,
                 .font: font,
                 .paragraphStyle: paragraphStyle,
                 .foregroundColor: NSColor.controlTextColor,
             ])
     }
 
+    static func stackedPercentLines(for percents: [Int]) -> [String] {
+        Array(percents.prefix(2)).map { value in
+            "\(max(0, min(100, value)))%"
+        }
+    }
+
     /// Render the exact-two-value provider frame as one template image. This
     /// avoids AppKit's relaunch-dependent multiline title positioning while
     /// keeping the native status-button cell for all other frames.
     static func stackedProviderImage(for id: String, percents: [Int]) -> NSImage {
-        let title = percentTitle(for: Array(percents.prefix(2)), layout: .stacked)
         let font = NSFont.monospacedDigitSystemFont(
             ofSize: stackedTitleFontSize, weight: .semibold)
-        let attributedTitle = attributedStackedTitle(title, font: font)
-        let measured = attributedTitle.boundingRect(
-            with: NSSize(width: 200, height: stackedProviderImageHeight),
-            options: [.usesLineFragmentOrigin, .usesFontLeading])
-        let textWidth = ceil(max(1, measured.width))
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.controlTextColor,
+        ]
+        let lines = stackedPercentLines(for: percents)
+        let lineWidths = lines.map { ($0 as NSString).size(withAttributes: attributes).width }
+        let textWidth = ceil(max(1, lineWidths.max() ?? 1))
         let logoSize = providerLogoPointSize(for: id)
         let targetSize = NSSize(
             width: textWidth + stackedProviderLogoGap + logoSize,
@@ -88,13 +91,17 @@ enum MenuBarIconRenderer {
 
         image.lockFocus()
         NSGraphicsContext.current?.imageInterpolation = .high
-        attributedTitle.draw(
-            with: NSRect(
-                x: 0,
-                y: 2,
-                width: textWidth,
-                height: targetSize.height - 2),
-            options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let lineHeight = ceil(font.ascender - font.descender)
+        let bottomY: CGFloat = 1
+        for (index, line) in lines.enumerated() {
+            let width = lineWidths[index]
+            let y = index == 0
+                ? targetSize.height - lineHeight - 1
+                : bottomY
+            (line as NSString).draw(
+                at: NSPoint(x: textWidth - width, y: y),
+                withAttributes: attributes)
+        }
 
         let logo = providerLogo(for: id, pointSize: logoSize)
         logo.draw(
@@ -195,15 +202,25 @@ enum MenuBarIconRenderer {
                 return .provider(id: status.id, name: status.displayName, percents: [avg], text: "Avg \(avg)%")
             }
 
-            if let selectedWindows = MenuBarMetricResolver.resolve(
-                windows: windows,
-                preference: pref,
-                supportsAverage: caps.supportsAverage,
-                supportsPrimaryAndSecondary: caps.hasPrimary && caps.hasSecondary,
-                supportsTertiary: caps.hasTertiary,
-                supportsExtraUsage: caps.hasExtraUsage,
-                hasMonthlyPlan: hasMonthlyPlan
-            ) {
+            let canonicalClaudeWindows = status.id == "claude" && pref == .automatic
+                ? claudeAutomaticWindows(windows)
+                : []
+            let selectedWindows: [QuotaWindow]?
+            if !canonicalClaudeWindows.isEmpty {
+                selectedWindows = canonicalClaudeWindows
+            } else {
+                selectedWindows = MenuBarMetricResolver.resolve(
+                    windows: windows,
+                    preference: pref,
+                    supportsAverage: caps.supportsAverage,
+                    supportsPrimaryAndSecondary: caps.hasPrimary && caps.hasSecondary,
+                    supportsTertiary: caps.hasTertiary,
+                    supportsExtraUsage: caps.hasExtraUsage,
+                    hasMonthlyPlan: hasMonthlyPlan
+                )
+            }
+
+            if let selectedWindows {
                 let percents = selectedWindows.map(\.remainingPct)
                 guard !percents.isEmpty else { return nil }
                 return .provider(id: status.id, name: status.displayName, percents: percents, text: nil)
@@ -292,6 +309,15 @@ enum MenuBarIconRenderer {
         // show it as-is instead of an empty title.
         if percents.isEmpty, let balance { return [balance.remainingPct] }
         return percents
+    }
+
+    /// Claude's default menu-bar readout mirrors FreeModel: show the two
+    /// canonical recurring budgets, in a stable 5-hour → weekly order. Opus
+    /// and extra-usage windows remain available to explicit metric choices.
+    static func claudeAutomaticWindows(_ windows: [QuotaWindow]) -> [QuotaWindow] {
+        ["5 giờ", "Tuần"].compactMap { label in
+            windows.first { $0.label == label }
+        }
     }
 
     // MARK: - Kiro menu-bar display mode
