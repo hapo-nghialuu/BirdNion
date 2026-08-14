@@ -100,7 +100,7 @@ final class ClaudeProvider: QuotaProvider {
         // Settings cost section via webExtras. Supplementary: they never take
         // over the lowest-quota headline.
         for extra in snapshot.extraRateWindows
-        where !extra.id.hasPrefix("claude-weekly-scoped-") {
+        where extra.usageKnown && !extra.id.hasPrefix("claude-weekly-scoped-") {
             let used = max(0, min(100, Int(extra.window.usedPercent.rounded())))
             windows.append(QuotaWindow(
                 label: extra.title, usedPct: used, remainingPct: 100 - used,
@@ -127,7 +127,7 @@ final class ClaudeProvider: QuotaProvider {
             sessionPercentUsed: snapshot.primary?.usedPercent,
             weeklyPercentUsed: snapshot.secondary?.usedPercent,
             opusPercentUsed: snapshot.opus?.usedPercent,
-            extraRateWindows: snapshot.extraRateWindows.map { named in
+            extraRateWindows: snapshot.extraRateWindows.filter(\.usageKnown).map { named in
                 ClaudeExtraRateWindow(
                     id: named.id, title: named.title,
                     usedPercent: Int(named.window.usedPercent.rounded()),
@@ -153,6 +153,7 @@ final class ClaudeProvider: QuotaProvider {
             planName: planName,
             cost: snapshot.providerCost,
             webExtras: extras,
+            sourceLabel: sourceLabel,
             claudeAdminUsage: snapshot.adminUsage)
     }
 

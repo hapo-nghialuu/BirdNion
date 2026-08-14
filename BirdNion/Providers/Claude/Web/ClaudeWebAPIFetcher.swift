@@ -4,7 +4,7 @@ import Foundation
 
 /// Usage data fetched directly from claude.ai API endpoints using a browser session cookie.
 struct ClaudeWebUsageData: Sendable {
-    let sessionPercentUsed: Double
+    let sessionPercentUsed: Double?
     let sessionResetsAt: Date?
     let weeklyPercentUsed: Double?
     let weeklyResetsAt: Date?
@@ -90,6 +90,22 @@ enum ClaudeWebAPIFetcher {
         try parseUsageResponse(data)
     }
 
+    /// Selects an organization from a canned `/organizations` response.
+    /// This keeps active-organization selection testable without cookies or network.
+    static func _selectOrganizationIDForTesting(
+        _ data: Data,
+        preferredOrganizationID: String?) throws -> String {
+        try parseOrganizationResponse(data, preferredOrganizationID: preferredOrganizationID).id
+    }
+
+    #if DEBUG
+    static func _cookieHeaderAfterSessionRotationForTesting(
+        _ header: String,
+        renewedSessionKey: String) -> String {
+        SessionKeyTracker.replacingSessionKey(in: header, with: renewedSessionKey)
+    }
+    #endif
+
     // MARK: - Core fetch
 
     private static func fetchUsage(
@@ -97,10 +113,13 @@ enum ClaudeWebAPIFetcher {
         session: URLSession) async throws -> ClaudeWebUsageData
     {
         // Use a tracker to pick up any Set-Cookie rotation during the session.
-        let tracker = SessionKeyTracker(initial: info.key)
+        let tracker = SessionKeyTracker(info: info)
 
-        let org = try await fetchOrganizationInfo(tracker: tracker, session: session)
-        var data = try await fetchUsageData(orgId: org.id, tracker: tracker, session: session)
+        let org = try await fetchOrganizationInfo(
+            preferredOrganizationID: info.activeOrganizationID,
+            tracker: tracker,
+            session: session)
+        let data = try await fetchUsageData(orgId: org.id, tracker: tracker, session: session)
 
         // Parallel best-effort fetches — failures do not abort the main result.
         async let accountInfoAsync = fetchAccountInfo(orgId: org.id, tracker: tracker, session: session)
@@ -145,6 +164,7 @@ enum ClaudeWebAPIFetcher {
     }
 
     private static func fetchOrganizationInfo(
+        preferredOrganizationID: String?,
         tracker: SessionKeyTracker,
         session: URLSession) async throws -> OrganizationInfo
     {
@@ -154,17 +174,23 @@ enum ClaudeWebAPIFetcher {
         guard let http = response as? HTTPURLResponse else { throw FetchError.invalidResponse }
         tracker.observe(response: http)
         switch http.statusCode {
-        case 200: return try parseOrganizationResponse(data)
+        case 200:
+            return try parseOrganizationResponse(
+                data, preferredOrganizationID: preferredOrganizationID)
         case 401, 403: throw FetchError.unauthorized
         default: throw FetchError.serverError(statusCode: http.statusCode)
         }
     }
 
-    private static func parseOrganizationResponse(_ data: Data) throws -> OrganizationInfo {
+    private static func parseOrganizationResponse(
+        _ data: Data,
+        preferredOrganizationID: String? = nil) throws -> OrganizationInfo {
         guard let orgs = try? JSONDecoder().decode([OrgResponse].self, from: data) else {
             throw FetchError.invalidResponse
         }
-        guard let selected = orgs.first(where: { $0.hasChatCapability })
+        guard let selected = preferredOrganizationID.flatMap({ preferredID in
+            orgs.first { $0.uuid == preferredID && $0.isEligibleForQuota }
+        }) ?? orgs.first(where: { $0.hasChatCapability })
             ?? orgs.first(where: { !$0.isApiOnly })
             ?? orgs.first
         else {
@@ -185,12 +211,16 @@ enum ClaudeWebAPIFetcher {
             let c = normalizedCaps
             return !c.isEmpty && c == ["api"]
         }
+
+        var isEligibleForQuota: Bool {
+            hasChatCapability || (capabilities?.isEmpty ?? true)
+        }
     }
 
     // MARK: - Usage data
 
     private struct RawUsageData {
-        let sessionPercentUsed: Double
+        let sessionPercentUsed: Double?
         let sessionResetsAt: Date?
         let weeklyPercentUsed: Double?
         let weeklyResetsAt: Date?
@@ -221,11 +251,11 @@ enum ClaudeWebAPIFetcher {
             throw FetchError.invalidResponse
         }
 
-        // five_hour = session window (null on enterprise/credit accounts → treat as 0%)
-        var sessionPercent: Double = 0
+        // five_hour = session window. Missing/null utilization is unknown, not 0% used.
+        var sessionPercent: Double?
         var sessionResets: Date?
         if let fiveHour = json["five_hour"] as? [String: Any] {
-            sessionPercent = percentValue(from: fiveHour["utilization"]) ?? 0
+            sessionPercent = percentValue(from: fiveHour["utilization"])
             sessionResets = (fiveHour["resets_at"] as? String).flatMap(parseISO8601Date)
         }
 
@@ -534,7 +564,7 @@ enum ClaudeWebAPIFetcher {
 
     private static func makeRequest(url: URL, tracker: SessionKeyTracker) -> URLRequest {
         var req = URLRequest(url: url)
-        req.setValue("sessionKey=\(tracker.sessionKey)", forHTTPHeaderField: "Cookie")
+        req.setValue(tracker.cookieHeader, forHTTPHeaderField: "Cookie")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.httpMethod = "GET"
         req.timeoutInterval = 15
@@ -574,9 +604,11 @@ enum ClaudeWebAPIFetcher {
 private final class SessionKeyTracker: @unchecked Sendable {
     private let lock = NSLock()
     private var _sessionKey: String
+    private var _cookieHeader: String
 
-    init(initial: String) {
-        _sessionKey = initial
+    init(info: SessionKeyInfo) {
+        _sessionKey = info.key
+        _cookieHeader = info.cookieHeader
     }
 
     var sessionKey: String {
@@ -584,12 +616,34 @@ private final class SessionKeyTracker: @unchecked Sendable {
         return _sessionKey
     }
 
+    var cookieHeader: String {
+        lock.lock(); defer { lock.unlock() }
+        return _cookieHeader
+    }
+
     /// Inspect response headers for a rotated sessionKey cookie.
     func observe(response: HTTPURLResponse) {
         guard response.statusCode == 200 else { return }
         if let renewed = Self.extractSessionKey(from: response.allHeaderFields) {
-            lock.lock(); _sessionKey = renewed; lock.unlock()
+            lock.lock()
+            _sessionKey = renewed
+            _cookieHeader = Self.replacingSessionKey(in: _cookieHeader, with: renewed)
+            lock.unlock()
         }
+    }
+
+    fileprivate static func replacingSessionKey(in header: String, with value: String) -> String {
+        var found = false
+        let updated = header.split(separator: ";").map { rawPart -> String in
+            let part = rawPart.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let separator = part.firstIndex(of: "=") else { return part }
+            let name = part[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard name == "sessionKey" else { return part }
+            found = true
+            return "sessionKey=\(value)"
+        }
+        if !found { return (updated + ["sessionKey=\(value)"]).joined(separator: "; ") }
+        return updated.joined(separator: "; ")
     }
 
     private static func extractSessionKey(from headers: [AnyHashable: Any]) -> String? {
@@ -658,11 +712,7 @@ private enum ClaudeWebExtraRateWindowParser {
                 sourceKeys[def.id] = found.sourceKey
                 continue
             }
-            // Key present but null payload → preserve bar at 0% so the UI section stays visible.
-            if let key = firstUsageKey(in: json, keys: def.keys) {
-                windows.append(namedWindow(id: def.id, title: def.title, usedPercent: 0, resetsAt: nil))
-                sourceKeys[def.id] = key
-            }
+            // Key present but null payload is unknown; never fabricate a 100% bar.
         }
         windows.append(contentsOf: scopedWeeklyLimitWindows(from: json))
         return (windows, sourceKeys)
@@ -777,10 +827,6 @@ private enum ClaudeWebExtraRateWindowParser {
             if let window = json[key] as? [String: Any] { return (window, key) }
         }
         return nil
-    }
-
-    private static func firstUsageKey(in json: [String: Any], keys: [String]) -> String? {
-        keys.first { json.keys.contains($0) }
     }
 
     private static func percentValue(from value: Any?) -> Double? {

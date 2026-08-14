@@ -37,6 +37,10 @@ enum ClaudeUsageOrchestrator {
                     step.dataSource, session: session, cookieSource: cookieSource,
                     manualCookie: manualCookie, allowKeychainPrompt: allowKeychainPrompt,
                     isAutoPlan: selected == .auto)
+                guard hasTrustedData(snapshot) else {
+                    throw ClaudeUsageError.parseFailed(
+                        "\(step.dataSource.sourceLabel): phản hồi không có quota/cost hợp lệ")
+                }
                 if webEnabled, step.dataSource != .web {
                     snapshot = await applyWebExtras(
                         to: snapshot, cookieSource: cookieSource, manualCookie: manualCookie, session: session)
@@ -47,6 +51,15 @@ enum ClaudeUsageOrchestrator {
             }
         }
         throw lastError ?? ClaudeUsageError.oauthFailed("Không có nguồn Claude khả dụng")
+    }
+
+    private static func hasTrustedData(_ snapshot: ClaudeUsageSnapshot) -> Bool {
+        snapshot.primary != nil
+            || snapshot.secondary != nil
+            || snapshot.opus != nil
+            || snapshot.extraRateWindows.contains(where: \.usageKnown)
+            || snapshot.providerCost != nil
+            || snapshot.adminUsage != nil
     }
 
     // MARK: - Per-source fetch
@@ -216,7 +229,8 @@ enum ClaudeUsageOrchestrator {
                                        cookieSource: ClaudeCookieSource,
                                        manualCookie: String?,
                                        session: URLSession) async -> ClaudeUsageSnapshot {
-        if snapshot.providerCost != nil, !snapshot.extraRateWindows.isEmpty { return snapshot }
+        let hasKnownExtra = snapshot.extraRateWindows.contains(where: \.usageKnown)
+        if snapshot.providerCost != nil, hasKnownExtra { return snapshot }
         let web: ClaudeWebUsageData? = await withTaskGroup(of: ClaudeWebUsageData?.self) { group in
             group.addTask {
                 do {
@@ -235,7 +249,7 @@ enum ClaudeUsageOrchestrator {
             return result
         }
         guard let web else { return snapshot }
-        let mergedExtra = snapshot.extraRateWindows.isEmpty ? web.extraRateWindows : snapshot.extraRateWindows
+        let mergedExtra = hasKnownExtra ? snapshot.extraRateWindows : web.extraRateWindows
         return ClaudeUsageSnapshot(
             primary: snapshot.primary,
             primaryWindowKind: snapshot.primaryWindowKind,
@@ -255,8 +269,10 @@ enum ClaudeUsageOrchestrator {
 
     private static func mapWeb(_ d: ClaudeWebUsageData) -> ClaudeUsageSnapshot {
         ClaudeUsageSnapshot(
-            primary: RateWindow(usedPercent: d.sessionPercentUsed, windowMinutes: 5 * 60,
-                                resetsAt: d.sessionResetsAt, resetDescription: nil),
+            primary: d.sessionPercentUsed.map {
+                RateWindow(usedPercent: $0, windowMinutes: 5 * 60,
+                           resetsAt: d.sessionResetsAt, resetDescription: nil)
+            },
             secondary: d.weeklyPercentUsed.map {
                 RateWindow(usedPercent: $0, windowMinutes: 7 * 24 * 60,
                            resetsAt: d.weeklyResetsAt, resetDescription: nil)
@@ -279,7 +295,6 @@ enum ClaudeUsageOrchestrator {
                               resetsAt: ClaudeStatusProbe.parseResetDate(from: reset), resetDescription: reset)
         }
         let primary = window(left: s.sessionPercentLeft, minutes: 5 * 60, reset: s.primaryResetDescription)
-            ?? RateWindow(usedPercent: 0, windowMinutes: 5 * 60, resetsAt: nil, resetDescription: nil)
         return ClaudeUsageSnapshot(
             primary: primary,
             secondary: window(left: s.weeklyPercentLeft, minutes: 7 * 24 * 60, reset: s.secondaryResetDescription),

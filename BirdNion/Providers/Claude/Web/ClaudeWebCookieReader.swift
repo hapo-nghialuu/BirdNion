@@ -6,6 +6,7 @@ import SweetCookieKit
 struct SessionKeyInfo: Sendable {
     let key: String
     let cookieHeader: String
+    let activeOrganizationID: String?
 }
 
 // MARK: - ClaudeWebCookieReader
@@ -60,8 +61,10 @@ enum ClaudeWebCookieReader {
     static func sessionKeyInfo(cookieHeader: String) -> SessionKeyInfo? {
         let pairs = parseCookieHeader(cookieHeader)
         guard let key = findSessionKey(in: pairs) else { return nil }
-        // Rebuild a minimal cookie header containing only the sessionKey.
-        return SessionKeyInfo(key: key, cookieHeader: "sessionKey=\(key)")
+        return SessionKeyInfo(
+            key: key,
+            cookieHeader: buildCookieHeader(from: pairs),
+            activeOrganizationID: cookieValue(named: "lastActiveOrg", in: pairs))
     }
 
     // MARK: - Private helpers
@@ -111,7 +114,10 @@ enum ClaudeWebCookieReader {
                     // Build a cookie header from all cookies in this store
                     // (some endpoints validate additional cookies alongside sessionKey).
                     let header = buildCookieHeader(from: pairs)
-                    return SessionKeyInfo(key: key, cookieHeader: header)
+                    return SessionKeyInfo(
+                        key: key,
+                        cookieHeader: header,
+                        activeOrganizationID: cookieValue(named: "lastActiveOrg", in: pairs))
                 }
             }
         } catch let error as BrowserCookieError {
@@ -129,6 +135,17 @@ enum ClaudeWebCookieReader {
             if trimmed.hasPrefix("sk-ant-") { return trimmed }
         }
         return nil
+    }
+
+    private static func cookieValue(
+        named name: String,
+        in cookies: [(name: String, value: String)]) -> String?
+    {
+        guard let value = cookies.first(where: { $0.name == name })?.value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func buildCookieHeader(from records: [(name: String, value: String)]) -> String {

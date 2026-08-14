@@ -147,8 +147,8 @@ final class SettingsStore: ObservableObject {
     // Defaults match CodexBar's out-of-the-box behavior so existing users
     // see no change on first launch after upgrading.
 
-    /// Which data source `ClaudeProvider` should use. CodexBar's `.auto`
-    /// walks OAuth → Web → CLI and stops at the first that returns data;
+    /// Which data source `ClaudeProvider` should use. BirdNion's `.auto`
+    /// walks OAuth → CLI → Web and stops at the first trusted result;
     /// the other modes pin to a single strategy. Default `.oauth` matches
     /// BirdNion's pre-parity behavior (no change for existing users).
     /// `ClaudeProvider.readUsageDataSource()` reads the same UserDefaults key.

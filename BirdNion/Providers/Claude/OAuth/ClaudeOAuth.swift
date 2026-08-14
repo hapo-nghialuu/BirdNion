@@ -341,9 +341,11 @@ enum ClaudeOAuthUsageAPI {
                     extraRateWindows: extra, providerCost: providerCost,
                     accountEmail: credentials.email, loginMethod: loginMethod)
             }
-            // Degenerate: empty windows, just carry cost/identity.
+            // No trusted quota and no spend limit. Keep the snapshot empty so
+            // the orchestrator can surface a schema error and let Auto try the
+            // next source instead of fabricating a 100% quota.
             return ClaudeUsageSnapshot(
-                primary: RateWindow(usedPercent: 0, windowMinutes: 5 * 60, resetsAt: nil, resetDescription: nil),
+                primary: nil,
                 secondary: nil, opus: nil, extraRateWindows: extra, providerCost: providerCost,
                 accountEmail: credentials.email, loginMethod: loginMethod)
         }
@@ -359,14 +361,15 @@ enum ClaudeOAuthUsageAPI {
     }
 
     private static func routineWindows(_ usage: OAuthUsageResponse) -> [NamedRateWindow] {
-        guard usage.sevenDayRoutines != nil || usage.sevenDayRoutinesSourceKey != nil else { return [] }
-        let util = usage.sevenDayRoutines?.utilization ?? 0
-        let resetDate = parseISO8601(usage.sevenDayRoutines?.resetsAt)
+        guard let routines = usage.sevenDayRoutines,
+              let util = routines.utilization
+        else { return [] }
+        let resetDate = parseISO8601(routines.resetsAt)
         return [NamedRateWindow(
             id: "claude-routines", title: "Daily Routines",
             window: RateWindow(usedPercent: util, windowMinutes: 7 * 24 * 60,
                                resetsAt: resetDate, resetDescription: nil),
-            usageKnown: usage.sevenDayRoutines?.utilization != nil)]
+            usageKnown: true)]
     }
 
     private static func extraUsageCost(_ extra: OAuthExtraUsage?, treatAsSpendLimit: Bool) -> ProviderCostSnapshot? {

@@ -31,6 +31,75 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(plan.executionSteps.map(\.dataSource), [.web])
     }
 
+    func testWebCookieRetainsActiveOrganization() {
+        let info = ClaudeWebCookieReader.sessionKeyInfo(
+            cookieHeader: "sessionKey=sk-ant-test; lastActiveOrg=org-active; theme=light")
+
+        XCTAssertEqual(info?.activeOrganizationID, "org-active")
+        XCTAssertTrue(info?.cookieHeader.contains("lastActiveOrg=org-active") == true)
+    }
+
+    func testWebOrganizationSelectionPrefersActiveOrganization() throws {
+        let json = """
+        [
+          {"uuid":"org-first","name":"Personal","capabilities":["chat"]},
+          {"uuid":"org-active","name":"Team","capabilities":["chat"]}
+        ]
+        """.data(using: .utf8)!
+
+        let selected = try ClaudeWebAPIFetcher._selectOrganizationIDForTesting(
+            json, preferredOrganizationID: "org-active")
+        XCTAssertEqual(selected, "org-active")
+    }
+
+    func testWebOrganizationSelectionSkipsActiveAPIOnlyOrganization() throws {
+        let json = """
+        [
+          {"uuid":"org-api","name":"API","capabilities":["api"]},
+          {"uuid":"org-chat","name":"Team","capabilities":["chat"]}
+        ]
+        """.data(using: .utf8)!
+
+        let selected = try ClaudeWebAPIFetcher._selectOrganizationIDForTesting(
+            json, preferredOrganizationID: "org-api")
+        XCTAssertEqual(selected, "org-chat")
+    }
+
+    func testWebSessionRotationKeepsBrowserContext() {
+        let rotated = ClaudeWebAPIFetcher._cookieHeaderAfterSessionRotationForTesting(
+            "sessionKey=sk-ant-old; lastActiveOrg=org-active; cf_clearance=clear",
+            renewedSessionKey: "sk-ant-new")
+
+        XCTAssertTrue(rotated.contains("sessionKey=sk-ant-new"))
+        XCTAssertFalse(rotated.contains("sessionKey=sk-ant-old"))
+        XCTAssertTrue(rotated.contains("lastActiveOrg=org-active"))
+        XCTAssertTrue(rotated.contains("cf_clearance=clear"))
+    }
+
+    func testWebFetchKeepsBrowserContextAfterSessionRotation() async throws {
+        ClaudeWebURLProtocol.reset()
+        defer { ClaudeWebURLProtocol.reset() }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ClaudeWebURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let usage = try await ClaudeWebAPIFetcher.fetchUsage(
+            cookieHeader: "sessionKey=sk-ant-original; lastActiveOrg=org-active; cf_clearance=clear",
+            session: session)
+
+        XCTAssertEqual(usage.sessionPercentUsed, 12)
+        let requests = ClaudeWebURLProtocol.requests
+        XCTAssertGreaterThanOrEqual(requests.count, 2)
+        let followups = requests.filter { $0.url?.path != "/api/organizations" }
+        XCTAssertFalse(followups.isEmpty)
+        for request in followups {
+            let cookie = request.value(forHTTPHeaderField: "Cookie") ?? ""
+            XCTAssertTrue(cookie.contains("sessionKey=sk-ant-rotated"), request.url?.path ?? "")
+            XCTAssertTrue(cookie.contains("lastActiveOrg=org-active"), request.url?.path ?? "")
+            XCTAssertTrue(cookie.contains("cf_clearance=clear"), request.url?.path ?? "")
+        }
+    }
+
     // MARK: - Web usage: weekly from the `limits` array (2026 schema)
 
     func testWebUsageWeeklyFallsBackToAllModelsLimit() throws {
@@ -184,6 +253,78 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(snap.providerCost?.limit, 10.0)
     }
 
+    func testOAuthMissingUtilizationDoesNotFabricatePrimaryOrRoutine() throws {
+        let json = """
+        {"five_hour":{"utilization":null},
+         "seven_day":{"utilization":null},
+         "seven_day_oauth_apps":{"utilization":null},
+         "seven_day_routines":{"utilization":null}}
+        """.data(using: .utf8)!
+        let usage = try ClaudeOAuthUsageAPI.decode(json)
+        let snap = ClaudeOAuthUsageAPI.mapOAuthUsage(
+            usage, credentials: ClaudeOAuthCredentials(accessToken: "x", refreshToken: nil, expiresAt: nil))
+
+        XCTAssertNil(snap.primary)
+        XCTAssertTrue(snap.extraRateWindows.isEmpty)
+        XCTAssertNil(snap.providerCost)
+    }
+
+    func testOAuthNumericZeroRemainsKnownUsage() throws {
+        let json = """
+        {"five_hour":{"utilization":0.0},
+         "seven_day_routines":{"utilization":0.0}}
+        """.data(using: .utf8)!
+        let usage = try ClaudeOAuthUsageAPI.decode(json)
+        let snap = ClaudeOAuthUsageAPI.mapOAuthUsage(
+            usage, credentials: ClaudeOAuthCredentials(accessToken: "x", refreshToken: nil, expiresAt: nil))
+
+        XCTAssertEqual(snap.primary?.usedPercent, 0)
+        XCTAssertEqual(snap.extraRateWindows.first?.window.usedPercent, 0)
+        XCTAssertTrue(snap.extraRateWindows.first?.usageKnown == true)
+    }
+
+    func testWebMissingNullAndWrongTypeSessionUsageIsUnknown() throws {
+        let payloads = [
+            "{}",
+            #"{"five_hour":null}"#,
+            #"{"five_hour":{"utilization":null}}"#,
+            #"{"five_hour":{"utilization":"0"}}"#
+        ]
+
+        for payload in payloads {
+            let parsed = try ClaudeWebAPIFetcher.parseUsageForTesting(Data(payload.utf8))
+            XCTAssertNil(parsed.sessionPercentUsed, payload)
+        }
+
+        let zero = try ClaudeWebAPIFetcher.parseUsageForTesting(
+            Data(#"{"five_hour":{"utilization":0}}"#.utf8))
+        XCTAssertEqual(zero.sessionPercentUsed, 0)
+    }
+
+    func testMaterializeDropsUnknownExtrasAndCarriesSourceLabel() {
+        let unknownRoutine = NamedRateWindow(
+            id: "claude-routines",
+            title: "Daily Routines",
+            window: RateWindow(usedPercent: 0, windowMinutes: 7 * 24 * 60,
+                               resetsAt: nil, resetDescription: nil),
+            usageKnown: false)
+        let snapshot = ClaudeUsageSnapshot(
+            primary: RateWindow(usedPercent: 2, windowMinutes: 5 * 60,
+                                resetsAt: nil, resetDescription: nil),
+            secondary: nil,
+            opus: nil,
+            extraRateWindows: [unknownRoutine])
+
+        let status = ClaudeProvider.materialize(
+            from: snapshot, override: nil, sourceLabel: "OAuth", status: nil,
+            allowKeychainRead: false)
+
+        XCTAssertEqual(status.sourceLabel, "OAuth")
+        XCTAssertEqual(status.windows.first?.remainingPct, 98)
+        XCTAssertFalse(status.windows.contains { $0.label == "Daily Routines" })
+        XCTAssertEqual(status.webExtras?.extraRateWindows.count, 0)
+    }
+
     // MARK: - Prepaid Extra usage balance
 
     func testPrepaidBalanceParsesMinorUnits() throws {
@@ -203,7 +344,8 @@ final class ClaudeNativeTests: XCTestCase {
         let snapshot = ClaudeUsageSnapshot(
             primary: nil, secondary: nil, opus: nil, providerCost: merged)
         let status = ClaudeProvider.materialize(
-            from: snapshot, override: nil, sourceLabel: "Web", status: nil)
+            from: snapshot, override: nil, sourceLabel: "Web", status: nil,
+            allowKeychainRead: false)
         XCTAssertEqual(status.creditsRemaining, 12.5)
     }
 
@@ -216,7 +358,8 @@ final class ClaudeNativeTests: XCTestCase {
         let snapshot = ClaudeUsageSnapshot(
             primary: nil, secondary: nil, opus: nil, providerCost: merged)
         let status = ClaudeProvider.materialize(
-            from: snapshot, override: nil, sourceLabel: "Web", status: nil)
+            from: snapshot, override: nil, sourceLabel: "Web", status: nil,
+            allowKeychainRead: false)
         XCTAssertEqual(status.creditsRemaining, 8.75)
     }
 
@@ -430,4 +573,67 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(report?.todayTokens, 150)
         XCTAssertEqual(report?.last30Tokens, 150)
     }
+}
+
+private final class ClaudeWebURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var capturedRequests: [URLRequest] = []
+
+    static var requests: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedRequests
+    }
+
+    static func reset() {
+        lock.lock()
+        capturedRequests.removeAll()
+        lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "claude.ai"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+
+        Self.lock.lock()
+        Self.capturedRequests.append(request)
+        Self.lock.unlock()
+
+        let body: Data
+        let statusCode: Int
+        var headers = ["Content-Type": "application/json"]
+        switch url.path {
+        case "/api/organizations":
+            statusCode = 200
+            headers["Set-Cookie"] = "sessionKey=sk-ant-rotated; Path=/"
+            body = Data(#"[{"uuid":"org-first","name":"Personal","capabilities":["chat"]},{"uuid":"org-active","name":"Team","capabilities":["chat"]}]"#.utf8)
+        case "/api/organizations/org-active/usage":
+            statusCode = 200
+            body = Data(#"{"five_hour":{"utilization":12},"seven_day":{"utilization":4}}"#.utf8)
+        default:
+            statusCode = 404
+            body = Data("{}".utf8)
+        }
+
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
