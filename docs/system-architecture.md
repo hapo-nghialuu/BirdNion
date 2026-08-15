@@ -1,17 +1,18 @@
 # BirdNion — System Architecture
 
-> Menu-bar app macOS native (Swift + SwiftUI), theo dõi quota AI từ nhiều provider, full parity với CodexBar cho Claude.
+> AI spend + quota cockpit: menu-bar app macOS native và tray app Linux, cùng theo dõi quota/cost từ nhiều provider.
 
 ## 1. Mục tiêu
 
-App nhỏ chạy trên thanh menu macOS (icon góc phải, popover), theo dõi quota AI của các hệ thống BOSS dùng/vận hành. **BirdNion** = fork/evolution của `ai-statusbar` (MiniMax + Hapo only) thành multi-provider (7 providers) với Claude parity.
+BirdNion chạy trên thanh menu macOS hoặc system tray Linux, theo dõi quota và chi phí AI từ dữ liệu provider lẫn scanner cục bộ. Dự án phát triển từ `ai-statusbar` thành một cockpit đa provider, ưu tiên độ tin cậy dữ liệu và thao tác cấu hình.
 
 ## 2. Stack & phạm vi
 
-- **Stack**: Swift + SwiftUI, AppKit (`NSStatusBar` + custom `DropdownPanel`), Xcode 16/26
+- **macOS**: Swift + SwiftUI, AppKit (`NSStatusBar` + custom `DropdownPanel`), Xcode 16/26
+- **Linux**: Tauri v2, Rust backend + TypeScript frontend
 - **Local SPM**: [CodexBarCore](https://github.com/hapo-nghialuu/CodexBar) tại `~/Desktop/CodexBar` — cung cấp `ClaudeUsageFetcher`, `ClaudeStatusProbe`, `RateWindow`, `ProviderCostSnapshot`
 - **Triển khai**: cá nhân / share nội bộ qua [Homebrew tap](https://github.com/hapo-nghialuu/homebrew-tap)
-- **Out of scope**: App Store, multi-user, auto-update (Sparkle), translation
+- **Out of scope hiện tại**: App Store, multi-user server và Windows production build
 
 ## 3. Provider quota
 
@@ -32,6 +33,8 @@ struct ProviderStatus {
   let windows: [QuotaWindow]
   let lastUpdated: Date
   let error: String?
+  let serviceStatus: String?              // last-good vendor status text
+  let serviceStatusLevel: String?         // operational / degraded / outage
   // Claude parity
   let cost: ProviderCostSnapshot?       // web-scraped monthly cap
   let webExtras: ClaudeWebExtras?        // account email, loginMethod, ...
@@ -87,12 +90,21 @@ Popover Accounts row (`CodexAccountsPopoverSection` trong `QuotaPanel.swift`) ch
 
 Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account id hiện đang ở CLI; `nil` = system account gốc.
 
+### 3.5 Profile quick switch và activation safety
+
+- macOS popover cho phép quick switch custom Claude Code/Codex profile, đồng thời hiển thị trạng thái ready/stale/active và health của local proxy.
+- Linux giữ quick switch Codex account hiện có, bổ sung last-good quota + health snapshot thụ động; không tạo polling loop riêng. Custom Claude/Codex profile switcher trong popover Linux vẫn là accepted gap.
+- Mỗi activation macOS kiểm tra **exact profile snapshot** trước và sau mọi `await`. Profile bị sửa hoặc xóa trong lúc activation chạy sẽ ném `profileChangedDuringActivation`, không upsert/apply/ghi overlay từ snapshot cũ; proxy reconcile đọc lại store hiện tại.
+
 ## 4. Luồng quota
 
 ```
-QuotaService.refresh()  (mỗi globalInterval ± 10s, default 120s)
+QuotaService.refresh()  (globalInterval ± 10s, default 120s)
   │
-  ├─ Filter providers theo per-provider override interval
+  ├─ Tính effective interval = base/per-provider override × adaptive multiplier
+  │   (1× / 2× / 4× / 8× theo failure streak; capped ở 8×)
+  │
+  ├─ Filter providers theo effective interval
   │   (nhỏ hơn interval thì skip, vẫn giữ status cũ trong displayStatuses)
   │
   ├─ TaskGroup: fetch song song tất cả providers do
@@ -110,6 +122,24 @@ QuotaService.refresh()  (mỗi globalInterval ± 10s, default 120s)
 
 `displayStatuses` luôn có 1 entry/provider kể cả khi fetch đang chạy (placeholder nếu chưa có data). Khi refresh bắt đầu, **status cũ vẫn hiển thị** — chỉ từng row swap sang data mới khi fetch return.
 
+Adaptive refresh dùng chính polling/tick hiện có, không thêm timer hay daemon. Automatic failure tăng multiplier; fetch thành công xóa streak. Manual/forced refresh luôn bypass due-filter, và queued forced retry vẫn giữ semantics user-initiated. State backoff chỉ ở memory và được dọn khi provider bị remove.
+
+### 4.1 Data confidence và last-good state
+
+Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (`UsageScanConfidence` trên macOS, `UsageReport` trên Linux):
+
+- `live`: scan hiện tại thành công; `history-only`: không live nhưng có lịch sử; `unavailable`: không có cả hai.
+- `scannedAt` được lưu cùng cost history để vẫn hiển thị freshness khi chu kỳ hiện tại chỉ dùng lịch sử.
+- Tab All chỉ cộng nguồn `included`; badge hiển thị trạng thái + freshness. Heatmap dùng token count, không dùng USD làm activity giả.
+- Provider refresh thiếu tạm thời `serviceStatus`/`serviceStatusLevel` sẽ kế thừa last-good pair thay vì làm trống UI.
+
+### 4.2 Monthly budget, forecast và weekly digest
+
+- `MonthlyForecast` cộng chi phí local Claude + Codex + Grok từ đầu tháng đến hiện tại rồi linear-project tới cuối tháng. Budget tổng là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API và chưa phải per-provider budget.
+- Weekly digest mặc định OFF. Cửa sổ hiện tại là hôm nay + 6 ngày trước; cửa sổ so sánh là 7 ngày liền trước đó.
+- Digest đi nhờ refresh/tick sẵn có. `lastEvaluatedAt` giới hạn cadence và vẫn được ghi khi suppress/error; `lastSentAt` chỉ ghi sau khi notification thành công.
+- Không gửi khi không có live source hoặc tổng USD/token bằng 0. Nếu một phần nguồn không live, notification ghi rõ nguồn dùng cached data.
+
 ## 5. Lưu trữ & bảo mật
 
 | Dữ liệu | Vị trí | Quyền |
@@ -121,6 +151,8 @@ QuotaService.refresh()  (mỗi globalInterval ± 10s, default 120s)
 | UserDefaults settings | `~/Library/Preferences/com.local.birdnion.plist` | standard |
 | Per-provider refresh override | `UserDefaults.refreshInterval.<id>` | standard |
 | Per-provider menu-bar visibility | `UserDefaults.menuBarVisibility.<id>` | standard |
+| Total monthly budget | macOS `UserDefaults.monthlyBudgetUSD`; Linux local storage `birdnion.monthlyBudgetUSD` | local preference |
+| Weekly digest toggle/cadence | macOS `weeklyDigest*`; Linux local storage `birdnion.weeklyDigest*` | local preference, default OFF |
 | Local token scanner cache | in-memory (5 min TTL) | n/a |
 
 > As of the 2026-06-25 storage refactor, there is **no BirdNion-owned
@@ -244,8 +276,13 @@ Scripts/
 - [x] Search box + active-first sort
 - [x] Menu-bar visibility toggle per provider
 - [x] Ad-hoc signed, Gatekeeper auto-strip qua Homebrew cask postflight
-- [x] `xcodebuild` build clean, 111 tests pass
+- [x] `xcodebuild` build clean; full macOS suite 420 tests pass (2026-08-15)
 - [x] Local token scanner: 30-day chart for Claude usage
+- [x] Data confidence + freshness + last-good service status trên macOS/Linux
+- [x] Total monthly budget + linear forecast trên macOS/Linux
+- [x] Adaptive refresh 1×/2×/4×/8×, manual/forced bypass, không timer mới
+- [x] Weekly digest rolling 7 ngày, default OFF, trên macOS/Linux
+- [x] macOS custom profile quick switch fail-closed; Linux Codex account quota/health snapshot
 - [x] Release pipeline (`Scripts/release.sh`) → tap → brew install
 
 ## 9. Decision register
@@ -257,6 +294,10 @@ Scripts/
 | Local CodexBarCore SPM (path-based) | Tận dụng `ClaudeWebAPIFetcher` + `RateWindow` battle-tested |
 | Seed pending with old statuses on refresh | User không thấy flash empty khi provider fetch chậm |
 | Per-provider refresh interval | Provider chậm/rate-limited poll ít hơn, user tự chỉnh |
+| Adaptive multiplier capped 8× | Giảm request khi provider lỗi mà không tạo scheduler mới hoặc gây starvation vô hạn |
+| Total budget là local preference | Forecast minh bạch trên dữ liệu scanner; không giả là provider billing |
+| Weekly digest default OFF | Tránh tự đưa số liệu chi phí ra ngoài popover khi user chưa opt in |
+| Exact-snapshot activation guard | Delete/edit profile thắng async activation; stale continuation fail closed |
 | Menu-bar visibility toggle per provider | User loại provider không quan tâm khỏi chuỗi % trên menu bar |
 | Cask filename: `BirdNion-${version}.zip` (no v prefix) | GitHub release-asset upload cache trả 404 BlobNotFound với `v${version}.zip` |
 
@@ -268,6 +309,7 @@ Scripts/
 - **Mac App Store** — nếu muốn mass distribution, cần review process
 - **Claude code API key** flow — hiện support Anthropic key, có thể extend cho setup token từ CLI
 - **Local memory** — track Anthropic Max weekly + Sonnet daily qua `~/.claude/projects/`
+- **Phase 8 còn lại** — per-provider budget, CSV/JSON export, Linux custom-profile popover và Windows port
 
 ## File liên quan
 

@@ -1,6 +1,6 @@
 # Linux ↔ macOS parity matrix
 
-Baseline: macOS BirdNion after Grok / OpenAI / Ollama / cost-history (2026-07-11).
+Baseline updated 2026-08-15: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh và weekly digest.
 
 | Area | macOS | Linux target | Status |
 |---|---|---|---|
@@ -10,7 +10,13 @@ Baseline: macOS BirdNion after Grok / OpenAI / Ollama / cost-history (2026-07-11
 | Grok quota | GrokProvider.swift | `providers/grok.rs` | **done** |
 | Grok cost scanner | GrokCostScanner.swift | `grok_scanner.rs` | **done** |
 | Cost history | CostHistoryStore.swift | `cost_history.rs` (high-water merge) | **done** |
+| Data confidence | `UsageScanConfidence` (`included` / `live` / `scannedAt`) + freshness badges | `UsageReport` cùng metadata + freshness badges | **done** |
+| Last-good provider status | giữ `serviceStatus`/level khi refresh mới thiếu status | giữ `serviceStatus`/level từ cached status | **done** |
 | All tab 3 sources | AllUsageOverview | `usage.ts` + `all-tab.ts` (Claude/Codex/Grok) | **done** |
+| Total monthly budget + forecast | local `monthlyBudgetUSD`, Claude+Codex+Grok linear forecast | local `birdnion.monthlyBudgetUSD`, cùng scope/logic | **done** |
+| Per-provider budget | chưa triển khai | chưa triển khai | **gap (deferred)** |
+| Adaptive refresh | base interval × 1/2/4/8; forced/manual bypass + success reset | cùng multiplier/bypass/reset, dùng tick sẵn có | **done** |
+| Weekly digest | rolling 7 ngày, default OFF, partial-data caveat | cùng cửa sổ/cadence, default OFF | **done** |
 | Per-provider cost chart | Claude/Codex/Grok cards | `source-chart.ts` + main tab branch | **done** |
 | Settings structure | multi-tab | section nav: Providers / General / About | **done** |
 | Heatmap greens | VocabbyTheme.heat* | `styles.css` soft GitHub greens | **done** |
@@ -20,6 +26,8 @@ Baseline: macOS BirdNion after Grok / OpenAI / Ollama / cost-history (2026-07-11
 | Menu-bar % text | yes | tray tooltip | **accepted gap** |
 | Settings provider detail | detailHeader + info grid + usage (pace/credits/cost) + setup + quota-warn card + links | `settings-provider-detail.ts` full port; ProviderStatus mở rộng (plan/version/serviceStatus/sourceLabel/windowSeconds) | **done** |
 | Settings Claude Code pane | 2-pane: preset + custom profiles, activation panel + power 76px, scope segmented + folder picker, remove env, token/baseURL, model loader, 1M toggle, paste JSON | `claude-code-pane.ts` + Rust `claudeCodeProfiles` (config flatten giữ key lạ), `claude_code_models` fetcher, profile apply/state commands, tauri-plugin-dialog | **done** |
+| Custom Claude/Codex quick switch trong popover | có, kèm ready/stale/active + proxy health; exact-snapshot guard chống activate sau delete/edit | chưa port; Settings quick-apply vẫn có | **accepted gap** |
+| Codex account quick switch health | account switcher + quota state | last-good quota/health snapshot thụ động, không polling mới | **done** |
 | Codex web extras (Code review %) | WKWebView scrape | không có headless tương đương | **accepted gap** |
 | Codex reset-credits row / auto-prime card | CodexResetCreditsAPI + scheduler | chưa port | **gap (todo)** |
 | Claude web cost bar + webExtras + multi-account | web cookie enrichment | web source không port enrichment | **accepted gap** |

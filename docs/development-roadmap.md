@@ -101,12 +101,17 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 > CI GitHub Actions cho macOS: **bỏ khỏi Phase 7** (quyết định 2026-07-07). Verify bằng `xcodebuild test` local khi cần.
 > macOS ↔ Linux đạt **full feature parity** (2026-07-07) — chỉ còn global hotkey là macOS-only (Linux tray không hỗ trợ).
 
-## 🚀 Phase 8 — AI spend cockpit (NEXT, 1–3 tháng, $0)
+## 🚀 Phase 8 — AI spend cockpit (IN PROGRESS, 2026-08-15, $0)
 Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
-- [ ] [both] Budget per-provider + tổng: đặt ngân sách tháng, cảnh báo pace "sẽ vượt $X trước ngày Y" (macOS mở rộng `WindowPace`; Linux port cùng logic sang Rust)
-- [ ] [both] Digest tuần qua notification: tổng chi, top model, streak (dữ liệu scanner có sẵn)
-- [ ] [both] Export CSV/JSON chi phí theo ngày/model (đối soát nội bộ)
-- [ ] [macOS] Claude Code switcher từ popover (không cần mở Settings) — tính năng khác biệt nhất so với CodexBar; Linux sync sau khi UX chốt
+- [x] [both] Data Confidence Pass: phân biệt live / history-only / unavailable, hiển thị freshness, giữ last-good service status và không đưa nguồn thiếu dữ liệu vào tổng/chart
+- [x] [both] Ngân sách **tổng** tháng cho chi phí local Claude + Codex + Grok, kèm linear forecast cuối tháng và trạng thái on-track / forecast-over / already-over
+- [x] [both] Adaptive refresh đơn giản: provider lỗi giãn nhịp 1× → 2× → 4× → 8×; manual/forced refresh bypass và reset khi thành công, không thêm timer
+- [x] [both] Digest tuần qua notification: rolling 7 ngày so với 7 ngày trước, top source/model, forecast; mặc định OFF và cảnh báo khi có nguồn dùng dữ liệu cũ
+- [x] [macOS] Quick switch custom Claude/Codex profile từ popover, kèm source/login health và activation fail-closed nếu profile bị sửa/xóa giữa `await`
+- [x] [Linux] Codex account quick switch hiển thị last-good quota + health snapshot thụ động, không thêm polling
+- [ ] [Linux] Custom Claude/Codex profile quick switch trong popover — deferred/accepted gap cho tới khi UX macOS ổn định
+- [ ] [both] Budget **per-provider** — chưa làm; budget tổng hiện tại không thay thế giới hạn riêng từng provider
+- [ ] [both] Export CSV/JSON chi phí theo ngày/model — deferred, ngoài scope đợt 2026-08-15
 - [ ] [Windows] Port từ codebase Tauri `linux/`: tray Windows, đường dẫn `%APPDATA%`, cookie qua rookie (đã hỗ trợ Windows), CI msi/exe
 
 ## 🌐 Phase 9 — Audience expansion (LATER, 3–6 tháng)
@@ -135,6 +140,7 @@ Chọn một hướng khi Phase 7–8 xong:
 
 | Date | Milestone |
 |---|---|
+| 2026-08-15 | Phase 8 in progress: Data Confidence, total monthly budget + forecast, profile quick switch/health, adaptive refresh và weekly digest trên macOS/Linux; CSV/JSON, per-provider budget và Windows vẫn deferred |
 | 2026-07-31 | 4 tính năng CodexBar: menu-bar metric resolver, bounded Codex cost scan (120 ngày, resumable), xAI Platform provider, Claude prepaid credits + Max multiplier |
 | 2026-07-07 | v0.8.6 — Settings parity CodexBar (hotkey, update check, storage footprint…) |
 | 2026-07-06 | Per-model breakdown tab All + fix drag-reorder + fix token clobber |
