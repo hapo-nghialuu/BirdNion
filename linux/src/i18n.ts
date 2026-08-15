@@ -415,6 +415,9 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   peakDayShort: { vi: "Cao nhất", en: "Peak" },
   avgActiveShort: { vi: "TB/ngày", en: "Avg/day" },
   appearanceTitle: { vi: "Giao diện", en: "Appearance" },
+  appearanceLight: { vi: "Chuyển sang sáng", en: "Switch to light" },
+  appearanceDark: { vi: "Chuyển sang tối", en: "Switch to dark" },
+  aboutUpdateNow: { vi: "Cập nhật ngay", en: "Update now" },
 
   // Settings detail grid (macOS ProvidersPane detailInfoGrid)
   "provider.status": { vi: "Trạng thái", en: "Status" },

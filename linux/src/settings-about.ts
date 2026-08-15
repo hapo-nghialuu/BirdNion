@@ -327,6 +327,39 @@ export async function aboutSection(): Promise<HTMLElement> {
   const actions = el("div", "about-hero-actions");
   const checkBtn = el("button", "sw-pill-btn ccp-primary", t("aboutCheckNow"));
   const statusLine = el("div", "about-update-status", "");
+  const renderUpdateStatus = (info: UpdateInfo | null) => {
+    statusLine.replaceChildren();
+    if (!info) {
+      statusLine.textContent = t("settingsUpToDate");
+      return;
+    }
+    // macOS About: version label + "Update now" + open release.
+    const label = document.createElement("span");
+    label.textContent = `${t("settingsUpdateAvailable")} ${info.version}`;
+    statusLine.append(label, " ");
+
+    const updateBtn = el("button", "sw-pill-btn ccp-primary", t("aboutUpdateNow"));
+    updateBtn.addEventListener("click", () => {
+      // Linux has no brew upgrade path; open the release page then quit so
+      // the user can install the new package without a running app lock
+      // (macOS: Terminal brew upgrade + quit).
+      void openUrl(info.url)
+        .catch(() => {})
+        .finally(() => {
+          void invoke("quit_app").catch(() => { window.close(); });
+        });
+    });
+
+    const releaseLink = document.createElement("a");
+    releaseLink.href = info.url;
+    releaseLink.textContent = t("settingsViewRelease");
+    releaseLink.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      void openUrl(info.url).catch(() => {});
+    });
+    statusLine.append(updateBtn, " · ", releaseLink);
+  };
+
   checkBtn.addEventListener("click", () => {
     if ((checkBtn as HTMLButtonElement).disabled) return;
     (checkBtn as HTMLButtonElement).disabled = true;
@@ -336,20 +369,7 @@ export async function aboutSection(): Promise<HTMLElement> {
       currentVersion: version,
     })
       .then((info) => {
-        statusLine.textContent = "";
-        if (info) {
-          statusLine.textContent = `${t("settingsUpdateAvailable")} ${info.version}`;
-          const releaseLink = document.createElement("a");
-          releaseLink.href = info.url;
-          releaseLink.textContent = t("settingsViewRelease");
-          releaseLink.addEventListener("click", (ev) => {
-            ev.preventDefault();
-            void openUrl(info.url).catch(() => {});
-          });
-          statusLine.append(" · ", releaseLink);
-        } else {
-          statusLine.textContent = t("settingsUpToDate");
-        }
+        renderUpdateStatus(info);
       })
       .catch((err) => {
         statusLine.textContent = `${t("loadError")}: ${err}`;

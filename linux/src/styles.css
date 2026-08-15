@@ -2911,9 +2911,9 @@ body.settings-body-root {
 .ccp-act-logo { width: 18px; height: 18px; object-fit: contain; }
 .ccp-act-provider-name { font-size: 12px; font-weight: 600; }
 
-/* 76px power button (macOS diameter 76 in this pane) */
-.cc-power-lg { width: 76px; height: 76px; flex-shrink: 0; }
-.cc-power-lg .cc-power-icon { width: 26px; height: 26px; }
+/* Compact power — macOS InstrumentPowerControl ~56pt (was 76, then hidden) */
+.cc-power-lg { width: 56px; height: 56px; flex-shrink: 0; }
+.cc-power-lg .cc-power-icon { width: 20px; height: 20px; }
 
 .ccp-status { font-size: 11px; color: var(--success); text-align: center; padding: 2px 0 6px; }
 .ccp-status.error { color: var(--critical); }
@@ -4306,14 +4306,70 @@ body.settings-body-root {
 .pp-account-badge { border-radius: 0; background: none; padding: 0; font-family: var(--font-mono); }
 
 /* Claude Code pane */
-.ccp-seg { border-radius: 4px; background: transparent; border: 1px solid var(--text); padding: 0; gap: 0; }
-.ccp-seg-btn { border-radius: 0; padding: 8px 13px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.4px; text-transform: uppercase; }
+/* macOS InstrumentSegmentedControl: ink border, auto-width segments, no wrap */
+.ccp-seg {
+  display: inline-flex;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid var(--text);
+  padding: 0;
+  gap: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ccp-seg-btn {
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  padding: 8px 16px;
+  min-width: 108px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.35px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text);
+  cursor: pointer;
+}
 .ccp-seg-btn + .ccp-seg-btn { border-left: 1px solid var(--text); }
 .ccp-seg-btn.active { background: var(--text); color: var(--bg); }
 .ccp-act-icon { border-radius: 4px; background: transparent !important; border: 1px solid currentColor; }
 .ccp-act-title { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
 .ccp-badge { font-family: var(--font-mono); letter-spacing: 0.5px; text-transform: uppercase; }
-.cc-power-lg { display: none; }
+/* macOS InstrumentPowerControl: compact layered disc (must stay visible) */
+.cc-power-lg {
+  display: flex !important;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.14);
+}
+.cc-power-lg .cc-power-icon { width: 19px; height: 19px; color: #fff; }
+.cc-power-lg.cc-power-on {
+  background: linear-gradient(145deg, #73adff 0%, #469be9 38%, #1f4fd8 72%, #1a3a9e 100%);
+  box-shadow: 0 0 16px rgba(31, 79, 216, 0.42), 0 2px 6px rgba(0, 0, 0, 0.16);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.cc-power-lg.cc-power-off {
+  background: linear-gradient(145deg, #949aa3 0%, #5c6370 42%, #343a44 78%, #1e2228 100%);
+  color: rgba(255, 255, 255, 0.94);
+}
+.cc-power-lg.cc-power-stale {
+  background: linear-gradient(145deg, #ffd166 0%, #e0a93f 45%, #8f5f12 100%);
+  box-shadow: 0 0 12px rgba(224, 169, 63, 0.35);
+}
+.cc-power-lg.cc-power-needsSetup {
+  background: linear-gradient(145deg, #9ea3ab 0%, #666c76 50%, #3a3f48 100%);
+  opacity: 0.78;
+}
+.cc-power-lg:hover:not(:disabled) { transform: scale(1.04); filter: brightness(1.05); }
+.cc-power-lg:active:not(:disabled) { transform: scale(0.96); }
 .ccp-field-row { padding: 12px 0; border-top: 1px solid var(--hairline); }
 .ccp-form-label { font-size: 13px; }
 .ccp-proxy-head { padding: 14px 0; border-top: 1px solid var(--hairline); }

@@ -1,6 +1,6 @@
 // Dedicated Settings window — port of macOS SettingsSceneRoot (920×620):
-// vertical sidebar (General / Providers / Claude Code / Advanced / About)
-// + card-style panes. Display folded into General; Debug into Advanced.
+// vertical sidebar (General / Providers / AI Coding / Advanced / About)
+// + instrument hairline panes. Display folded into General; Debug into Advanced.
 
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";

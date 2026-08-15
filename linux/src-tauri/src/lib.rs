@@ -866,10 +866,10 @@ fn open_settings_window_impl(app: &tauri::AppHandle, section: Option<&str>) -> R
             serde_json::to_string(sec).unwrap_or_else(|_| "\"general\"".into())
         ));
     }
-    // macOS SettingsSceneRoot remake: 920×620 (was 780×720).
+    // macOS SettingsSceneRoot: fixed 920×620 (parity with SwiftUI frame).
     let win = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("BirdNion Settings")
-        .inner_size(920.0, 760.0)
+        .inner_size(920.0, 620.0)
         .min_inner_size(780.0, 520.0)
         .resizable(true)
         .initialization_script(&init)

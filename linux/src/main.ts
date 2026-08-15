@@ -27,7 +27,7 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { logoMark, logoUrl, providerTintCss } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
-import { initTheme, getAppearance, setAppearance, type Appearance } from "./theme";
+import { initTheme, setAppearance, resolveTheme } from "./theme";
 import { checkWeeklyDigest } from "./weekly-digest";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
@@ -247,20 +247,18 @@ function appHeader(): HTMLElement {
   refresh.append(settingsIcon("arrow.clockwise", "header-refresh-icon"));
   refresh.addEventListener("click", () => { void refreshNow(); });
 
-  // Design: sun/moon cycles appearance; Settings is a footer text link.
-  const appearance = getAppearance();
-  const appearanceIcon =
-    appearance === "light" ? "sun.max" : appearance === "dark" ? "moon" : "circle.lefthalf.filled";
+  // macOS BirdNionHeader: sun/moon toggles light ↔ dark (resolved theme).
+  // Icon shows the *target* mode (sun → go light, moon → go dark).
+  const effectivelyDark = resolveTheme() === "dark";
+  const appearanceIcon = effectivelyDark ? "sun.max" : "moon";
   const themeBtn = document.createElement("button");
   themeBtn.type = "button";
   themeBtn.className = "header-refresh header-appearance";
-  themeBtn.title = t("appearanceTitle");
-  themeBtn.setAttribute("aria-label", t("appearanceTitle"));
+  themeBtn.title = effectivelyDark ? t("appearanceLight") : t("appearanceDark");
+  themeBtn.setAttribute("aria-label", themeBtn.title);
   themeBtn.append(settingsIcon(appearanceIcon, "header-refresh-icon"));
   themeBtn.addEventListener("click", () => {
-    const cur = getAppearance();
-    const next: Appearance = cur === "light" ? "dark" : cur === "dark" ? "auto" : "light";
-    setAppearance(next);
+    setAppearance(resolveTheme() === "dark" ? "light" : "dark");
     render();
   });
 
@@ -337,7 +335,7 @@ function popoverFooter(): HTMLElement {
   }
 
   const actions = el("div", "footer-actions");
-  const mkIcon = (sf: string, label: string, extraClass: string, onClick: () => void) => {
+  const mkIcon = (sf: Parameters<typeof settingsIcon>[0], label: string, extraClass: string, onClick: () => void) => {
     const btn = el("button", `footer-icon-btn${extraClass ? ` ${extraClass}` : ""}`);
     btn.title = label;
     btn.setAttribute("aria-label", label);

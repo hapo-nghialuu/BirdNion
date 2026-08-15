@@ -25,12 +25,6 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   return node;
 }
 
-function legendDot(cssClass: string, label: string) {
-  const item = el("span", "legend-item");
-  item.append(el("span", `dot ${cssClass}`), el("span", "legend-label", label));
-  return item;
-}
-
 // --- Data Confidence Pass: compact per-source scan metadata ----------------
 
 const CONFIDENCE_SOURCES: readonly [UsageSourceId, string][] = [
