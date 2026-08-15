@@ -311,11 +311,9 @@ export async function aboutSection(): Promise<HTMLElement> {
 
   // Centered branding + primary actions (no nested card for hero)
   const hero = el("div", "about-hero");
-  const icon = document.createElement("img");
-  icon.className = "about-hero-icon";
-  icon.src = "/logos/app.png";
-  icon.alt = "BirdNion";
-  icon.draggable = false;
+  const icon = el("span", "about-hero-icon");
+  icon.setAttribute("role", "img");
+  icon.setAttribute("aria-label", "BirdNion");
   icon.addEventListener("click", () => { void openUrl(REPO_URL).catch(() => {}); });
   hero.append(icon);
   hero.append(el("div", "about-hero-name", "BirdNion"));
