@@ -400,7 +400,7 @@ struct BirdNionHeader: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 15)
+        .padding(.top, 8)
         .padding(.bottom, 11)
         .overlay(alignment: .bottom) {
             VocabbyTheme.inkRule.frame(height: 1)
