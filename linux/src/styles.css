@@ -1211,6 +1211,56 @@ html.popover-capped .app-body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Data Confidence Pass — compact per-source (Claude/Codex/Grok) scan
+ * metadata row on the All tab: included/live/history-only + freshness. */
+.confidence-row { display: flex; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+
+.confidence-item { display: inline-flex; align-items: center; gap: 4px; }
+
+.confidence-state {
+  font-size: 9px;
+  color: var(--tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.confidence-state.live { color: var(--success); }
+.confidence-state.history { color: var(--warning); }
+
+/* Budget & monthly forecast (Phase 2) — All-tab card, local-only estimate. */
+.budget-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+
+.budget-status {
+  font-size: 9px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--tertiary);
+}
+.budget-status.ok { color: var(--success); }
+.budget-status.warning { color: var(--warning); }
+.budget-status.critical { color: var(--critical); }
+
+.budget-amounts { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.budget-mtd, .budget-projected {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text2);
+}
+
+.budget-track { margin-bottom: 6px; }
+
+.budget-foot { display: flex; justify-content: space-between; gap: 8px; }
+.budget-of { font-size: 10px; color: var(--tertiary); font-variant-numeric: tabular-nums; }
+.budget-remaining {
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--tertiary);
+}
+.budget-remaining.ok { color: var(--success); }
+.budget-remaining.warning { color: var(--warning); }
+.budget-remaining.critical { color: var(--critical); }
+
 .day-detail { margin-top: 8px; margin-bottom: 4px; min-height: 0; }
 
 .day-detail:empty { display: none; }
@@ -3280,7 +3330,7 @@ body.settings-body-root {
   white-space: nowrap;
 }
 
-/* Per-account quota placeholder — Linux has no snapshot store yet. */
+/* Passive per-account quota/health snapshot from the normal Codex refresh. */
 .fm-pop-quota {
   font-size: 10px;
   font-weight: 600;
@@ -3293,6 +3343,10 @@ body.settings-body-root {
   text-align: center;
   flex-shrink: 0;
 }
+.fm-pop-quota.ok { color: var(--success); }
+.fm-pop-quota.warning { color: var(--warning); }
+.fm-pop-quota.critical,
+.fm-pop-quota.error { color: var(--critical); }
 
 .fm-pop-use { flex-shrink: 0; }
 .fm-pop-switch,
@@ -3316,4 +3370,3 @@ body.settings-body-root {
   padding: 8px 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
-

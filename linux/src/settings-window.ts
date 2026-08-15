@@ -14,8 +14,10 @@ import {
   getQuotaWarnL1, setQuotaWarnL1, getQuotaWarnL2, setQuotaWarnL2,
   isShowTrayPercentEnabled, setShowTrayPercentEnabled,
   isHidePersonalInfo, setHidePersonalInfo,
+  getMonthlyBudgetUsd, setMonthlyBudgetUsd,
   REFRESH_OPTIONS, aboutSection,
 } from "./settings-about";
+import { isWeeklyDigestEnabled, setWeeklyDigestEnabled } from "./weekly-digest";
 import { providersPane } from "./settings-tab";
 import { claudeCodePane } from "./claude-code-pane";
 import { isClaudeCodeSupported } from "./claude-code";
@@ -193,6 +195,7 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     setQuotaWarnEnabled(v);
     void mountSettingsWindow(onRefreshMain);
   });
+  const weeklyDigest = switchToggle(isWeeklyDigestEnabled(), setWeeklyDigestEnabled);
 
   const system = card(t("settingsSectionSystem"), [
     labeledRow(t("settingsLanguage"), t("settingsLanguageSub"), langSelect),
@@ -201,9 +204,29 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     labeledRow(t("settingsLaunchAtLogin"), t("settingsLaunchAtLoginSub"), autostart),
   ], t("settingsDisplayFooter"));
 
+  // Monthly budget (USD) — local UI preference (localStorage, mirrors macOS
+  // @AppStorage), NOT settings.json. >=0 accepted at the input level; the
+  // helper itself treats blank/invalid/<=0 as "off" and clears the key.
+  const budgetInput = document.createElement("input");
+  budgetInput.type = "number";
+  budgetInput.min = "0";
+  budgetInput.step = "1";
+  budgetInput.className = "sw-input-num";
+  budgetInput.placeholder = t("settingsMonthlyBudgetPlaceholder");
+  const currentBudget = getMonthlyBudgetUsd();
+  budgetInput.value = currentBudget != null ? String(currentBudget) : "";
+  budgetInput.addEventListener("change", () => {
+    const raw = budgetInput.value.trim();
+    setMonthlyBudgetUsd(raw === "" ? null : Number(raw));
+    // Reflect the normalized value back — blank/invalid/<=0 clears to "".
+    const normalized = getMonthlyBudgetUsd();
+    budgetInput.value = normalized != null ? String(normalized) : "";
+  });
+
   const usageRows = [
     labeledRow(t("settingsRefreshFrequency"), t("settingsRefreshFrequencySub"), freq),
     labeledRow(t("settingsRefreshOnOpen"), t("settingsRefreshOnOpenSub"), refreshOnOpen),
+    labeledRow(t("settingsMonthlyBudget"), t("settingsMonthlyBudgetSub"), budgetInput),
   ];
   const usage = card(
     t("settingsSectionUsage"),
@@ -215,6 +238,7 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     labeledRow(t("settingsStatusChecks"), t("settingsStatusChecksSub"), statusChecks),
     labeledRow(t("settingsSessionNotify"), t("settingsSessionNotifySub"), sessionNotify),
     labeledRow(t("settingsQuotaWarn"), t("settingsQuotaWarnSub"), quotaWarn),
+    labeledRow(t("settingsWeeklyDigest"), t("settingsWeeklyDigestSub"), weeklyDigest),
   ];
   if (isQuotaWarnEnabled()) {
     const l1 = document.createElement("input");

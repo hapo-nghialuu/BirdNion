@@ -77,6 +77,15 @@ struct CombinedUsageReport: Equatable {
     /// Consecutive active days counted back from the most recent activity;
     /// an inactive "today" doesn't break the streak (the day isn't over yet).
     let streakDays: Int
+    /// Data Confidence Pass metadata per source, gated by the same
+    /// `includeX` flags as everything else above — nil when the source is
+    /// disabled OR its scan hasn't landed yet (both cases render no badge;
+    /// only a landed, enabled report carries real confidence, which may
+    /// itself classify as `included == false` for a source with no data at
+    /// all). See `SourceConfidenceState.classify`.
+    let claudeConfidence: CostHistoryStore.UsageScanConfidence?
+    let codexConfidence: CostHistoryStore.UsageScanConfidence?
+    let grokConfidence: CostHistoryStore.UsageScanConfidence?
 
     var isEmpty: Bool { activeDays == 0 }
 
@@ -168,7 +177,10 @@ struct CombinedUsageReport: Equatable {
             peakDayDate: peakUSD > 0 ? peak?.date : nil,
             avgPerActiveDayUSD: active.isEmpty ? 0 : totalUSD / Double(active.count),
             activeDays: active.count,
-            streakDays: streak)
+            streakDays: streak,
+            claudeConfidence: includedClaude?.scanConfidence,
+            codexConfidence: includedCodex?.scanConfidence,
+            grokConfidence: includedGrok?.scanConfidence)
     }
 
     private struct DayIndex {
@@ -269,6 +281,93 @@ extension CombinedUsageReport {
     }
 }
 
+// MARK: - Phase 2: monthly budget forecast (pure)
+
+/// Where month-to-date spend sits relative to a configured budget.
+/// `alreadyOver` takes precedence over `forecastOver` — a month that has
+/// already overshot is reported as over, not merely "on track to overshoot".
+enum MonthlyForecastStatus: Equatable {
+    case onTrack
+    case forecastOver
+    case alreadyOver
+}
+
+/// Linear month-to-date spend projection for the All-tab budget card.
+/// Day-granularity (`CostHistoryStore` only has day-resolution buckets),
+/// unlike `WindowPace`'s sub-day precision for quota windows. Pure value
+/// type + pure `build`, no SwiftUI/file-I/O dependency — takes `now` and
+/// `calendar` explicitly so every calendar edge case is deterministic.
+struct MonthlyForecast: Equatable {
+    let monthToDateUSD: Double
+    /// 1...`daysInMonth` — "today" always counts as elapsed.
+    let daysElapsed: Int
+    /// Calendar-aware length of the current month (28/29/30/31).
+    let daysInMonth: Int
+    let dailyAverageUSD: Double
+    let projectedTotalUSD: Double
+    /// Normalized: `nil` when the configured budget is missing, zero,
+    /// negative, or non-finite — the card hides itself in that state.
+    let budgetUSD: Double?
+    /// `nil` exactly when `budgetUSD` is `nil`.
+    let status: MonthlyForecastStatus?
+
+    var remainingBudgetUSD: Double? { budgetUSD.map { $0 - monthToDateUSD } }
+    /// Month-to-date spend as a fraction of budget (can exceed 1 when over).
+    /// `nil` when no budget is configured.
+    var progressFraction: Double? {
+        guard let budgetUSD, budgetUSD > 0 else { return nil }
+        return monthToDateUSD / budgetUSD
+    }
+
+    static func build(daily: [CombinedDailyUsage],
+                      budgetUSD: Double?,
+                      now: Date = Date(),
+                      calendar: Calendar = .current) -> MonthlyForecast {
+        // Same year AND month — `toGranularity: .month` compares era/year/
+        // month together, so a bucket from last December never leaks into
+        // a January month-to-date sum even though both are "December" or
+        // "January" by month-number alone across a year boundary.
+        // "Month-to-date" is strictly through local today: a same-month
+        // bucket dated after today (a caller passing malformed/preview data)
+        // is excluded rather than inflating a projection that hasn't
+        // happened yet. A non-finite (NaN/Infinity) or negative day `usd`
+        // is ignored rather than poisoning the whole sum to NaN or letting
+        // a bad negative value quietly shrink real spend.
+        let startOfToday = calendar.startOfDay(for: now)
+        let monthToDateUSD = daily
+            .filter {
+                calendar.isDate($0.date, equalTo: now, toGranularity: .month)
+                    && $0.date <= startOfToday
+                    && $0.usd.isFinite && $0.usd >= 0
+            }
+            .reduce(0) { $0 + $1.usd }
+
+        let daysElapsed = max(1, calendar.component(.day, from: now))
+        let daysInMonth = calendar.range(of: .day, in: .month, for: now)?.count ?? 30
+        let dailyAverageUSD = monthToDateUSD / Double(daysElapsed)
+        let projectedTotalUSD = dailyAverageUSD * Double(daysInMonth)
+
+        let normalizedBudget: Double? = {
+            guard let budgetUSD, budgetUSD.isFinite, budgetUSD > 0 else { return nil }
+            return budgetUSD
+        }()
+        let status: MonthlyForecastStatus? = normalizedBudget.map { budget in
+            if monthToDateUSD > budget { return .alreadyOver }
+            if projectedTotalUSD > budget { return .forecastOver }
+            return .onTrack
+        }
+
+        return MonthlyForecast(
+            monthToDateUSD: monthToDateUSD,
+            daysElapsed: daysElapsed,
+            daysInMonth: daysInMonth,
+            dailyAverageUSD: dailyAverageUSD,
+            projectedTotalUSD: projectedTotalUSD,
+            budgetUSD: normalizedBudget,
+            status: status)
+    }
+}
+
 // MARK: - All tab root
 
 /// Body of the "All" pseudo-provider tab: combined totals + stacked 30-day
@@ -328,6 +427,14 @@ struct AllUsageOverview: View {
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
             }
+            // Shown even when the report has no active days — freshness is
+            // about the scan itself, not whether it found spend. A pending
+            // (nil) source relies on the hint above, not an "unavailable" badge.
+            SourceConfidenceBadgeRow(report: report)
+            // Shown even when usage is zero this month (same rationale as
+            // the confidence badges above) — hides itself when no budget is
+            // configured (`BudgetForecastCard` checks `settings.monthlyBudgetUSD`).
+            BudgetForecastCard(report: report)
             if report.isEmpty {
                 Text(vi ? "Chưa có dữ liệu sử dụng trong 120 ngày qua."
                         : "No usage recorded in the last 120 days.")
@@ -343,6 +450,242 @@ struct AllUsageOverview: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Data Confidence badges (per-source)
+
+/// Classified confidence state for the All-tab per-source badge — pure,
+/// derived from `CostHistoryStore.UsageScanConfidence` with no SwiftUI
+/// dependency so it's directly unit-testable.
+enum SourceConfidenceState: Equatable {
+    case live
+    case historyOnly
+    case unavailable
+
+    static func classify(_ confidence: CostHistoryStore.UsageScanConfidence) -> SourceConfidenceState {
+        guard confidence.included else { return .unavailable }
+        return confidence.live ? .live : .historyOnly
+    }
+
+    /// `AppLocalizer` key for the badge's short state tag — no new inline
+    /// bilingual strings live in the view itself.
+    var localizationKey: String {
+        switch self {
+        case .live: return "confidence.live"
+        case .historyOnly: return "confidence.historyOnly"
+        case .unavailable: return "confidence.unavailable"
+        }
+    }
+}
+
+/// Pure freshness text for a scan timestamp. `nil` when there has never been
+/// a successful live scan for the source — a `cost-history.json` written
+/// before the Data Confidence Pass decodes with no timestamp at all, and a
+/// brand-new source that only just started history-only never had one
+/// either. Deterministic: takes `now` explicitly instead of reading the
+/// wall clock, so it's unit-testable.
+enum SourceConfidenceFormat {
+    static func freshnessLabel(scannedAt: Date?, now: Date = Date(), preference: String? = nil) -> String? {
+        scannedAt.map { L10n.relativeUpdated(from: $0, now: now, preference: preference) }
+    }
+
+    /// Dense, locale-neutral timestamp for the fixed-width popover row. The
+    /// fully localized text remains available through the badge tooltip and
+    /// accessibility label.
+    static func compactFreshnessLabel(scannedAt: Date?, now: Date = Date()) -> String? {
+        guard let scannedAt else { return nil }
+        let seconds = max(0, Int(now.timeIntervalSince(scannedAt)))
+        if seconds < 60 { return "<1m" }
+        if seconds < 3_600 { return "\(seconds / 60)m" }
+        if seconds < 86_400 { return "\(seconds / 3_600)h" }
+        return "\(seconds / 86_400)d"
+    }
+}
+
+/// Compact per-source Data Confidence row: one badge per source that is both
+/// enabled AND has a landed report (`CombinedUsageReport.build` already nils
+/// a disabled or still-pending source's confidence, so both collapse to "no
+/// badge" here — a pending source keeps relying on the "Scanning…" hint
+/// above instead of showing a misleading "unavailable" badge). Rendered even
+/// when the combined report has no active days: freshness describes the
+/// scan, not whether it found spend. Provider names become logos and freshness
+/// is abbreviated so all landed sources stay on one fixed-width popover row.
+struct SourceConfidenceBadgeRow: View {
+    @EnvironmentObject var settings: SettingsStore
+    let report: CombinedUsageReport
+
+    private var language: String { settings.appLanguage }
+
+    private var entries: [(id: String, name: String, color: Color, confidence: CostHistoryStore.UsageScanConfidence)] {
+        [
+            ("claude", "Claude", VocabbyTheme.chartClaude, report.claudeConfidence),
+            ("codex", "Codex", VocabbyTheme.chartCodex, report.codexConfidence),
+            ("grok", "Grok", VocabbyTheme.chartGrok, report.grokConfidence),
+        ].compactMap { id, name, color, confidence in
+            confidence.map { (id, name, color, $0) }
+        }
+    }
+
+    var body: some View {
+        if !entries.isEmpty {
+            HStack(spacing: 8) { badges }
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var badges: some View {
+        ForEach(entries, id: \.id) { entry in
+            badge(id: entry.id, name: entry.name, color: entry.color, confidence: entry.confidence)
+        }
+    }
+
+    private func badge(id: String,
+                       name: String,
+                       color: Color,
+                       confidence: CostHistoryStore.UsageScanConfidence) -> some View {
+        let state = SourceConfidenceState.classify(confidence)
+        let tag = L10n.t(state.localizationKey, language)
+        let fullFreshness = SourceConfidenceFormat.freshnessLabel(
+            scannedAt: confidence.scannedAt, preference: language)
+        let compactFreshness = SourceConfidenceFormat.compactFreshnessLabel(
+            scannedAt: confidence.scannedAt)
+        let help = fullFreshness.map { L10n.f("confidence.badgeHelp", language, name, tag, $0) }
+            ?? L10n.f("confidence.badgeHelpNoFreshness", language, name, tag)
+        return HStack(spacing: 3) {
+            ProviderLogoMark(id: id, tint: color)
+                .frame(width: 12, height: 12)
+                .accessibilityHidden(true)
+            Text(tag)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(stateColor(state))
+            if let compactFreshness {
+                Text("· \(compactFreshness)")
+                    .font(.system(size: 9))
+                    .monospacedDigit()
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .help(help)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(help)
+    }
+
+    private func stateColor(_ state: SourceConfidenceState) -> Color {
+        switch state {
+        case .live: return VocabbyTheme.success
+        case .historyOnly: return VocabbyTheme.tertiary
+        case .unavailable: return VocabbyTheme.disabled
+        }
+    }
+}
+
+// MARK: - Phase 2: budget vs. forecast card
+
+/// Month-to-date spend vs. a user-configured monthly budget, plus a linear
+/// forecast to month-end (`MonthlyForecast`). Passive read-out only — no
+/// notifications, no scheduler. Hidden entirely when no budget is
+/// configured (`SettingsStore.monthlyBudgetUSD <= 0`); shown even when this
+/// month's spend is zero, same as the confidence badge row above.
+struct BudgetForecastCard: View {
+    @EnvironmentObject var settings: SettingsStore
+    let report: CombinedUsageReport
+
+    private var language: String { settings.appLanguage }
+    private var forecast: MonthlyForecast {
+        MonthlyForecast.build(daily: report.daily, budgetUSD: settings.monthlyBudgetUSD)
+    }
+
+    var body: some View {
+        if let budgetUSD = forecast.budgetUSD, let status = forecast.status {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(L10n.t("budget.title", language))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                        .tracking(0.3)
+                    Spacer(minLength: 8)
+                    Text(statusLabel(status))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(statusColor(status))
+                }
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(L10n.t("budget.monthToDate", language))
+                            .font(.system(size: 9))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                        Text(AllUsageFormat.usd(forecast.monthToDateUSD))
+                            .font(.system(size: 16, weight: .bold).monospacedDigit())
+                            .foregroundStyle(VocabbyTheme.primary)
+                    }
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(L10n.t("budget.projected", language))
+                            .font(.system(size: 9))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                        Text(AllUsageFormat.usd(forecast.projectedTotalUSD))
+                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(statusColor(status))
+                    }
+                }
+                progressBar(status: status)
+                Text(remainingText(budgetUSD: budgetUSD))
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+            .vocabbyCard()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityText(budgetUSD: budgetUSD, status: status))
+        }
+    }
+
+    private func progressBar(status: MonthlyForecastStatus) -> some View {
+        let fraction = min(1, max(0, forecast.progressFraction ?? 0))
+        return ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(VocabbyTheme.track)
+                .frame(height: 5)
+            GeometryReader { geo in
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(statusColor(status))
+                    .frame(width: geo.size.width * fraction, height: 5)
+            }
+            .frame(height: 5)
+        }
+    }
+
+    private func statusLabel(_ status: MonthlyForecastStatus) -> String {
+        switch status {
+        case .onTrack: L10n.t("budget.onTrack", language)
+        case .forecastOver: L10n.t("budget.forecastOver", language)
+        case .alreadyOver: L10n.t("budget.alreadyOver", language)
+        }
+    }
+
+    private func statusColor(_ status: MonthlyForecastStatus) -> Color {
+        switch status {
+        case .onTrack: VocabbyTheme.success
+        case .forecastOver: VocabbyTheme.yellow
+        case .alreadyOver: VocabbyTheme.critical
+        }
+    }
+
+    private func remainingText(budgetUSD: Double) -> String {
+        let remaining = forecast.remainingBudgetUSD ?? (budgetUSD - forecast.monthToDateUSD)
+        return remaining >= 0
+            ? L10n.f("budget.remaining", language, AllUsageFormat.usd(remaining))
+            : L10n.f("budget.overBy", language, AllUsageFormat.usd(-remaining))
+    }
+
+    private func accessibilityText(budgetUSD: Double, status: MonthlyForecastStatus) -> String {
+        L10n.f("budget.a11y", language,
+               AllUsageFormat.usd(forecast.monthToDateUSD),
+               AllUsageFormat.usd(forecast.projectedTotalUSD),
+               AllUsageFormat.usd(budgetUSD),
+               statusLabel(status))
     }
 }
 
@@ -842,10 +1185,23 @@ private struct DaySourceModelRows: View {
 
 // MARK: - Heatmap card
 
+/// Pure heatmap-intensity math — token-only, no USD — so `CombinedHeatmapCard`
+/// coloring is unit-testable without SwiftUI. USD keeps its place in the
+/// header/help-tooltip/day-detail text; it never drives the cell color.
+/// Active-but-$0 days (tokens only) still get the lightest heat level so
+/// they don't read as idle.
+enum CombinedHeatmapIntensity {
+    static func fraction(tokens: Int, maxTokens: Int, isActive: Bool) -> Double {
+        guard isActive else { return 0 }
+        return max(UsageChartScaling.fraction(value: Double(tokens), maximum: Double(maxTokens)), 0.05)
+    }
+}
+
 /// GitHub-style contribution grid over the 120-day window: columns are weeks
-/// (Monday-first), rows are weekdays, cell intensity follows the day's USD.
-/// Peak / average / streak stats sit to the right of the grid to keep the
-/// popover short.
+/// (Monday-first), rows are weekdays, cell intensity follows the day's token
+/// volume (see `CombinedHeatmapIntensity`) — USD stays in the header/detail
+/// text only. Peak / average / streak stats sit to the right of the grid to
+/// keep the popover short.
 struct CombinedHeatmapCard: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -858,7 +1214,7 @@ struct CombinedHeatmapCard: View {
     private static let cellGap: CGFloat = 2
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    private var maxUSD: Double { max(report.daily.map(\.usd).max() ?? 0, 0.01) }
+    private var maxTokens: Int { max(report.daily.map(\.tokens).max() ?? 0, 1) }
     private var today: Date? { report.daily.last?.date }
 
     /// Week columns, padded with nil at both ends so every column has 7 rows.
@@ -956,9 +1312,8 @@ struct CombinedHeatmapCard: View {
     @ViewBuilder
     private func cell(_ day: CombinedDailyUsage?) -> some View {
         if let day {
-            // Active-but-$0 days (tokens only) still get the lightest heat
-            // level so they don't read as idle.
-            let fraction = day.isActive ? max(day.usd / maxUSD, 0.05) : 0
+            let fraction = CombinedHeatmapIntensity.fraction(
+                tokens: day.tokens, maxTokens: maxTokens, isActive: day.isActive)
             let isSelected = selectedDay?.id == day.id
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(VocabbyTheme.heatColor(fraction: fraction))

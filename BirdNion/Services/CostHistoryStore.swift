@@ -40,6 +40,56 @@ enum CostHistoryStore {
         var version: Int?
         /// source id → "yyyy-MM-dd" (local) → day totals
         var sources: [String: [String: Day]]?
+        /// source id → epoch millis of the most recent successful live scan
+        /// (Data Confidence Pass, mirrors the Linux Tauri port's
+        /// `cost-history.json` schema). Optional so older documents without
+        /// this key decode unchanged — missing entries read back as `nil`.
+        var scannedAt: [String: Double]?
+    }
+
+    // MARK: - Data Confidence Pass
+
+    /// Per-source scan-confidence metadata for the All-tab compact badge —
+    /// mirrors the Linux port's `included`/`live`/`scannedAt` `UsageReport`
+    /// fields. Pure value type; produced by `confidence(source:liveScanSucceeded:)`.
+    struct UsageScanConfidence: Equatable {
+        /// `true` once this source has ever produced evidence — this cycle's
+        /// live scan succeeded, or history already holds a real (non-zero)
+        /// day for it. `false` means the source has no data on this machine
+        /// at all.
+        let included: Bool
+        /// `true` when THIS refresh cycle's scanner actually ran and
+        /// returned a report (merged into history); `false` means the
+        /// numbers are a history-only carry-forward.
+        let live: Bool
+        /// Most recent successful live-scan time, persisted so a
+        /// history-only cycle can still report freshness. `nil` when no
+        /// live scan has ever succeeded for this source.
+        let scannedAt: Date?
+
+        /// Neutral placeholder for reports built without going through
+        /// `CostHistoryStore` (memberwise inits, previews, tests).
+        static let unavailable = UsageScanConfidence(included: false, live: false, scannedAt: nil)
+    }
+
+    /// Read-only confidence lookup for one source. Call after `apply` so a
+    /// live scan's just-written `scannedAt` stamp is already on disk. No
+    /// merge, no write — mirrors the `window(source:...)` read-only helper.
+    static func confidence(
+        source: Source,
+        liveScanSucceeded: Bool,
+        url: URL = historyURL()) -> UsageScanConfidence
+    {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        let doc = read(url: url)
+        let byDay = doc.sources?[source.rawValue] ?? [:]
+        let historyHasData = byDay.values.contains { $0.tokens > 0 || $0.usd > 0 }
+        let scannedAt = doc.scannedAt?[source.rawValue].map { Date(timeIntervalSince1970: $0 / 1000) }
+        return UsageScanConfidence(
+            included: liveScanSucceeded || historyHasData,
+            live: liveScanSucceeded,
+            scannedAt: scannedAt)
     }
 
     // MARK: - Path
@@ -146,7 +196,10 @@ enum CostHistoryStore {
         }
 
         sources[source.rawValue] = byDay
-        let updated = Document(version: version, sources: sources)
+        // Preserve the confidence-pass timestamp map untouched — `apply`
+        // stamps it separately, based on `liveScanSucceeded`, not on
+        // whether `liveDays` merged anything.
+        let updated = Document(version: version, sources: sources, scannedAt: document.scannedAt)
         let window = buildWindow(
             byDay: byDay, now: now, calendar: calendar, windowDays: windowDays)
         return (updated, window)
@@ -187,6 +240,11 @@ enum CostHistoryStore {
     /// Apply live days for a source: merge into disk and return the window.
     /// Pass `replacingSource: true` to atomically replace that source's days
     /// with the live set (no high-water against prior disk state).
+    /// `liveScanSucceeded` stamps `Document.scannedAt[source]` with `now`
+    /// (Data Confidence Pass) — pass `true` only when the scanner actually
+    /// ran and returned a report this cycle. `false` (the default, kept for
+    /// call sites predating this pass) leaves any prior stamp untouched, so
+    /// a history-only fallback never manufactures a fresh timestamp.
     @discardableResult
     static func apply(
         source: Source,
@@ -195,13 +253,14 @@ enum CostHistoryStore {
         calendar: Calendar = .current,
         windowDays: Int = 90,
         url: URL = historyURL(),
-        replacingSource: Bool = false) -> [DayBucket]
+        replacingSource: Bool = false,
+        liveScanSucceeded: Bool = false) -> [DayBucket]
     {
         ioLock.lock()
         defer { ioLock.unlock() }
 
         let doc = read(url: url)
-        let (updated, window) = merge(
+        var (updated, window) = merge(
             document: doc,
             source: source,
             liveDays: liveDays,
@@ -209,6 +268,11 @@ enum CostHistoryStore {
             calendar: calendar,
             windowDays: windowDays,
             replacingSource: replacingSource)
+        if liveScanSucceeded {
+            var scannedAt = updated.scannedAt ?? [:]
+            scannedAt[source.rawValue] = now.timeIntervalSince1970 * 1000
+            updated.scannedAt = scannedAt
+        }
         try? write(updated, url: url)
         return window
     }
@@ -258,7 +322,8 @@ enum CostHistoryStore {
         window: [DayBucket],
         hourly: [ClaudeHourlyUsage] = [],
         now: Date = Date(),
-        calendar: Calendar = .current) -> ClaudeUsageReport
+        calendar: Calendar = .current,
+        confidence: UsageScanConfidence = .unavailable) -> ClaudeUsageReport
     {
         let last30 = window.suffix(30)
         let today = window.last
@@ -280,12 +345,14 @@ enum CostHistoryStore {
                     })
             },
             hourly: hourly,
-            topModel: top)
+            topModel: top,
+            scanConfidence: confidence)
     }
 
     static func makeCodexReport(
         window: [DayBucket],
-        now: Date = Date()) -> CodexUsageReport
+        now: Date = Date(),
+        confidence: UsageScanConfidence = .unavailable) -> CodexUsageReport
     {
         let last30 = window.suffix(30)
         let today = window.last
@@ -315,10 +382,14 @@ enum CostHistoryStore {
                         CodexDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
-            topModel: top)
+            topModel: top,
+            scanConfidence: confidence)
     }
 
-    static func makeGrokReport(window: [DayBucket]) -> GrokUsageReport {
+    static func makeGrokReport(
+        window: [DayBucket],
+        confidence: UsageScanConfidence = .unavailable) -> GrokUsageReport
+    {
         let last30 = window.suffix(30)
         let today = window.last
         var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
@@ -347,7 +418,8 @@ enum CostHistoryStore {
                         GrokDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
-            topModel: top)
+            topModel: top,
+            scanConfidence: confidence)
     }
 
     static func makeKiroReport(window: [DayBucket]) -> KiroUsageReport {

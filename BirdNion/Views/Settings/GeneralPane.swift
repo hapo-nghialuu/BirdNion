@@ -113,6 +113,39 @@ struct GeneralPane: View {
                 }
             }
 
+            SettingsCard(
+                header: L10n.t("settings.section.budget", settings.appLanguage),
+                footer: LocalizedStringKey(L10n.t("settings.monthlyBudget.subtitle", settings.appLanguage))
+            ) {
+                SettingsLabeledRow(
+                    title: L10n.t("settings.monthlyBudget.title", settings.appLanguage)
+                ) {
+                    TextField("∞", text: Binding(
+                        get: {
+                            // Plain `String(_:)` (mirrors the Bedrock budget
+                            // field below) instead of a fixed-decimal format —
+                            // reformatting on every keystroke fights the
+                            // user's typing and jumps the cursor.
+                            settings.monthlyBudgetUSD > 0 ? String(settings.monthlyBudgetUSD) : ""
+                        },
+                        set: { raw in
+                            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+                            // Blank, unparsable, non-finite (NaN/Infinity —
+                            // `Double("inf")`/`Double("nan")` both parse
+                            // successfully), or non-positive all normalize to
+                            // 0 ("not configured") — never persisted as-is.
+                            guard let parsed = Double(trimmed), parsed.isFinite, parsed > 0 else {
+                                settings.monthlyBudgetUSD = 0
+                                return
+                            }
+                            settings.monthlyBudgetUSD = parsed
+                        }
+                    ))
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 90)
+                }
+            }
+
             SettingsCard(header: L10n.t("settings.section.notifications", settings.appLanguage)) {
                 SettingsLabeledRow(
                     title: L10n.t("settings.statusChecks.title", settings.appLanguage),
@@ -194,6 +227,20 @@ struct GeneralPane: View {
                     ) {
                         Toggle("", isOn: $settings.quotaWarningOnScreenAlertEnabled).labelsHidden().toggleStyle(.switch)
                     }
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.weeklyDigest.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.weeklyDigest.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.weeklyDigestEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: settings.weeklyDigestEnabled) { enabled in
+                            if enabled { WeeklyDigest.lastEvaluatedAt = nil }
+                        }
                 }
             }
 

@@ -71,6 +71,37 @@ final class QuotaServicePollingTests: XCTestCase {
         XCTAssertEqual(provider.fetchCount, 2)
     }
 
+    func testAdaptiveIntervalNeverPollsFasterAndCapsAtEightTimes() {
+        XCTAssertEqual(QuotaService.adaptiveInterval(base: 3_600, consecutiveFailures: 0), 3_600)
+        XCTAssertEqual(QuotaService.adaptiveInterval(base: 3_600, consecutiveFailures: 1), 3_600)
+        XCTAssertEqual(QuotaService.adaptiveInterval(base: 3_600, consecutiveFailures: 2), 7_200)
+        XCTAssertEqual(QuotaService.adaptiveInterval(base: 3_600, consecutiveFailures: 3), 14_400)
+        XCTAssertEqual(QuotaService.adaptiveInterval(base: 3_600, consecutiveFailures: 4), 28_800)
+        XCTAssertEqual(QuotaService.adaptiveInterval(base: 3_600, consecutiveFailures: 99), 28_800)
+        XCTAssertEqual(QuotaService.adaptiveInterval(base: 0, consecutiveFailures: 99), 0)
+    }
+
+    @MainActor
+    func testAdaptiveBackoffAdvancesOnAutomaticFailureAndManualRetryResets() async {
+        let provider = GoodThenErrorProvider(id: "adaptive", displayName: "Adaptive")
+        let svc = QuotaService(providers: [provider], interval: 0)
+
+        await svc.refresh() // success
+        XCTAssertEqual(svc.adaptiveBackoffState(for: "adaptive").consecutiveFailures, 0)
+
+        await svc.refresh() // first automatic failure stays at 1x
+        XCTAssertEqual(svc.adaptiveBackoffState(for: "adaptive").multiplier, 1)
+        await svc.refresh() // second automatic failure moves to 2x
+        var state = svc.adaptiveBackoffState(for: "adaptive")
+        XCTAssertEqual(state.consecutiveFailures, 2)
+        XCTAssertEqual(state.multiplier, 2)
+
+        await svc.refresh(forceProviderIDs: ["adaptive"]) // user retry resets, then fails once
+        state = svc.adaptiveBackoffState(for: "adaptive")
+        XCTAssertEqual(state.consecutiveFailures, 1)
+        XCTAssertEqual(state.multiplier, 1)
+    }
+
     @MainActor
     func testStatusCacheRestoresSnapshotsAndSeedsThrottle() async {
         let cacheURL = FileManager.default.temporaryDirectory
@@ -153,6 +184,49 @@ final class QuotaServicePollingTests: XCTestCase {
         XCTAssertEqual(gateFetchCount, 1)
         XCTAssertEqual(maximumConcurrentFetches, 1)
         XCTAssertFalse(svc.refreshCoordinatorState().running)
+    }
+
+    @MainActor
+    func testQueuedForcedRefreshRetriesFailedInFlightProviderAndResetsBackoff() async {
+        let provider = GatedProvider(id: "slow", displayName: "Slow", error: "timeout")
+        let svc = QuotaService(providers: [provider], interval: 3_600)
+
+        let background = Task { @MainActor in
+            await svc.refresh()
+        }
+        await provider.waitUntilFirstFetchStarts()
+
+        let forced = Task { @MainActor in
+            await svc.refresh(forceProviderIDs: ["slow"])
+        }
+        for _ in 0..<100 where !svc.refreshCoordinatorState().pending {
+            await Task.yield()
+        }
+
+        await provider.releaseFirstFetch()
+        await background.value
+        await forced.value
+
+        let fetchCount = await provider.fetchCount()
+        XCTAssertEqual(fetchCount, 2)
+        let state = svc.adaptiveBackoffState(for: "slow")
+        XCTAssertEqual(state.consecutiveFailures, 1)
+        XCTAssertEqual(state.multiplier, 1)
+    }
+
+    @MainActor
+    func testRemoveThenAddSameProviderIDDoesNotReuseThrottleTimestamp() async {
+        let first = CountingProvider(id: "readded", displayName: "First")
+        let svc = QuotaService(providers: [first], interval: 3_600)
+        await svc.refresh()
+        XCTAssertEqual(first.fetchCount, 1)
+
+        svc.remove(id: "readded")
+        let replacement = CountingProvider(id: "readded", displayName: "Replacement")
+        svc.add(replacement)
+        await svc.refresh()
+
+        XCTAssertEqual(replacement.fetchCount, 1)
     }
 
     @MainActor
@@ -377,6 +451,96 @@ final class QuotaServicePollingTests: XCTestCase {
 
     /// R3.5: the counter counts even while the published status keeps a
     /// preserved stale GOOD snapshot (the awaited fetch result drives it).
+    // MARK: - Service-status last-good preservation
+
+    /// A successful fetch that comes back with BOTH service-status fields
+    /// nil (the side probe returned nothing this cycle) preserves the same
+    /// provider's last-good pair. Quota data + `lastUpdated` still come from
+    /// the incoming snapshot, never the previous one.
+    func testPreservesLastGoodServiceStatusWhenIncomingBothNil() {
+        let previous = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(timeIntervalSince1970: 1_000),
+            serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
+        let incoming = ProviderStatus(
+            id: "codex", displayName: "Codex",
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 10, remainingPct: 90)],
+            lastUpdated: Date(timeIntervalSince1970: 2_000))
+
+        let merged = QuotaService.preservingLastGoodServiceStatus(incoming, previous: previous)
+
+        XCTAssertEqual(merged.serviceStatus, "All Systems Operational")
+        XCTAssertEqual(merged.serviceStatusLevel, "none")
+        XCTAssertEqual(merged.lastUpdated, incoming.lastUpdated)
+        XCTAssertEqual(merged.windows, incoming.windows)
+    }
+
+    /// Any incoming non-nil service-status value always wins over the
+    /// previous one — this merge only fills a true nil/nil gap.
+    func testIncomingNonNilServiceStatusAlwaysWins() {
+        let previous = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
+            serviceStatus: "Degraded", serviceStatusLevel: "major")
+        let incoming = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
+            serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
+
+        let merged = QuotaService.preservingLastGoodServiceStatus(incoming, previous: previous)
+
+        XCTAssertEqual(merged.serviceStatus, "All Systems Operational")
+        XCTAssertEqual(merged.serviceStatusLevel, "none")
+    }
+
+    /// Never merge across providers — a previous snapshot for a different id
+    /// must not backfill an unrelated incoming status.
+    func testServiceStatusMergeSkipsAcrossProviderMismatch() {
+        let previous = ProviderStatus(
+            id: "claude", displayName: "Claude", windows: [], lastUpdated: Date(),
+            serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
+        let incoming = ProviderStatus(id: "codex", displayName: "Codex", windows: [], lastUpdated: Date())
+
+        let merged = QuotaService.preservingLastGoodServiceStatus(incoming, previous: previous)
+
+        XCTAssertNil(merged.serviceStatus)
+        XCTAssertNil(merged.serviceStatusLevel)
+    }
+
+    /// A primary fetch error must never be masked by merging in the previous
+    /// service-status pair.
+    func testServiceStatusMergeDoesNotMaskPrimaryError() {
+        let previous = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
+            serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
+        let incoming = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(), error: "timeout")
+
+        let merged = QuotaService.preservingLastGoodServiceStatus(incoming, previous: previous)
+
+        XCTAssertEqual(merged.error, "timeout")
+        XCTAssertNil(merged.serviceStatus)
+        XCTAssertNil(merged.serviceStatusLevel)
+    }
+
+    /// End-to-end through `refresh()`: a provider that stops reporting
+    /// service-status on its second fetch (but still succeeds with fresh
+    /// quota windows) keeps showing the first fetch's last-good pair.
+    @MainActor
+    func testRefreshPreservesServiceStatusAcrossTransientProbeGap() async {
+        let provider = ServiceStatusThenGapProvider(id: "codex", displayName: "Codex")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.serviceStatus, "All Systems Operational")
+        XCTAssertEqual(svc.statuses.first?.serviceStatusLevel, "none")
+
+        await svc.refresh(forceProviderIDs: ["codex"])
+
+        let status = svc.statuses.first
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(status?.serviceStatus, "All Systems Operational")     // preserved
+        XCTAssertEqual(status?.serviceStatusLevel, "none")                  // preserved
+        XCTAssertEqual(status?.windows.first?.usedPct, 55)                  // fresh quota data still applied
+    }
+
     @MainActor
     func testFailureCounterRunsDespitePreservedStaleSnapshot() async {
         let provider = GoodThenErrorProvider(id: "claude", displayName: "Claude")
@@ -620,6 +784,35 @@ private final class GoodThenErrorProvider: QuotaProvider {
             windows: [],
             lastUpdated: Date(),
             error: "\(displayName): timeout")
+    }
+}
+
+/// First fetch reports a service-status pair; every later fetch still
+/// succeeds with fresh quota windows but stops reporting service-status
+/// (both fields nil) — simulates a transient side-probe gap.
+private final class ServiceStatusThenGapProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    private var fetchCount = 0
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        fetchCount += 1
+        if fetchCount == 1 {
+            return ProviderStatus(
+                id: id, displayName: displayName,
+                windows: [QuotaWindow(label: "5 giờ", usedPct: 10, remainingPct: 90)],
+                lastUpdated: Date(),
+                serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
+        }
+        return ProviderStatus(
+            id: id, displayName: displayName,
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 55, remainingPct: 45)],
+            lastUpdated: Date())
     }
 }
 

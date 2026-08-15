@@ -163,6 +163,36 @@ export function setShowTrayPercentEnabled(v: boolean) {
 }
 
 export const TRAY_PERCENT_STORAGE_KEY = SHOW_TRAY_PERCENT_KEY;
+
+const MONTHLY_BUDGET_KEY = "birdnion.monthlyBudgetUSD";
+/** Exported so main.ts's cross-window `storage` listener can filter on this
+ * key without duplicating the string literal (mirrors `TRAY_PERCENT_STORAGE_KEY`). */
+export const MONTHLY_BUDGET_STORAGE_KEY = MONTHLY_BUDGET_KEY;
+/** `storage` only fires in OTHER windows — same-window listeners (e.g. the
+ * Settings window itself, if it ever renders the forecast) need this. */
+export const MONTHLY_BUDGET_CHANGED_EVENT = "birdnion-budget-changed";
+
+/** All-tab monthly cost budget (USD) — local UI preference only, mirrors
+ * macOS `@AppStorage` (never written to settings.json: a Mac-side Codable
+ * re-save would silently drop an unknown top-level key, see BirdNionConfigStore.
+ * Config). `null` = feature off (no budget/forecast card). */
+export function getMonthlyBudgetUsd(): number | null {
+  const raw = localStorage.getItem(MONTHLY_BUDGET_KEY);
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Blank/invalid/<=0 clears the budget (feature off) instead of persisting a
+ * bad value. Dispatches the same-window event; other windows pick it up via
+ * the native cross-window `storage` event. */
+export function setMonthlyBudgetUsd(n: number | null): void {
+  const valid = n != null && Number.isFinite(n) && n > 0 ? n : null;
+  if (valid == null) localStorage.removeItem(MONTHLY_BUDGET_KEY);
+  else localStorage.setItem(MONTHLY_BUDGET_KEY, String(valid));
+  window.dispatchEvent(new CustomEvent(MONTHLY_BUDGET_CHANGED_EVENT, { detail: { budget: valid } }));
+}
+
 export function isHidePersonalInfo(): boolean {
   return localStorage.getItem(HIDE_PERSONAL_KEY) === "true";
 }

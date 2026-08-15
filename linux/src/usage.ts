@@ -2,6 +2,8 @@
 // combined-report math ported from the macOS `CombinedUsageReport.build`
 // (Claude + Codex + Grok).
 
+import { t } from "./i18n";
+
 export type DailyModel = { name: string; usd: number; tokens: number };
 export type DailyUsage = { date: string; usd: number; tokens: number; models: DailyModel[] };
 export type HourlyUsage = { hour: string; usd: number; tokens: number };
@@ -13,7 +15,38 @@ export type UsageReport = {
   daily: DailyUsage[];
   hourly: HourlyUsage[];
   topModel: string | null;
+  /** Data Confidence Pass metadata — optional so older cached reports (or a
+   * command result predating this field) still type-check. `undefined`
+   * reads the same as `false`/`null` at every call site below. */
+  included?: boolean;
+  live?: boolean;
+  scannedAt?: number | null;
 };
+
+/** One of the three All-tab cost sources, for confidence badges. */
+export type UsageSourceId = "claude" | "codex" | "grok";
+
+export type ScanConfidence = "live" | "history" | "unavailable";
+
+/** Data Confidence Pass: classify a source's report into the compact
+ * All-tab badge state. Pure function of the report's own fields — no
+ * network/clock access beyond what the caller already fetched. */
+export function scanConfidence(report: UsageReport | null | undefined): ScanConfidence {
+  if (!report?.included) return "unavailable";
+  return report.live ? "live" : "history";
+}
+
+/** "vừa quét" / "N phút trước" / "N giờ trước" freshness label from a
+ * source's `scannedAt` (epoch millis). `null` when there is nothing to show
+ * (never scanned) — callers render a placeholder instead. */
+export function scanFreshness(scannedAt: number | null | undefined): string | null {
+  if (scannedAt == null || !Number.isFinite(scannedAt) || scannedAt <= 0) return null;
+  const seconds = Math.max(0, Math.floor((Date.now() - scannedAt) / 1000));
+  if (seconds < 5) return t("time.justUpdated");
+  if (seconds < 60) return t("time.secondsAgo", { n: seconds });
+  if (seconds < 3600) return t("time.minutesAgo", { n: Math.floor(seconds / 60) });
+  return t("time.hoursAgo", { n: Math.floor(seconds / 3600) });
+}
 
 export type CombinedModel = {
   name: string;
@@ -136,6 +169,157 @@ export function combine(
     avgActiveUsd: active.length ? totalUsd / active.length : 0,
     streakDays: streak,
     topModels,
+  };
+}
+
+// --- Weekly Digest window stats ---------------------------------------------
+
+export type DigestWindowStats = {
+  usd: number;
+  tokens: number;
+  bySource: Record<UsageSourceId, { usd: number; tokens: number }>;
+  /** Deterministic tie-break: tokens desc, then usd desc, then source name
+   * (iteration order below is already alphabetical claude/codex/grok). */
+  topSource: UsageSourceId | null;
+  /** Deterministic tie-break: tokens desc, then usd desc, then model name,
+   * then source — never depends on map/array insertion order. */
+  topModel: CombinedModel | null;
+};
+
+function compareDigestLabels(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Sum a `combine()` daily array over an inclusive `[startDate, endDate]`
+ * range (YYYY-MM-DD strings) restricted to `enabledSources`, for the Weekly
+ * Digest notification. Pure function of its inputs — no clock/network
+ * access — so it is independently verifiable without live scanners. */
+export function digestWindowStats(
+  daily: CombinedDay[],
+  startDate: string,
+  endDate: string,
+  enabledSources: ReadonlySet<UsageSourceId>,
+): DigestWindowStats {
+  const bySource: Record<UsageSourceId, { usd: number; tokens: number }> = {
+    claude: { usd: 0, tokens: 0 },
+    codex: { usd: 0, tokens: 0 },
+    grok: { usd: 0, tokens: 0 },
+  };
+  const modelMap = new Map<string, CombinedModel>();
+  for (const d of daily) {
+    if (d.date < startDate || d.date > endDate) continue;
+    if (enabledSources.has("claude")) { bySource.claude.usd += d.claudeUsd; bySource.claude.tokens += d.claudeTokens; }
+    if (enabledSources.has("codex")) { bySource.codex.usd += d.codexUsd; bySource.codex.tokens += d.codexTokens; }
+    if (enabledSources.has("grok")) { bySource.grok.usd += d.grokUsd; bySource.grok.tokens += d.grokTokens; }
+    for (const m of d.models) {
+      if (!enabledSources.has(m.source)) continue;
+      const key = `${m.source}:${m.name}`;
+      const existing = modelMap.get(key);
+      if (existing) { existing.usd += m.usd; existing.tokens += m.tokens; }
+      else modelMap.set(key, { ...m });
+    }
+  }
+
+  let topSource: UsageSourceId | null = null;
+  for (const s of ["claude", "codex", "grok"] as const) {
+    if (!enabledSources.has(s)) continue;
+    const cand = bySource[s];
+    if (cand.usd === 0 && cand.tokens === 0) continue;
+    if (!topSource) { topSource = s; continue; }
+    const best = bySource[topSource];
+    if (cand.tokens !== best.tokens) { if (cand.tokens > best.tokens) topSource = s; continue; }
+    if (cand.usd !== best.usd && cand.usd > best.usd) topSource = s;
+    // Equal tokens and usd: keep the earlier (alphabetically first) source.
+  }
+
+  const topModel = [...modelMap.values()].sort((a, b) =>
+    (b.tokens - a.tokens) || (b.usd - a.usd)
+      || compareDigestLabels(a.name, b.name) || compareDigestLabels(a.source, b.source),
+  )[0] ?? null;
+
+  return {
+    usd: bySource.claude.usd + bySource.codex.usd + bySource.grok.usd,
+    tokens: bySource.claude.tokens + bySource.codex.tokens + bySource.grok.tokens,
+    bySource,
+    topSource,
+    topModel,
+  };
+}
+
+// --- Budget & monthly forecast (Phase 2) ------------------------------------
+
+/** `already-over`: month-to-date spend already exceeds the budget.
+ * `forecast-over`: still under budget so far, but the linear projection
+ * would exceed it by month end. `on-track`: neither. */
+export type BudgetStatus = "on-track" | "forecast-over" | "already-over";
+
+export type MonthlyForecast = {
+  budgetUsd: number;
+  monthToDateUsd: number;
+  /** 1-based day of month "as of", inclusive of today. */
+  daysElapsed: number;
+  daysInMonth: number;
+  /** Linear projection: `monthToDateUsd / daysElapsed * daysInMonth`. */
+  projectedUsd: number;
+  /** `budgetUsd - monthToDateUsd`; negative once already over budget. */
+  remainingUsd: number;
+  /** `monthToDateUsd / budgetUsd * 100`, uncapped (can exceed 100). */
+  usedPct: number;
+  /** `projectedUsd / budgetUsd * 100`, uncapped. */
+  projectedPct: number;
+  status: BudgetStatus;
+};
+
+/** Pure month-to-date + linear-projection forecast for the All-tab budget
+ * card. Filters `daily` to the CURRENT local calendar month only (not a
+ * rolling 30-day window), through today (a same-month bucket dated AFTER
+ * today — clock skew, a mocked `now` in tests — is excluded so "month to
+ * date" never counts a day that hasn't happened yet), then projects a
+ * full-month total assuming the same daily average holds for the rest of
+ * the month. `now` is injectable for deterministic testing.
+ *
+ * `budgetUsd` must be a finite, positive number — blank/NaN/zero/negative
+ * all return `null` so the caller hides the card entirely (feature off),
+ * matching `getMonthlyBudgetUsd`'s own validation. Non-finite or negative
+ * per-day `usd` (corrupt scan data) is ignored (counted as 0) rather than
+ * poisoning the sum — `Math.max(0, NaN)` is `NaN`, not `0`. */
+export function monthlyForecast(
+  daily: CombinedDay[],
+  budgetUsd: number | null | undefined,
+  now: Date = new Date(),
+): MonthlyForecast | null {
+  if (budgetUsd == null || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
+
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const prefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
+  const todayKey = `${prefix}${String(now.getDate()).padStart(2, "0")}`;
+  const monthToDateUsd = daily
+    .filter((d) => d.date.startsWith(prefix) && d.date <= todayKey)
+    .reduce((sum, d) => sum + (Number.isFinite(d.usd) && d.usd > 0 ? d.usd : 0), 0);
+
+  // `new Date(year, month + 1, 0)` is the last day of `month` — correctly
+  // resolves 28/29 (leap year) Feb, 30- vs 31-day months, and Dec → next
+  // year's Jan-0 rollover, all via the native calendar (no manual table).
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysElapsed = Math.min(Math.max(now.getDate(), 1), daysInMonth);
+  const projectedUsd = (monthToDateUsd / daysElapsed) * daysInMonth;
+
+  const status: BudgetStatus =
+    monthToDateUsd > budgetUsd ? "already-over"
+      : projectedUsd > budgetUsd ? "forecast-over"
+        : "on-track";
+
+  return {
+    budgetUsd,
+    monthToDateUsd,
+    daysElapsed,
+    daysInMonth,
+    projectedUsd,
+    remainingUsd: budgetUsd - monthToDateUsd,
+    usedPct: (monthToDateUsd / budgetUsd) * 100,
+    projectedPct: (projectedUsd / budgetUsd) * 100,
+    status,
   };
 }
 

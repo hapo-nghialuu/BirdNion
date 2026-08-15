@@ -41,6 +41,10 @@ struct GrokUsageReport: Equatable {
     /// Contiguous `chartWindowDays` daily buckets, oldest → newest.
     let daily: [GrokDailyUsage]
     let topModel: String?
+    /// Data Confidence Pass metadata (included/live/scannedAt) for the
+    /// All-tab compact badge. Defaulted so memberwise call sites predating
+    /// this pass stay source-compatible.
+    var scanConfidence: CostHistoryStore.UsageScanConfidence = .unavailable
 
     /// Empty only when there is neither spend nor tokens in the 30-day window
     /// (usd alone still warrants a chart card).
@@ -199,6 +203,23 @@ enum GrokCostScanner {
     static func usageReport(now: Date = Date()) async -> GrokUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
         let value = await Task.detached(priority: .utility) {
+            guard availableSessionsRoot(
+                env: ProcessInfo.processInfo.environment, fileManager: .default, homeURL: nil) != nil
+            else {
+                // Sessions root missing entirely (Grok never installed, or
+                // `GROK_HOME` points elsewhere) — never run `loadSessions`
+                // (would prune every persisted baseline) and never claim a
+                // live scan happened. Merge nothing new so existing history
+                // and its `scannedAt` stamp stay exactly as they were;
+                // `confidence` falls back to history-only, or unavailable
+                // when there's no history for this source at all.
+                let window = CostHistoryStore.apply(
+                    source: .grok, liveDays: [], now: now, windowDays: chartWindowDays,
+                    liveScanSucceeded: false)
+                let confidence = CostHistoryStore.confidence(source: .grok, liveScanSucceeded: false)
+                return CostHistoryStore.makeGrokReport(window: window, confidence: confidence)
+            }
+
             // Only rescan days that can still change persisted history; the
             // store supplies the older days. On a counting-revision bump, scan
             // the full chart window once so `replacingSource` can rebuild
@@ -212,25 +233,29 @@ enum GrokCostScanner {
             // would shrink every delta to ~0, and `replacingSource` below
             // would then rebuild the whole history from near-empty days.
             // Clearing first makes the full-window rescan re-charge each
-            // session's lifetime exactly once at its last-active day.
+            // session's lifetime exactly once at its last-active day. Safe
+            // here: the root is confirmed to exist (guard above).
             if replacing {
                 GrokSessionBaselineStore.save([:], keepKeys: [])
             }
             let scanDays = replacing ? chartWindowDays : incrementalDays
+            // The root's existence was just confirmed, so the plain
+            // (nonoptional) `scanFull` is safe to call directly here.
             let live = scanFull(now: now, windowDays: scanDays)
             let liveDays = live.daily.map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
             }
-            // Live scan always succeeds for Grok (`scanFull` never returns nil).
             let window = CostHistoryStore.apply(
                 source: .grok,
                 liveDays: liveDays,
                 now: now,
                 windowDays: chartWindowDays,
-                replacingSource: replacing)
+                replacingSource: replacing,
+                liveScanSucceeded: true)
             UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
-            return CostHistoryStore.makeGrokReport(window: window)
+            let confidence = CostHistoryStore.confidence(source: .grok, liveScanSucceeded: true)
+            return CostHistoryStore.makeGrokReport(window: window, confidence: confidence)
         }.value
         await Cache.shared.storeReport(value, at: now)
         return value
@@ -246,7 +271,9 @@ enum GrokCostScanner {
             let window = CostHistoryStore.window(
                 source: .grok, now: now, windowDays: chartWindowDays, url: url)
             guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
-            return CostHistoryStore.makeGrokReport(window: window)
+            let confidence = CostHistoryStore.confidence(
+                source: .grok, liveScanSucceeded: false, url: url)
+            return CostHistoryStore.makeGrokReport(window: window, confidence: confidence)
         }.value
     }
 
@@ -261,6 +288,50 @@ enum GrokCostScanner {
     {
         let root = (homeURL ?? GrokCredentialsStore.grokHomeURL(env: env, fileManager: fileManager))
             .appendingPathComponent("sessions", isDirectory: true)
+        let sessions = loadSessions(
+            root: root, fileManager: fileManager, now: now, windowDays: windowDays,
+            baselineURL: baselineURL)
+        return buildReport(sessions: sessions, now: now, windowDays: windowDays)
+    }
+
+    /// The sessions root, but only when it actually exists as a directory —
+    /// `nil` when it's missing entirely or the path exists but isn't a
+    /// directory. Shared by `scanFullIfAvailable` and `usageReport` so a
+    /// missing root is decided once, consistently, before any baseline or
+    /// counting-revision side effect runs.
+    private static func availableSessionsRoot(
+        env: [String: String],
+        fileManager: FileManager,
+        homeURL: URL?
+    ) -> URL? {
+        let root = (homeURL ?? GrokCredentialsStore.grokHomeURL(env: env, fileManager: fileManager))
+            .appendingPathComponent("sessions", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue
+        else { return nil }
+        return root
+    }
+
+    /// Same as `scanFull`, but returns `nil` when the sessions root itself is
+    /// missing or not a directory, instead of quietly treating that as "zero
+    /// sessions". A root that exists but is genuinely empty still returns a
+    /// (zero) report — that's a legitimate live scan, not an unavailable one.
+    ///
+    /// Never calls `loadSessions` (and therefore never touches
+    /// `GrokSessionBaselineStore`) when it returns `nil` — a missing
+    /// `~/.grok` (Grok never installed, or `GROK_HOME` pointed elsewhere)
+    /// must not prune every persisted session baseline just because the
+    /// scan couldn't run this cycle.
+    static func scanFullIfAvailable(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        homeURL: URL? = nil,
+        now: Date = Date(),
+        windowDays: Int = chartWindowDays,
+        baselineURL: URL = GrokSessionBaselineStore.defaultURL()) -> GrokUsageReport?
+    {
+        guard let root = availableSessionsRoot(env: env, fileManager: fileManager, homeURL: homeURL)
+        else { return nil }
         let sessions = loadSessions(
             root: root, fileManager: fileManager, now: now, windowDays: windowDays,
             baselineURL: baselineURL)

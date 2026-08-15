@@ -319,6 +319,10 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
         daily,
         hourly,
         top_model,
+        // Confidence metadata (included/live/scanned_at) is decided by
+        // `cost_history::apply_and_report`, which owns the merge; this
+        // intermediate "live" report is only ever consumed there.
+        ..Default::default()
     })
 }
 

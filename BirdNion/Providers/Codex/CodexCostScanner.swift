@@ -52,6 +52,10 @@ struct CodexUsageReport: Equatable {
     let daily: [CodexDailyUsage]
     /// Highest-cost model across the window (shortened). nil when none logged.
     let topModel: String?
+    /// Data Confidence Pass metadata (included/live/scannedAt) for the
+    /// All-tab compact badge. Defaulted so memberwise call sites predating
+    /// this pass stay source-compatible.
+    var scanConfidence: CostHistoryStore.UsageScanConfidence = .unavailable
 
     var isEmpty: Bool { last30Tokens == 0 }
 }
@@ -147,12 +151,16 @@ enum CodexCostScanner {
             ($0.date, $0.usd, $0.tokens,
              $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
         }
+        let liveScanSucceeded = live != nil
         let window = CostHistoryStore.apply(
             source: .codex,
             liveDays: liveDays,
             now: now,
-            windowDays: chartWindowDays)
-        let value = CostHistoryStore.makeCodexReport(window: window, now: now)
+            windowDays: chartWindowDays,
+            liveScanSucceeded: liveScanSucceeded)
+        let confidence = CostHistoryStore.confidence(
+            source: .codex, liveScanSucceeded: liveScanSucceeded)
+        let value = CostHistoryStore.makeCodexReport(window: window, now: now, confidence: confidence)
         // Persist high-water days even when the live snapshot fails / is empty
         // (e.g. user deleted ~/.codex/sessions after a prior successful scan).
         if value.isEmpty && live == nil {
@@ -172,7 +180,9 @@ enum CodexCostScanner {
             let window = CostHistoryStore.window(
                 source: .codex, now: now, windowDays: chartWindowDays, url: url)
             guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
-            return CostHistoryStore.makeCodexReport(window: window, now: now)
+            let confidence = CostHistoryStore.confidence(
+                source: .codex, liveScanSucceeded: false, url: url)
+            return CostHistoryStore.makeCodexReport(window: window, now: now, confidence: confidence)
         }.value
     }
 

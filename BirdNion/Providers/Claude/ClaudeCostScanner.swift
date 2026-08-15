@@ -66,6 +66,10 @@ struct ClaudeUsageReport: Equatable {
     /// Most-used model across the 30-day window (by token count). nil when
     /// no model information was logged.
     let topModel: String?
+    /// Data Confidence Pass metadata (included/live/scannedAt) for the
+    /// All-tab compact badge. Defaulted so memberwise call sites predating
+    /// this pass stay source-compatible.
+    var scanConfidence: CostHistoryStore.UsageScanConfidence = .unavailable
 
     var isEmpty: Bool { last30Tokens == 0 }
 
@@ -291,16 +295,21 @@ enum ClaudeCostScanner {
             // atomic write. If live is nil, keep prior history and leave
             // revision unset so the next run can still rescan.
             let replacing = storedPricingRevision < pricingRevision && live != nil
+            let liveScanSucceeded = live != nil
             let window = CostHistoryStore.apply(
                 source: .claude,
                 liveDays: liveDays,
                 now: now,
                 windowDays: historyDays,
-                replacingSource: replacing)
+                replacingSource: replacing,
+                liveScanSucceeded: liveScanSucceeded)
+            let confidence = CostHistoryStore.confidence(
+                source: .claude, liveScanSucceeded: liveScanSucceeded)
             let report = CostHistoryStore.makeClaudeReport(
                 window: window,
                 hourly: live?.hourly ?? [],
-                now: now)
+                now: now,
+                confidence: confidence)
             if live != nil {
                 UserDefaults.standard.set(pricingRevision, forKey: pricingRevisionKey)
             }
@@ -322,7 +331,9 @@ enum ClaudeCostScanner {
             let window = CostHistoryStore.window(
                 source: .claude, now: now, windowDays: historyDays, url: url)
             guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
-            return CostHistoryStore.makeClaudeReport(window: window, now: now)
+            let confidence = CostHistoryStore.confidence(
+                source: .claude, liveScanSucceeded: false, url: url)
+            return CostHistoryStore.makeClaudeReport(window: window, now: now, confidence: confidence)
         }.value
     }
 

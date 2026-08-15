@@ -62,8 +62,13 @@ pub fn usage_report() -> Option<UsageReport> {
 
 pub fn scan(now: DateTime<Local>) -> Option<UsageReport> {
     let root = grok_home().join("sessions");
+    // Missing/not-a-dir root means Grok was never scanned on this machine —
+    // return None (not a fabricated all-zero report) so the Data Confidence
+    // Pass can tell "never scanned" apart from "scanned, found nothing". An
+    // existing-but-empty root still returns Some (all-zero daily buckets)
+    // via the normal walk below, which naturally finds zero sessions.
     if !root.is_dir() {
-        return Some(empty_report(now));
+        return None;
     }
     let today = now.date_naive();
     let cutoff = today - Duration::days(HISTORY_DAYS - 1);
@@ -192,24 +197,59 @@ pub fn scan(now: DateTime<Local>) -> Option<UsageReport> {
         daily,
         hourly: vec![],
         top_model,
+        // Confidence metadata (included/live/scanned_at) is decided by
+        // `cost_history::apply_and_report`, which owns the merge; this
+        // intermediate "live" report is only ever consumed there.
+        ..Default::default()
     })
 }
 
-fn empty_report(now: DateTime<Local>) -> UsageReport {
-    let today = now.date_naive();
-    let mut daily = Vec::new();
-    for offset in (0..HISTORY_DAYS).rev() {
-        let day = today - Duration::days(offset);
-        daily.push(DailyUsage {
-            date: day.format("%Y-%m-%d").to_string(),
-            usd: 0.0,
-            tokens: 0,
-            models: vec![],
-        });
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TEST_ENV_LOCK as ENV_LOCK;
+
+    fn temp_grok_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "birdnion-grok-scanner-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
     }
-    UsageReport {
-        daily,
-        ..Default::default()
+
+    #[test]
+    fn scan_returns_none_when_sessions_root_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_grok_home("missing");
+        // Deliberately do NOT create `home` (or its `sessions` subdir) — the
+        // scanner must report "no data" (None), not a fabricated all-zero
+        // report, so the Data Confidence Pass can tell "never scanned"
+        // apart from "scanned and found nothing".
+        std::env::set_var("GROK_HOME", &home);
+
+        let result = scan(Local::now());
+
+        std::env::remove_var("GROK_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn scan_returns_empty_report_when_sessions_root_exists_but_empty() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_grok_home("empty");
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        std::env::set_var("GROK_HOME", &home);
+
+        let result = scan(Local::now());
+
+        std::env::remove_var("GROK_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+        let report = result.expect("an existing, empty sessions dir still scans (Some)");
+        assert_eq!(report.today_tokens, 0);
+        assert_eq!(report.last30_tokens, 0);
+        assert_eq!(report.daily.len(), HISTORY_DAYS as usize);
+        assert!(report.daily.iter().all(|d| d.tokens == 0 && d.usd == 0.0));
     }
 }
-

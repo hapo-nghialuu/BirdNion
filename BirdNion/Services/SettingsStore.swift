@@ -69,6 +69,10 @@ final class SettingsStore: ObservableObject {
     /// preserves the behavior from before this preference was visible.
     @AppStorage("providerFailureNotificationsEnabled") var providerFailureNotificationsEnabled: Bool = true
     @AppStorage("quotaWarningNotificationsEnabled") var quotaWarningNotificationsEnabled: Bool = false
+    /// Rolling 7-day cost/token summary notification. Off by default — see
+    /// `WeeklyDigest`. `QuotaService` reads the same UserDefaults key
+    /// directly (`WeeklyDigest.isEnabled`) on its refresh cadence.
+    @AppStorage(WeeklyDigest.enabledKey) var weeklyDigestEnabled: Bool = false
     /// Global quota-warning thresholds (remaining %). Two levels: warning then
     /// critical. `QuotaWarnConfig` reads the same keys; providers may override.
     @AppStorage(QuotaWarnConfig.level1Key) var quotaWarnLevel1: Int = 50
@@ -77,6 +81,12 @@ final class SettingsStore: ObservableObject {
     /// on-screen overlay. `QuotaWarnConfig` reads the same keys.
     @AppStorage(QuotaWarnConfig.soundKey) var quotaWarningSoundEnabled: Bool = true
     @AppStorage(QuotaWarnConfig.alertKey) var quotaWarningOnScreenAlertEnabled: Bool = false
+    /// All-tab monthly budget (USD) for the local estimated Claude+Codex+Grok
+    /// cost — 0 means "not configured" (the budget card stays hidden).
+    /// UserDefaults only; deliberately NOT `BirdNionConfigStore.Provider.budget`
+    /// (that field is Bedrock's own per-provider AWS Cost Explorer budget, a
+    /// different scope/data source) and not a new `settings.json` key.
+    @AppStorage("monthlyBudgetUSD") var monthlyBudgetUSD: Double = 0
     /// Refresh every provider each time the menu-bar popover opens (CodexBar's
     /// `refreshAllProvidersOnMenuOpen`). `AppDelegate.showPanel()` reads this.
     @AppStorage("refreshOnMenuOpen") var refreshOnMenuOpen: Bool = false

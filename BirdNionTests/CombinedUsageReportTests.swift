@@ -24,18 +24,22 @@ final class CombinedUsageReportTests: XCTestCase {
     }
 
     private func claudeReport(daily: [ClaudeDailyUsage],
-                              last30USD: Double = 0, last30Tokens: Int = 0) -> ClaudeUsageReport {
+                              last30USD: Double = 0, last30Tokens: Int = 0,
+                              confidence: CostHistoryStore.UsageScanConfidence = .unavailable
+    ) -> ClaudeUsageReport {
         ClaudeUsageReport(todayUSD: 0, todayTokens: 0,
                           last30USD: last30USD, last30Tokens: last30Tokens,
-                          daily: daily, topModel: nil)
+                          daily: daily, topModel: nil, scanConfidence: confidence)
     }
 
     private func codexReport(daily: [CodexDailyUsage],
                              todayUSD: Double = 0, todayTokens: Int = 0,
-                             last30USD: Double = 0, last30Tokens: Int = 0) -> CodexUsageReport {
+                             last30USD: Double = 0, last30Tokens: Int = 0,
+                             confidence: CostHistoryStore.UsageScanConfidence = .unavailable
+    ) -> CodexUsageReport {
         CodexUsageReport(todayUSD: todayUSD, todayTokens: todayTokens,
                          last30USD: last30USD, last30Tokens: last30Tokens,
-                         daily: daily, topModel: nil)
+                         daily: daily, topModel: nil, scanConfidence: confidence)
     }
 
     func testMergesSourcesByCalendarDay() {
@@ -243,6 +247,29 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(costHeavy, 0.01, accuracy: 0.001)
         XCTAssertGreaterThan(tokenHeavy, costHeavy)
     }
+
+    /// The heatmap cell intensity takes tokens only — USD isn't even a
+    /// parameter, so a day with high spend but low token volume can never
+    /// out-shine a high-token/low-spend day.
+    func testHeatmapIntensityScalesByTokensNotUSD() {
+        let halfway = CombinedHeatmapIntensity.fraction(tokens: 500, maxTokens: 1_000, isActive: true)
+        XCTAssertEqual(halfway, 0.5, accuracy: 0.0001)
+
+        // Full-scale day.
+        XCTAssertEqual(
+            CombinedHeatmapIntensity.fraction(tokens: 1_000, maxTokens: 1_000, isActive: true),
+            1, accuracy: 0.0001)
+
+        // Inactive day is always 0, regardless of leftover token count.
+        XCTAssertEqual(
+            CombinedHeatmapIntensity.fraction(tokens: 999, maxTokens: 1_000, isActive: false), 0)
+
+        // Active but token-less day (spend-only edge case) still gets the
+        // visible floor instead of reading as idle.
+        XCTAssertEqual(
+            CombinedHeatmapIntensity.fraction(tokens: 0, maxTokens: 1_000, isActive: true),
+            0.05, accuracy: 0.0001)
+    }
     func testDisabledSourcesExcludePreviouslyLoadedReports() {
         let claude = claudeReport(
             daily: [claudeDay(0, usd: 1, tokens: 10)],
@@ -335,5 +362,232 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(yesterday.models[0].usd, 4, accuracy: 0.001)
         // Idle days carry no model rows.
         XCTAssertTrue(r.daily[0].models.isEmpty)
+    }
+
+    // MARK: - Data Confidence Pass (per-source badge)
+
+    func testSourceConfidenceStateClassifiesLiveHistoryAndUnavailable() {
+        let live = CostHistoryStore.UsageScanConfidence(included: true, live: true, scannedAt: now)
+        let historyOnly = CostHistoryStore.UsageScanConfidence(included: true, live: false, scannedAt: now)
+
+        XCTAssertEqual(SourceConfidenceState.classify(live), .live)
+        XCTAssertEqual(SourceConfidenceState.classify(historyOnly), .historyOnly)
+        XCTAssertEqual(SourceConfidenceState.classify(.unavailable), .unavailable)
+        // `included` is the gate: a malformed confidence with `live: true`
+        // but `included: false` still classifies unavailable.
+        let malformed = CostHistoryStore.UsageScanConfidence(included: false, live: true, scannedAt: now)
+        XCTAssertEqual(SourceConfidenceState.classify(malformed), .unavailable)
+    }
+
+    /// Boundary values for each `L10n.relativeUpdated` tier, driven by an
+    /// injected `now` so the assertion never depends on wall-clock timing.
+    func testFreshnessLabelBoundariesAreDeterministic() {
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertNil(SourceConfidenceFormat.freshnessLabel(scannedAt: nil, now: fixedNow))
+
+        XCTAssertEqual(
+            SourceConfidenceFormat.freshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-2), now: fixedNow, preference: "en"),
+            "just updated")
+        XCTAssertEqual(
+            SourceConfidenceFormat.freshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-30), now: fixedNow, preference: "en"),
+            "30 seconds ago")
+        XCTAssertEqual(
+            SourceConfidenceFormat.freshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-125), now: fixedNow, preference: "en"),
+            "2 minutes ago")
+        XCTAssertEqual(
+            SourceConfidenceFormat.freshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-3 * 3_600 - 60), now: fixedNow, preference: "en"),
+            "3 hours ago")
+        // Vietnamese table.
+        XCTAssertEqual(
+            SourceConfidenceFormat.freshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-125), now: fixedNow, preference: "vi"),
+            "2 phút trước")
+    }
+
+    func testCompactFreshnessLabelKeepsConfidenceRowDense() {
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertNil(SourceConfidenceFormat.compactFreshnessLabel(scannedAt: nil, now: fixedNow))
+        XCTAssertEqual(
+            SourceConfidenceFormat.compactFreshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-30), now: fixedNow),
+            "<1m")
+        XCTAssertEqual(
+            SourceConfidenceFormat.compactFreshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-125), now: fixedNow),
+            "2m")
+        XCTAssertEqual(
+            SourceConfidenceFormat.compactFreshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-3 * 3_600), now: fixedNow),
+            "3h")
+        XCTAssertEqual(
+            SourceConfidenceFormat.compactFreshnessLabel(
+                scannedAt: fixedNow.addingTimeInterval(-3 * 86_400), now: fixedNow),
+            "3d")
+    }
+
+    /// `CombinedUsageReport.build` gates confidence by the same `includeX`
+    /// flags as the token/usd rollups: disabled and still-pending (nil
+    /// report) sources both collapse to `nil` confidence, never a
+    /// synthesized "unavailable" state.
+    func testCombinedConfidenceNilWhenSourceDisabledOrPending() {
+        let liveConfidence = CostHistoryStore.UsageScanConfidence(included: true, live: true, scannedAt: now)
+        let claude = claudeReport(daily: [claudeDay(0, usd: 1, tokens: 10)], confidence: liveConfidence)
+
+        let landed = CombinedUsageReport.build(claude: claude, codex: nil, calendar: calendar, now: now)
+        XCTAssertEqual(landed.claudeConfidence, liveConfidence)
+
+        let disabled = CombinedUsageReport.build(
+            claude: claude, codex: nil, includeClaude: false, calendar: calendar, now: now)
+        XCTAssertNil(disabled.claudeConfidence)
+
+        let pending = CombinedUsageReport.build(claude: nil, codex: nil, calendar: calendar, now: now)
+        XCTAssertNil(pending.claudeConfidence)
+    }
+
+    /// A landed report with `included == false` (the source has never
+    /// produced any evidence) still surfaces that real state through the
+    /// combined report — the badge row is responsible for hiding it from
+    /// view, not the model layer.
+    func testCombinedConfidenceSurfacesUnavailableStateWhenIncludedFalse() {
+        let codex = codexReport(daily: [], confidence: .unavailable)
+        let r = CombinedUsageReport.build(claude: nil, codex: codex, calendar: calendar, now: now)
+        XCTAssertEqual(r.codexConfidence, .unavailable)
+        XCTAssertEqual(r.codexConfidence.map(SourceConfidenceState.classify), .unavailable)
+    }
+
+    // MARK: - Phase 2: MonthlyForecast (pure)
+
+    private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        var comp = DateComponents()
+        comp.year = year; comp.month = month; comp.day = day
+        return calendar.date(from: comp)!
+    }
+
+    private func combinedDay(_ d: Date, usd: Double) -> CombinedDailyUsage {
+        CombinedDailyUsage(date: d, claudeUSD: usd, claudeTokens: 0, codexUSD: 0, codexTokens: 0)
+    }
+
+    /// Day 1 of the month: `daysElapsed == 1` (no divide-by-zero), and the
+    /// projection is simply that single day's spend scaled to the full month.
+    func testMonthlyForecastDayOneOfMonth() {
+        let now = date(2026, 3, 1)
+        let f = MonthlyForecast.build(
+            daily: [combinedDay(now, usd: 10)], budgetUSD: 100, now: now, calendar: calendar)
+        XCTAssertEqual(f.daysElapsed, 1)
+        XCTAssertEqual(f.daysInMonth, 31)
+        XCTAssertEqual(f.monthToDateUSD, 10, accuracy: 0.001)
+        XCTAssertEqual(f.projectedTotalUSD, 310, accuracy: 0.001)   // 10/1 * 31
+    }
+
+    /// 2028 is a leap year — February has 29 days.
+    func testMonthlyForecastLeapFebruaryDaysInMonth() {
+        let now = date(2028, 2, 15)
+        let f = MonthlyForecast.build(daily: [], budgetUSD: nil, now: now, calendar: calendar)
+        XCTAssertEqual(f.daysInMonth, 29)
+    }
+
+    /// 2027 is not a leap year — February has 28 days.
+    func testMonthlyForecastNonLeapFebruaryDaysInMonth() {
+        let now = date(2027, 2, 15)
+        let f = MonthlyForecast.build(daily: [], budgetUSD: nil, now: now, calendar: calendar)
+        XCTAssertEqual(f.daysInMonth, 28)
+    }
+
+    /// January is a 31-day month.
+    func testMonthlyForecast31DayMonth() {
+        let now = date(2026, 1, 20)
+        let f = MonthlyForecast.build(daily: [], budgetUSD: nil, now: now, calendar: calendar)
+        XCTAssertEqual(f.daysInMonth, 31)
+    }
+
+    /// A bucket from the previous month, and one from the same month-number
+    /// a year earlier, must both be excluded from month-to-date — only the
+    /// exact (year, month) of `now` counts.
+    func testMonthlyForecastExcludesPreviousMonthAndYear() {
+        let now = date(2026, 3, 10)
+        let daily = [
+            combinedDay(date(2026, 2, 28), usd: 500),   // previous month, same year
+            combinedDay(date(2025, 3, 10), usd: 500),   // same month-number, previous year
+            combinedDay(date(2026, 3, 5), usd: 20),     // in-month
+        ]
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: nil, now: now, calendar: calendar)
+        XCTAssertEqual(f.monthToDateUSD, 20, accuracy: 0.001)
+    }
+
+    /// A same-month bucket dated after today, a negative `usd`, and a NaN
+    /// `usd` must each be dropped rather than inflating/poisoning/shrinking
+    /// month-to-date — only the one genuinely valid past-or-today day counts.
+    func testMonthlyForecastIgnoresFutureNegativeAndNonFiniteBucketsButKeepsValidOne() {
+        let now = date(2026, 3, 10)
+        let daily = [
+            combinedDay(date(2026, 3, 5), usd: 20),          // valid: in-month, on/before today
+            combinedDay(date(2026, 3, 15), usd: 1_000),      // future date (same month) — excluded
+            combinedDay(date(2026, 3, 8), usd: -50),         // negative — ignored, not subtracted
+            combinedDay(date(2026, 3, 9), usd: Double.nan),  // non-finite — must not poison the sum
+        ]
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: nil, now: now, calendar: calendar)
+        XCTAssertFalse(f.monthToDateUSD.isNaN)
+        XCTAssertEqual(f.monthToDateUSD, 20, accuracy: 0.001)
+    }
+
+    /// No budget configured: `budgetUSD`/`status`/`remainingBudgetUSD`/
+    /// `progressFraction` all read as `nil` — the card hides itself.
+    func testMonthlyForecastNoBudgetConfigured() {
+        let now = date(2026, 3, 10)
+        let f = MonthlyForecast.build(
+            daily: [combinedDay(now, usd: 5)], budgetUSD: nil, now: now, calendar: calendar)
+        XCTAssertNil(f.budgetUSD)
+        XCTAssertNil(f.status)
+        XCTAssertNil(f.remainingBudgetUSD)
+        XCTAssertNil(f.progressFraction)
+    }
+
+    /// Zero, negative, and non-finite budgets all normalize to "not configured".
+    func testMonthlyForecastInvalidOrNonpositiveBudgetNormalizesToNil() {
+        let now = date(2026, 3, 10)
+        for invalid in [0.0, -25.0, Double.nan, Double.infinity] {
+            let f = MonthlyForecast.build(daily: [], budgetUSD: invalid, now: now, calendar: calendar)
+            XCTAssertNil(f.budgetUSD, "budget \(invalid) should normalize to nil")
+            XCTAssertNil(f.status)
+        }
+    }
+
+    /// Month-to-date is still under budget, but the linear projection to
+    /// month-end exceeds it → `.forecastOver`, not `.alreadyOver`.
+    func testMonthlyForecastStatusForecastOverNotYetOver() {
+        let now = date(2026, 3, 5)   // day 5 of a 31-day month
+        let f = MonthlyForecast.build(
+            daily: [combinedDay(now, usd: 50)], budgetUSD: 200, now: now, calendar: calendar)
+        // dailyAverage = 50/5 = 10; projected = 10*31 = 310 > 200; MTD 50 < 200.
+        XCTAssertEqual(f.status, .forecastOver)
+        XCTAssertLessThan(f.monthToDateUSD, f.budgetUSD!)
+        XCTAssertGreaterThan(f.projectedTotalUSD, f.budgetUSD!)
+    }
+
+    /// Month-to-date has already exceeded the budget — reported as
+    /// `.alreadyOver` even though the projection is (necessarily) also over.
+    func testMonthlyForecastStatusAlreadyOver() {
+        let now = date(2026, 3, 5)
+        let f = MonthlyForecast.build(
+            daily: [combinedDay(now, usd: 300)], budgetUSD: 200, now: now, calendar: calendar)
+        XCTAssertEqual(f.status, .alreadyOver)
+        XCTAssertEqual(f.remainingBudgetUSD ?? 1, -100, accuracy: 0.001)
+    }
+
+    /// Zero spend this month with a budget configured is `.onTrack`, not an
+    /// error state — projected/MTD are both exactly zero.
+    func testMonthlyForecastZeroSpendMonth() {
+        let now = date(2026, 3, 10)
+        let daily = (1...10).map { combinedDay(date(2026, 3, $0), usd: 0) }
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: 100, now: now, calendar: calendar)
+        XCTAssertEqual(f.monthToDateUSD, 0, accuracy: 0.001)
+        XCTAssertEqual(f.projectedTotalUSD, 0, accuracy: 0.001)
+        XCTAssertEqual(f.status, .onTrack)
     }
 }

@@ -197,6 +197,12 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     vi: "Làm mới tất cả nhà cung cấp mỗi lần mở popover.",
     en: "Refresh all providers every time the popover opens.",
   },
+  settingsMonthlyBudget: { vi: "Ngân sách tháng (USD)", en: "Monthly budget (USD)" },
+  settingsMonthlyBudgetSub: {
+    vi: "Ước tính từ log cục bộ Claude, Codex, Grok trên tab All — không đồng bộ giữa các máy hay với macOS.",
+    en: "Estimated from local Claude, Codex, Grok logs on the All tab — not synced across machines or with macOS.",
+  },
+  settingsMonthlyBudgetPlaceholder: { vi: "Tắt", en: "Off" },
   settingsStatusChecks: { vi: "Kiểm tra trạng thái", en: "Status checks" },
   settingsStatusChecksSub: {
     vi: "Poll trạng thái của các nhà cung cấp.",
@@ -221,6 +227,24 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   settingsCriticalThresholdSub: {
     vi: "Phần trăm còn lại để báo mức 2.",
     en: "Remaining percent for level-2 critical warning.",
+  },
+  settingsWeeklyDigest: { vi: "Digest hàng tuần", en: "Weekly digest" },
+  settingsWeeklyDigestSub: {
+    vi: "Thông báo 1 lần/tuần tổng chi phí và token — mặc định TẮT vì có thể lộ chi phí ngoài popover.",
+    en: "One notification a week with total cost and tokens — OFF by default since it can reveal spend outside the popover.",
+  },
+  weeklyDigestTitle: { vi: "BirdNion — Digest tuần", en: "BirdNion — Weekly digest" },
+  weeklyDigestSummary: { vi: "{usd} · {tokens} trong 7 ngày qua", en: "{usd} · {tokens} in the past 7 days" },
+  weeklyDigestChange: { vi: "{sign}{pct}% so với 7 ngày trước", en: "{sign}{pct}% vs the prior 7 days" },
+  weeklyDigestTopSource: { vi: "Nguồn nhiều nhất: {source}", en: "Top source: {source}" },
+  weeklyDigestTopModel: { vi: "Model nhiều nhất: {model}", en: "Top model: {model}" },
+  weeklyDigestForecast: { vi: "Dự báo cả tháng: {usd}", en: "Monthly forecast: {usd}" },
+  weeklyDigestBudgetOnTrack: { vi: "Trong ngân sách.", en: "On track with budget." },
+  weeklyDigestBudgetForecast: { vi: "Dự báo sẽ vượt ngân sách.", en: "Forecast to exceed budget." },
+  weeklyDigestBudgetOver: { vi: "Đã vượt ngân sách tháng.", en: "Already over the monthly budget." },
+  weeklyDigestCaveat: {
+    vi: "Dữ liệu lịch sử (chưa quét mới) cho: {sources}.",
+    en: "Historical (not freshly scanned) data for: {sources}.",
   },
   settingsHotkey: { vi: "Mở popover", en: "Open popover" },
   settingsHotkeySub: {
@@ -281,6 +305,10 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     vi: "Chưa có snapshot quota cho account này",
     en: "No quota snapshot for this account yet",
   },
+  codexAccountQuotaHelp: {
+    vi: "Quota thấp nhất: {label} còn {n}%",
+    en: "Lowest quota: {label} has {n}% remaining",
+  },
   codexAccountRemoveTitle: { vi: "Xoá {name}?", en: "Remove {name}?" },
   codexAccountRemoveMessage: {
     vi: "Tài khoản managed sẽ bị xoá khỏi BirdNion.",
@@ -339,6 +367,38 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "time.secondsAgo": { vi: "{n} giây trước", en: "{n}s ago" },
   "time.minutesAgo": { vi: "{n} phút trước", en: "{n}m ago" },
   "time.hoursAgo": { vi: "{n} giờ trước", en: "{n}h ago" },
+
+  // Data Confidence Pass — All-tab compact per-source scan badge.
+  "confidence.live": { vi: "Live · {time}", en: "Live · {time}" },
+  "confidence.history": { vi: "Lịch sử · {time}", en: "History · {time}" },
+  "confidence.noData": { vi: "Chưa có dữ liệu", en: "No data" },
+  "confidence.liveHint": {
+    vi: "{source}: dữ liệu vừa quét trực tiếp, đã gộp vào lịch sử.",
+    en: "{source}: freshly scanned live and merged into history.",
+  },
+  "confidence.historyHint": {
+    vi: "{source}: không quét được lượt này — hiển thị dữ liệu lịch sử đã lưu.",
+    en: "{source}: could not scan this cycle — showing saved history only.",
+  },
+  "confidence.noDataHint": {
+    vi: "{source}: chưa tìm thấy dữ liệu nào trên máy này.",
+    en: "{source}: no data found on this machine yet.",
+  },
+
+  // Budget & monthly forecast (Phase 2) — All-tab card.
+  budgetMonthly: { vi: "Ngân sách tháng", en: "Monthly budget" },
+  "budgetStatus.on-track": { vi: "Đúng tiến độ", en: "On track" },
+  "budgetStatus.forecast-over": { vi: "Dự phóng vượt", en: "Forecast over" },
+  "budgetStatus.already-over": { vi: "Đã vượt", en: "Already over" },
+  budgetMtd: { vi: "Đã chi tháng này {amount}", en: "Spent this month {amount}" },
+  budgetProjected: { vi: "Dự phóng cuối tháng {amount}", en: "Projected by month end {amount}" },
+  budgetRemaining: { vi: "Còn lại {amount}", en: "{amount} remaining" },
+  budgetOverBy: { vi: "Vượt {amount}", en: "Over by {amount}" },
+  budgetOfLimit: { vi: "{spent} / {budget}", en: "{spent} / {budget}" },
+  budgetHint: {
+    vi: "Ước tính local Claude+Codex+Grok — đã chi {mtd}, dự phóng {projected} cuối tháng, ngân sách {budget} ({status}).",
+    en: "Estimated from local Claude+Codex+Grok — spent {mtd}, projected {projected} by month end, budget {budget} ({status}).",
+  },
 
   // Settings detail grid (macOS ProvidersPane detailInfoGrid)
   "provider.status": { vi: "Trạng thái", en: "Status" },

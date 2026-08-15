@@ -139,6 +139,8 @@ final class QuotaService: ObservableObject {
         failureNotificationRemove(Self.failureNotificationID(for: id))
         legacyFailureNotificationCleanup(id)
         failureEpisode.removeValue(forKey: id)
+        adaptiveFailureCounts.removeValue(forKey: id)
+        providerLastFetched.removeValue(forKey: id)
         warnState.removeValue(forKey: id)
     }
 
@@ -230,8 +232,11 @@ final class QuotaService: ObservableObject {
     /// only fetched on refresh cycles where `now - lastFetched[id] >=
     /// override` has elapsed, so a slow / rate-limited provider can be polled
     /// less often than a fast one.
-    private var providerIntervals: [String: TimeInterval] = [:]
     private var providerLastFetched: [String: Date] = [:]
+    /// Consecutive awaited failures per provider. The existing loop still
+    /// wakes at the configured global cadence; this map only makes failed
+    /// providers progressively less likely to perform another expensive fetch.
+    private var adaptiveFailureCounts: [String: Int] = [:]
 
     /// Where the last published statuses are cached across launches (nil =
     /// persistence disabled, e.g. in unit tests). See ProviderStatusCache.
@@ -281,7 +286,45 @@ final class QuotaService: ObservableObject {
     /// otherwise the global one.
     private func effectiveInterval(for providerId: String) -> TimeInterval {
         let override = Self.overrideInterval(for: providerId)
-        return override > 0 ? override : interval
+        let base = override > 0 ? override : interval
+        return Self.adaptiveInterval(
+            base: base,
+            consecutiveFailures: adaptiveFailureCounts[providerId, default: 0]
+        )
+    }
+
+    /// Deterministic, bounded backoff: the first failure keeps the configured
+    /// cadence, then repeated failures use 2x, 4x and at most 8x. Multiplying
+    /// the provider's own effective interval means a large user override can
+    /// never accidentally be shortened by an absolute cap.
+    nonisolated static func adaptiveBackoffMultiplier(for consecutiveFailures: Int) -> Int {
+        switch max(0, consecutiveFailures) {
+        case 0...1: return 1
+        case 2: return 2
+        case 3: return 4
+        default: return 8
+        }
+    }
+
+    nonisolated static func adaptiveInterval(base: TimeInterval,
+                                             consecutiveFailures: Int) -> TimeInterval {
+        guard base > 0 else { return base }
+        return base * Double(adaptiveBackoffMultiplier(for: consecutiveFailures))
+    }
+
+    /// Test seam and diagnostics without exposing mutable scheduler state.
+    func adaptiveBackoffState(for providerID: String)
+    -> (consecutiveFailures: Int, multiplier: Int) {
+        let failures = adaptiveFailureCounts[providerID, default: 0]
+        return (failures, Self.adaptiveBackoffMultiplier(for: failures))
+    }
+
+    private func recordAdaptiveOutcome(providerID: String, error: String?) {
+        if let error, !error.isEmpty {
+            adaptiveFailureCounts[providerID, default: 0] += 1
+        } else {
+            adaptiveFailureCounts.removeValue(forKey: providerID)
+        }
     }
 
     /// Replace the Codex status with the active account's cached snapshot so an
@@ -311,18 +354,16 @@ final class QuotaService: ObservableObject {
         isRefreshing = true
         var nextForceProviderIDs = forceProviderIDs
         repeat {
-            await runRefreshPass(forceProviderIDs: nextForceProviderIDs)
+            let successfulProviderIDs = await runRefreshPass(
+                forceProviderIDs: nextForceProviderIDs
+            )
             guard pendingRefreshRequested else { break }
             // A forced request that queued up WHILE the pass was fetching that
-            // same provider is already satisfied by the result that just
-            // landed. Without this filter, clicking Refresh during a slow
-            // provider fetch (Claude CLI probe can take a minute) chains a
-            // second full fetch right after the first — the popover then shows
-            // "Updating" for several minutes straight.
-            nextForceProviderIDs = pendingForceProviderIDs.filter { id in
-                guard let last = providerLastFetched[id] else { return true }
-                return Date().timeIntervalSince(last) > 30
-            }
+            // same provider is satisfied only when that in-flight fetch
+            // succeeded. A failed or skipped background fetch still gets the
+            // promised user-initiated retry, which resets adaptive backoff and
+            // bypasses provider cooldowns without duplicating successful work.
+            nextForceProviderIDs = pendingForceProviderIDs.subtracting(successfulProviderIDs)
             pendingForceProviderIDs.removeAll()
             pendingRefreshRequested = false
         } while true
@@ -339,13 +380,22 @@ final class QuotaService: ObservableObject {
         (refreshPassIsRunning, pendingRefreshRequested, pendingForceProviderIDs)
     }
 
-    private func runRefreshPass(forceProviderIDs: Set<String>) async {
+    private func runRefreshPass(forceProviderIDs: Set<String>) async -> Set<String> {
         let snapshot = providers
         let startedAt = Date()
         let log = Logger(subsystem: "com.local.birdnion", category: "quota.refresh")
 
+        // User-driven refreshes (button, popover-open and account switch)
+        // always bypass timing gates and start a fresh failure episode. A
+        // failed manual retry becomes failure #1, so it is never immediately
+        // penalized by an older automatic backoff streak.
+        for id in forceProviderIDs {
+            adaptiveFailureCounts.removeValue(forKey: id)
+        }
+
         // Per-provider throttling: skip a provider if its individual override
-        // interval hasn't elapsed since the last successful fetch. The
+        // interval (including adaptive backoff) hasn't elapsed since the last
+        // fetch attempt. The
         // global `interval` is still the loop cadence; this only stops
         // re-polling providers whose own setting says "wait longer".
         let due: [QuotaProvider] = snapshot.filter { p in
@@ -396,6 +446,7 @@ final class QuotaService: ObservableObject {
             uniqueKeysWithValues: statuses.map { ($0.id, $0) }
         )
         let isFirstRefresh = statuses.isEmpty
+        var successfulProviderIDs: Set<String> = []
         await withTaskGroup(
             of: (String, ObjectIdentifier, ProviderStatus, TimeInterval).self
         ) { group in
@@ -436,6 +487,10 @@ final class QuotaService: ObservableObject {
                 // snapshot that would mask an ongoing failure (R3.5).
                 evaluateFailureEpisode(id: id, displayName: status.displayName,
                                        error: status.error)
+                recordAdaptiveOutcome(providerID: id, error: status.error)
+                if status.error == nil {
+                    successfulProviderIDs.insert(id)
+                }
                 // Preserve a good snapshot across a *transient* refresh error
                 // (timeout, rate-limit, 5xx) so the popover doesn't flicker to
                 // empty. But a credential error (401/403 / invalid token) means
@@ -446,7 +501,7 @@ final class QuotaService: ObservableObject {
                 if status.error != nil, previous?.isRenderableSnapshot == true, !isCredentialError {
                     log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
                 } else {
-                    pending[id] = status
+                    pending[id] = Self.preservingLastGoodServiceStatus(status, previous: previous)
                 }
                 providerLastFetched[id] = Date()
                 timings.append((id, elapsed))
@@ -471,6 +526,53 @@ final class QuotaService: ObservableObject {
             log.info("refresh done — total=\(String(format: "%.2f", total), privacy: .public)s slow=\(sortedByDuration.filter { $0.1 > 2.0 }.count, privacy: .public)")
         }
         persistStatuses()
+        await runWeeklyDigestIfDue()
+        return successfulProviderIDs
+    }
+
+    // MARK: - Weekly Digest (rolling 7-day cost/token summary notification)
+
+    /// Runs after every completed refresh pass. Gated by
+    /// `WeeklyDigest.isEnabled` (a disabled toggle costs one UserDefaults
+    /// read) and `WeeklyDigest.isDue` (a 7-day cadence, so an enabled toggle
+    /// still only scans once a week). `refreshPassIsRunning` already
+    /// serializes every call into `runRefreshPass`, so no separate overlap
+    /// flag is needed here. Reuses the same three local cost scanners the
+    /// All tab already calls — no new Timer/daemon/polling loop.
+    private func runWeeklyDigestIfDue() async {
+        guard WeeklyDigest.isEnabled else { return }
+        let now = Date()
+        guard WeeklyDigest.isDue(now: now, lastEvaluatedAt: WeeklyDigest.lastEvaluatedAt) else { return }
+
+        let enabledIDs = Set(providers.map(\.id))
+        let includeClaude = enabledIDs.contains("claude")
+        let includeCodex = enabledIDs.contains("codex")
+        let includeGrok = enabledIDs.contains("grok")
+        guard includeClaude || includeCodex || includeGrok else {
+            WeeklyDigest.lastEvaluatedAt = now
+            return
+        }
+
+        let claudeReport = includeClaude ? await ClaudeCostScanner.usageReport(now: now) : nil
+        let codexReport = includeCodex ? await CodexCostScanner.usageReport(now: now) : nil
+        let grokReport = includeGrok ? await GrokCostScanner.usageReport(now: now) : nil
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claudeReport, codex: codexReport, grok: grokReport,
+            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            budgetUSD: WeeklyDigest.budgetUSD, now: now)
+
+        // Stamp the evaluation cadence regardless of outcome — a suppressed
+        // week (no live source, or zero activity) must not rescan on every
+        // refresh for the rest of the day.
+        WeeklyDigest.lastEvaluatedAt = now
+        guard evaluation.shouldSend else { return }
+
+        let posted = await QuotaNotifier.postAndWait(
+            id: WeeklyDigest.notificationID, title: evaluation.title, body: evaluation.body)
+        if posted {
+            WeeklyDigest.lastSentAt = now
+        }
     }
 
     // MARK: - Quota warnings
@@ -656,6 +758,28 @@ final class QuotaService: ObservableObject {
             state.episodeSeq,
             state.lastNotificationAt)
     }
+
+    // MARK: - Service-status last-good preservation
+
+    /// When a fresh, successful status (`error == nil`) comes back with BOTH
+    /// service-status fields nil — the side probe (e.g. a status-page fetch
+    /// separate from the quota windows) didn't return anything this cycle —
+    /// carry forward the same provider's last-good `serviceStatus` /
+    /// `serviceStatusLevel` pair so a transient probe hiccup doesn't blank
+    /// the health line. Everything else (windows, `lastUpdated`, `error`,
+    /// ...) always comes from the incoming snapshot. Never runs when the
+    /// primary fetch itself failed (that error must surface, not be
+    /// masked), never merges across providers, and any incoming non-nil
+    /// service-status value always wins — this only fills a true nil/nil gap.
+    nonisolated static func preservingLastGoodServiceStatus(
+        _ status: ProviderStatus, previous: ProviderStatus?
+    ) -> ProviderStatus {
+        guard status.error == nil else { return status }
+        guard let previous, previous.id == status.id else { return status }
+        guard status.serviceStatus == nil, status.serviceStatusLevel == nil else { return status }
+        guard previous.serviceStatus != nil || previous.serviceStatusLevel != nil else { return status }
+        return status.withServiceStatus(previous.serviceStatus, level: previous.serviceStatusLevel)
+    }
 }
 
 // MARK: - Status cache (disk)
@@ -825,6 +949,37 @@ enum QuotaNotifier {
         }
     }
 
+    /// Awaitable variant of `post` — returns `true` only when the OS
+    /// actually queued the notification (authorization granted AND `add`
+    /// completed without an error). Used by `WeeklyDigest` so `lastSentAt`
+    /// only advances on confirmed delivery; every other call site keeps
+    /// using the fire-and-forget `post` above, which this does not replace.
+    @discardableResult
+    static func postAndWait(id: String, title: String, body: String) async -> Bool {
+        let center = UNUserNotificationCenter.current()
+        let soundEnabled = QuotaWarnConfig.soundEnabled
+        let posted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            operations.enqueue {
+                let granted = await requestAuthorization(center)
+                guard granted else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = soundEnabled ? .default : nil
+                let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
+                let succeeded = await addAwaitingResult(request, to: center)
+                continuation.resume(returning: succeeded)
+            }
+        }
+        if posted, QuotaWarnConfig.onScreenAlertEnabled {
+            QuotaAlertOverlay.shared.show(title: title, message: body)
+        }
+        return posted
+    }
+
     static func remove(id: String) {
         let center = UNUserNotificationCenter.current()
         operations.enqueue {
@@ -879,6 +1034,19 @@ enum QuotaNotifier {
         await withCheckedContinuation { continuation in
             center.add(request) { _ in
                 continuation.resume()
+            }
+        }
+    }
+
+    /// Same as `add` but reports whether the OS actually accepted the
+    /// request (`error == nil`), for `postAndWait`.
+    private static func addAwaitingResult(
+        _ request: UNNotificationRequest,
+        to center: UNUserNotificationCenter
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            center.add(request) { error in
+                continuation.resume(returning: error == nil)
             }
         }
     }

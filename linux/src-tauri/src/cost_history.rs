@@ -36,6 +36,11 @@ pub struct Document {
     /// source → "YYYY-MM-DD" → day
     #[serde(default)]
     pub sources: HashMap<String, HashMap<String, HistoryDay>>,
+    /// source → epoch millis of the most recent successful live scan
+    /// (Data Confidence Pass). Missing entries (older documents, or a
+    /// source that never had a live scan) read back as `None`.
+    #[serde(default)]
+    pub scanned_at: HashMap<String, i64>,
 }
 
 pub fn history_path() -> PathBuf {
@@ -143,8 +148,17 @@ pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport
         });
     }
 
+    // Data Confidence Pass: stamp the last successful live-scan time so a
+    // later history-only cycle (live == None) can still report freshness.
+    if live.is_some() {
+        doc.scanned_at
+            .insert(source.to_string(), now.timestamp_millis());
+    }
+
     let _ = write(&doc);
     let by_day = doc.sources.get(source).cloned().unwrap_or_default();
+    let history_has_data = by_day.values().any(|d| d.tokens > 0 || d.usd > 0.0);
+    let scanned_at = doc.scanned_at.get(source).copied();
 
     // Build contiguous window
     let mut daily = Vec::with_capacity(WINDOW_DAYS as usize);
@@ -192,7 +206,17 @@ pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport
         daily,
         hourly: live.map(|l| l.hourly.clone()).unwrap_or_default(),
         top_model: top,
+        included: is_included(live.is_some(), history_has_data),
+        live: live.is_some(),
+        scanned_at,
     }
+}
+
+/// Data Confidence Pass: whether `source` counts as "included" — present on
+/// this machine — from this cycle's live-scan outcome and whether history
+/// already holds a real (non-zero) day for it.
+fn is_included(live_present: bool, history_has_data: bool) -> bool {
+    live_present || history_has_data
 }
 
 #[cfg(test)]
@@ -213,5 +237,100 @@ mod tests {
         };
         assert_eq!(prefer_higher(&low, &high).tokens, 20);
         assert_eq!(prefer_higher(&high, &low).tokens, 20);
+    }
+
+    // --- Data Confidence Pass: included/live/scanned_at ---------------
+
+    use crate::config::TEST_ENV_LOCK as ENV_LOCK;
+
+    fn temp_config(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "birdnion-cost-history-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn live_report_for_today(tokens: i64) -> UsageReport {
+        let today = Local::now().date_naive().to_string();
+        UsageReport {
+            daily: vec![DailyUsage {
+                date: today,
+                usd: 0.01,
+                tokens,
+                models: vec![],
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_and_report_live_scan_marks_included_and_live() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let base = temp_config("live");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        let live = live_report_for_today(500);
+        let report = apply_and_report("claude", Some(&live));
+
+        assert!(report.included, "live scan should mark the source included");
+        assert!(report.live, "this cycle had a live scan");
+        assert!(report.scanned_at.is_some(), "live scan stamps scanned_at");
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn apply_and_report_history_only_keeps_scanned_at_and_included() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let base = temp_config("history-only");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        let live = live_report_for_today(500);
+        let seeded = apply_and_report("codex", Some(&live));
+        let first_scanned_at = seeded.scanned_at.expect("seeded scan stamps scanned_at");
+
+        // Next cycle's scanner found nothing readable (live == None) — the
+        // source must still report included/history-only with the SAME
+        // last-known scanned_at, not a fresh one and not None.
+        let history_only = apply_and_report("codex", None);
+        assert!(
+            history_only.included,
+            "prior history keeps the source included"
+        );
+        assert!(!history_only.live, "no scan ran this cycle");
+        assert_eq!(history_only.scanned_at, Some(first_scanned_at));
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn apply_and_report_without_any_data_is_not_included() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let base = temp_config("no-data");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        let report = apply_and_report("grok", None);
+        assert!(
+            !report.included,
+            "no live scan and no history means not included"
+        );
+        assert!(!report.live);
+        assert!(report.scanned_at.is_none());
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn usage_report_default_confidence_fields() {
+        let report = UsageReport::default();
+        assert!(!report.included);
+        assert!(!report.live);
+        assert_eq!(report.scanned_at, None);
     }
 }

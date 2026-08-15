@@ -4,8 +4,8 @@
 // click-to-pin day detail (compact model rows), 120-day heatmap, top models.
 
 import {
-  Combined, CombinedDay, HourlyUsage,
-  usd, tokens, tokensShort, tokensAndUsd, dayLabel,
+  Combined, CombinedDay, HourlyUsage, UsageReport, UsageSourceId, BudgetStatus,
+  usd, tokens, tokensShort, tokensAndUsd, dayLabel, scanConfidence, scanFreshness, monthlyForecast,
 } from "./usage";
 import { t, currentLang } from "./i18n";
 
@@ -27,6 +27,138 @@ function legendDot(cssClass: string, label: string) {
   const item = el("span", "legend-item");
   item.append(el("span", `dot ${cssClass}`), el("span", "legend-label", label));
   return item;
+}
+
+// --- Data Confidence Pass: compact per-source scan metadata ----------------
+
+const CONFIDENCE_SOURCES: readonly [UsageSourceId, string][] = [
+  ["claude", "Claude"],
+  ["codex", "Codex"],
+  ["grok", "Grok"],
+];
+
+/** Compact "included / live / history-only" + freshness badge per cost
+ * source (Claude/Codex/Grok) — Data Confidence Pass. Purely informational,
+ * no click handlers, so a `title` tooltip + matching `aria-label` carry the
+ * full sentence while the visible text stays short.
+ *
+ * `pending` is the source ids whose first scan is still in flight and has
+ * no report yet (main's `pendingScanSources()`, which already excludes a
+ * source with an existing report — a background rescan keeps showing that
+ * old report/badge, never a skeleton). A pending source with no report yet
+ * skips its badge entirely instead of flashing "No data" before the first
+ * scan even settles. */
+export function confidenceRow(
+  claude: UsageReport | null,
+  codex: UsageReport | null,
+  grok: UsageReport | null,
+  pending: readonly UsageSourceId[] = [],
+): HTMLElement {
+  const reports: Record<UsageSourceId, UsageReport | null> = { claude, codex, grok };
+  const row = el("div", "confidence-row");
+  for (const [id, label] of CONFIDENCE_SOURCES) {
+    const report = reports[id];
+    if (!report && pending.includes(id)) continue;
+    row.append(confidenceItem(id, label, report));
+  }
+  return row;
+}
+
+function confidenceItem(id: UsageSourceId, label: string, report: UsageReport | null): HTMLElement {
+  const state = scanConfidence(report);
+  const fresh = scanFreshness(report?.scannedAt ?? null);
+
+  let stateText: string;
+  let hint: string;
+  if (state === "unavailable") {
+    stateText = t("confidence.noData");
+    hint = t("confidence.noDataHint", { source: label });
+  } else if (state === "live") {
+    stateText = t("confidence.live", { time: fresh ?? t("time.justUpdated") });
+    hint = t("confidence.liveHint", { source: label });
+  } else {
+    stateText = t("confidence.history", { time: fresh ?? "—" });
+    hint = t("confidence.historyHint", { source: label });
+  }
+
+  const item = el("span", "confidence-item");
+  item.title = hint;
+  item.setAttribute("aria-label", hint);
+  item.append(
+    el("span", `dot ${id}`),
+    el("span", "legend-label", label),
+    el("span", `confidence-state ${state}`, stateText),
+  );
+  return item;
+}
+
+// --- Budget & monthly forecast (Phase 2) ------------------------------------
+
+/** Reuses the `provider-tab.ts` quota tone convention (ok/warning/critical)
+ * keyed off budget risk instead of remaining quota. Kept local — the
+ * All-tab budget card and per-provider quota windows are different enough
+ * risk models that sharing one function would couple unrelated concerns. */
+function budgetTone(status: BudgetStatus): string {
+  if (status === "already-over") return "critical";
+  if (status === "forecast-over") return "warning";
+  return "ok";
+}
+
+/** Monthly budget + linear-projection forecast card. Only rendered when a
+ * budget is configured (`monthlyForecast` returns non-null) — `main.ts`
+ * places it right after `confidenceRow` and before `chartCard` so it still
+ * shows on a fresh/all-zero usage report (no "active day" gate, unlike the
+ * heatmap). Estimated from local Claude+Codex+Grok logs only, current
+ * calendar month — purely a read-only summary, no notifications/scheduler. */
+export function budgetForecastCard(combined: Combined, budgetUsd: number | null): HTMLElement | null {
+  const forecast = monthlyForecast(combined.daily, budgetUsd);
+  if (!forecast) return null;
+  const tone = budgetTone(forecast.status);
+
+  const statusLabel = t(`budgetStatus.${forecast.status}`);
+  const card = el("section", "card budget-card");
+
+  const head = el("div", "budget-head");
+  head.append(el("span", "summary-label", t("budgetMonthly")));
+  head.append(el("span", `budget-status ${tone}`, statusLabel));
+  card.append(head);
+
+  const amounts = el("div", "budget-amounts");
+  amounts.append(el("div", "budget-mtd", t("budgetMtd", { amount: usd(forecast.monthToDateUsd) })));
+  amounts.append(el("div", "budget-projected", t("budgetProjected", { amount: usd(forecast.projectedUsd) })));
+  card.append(amounts);
+
+  const track = el("div", "window-track budget-track");
+  const fill = el("div", `window-fill ${tone}`);
+  // Visual bar width is capped at 100% — the numeric %/tone above still
+  // reflect the real, uncapped usedPct (can read >100% once over budget).
+  fill.style.width = `${Math.max(0, Math.min(100, forecast.usedPct))}%`;
+  track.append(fill);
+  card.append(track);
+
+  const remainLabel = forecast.remainingUsd >= 0
+    ? t("budgetRemaining", { amount: usd(forecast.remainingUsd) })
+    : t("budgetOverBy", { amount: usd(-forecast.remainingUsd) });
+  const foot = el("div", "budget-foot");
+  foot.append(
+    el("span", "budget-of",
+      t("budgetOfLimit", { spent: usd(forecast.monthToDateUsd), budget: usd(forecast.budgetUsd) })),
+    el("span", `budget-remaining ${tone}`, remainLabel),
+  );
+  card.append(foot);
+
+  // Title/aria carry the visible amounts + localized status — not bare
+  // percentages, which read as meaningless numbers out of context to a
+  // screen reader or tooltip hover.
+  const hint = t("budgetHint", {
+    mtd: usd(forecast.monthToDateUsd),
+    projected: usd(forecast.projectedUsd),
+    budget: usd(forecast.budgetUsd),
+    status: statusLabel,
+  });
+  card.title = hint;
+  card.setAttribute("aria-label", hint);
+  return card;
 }
 
 // --- Chart card -----------------------------------------------------------
@@ -393,7 +525,9 @@ function weekdayLabels(): HTMLElement {
 
 function heatGrid(days: CombinedDay[], detail: HTMLElement): HTMLElement {
   const grid = el("div", "heat-grid");
-  const max = Math.max(...days.map((d) => d.usd), 0.01);
+  // Intensity tracks tokens, not USD — unpriced/non-Claude models cost $0
+  // but still burn real tokens, so a USD-based heatmap under-represents them.
+  const max = Math.max(...days.map((d) => d.tokens), 1);
   // Monday-first padding for the first column.
   const first = days[0];
   const pad = first ? (new Date(`${first.date}T00:00:00`).getDay() + 6) % 7 : 0;
@@ -410,7 +544,7 @@ function heatGrid(days: CombinedDay[], detail: HTMLElement): HTMLElement {
         continue;
       }
       const cell = el("div", "heat-cell");
-      const fraction = day.active ? Math.max(day.usd / max, 0.05) : 0;
+      const fraction = day.active ? Math.max(day.tokens / max, 0.05) : 0;
       cell.classList.add(heatLevel(fraction));
       if (day === days[days.length - 1]) cell.classList.add("today");
       cell.title = `${dayLabel(day.date)}: ${usd(day.usd)} · ${tokens(day.tokens)}`;

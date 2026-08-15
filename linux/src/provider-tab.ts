@@ -75,7 +75,7 @@ function relativeUpdated(ts: number | null | undefined): string | null {
   return t("time.hoursAgo", { n: Math.floor(seconds / 3600) });
 }
 
-function quotaTone(remaining: number): string {
+export function quotaTone(remaining: number): "ok" | "warning" | "critical" {
   if (remaining <= 20) return "critical";
   if (remaining <= 50) return "warning";
   return "ok";

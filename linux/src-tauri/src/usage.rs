@@ -43,4 +43,17 @@ pub struct UsageReport {
     pub hourly: Vec<HourlyUsage>,
     /// Most-used model (by tokens) across the trailing 30 days.
     pub top_model: Option<String>,
+    /// Data Confidence Pass metadata (all three fields below): `true` once
+    /// this source has ever produced evidence — a live scan found a
+    /// readable root, or cost-history already holds a day for it — `false`
+    /// means the source has no data on this machine at all.
+    pub included: bool,
+    /// `true` when THIS refresh cycle re-scanned the source live and merged
+    /// it into history; `false` means the numbers are a history-only
+    /// carry-forward (the live scan found nothing readable this cycle).
+    pub live: bool,
+    /// Epoch millis of the most recent successful live scan for this
+    /// source, persisted so a history-only cycle can still report when the
+    /// data was last fresh. `None` when no live scan has ever succeeded.
+    pub scanned_at: Option<i64>,
 }

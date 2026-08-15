@@ -162,6 +162,73 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(CostHistoryStore.preferHigher(high, low).tokens, 20)
     }
 
+    // MARK: - Data Confidence Pass
+
+    /// Legacy `cost-history.json` files (written before the Data Confidence
+    /// Pass) have no `scannedAt` key — decoding must not fail, and the field
+    /// reads back as `nil` rather than an empty dictionary.
+    func testCostHistoryDocumentDecodesLegacyMissingScannedAt() throws {
+        let legacyJSON = """
+        {"version":1,"sources":{"claude":{"2026-08-01":{"usd":1.5,"tokens":150,"models":[]}}}}
+        """
+        let doc = try JSONDecoder().decode(CostHistoryStore.Document.self, from: Data(legacyJSON.utf8))
+        XCTAssertNil(doc.scannedAt)
+        XCTAssertEqual(doc.sources?["claude"]?["2026-08-01"]?.tokens, 150)
+    }
+
+    /// `scannedAt` persists as epoch millis (matches the Linux Tauri port's
+    /// `cost-history.json` schema) and round-trips exactly through encode/decode.
+    func testCostHistoryDocumentScannedAtEpochMillisRoundtrip() throws {
+        let millis = 1_755_555_555_123.0
+        let doc = CostHistoryStore.Document(version: 1, sources: [:], scannedAt: ["claude": millis])
+        let data = try JSONEncoder().encode(doc)
+        let decoded = try JSONDecoder().decode(CostHistoryStore.Document.self, from: data)
+        XCTAssertEqual(decoded.scannedAt?["claude"], millis)
+    }
+
+    /// `apply(liveScanSucceeded: true)` stamps `scannedAt`; a later
+    /// history-only cycle (`liveScanSucceeded: false`, e.g. the popover's
+    /// `seededReport`) must see the SAME stamp and report `live == false`,
+    /// `included == true` — never a fresh timestamp, never unavailable.
+    func testCostHistoryConfidenceLiveApplyThenHistoryOnlyKeepsTimestamp() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let now = Date()
+
+        _ = CostHistoryStore.apply(
+            source: .codex,
+            liveDays: [(now, 1.0, 100, [("gpt-5", 1.0, 100)])],
+            now: now, url: url, liveScanSucceeded: true)
+        let live = CostHistoryStore.confidence(source: .codex, liveScanSucceeded: true, url: url)
+        XCTAssertTrue(live.included)
+        XCTAssertTrue(live.live)
+        let stampedAt = try XCTUnwrap(live.scannedAt)
+
+        // Next cycle's scanner found nothing readable — history-only fallback.
+        let historyOnly = CostHistoryStore.confidence(source: .codex, liveScanSucceeded: false, url: url)
+        XCTAssertTrue(historyOnly.included, "prior history keeps the source included")
+        XCTAssertFalse(historyOnly.live, "no scan ran this cycle")
+        XCTAssertEqual(historyOnly.scannedAt, stampedAt)
+    }
+
+    /// A source untouched by any scan (never live, no persisted history)
+    /// reads back as fully unavailable — not merely history-only.
+    func testCostHistoryConfidenceUnavailableWithoutHistory() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+
+        let confidence = CostHistoryStore.confidence(source: .grok, liveScanSucceeded: false, url: url)
+        XCTAssertFalse(confidence.included)
+        XCTAssertFalse(confidence.live)
+        XCTAssertNil(confidence.scannedAt)
+    }
+
     /// `replacingSource: true` writes live totals even when lower than the
     /// stored high-water mark, and drops stored days absent from live —
     /// without an intermediate empty-source file write.
@@ -458,6 +525,68 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(report.todayUSD, 3.0, accuracy: 0.01) // 1M × $3 blended
         XCTAssertEqual(report.last30Tokens, 1_000_000)
         XCTAssertEqual(report.topModel, "grok-4.5")
+    }
+
+    // MARK: - scanFullIfAvailable: missing root vs genuinely-empty (reviewer Finding 1)
+    //
+    // Root cause: `usageReport` hardcoded `liveScanSucceeded: true` because
+    // `scanFull` never returns nil — so when `~/.grok/sessions` doesn't exist
+    // at all (Grok never installed), the UI showed a false "Live" badge and
+    // `loadSessions` pruned every persisted baseline. `scanFullIfAvailable`
+    // distinguishes "root missing" (nil, no baseline touch) from "root exists
+    // but has zero sessions" (a real, live-eligible zero report).
+
+    /// A completely missing sessions root must return `nil` — not a
+    /// zero-value report — so the caller can report `liveScanSucceeded: false`
+    /// instead of a false "Live" badge.
+    func testScanFullIfAvailableReturnsNilWhenSessionsRootMissing() throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        // Intentionally never created — simulates Grok never having been
+        // installed (or `GROK_HOME` pointing at a home that doesn't exist).
+        defer { try? fm.removeItem(at: home) }
+
+        XCTAssertNil(GrokCostScanner.scanFullIfAvailable(homeURL: home, now: Date()))
+    }
+
+    /// A sessions directory that exists but genuinely has no session files
+    /// is a valid, completed live scan (a zero-value report) — not an
+    /// unavailable one.
+    func testScanFullIfAvailableReturnsReportWhenSessionsDirEmpty() throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sessionsDir = home.appendingPathComponent("sessions", isDirectory: true)
+        try fm.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: home) }
+
+        let report = GrokCostScanner.scanFullIfAvailable(homeURL: home, now: Date())
+        XCTAssertNotNil(report)
+        XCTAssertEqual(report?.todayTokens, 0)
+        XCTAssertEqual(report?.isEmpty, true)
+    }
+
+    /// A missing sessions root must never touch (create, overwrite, or
+    /// prune) the session baseline store — verified against a baseline file
+    /// that already has real content, which must survive the call
+    /// byte-for-byte.
+    func testScanFullIfAvailableNeverTouchesBaselineWhenRootMissing() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let home = base.appendingPathComponent("missing-home", isDirectory: true) // never created
+        let baselineURL = base.appendingPathComponent("baselines.json")
+
+        GrokSessionBaselineStore.save(["sess-a": 1_234], keepKeys: ["sess-a"], url: baselineURL)
+        let before = try Data(contentsOf: baselineURL)
+
+        let report = GrokCostScanner.scanFullIfAvailable(
+            homeURL: home, now: Date(), baselineURL: baselineURL)
+
+        XCTAssertNil(report)
+        let after = try Data(contentsOf: baselineURL)
+        XCTAssertEqual(before, after)
+        XCTAssertEqual(GrokSessionBaselineStore.load(url: baselineURL)["sess-a"], 1_234)
     }
 
     /// Baseline store: load/save roundtrip + prune of deleted session keys.

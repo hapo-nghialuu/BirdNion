@@ -147,4 +147,43 @@ final class ProviderStatusTests: XCTestCase {
         let w = QuotaWindow(label: "Tuần", usedPct: 40, remainingPct: 60) // no reset/seconds
         XCTAssertNil(WindowPace(window: w))
     }
+
+    // MARK: - withServiceStatus (copy helper)
+
+    /// The copy helper must override only `serviceStatus`/`serviceStatusLevel`
+    /// and leave every other field — including quota windows and
+    /// `lastUpdated` — byte-for-byte identical.
+    func testWithServiceStatusOverridesOnlyThoseTwoFields() {
+        let original = ProviderStatus(
+            id: "codex",
+            displayName: "Codex",
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 10, remainingPct: 90)],
+            lastUpdated: Date(timeIntervalSince1970: 1_000),
+            error: nil,
+            accountLabel: "acct",
+            planType: "plus",
+            serviceStatus: "Degraded",
+            serviceStatusLevel: "major")
+
+        let copy = original.withServiceStatus("All Systems Operational", level: "none")
+
+        XCTAssertEqual(copy.serviceStatus, "All Systems Operational")
+        XCTAssertEqual(copy.serviceStatusLevel, "none")
+        XCTAssertEqual(copy.id, original.id)
+        XCTAssertEqual(copy.displayName, original.displayName)
+        XCTAssertEqual(copy.windows, original.windows)
+        XCTAssertEqual(copy.lastUpdated, original.lastUpdated)
+        XCTAssertNil(copy.error)
+        XCTAssertEqual(copy.accountLabel, original.accountLabel)
+        XCTAssertEqual(copy.planType, original.planType)
+    }
+
+    func testWithServiceStatusAcceptsNilPair() {
+        let original = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
+            serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
+        let copy = original.withServiceStatus(nil, level: nil)
+        XCTAssertNil(copy.serviceStatus)
+        XCTAssertNil(copy.serviceStatusLevel)
+    }
 }

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { combine, UsageReport } from "./usage";
-import { chartCard, heatmapCard, topModelsCard } from "./all-tab";
+import { chartCard, heatmapCard, topModelsCard, confidenceRow, budgetForecastCard } from "./all-tab";
 import { providerCard, claudeCodeQuickApplyCard, loadingSkeleton, lowestWindow, ProviderStatus } from "./provider-tab";
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
@@ -12,7 +12,8 @@ import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { t } from "./i18n";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
-  isShowTrayPercentEnabled,
+  isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
+  MONTHLY_BUDGET_CHANGED_EVENT,
 } from "./settings-about";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -20,6 +21,7 @@ import { logoMark, logoUrl, providerTintCss } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
 import { initTheme } from "./theme";
+import { checkWeeklyDigest } from "./weekly-digest";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
 const POPOVER_WIDTH = 420;
@@ -129,6 +131,46 @@ function paintRefreshChrome() {
 /** Per-provider last-fetch timestamps (ms), used to honor `refreshInterval`
  * overrides independent of the global polling cadence. */
 const lastFetched = new Map<string, number>();
+/** Consecutive awaited failures per provider. The existing 10-second tick
+ * remains the only timer; this state only stretches each failed provider's
+ * own due interval so healthy providers keep their configured cadence. */
+const adaptiveFailureStreaks = new Map<string, number>();
+
+function adaptiveBackoffMultiplier(consecutiveFailures: number): number {
+  const failures = Math.max(0, Math.trunc(consecutiveFailures));
+  if (failures <= 1) return 1;
+  if (failures === 2) return 2;
+  if (failures === 3) return 4;
+  return 8;
+}
+
+function adaptiveIntervalMs(baseMs: number, providerId: string): number {
+  if (baseMs <= 0) return baseMs;
+  return baseMs * adaptiveBackoffMultiplier(adaptiveFailureStreaks.get(providerId) ?? 0);
+}
+
+/** Record every attempted id, including an IPC result that omitted a status.
+ * Manual/open/account-switch retries start a new streak and always bypass the
+ * due gate; a failed user retry therefore becomes failure #1 rather than
+ * inheriting an old automatic backoff. */
+function recordFetchOutcomes(
+  requestedIds: string[],
+  fresh: ProviderStatus[],
+  manual: boolean,
+): void {
+  const byId = new Map(fresh.map((status) => [status.id, status]));
+  const now = Date.now();
+  for (const id of requestedIds) {
+    lastFetched.set(id, now);
+    const status = byId.get(id);
+    if (status && !status.error) {
+      adaptiveFailureStreaks.delete(id);
+      continue;
+    }
+    const previous = manual ? 0 : (adaptiveFailureStreaks.get(id) ?? 0);
+    adaptiveFailureStreaks.set(id, previous + 1);
+  }
+}
 
 /** Provider ids due for a fetch this tick: providers whose own
  * `refreshInterval` (or the global interval when unset/0) has elapsed since
@@ -145,7 +187,8 @@ async function dueProviderIds(): Promise<string[] | undefined> {
   const due: string[] = [];
   for (const p of settings.providers) {
     if (p.enabled !== true) continue;
-    const intervalMs = p.refreshInterval && p.refreshInterval > 0 ? p.refreshInterval * 1000 : globalMs;
+    const baseMs = p.refreshInterval && p.refreshInterval > 0 ? p.refreshInterval * 1000 : globalMs;
+    const intervalMs = adaptiveIntervalMs(baseMs, p.id);
     const last = lastFetched.get(p.id);
     if (last === undefined || now - last >= intervalMs) due.push(p.id);
   }
@@ -509,7 +552,13 @@ function render() {
       }
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
+      body.append(confidenceRow(state.claude, state.codex, state.grok, pending));
       const combined = combine(state.claude, state.codex, state.grok);
+      // Budget/forecast card sits before the chart so it still shows on a
+      // fresh/all-zero report (no "active day" gate) — only rendered when a
+      // budget is actually configured (`budgetForecastCard` returns null otherwise).
+      const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
+      if (budget) body.append(budget);
       body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(heatmapCard(combined));
       if (combined.topModels.length > 0) body.append(topModelsCard(combined));
@@ -990,12 +1039,25 @@ async function updateTrayTooltip(statuses: ProviderStatus[], hidden: Set<string>
   else stopTrayRotation();
 }
 
+/** Data Confidence Pass: keep the previous `serviceStatus`/`serviceStatusLevel`
+ * for one provider id when its quota update just succeeded but the side
+ * status-page probe came back empty this cycle — a transient probe miss
+ * shouldn't blank a value the UI already had. Any incoming non-nil value
+ * always wins outright, and an errored update is left completely untouched
+ * (unchanged from prior behavior; the error banner still shows as-is). */
+function withLastGoodServiceStatus(cached: ProviderStatus | undefined, fresh: ProviderStatus): ProviderStatus {
+  if (fresh.error) return fresh;
+  if (fresh.serviceStatus != null || fresh.serviceStatusLevel != null) return fresh;
+  if (!cached || (cached.serviceStatus == null && cached.serviceStatusLevel == null)) return fresh;
+  return { ...fresh, serviceStatus: cached.serviceStatus, serviceStatusLevel: cached.serviceStatusLevel };
+}
+
 /** Merge freshly fetched statuses over the cached ones by id, preserving the
  * **cached order** (which is settings.providers order via seed/rebuild).
  * New ids not yet in cache are appended. */
 function mergeStatuses(cached: ProviderStatus[], fresh: ProviderStatus[]): ProviderStatus[] {
   const byId = new Map(cached.map((s) => [s.id, s]));
-  for (const s of fresh) byId.set(s.id, s);
+  for (const s of fresh) byId.set(s.id, withLastGoodServiceStatus(byId.get(s.id), s));
   const order = [...cached.map((s) => s.id)];
   for (const s of fresh) if (!order.includes(s.id)) order.push(s.id);
   return order.map((id) => byId.get(id)!).filter(Boolean);
@@ -1041,7 +1103,10 @@ async function rebuildProviderOrderFromSettings() {
   // Drop lastFetched for providers no longer enabled so a re-enable refetches.
   const keep = new Set(state.statuses.map((s) => s.id));
   for (const id of [...lastFetched.keys()]) {
-    if (!keep.has(id)) lastFetched.delete(id);
+    if (!keep.has(id)) {
+      lastFetched.delete(id);
+      adaptiveFailureStreaks.delete(id);
+    }
   }
   if (state.tab !== "all" && !keep.has(state.tab)) {
     state.tab = state.statuses[0]?.id ?? "all";
@@ -1054,7 +1119,7 @@ async function rebuildProviderOrderFromSettings() {
 /** Initial full load (all enabled providers) plus the local usage reports.
  * macOS QuotaService parity: every fetch publishes into state and re-renders
  * as soon as IT finishes — the UI never waits for the slowest source. */
-async function load() {
+async function load(manual = false) {
   if (isSettingsWindow()) return;
   if (loadInFlight) return;
   loadInFlight = true;
@@ -1099,10 +1164,9 @@ async function load() {
     // card fills in the moment ITS fetch lands — a 15s-timeout provider never
     // holds up the others. Falls back to one batch call when settings are
     // unreadable (no id list to fan out over).
-    const publishStatuses = (fresh: ProviderStatus[]) => {
+    const publishStatuses = (requestedIds: string[], fresh: ProviderStatus[]) => {
       const prevIds = state.statuses.map((s) => s.id).join(",");
-      const now = Date.now();
-      for (const s of fresh) lastFetched.set(s.id, now);
+      recordFetchOutcomes(requestedIds, fresh, manual);
       state.statuses = state.statuses.length > 0 ? mergeStatuses(state.statuses, fresh) : fresh;
       checkQuotaWarnings(fresh);
       evaluateFailureEpisodes(fresh);
@@ -1116,10 +1180,10 @@ async function load() {
       ? Promise.all(enabledIds.map((id) =>
           invoke<ProviderStatus[]>("provider_statuses", { ids: [id] })
             .catch(() => [] as ProviderStatus[])
-            .then(publishStatuses)))
+            .then((fresh) => publishStatuses([id], fresh))))
       : invoke<ProviderStatus[]>("provider_statuses", { ids: null })
           .catch(() => [] as ProviderStatus[])
-          .then(publishStatuses)
+          .then((fresh) => publishStatuses(fresh.map((status) => status.id), fresh))
     ).then(async () => updateTrayTooltip(state.statuses, await fetchTrayHidden()));
 
     await Promise.all([
@@ -1148,8 +1212,8 @@ async function load() {
 async function refetchProvider(id: string) {
   if (isSettingsWindow()) return;
   const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] }).catch(() => []);
+  recordFetchOutcomes([id], fresh, true);
   if (fresh.length === 0) return;
-  lastFetched.set(id, Date.now());
   state.statuses = mergeStatuses(state.statuses, fresh);
   checkQuotaWarnings(fresh);
   await updateTrayTooltip(state.statuses, await fetchTrayHidden());
@@ -1161,12 +1225,14 @@ async function refetchProvider(id: string) {
  * flicker back to "loading". */
 async function tick() {
   if (isSettingsWindow() || loadInFlight) return;
+  // Weekly Digest rides this existing cadence — evaluated even when no
+  // provider quota is due this cycle (its own 7-day/in-flight gates decide).
+  void checkWeeklyDigest().catch(() => {});
   const ids = await dueProviderIds();
   if (!ids || ids.length === 0) return;
   const prevIds = state.statuses.map((s) => s.id).join(",");
   const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
-  const now = Date.now();
-  for (const s of fresh) lastFetched.set(s.id, now);
+  recordFetchOutcomes(ids, fresh, false);
   state.statuses = mergeStatuses(state.statuses, fresh);
   checkQuotaWarnings(state.statuses);
   evaluateFailureEpisodes(fresh);
@@ -1185,7 +1251,7 @@ async function tick() {
  * works regardless of the current global-interval mode. */
 async function refreshNow() {
   if (isSettingsWindow()) return;
-  await load();
+  await load(true);
 }
 
 /** Ctrl/Cmd+, → Settings window; Ctrl/Cmd+Q → Quit (macOS popover shortcuts). */
@@ -1230,6 +1296,18 @@ window.addEventListener("storage", (e) => {
   if (e.key === "birdnion.showPercentInTray") onTrayDisplayPrefChanged();
 });
 window.addEventListener("birdnion-tray-display-changed", onTrayDisplayPrefChanged);
+
+/** Repaint the All-tab budget card when the monthly budget changes —
+ * Settings is another webview (`storage` for cross-window, custom event for
+ * same-window; mirrors `onTrayDisplayPrefChanged`). */
+function onMonthlyBudgetChanged() {
+  if (isSettingsWindow()) return;
+  if (state.tab === "all") render();
+}
+window.addEventListener("storage", (e) => {
+  if (e.key === MONTHLY_BUDGET_STORAGE_KEY) onMonthlyBudgetChanged();
+});
+window.addEventListener(MONTHLY_BUDGET_CHANGED_EVENT, onMonthlyBudgetChanged);
 
 window.addEventListener("DOMContentLoaded", () => {
   initTheme();

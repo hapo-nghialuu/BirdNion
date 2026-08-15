@@ -93,6 +93,8 @@
 		ALLV0001000000000000B001 /* AllUsageOverview.swift in Sources */ = {isa = PBXBuildFile; fileRef = ALLV0002000000000000F001 /* AllUsageOverview.swift */; };
 		CURT0001000000000000B001 /* CombinedUsageReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURT0002000000000000F001 /* CombinedUsageReportTests.swift */; };
 		SET0001000000000000B001 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0002000000000000F001 /* SettingsStore.swift */; };
+		WKDG0001000000000000B001 /* WeeklyDigest.swift in Sources */ = {isa = PBXBuildFile; fileRef = WKDG0002000000000000F001 /* WeeklyDigest.swift */; };
+		WKDG0003000000000000B002 /* WeeklyDigestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WKDG0004000000000000F002 /* WeeklyDigestTests.swift */; };
 		L10N0001000000000000B001 /* AppLocalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N0002000000000000F001 /* AppLocalizer.swift */; };
 		FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FR0002000000000000F001 /* BirdNionConfigStore.swift */; };
 		CCBK0001000000000000B001 /* ClaudeCodeBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCBK0002000000000000F001 /* ClaudeCodeBackend.swift */; };
@@ -254,6 +256,8 @@
 		STG0002000000000000F001 /* ProviderStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProviderStorage.swift; sourceTree = "<group>"; };
 		UPDT0002000000000000F001 /* UpdateCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/UpdateCheckerTests.swift; sourceTree = "<group>"; };
 		SET0002000000000000F001 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsStore.swift; sourceTree = "<group>"; };
+		WKDG0002000000000000F001 /* WeeklyDigest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/WeeklyDigest.swift; sourceTree = "<group>"; };
+		WKDG0004000000000000F002 /* WeeklyDigestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WeeklyDigestTests.swift; sourceTree = "<group>"; };
 		L10N0002000000000000F001 /* AppLocalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalizer.swift; sourceTree = "<group>"; };
 		FR0002000000000000F001 /* BirdNionConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BirdNionConfigStore.swift; sourceTree = "<group>"; };
 		CCBK0002000000000000F001 /* ClaudeCodeBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeCodeBackend.swift; sourceTree = "<group>"; };
@@ -342,6 +346,7 @@
 				CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */,
 				CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */,
 				CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */,
+				WKDG0003000000000000B002 /* WeeklyDigestTests.swift in Sources */,
 				CFKB0001000000000000B777 /* CodexForkBaselineTests.swift in Sources */,
 				CCCC000D000000000000B007 /* StubURLProtocol.swift in Sources */,
 				C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */,
@@ -689,6 +694,7 @@
 				DDDD001B0000000000B00E /* QuotaPanel.swift in Sources */,
 				ALLV0001000000000000B001 /* AllUsageOverview.swift in Sources */,
 				SET0001000000000000B001 /* SettingsStore.swift in Sources */,
+				WKDG0001000000000000B001 /* WeeklyDigest.swift in Sources */,
 				L10N0001000000000000B001 /* AppLocalizer.swift in Sources */,
 				FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */,
 				CCBK0001000000000000B001 /* ClaudeCodeBackend.swift in Sources */,

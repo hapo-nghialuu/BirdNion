@@ -262,6 +262,22 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
         self.claudeAdminUsage = claudeAdminUsage
         self.kiroMenu = kiroMenu
     }
+
+    /// Copy with `serviceStatus`/`serviceStatusLevel` overridden, every other
+    /// field identical. Used by `QuotaService` to carry forward the last-good
+    /// service-status pair when a successful quota fetch's service-status
+    /// side probe returns nothing this cycle (see
+    /// `QuotaService.preservingLastGoodServiceStatus`).
+    func withServiceStatus(_ serviceStatus: String?, level serviceStatusLevel: String?) -> ProviderStatus {
+        ProviderStatus(
+            id: id, displayName: displayName, windows: windows, lastUpdated: lastUpdated,
+            error: error, accountLabel: accountLabel, planType: planType,
+            creditsRemaining: creditsRemaining, creditsUnlimited: creditsUnlimited,
+            version: version, serviceStatus: serviceStatus, serviceStatusLevel: serviceStatusLevel,
+            accountID: accountID, planName: planName, resetCreditsAvailable: resetCreditsAvailable,
+            cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
+            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
+    }
 }
 
 /// Structured Kiro usage consumed by the menu-bar display-mode picker and the
