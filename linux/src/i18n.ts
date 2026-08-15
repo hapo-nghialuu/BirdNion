@@ -63,9 +63,10 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   popoverReady: { vi: "Sẵn sàng", en: "Ready" },
   popoverUpdating: { vi: "Đang cập nhật…", en: "Updating…" },
   popoverRefresh: { vi: "Làm mới", en: "Refresh" },
-  footerSettings: { vi: "Cài đặt…", en: "Settings…" },
-  footerAbout: { vi: "Giới thiệu BirdNion", en: "About BirdNion" },
-  footerQuit: { vi: "Thoát BirdNion", en: "Quit BirdNion" },
+  "popover.tray": { vi: "Tray", en: "Tray" },
+  footerSettings: { vi: "Cài đặt", en: "Settings" },
+  footerAbout: { vi: "Giới thiệu", en: "About" },
+  footerQuit: { vi: "Thoát", en: "Quit" },
   tabAll: { vi: "All", en: "All" },
 
   // Claude Code quick-apply — macOS AppLocalizer `claudeCode.*` parity
@@ -372,6 +373,13 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "confidence.live": { vi: "Live · {time}", en: "Live · {time}" },
   "confidence.history": { vi: "Lịch sử · {time}", en: "History · {time}" },
   "confidence.noData": { vi: "Chưa có dữ liệu", en: "No data" },
+  "confidence.state.live": { vi: "LIVE", en: "LIVE" },
+  "confidence.state.history": { vi: "LỊCH SỬ", en: "HISTORY" },
+  "confidence.state.unavailable": { vi: "CHƯA CÓ", en: "NO DATA" },
+  "confidence.fresh.justNow": { vi: "vừa xong", en: "just now" },
+  "confidence.fresh.minutes": { vi: "{n} phút", en: "{n}m" },
+  "confidence.fresh.hours": { vi: "{n} giờ", en: "{n}h" },
+  "confidence.fresh.days": { vi: "{n} ngày", en: "{n}d" },
   "confidence.liveHint": {
     vi: "{source}: dữ liệu vừa quét trực tiếp, đã gộp vào lịch sử.",
     en: "{source}: freshly scanned live and merged into history.",
@@ -392,13 +400,21 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "budgetStatus.already-over": { vi: "Đã vượt", en: "Already over" },
   budgetMtd: { vi: "Đã chi tháng này {amount}", en: "Spent this month {amount}" },
   budgetProjected: { vi: "Dự phóng cuối tháng {amount}", en: "Projected by month end {amount}" },
+  budgetProjectedAmount: { vi: "dự phóng {amount}", en: "projected {amount}" },
   budgetRemaining: { vi: "Còn lại {amount}", en: "{amount} remaining" },
+  budgetRemainingWithDays: {
+    vi: "Còn lại {amount} · {n} ngày nữa hết tháng",
+    en: "{amount} left · {n} days left in month",
+  },
   budgetOverBy: { vi: "Vượt {amount}", en: "Over by {amount}" },
   budgetOfLimit: { vi: "{spent} / {budget}", en: "{spent} / {budget}" },
   budgetHint: {
     vi: "Ước tính local Claude+Codex+Grok — đã chi {mtd}, dự phóng {projected} cuối tháng, ngân sách {budget} ({status}).",
     en: "Estimated from local Claude+Codex+Grok — spent {mtd}, projected {projected} by month end, budget {budget} ({status}).",
   },
+  peakDayShort: { vi: "Cao nhất", en: "Peak" },
+  avgActiveShort: { vi: "TB/ngày", en: "Avg/day" },
+  appearanceTitle: { vi: "Giao diện", en: "Appearance" },
 
   // Settings detail grid (macOS ProvidersPane detailInfoGrid)
   "provider.status": { vi: "Trạng thái", en: "Status" },

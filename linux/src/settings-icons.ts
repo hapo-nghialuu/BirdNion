@@ -14,7 +14,10 @@ export type SettingsIconId =
   | "arrow.clockwise"
   | "person"
   | "key"
-  | "trash";
+  | "trash"
+  | "sun.max"
+  | "moon"
+  | "circle.lefthalf.filled";
 
 /** Shared outline attrs — SF regular weight optical match at 20pt. */
 const O = 'fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"';
@@ -98,6 +101,20 @@ const PATHS: Record<SettingsIconId, string> = {
     <path ${O} d="M6.8 7l.7 11.2c.03.6.53 1.05 1.13 1.05h6.74c.6 0 1.1-.45 1.13-1.05L17.2 7"/>
     <path ${O} d="M10.2 10.2v5.6"/>
     <path ${O} d="M13.8 10.2v5.6"/>`,
+
+  // SF `sun.max` — appearance light
+  "sun.max": `
+    <circle cx="12" cy="12" r="3.4" ${O}/>
+    <path ${O} d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6.05 6.05l1.55 1.55M16.4 16.4l1.55 1.55M6.05 17.95l1.55-1.55M16.4 7.6l1.55-1.55"/>`,
+
+  // SF `moon` — appearance dark
+  moon: `
+    <path ${O} d="M18.2 14.1A6.9 6.9 0 0 1 9.9 5.8 6.95 6.95 0 1 0 18.2 14.1Z"/>`,
+
+  // SF-ish half circle for appearance auto
+  "circle.lefthalf.filled": `
+    <circle cx="12" cy="12" r="7.5" ${O}/>
+    <path d="M12 4.5a7.5 7.5 0 0 0 0 15Z" fill="currentColor" stroke="none"/>`,
 };
 
 export function settingsIcon(id: SettingsIconId, className = "sw-icon"): SVGSVGElement {

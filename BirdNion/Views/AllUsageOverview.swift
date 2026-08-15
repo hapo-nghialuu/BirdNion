@@ -279,6 +279,45 @@ extension CombinedUsageReport {
             grokUSD: window.reduce(0) { $0 + $1.grokUSD },
             grokTokens: window.reduce(0) { $0 + $1.grokTokens })
     }
+
+    /// Top models over the chart period (`1` = calendar today only).
+    /// Does not touch heatmap stats — only folds `daily` model splits.
+    func topModels(lastDays days: Int, limit: Int = 6) -> (models: [CombinedModelCost], windowTokens: Int) {
+        let n = max(days, 1)
+        let window = Array(daily.suffix(n))
+        var usdByKey: [String: Double] = [:]
+        var tokensByKey: [String: Int] = [:]
+        var metaByKey: [String: (name: String, source: String)] = [:]
+        var windowTokens = 0
+        for day in window {
+            windowTokens += day.tokens
+            for m in day.models {
+                let key = "\(m.source):\(m.name)"
+                if metaByKey[key] == nil {
+                    metaByKey[key] = (m.name, m.source)
+                }
+                usdByKey[key, default: 0] += m.usd
+                tokensByKey[key, default: 0] += m.tokens
+            }
+        }
+        var models: [CombinedModelCost] = []
+        models.reserveCapacity(metaByKey.count)
+        for (key, meta) in metaByKey {
+            let usd = usdByKey[key] ?? 0
+            let tokens = tokensByKey[key] ?? 0
+            if usd <= 0 && tokens <= 0 { continue }
+            models.append(CombinedModelCost(
+                name: meta.name, usd: usd, tokens: tokens, source: meta.source))
+        }
+        models.sort {
+            if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+            return $0.usd > $1.usd
+        }
+        if models.count > limit {
+            models = Array(models.prefix(limit))
+        }
+        return (models, max(windowTokens, 1))
+    }
 }
 
 // MARK: - Phase 2: monthly budget forecast (pure)
@@ -312,6 +351,8 @@ struct MonthlyForecast: Equatable {
     let status: MonthlyForecastStatus?
 
     var remainingBudgetUSD: Double? { budgetUSD.map { $0 - monthToDateUSD } }
+    /// Full calendar days left after today until month-end (0 on the last day).
+    var daysRemainingInMonth: Int { max(0, daysInMonth - daysElapsed) }
     /// Month-to-date spend as a fraction of budget (can exceed 1 when over).
     /// `nil` when no budget is configured.
     var progressFraction: Double? {
@@ -404,6 +445,7 @@ struct AllUsageOverview: View {
         if !anyReportReady {
             // All enabled scans still in flight — same skeleton the provider card uses.
             VStack(alignment: .leading, spacing: 9) { LoadingQuotaSkeleton() }
+                .popoverContentInset()
                 .padding(.vertical, 16)
         } else {
             // Render whatever already landed; other sources fold in when
@@ -426,29 +468,31 @@ struct AllUsageOverview: View {
                         .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
+                .popoverContentInset()
             }
-            // Shown even when the report has no active days — freshness is
-            // about the scan itself, not whether it found spend. A pending
-            // (nil) source relies on the hint above, not an "unavailable" badge.
-            SourceConfidenceBadgeRow(report: report)
-            // Shown even when usage is zero this month (same rationale as
-            // the confidence badges above) — hides itself when no budget is
-            // configured (`BudgetForecastCard` checks `settings.monthlyBudgetUSD`).
-            BudgetForecastCard(report: report)
+            // Design order: chart/share → confidence → budget → heatmap → models.
+            // Confidence + budget stay visible even on a zero-spend month
+            // (freshness describes the scan; budget card hides itself when
+            // monthlyBudgetUSD is unset).
             if report.isEmpty {
+                // No top hairline — ProviderTabs already draws the section rule.
                 Text(vi ? "Chưa có dữ liệu sử dụng trong 120 ngày qua."
                         : "No usage recorded in the last 120 days.")
                     .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .popoverContentInset()
                     .padding(.vertical, 16)
-                    .hairlineTop()
             } else {
                 CombinedChartCard(report: report, claudeHourly: claude?.hourly ?? [])
+            }
+            SourceConfidenceBadgeRow(report: report)
+            BudgetForecastCard(report: report)
+            if !report.isEmpty {
+                // Heatmap stays fixed 120d — not tied to chart period chips.
                 CombinedHeatmapCard(report: report)
-                if !report.topModels.isEmpty {
-                    CombinedTopModelsCard(report: report)
-                }
+                // Top models follow chart period (24h / 7d / 30d / 90d / 120d).
+                CombinedTopModelsCard(report: report)
             }
         }
     }
@@ -469,13 +513,13 @@ enum SourceConfidenceState: Equatable {
         return confidence.live ? .live : .historyOnly
     }
 
-    /// `AppLocalizer` key for the badge's short state tag — no new inline
-    /// bilingual strings live in the view itself.
+    /// `AppLocalizer` key for the badge's short state tag — design uses
+    /// uppercase mono `LIVE` / `LỊCH SỬ` (see `confidence.state.*`).
     var localizationKey: String {
         switch self {
-        case .live: return "confidence.live"
-        case .historyOnly: return "confidence.historyOnly"
-        case .unavailable: return "confidence.unavailable"
+        case .live: return "confidence.state.live"
+        case .historyOnly: return "confidence.state.historyOnly"
+        case .unavailable: return "confidence.state.unavailable"
         }
     }
 }
@@ -491,9 +535,7 @@ enum SourceConfidenceFormat {
         scannedAt.map { L10n.relativeUpdated(from: $0, now: now, preference: preference) }
     }
 
-    /// Dense, locale-neutral timestamp for the fixed-width popover row. The
-    /// fully localized text remains available through the badge tooltip and
-    /// accessibility label.
+    /// Dense, locale-neutral timestamp for tests / fixed-width rows.
     static func compactFreshnessLabel(scannedAt: Date?, now: Date = Date()) -> String? {
         guard let scannedAt else { return nil }
         let seconds = max(0, Int(now.timeIntervalSince(scannedAt)))
@@ -501,6 +543,23 @@ enum SourceConfidenceFormat {
         if seconds < 3_600 { return "\(seconds / 60)m" }
         if seconds < 86_400 { return "\(seconds / 3_600)h" }
         return "\(seconds / 86_400)d"
+    }
+
+    /// Design-style freshness after the LIVE / LỊCH SỬ tag: "vừa xong",
+    /// "2 phút", "3 giờ" — no "trước" suffix so the row stays dense.
+    static func badgeFreshnessLabel(scannedAt: Date?,
+                                    now: Date = Date(),
+                                    preference: String? = nil) -> String? {
+        guard let scannedAt else { return nil }
+        let seconds = max(0, Int(now.timeIntervalSince(scannedAt)))
+        if seconds < 60 { return L10n.t("confidence.fresh.justNow", preference) }
+        if seconds < 3_600 {
+            return L10n.f("confidence.fresh.minutes", preference, seconds / 60)
+        }
+        if seconds < 86_400 {
+            return L10n.f("confidence.fresh.hours", preference, seconds / 3_600)
+        }
+        return L10n.f("confidence.fresh.days", preference, seconds / 86_400)
     }
 }
 
@@ -530,8 +589,12 @@ struct SourceConfidenceBadgeRow: View {
 
     var body: some View {
         if !entries.isEmpty {
+            // No top hairline; tight gap under share rows / chart.
             HStack(spacing: 8) { badges }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .popoverContentInset()
+                .padding(.top, 2)
+                .padding(.bottom, 6)
         }
     }
 
@@ -550,20 +613,28 @@ struct SourceConfidenceBadgeRow: View {
         let tag = L10n.t(state.localizationKey, language)
         let fullFreshness = SourceConfidenceFormat.freshnessLabel(
             scannedAt: confidence.scannedAt, preference: language)
-        let compactFreshness = SourceConfidenceFormat.compactFreshnessLabel(
-            scannedAt: confidence.scannedAt)
+        let badgeFresh = SourceConfidenceFormat.badgeFreshnessLabel(
+            scannedAt: confidence.scannedAt, preference: language)
         let help = fullFreshness.map { L10n.f("confidence.badgeHelp", language, name, tag, $0) }
             ?? L10n.f("confidence.badgeHelpNoFreshness", language, name, tag)
-        return HStack(spacing: 3) {
+        // Old compact badge: provider logo + LIVE/HISTORY + short freshness
+        // (no text name — logos identify the source on the dense row).
+        return HStack(spacing: 4) {
             ProviderLogoMark(id: id, tint: color)
                 .frame(width: 12, height: 12)
                 .accessibilityHidden(true)
             Text(tag)
-                .plexEyebrow(size: 9, color: stateColor(state), tracking: 0.6)
-            if let compactFreshness {
-                Text("· \(compactFreshness)")
+                .font(.plexMono(9, weight: .semibold))
+                .foregroundStyle(stateColor(state))
+                .tracking(0.4)
+            if let badgeFresh {
+                Text("·")
                     .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
+                Text(badgeFresh.uppercased())
+                    .font(.plexMono(9, weight: .medium))
+                    .foregroundStyle(stateColor(state).opacity(0.85))
+                    .tracking(0.3)
             }
         }
         .lineLimit(1)
@@ -576,7 +647,7 @@ struct SourceConfidenceBadgeRow: View {
     private func stateColor(_ state: SourceConfidenceState) -> Color {
         switch state {
         case .live: return VocabbyTheme.success
-        case .historyOnly: return VocabbyTheme.tertiary
+        case .historyOnly: return VocabbyTheme.warningFill // design amber HISTORY
         case .unavailable: return VocabbyTheme.disabled
         }
     }
@@ -600,6 +671,8 @@ struct BudgetForecastCard: View {
 
     var body: some View {
         if let budgetUSD = forecast.budgetUSD, let status = forecast.status {
+            // Design: title + status on one row; big "$MTD / $budget" left,
+            // "dự phóng $X" right; progress; "CÒN LẠI $Y · N NGÀY NỮA HẾT THÁNG".
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(L10n.t("budget.title", language))
@@ -608,30 +681,32 @@ struct BudgetForecastCard: View {
                     Text(statusLabel(status))
                         .plexEyebrow(size: 9, color: statusColor(status), tracking: 0.4)
                 }
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(L10n.t("budget.monthToDate", language))
-                            .plexEyebrow(size: 9, color: VocabbyTheme.tertiary)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(AllUsageFormat.usd(forecast.monthToDateUSD))
-                            .font(.plexMono(16, weight: .bold))
+                            .font(.plexMono(24, weight: .bold))
                             .foregroundStyle(VocabbyTheme.primary)
+                        Text("/ \(AllUsageFormat.usd(budgetUSD))")
+                            .font(.plexMono(14, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.tertiary)
                     }
                     Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(L10n.t("budget.projected", language))
-                            .plexEyebrow(size: 9, color: VocabbyTheme.tertiary)
-                        Text(AllUsageFormat.usd(forecast.projectedTotalUSD))
-                            .font(.plexMono(13, weight: .semibold))
-                            .foregroundStyle(statusColor(status))
-                    }
+                    Text(L10n.f("budget.projectedAmount", language,
+                                AllUsageFormat.usd(forecast.projectedTotalUSD)))
+                        .font(.plexMono(12, weight: .semibold))
+                        .foregroundStyle(statusColor(status))
+                        .multilineTextAlignment(.trailing)
                 }
                 progressBar(status: status)
                 Text(remainingText(budgetUSD: budgetUSD))
-                    .font(.plexMono(10))
-                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(statusColor(status).opacity(0.9))
+                    .textCase(.uppercase)
+                    .tracking(0.3)
             }
+            .popoverContentInset()
             .padding(.vertical, 16)
-            .hairlineTop(VocabbyTheme.inkRule)
+            .popoverHairlineTop(VocabbyTheme.inkRule)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityText(budgetUSD: budgetUSD, status: status))
         }
@@ -670,9 +745,12 @@ struct BudgetForecastCard: View {
 
     private func remainingText(budgetUSD: Double) -> String {
         let remaining = forecast.remainingBudgetUSD ?? (budgetUSD - forecast.monthToDateUSD)
-        return remaining >= 0
-            ? L10n.f("budget.remaining", language, AllUsageFormat.usd(remaining))
-            : L10n.f("budget.overBy", language, AllUsageFormat.usd(-remaining))
+        let daysLeft = forecast.daysRemainingInMonth
+        if remaining >= 0 {
+            return L10n.f("budget.remainingWithDays", language,
+                          AllUsageFormat.usd(remaining), daysLeft)
+        }
+        return L10n.f("budget.overBy", language, AllUsageFormat.usd(-remaining))
     }
 
     private func accessibilityText(budgetUSD: Double, status: MonthlyForecastStatus) -> String {
@@ -696,26 +774,24 @@ struct CombinedChartCard: View {
     /// logs only have day resolution, so that period's bars are Claude-only.
     let claudeHourly: [ClaudeHourlyUsage]
     @State private var hoveredDay: CombinedDailyUsage?
-    /// Day pinned by clicking a chart bar — shows the per-source breakdown
-    /// until the same bar is clicked again or the period changes. Hover
-    /// temporarily overrides pin for the detail rows.
+    /// Day pinned by clicking a chart bar — the only thing that shows the
+    /// per-source / model breakdown. Default is nil (hidden). Click the same
+    /// bar again to clear; hover only highlights the bar (never opens detail).
     @State private var pinnedDay: CombinedDailyUsage?
-    /// Click-toggled visibility of the day-detail block: clicking the bar
-    /// whose detail is showing hides the block; any bar click brings it back.
-    /// While hidden, hover must NOT resurrect it — hover-driven height
-    /// changes are the relayout loop this card just got cured of.
-    @State private var detailHidden = false
     @State private var hoveredHour: ClaudeHourlyUsage?
     /// Selected chart window in days (1 = the 24 h hourly view); persisted
-    /// so the popover re-opens on the period the user last chose.
+    /// so the popover re-opens on the period the user last chose. Shared with
+    /// `CombinedTopModelsCard` (heatmap stays fixed 120d).
     @AppStorage("popover.allChartDays") private var periodDays = 30
 
-    private static let periods = [1, 7, 30, 90]
+    private static let periods = [1, 7, 30, 90, 120]
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
     private var is24h: Bool { periodDays == 1 }
-    private var windowDaily: [CombinedDailyUsage] { Array(report.daily.suffix(periodDays)) }
-    private var windowTotals: CombinedWindowTotals { report.totals(lastDays: periodDays) }
+    /// Cap bar window at available daily history (120).
+    private var periodWindowDays: Int { min(max(periodDays, 1), max(report.daily.count, 1)) }
+    private var windowDaily: [CombinedDailyUsage] { Array(report.daily.suffix(periodWindowDays)) }
+    private var windowTotals: CombinedWindowTotals { report.totals(lastDays: periodWindowDays) }
     /// Chart bars scale by tokens (not USD) so volume, not spend, drives height.
     private var maxBarTokens: Int { max(windowDaily.map(\.tokens).max() ?? 0, 1) }
 
@@ -729,19 +805,24 @@ struct CombinedChartCard: View {
     private var grokTodayTokens: Int { report.daily.last?.grokTokens ?? 0 }
     private var maxBarHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
 
-    /// The day whose breakdown renders below the chart: the pinned day, else
-    /// the latest active day. Deliberately NOT hover-driven — hover changing
-    /// the block (and with it the card height mid-mouse-move) is what caused
-    /// the popover relayout loop; clicks resize once, intentionally, so the
-    /// block can hug its natural content height. Hover keeps the bar
-    /// highlight and the `.help` tooltip.
-    private var detailDay: CombinedDailyUsage? {
-        guard !detailHidden else { return nil }
-        return pinnedDay ?? windowDaily.last(where: \.isActive) ?? windowDaily.last
-    }
+    /// Breakdown under the chart — only the click-pinned day. No latest-day
+    /// fallback and no hover: default is hidden until the user clicks a bar.
+    private var detailDay: CombinedDailyUsage? { pinnedDay }
 
     private func periodLabel(_ days: Int) -> String {
         days == 1 ? "24h" : "\(days) \(vi ? "ngày" : "days")"
+    }
+
+    /// Compact chip labels for the top-right square period boxes.
+    private func periodShortLabel(_ days: Int) -> String {
+        switch days {
+        case 1: return "24h"
+        case 7: return "7d"
+        case 30: return "30d"
+        case 90: return "90d"
+        case 120: return "120d"
+        default: return "\(days)d"
+        }
     }
 
     private var periodTotalUSD: Double {
@@ -757,36 +838,11 @@ struct CombinedChartCard: View {
     }
 
     var body: some View {
+        // Content inset per-block; body hairlines also inset 16pt.
+        // No top hairline here — ProviderTabs already owns the edge-to-edge rule.
         VStack(alignment: .leading, spacing: 8) {
-            // Total-cost hero (mockup: 24px bold) + today secondary.
-            VStack(alignment: .leading, spacing: 2) {
-                Text((vi ? "Tổng chi phí " : "Total cost ") + periodLabel(periodDays))
-                    .plexEyebrow(size: 10, color: VocabbyTheme.secondary, tracking: 0.2)
-                // .top, not .firstTextBaseline: the trailing VStack has no
-                // valid text baseline, and collecting invalid baselines inside
-                // the auto-sizing popover host recurses NSISEngine (crash
-                // reproduced at launch, report 2026-07-20-131610).
-                HStack(alignment: .top, spacing: 10) {
-                    Text(AllUsageFormat.usd(periodTotalUSD))
-                        .font(.plexMono(24, weight: .bold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                    Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(vi ? "Hôm nay" : "Today")
-                            .plexEyebrow(size: 9, color: VocabbyTheme.tertiary)
-                        Text(AllUsageFormat.usd(report.todayUSD))
-                            .font(.plexMono(12, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.secondary)
-                        Text(AllUsageFormat.tokens(report.todayTokens))
-                            .font(.plexMono(10))
-                            .foregroundStyle(VocabbyTheme.tertiary)
-                    }
-                }
-                Text(AllUsageFormat.tokens(periodTotalTokens))
-                    .font(.plexMono(11))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-            }
-            periodPicker
+            costHero
+                .popoverContentInset()
             Group {
                 if is24h {
                     hourChart
@@ -794,181 +850,186 @@ struct CombinedChartCard: View {
                     barChart
                 }
             }
-            .frame(height: 56)
-            .inkRuleBottom()
-            // Legend doubles as the per-source split for the chosen period
-            // (token volume — same metric as the stacked bars).
-            HStack(spacing: 12) {
-                legendDot(color: VocabbyTheme.chartClaude,
-                          label: "Claude \(AllUsageFormat.tokensShort(is24h ? claude24Tokens : windowTotals.claudeTokens))")
-                legendDot(color: VocabbyTheme.chartCodex,
-                          label: (is24h ? (vi ? "Codex (hôm nay) " : "Codex (today) ") : "Codex ")
-                              + AllUsageFormat.tokensShort(is24h ? codexTodayTokens : windowTotals.codexTokens))
-                legendDot(color: VocabbyTheme.chartGrok,
-                          label: (is24h ? (vi ? "Grok (hôm nay) " : "Grok (today) ") : "Grok ")
-                              + AllUsageFormat.tokensShort(is24h ? grokTodayTokens : windowTotals.grokTokens))
-            }
-            // Per-source token-share rows (existing report totals only —
-            // no QuotaService / new data flow).
+            .frame(height: 68)
+            .popoverContentInset()
+            .popoverInkRuleBottom()
             if !is24h {
-                sourceShareRows
+                chartAxisLabels
+                    .popoverContentInset()
             }
+            // Claude / Codex / Grok share — always follows the period chips
+            // (24h uses hour Claude + today Codex/Grok; multi-day uses window).
+            sourceShareRows
             if is24h {
                 if let hovered = hoveredHour {
                     Text("\(hourLabel(hovered.date)) · \(AllUsageFormat.tokens(hovered.tokens)) · \(AllUsageFormat.usd(hovered.usd))")
                         .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.secondary)
+                        .popoverContentInset()
                 }
                 Text(vi ? "Cột giờ chỉ gồm Claude — log Codex/Grok chỉ ghi theo ngày."
                         : "Hour bars are Claude-only — Codex/Grok logs have day resolution.")
                     .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
-            } else {
-                // Natural content height: the block only changes on click
-                // (pin / hide), never on hover, so each resize is a single
-                // intentional one — not the hover feedback loop.
-                if let detail = detailDay {
-                    detailRows(detail)
+                    .popoverContentInset()
+            } else if let detail = detailDay {
+                // Click-pinned day only — hover never opens detail.
+                detailRows(detail)
+                    .popoverContentInset()
+            }
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    /// Two-column cost hero:
+    ///   left  — period label + big $ + tokens
+    ///   right — period chips + TODAY stack
+    /// Uses `.top` alignment (not firstTextBaseline) to avoid NSISEngine
+    /// recursion on invalid baselines in the auto-sizing popover host.
+    private var costHero: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text((vi ? "Tổng chi phí " : "Total cost ") + periodLabel(periodDays))
+                    .plexEyebrow(size: 10, color: VocabbyTheme.secondary, tracking: 0.2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Text(AllUsageFormat.usd(periodTotalUSD))
+                    .font(.plexMono(32, weight: .bold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                    .tracking(-1)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(AllUsageFormat.tokens(periodTotalTokens))
+                    .font(.plexMono(11))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .trailing, spacing: 8) {
+                periodPicker
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(vi ? "Hôm nay" : "Today")
+                        .plexEyebrow(size: 9, color: VocabbyTheme.tertiary)
+                    Text(AllUsageFormat.usd(report.todayUSD))
+                        .font(.plexMono(13, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                        .lineLimit(1)
+                    Text(AllUsageFormat.tokensShort(report.todayTokens))
+                        .font(.plexMono(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
                 }
-                Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex và Grok."
-                        : "Estimated from local Claude Code CLI, Codex, and Grok logs.")
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    /// Start / end of the visible window under the bars (design axis labels).
+    private var chartAxisLabels: some View {
+        HStack {
+            if let first = windowDaily.first {
+                Text(dayLabel(first.date))
                     .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if let last = windowDaily.last {
+                Text(dayLabel(last.date))
+                    .font(.plexMono(9))
+                    .foregroundStyle(VocabbyTheme.tertiary)
             }
         }
-        .padding(.vertical, 16)
-        .hairlineTop()
+        .padding(.top, 2)
     }
 
-    /// Full-width token-share distribution bar (GitHub language-bar style) +
-    /// compact legend rows. View-only over `windowTotals` — no data-path change.
+    /// Per-source rows for the active period chip (24h / 7d / 30d / 90d / 120d).
+    private var periodShareRows: [(name: String, usd: Double, tokens: Int, color: Color)] {
+        let raw: [(String, Double, Int, Color)]
+        if is24h {
+            raw = [
+                ("Claude", claude24USD, claude24Tokens, VocabbyTheme.chartClaude),
+                ("Codex", codexTodayUSD, codexTodayTokens, VocabbyTheme.chartCodex),
+                ("Grok", grokTodayUSD, grokTodayTokens, VocabbyTheme.chartGrok),
+            ]
+        } else {
+            raw = [
+                ("Claude", windowTotals.claudeUSD, windowTotals.claudeTokens, VocabbyTheme.chartClaude),
+                ("Codex", windowTotals.codexUSD, windowTotals.codexTokens, VocabbyTheme.chartCodex),
+                ("Grok", windowTotals.grokUSD, windowTotals.grokTokens, VocabbyTheme.chartGrok),
+            ]
+        }
+        return raw
+            .filter { $0.2 > 0 }
+            .map { (name: $0.0, usd: $0.1, tokens: $0.2, color: $0.3) }
+    }
+
+    /// Per-source rows: color tick · name · "12.1B · 72%" · $amount.
     @ViewBuilder
     private var sourceShareRows: some View {
-        let rows: [(name: String, usd: Double, tokens: Int, color: Color)] = [
-            ("Claude", windowTotals.claudeUSD, windowTotals.claudeTokens, VocabbyTheme.chartClaude),
-            ("Codex", windowTotals.codexUSD, windowTotals.codexTokens, VocabbyTheme.chartCodex),
-            ("Grok", windowTotals.grokUSD, windowTotals.grokTokens, VocabbyTheme.chartGrok),
-        ].filter { $0.tokens > 0 }
+        let rows = periodShareRows
         let total = max(rows.reduce(0) { $0 + $1.tokens }, 1)
         if !rows.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                GeometryReader { geo in
-                    let widths = Self.segmentWidths(
-                        shares: rows.map { CGFloat(Double($0.tokens) / Double(total)) },
-                        totalWidth: geo.size.width,
-                        minWidth: 3)
-                    HStack(spacing: 0) {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                            Rectangle()
-                                .fill(row.color)
-                                .frame(width: widths[index])
-                        }
+            VStack(spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    let share = Double(row.tokens) / Double(total)
+                    HStack(spacing: 8) {
+                        Rectangle().fill(row.color).frame(width: 3, height: 12)
+                        Text(row.name)
+                            .font(.plexSans(13, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.primary)
+                        Spacer(minLength: 8)
+                        Text("\(AllUsageFormat.tokensShort(row.tokens)) · \(String(format: "%.0f%%", share * 100))")
+                            .font(.plexMono(11))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                        Text(AllUsageFormat.usd(row.usd))
+                            .font(.plexMono(12, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.primary)
+                            .frame(minWidth: 56, alignment: .trailing)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                }
-                .frame(height: 6)
-
-                VStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        let share = Double(row.tokens) / Double(total)
-                        HStack(spacing: 8) {
-                            Rectangle().fill(row.color).frame(width: 7, height: 7)
-                            Text(row.name)
-                                .font(.plexSans(12, weight: .medium))
-                                .foregroundStyle(VocabbyTheme.primary)
-                            Text(String(format: "%.0f%%", share * 100))
-                                .font(.plexMono(11))
-                                .foregroundStyle(VocabbyTheme.tertiary)
-                            Spacer(minLength: 8)
-                            Text(AllUsageFormat.usd(row.usd))
-                                .font(.plexMono(11, weight: .semibold))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                        }
-                        .padding(.vertical, 5)
-                        if index < rows.count - 1 {
-                            Rectangle()
-                                .fill(VocabbyTheme.border.opacity(0.7))
-                                .frame(height: 0.5)
-                        }
+                    .popoverContentInset()
+                    .padding(.vertical, 5)
+                    if index < rows.count - 1 {
+                        // Inset separator between share rows (body rule).
+                        PopoverInsetHairline()
                     }
                 }
             }
+            .padding(.top, 2)
         }
     }
 
-    /// Proportional segment widths with a floor so small shares stay visible.
-    private static func segmentWidths(shares: [CGFloat],
-                                      totalWidth: CGFloat,
-                                      minWidth: CGFloat) -> [CGFloat] {
-        guard !shares.isEmpty, totalWidth > 0 else {
-            return Array(repeating: 0, count: shares.count)
-        }
-        let n = shares.count
-        let minTotal = minWidth * CGFloat(n)
-        if minTotal >= totalWidth {
-            return Array(repeating: totalWidth / CGFloat(n), count: n)
-        }
-        var widths = shares.map { max(minWidth, $0 * totalWidth) }
-        let sum = widths.reduce(0, +)
-        if sum > totalWidth + 0.01 {
-            let excess = sum - totalWidth
-            let flexible = widths.map { max(0, $0 - minWidth) }
-            let flexSum = flexible.reduce(0, +)
-            if flexSum > 0 {
-                for i in widths.indices {
-                    widths[i] -= excess * (flexible[i] / flexSum)
-                }
-            }
-        } else if sum < totalWidth - 0.01 {
-            let deficit = totalWidth - sum
-            let shareSum = shares.reduce(0, +)
-            if shareSum > 0 {
-                for i in widths.indices {
-                    widths[i] += deficit * (shares[i] / shareSum)
-                }
-            }
-        }
-        return widths
-    }
-
-    /// Plain text tabs with an accent underline on the active tab (mockup:
-    /// no filled pill background — just mono caps + a 2pt accent rule under
-    /// the selected period).
+    /// Compact square period chips (24h / 7d / 30d / 90d) — top-right of the
+    /// cost hero, not a full-width underline strip under the amount.
     private var periodPicker: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 4) {
             ForEach(Self.periods, id: \.self) { days in
                 let active = periodDays == days
                 Button {
                     periodDays = days
                     hoveredDay = nil   // stale hover may fall outside the new window
-                    pinnedDay = nil    // pinned day may fall outside the new window
+                    pinnedDay = nil    // clear pin — new window starts with detail hidden
                     hoveredHour = nil
-                    detailHidden = false   // fresh window starts with detail visible
                 } label: {
-                    VStack(alignment: .center, spacing: 3) {
-                        Text(periodLabel(days))
-                            .font(.plexMono(9, weight: active ? .semibold : .regular))
-                            .foregroundStyle(active ? VocabbyTheme.primary : VocabbyTheme.secondary)
-                        Rectangle()
-                            .fill(active ? VocabbyTheme.blue : Color.clear)
-                            .frame(height: 2)
-                    }
-                    .contentShape(Rectangle())
+                    Text(periodShortLabel(days))
+                        .font(.plexMono(9, weight: active ? .semibold : .medium))
+                        .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
+                        .frame(width: 30, height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .fill(active ? VocabbyTheme.primary : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 1)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .help(periodLabel(days))
+                .accessibilityLabel(periodLabel(days))
+                .accessibilityAddTraits(active ? .isSelected : [])
             }
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func legendDot(color: Color, label: String) -> some View {
-        HStack(spacing: 4) {
-            Rectangle().fill(color).frame(width: 6, height: 6)
-            Text(label)
-                .font(.plexMono(9))
-                .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
 
@@ -1013,14 +1074,8 @@ struct CombinedChartCard: View {
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
                     }
                     .onTapGesture {
-                        // Click = toggle: hidden → show this day; clicking the
-                        // day already on display → hide the block; any other
-                        // bar → move the pin there.
-                        if detailHidden {
-                            detailHidden = false
-                            pinnedDay = day
-                        } else if detailDay?.id == day.id {
-                            detailHidden = true
+                        // Click = toggle pin only. Hover never opens detail.
+                        if pinnedDay?.id == day.id {
                             pinnedDay = nil
                         } else {
                             pinnedDay = day
@@ -1187,11 +1242,9 @@ enum CombinedHeatmapIntensity {
     }
 }
 
-/// GitHub-style contribution grid over the 120-day window: columns are weeks
-/// (Monday-first), rows are weekdays, cell intensity follows the day's token
-/// volume (see `CombinedHeatmapIntensity`) — USD stays in the header/detail
-/// text only. Peak / average / streak stats sit to the right of the grid to
-/// keep the popover short.
+/// GitHub-style contribution grid: fixed cell size, week-count fills the
+/// available width (not a hard-coded 120-day window). Columns are weeks
+/// (Monday-first); intensity follows tokens (`CombinedHeatmapIntensity`).
 struct CombinedHeatmapCard: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -1199,54 +1252,120 @@ struct CombinedHeatmapCard: View {
     /// Day pinned by clicking a cell — shows the per-source breakdown below
     /// the grid. Click the same cell again to dismiss.
     @State private var selectedDay: CombinedDailyUsage?
+    /// Measured content width (after popover inset) — seeds week count.
+    @State private var contentWidth: CGFloat = 388
 
     private static let cellSize: CGFloat = 11
     private static let cellGap: CGFloat = 2
+    /// Mon/Wed/Fri/Sun label column + gap before the grid.
+    private static let labelColumnWidth: CGFloat = 28
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    private var maxTokens: Int { max(report.daily.map(\.tokens).max() ?? 0, 1) }
     private var today: Date? { report.daily.last?.date }
 
-    /// Week columns, padded with nil at both ends so every column has 7 rows.
+    /// How many week columns fit at fixed cell size (no horizontal stretch).
+    private var weekCount: Int {
+        let gridWidth = max(contentWidth - Self.labelColumnWidth, Self.cellSize)
+        // n * cell + (n - 1) * gap <= gridWidth  →  n <= (gridWidth + gap) / (cell + gap)
+        let n = Int(floor((gridWidth + Self.cellGap) / (Self.cellSize + Self.cellGap)))
+        return max(4, min(52, n))
+    }
+
+    /// Contiguous calendar days ending today that fill `weekCount` Monday-first columns.
+    private var windowDays: [CombinedDailyUsage] {
+        Self.heatmapWindow(from: report.daily, weekCount: weekCount)
+    }
+
+    private var maxTokens: Int { max(windowDays.map(\.tokens).max() ?? 0, 1) }
+
+    /// Week columns, padded with nil so every column has 7 rows.
     private var weeks: [[CombinedDailyUsage?]] {
         var cells: [CombinedDailyUsage?] = []
-        if let first = report.daily.first {
+        if let first = windowDays.first {
             let weekday = Calendar.current.component(.weekday, from: first.date) // 1 = Sun
             let mondayIndex = (weekday + 5) % 7
             cells.append(contentsOf: Array(repeating: nil, count: mondayIndex))
         }
-        cells.append(contentsOf: report.daily.map { Optional($0) })
+        cells.append(contentsOf: windowDays.map { Optional($0) })
         while cells.count % 7 != 0 { cells.append(nil) }
         return stride(from: 0, to: cells.count, by: 7).map { Array(cells[$0..<($0 + 7)]) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let days = windowDays
+        let active = days.filter(\.isActive)
+        let windowUSD = days.reduce(0) { $0 + $1.usd }
+        let dayCount = days.count
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(vi ? "Hoạt động 120 ngày" : "120-day activity")
+                Text(vi ? "Hoạt động \(dayCount) ngày" : "\(dayCount)-day activity")
                     .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
                 Spacer(minLength: 8)
-                Text("\(AllUsageFormat.usd(report.totalUSD)) · \(report.activeDays) \(vi ? "ngày active" : "active days")")
+                Text("\(AllUsageFormat.usd(windowUSD)) · \(active.count) \(vi ? "ngày active" : "active days")")
                     .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
-            // Stats sit right next to the grid (leading-aligned) instead of
-            // being pinned to the trailing edge — the leftover width of the
-            // fixed 420pt popover row collects at the right border, which
-            // reads better than a hole in the middle of the card.
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 6) {
                 weekdayLabels
                 grid
-                statsColumn
-                    .padding(.leading, 8)
-                Spacer(minLength: 0)
             }
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: HeatmapContentWidthKey.self,
+                        value: geo.size.width)
+                }
+            )
+            statsRow(for: days)
             if let day = selectedDay {
                 dayDetail(day)
             }
         }
+        .popoverContentInset()
         .padding(.vertical, 16)
-        .hairlineTop()
+        .popoverHairlineTop()
+        .onPreferenceChange(HeatmapContentWidthKey.self) { width in
+            if width > 1 { contentWidth = width }
+        }
+    }
+
+    /// Build a Monday-aligned trailing window of calendar days that fills
+    /// exactly `weekCount` columns, looking up spend from `source` (zeros
+    /// for dates outside the scanned history).
+    static func heatmapWindow(from source: [CombinedDailyUsage],
+                              weekCount: Int,
+                              calendar: Calendar = .current,
+                              now: Date = Date()) -> [CombinedDailyUsage] {
+        let weeks = max(1, weekCount)
+        let startOfToday = source.last.map { calendar.startOfDay(for: $0.date) }
+            ?? calendar.startOfDay(for: now)
+        let weekday = calendar.component(.weekday, from: startOfToday) // 1 = Sun
+        let mondayIndex = (weekday + 5) % 7 // 0 = Mon … 6 = Sun
+        // Full weeks before today's week + days Mon…today in the last week.
+        let dayCount = (weeks - 1) * 7 + mondayIndex + 1
+        guard let start = calendar.date(byAdding: .day, value: -(dayCount - 1), to: startOfToday)
+        else { return source }
+        var byDate: [Date: CombinedDailyUsage] = [:]
+        byDate.reserveCapacity(source.count)
+        for d in source {
+            byDate[calendar.startOfDay(for: d.date)] = d
+        }
+        var out: [CombinedDailyUsage] = []
+        out.reserveCapacity(dayCount)
+        for offset in 0..<dayCount {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: start) else { continue }
+            if let hit = byDate[day] {
+                out.append(hit)
+            } else {
+                out.append(CombinedDailyUsage(
+                    date: day,
+                    claudeUSD: 0, claudeTokens: 0,
+                    codexUSD: 0, codexTokens: 0,
+                    grokUSD: 0, grokTokens: 0,
+                    models: []))
+            }
+        }
+        return out
     }
 
     /// Per-source breakdown for the clicked cell — same layout as the chart
@@ -1276,6 +1395,7 @@ struct CombinedHeatmapCard: View {
                     .frame(height: Self.cellSize)
             }
         }
+        .frame(width: Self.labelColumnWidth - 6, alignment: .trailing)
     }
 
     /// Mon/Wed/Fri/Sun row markers (even rows only, like GitHub's grid).
@@ -1332,23 +1452,42 @@ struct CombinedHeatmapCard: View {
         }
     }
 
-    private var statsColumn: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            stat(label: vi ? "Ngày cao nhất" : "Peak day",
-                 value: report.peakDayDate.map {
-                     "\(AllUsageFormat.usd(report.peakDayUSD)) · \(L10n.dayMonth($0, preference: settings.appLanguage))"
-                 } ?? "—")
-            stat(label: vi ? "TB/ngày active" : "Avg active day",
-                 value: AllUsageFormat.usd(report.avgPerActiveDayUSD))
-            stat(label: "Streak",
-                 value: "\(report.streakDays) \(vi ? "ngày" : "days")")
+    /// Peak / avg / streak for the *visible* window only.
+    private func statsRow(for days: [CombinedDailyUsage]) -> some View {
+        let active = days.filter(\.isActive)
+        let peakUSD = days.map(\.usd).max() ?? 0
+        let avgUSD = active.isEmpty ? 0 : days.reduce(0) { $0 + $1.usd } / Double(active.count)
+        var streak = 0
+        var i = days.count - 1
+        if i >= 0, !days[i].isActive { i -= 1 }
+        while i >= 0, days[i].isActive {
+            streak += 1
+            i -= 1
         }
+        let peak = AllUsageFormat.usd(peakUSD)
+        let avg = AllUsageFormat.usd(avgUSD)
+        let streakText = "\(streak) \(vi ? "ngày" : "days")"
+        return HStack(spacing: 0) {
+            statChip(label: vi ? "Cao nhất" : "Peak", value: peak)
+            Text("  ·  ")
+                .font(.plexMono(10))
+                .foregroundStyle(VocabbyTheme.tertiary)
+            statChip(label: vi ? "TB/ngày" : "Avg/day", value: avg)
+            Text("  ·  ")
+                .font(.plexMono(10))
+                .foregroundStyle(VocabbyTheme.tertiary)
+            statChip(label: "Streak", value: streakText)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 2)
     }
 
-    private func stat(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label)
-                .plexEyebrow(size: 9, color: VocabbyTheme.secondary)
+    private func statChip(label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label.uppercased())
+                .font(.plexMono(9, weight: .medium))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .tracking(0.4)
             Text(value)
                 .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
@@ -1356,56 +1495,94 @@ struct CombinedHeatmapCard: View {
     }
 }
 
+private struct HeatmapContentWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 // MARK: - Top models card
 
-/// Merged top-models list (both sources), each row carrying its provider's
-/// brand colour and a token-share bar — mirrors CodeBurn's Models block.
+/// Merged top-models list (design single row + brand icon):
+/// `■ name | 84pt bar | tokens · $`.
+/// Window follows the All-tab chart period chips (`popover.allChartDays`);
+/// heatmap is independent (always 120d).
 struct CombinedTopModelsCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let report: CombinedUsageReport
+    /// Same key as `CombinedChartCard` so chips and this list stay in sync.
+    @AppStorage("popover.allChartDays") private var periodDays = 30
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    /// Bars show each model's share of the WINDOW token total (not of the
-    /// largest model, which would always render the top row at 100%).
-    private var totalTokens: Double { max(Double(report.totalTokens), 1) }
+    private var periodWindowDays: Int { min(max(periodDays, 1), max(report.daily.count, 1)) }
+    private var periodModels: (models: [CombinedModelCost], windowTokens: Int) {
+        report.topModels(lastDays: periodWindowDays)
+    }
+
+    /// Design: fixed mid-column bar width (84px).
+    private static let barWidth: CGFloat = 84
+    /// Design: fixed trailing amount column width (84px).
+    private static let amountWidth: CGFloat = 84
+
+    private var title: String {
+        if periodWindowDays <= 1 {
+            return vi ? "Model dùng nhiều (24h)" : "Top models (24h)"
+        }
+        return vi
+            ? "Model dùng nhiều (\(periodWindowDays) ngày)"
+            : "Top models (\(periodWindowDays) days)"
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(vi ? "Model dùng nhiều (120 ngày)" : "Top models (120 days)")
-                .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
-            ForEach(report.topModels) { model in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
+        let ranked = periodModels
+        if ranked.models.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(.plexMono(10, weight: .medium))
+                    .tracking(0.8)
+                    .foregroundStyle(VocabbyTheme.muted)
+                    .textCase(.uppercase)
+                    .padding(.bottom, 10)
+                ForEach(ranked.models) { model in
+                    let fraction = min(1, max(0, Double(model.tokens) / Double(ranked.windowTokens)))
+                    let tint = color(for: model)
+                    HStack(alignment: .center, spacing: 10) {
+                        // Brand icon (source color) — restored at user request.
                         Rectangle()
-                            .fill(color(for: model))
+                            .fill(tint)
                             .frame(width: 6, height: 6)
                         Text(AllUsageFormat.shortName(model.name))
-                            .font(.plexSans(10))
-                            .foregroundStyle(VocabbyTheme.secondary)
+                            .font(.plexSans(12))
+                            .foregroundStyle(VocabbyTheme.primary)
                             .lineLimit(1)
-                        Spacer(minLength: 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // Fixed mid-column share bar (design 84×3).
+                        ZStack(alignment: .leading) {
+                            Rectangle()
+                                .fill(VocabbyTheme.track)
+                            Rectangle()
+                                .fill(tint)
+                                .frame(width: max(2, Self.barWidth * fraction))
+                        }
+                        .frame(width: Self.barWidth, height: 3)
                         Text(AllUsageFormat.tokensAndUSD(model.tokens, model.usd))
                             .font(.plexMono(10))
-                            .foregroundStyle(VocabbyTheme.tertiary)
+                            .foregroundStyle(VocabbyTheme.muted)
+                            .lineLimit(1)
+                            .frame(width: Self.amountWidth, alignment: .trailing)
                     }
-                    ZStack(alignment: .leading) {
-                        Rectangle()
-                            .fill(VocabbyTheme.track)
-                            .frame(height: 3)
-                        GeometryReader { geo in
-                            Rectangle()
-                                .fill(color(for: model))
-                                .frame(width: max(2, geo.size.width * CGFloat(Double(model.tokens) / totalTokens)),
-                                       height: 3)
-                        }
-                        .frame(height: 3)
-                    }
+                    .padding(.vertical, 7)
                 }
             }
+            .popoverContentInset()
+            .padding(.top, 14)
+            .padding(.bottom, 16)
+            .popoverHairlineTop()
         }
-        .padding(.vertical, 16)
-        .hairlineTop()
     }
 
     private func color(for model: CombinedModelCost) -> Color {

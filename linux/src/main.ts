@@ -27,7 +27,7 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { logoMark, logoUrl, providerTintCss } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
-import { initTheme } from "./theme";
+import { initTheme, getAppearance, setAppearance, type Appearance } from "./theme";
 import { checkWeeklyDigest } from "./weekly-digest";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
@@ -215,7 +215,7 @@ function goTab(id: string) {
   render();
 }
 
-/** macOS BirdNionHeader remake: logo + title + status pill + refresh + settings. */
+/** macOS BirdNionHeader remake: logo + title + status + refresh + appearance. */
 function appHeader(): HTMLElement {
   const head = el("header", "app-header");
   const brand = el("div", "app-brand");
@@ -247,15 +247,24 @@ function appHeader(): HTMLElement {
   refresh.append(settingsIcon("arrow.clockwise", "header-refresh-icon"));
   refresh.addEventListener("click", () => { void refreshNow(); });
 
-  const settingsBtn = document.createElement("button");
-  settingsBtn.type = "button";
-  settingsBtn.className = "header-refresh header-settings";
-  settingsBtn.title = t("footerSettings");
-  settingsBtn.setAttribute("aria-label", t("footerSettings"));
-  settingsBtn.append(settingsIcon("gearshape", "header-refresh-icon"));
-  settingsBtn.addEventListener("click", () => openSettings("general"));
+  // Design: sun/moon cycles appearance; Settings is a footer text link.
+  const appearance = getAppearance();
+  const appearanceIcon =
+    appearance === "light" ? "sun.max" : appearance === "dark" ? "moon" : "circle.lefthalf.filled";
+  const themeBtn = document.createElement("button");
+  themeBtn.type = "button";
+  themeBtn.className = "header-refresh header-appearance";
+  themeBtn.title = t("appearanceTitle");
+  themeBtn.setAttribute("aria-label", t("appearanceTitle"));
+  themeBtn.append(settingsIcon(appearanceIcon, "header-refresh-icon"));
+  themeBtn.addEventListener("click", () => {
+    const cur = getAppearance();
+    const next: Appearance = cur === "light" ? "dark" : cur === "dark" ? "auto" : "light";
+    setAppearance(next);
+    render();
+  });
 
-  actions.append(refresh, settingsBtn);
+  actions.append(refresh, themeBtn);
   head.append(brand, actions);
   return head;
 }
@@ -269,26 +278,31 @@ function appHeader(): HTMLElement {
 function tabsStrip(): HTMLElement {
   const strip = el("nav", "tabs tabs-pills");
 
-  const addIconTab = (id: string, label: string, mark: Element) => {
+  const addIconTab = (id: string, label: string, mark: Element, cornerTint?: string) => {
     const active = state.tab === id;
-    // Compact (d2852ed4): unselected = logo-only; selected = logo + name.
+    // Design: logo-only squares for every provider (selected = ink fill).
     const tab = el("button", active ? "tab tab-pill tab-icon active" : "tab tab-pill tab-icon");
     tab.title = label;
     tab.setAttribute("aria-label", label);
     tab.append(mark);
-    if (active) tab.append(el("span", "tab-pill-label", label));
+    // Design corner mark: 5×5 at top-right (CSS top/right -1px).
+    if (!active && cornerTint) {
+      const corner = el("span", "tab-corner-mark");
+      corner.style.background = cornerTint;
+      tab.append(corner);
+    }
     tab.addEventListener("click", () => goTab(id));
     strip.append(tab);
   };
 
-  // All = SF square.grid.2x2.fill (macOS allChip)
-  // Text-only All pill (no logo) — macOS allChip.
+  // Design: All = icon-only grid square.
   {
     const allActive = state.tab === "all";
-    const allTab = el("button", allActive ? "tab tab-pill active" : "tab tab-pill");
+    const allTab = el("button", allActive ? "tab tab-pill tab-icon active" : "tab tab-pill tab-icon");
     allTab.title = t("tabAll");
     allTab.setAttribute("aria-label", t("tabAll"));
-    allTab.append(el("span", "tab-pill-label", t("tabAll")));
+    allTab.append(settingsIcon("square.grid.2x2", allActive ? "tab-sf-icon" : "tab-sf-icon"));
+    if (allActive) allTab.classList.add("active");
     allTab.addEventListener("click", () => goTab("all"));
     strip.append(allTab);
   }
@@ -296,22 +310,21 @@ function tabsStrip(): HTMLElement {
   for (const s of state.statuses) {
     const active = state.tab === s.id;
     const mark = logoMark(s.id, active ? "tab-logo-mono tab-logo-on-accent" : "tab-logo-mono");
-    if (!active) {
+    const tint = providerTintCss(s.id);
+    if (!active && tint) {
       // Brand tint on idle chips (macOS providerTint); falls back to secondary.
-      const tint = providerTintCss(s.id);
-      if (tint) mark.style.setProperty("--tab-tint", tint);
+      mark.style.setProperty("--tab-tint", tint);
     }
-    addIconTab(s.id, s.displayName, mark);
+    addIconTab(s.id, s.displayName, mark, active ? undefined : (tint ?? undefined));
   }
 
   return strip;
 }
 
-/** Compact footer (macOS ActionsList remake): "Updated …" left + icon buttons right. */
+/** Footer: "CẬP NHẬT …" left + icon buttons Settings / About / Quit (macOS parity). */
 function popoverFooter(): HTMLElement {
   const foot = el("footer", "popover-footer footer-compact");
 
-  // Most recent provider lastUpdated across live statuses.
   let latest = 0;
   for (const s of state.statuses) {
     if (s.lastUpdated && s.lastUpdated > latest) latest = s.lastUpdated;
@@ -324,23 +337,18 @@ function popoverFooter(): HTMLElement {
   }
 
   const actions = el("div", "footer-actions");
-  const mk = (
-    iconId: "gearshape" | "info.circle" | "power",
-    label: string,
-    extraClass: string,
-    onClick: () => void,
-  ) => {
+  const mkIcon = (sf: string, label: string, extraClass: string, onClick: () => void) => {
     const btn = el("button", `footer-icon-btn${extraClass ? ` ${extraClass}` : ""}`);
     btn.title = label;
     btn.setAttribute("aria-label", label);
-    btn.append(settingsIcon(iconId, "footer-icon-svg"));
+    btn.append(settingsIcon(sf, "footer-icon-svg"));
     btn.addEventListener("click", onClick);
     return btn;
   };
   actions.append(
-    mk("gearshape", t("footerSettings"), "", () => openSettings("general")),
-    mk("info.circle", t("footerAbout"), "", () => openSettings("about")),
-    mk("power", t("footerQuit"), "quit", () => {
+    mkIcon("gearshape", t("footerSettings"), "", () => openSettings("general")),
+    mkIcon("info.circle", t("footerAbout"), "", () => openSettings("about")),
+    mkIcon("power", t("footerQuit"), "quit", () => {
       void invoke("quit_app").catch(() => { window.close(); });
     }),
   );
@@ -388,12 +396,20 @@ function measurePopoverContentHeight(app: HTMLElement): number {
   const body = app.querySelector(".app-body") as HTMLElement | null;
   const footer = app.querySelector(".popover-footer") as HTMLElement | null;
 
-  // .container padding 8 top + 10 bottom; three 7px gaps between 4 sections.
-  const padY = 8 + 10;
-  const gaps = 7 * 3;
+  // Instrument redesign: `.container { padding: 0; gap: 0 }` — section
+  // padding lives inside header/tabs/body/footer themselves. The pre-redesign
+  // padY (8+10) + three 7px gaps inflated the window by ~39px and left a
+  // blank band above the footer on short tabs (e.g. Codex Accounts row).
+  const style = getComputedStyle(app);
+  const padY =
+    (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  const gap = parseFloat(style.rowGap || style.gap) || 0;
+  const sections = [header, tabs, body, footer].filter(
+    (el): el is HTMLElement => el != null,
+  );
+  const gaps = gap * Math.max(0, sections.length - 1);
   let sum = padY + gaps;
-  for (const el of [header, tabs, body, footer]) {
-    if (!el) continue;
+  for (const el of sections) {
     // scrollHeight catches overflow children; rect is laid-out size.
     sum += Math.max(el.scrollHeight, el.getBoundingClientRect().height);
   }
@@ -559,16 +575,15 @@ function render() {
       }
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
-      body.append(confidenceRow(state.claude, state.codex, state.grok, pending));
       const combined = combine(state.claude, state.codex, state.grok);
-      // Budget/forecast card sits before the chart so it still shows on a
-      // fresh/all-zero report (no "active day" gate) — only rendered when a
-      // budget is actually configured (`budgetForecastCard` returns null otherwise).
+      // Design order: chart/share → confidence → budget → heatmap → models.
+      body.append(chartCard(combined, state.claude?.hourly ?? []));
+      body.append(confidenceRow(state.claude, state.codex, state.grok, pending));
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
       if (budget) body.append(budget);
-      body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(heatmapCard(combined));
-      if (combined.topModels.length > 0) body.append(topModelsCard(combined));
+      // Top models follow chart period chips (may hide itself if empty window).
+      body.append(topModelsCard(combined));
     }
   } else {
     const status = state.statuses.find((s) => s.id === state.tab);

@@ -115,11 +115,11 @@ export function lowestWindow(status: ProviderStatus): QuotaWindow | null {
   return primaryWindows(status.windows).reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
 }
 
-/** macOS `WindowRow` — label · % · 5px bar · used · reset. */
+/** Design window row: LABEL · % / bar / used · reset. */
 function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
   const row = el("div", "window-row");
   const head = el("div", "window-head");
-  head.append(el("span", "window-label", win.label));
+  head.append(el("span", "window-label", win.label.toUpperCase()));
   head.append(el("span", `window-pct ${quotaTone(win.remainingPct)}`, `${win.remainingPct}%`));
   const track = el("div", "window-track");
   const fill = el("div", `window-fill ${quotaTone(win.remainingPct)}`);
@@ -128,8 +128,7 @@ function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
   row.append(head, track);
   const foot = el("div", "window-foot");
   foot.append(el("span", "window-subtitle",
-    win.subtitle ?? t("usedPct", { n: win.usedPct })));
-  // Prefer API resetsAt; fall back to lastUpdated + windowSeconds like macOS.
+    (win.subtitle ?? t("usedPct", { n: win.usedPct })).toUpperCase()));
   let resetAt = win.resetsAt && win.resetsAt > 0 ? win.resetsAt * 1000 : 0;
   if (!resetAt && win.windowSeconds && win.windowSeconds > 0 && lastUpdated > 0) {
     const base = lastUpdated > 1e12 ? lastUpdated : lastUpdated * 1000;
@@ -140,23 +139,42 @@ function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
     const label = mins >= 1440 ? t("resetInDays", { n: Math.round(mins / 1440) })
       : mins >= 60 ? t("resetInHours", { n: Math.round(mins / 60) })
       : t("resetInMins", { n: mins });
-    foot.append(el("span", "window-subtitle", label));
+    foot.append(el("span", "window-subtitle", label.toUpperCase()));
   }
   row.append(foot);
   return row;
 }
 
-/** macOS `QuotaSummaryStrip` — "Quota thấp nhất" + window name + big %. */
+/** Design lowest-quota hero: eyebrow + big % + reset/used stack. */
 function quotaSummaryStrip(status: ProviderStatus): HTMLElement {
   const lowest = lowestWindow(status);
   const strip = el("div", "quota-summary");
-  const left = el("div", "quota-summary-left");
-  left.append(el("div", "quota-summary-label", t("popover.lowestQuota")));
-  left.append(el("div", "quota-summary-window",
-    lowest?.label ?? status.displayName));
-  strip.append(left);
+  const winLabel = (lowest?.label ?? status.displayName).toUpperCase();
+  const eyebrow = `${t("popover.lowestQuota").toUpperCase()} · ${winLabel}`;
+  strip.append(el("div", "quota-summary-label", eyebrow));
+  const row = el("div", "quota-summary-row");
   const pct = lowest?.remainingPct ?? 0;
-  strip.append(el("div", `quota-summary-pct ${quotaTone(pct)}`, `${pct}%`));
+  row.append(el("div", `quota-summary-pct ${quotaTone(pct)}`, `${pct}%`));
+  const right = el("div", "quota-summary-right");
+  // Reset estimate when available.
+  if (lowest) {
+    let resetAt = lowest.resetsAt && lowest.resetsAt > 0 ? lowest.resetsAt * 1000 : 0;
+    if (!resetAt && lowest.windowSeconds && lowest.windowSeconds > 0 && status.lastUpdated > 0) {
+      const base = status.lastUpdated > 1e12 ? status.lastUpdated : status.lastUpdated * 1000;
+      resetAt = base + lowest.windowSeconds * 1000;
+    }
+    if (resetAt) {
+      const mins = Math.max(0, Math.round((resetAt - Date.now()) / 60000));
+      const label = mins >= 1440 ? t("resetInDays", { n: Math.round(mins / 1440) })
+        : mins >= 60 ? t("resetInHours", { n: Math.round(mins / 60) })
+        : t("resetInMins", { n: mins });
+      right.append(el("div", "quota-summary-meta", label.toUpperCase()));
+    }
+    right.append(el("div", "quota-summary-meta",
+      t("usedPct", { n: lowest.usedPct }).toUpperCase()));
+  }
+  row.append(right);
+  strip.append(row);
   return strip;
 }
 
@@ -177,36 +195,15 @@ function extrasParts(status: ProviderStatus): string[] {
   return parts;
 }
 
-/** SF-style checkmark / warning glyph (crisper than text “✓”). */
-function healthIcon(hasError: boolean): SVGSVGElement {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 16 16");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("class", `mb-vis-health-svg${hasError ? " err" : " ok"}`);
-  if (hasError) {
-    // SF exclamationmark.triangle.fill
-    svg.innerHTML =
-      '<path fill="currentColor" d="M7.05 2.55a1.1 1.1 0 0 1 1.9 0l5.85 10.2A1.1 1.1 0 0 1 13.85 14.3H2.15a1.1 1.1 0 0 1-.95-1.55l5.85-10.2z"/>'
-      + '<rect x="7.35" y="5.6" width="1.3" height="4" rx="0.55" fill="#fff"/>'
-      + '<circle cx="8" cy="11.55" r="0.85" fill="#fff"/>';
-  } else {
-    // SF checkmark.circle.fill
-    svg.innerHTML =
-      '<circle cx="8" cy="8" r="7.1" fill="currentColor"/>'
-      + '<path fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.6 8.15l2.25 2.25L11.5 5.7"/>';
-  }
-  return svg;
-}
-
 /**
- * macOS `MenuBarVisibilityToggle`: health glyph + capsule switch controlling
- * whether this provider rotates on the tray / menu bar percent readout.
+ * Design TRAY toggle: mono label + square switch (no health glyph).
  * Persists `showInTray` on the provider row in settings.json (default true).
  */
 function menuBarVisibilityToggle(providerId: string, hasError: boolean): HTMLElement {
   const wrap = el("div", "mb-vis");
   wrap.title = t("popover.menuBarVisibility");
-  wrap.append(healthIcon(hasError));
+  const label = el("span", hasError ? "mb-vis-label err" : "mb-vis-label", t("popover.tray").toUpperCase());
+  wrap.append(label);
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -286,7 +283,7 @@ export function loadingSkeleton(): HTMLElement {
   return wrap;
 }
 
-/** macOS `ProviderHeaderCard` — logo · name/meta · MenuBarVisibilityToggle. */
+/** Design provider header: logo tile · name + PLAN · SOURCE · RELATIVE · TRAY. */
 function providerHeaderCard(status: ProviderStatus): HTMLElement {
   const card = el("section", "card provider-header-card");
   const row = el("div", "provider-head-row");
@@ -296,18 +293,20 @@ function providerHeaderCard(status: ProviderStatus): HTMLElement {
   if (status.pending) {
     textCol.append(el("div", "provider-meta", t("provider.loading")));
   } else {
+    // Design: plan · source · relative (no email clutter in popover).
     const meta: string[] = [];
-    if (!isHidePersonalInfo()) {
+    const plan = planLabel(status);
+    if (plan) meta.push(plan);
+    if (status.sourceLabel?.trim()) meta.push(status.sourceLabel.trim());
+    if (meta.length === 0 && !isHidePersonalInfo()) {
       if (status.accountLabel) meta.push(status.accountLabel);
       else if (status.signedInEmail) meta.push(status.signedInEmail);
     }
-    const plan = planLabel(status);
-    if (plan) meta.push(plan);
-    // macOS includes sourceLabel on the metadata line when present.
-    if (status.sourceLabel?.trim()) meta.push(status.sourceLabel.trim());
     const updated = relativeUpdated(status.lastUpdated);
     if (updated) meta.push(updated);
-    if (meta.length > 0) textCol.append(el("div", "provider-meta", meta.join(" · ")));
+    if (meta.length > 0) {
+      textCol.append(el("div", "provider-meta", meta.join(" · ").toUpperCase()));
+    }
   }
 
   row.append(

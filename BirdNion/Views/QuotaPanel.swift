@@ -36,7 +36,9 @@ struct QuotaOverview: View {
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 8) {
+            // spacing 0: section hairlines own separation (no double rules
+            // from VStack gap + section top hairline).
+            VStack(alignment: .leading, spacing: 0) {
                 if quota.displayStatuses.isEmpty {
                     // First-run / opt-in state. The bird logo + title + body
                     // + prominent Settings button are all contained in
@@ -76,20 +78,20 @@ struct QuotaOverview: View {
                     if selected == "all" {
                         // Combined Claude CLI + Codex + Grok overview (no real
                         // ProviderStatus behind it — reports only).
-                        VStack(alignment: .leading, spacing: 8) {
-                            AllUsageOverview(
-                                claude: claudeReport,
-                                codex: codexReport,
-                                grok: grokReport,
-                                claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
-                                codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
-                                grokEnabled: quota.displayStatuses.contains { $0.id == "grok" })
-                        }
+                        AllUsageOverview(
+                            claude: claudeReport,
+                            codex: codexReport,
+                            grok: grokReport,
+                            claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
+                            codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
+                            grokEnabled: quota.displayStatuses.contains { $0.id == "grok" })
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
-                        VStack(alignment: .leading, spacing: 8) {
+                        // Design provider stack: header → lowest hero → windows
+                        // (+ credits) → optional charts / accounts. Spacing
+                        // owned by each section's padding/rules (body pad 16).
+                        VStack(alignment: .leading, spacing: 0) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
-                            // Summary lives outside the windows card (mockup).
                             if s.error == nil, !s.windows.isEmpty {
                                 QuotaSummaryStrip(status: s)
                             }
@@ -155,11 +157,15 @@ struct QuotaOverview: View {
                         }
                     }
                 }
-                Spacer(minLength: 0)
+                // No expanding Spacer: the panel height hugs content via
+                // AppDelegate.fittingSize. A Spacer here absorbed leftover
+                // host height (seed / prior tall tab) into a visible gap
+                // between the last section (e.g. Accounts) and the footer.
                 ActionsList()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            // No horizontal pad here: header/tabs own full-bleed rules;
+            // body sections inset content + hairlines themselves.
+            .padding(.vertical, 0)
         }
         .onAppear {
             if selectedProviderId == nil,
@@ -356,58 +362,85 @@ struct BirdNionHeader: View {
                 .frame(width: 42, height: 28)
                 .accessibilityLabel("BirdNion")
 
-            // Status pill from existing ready/updating state — no new status invented.
-            // Instrument redesign: plain mono caps + square dot, no pill
-            // background/border (matches CSS `.status-pill`).
             HStack(spacing: 5) {
                 Rectangle()
                     .fill(statusTone)
                     .frame(width: 5, height: 5)
-                Text(isRefreshing
-                     ? L10n.t("popover.updating", settings.appLanguage)
-                     : L10n.t("popover.ready", settings.appLanguage))
-                    .font(.plexMono(10, weight: .bold))
+                // Design uses CSS text-transform: uppercase on sentence case copy.
+                Text((isRefreshing
+                      ? L10n.t("popover.updating", settings.appLanguage)
+                      : L10n.t("popover.ready", settings.appLanguage)).uppercased())
+                    .font(.plexMono(10, weight: .medium))
                     .foregroundStyle(statusTone)
+                    .tracking(0.6)
             }
             .accessibilityElement(children: .combine)
 
             Spacer(minLength: 8)
 
-            Button {
-                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-            } label: {
-                ZStack {
-                    if isRefreshing {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(VocabbyTheme.secondary)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.secondary)
-                    }
+            HStack(spacing: 6) {
+                headerIconButton(
+                    systemName: isRefreshing ? nil : "arrow.clockwise",
+                    spinning: isRefreshing,
+                    label: L10n.t("popover.refresh", settings.appLanguage),
+                    disabled: isRefreshing
+                ) {
+                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                 }
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isRefreshing)
-            .help(L10n.t("popover.refresh", settings.appLanguage))
-            .accessibilityLabel(L10n.t("popover.refresh", settings.appLanguage))
 
-            Button {
-                NotificationCenter.default.post(name: .openSettings, object: nil)
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+                // Design: second header action is Settings (sun glyph in mock).
+                headerIconButton(
+                    systemName: "sun.max",
+                    spinning: false,
+                    label: L10n.t("popover.settings", settings.appLanguage),
+                    disabled: false
+                ) {
+                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                }
             }
-            .buttonStyle(.plain)
-            .help(L10n.t("popover.settings", settings.appLanguage))
-            .accessibilityLabel(L10n.t("popover.settings", settings.appLanguage))
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 15)
+        .padding(.bottom, 11)
+        .overlay(alignment: .bottom) {
+            VocabbyTheme.inkRule.frame(height: 1)
+        }
+    }
+
+
+    /// Design header actions: 26×26, r4, border #DCD8CD, icon 14.
+    private func headerIconButton(systemName: String?,
+                                  spinning: Bool,
+                                  label: String,
+                                  disabled: Bool,
+                                  action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack {
+                if spinning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(VocabbyTheme.muted)
+                } else if let systemName {
+                    Image(systemName: systemName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(disabled ? VocabbyTheme.muted : VocabbyTheme.secondary)
+                }
+            }
+            .frame(width: 26, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .fill(VocabbyTheme.background)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -437,6 +470,9 @@ struct ProviderTabs: View {
         // NSISEngine ("invalid baselines") ~6s after launch, when the first
         // cost-scan publish relayouts the auto-sizing popover host. Keep the
         // strip inside a ScrollView.
+        // Design strip: content inset 16 (same as body hero), gap 6,
+        // one full-bleed hairline under the strip. Padding lives outside
+        // the ScrollView so chips share the same left edge as TOTAL COST.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 if showAllTab {
@@ -446,29 +482,34 @@ struct ProviderTabs: View {
                     chip(for: provider)
                 }
             }
-            .padding(.vertical, 1)
+            .padding(.vertical, 10)
+        }
+        .contentMargins(.horizontal, 0, for: .scrollContent)
+        .popoverContentInset()
+        .overlay(alignment: .bottom) {
+            VocabbyTheme.hairline.frame(height: 1)
         }
     }
 
-    /// Combined-overview pseudo-tab (sentinel id "all") — no ProviderStatus
-    /// behind it, so it renders its own chip instead of `chip(for:)`.
+    /// Combined-overview pseudo-tab — design: icon-only grid square; selected
+    /// = ink fill (not blue pill with text).
     private var allChip: some View {
         let active = selectedId == "all"
         let label = L10n.t("popover.allTab", settings.appLanguage)
         return Button {
             selectedId = "all"
         } label: {
-            Text(label)
-                .font(.plexSans(12, weight: .medium))
+            Image(systemName: "square.grid.2x2.fill")
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .frame(minHeight: Self.chipHeight)
-                .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
-                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(active ? VocabbyTheme.primary : VocabbyTheme.background)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
+                        .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 1)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         }
@@ -481,37 +522,36 @@ struct ProviderTabs: View {
     @ViewBuilder
     private func chip(for p: ProviderStatus) -> some View {
         let active = p.id == selectedId
-        // Brand tint on unselected logos; white on selected so the mark
-        // remains visible against the accent pill fill.
+        // Design: logo-only squares; selected = ink fill + paper logo.
+        // Brand tint on idle logos; no expanded name (keeps one compact row).
         let logoTint: Color = active
             ? VocabbyTheme.background
             : (VocabbyTheme.providerTint(p.id) ?? VocabbyTheme.secondary)
         Button {
             selectedId = p.id
         } label: {
-            // Compact strip: only the selected chip expands to logo + name;
-            // the rest are logo-only pills (brand tint + tooltip), so a
-            // typical roster fits one row without scrolling or tall wraps.
-            HStack(spacing: 5) {
-                ProviderLogoMark(id: p.id, tint: logoTint)
-                    .frame(width: 14, height: 14)
-                if active {
-                    Text(p.displayName)
-                        .font(.plexSans(12, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.background)
-                        .lineLimit(1)
+            ProviderLogoMark(id: p.id, tint: logoTint)
+                .frame(width: 15, height: 15)
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(active ? VocabbyTheme.primary : VocabbyTheme.background)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 1)
+                )
+                .overlay(alignment: .topTrailing) {
+                    // Design: 5×5 mark at chip corner — CSS `top: -1px; right: -1px`
+                    // (flush top-right, 1pt outside the border).
+                    if !active, let tint = VocabbyTheme.providerTint(p.id) {
+                        Rectangle()
+                            .fill(tint)
+                            .frame(width: 5, height: 5)
+                            .offset(x: 1, y: -1)
+                    }
                 }
-            }
-            .padding(.horizontal, active ? 12 : 9)
-            .padding(.vertical, 5)
-            .frame(minHeight: Self.chipHeight)
-            .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
-            .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(p.displayName)
@@ -664,16 +704,21 @@ struct ProviderHeaderCard: View {
         L10n.relativeUpdated(from: status.lastUpdated, preference: settings.appLanguage)
     }
 
+    /// Design header meta: `PLAN · SOURCE · RELATIVE` (no email clutter).
+    /// Account email stays available via Settings when hide-personal is off.
     private var metadataParts: [String] {
         var parts: [String] = []
-        if let account = status.accountLabel, !account.isEmpty {
-            parts.append(account)
-        }
         if let plan = planLabel {
             parts.append(L10n.providerText(plan, preference: settings.appLanguage))
         }
         if let source = status.sourceLabel, !source.isEmpty {
             parts.append(L10n.providerText(source, preference: settings.appLanguage))
+        }
+        // Fall back to account only when plan/source are both empty (rare).
+        if parts.isEmpty,
+           let account = status.accountLabel, !account.isEmpty,
+           !settings.hidePersonalInfo {
+            parts.append(account)
         }
         parts.append(updatedAgo)
         return parts
@@ -691,171 +736,79 @@ struct ProviderHeaderCard: View {
 
     private var hasError: Bool { status.error != nil }
 
-    /// Provider detail extras not surfaced as quota windows (Codex populates
-    /// these): unlimited credits, CLI version, code-review %, manual-reset
-    /// credits. Rendered as a dim second metadata line so they don't crowd the
-    /// primary one. A finite Codex balance gets its own full-width strip below.
-    private var detailParts: [String] {
-        var parts: [String] = []
-        if status.creditsUnlimited {
-            parts.append("∞ credits")
-        }
-        if let v = status.version, !v.isEmpty { parts.append(v) }
-        if let cr = status.codexWeb?.codeReviewRemainingPercent {
-            parts.append("Code review \(cr)%")
-        }
-        if let rc = status.resetCreditsAvailable, rc > 0 {
-            parts.append("\(rc) reset credits")
-        }
-        return parts
-    }
-
-    private var availableCodexCredits: Double? {
-        guard status.id == "codex",
-              !status.creditsUnlimited,
-              let credits = status.creditsRemaining,
-              credits.isFinite,
-              credits > 0
-        else {
-            return nil
-        }
-        return credits
-    }
-
-    private func creditsText(_ credits: Double) -> String {
-        credits.rounded() == credits
-            ? String(Int(credits))
-            : String(format: "%.2f", credits)
-    }
-
-    private func creditsAccessibilityLabel(_ credits: Double) -> String {
-        let title = L10n.t("provider.creditsAvailable", settings.appLanguage)
-        return title + ": " + creditsText(credits)
-    }
-
-    /// The Codex API exposes a balance but not a credit limit, so this is a
-    /// balance strip rather than a percentage meter.
-    private func availableCreditsStrip(_ credits: Double) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "creditcard.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.blue)
-                .frame(width: 18, height: 18)
-            Text(L10n.t("provider.creditsAvailable", settings.appLanguage))
-                .font(.plexSans(11, weight: .medium))
-                .foregroundStyle(VocabbyTheme.primary)
-            Spacer(minLength: 8)
-            Text(creditsText(credits))
-                .font(.plexMono(13, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.blue)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(VocabbyTheme.blue.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                .stroke(VocabbyTheme.blue.opacity(0.18), lineWidth: 1)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(creditsAccessibilityLabel(credits))
-    }
-
-    /// Dot color for the provider service-status badge, driven by the
-    /// statuspage severity ("none"/"minor"/"major"/"critical").
-    private var serviceColor: Color {
-        switch status.serviceStatusLevel {
-        case "minor": return VocabbyTheme.warningFill
-        case "major", "critical": return VocabbyTheme.critical
-        default: return VocabbyTheme.success
-        }
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .center, spacing: 10) {
-                ProviderLogoMark(id: status.id, tint: VocabbyTheme.blue)
-                    .frame(width: 24, height: 24)
-                    .padding(5)
-                    .background(VocabbyTheme.segment)
-                    .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                            .stroke(VocabbyTheme.border, lineWidth: 1)
-                    )
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(status.displayName)
-                            .font(.plexSans(13, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.primary)
-                        if !isPlaceholder && quota.isRefreshing {
-                            // Provider has last-known data; a refresh is in
-                            // flight. Show a small inline spinner so the user
-                            // knows the row is being updated, but keep the
-                            // existing subtitle + quota windows visible.
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(VocabbyTheme.blue)
-                                .frame(width: 10, height: 10)
-                            Text(L10n.t("popover.updating", settings.appLanguage).lowercased())
-                                .font(.plexSans(10))
-                                .foregroundStyle(VocabbyTheme.tertiary)
-                        }
-                    }
+        // Design: plate 34, logo 20, name 15/600, meta mono 11 #7A776C, TRAY.
+        HStack(alignment: .center, spacing: 12) {
+            ProviderLogoMark(
+                id: status.id,
+                tint: VocabbyTheme.providerTint(status.id) ?? VocabbyTheme.primary
+            )
+            .frame(width: 20, height: 20)
+            .frame(width: 34, height: 34)
+            .background(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .fill(VocabbyTheme.background)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 1)
+            )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(status.displayName)
+                    .font(.plexSans(15, weight: .semibold))
+                    .tracking(-0.2)
+                    .foregroundStyle(VocabbyTheme.primary)
+                if isPlaceholder {
                     HStack(spacing: 4) {
-                        if isPlaceholder {
-                            // First-time load for this provider — no previous
-                            // data to show. Use a placeholder spinner so the
-                            // popover makes clear which tab is still loading.
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(VocabbyTheme.blue)
-                                .frame(width: 12, height: 12)
-                            Text(L10n.t("provider.loading", settings.appLanguage))
-                                .font(.plexMono(11))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                        } else {
-                            Text(metadataParts.joined(separator: " · "))
-                                .font(.plexMono(11))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                                .lineLimit(1)
-                        }
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(VocabbyTheme.blue)
+                            .frame(width: 12, height: 12)
+                        Text(L10n.t("provider.loading", settings.appLanguage))
+                            .font(.plexMono(11))
+                            .foregroundStyle(VocabbyTheme.muted)
                     }
-                    if !isPlaceholder, let svc = status.serviceStatus, !svc.isEmpty {
-                        HStack(spacing: 4) {
-                            Rectangle().fill(serviceColor).frame(width: 6, height: 6)
-                            Text(L10n.providerText(svc, preference: settings.appLanguage))
-                                .font(.plexSans(10))
-                                .foregroundStyle(VocabbyTheme.tertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                    if !isPlaceholder, !detailParts.isEmpty {
-                        Text(detailParts
-                            .map { L10n.providerText($0, preference: settings.appLanguage) }
-                            .joined(separator: " · "))
-                            .font(.plexMono(10))
-                            .foregroundStyle(VocabbyTheme.tertiary)
-                            .lineLimit(1)
-                    }
+                } else {
+                    Text(metadataParts.joined(separator: " · ").uppercased())
+                        .font(.plexMono(11))
+                        .foregroundStyle(VocabbyTheme.muted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                Spacer(minLength: 6)
-                MenuBarVisibilityToggle(providerId: status.id, hasError: hasError)
-                    .id("menuBarVis.\(status.id)")  // force fresh @State per provider
             }
-            if !isPlaceholder, let credits = availableCodexCredits {
-                availableCreditsStrip(credits)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            MenuBarVisibilityToggle(providerId: status.id, hasError: hasError)
+                .id("menuBarVis.\(status.id)")
         }
-        // Instrument redesign: no filled/rounded card — plain background,
-        // vertical padding only (the section is bounded by the popover's own
-        // horizontal padding, matching the CSS `.card { padding: 16px 0 }`
-        // hairline-section pattern).
-        .padding(.vertical, 10)
+        .popoverContentInset()
+        // Design body pad after tabs (16pt) — without this the name row
+        // sits flush under the provider chip strip.
+        .padding(.top, 16)
+        .padding(.bottom, 2)
         .background(VocabbyTheme.background)
+    }
+
+    /// Design credits row (sits with window list): `CREDITS` · `$24.80 CÒN LẠI`
+    static func creditsRow(credits: Double,
+                           language: String,
+                           creditsText: String) -> some View {
+        HStack {
+            Text(L10n.t("provider.creditsAvailable", language).uppercased())
+                .font(.plexMono(10, weight: .medium))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .tracking(0.6)
+            Spacer(minLength: 8)
+            Text(L10n.f("provider.creditsLeft", language, "$\(creditsText)").uppercased())
+                .font(.plexMono(12, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
+        }
+        .popoverContentInset()
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            PopoverInsetHairline()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(L10n.t("provider.creditsAvailable", language) + ": " + creditsText)
     }
 }
 
@@ -884,10 +837,11 @@ struct XAISpendCard: View {
                 .font(.plexSans(10))
                 .foregroundStyle(VocabbyTheme.secondary)
         }
+        .popoverContentInset()
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(VocabbyTheme.background)
-        .hairlineTop()
+        .popoverHairlineTop()
     }
 }
 
@@ -900,8 +854,26 @@ struct ProviderCard: View {
 
     let status: ProviderStatus
 
+    /// Finite credit balance shown as design `CREDITS` row (Codex today;
+    /// any provider with remaining credits can share this chrome).
+    private var creditsBalance: Double? {
+        guard !status.creditsUnlimited,
+              let credits = status.creditsRemaining,
+              credits.isFinite,
+              credits > 0
+        else { return nil }
+        return credits
+    }
+
+    private func creditsText(_ credits: Double) -> String {
+        credits.rounded() == credits
+            ? String(Int(credits))
+            : String(format: "%.2f", credits)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // Design: windows list under hairline; optional CREDITS last row.
+        VStack(alignment: .leading, spacing: 0) {
             if let err = status.error {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -912,19 +884,12 @@ struct ProviderCard: View {
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .fill(VocabbyTheme.criticalSurface.opacity(0.7))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .strokeBorder(VocabbyTheme.critical.opacity(0.16), lineWidth: 1)
-                )
+                .popoverContentInset()
+                .padding(.vertical, 10)
             } else if status.windows.isEmpty {
                 LoadingQuotaSkeleton()
+                    .popoverContentInset()
+                    .padding(.vertical, 8)
             } else if status.id == "antigravity" {
                 AntigravitySemanticQuotaRows(windows: status.windows, lastUpdated: status.lastUpdated)
             } else {
@@ -935,8 +900,19 @@ struct ProviderCard: View {
                         lastUpdated: status.lastUpdated)
                 }
             }
+            if let credits = creditsBalance {
+                ProviderHeaderCard.creditsRow(
+                    credits: credits,
+                    language: settings.appLanguage,
+                    creditsText: creditsText(credits))
+            }
         }
-        .vocabbyCard()
+        // Error / empty rows keep content inset; window rows pad themselves.
+        // Section rule is inset (only header + tabs are edge-to-edge).
+        .padding(.top, 16)
+        .overlay(alignment: .top) {
+            PopoverInsetHairline()
+        }
     }
 }
 
@@ -1529,37 +1505,64 @@ struct QuotaSummaryStrip: View {
         VocabbyTheme.quotaColor(remaining: lowest?.remainingPct ?? 100)
     }
 
-    private var windowCaption: String {
-        guard let lowest else { return status.displayName }
-        let label = L10n.windowLabel(lowest.label, preference: settings.appLanguage)
-        return "\(label) · \(status.displayName)"
+    /// Design: `QUOTA THẤP NHẤT · 5 GIỜ` (window name, not provider name).
+    private var eyebrow: String {
+        let base = L10n.t("popover.lowestQuota", settings.appLanguage).uppercased()
+        guard let lowest else { return base }
+        let label = L10n.windowLabel(lowest.label, preference: settings.appLanguage).uppercased()
+        return "\(base) · \(label)"
+    }
+
+    private var resetText: String {
+        guard let lowest else { return "" }
+        if let d = lowest.resetDate {
+            return L10n.resetCountdown(to: d, preference: settings.appLanguage).uppercased()
+        }
+        if let secs = lowest.windowSeconds, secs > 0 {
+            let estimate = status.lastUpdated.addingTimeInterval(TimeInterval(secs))
+            return L10n.resetCountdown(to: estimate, preference: settings.appLanguage).uppercased()
+        }
+        return ""
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.t("popover.lowestQuota", settings.appLanguage).uppercased())
-                    .font(.plexMono(10, weight: .bold))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                    .tracking(0.6)
-                HStack(spacing: 6) {
-                    Rectangle()
-                        .fill(tone)
-                        .frame(width: 6, height: 6)
-                    Text(windowCaption)
-                        .font(.plexSans(12, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.primary)
-                        .lineLimit(1)
+        // Design: mt16 pt14 ink top · eyebrow · 34px % · right mono 11/1.6.
+        VStack(alignment: .leading, spacing: 0) {
+            Text(eyebrow)
+                .font(.plexMono(10, weight: .medium))
+                .foregroundStyle(VocabbyTheme.muted)
+                .tracking(0.8)
+            HStack(alignment: .bottom, spacing: 12) {
+                Text("\(lowest?.remainingPct ?? 0)%")
+                    .font(.plexMono(34, weight: .semibold))
+                    .foregroundStyle(tone)
+                    .tracking(-1.2)
+                    .padding(.top, 8)
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 0) {
+                    if !resetText.isEmpty {
+                        Text(resetText)
+                            .font(.plexMono(11))
+                            .foregroundStyle(VocabbyTheme.muted)
+                    }
+                    if let lowest {
+                        Text(L10n.f("quota.usedPct", settings.appLanguage, lowest.usedPct).uppercased())
+                            .font(.plexMono(11))
+                            .foregroundStyle(VocabbyTheme.muted)
+                    }
                 }
+                .lineSpacing(4) // ~1.6 line-height optical
             }
-            Spacer(minLength: 8)
-            Text("\(lowest?.remainingPct ?? 0)%")
-                .font(.plexMono(22, weight: .semibold))
-                .foregroundStyle(tone)
         }
-        .padding(.vertical, 10)
-        .background(VocabbyTheme.background)
-        .overlay(InkRule(), alignment: .top)
+        // Design: margin-top 16 + padding-top 14 under ink rule (inset).
+        // Bottom 16 keeps RESETS/USED clear of the next section hairline.
+        .popoverContentInset()
+        .padding(.top, 30)
+        .padding(.bottom, 16)
+        .overlay(alignment: .top) {
+            PopoverInsetHairline(color: VocabbyTheme.inkRule)
+                .padding(.top, 16)
+        }
         .accessibilityElement(children: .combine)
     }
 }
@@ -1598,12 +1601,11 @@ struct WindowRow: View {
     /// the API didn't return an explicit reset timestamp.
     let lastUpdated: Date
 
+    /// Design: bar + % use semantic remaining tone (critical / warning / success),
+    /// not provider brand fill.
     private var barFillColor: Color {
         guard !window.isInactive else { return VocabbyTheme.track }
-        if providerID == "codex" { return VocabbyTheme.brandBlue }
-        if providerID == "claude" { return VocabbyTheme.claude }
-        return VocabbyTheme.providerTint(providerID)
-            ?? VocabbyTheme.quotaFillColor(remaining: window.remainingPct)
+        return VocabbyTheme.quotaColor(remaining: window.remainingPct)
     }
 
     private var percentTextColor: Color {
@@ -1653,53 +1655,76 @@ struct WindowRow: View {
     }
 
     var body: some View {
-        // CodexBar MetricRow layout: title on top, bar with pace marker,
-        // then "N% left … reset countdown", then the pace detail line
-        // ("X% in reserve … Lasts until reset").
+        // Design MetricRow:
+        //   LABEL                          18%
+        //   [=========== bar ============]
+        //   ĐÃ DÙNG 82%          RESET SAU …
+        //   12% DỰ PHÒNG · ĐỦ ĐẾN KHI RESET   (pace, optional)
+        // Design: pad 12 0 · label 10/500 · % 12/600 · bar h4 mt8 · foot 10 mt7
         let pace = self.pace
-        VStack(alignment: .leading, spacing: 5) {
-            Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
-                .font(.plexMono(11, weight: .medium))
-                .foregroundStyle(VocabbyTheme.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(L10n.windowLabel(window.label, preference: settings.appLanguage).uppercased())
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .tracking(0.6)
+                Spacer(minLength: 8)
+                Text(window.isInactive ? "—" : "\(window.remainingPct)%")
+                    .font(.plexMono(12, weight: .semibold))
+                    .foregroundStyle(percentTextColor)
+            }
             QuotaBarWithPaceMarker(
                 remainingPct: window.isInactive ? 0 : window.remainingPct,
                 fillColor: barFillColor,
-                // Marker only when meaningfully off pace (CodexBar hides it
-                // on-track). Bar shows REMAINING, so the expected-usage marker
-                // sits at 100 − expectedUsed.
-                markerPct: (pace?.isOnTrack == false) ? pace.map { 100 - $0.expectedUsedPct } : nil)
+                // Design mock has no pace marker stripe — keep bar clean.
+                markerPct: nil)
+            .padding(.top, 8)
             HStack(alignment: .firstTextBaseline) {
-                Text(window.isInactive
-                     ? "—"
-                     : L10n.f("quota.left", settings.appLanguage, window.remainingPct))
-                    .font(.plexMono(10, weight: .semibold))
-                    .foregroundStyle(percentTextColor)
-                Spacer()
-                if !resetText.isEmpty {
-                    Text(resetText)
-                        .font(.plexMono(10))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                }
-            }
-            if let sub = window.subtitle, !sub.isEmpty {
-                Text(L10n.providerText(sub, preference: settings.appLanguage))
-                    .font(.plexMono(10))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-            } else if let pace {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(paceLeftText(pace))
-                        .font(.plexMono(10))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                    Spacer()
-                    if let right = paceRightText(pace) {
-                        Text(right)
-                            .font(.plexMono(10))
-                            .foregroundStyle(pace.lastsUntilReset
-                                ? VocabbyTheme.tertiary : VocabbyTheme.quotaColor(remaining: 0))
+                Group {
+                    if window.isInactive {
+                        Text("—")
+                    } else if let pace, !pace.isOnTrack || !pace.lastsUntilReset {
+                        // Design merges pace into left foot when off-track.
+                        Text(paceLine(pace).uppercased())
+                    } else {
+                        Text(L10n.f("quota.usedPct", settings.appLanguage, window.usedPct).uppercased())
                     }
                 }
+                .font(.plexMono(10))
+                .foregroundStyle(
+                    (pace?.lastsUntilReset == false)
+                    ? VocabbyTheme.warningFill
+                    : VocabbyTheme.tertiary
+                )
+                .lineLimit(2)
+                Spacer()
+                if !resetText.isEmpty {
+                    Text(resetText.uppercased())
+                        .font(.plexMono(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+            .padding(.top, 7)
+            if let sub = window.subtitle, !sub.isEmpty, pace == nil || pace?.isOnTrack == true {
+                Text(L10n.providerText(sub, preference: settings.appLanguage).uppercased())
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .padding(.top, 4)
             }
         }
+        .popoverContentInset()
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            PopoverInsetHairline()
+        }
+    }
+
+    private func paceLine(_ pace: WindowPace) -> String {
+        let left = paceLeftText(pace)
+        if let right = paceRightText(pace) {
+            return "\(left) · \(right)"
+        }
+        return left
     }
 }
 
@@ -1707,6 +1732,7 @@ struct WindowRow: View {
 /// thin neutral stripe at the position usage "should" be if consumption were
 /// linear over the window. Fill left of the stripe = reserve, right = deficit.
 enum QuotaBarLayout {
+    /// Design window track height (provider mock: `height: 4px`).
     static let compactHeight: CGFloat = 4
 }
 
@@ -2241,9 +2267,8 @@ struct FreemodelAccountsPopoverSection: View {
 
 // MARK: - Actions List
 
-/// Footer row: last-refresh caption (left) + icon-only action buttons (right).
-/// Actions/menu are unchanged — Settings, About, Quit — only the chrome is
-/// remade to 28pt bordered icon buttons per the popover mockup.
+/// Footer row: last-refresh caption (left) + mono text links (right).
+/// Footer: "UPDATED …" left + icon buttons Settings / About / Quit.
 struct ActionsList: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var quota: QuotaService
@@ -2258,57 +2283,62 @@ struct ActionsList: View {
         return L10n.f("popover.lastUpdated", settings.appLanguage, relative)
     }
 
+    private var lang: String { settings.appLanguage }
+
     var body: some View {
         HStack(spacing: 8) {
             if let lastRefreshCaption {
-                Text(lastRefreshCaption)
+                Text(lastRefreshCaption.uppercased())
                     .font(.plexMono(10, weight: .medium))
                     .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.4)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             footerIcon(
                 systemName: "gearshape",
-                label: L10n.t("popover.settings", settings.appLanguage),
+                label: L10n.t("popover.settings", lang),
                 tint: VocabbyTheme.secondary
             ) {
                 NotificationCenter.default.post(name: .openSettings, object: nil)
             }
             footerIcon(
                 systemName: "info.circle",
-                label: L10n.t("popover.about", settings.appLanguage),
+                label: L10n.t("popover.about", lang),
                 tint: VocabbyTheme.secondary
             ) {
                 AboutPresenter.show()
             }
             footerIcon(
                 systemName: "power",
-                label: L10n.t("popover.quit", settings.appLanguage),
+                label: L10n.t("popover.quit", lang),
                 tint: VocabbyTheme.critical
             ) {
                 NSApp.terminate(nil)
             }
         }
-        .padding(.top, 8)
+        .popoverContentInset()
+        .padding(.top, 10)
+        .padding(.bottom, 10)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(VocabbyTheme.border.opacity(0.7))
-                .frame(height: 0.5)
+            // Body rule — inset; only header + tabs stay edge-to-edge.
+            PopoverInsetHairline()
         }
     }
 
+    /// Square icon control matching header actions (26×26, r4, hairline border).
     private func footerIcon(systemName: String,
                             label: String,
                             tint: Color,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(tint)
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .fill(VocabbyTheme.segment)
+                        .fill(VocabbyTheme.background)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
@@ -3037,37 +3067,39 @@ struct MenuBarVisibilityToggle: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: hasError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(hasError ? VocabbyTheme.critical : VocabbyTheme.success)
+        // Design: TRAY mono 9/500 · switch 34×18.
+        // ON  = accent fill + paper knob (right).
+        // OFF = track fill + ink knob (left) — never Color.clear (invisible
+        //       knob + hit-testing dead zone when off).
+        HStack(spacing: 8) {
+            Text(L10n.t("popover.tray", settings.appLanguage).uppercased())
+                .font(.plexMono(9, weight: .medium))
+                .foregroundStyle(hasError ? VocabbyTheme.critical : VocabbyTheme.muted)
+                .tracking(0.6)
             Button {
                 withAnimation(.easeOut(duration: 0.16)) {
                     isOn.toggle()
                 }
                 MenuBarVisibility.setShown(providerId: providerId, to: isOn)
             } label: {
-                // Instrument redesign: square switch track + square knob
-                // (matches CSS `.mb-vis-switch` / `.mb-vis-knob`), not the
-                // rounded capsule/circle pill switch.
-                ZStack {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                ZStack(alignment: isOn ? .trailing : .leading) {
+                    RoundedRectangle(cornerRadius: 0, style: .continuous)
                         .fill(isOn ? VocabbyTheme.blue : VocabbyTheme.track)
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .strokeBorder(isOn ? VocabbyTheme.blue.opacity(0.45) : VocabbyTheme.border,
-                                      lineWidth: 1)
-                    HStack {
-                        if isOn { Spacer(minLength: 0) }
-                        Rectangle()
-                            .fill(VocabbyTheme.background)
-                            .frame(width: 12, height: 12)
-                            .shadow(color: VocabbyTheme.brandNavy.opacity(isOn ? 0.18 : 0.10),
-                                    radius: 1, x: 0, y: 1)
-                        if !isOn { Spacer(minLength: 0) }
-                    }
-                    .padding(2)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 0, style: .continuous)
+                                .strokeBorder(
+                                    isOn ? VocabbyTheme.blue : VocabbyTheme.border,
+                                    lineWidth: 1)
+                        )
+                    Rectangle()
+                        // Off knob is ink so it reads on paper; on knob is paper on accent.
+                        .fill(isOn ? VocabbyTheme.background : VocabbyTheme.primary)
+                        .frame(width: 12, height: 12)
+                        .padding(2)
                 }
-                .frame(width: 30, height: 16)
+                .frame(width: 34, height: 18)
+                // Opaque hit target for the whole track (fixes unclickable OFF).
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .contentShape(Rectangle())
@@ -3079,6 +3111,7 @@ struct MenuBarVisibilityToggle: View {
             .accessibilityValue(isOn
                                 ? L10n.t("popover.visibilityOn", settings.appLanguage)
                                 : L10n.t("popover.visibilityOff", settings.appLanguage))
+            .accessibilityAddTraits(.isButton)
             .accessibilityAddTraits(isOn ? [.isSelected] : [])
         }
     }
@@ -3095,7 +3128,7 @@ enum AboutPresenter {
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
 
         let alert = NSAlert()
-        alert.icon = NSApplication.shared.applicationIconImage
+        alert.icon = NSImage(named: "OriginalImage")
         alert.messageText = "BirdNion"
         alert.informativeText = """
         Version \(version) (\(build))
@@ -3113,14 +3146,14 @@ enum AboutPresenter {
 struct VocabbyCard: ViewModifier {
     // Instrument redesign: no filled/rounded/shadowed card — a plain top
     // hairline divider instead (matches CSS `.card { border-radius: 0;
-    // border-top: 1px solid var(--hairline); padding: 16px 0; }`). Vertical
-    // padding only; horizontal inset now comes from the popover's own
-    // padding so hairline-divided sections span the full content width.
+    // border-top: 1px solid var(--hairline); padding: 16px 0; }`). Content
+    // and rule share the 16pt side inset (only header/tabs are edge-to-edge).
     func body(content: Content) -> some View {
         content
+            .popoverContentInset()
             .padding(.vertical, 12)
             .background(VocabbyTheme.background)
-            .hairlineTop()
+            .popoverHairlineTop()
     }
 }
 
@@ -3139,125 +3172,38 @@ enum UsageChartScaling {
 
 // MARK: - Claude usage chart
 
-/// 30-day bar chart card sourced from `ClaudeCostScanner.usageReport()`.
-/// Mirrors CodexBar's compact "Today / 30d cost / tokens / latest tokens"
-/// header + a per-day token bar series. USD remains in summary and hover
-/// details so both volume and spend stay visible.
+/// 30-day cost chart — title + total, bars, axis. Model breakdown is
+/// **click-to-pin** (All-tab parity): hidden by default; click a bar to
+/// show that day's models; click again to hide. Hover only highlights.
 struct ClaudeUsageChartCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let report: ClaudeUsageReport
-    /// The bar the pointer is currently over — drives the hover read-out line
-    /// and the column highlight.
     @State private var hoveredDay: ClaudeDailyUsage?
+    @State private var pinnedDay: ClaudeDailyUsage?
 
-    /// This card keeps its 30-day scope; the report's wider (90-day) window
-    /// only exists for the All tab's heatmap.
     private var daily30: [ClaudeDailyUsage] { Array(report.daily.suffix(30)) }
+    private var maxBarTokens: Int { max(daily30.map(\.tokens).max() ?? 0, 1) }
 
-    private var maxBarTokens: Int {
-        max(daily30.map(\.tokens).max() ?? 0, 1)
-    }
-
-    /// Day whose per-model breakdown is shown: the hovered bar, else the most
-    /// recent day with activity.
-    private var detailDay: ClaudeDailyUsage? {
-        hoveredDay ?? daily30.last(where: { $0.tokens > 0 })
-    }
-
-    private var latestDayTokens: Int {
-        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
-    }
-
-    private var todayLabel: String {
-        guard let today = daily30.last else { return L10n.t("chart.today", settings.appLanguage) }
-        return L10n.f("chart.todayWithDate", settings.appLanguage, L10n.dayMonth(today.date, preference: settings.appLanguage))
+    private var dayDetail: ProviderDayChartDetail? {
+        pinnedDay.map { ProviderDayChartDetail.from(day: $0, language: settings.appLanguage) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Top summary row: today vs 30d cost + tokens.
-            HStack(alignment: .top, spacing: 16) {
-                summaryColumn(
-                    label: todayLabel,
-                    amount: report.todayUSD,
-                    tokens: report.todayTokens)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: L10n.t("chart.last30Cost", settings.appLanguage),
-                    amount: report.last30USD,
-                    tokens: report.last30Tokens,
-                    alignTrailing: true)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: L10n.t("chart.latestTokens", settings.appLanguage),
-                    amount: nil,
-                    tokens: latestDayTokens,
-                    alignTrailing: true)
-            }
+        ProviderCostChartScaffold(
+            title: L10n.f("chart.providerCost30", settings.appLanguage, "Claude"),
+            totalUSD: report.last30USD,
+            todayUSD: report.todayUSD,
+            todayTokens: report.todayTokens,
+            startLabel: daily30.first.map { dayLabel($0.date) },
+            dayDetail: dayDetail,
+            footnote: L10n.t("chart.estimateClaude", settings.appLanguage),
+            barTint: VocabbyTheme.chartClaude
+        ) {
             barChart
-                .frame(height: 56)
-            // Per-model breakdown for the focused day (hovered bar, else the
-            // most recent active day) — mirrors CodexBar's day detail list.
-            if let detail = detailDay {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
-                        .font(.plexMono(11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                    ForEach(detail.models) { m in
-                        HStack(spacing: 8) {
-                            Text(m.name)
-                                .font(.plexSans(10))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            // Unpriced models (cost scanner prices non-Claude
-                            // models at $0) show tokens only — a "$0.00" reads
-                            // like real spend data that is simply wrong.
-                            Text(m.usd < 0.005
-                                ? formatTokensShort(m.tokens)
-                                : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
-                                .font(.plexMono(10))
-                                .foregroundStyle(VocabbyTheme.tertiary)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            // 30-day estimated total + provenance footnote.
-            Text("\(L10n.t("chart.estTotal30", settings.appLanguage)): \(formatUSD(report.last30USD))")
-                .font(.plexMono(11, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
-            Text(L10n.t("chart.estimate", settings.appLanguage))
-                .font(.plexMono(9))
-                .foregroundStyle(VocabbyTheme.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .vocabbyCard()
-    }
-
-    @ViewBuilder
-    private func summaryColumn(label: String, amount: Double?, tokens: Int,
-                               alignTrailing: Bool = false) -> some View {
-        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
-            Text(label)
-                .font(.plexMono(9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .tracking(0.3)
-            if let amount {
-                Text(formatUSD(amount))
-                    .font(.plexMono(16, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-            }
-            Text(formatTokens(tokens))
-                .font(.plexMono(11))
-                .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
 
-    /// 30 vertical bars, one per day, height proportional to tokens. Inactive
-    /// days render as a faint 2pt baseline so the chart doesn't look broken
-    /// when usage is sparse.
     private var barChart: some View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
@@ -3266,23 +3212,25 @@ struct ClaudeUsageChartCard: View {
                     let heightFraction = UsageChartScaling.fraction(
                         value: Double(day.tokens), maximum: Double(maxBarTokens))
                     let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
-                    // Full-height hover column so even tiny bars are easy to
-                    // target; the bar itself sits at the bottom.
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 0, style: .continuous)
+                        Rectangle()
                             .fill(barColor(for: day))
                             .frame(height: barHeight)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(hoveredDay?.id == day.id
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
                                 ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         if inside { hoveredDay = day }
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
                     }
-                    .help("\(dayLabel(day.date)): \(formatUSD(day.usd)) · \(formatTokens(day.tokens))")
+                    .onTapGesture {
+                        if pinnedDay?.id == day.id { pinnedDay = nil }
+                        else { pinnedDay = day }
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.usd(day.usd)) · \(AllUsageFormat.tokens(day.tokens))")
                 }
             }
         }
@@ -3300,138 +3248,41 @@ struct ClaudeUsageChartCard: View {
     private func dayLabel(_ date: Date) -> String {
         L10n.dayMonth(date, preference: settings.appLanguage)
     }
-
-    private func formatUSD(_ amount: Double) -> String {
-        AllUsageFormat.usd(amount)
-    }
-
-    private func formatTokens(_ n: Int) -> String {
-        AllUsageFormat.tokens(n)
-    }
-
-    /// Compact token count without the " tokens" suffix, for the dense per-model
-    /// breakdown rows (e.g. "628M", "9.1M", "29M").
-    private func formatTokensShort(_ n: Int) -> String {
-        AllUsageFormat.tokensShort(n)
-    }
 }
 
 // MARK: - Codex usage chart
 
-/// 30-day bar chart card sourced from `CodexCostScanner.usageReport()`. Mirrors
-/// `ClaudeUsageChartCard` (Today / 30d cost / latest tokens + per-day token bars +
-/// hover per-model breakdown) but the numbers are mapped to match CodexBar's own
-/// inline Codex dashboard. Labels are inline VI/EN (no shared L10n keys needed).
+/// 30-day bar chart from `CodexCostScanner`. Click a bar to pin that day's
+/// model breakdown (hidden by default); hover only highlights.
 struct CodexUsageChartCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let report: CodexUsageReport
     @State private var hoveredDay: CodexDailyUsage?
+    @State private var pinnedDay: CodexDailyUsage?
 
-    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-
-    /// This card keeps its 30-day scope; the report's wider (90-day) window
-    /// only exists for the All tab's heatmap.
     private var daily30: [CodexDailyUsage] { Array(report.daily.suffix(30)) }
+    private var maxBarTokens: Int { max(daily30.map(\.tokens).max() ?? 0, 1) }
 
-    private var maxBarTokens: Int {
-        max(daily30.map(\.tokens).max() ?? 0, 1)
-    }
-
-    /// Day whose per-model breakdown is shown: the hovered bar, else the most
-    /// recent day with activity.
-    private var detailDay: CodexDailyUsage? {
-        hoveredDay ?? daily30.last(where: { $0.tokens > 0 })
-    }
-
-    private var latestDayTokens: Int {
-        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
+    private var dayDetail: ProviderDayChartDetail? {
+        pinnedDay.map { ProviderDayChartDetail.from(day: $0, language: settings.appLanguage) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Top summary row: today vs 30d cost + tokens.
-            HStack(alignment: .top, spacing: 16) {
-                summaryColumn(
-                    label: vi ? "Hôm nay" : "Today",
-                    amount: report.todayUSD,
-                    tokens: report.todayTokens)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: vi ? "30 ngày" : "30d cost",
-                    amount: report.last30USD,
-                    tokens: report.last30Tokens,
-                    alignTrailing: true)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: vi ? "Token mới nhất" : "Latest tokens",
-                    amount: nil,
-                    tokens: latestDayTokens,
-                    alignTrailing: true)
-            }
+        ProviderCostChartScaffold(
+            title: L10n.f("chart.providerCost30", settings.appLanguage, "Codex"),
+            totalUSD: report.last30USD,
+            todayUSD: report.todayUSD,
+            todayTokens: report.todayTokens,
+            startLabel: daily30.first.map { dayLabel($0.date) },
+            dayDetail: dayDetail,
+            footnote: L10n.t("chart.estimateCodex", settings.appLanguage),
+            barTint: VocabbyTheme.chartCodex
+        ) {
             barChart
-                .frame(height: 56)
-            // Per-model breakdown for the focused day (hovered bar, else the
-            // most recent active day) — mirrors CodexBar's day detail list.
-            if let detail = detailDay {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
-                        .font(.plexMono(11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                    ForEach(detail.models) { m in
-                        HStack(spacing: 8) {
-                            Text(m.name)
-                                .font(.plexSans(10))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            // Unpriced models (cost scanner prices non-Claude
-                            // models at $0) show tokens only — a "$0.00" reads
-                            // like real spend data that is simply wrong.
-                            Text(m.usd < 0.005
-                                ? formatTokensShort(m.tokens)
-                                : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
-                                .font(.plexMono(10))
-                                .foregroundStyle(VocabbyTheme.tertiary)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            // 30-day estimated total + provenance footnote.
-            Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatUSD(report.last30USD))")
-                .font(.plexMono(11, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
-            Text(vi
-                 ? "Ước tính từ log phiên Codex CLI cục bộ trên máy này."
-                 : "Estimated from this machine's local Codex CLI session logs.")
-                .font(.plexMono(9))
-                .foregroundStyle(VocabbyTheme.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .vocabbyCard()
-    }
-
-    @ViewBuilder
-    private func summaryColumn(label: String, amount: Double?, tokens: Int,
-                               alignTrailing: Bool = false) -> some View {
-        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
-            Text(label)
-                .font(.plexMono(9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .tracking(0.3)
-            if let amount {
-                Text(formatUSD(amount))
-                    .font(.plexMono(16, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-            }
-            Text(formatTokens(tokens))
-                .font(.plexMono(11))
-                .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
 
-    /// 30 vertical bars, one per day, height proportional to USD.
     private var barChart: some View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
@@ -3442,19 +3293,23 @@ struct CodexUsageChartCard: View {
                     let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 0, style: .continuous)
+                        Rectangle()
                             .fill(barColor(for: day))
                             .frame(height: barHeight)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(hoveredDay?.id == day.id
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
                                 ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         if inside { hoveredDay = day }
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
                     }
-                    .help("\(dayLabel(day.date)): \(formatUSD(day.usd)) · \(formatTokens(day.tokens))")
+                    .onTapGesture {
+                        if pinnedDay?.id == day.id { pinnedDay = nil }
+                        else { pinnedDay = day }
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.usd(day.usd)) · \(AllUsageFormat.tokens(day.tokens))")
                 }
             }
         }
@@ -3463,131 +3318,171 @@ struct CodexUsageChartCard: View {
     private func barColor(for day: CodexDailyUsage) -> Color {
         VocabbyTheme.activityChartBarColor(
             isCurrent: day.date == daily30.last?.date,
-            hasActivity: day.tokens > 0
+            hasActivity: day.tokens > 0,
+            tint: VocabbyTheme.chartCodex,
+            currentTint: VocabbyTheme.chartCodex
         )
     }
 
     private func dayLabel(_ date: Date) -> String {
         L10n.dayMonth(date, preference: settings.appLanguage)
     }
+}
 
-    private func formatUSD(_ amount: Double) -> String {
-        AllUsageFormat.usd(amount)
+/// Pinned-day model breakdown for a single-provider chart (hidden until click).
+private struct ProviderDayChartDetail {
+    let header: String
+    let models: [(name: String, usd: Double, tokens: Int)]
+
+    static func from(day: ClaudeDailyUsage, language: String) -> ProviderDayChartDetail {
+        make(date: day.date, usd: day.usd, tokens: day.tokens,
+             models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
     }
 
-    private func formatTokens(_ n: Int) -> String {
-        AllUsageFormat.tokens(n)
+    static func from(day: CodexDailyUsage, language: String) -> ProviderDayChartDetail {
+        make(date: day.date, usd: day.usd, tokens: day.tokens,
+             models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
     }
 
-    private func formatTokensShort(_ n: Int) -> String {
-        AllUsageFormat.tokensShort(n)
+    static func from(day: GrokDailyUsage, language: String) -> ProviderDayChartDetail {
+        make(date: day.date, usd: day.usd, tokens: day.tokens,
+             models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
+    }
+
+    static func from(day: KiroDailyUsage, language: String) -> ProviderDayChartDetail {
+        make(date: day.date, usd: day.usd, tokens: day.tokens,
+             models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
+    }
+
+    private static func make(date: Date, usd: Double, tokens: Int,
+                             models: [(String, Double, Int)],
+                             language: String) -> ProviderDayChartDetail {
+        let sorted = models
+            .filter { $0.1 > 0 || $0.2 > 0 }
+            .sorted { ($0.2, $0.1) > ($1.2, $1.1) }
+            .prefix(6)
+            .map { (name: $0.0, usd: $0.1, tokens: $0.2) }
+        let header = "\(L10n.dayMonth(date, preference: language)) · \(AllUsageFormat.tokens(tokens)) · \(AllUsageFormat.usd(usd))"
+        return ProviderDayChartDetail(header: header, models: Array(sorted))
     }
 }
 
-// MARK: - Kiro usage chart
-
-/// 30-day bar chart for Kiro CLI local sessions (`KiroCostScanner`),
-/// mirroring `GrokUsageChartCard` layout so the Kiro tab shows the same
-/// Today / 30d / latest-tokens + hover model breakdown. Bar height uses
-/// tokens (volume), not USD estimates.
-struct KiroUsageChartCard: View {
+/// Shared design chrome for per-provider 30-day cost cards (Claude/Codex/Grok/Kiro).
+/// Model list is only shown when `dayDetail` is set (click-pinned bar).
+private struct ProviderCostChartScaffold<Bars: View>: View {
     @EnvironmentObject var settings: SettingsStore
 
-    let report: KiroUsageReport
-    @State private var hoveredDay: KiroDailyUsage?
-
-    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-
-    private var daily30: [KiroDailyUsage] { Array(report.daily.suffix(30)) }
-
-    private var maxBarTokens: Int {
-        max(daily30.map(\.tokens).max() ?? 0, 1)
-    }
-
-    private var detailDay: KiroDailyUsage? {
-        hoveredDay ?? daily30.last(where: { $0.tokens > 0 || $0.usd > 0 })
-    }
-
-    private var latestDayTokens: Int {
-        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
-    }
+    let title: String
+    let totalUSD: Double
+    let todayUSD: Double
+    let todayTokens: Int
+    let startLabel: String?
+    let dayDetail: ProviderDayChartDetail?
+    let footnote: String
+    let barTint: Color
+    @ViewBuilder let bars: () -> Bars
 
     var body: some View {
+        let _ = barTint
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 16) {
-                summaryColumn(
-                    label: vi ? "Hôm nay" : "Today",
-                    amount: report.todayUSD,
-                    tokens: report.todayTokens)
+            HStack(alignment: .firstTextBaseline) {
+                Text(title.uppercased())
+                    .font(.plexMono(10, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.4)
                 Spacer(minLength: 8)
-                summaryColumn(
-                    label: vi ? "30 ngày" : "30d cost",
-                    amount: report.last30USD,
-                    tokens: report.last30Tokens,
-                    alignTrailing: true)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: vi ? "Token mới nhất" : "Latest tokens",
-                    amount: nil,
-                    tokens: latestDayTokens,
-                    alignTrailing: true)
+                Text(AllUsageFormat.usd(totalUSD))
+                    .font(.plexMono(16, weight: .bold))
+                    .foregroundStyle(VocabbyTheme.primary)
             }
-            barChart
-                .frame(height: 56)
-            if let detail = detailDay {
+            bars()
+                .frame(height: 68)
+            HStack {
+                if let startLabel {
+                    Text(startLabel)
+                        .font(.plexMono(9))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+                Spacer(minLength: 8)
+                Text("\(L10n.t("chart.today", settings.appLanguage).uppercased()) \(AllUsageFormat.usd(todayUSD)) · \(AllUsageFormat.tokensShort(todayTokens))")
+                    .font(.plexMono(9, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            // Click-pinned day models only — default is hidden.
+            if let dayDetail {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(dayLabel(detail.date)) · \(formatTokens(detail.tokens)) · \(formatUSD(detail.usd))")
+                    Text(dayDetail.header)
                         .font(.plexMono(11, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
-                    ForEach(detail.models) { m in
-                        HStack(spacing: 8) {
-                            Text(m.name)
-                                .font(.plexSans(10))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text("\(formatTokensShort(m.tokens)) · \(formatUSD(m.usd))")
-                                .font(.plexMono(10))
-                                .foregroundStyle(VocabbyTheme.tertiary)
+                    if dayDetail.models.isEmpty {
+                        Text(L10n.languageCode(settings.appLanguage) == "vi"
+                             ? "Không có chi tiết model."
+                             : "No model breakdown.")
+                            .font(.plexSans(10))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    } else {
+                        ForEach(Array(dayDetail.models.enumerated()), id: \.offset) { _, m in
+                            HStack(spacing: 8) {
+                                Text(AllUsageFormat.shortName(m.name))
+                                    .font(.plexSans(12, weight: .medium))
+                                    .foregroundStyle(VocabbyTheme.primary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 8)
+                                Text(m.usd < 0.005
+                                     ? AllUsageFormat.tokensShort(m.tokens)
+                                     : "\(AllUsageFormat.tokensShort(m.tokens)) · \(AllUsageFormat.usd(m.usd))")
+                                    .font(.plexMono(11))
+                                    .foregroundStyle(VocabbyTheme.tertiary)
+                            }
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatTokens(report.last30Tokens))")
-                .font(.plexMono(11, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
-            if let top = report.topModel, !top.isEmpty {
-                Text("\(vi ? "Model dùng nhiều" : "Top model"): \(top)")
-                    .font(.plexMono(9))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-            }
-            Text(vi
-                 ? "Ước tính từ log Kiro CLI cục bộ (kiro-cli sessions)."
-                 : "Estimated from local Kiro CLI sessions (kiro-cli data.sqlite3).")
-                .font(.plexMono(9))
+            Text(footnote.uppercased())
+                .font(.plexMono(9, weight: .medium))
                 .foregroundStyle(VocabbyTheme.tertiary)
+                .tracking(0.2)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
         }
-        .vocabbyCard()
+        .popoverContentInset()
+        .padding(.vertical, 14)
+        .popoverHairlineTop()
+    }
+}
+
+// MARK: - Kiro usage chart
+
+/// 30-day bar chart for Kiro CLI. Click bar → pin day model detail.
+struct KiroUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let report: KiroUsageReport
+    @State private var hoveredDay: KiroDailyUsage?
+    @State private var pinnedDay: KiroDailyUsage?
+
+    private var daily30: [KiroDailyUsage] { Array(report.daily.suffix(30)) }
+    private var maxBarTokens: Int { max(daily30.map(\.tokens).max() ?? 0, 1) }
+
+    private var dayDetail: ProviderDayChartDetail? {
+        pinnedDay.map { ProviderDayChartDetail.from(day: $0, language: settings.appLanguage) }
     }
 
-    @ViewBuilder
-    private func summaryColumn(label: String, amount: Double?, tokens: Int,
-                               alignTrailing: Bool = false) -> some View {
-        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
-            Text(label)
-                .font(.plexMono(9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .tracking(0.3)
-            if let amount {
-                Text(formatUSD(amount))
-                    .font(.plexMono(16, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-            }
-            Text(formatTokens(tokens))
-                .font(.plexMono(11))
-                .foregroundStyle(VocabbyTheme.tertiary)
+    var body: some View {
+        ProviderCostChartScaffold(
+            title: L10n.f("chart.providerCost30", settings.appLanguage, "Kiro"),
+            totalUSD: report.last30USD,
+            todayUSD: report.todayUSD,
+            todayTokens: report.todayTokens,
+            startLabel: daily30.first.map { dayLabel($0.date) },
+            dayDetail: dayDetail,
+            footnote: L10n.t("chart.estimateKiro", settings.appLanguage),
+            barTint: VocabbyTheme.primary
+        ) {
+            barChart
         }
     }
 
@@ -3606,14 +3501,18 @@ struct KiroUsageChartCard: View {
                             .frame(height: barHeight)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(hoveredDay?.id == day.id
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
                                 ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         if inside { hoveredDay = day }
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
                     }
-                    .help("\(dayLabel(day.date)): \(formatTokens(day.tokens)) · \(formatUSD(day.usd))")
+                    .onTapGesture {
+                        if pinnedDay?.id == day.id { pinnedDay = nil }
+                        else { pinnedDay = day }
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
                 }
             }
         }
@@ -3630,128 +3529,37 @@ struct KiroUsageChartCard: View {
     private func dayLabel(_ date: Date) -> String {
         L10n.dayMonth(date, preference: settings.appLanguage)
     }
-
-    private func formatUSD(_ amount: Double) -> String {
-        AllUsageFormat.usd(amount)
-    }
-
-    private func formatTokens(_ n: Int) -> String {
-        AllUsageFormat.tokens(n)
-    }
-
-    private func formatTokensShort(_ n: Int) -> String {
-        AllUsageFormat.tokensShort(n)
-    }
 }
 
 // MARK: - Grok Build usage chart
 
-/// 30-day bar chart for Grok Build local sessions (`GrokCostScanner`),
-/// mirroring `CodexUsageChartCard` layout so the Grok tab shows the same
-/// Today / 30d / latest-tokens + hover model breakdown as Codex/Claude.
+/// 30-day bar chart for Grok Build. Click bar → pin day model detail.
 struct GrokUsageChartCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let report: GrokUsageReport
     @State private var hoveredDay: GrokDailyUsage?
-
-    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+    @State private var pinnedDay: GrokDailyUsage?
 
     private var daily30: [GrokDailyUsage] { Array(report.daily.suffix(30)) }
+    private var maxBarTokens: Int { max(daily30.map(\.tokens).max() ?? 0, 1) }
 
-    private var maxBarTokens: Int {
-        max(daily30.map(\.tokens).max() ?? 0, 1)
-    }
-
-    private var detailDay: GrokDailyUsage? {
-        hoveredDay ?? daily30.last(where: { $0.tokens > 0 })
-    }
-
-    private var latestDayTokens: Int {
-        daily30.last(where: { $0.tokens > 0 })?.tokens ?? 0
+    private var dayDetail: ProviderDayChartDetail? {
+        pinnedDay.map { ProviderDayChartDetail.from(day: $0, language: settings.appLanguage) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 16) {
-                summaryColumn(
-                    label: vi ? "Hôm nay" : "Today",
-                    amount: report.todayUSD,
-                    tokens: report.todayTokens)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: vi ? "30 ngày" : "30d cost",
-                    amount: report.last30USD,
-                    tokens: report.last30Tokens,
-                    alignTrailing: true)
-                Spacer(minLength: 8)
-                summaryColumn(
-                    label: vi ? "Token mới nhất" : "Latest tokens",
-                    amount: nil,
-                    tokens: latestDayTokens,
-                    alignTrailing: true)
-            }
+        ProviderCostChartScaffold(
+            title: L10n.f("chart.providerCost30", settings.appLanguage, "Grok"),
+            totalUSD: report.last30USD,
+            todayUSD: report.todayUSD,
+            todayTokens: report.todayTokens,
+            startLabel: daily30.first.map { dayLabel($0.date) },
+            dayDetail: dayDetail,
+            footnote: L10n.t("chart.estimateGrok", settings.appLanguage),
+            barTint: VocabbyTheme.chartGrok
+        ) {
             barChart
-                .frame(height: 56)
-            if let detail = detailDay {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
-                        .font(.plexMono(11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                    ForEach(detail.models) { m in
-                        HStack(spacing: 8) {
-                            Text(m.name)
-                                .font(.plexSans(10))
-                                .foregroundStyle(VocabbyTheme.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            // Unpriced models (cost scanner prices non-Claude
-                            // models at $0) show tokens only — a "$0.00" reads
-                            // like real spend data that is simply wrong.
-                            Text(m.usd < 0.005
-                                ? formatTokensShort(m.tokens)
-                                : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
-                                .font(.plexMono(10))
-                                .foregroundStyle(VocabbyTheme.tertiary)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatUSD(report.last30USD))")
-                .font(.plexMono(11, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
-            if let top = report.topModel, !top.isEmpty {
-                Text("\(vi ? "Model dùng nhiều" : "Top model"): \(top)")
-                    .font(.plexMono(9))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-            }
-            Text(vi
-                 ? "Ước tính từ log Grok Build cục bộ (~/.grok/sessions)."
-                 : "Estimated from local Grok Build logs (~/.grok/sessions).")
-                .font(.plexMono(9))
-                .foregroundStyle(VocabbyTheme.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .vocabbyCard()
-    }
-
-    @ViewBuilder
-    private func summaryColumn(label: String, amount: Double?, tokens: Int,
-                               alignTrailing: Bool = false) -> some View {
-        VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
-            Text(label)
-                .font(.plexMono(9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .tracking(0.3)
-            if let amount {
-                Text(formatUSD(amount))
-                    .font(.plexMono(16, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-            }
-            Text(formatTokens(tokens))
-                .font(.plexMono(11))
-                .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
 
@@ -3765,47 +3573,36 @@ struct GrokUsageChartCard: View {
                     let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 0, style: .continuous)
+                        Rectangle()
                             .fill(barColor(for: day))
                             .frame(height: barHeight)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(hoveredDay?.id == day.id
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
                                 ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         if inside { hoveredDay = day }
                         else if hoveredDay?.id == day.id { hoveredDay = nil }
                     }
-                    .help("\(dayLabel(day.date)): \(formatUSD(day.usd)) · \(formatTokens(day.tokens))")
+                    .onTapGesture {
+                        if pinnedDay?.id == day.id { pinnedDay = nil }
+                        else { pinnedDay = day }
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.usd(day.usd)) · \(AllUsageFormat.tokens(day.tokens))")
                 }
             }
         }
     }
 
     private func barColor(for day: GrokDailyUsage) -> Color {
-        // Grok brand near-black; slightly lift the current day for readability.
         if day.tokens <= 0 { return VocabbyTheme.track }
-        if day.date == daily30.last?.date {
-            return VocabbyTheme.chartGrok
-        }
+        if day.date == daily30.last?.date { return VocabbyTheme.chartGrok }
         return VocabbyTheme.chartGrok.opacity(0.78)
     }
 
     private func dayLabel(_ date: Date) -> String {
         L10n.dayMonth(date, preference: settings.appLanguage)
-    }
-
-    private func formatUSD(_ amount: Double) -> String {
-        AllUsageFormat.usd(amount)
-    }
-
-    private func formatTokens(_ n: Int) -> String {
-        AllUsageFormat.tokens(n)
-    }
-
-    private func formatTokensShort(_ n: Int) -> String {
-        AllUsageFormat.tokensShort(n)
     }
 }
 
@@ -3934,7 +3731,7 @@ extension Notification.Name {
 /// re-entering the NSISEngine recursion loop.
 ///
 /// Plain macOS-style empty state:
-///   - Big bird logo at the top
+///   - Big BirdNion logo at the top
 ///   - Bold title + secondary body (no tinted card)
 ///   - Compact primary CTA
 ///
@@ -3943,9 +3740,7 @@ struct EmptyProvidersState: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            // Bird logo. `OriginalImage` is the same artwork bundled in
-            // the menu bar icon — re-uses the asset so the empty state and
-            // the menu bar look consistent.
+            // Reuse the same gradient-preserving mark as the menu bar/header.
             Image("OriginalImage")
                 .resizable()
                 .interpolation(.high)

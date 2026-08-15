@@ -5,6 +5,18 @@
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "128x128"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "original-dark.png",
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "128x128"
     }
   ],
   "info" : {

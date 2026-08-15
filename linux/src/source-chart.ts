@@ -1,6 +1,5 @@
-// Single-source 30-day chart card — port of the macOS ClaudeUsageChartCard /
-// CodexUsageChartCard: today + 30d summary, per-day token bars, hovered-day
-// per-model breakdown, estimated-total footer.
+// Single-source 30-day chart card — port of macOS provider cost charts.
+// Model breakdown is click-to-pin (hidden by default); hover only highlights.
 
 import { DailyUsage, UsageReport, usd, tokens, tokensAndUsd, dayLabel } from "./usage";
 import { t } from "./i18n";
@@ -24,12 +23,24 @@ function showDetail(detail: HTMLElement, day: DailyUsage) {
   detail.textContent = "";
   detail.append(el("div", "day-detail-head",
     `${dayLabel(day.date)} · ${tokens(day.tokens)} · ${usd(day.usd)}`));
-  for (const m of day.models) {
+  const models = [...day.models]
+    .filter((m) => m.tokens > 0 || m.usd > 0)
+    .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd))
+    .slice(0, 6);
+  if (models.length === 0) {
+    detail.append(el("div", "footnote", t("noModelBreakdown") || "No model breakdown."));
+    return;
+  }
+  for (const m of models) {
     const row = el("div", "source-row");
     row.append(el("span", "model-name", m.name));
     row.append(el("span", "source-amount", tokensAndUsd(m.tokens, m.usd)));
     detail.append(row);
   }
+}
+
+function clearDetail(detail: HTMLElement) {
+  detail.textContent = "";
 }
 
 export function sourceChartCard(
@@ -52,7 +63,11 @@ export function sourceChartCard(
   summary.append(summaryColumn(t("latestTokens"), null, latestActive?.tokens ?? 0, true));
   card.append(summary);
 
+  // Default empty — detail only after click (macOS parity).
   const detail = el("div", "day-detail");
+  let pinnedKey: string | null = null;
+  const dayKey = (d: DailyUsage) => String(d.date);
+
   // Bar height by tokens (parity with All chart card).
   const max = Math.max(...daily30.map((d) => d.tokens), 1);
   const chart = el("div", "bar-chart");
@@ -66,16 +81,24 @@ export function sourceChartCard(
     } else {
       col.append(el("div", "bar-idle"));
     }
-    col.addEventListener("mouseenter", () => showDetail(detail, day));
+    col.addEventListener("click", () => {
+      const key = dayKey(day);
+      if (pinnedKey === key) {
+        pinnedKey = null;
+        clearDetail(detail);
+        col.classList.remove("pinned");
+      } else {
+        chart.querySelectorAll(".bar-col.pinned").forEach((el) => el.classList.remove("pinned"));
+        pinnedKey = key;
+        col.classList.add("pinned");
+        showDetail(detail, day);
+      }
+    });
     chart.append(col);
   }
   card.append(chart, detail);
-  if (latestActive) showDetail(detail, latestActive);
 
   card.append(el("div", "est-total", `${t("estTotal", { n: 30 })}: ${tokens(report.last30Tokens)}`));
-  if (report.topModel) {
-    card.append(el("div", "footnote", `${t("topModel")}: ${report.topModel}`));
-  }
   card.append(el("div", "footnote", t(footnoteKey)));
   return card;
 }

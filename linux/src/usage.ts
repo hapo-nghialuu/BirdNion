@@ -48,6 +48,16 @@ export function scanFreshness(scannedAt: number | null | undefined): string | nu
   return t("time.hoursAgo", { n: Math.floor(seconds / 3600) });
 }
 
+/** Design badge freshness: "vừa xong" / "2 phút" / "3 giờ" (no "trước"). */
+export function badgeFreshness(scannedAt: number | null | undefined): string | null {
+  if (scannedAt == null || !Number.isFinite(scannedAt) || scannedAt <= 0) return null;
+  const seconds = Math.max(0, Math.floor((Date.now() - scannedAt) / 1000));
+  if (seconds < 60) return t("confidence.fresh.justNow");
+  if (seconds < 3600) return t("confidence.fresh.minutes", { n: Math.floor(seconds / 60) });
+  if (seconds < 86400) return t("confidence.fresh.hours", { n: Math.floor(seconds / 3600) });
+  return t("confidence.fresh.days", { n: Math.floor(seconds / 86400) });
+}
+
 export type CombinedModel = {
   name: string;
   usd: number;

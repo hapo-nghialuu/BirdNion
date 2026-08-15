@@ -5,14 +5,16 @@
 
 import {
   Combined, CombinedDay, HourlyUsage, UsageReport, UsageSourceId, BudgetStatus,
-  usd, tokens, tokensShort, tokensAndUsd, dayLabel, scanConfidence, scanFreshness, monthlyForecast,
+  usd, tokens, tokensShort, tokensAndUsd, dayLabel, scanConfidence, scanFreshness,
+  badgeFreshness, monthlyForecast,
 } from "./usage";
 import { t, currentLang } from "./i18n";
+import { logoMark } from "./logos";
 
 const PERIOD_KEY = "birdnion.allChartDays";
-const PERIODS = [1, 7, 30, 90]; // 1 = the 24h hourly view
-/** Heatmap / top-models window — macOS CombinedUsageReport windowDays. */
-const HEATMAP_DAYS = 120;
+/** Chart + top-models period chips (heatmap fills width independently). */
+const PERIODS = [1, 7, 30, 90, 120]; // 1 = the 24h hourly view
+const PERIOD_CHANGE_EVENT = "birdnion-all-period";
 /** Cap model rows in day-detail so the breakdown stays shorter than the chart. */
 const MAX_DETAIL_MODELS = 6;
 
@@ -66,29 +68,35 @@ export function confidenceRow(
 
 function confidenceItem(id: UsageSourceId, label: string, report: UsageReport | null): HTMLElement {
   const state = scanConfidence(report);
-  const fresh = scanFreshness(report?.scannedAt ?? null);
+  const fullFresh = scanFreshness(report?.scannedAt ?? null);
+  const badgeFresh = badgeFreshness(report?.scannedAt ?? null);
 
-  let stateText: string;
+  // Design: "CLAUDE · LIVE VỪA XONG" — name · state · short freshness.
+  let stateTag: string;
   let hint: string;
   if (state === "unavailable") {
-    stateText = t("confidence.noData");
+    stateTag = t("confidence.state.unavailable");
     hint = t("confidence.noDataHint", { source: label });
   } else if (state === "live") {
-    stateText = t("confidence.live", { time: fresh ?? t("time.justUpdated") });
+    stateTag = t("confidence.state.live");
     hint = t("confidence.liveHint", { source: label });
   } else {
-    stateText = t("confidence.history", { time: fresh ?? "—" });
+    stateTag = t("confidence.state.history");
     hint = t("confidence.historyHint", { source: label });
   }
 
-  const item = el("span", "confidence-item");
-  item.title = hint;
-  item.setAttribute("aria-label", hint);
-  item.append(
-    el("span", `dot ${id}`),
-    el("span", "legend-label", label),
-    el("span", `confidence-state ${state}`, stateText),
-  );
+  // Old compact badge: provider logo + LIVE/HISTORY + short freshness
+  // (no text name — logos identify the source on the dense row).
+  const item = el("span", `confidence-item ${state}`);
+  item.title = fullFresh ? `${label}: ${stateTag} · ${fullFresh}` : hint;
+  item.setAttribute("aria-label", item.title);
+  item.append(logoMark(id, `confidence-logo confidence-logo-${id}`));
+  const stateEl = el("span", `confidence-state ${state}`, stateTag);
+  item.append(stateEl);
+  if (badgeFresh && state !== "unavailable") {
+    item.append(el("span", "confidence-sep", "·"));
+    item.append(el("span", `confidence-fresh ${state}`, badgeFresh.toUpperCase()));
+  }
   return item;
 }
 
@@ -118,38 +126,37 @@ export function budgetForecastCard(combined: Combined, budgetUsd: number | null)
   const statusLabel = t(`budgetStatus.${forecast.status}`);
   const card = el("section", "card budget-card");
 
+  // Design: title + status; big "$MTD / $budget" + "dự phóng $X"; bar;
+  // "CÒN LẠI $Y · N NGÀY NỮA HẾT THÁNG".
   const head = el("div", "budget-head");
   head.append(el("span", "summary-label", t("budgetMonthly")));
   head.append(el("span", `budget-status ${tone}`, statusLabel));
   card.append(head);
 
   const amounts = el("div", "budget-amounts");
-  amounts.append(el("div", "budget-mtd", t("budgetMtd", { amount: usd(forecast.monthToDateUsd) })));
-  amounts.append(el("div", "budget-projected", t("budgetProjected", { amount: usd(forecast.projectedUsd) })));
+  const mtd = el("div", "budget-mtd-hero");
+  mtd.append(el("span", "budget-mtd-main", usd(forecast.monthToDateUsd)));
+  mtd.append(el("span", "budget-mtd-cap", ` / ${usd(forecast.budgetUsd)}`));
+  amounts.append(mtd);
+  amounts.append(el("div", `budget-projected ${tone}`,
+    t("budgetProjectedAmount", { amount: usd(forecast.projectedUsd) })));
   card.append(amounts);
 
   const track = el("div", "window-track budget-track");
   const fill = el("div", `window-fill ${tone}`);
-  // Visual bar width is capped at 100% — the numeric %/tone above still
-  // reflect the real, uncapped usedPct (can read >100% once over budget).
   fill.style.width = `${Math.max(0, Math.min(100, forecast.usedPct))}%`;
   track.append(fill);
   card.append(track);
 
+  const daysLeft = Math.max(0, forecast.daysInMonth - forecast.daysElapsed);
   const remainLabel = forecast.remainingUsd >= 0
-    ? t("budgetRemaining", { amount: usd(forecast.remainingUsd) })
+    ? t("budgetRemainingWithDays", {
+      amount: usd(forecast.remainingUsd),
+      n: daysLeft,
+    })
     : t("budgetOverBy", { amount: usd(-forecast.remainingUsd) });
-  const foot = el("div", "budget-foot");
-  foot.append(
-    el("span", "budget-of",
-      t("budgetOfLimit", { spent: usd(forecast.monthToDateUsd), budget: usd(forecast.budgetUsd) })),
-    el("span", `budget-remaining ${tone}`, remainLabel),
-  );
-  card.append(foot);
+  card.append(el("div", `budget-remaining ${tone}`, remainLabel));
 
-  // Title/aria carry the visible amounts + localized status — not bare
-  // percentages, which read as meaningless numbers out of context to a
-  // screen reader or tooltip hover.
   const hint = t("budgetHint", {
     mtd: usd(forecast.monthToDateUsd),
     projected: usd(forecast.projectedUsd),
@@ -167,10 +174,8 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
   const card = el("section", "card");
   let period = Number(localStorage.getItem(PERIOD_KEY)) || 30;
   if (!PERIODS.includes(period)) period = 30;
-  // Click-to-pin day detail (macOS pinnedDay) with the latest-active-day
-  // fallback; clicking the day on display hides the block (macOS parity).
+  // Click-to-pin day detail only (default hidden). Hover never opens detail.
   let pinnedDay: CombinedDay | null = null;
-  let detailHidden = false;
 
   const render = () => {
     card.textContent = "";
@@ -195,10 +200,38 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
       ? claude24Tokens + (today?.codexTokens ?? 0) + (today?.grokTokens ?? 0)
       : wTokens;
 
-    // Total-cost hero (macOS mockup): big period total left, today trailing right.
+    // Total-cost hero: eyebrow + square period chips on one row (top-right),
+    // big period total left / today trailing right below (macOS parity).
     const hero = el("div", "cost-hero");
     const periodLabel = is24h ? "24h" : `${period} ${t("days")}`;
-    hero.append(el("div", "cost-hero-label", t("totalCostPeriod", { period: periodLabel })));
+    const head = el("div", "cost-hero-head");
+    head.append(el("div", "cost-hero-label", t("totalCostPeriod", { period: periodLabel })));
+    const picker = el("div", "period-picker");
+    for (const days of PERIODS) {
+      const short =
+        days === 1 ? "24h"
+          : days === 7 ? "7d"
+            : days === 30 ? "30d"
+              : days === 90 ? "90d"
+                : days === 120 ? "120d"
+                  : `${days}d`;
+      const full = days === 1 ? "24h" : `${days} ${t("days")}`;
+      const pill = el("button", `pill${period === days ? " active" : ""}`, short);
+      pill.title = full;
+      pill.setAttribute("aria-label", full);
+      if (period === days) pill.setAttribute("aria-pressed", "true");
+      pill.addEventListener("click", () => {
+        period = days;
+        pinnedDay = null; // new window starts with detail hidden
+        localStorage.setItem(PERIOD_KEY, String(days));
+        render();
+        // Top models card listens and re-ranks for the new window.
+        window.dispatchEvent(new CustomEvent(PERIOD_CHANGE_EVENT, { detail: { days } }));
+      });
+      picker.append(pill);
+    }
+    head.append(picker);
+    hero.append(head);
     const heroRow = el("div", "cost-hero-row");
     const left = el("div", "cost-hero-main");
     left.append(el("div", "cost-hero-amount", usd(periodUsd)));
@@ -211,63 +244,44 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     hero.append(heroRow);
     card.append(hero);
 
-    // Period pills.
-    const picker = el("div", "period-picker");
-    for (const days of PERIODS) {
-      const pill = el("button", `pill${period === days ? " active" : ""}`,
-        days === 1 ? "24h" : `${days} ${t("days")}`);
-      pill.addEventListener("click", () => {
-        period = days;
-        pinnedDay = null;
-        detailHidden = false;
-        localStorage.setItem(PERIOD_KEY, String(days));
-        render();
-      });
-      picker.append(pill);
-    }
-    card.append(picker);
-
     const detail = el("div", "day-detail");
     if (is24h) {
       card.append(hourChart(claudeHourly, detail));
-      const legend = el("div", "legend");
-      legend.append(
-        legendDot("claude", `Claude ${tokensShort(claude24Tokens)}`),
-        legendDot("codex", `${t("codexToday")} ${tokensShort(today?.codexTokens ?? 0)}`),
-        legendDot("grok", `Grok ${tokensShort(today?.grokTokens ?? 0)}`));
-      card.append(legend, detail);
+      // Share rows follow the 24h period (Claude hours + Codex/Grok today).
+      card.append(sourceShareSection([
+        { name: "Claude", usd: claude24Usd, tokens: claude24Tokens, css: "claude" },
+        { name: "Codex", usd: today?.codexUsd ?? 0, tokens: today?.codexTokens ?? 0, css: "codex" },
+        { name: "Grok", usd: today?.grokUsd ?? 0, tokens: today?.grokTokens ?? 0, css: "grok" },
+      ]));
+      card.append(detail);
       card.append(el("div", "footnote", t("hourBarsNote")));
     } else {
       card.append(stackedBarChart(windowDaily, detail, {
         getPinned: () => pinnedDay,
         setPinned: (d) => { pinnedDay = d; },
-        getHidden: () => detailHidden,
-        setHidden: (hidden) => { detailHidden = hidden; },
       }));
-      const legend = el("div", "legend");
-      legend.append(
-        legendDot("claude", `Claude ${tokensShort(wClaudeTokens)}`),
-        legendDot("codex", `Codex ${tokensShort(wCodexTokens)}`),
-        legendDot("grok", `Grok ${tokensShort(wGrokTokens)}`));
-      card.append(legend);
-      // Token-share bar + rows (macOS sourceShareRows) — USD stays in row labels.
+      // Axis labels under the bars (start · end of visible window).
+      if (windowDaily.length > 0) {
+        const axis = el("div", "chart-axis");
+        axis.append(el("span", "chart-axis-label", dayLabel(windowDaily[0].date)));
+        axis.append(el("span", "chart-axis-label",
+          dayLabel(windowDaily[windowDaily.length - 1].date)));
+        card.append(axis);
+      }
+      // Share rows for the selected multi-day window (7d/30d/90d/120d).
       card.append(sourceShareSection([
         { name: "Claude", usd: wClaudeUsd, tokens: wClaudeTokens, css: "claude" },
         { name: "Codex", usd: wCodexUsd, tokens: wCodexTokens, css: "codex" },
         { name: "Grok", usd: wGrokUsd, tokens: wGrokTokens, css: "grok" },
       ]));
-      if (!detailHidden && pinnedDay && windowDaily.some((d) => d.date === pinnedDay!.date)) {
-        showDayDetail(detail, pinnedDay);
-      }
       card.append(detail);
-      card.append(el("div", "footnote", t("estFootnote")));
     }
   };
   render();
   return card;
 }
 
-/** Full-width token-share capsule + compact % / USD rows (view-only over totals). */
+/** Per-source rows: tick · name · "12.1B · 72%" · $amount (design share list). */
 function sourceShareSection(
   rows: { name: string; usd: number; tokens: number; css: string }[],
 ): HTMLElement {
@@ -276,26 +290,16 @@ function sourceShareSection(
   if (active.length === 0) return wrap;
   const total = Math.max(active.reduce((s, r) => s + r.tokens, 0), 1);
 
-  const bar = el("div", "share-bar");
-  for (const r of active) {
-    const seg = el("div", `share-seg ${r.css}`);
-    const pct = Math.max((r.tokens / total) * 100, 1.5);
-    seg.style.flexGrow = String(pct);
-    seg.style.flexBasis = "0";
-    bar.append(seg);
-  }
-  wrap.append(bar);
-
   const list = el("div", "share-list");
   active.forEach((r, i) => {
     if (i > 0) list.append(el("div", "share-divider"));
     const row = el("div", "share-row");
     const left = el("span", "legend-item");
-    left.append(el("span", `dot ${r.css}`), el("span", "share-name", r.name));
+    left.append(el("span", `share-tick ${r.css}`), el("span", "share-name", r.name));
     const sharePct = Math.round((r.tokens / total) * 100);
     row.append(
       left,
-      el("span", "share-pct", `${sharePct}%`),
+      el("span", "share-mid", `${tokensShort(r.tokens)} · ${sharePct}%`),
       el("span", "share-usd", usd(r.usd)),
     );
     list.append(row);
@@ -356,23 +360,20 @@ function compactModelRow(
 type PinApi = {
   getPinned: () => CombinedDay | null;
   setPinned: (d: CombinedDay | null) => void;
-  getHidden: () => boolean;
-  setHidden: (hidden: boolean) => void;
 };
 
 /** Stacked per-source bars: Claude → Codex → Grok; height by tokens.
- * Click toggles pin; hover temporarily previews detail. */
+ * Click toggles pin/detail; hover only highlights (never opens detail). */
 function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi): HTMLElement {
   const max = Math.max(...days.map((d) => d.tokens), 1);
   const chart = el("div", `bar-chart${days.length > 45 ? " dense" : ""}`);
   let hoverDay: CombinedDay | null = null;
 
-  const latestActive = [...days].reverse().find((d) => d.tokens > 0) ?? days[days.length - 1] ?? null;
-  const paintDetail = () => {
-    const day = pin.getHidden() ? null : (hoverDay ?? pin.getPinned() ?? latestActive);
+  const paint = () => {
+    // Detail only from click-pin — default empty, no latest-day fallback.
+    const day = pin.getPinned();
     if (day) showDayDetail(detail, day);
     else detail.textContent = "";
-    // Highlight pinned bar.
     chart.querySelectorAll(".bar-col").forEach((col) => {
       const elCol = col as HTMLElement;
       const date = elCol.dataset.date;
@@ -403,30 +404,21 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
     }
     col.addEventListener("mouseenter", () => {
       hoverDay = day;
-      paintDetail();
+      paint(); // highlight only — detail still follows pin
     });
     col.addEventListener("mouseleave", () => {
       hoverDay = null;
-      paintDetail();
+      paint();
     });
     col.addEventListener("click", () => {
-      if (pin.getHidden()) {
-        pin.setHidden(false);
-        pin.setPinned(day);
-      } else {
-        const shown = hoverDay ?? pin.getPinned() ?? latestActive;
-        if (shown && shown.date === day.date) {
-          pin.setHidden(true);
-          pin.setPinned(null);
-        } else {
-          pin.setPinned(day);
-        }
-      }
-      paintDetail();
+      const pinned = pin.getPinned();
+      if (pinned && pinned.date === day.date) pin.setPinned(null);
+      else pin.setPinned(day);
+      paint();
     });
     chart.append(col);
   }
-  paintDetail();
+  paint();
   return chart;
 }
 
@@ -460,24 +452,82 @@ function hourChart(hourly: HourlyUsage[], detail: HTMLElement): HTMLElement {
 
 // --- Heatmap card ----------------------------------------------------------
 
+/** Fixed cell 11 + gap 2 (macOS CombinedHeatmapCard). */
+const HEAT_CELL = 11;
+const HEAT_GAP = 2;
+const HEAT_LABEL_W = 28;
+
+/** Week columns that fit at fixed cell size in the available grid width. */
+function heatWeeksForWidth(gridWidth: number): number {
+  const n = Math.floor((gridWidth + HEAT_GAP) / (HEAT_CELL + HEAT_GAP));
+  return Math.max(4, Math.min(52, n));
+}
+
+/**
+ * Monday-aligned trailing window that fills `weekCount` columns ending today.
+ * Dates outside scanned history become empty inactive days (macOS parity).
+ */
+function heatmapWindow(daily: CombinedDay[], weekCount: number): CombinedDay[] {
+  if (daily.length === 0) return [];
+  const weeks = Math.max(1, weekCount);
+  const last = daily[daily.length - 1];
+  const end = new Date(`${last.date}T12:00:00`);
+  // JS getDay: 0=Sun … 6=Sat → Mon-first index 0…6
+  const mondayIndex = (end.getDay() + 6) % 7;
+  const dayCount = (weeks - 1) * 7 + mondayIndex + 1;
+  const byDate = new Map(daily.map((d) => [d.date, d]));
+  const ymd = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const out: CombinedDay[] = [];
+  for (let i = dayCount - 1; i >= 0; i--) {
+    const d = new Date(end);
+    d.setDate(end.getDate() - i);
+    const key = ymd(d);
+    const existing = byDate.get(key);
+    if (existing) out.push(existing);
+    else {
+      out.push({
+        date: key,
+        claudeUsd: 0, claudeTokens: 0,
+        codexUsd: 0, codexTokens: 0,
+        grokUsd: 0, grokTokens: 0,
+        usd: 0, tokens: 0, active: false, models: [],
+      });
+    }
+  }
+  return out;
+}
+
 export function heatmapCard(combined: Combined): HTMLElement {
   const card = el("section", "card");
-  // Use trailing HEATMAP_DAYS (pad if scanner returns fewer).
-  const days = trailingDays(combined.daily, HEATMAP_DAYS);
+  // Fixed cell size; week count fills popover content width (~420 - body pad).
+  const contentW = 420 - 32; // .app-body horizontal pad 16×2
+  const gridW = Math.max(contentW - HEAT_LABEL_W, HEAT_CELL);
+  const weekCount = heatWeeksForWidth(gridW);
+  const days = heatmapWindow(combined.daily, weekCount);
   const windowUsd = days.reduce((s, d) => s + d.usd, 0);
   const activeDays = days.filter((d) => d.active).length;
+  const dayCount = days.length;
 
   const head = el("div", "heatmap-head");
-  head.append(el("span", "summary-label", t("activity120")));
+  const title =
+    currentLang() === "vi"
+      ? `Hoạt động ${dayCount} ngày`
+      : `${dayCount}-day activity`;
+  head.append(el("span", "summary-label", title));
   head.append(el("span", "heatmap-total",
     `${usd(windowUsd)} · ${activeDays} ${t("activeDays")}`));
   card.append(head);
 
   const body = el("div", "heatmap-body");
   const detail = el("div", "day-detail");
-  const stats = heatmapStats(days);
-  body.append(weekdayLabels(), heatGrid(days, detail), stats);
-  card.append(body, detail);
+  body.append(weekdayLabels(), heatGrid(days, detail));
+  // Design: peak / avg / streak as one mono row under the grid (not side column).
+  card.append(body, heatmapStats(days), detail);
   return card;
 }
 
@@ -591,61 +641,90 @@ function heatmapStats(days: CombinedDay[]): HTMLElement {
   if (i >= 0 && !days[i].active) i--;
   while (i >= 0 && days[i].active) { streak++; i--; }
 
-  const col = el("div", "heat-stats");
-  const stat = (label: string, value: string) => {
-    const box = el("div", "stat");
-    box.append(el("div", "summary-label", label), el("div", "stat-value", value));
+  // Design: "CAO NHẤT $X · TB/NGÀY $Y · STREAK N NGÀY"
+  const row = el("div", "heat-stats-row");
+  const chip = (label: string, value: string) => {
+    const box = el("span", "heat-stat-chip");
+    box.append(el("span", "heat-stat-label", label.toUpperCase()));
+    box.append(el("span", "heat-stat-value", value));
     return box;
   };
-  col.append(stat(t("peakDay"), peak && peak.usd > 0
-    ? `${usd(peak.usd)} · ${dayLabel(peak.date)}` : "—"));
-  col.append(stat(t("avgActive"), usd(active.length ? totalUsd / active.length : 0)));
-  col.append(stat("Streak", `${streak} ${t("streakUnit")}`));
-  return col;
+  const sep = () => el("span", "heat-stat-sep", "·");
+  row.append(
+    chip(t("peakDayShort"), peak && peak.usd > 0 ? usd(peak.usd) : "—"),
+    sep(),
+    chip(t("avgActiveShort"), usd(active.length ? totalUsd / active.length : 0)),
+    sep(),
+    chip("Streak", `${streak} ${t("streakUnit")}`),
+  );
+  return row;
 }
 
 // --- Top models card --------------------------------------------------------
 
+/** Top models over the chart period chips (not heatmap 120d). Re-renders when
+ * `PERIOD_CHANGE_EVENT` fires after a period pill click. */
 export function topModelsCard(combined: Combined): HTMLElement {
   const card = el("section", "card top-models-card");
-  card.append(el("div", "summary-label", t("topModels120")));
-  // Top models over the trailing heatmap window (token share of that window).
-  const days = trailingDays(combined.daily, HEATMAP_DAYS);
-  const modelMap = new Map<string, { name: string; usd: number; tokens: number; source: string }>();
-  for (const d of days) {
-    for (const m of d.models) {
-      const k = `${m.source}:${m.name}`;
-      const e = modelMap.get(k);
-      if (e) { e.usd += m.usd; e.tokens += m.tokens; }
-      else modelMap.set(k, { name: m.name, usd: m.usd, tokens: m.tokens, source: m.source });
-    }
-  }
-  const top = [...modelMap.values()]
-    .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd))
-    .slice(0, 6);
-  const total = Math.max(top.reduce((s, m) => s + m.tokens, 0), 1);
-  // Prefer window token total for bar width share (macOS).
-  const windowTokens = Math.max(days.reduce((s, d) => s + d.tokens, 0), total);
 
-  for (const model of top) {
-    const row = el("div", "top-model-row");
-    const head = el("div", "top-model-head");
-    const left = el("span", "legend-item");
-    left.append(
-      el("span", `dot ${model.source}`),
-      el("span", "top-model-name", shortModelName(model.name)),
+  const periodDays = (): number => {
+    let p = Number(localStorage.getItem(PERIOD_KEY)) || 30;
+    if (!PERIODS.includes(p)) p = 30;
+    return p;
+  };
+
+  const render = () => {
+    card.textContent = "";
+    const p = periodDays();
+    const windowDays = trailingDays(combined.daily, p);
+    const modelMap = new Map<string, { name: string; usd: number; tokens: number; source: string }>();
+    for (const d of windowDays) {
+      for (const m of d.models) {
+        const k = `${m.source}:${m.name}`;
+        const e = modelMap.get(k);
+        if (e) { e.usd += m.usd; e.tokens += m.tokens; }
+        else modelMap.set(k, { name: m.name, usd: m.usd, tokens: m.tokens, source: m.source });
+      }
+    }
+    const top = [...modelMap.values()]
+      .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd))
+      .slice(0, 6);
+    if (top.length === 0) {
+      card.style.display = "none";
+      return;
+    }
+    card.style.display = "";
+    const title =
+      p <= 1
+        ? (currentLang() === "vi" ? "Model dùng nhiều (24h)" : "Top models (24h)")
+        : (currentLang() === "vi"
+          ? `Model dùng nhiều (${p} ngày)`
+          : `Top models (${p} days)`);
+    card.append(el("div", "summary-label", title));
+    const windowTokens = Math.max(
+      windowDays.reduce((s, d) => s + d.tokens, 0),
+      top.reduce((s, m) => s + m.tokens, 0),
+      1,
     );
-    head.append(
-      left,
-      el("span", "top-model-amount", tokensAndUsd(model.tokens, model.usd)),
-    );
-    const track = el("div", "model-track");
-    const fill = el("div", `model-fill ${model.source}`);
-    fill.style.width = `${Math.max((model.tokens / windowTokens) * 100, 1)}%`;
-    track.append(fill);
-    row.append(head, track);
-    card.append(row);
-  }
+
+    // Design row: brand icon · name (flex) | fixed 84px bar | fixed 84px amount.
+    for (const model of top) {
+      const row = el("div", "top-model-row");
+      const left = el("span", "top-model-left");
+      left.append(el("span", `dot ${model.source}`), el("span", "top-model-name", shortModelName(model.name)));
+      row.append(left);
+      const track = el("div", "model-track");
+      const fill = el("div", `model-fill ${model.source}`);
+      fill.style.width = `${Math.max((model.tokens / windowTokens) * 100, 1)}%`;
+      track.append(fill);
+      row.append(track);
+      row.append(el("span", "top-model-amount", tokensAndUsd(model.tokens, model.usd)));
+      card.append(row);
+    }
+  };
+
+  render();
+  window.addEventListener(PERIOD_CHANGE_EVENT, render);
   return card;
 }
 

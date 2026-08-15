@@ -7,7 +7,31 @@
       "size" : "22x22"
     },
     {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "icon_16x16-dark.png",
+      "idiom" : "mac",
+      "scale" : "1x",
+      "size" : "22x22"
+    },
+    {
       "filename" : "icon_32x32@2x.png",
+      "idiom" : "mac",
+      "scale" : "2x",
+      "size" : "22x22"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "filename" : "icon_32x32@2x-dark.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "22x22"

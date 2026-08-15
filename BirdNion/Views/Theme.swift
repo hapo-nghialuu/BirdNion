@@ -70,7 +70,9 @@ enum VocabbyTheme {
     // Text
     static let primary    = dyn(0x16150F, 0xF2F0E8)  // --text
     static let secondary  = dyn(0x4B4941, 0xC9C6BC)  // --text2
-    static let tertiary   = dyn(0x6B6862, 0xA3A096)  // --text3
+    static let tertiary   = dyn(0x6B6862, 0xA3A096)  // --text3 (axis / footnote)
+    /// Design eyebrow / meta muted (`#7A776C` light) — distinct from tertiary.
+    static let muted      = dyn(0x7A776C, 0xA3A096)
     static let disabled   = dyn(0xB0ADA3, 0x4A4A40)  // --disabled
 
     // Accent + semantic states

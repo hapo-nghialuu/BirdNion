@@ -66,15 +66,38 @@ struct InkRule: View {
 }
 
 extension View {
-    /// Adds a top hairline divider without the old rounded/filled card
-    /// look — the standard way a "section" starts in the redesign.
-    func hairlineTop(_ color: Color = VocabbyTheme.hairline) -> some View {
-        overlay(color.frame(height: 1), alignment: .top)
+    /// Adds a top hairline divider. `inset` indents the rule from the view
+    /// edges (popover body sections use content inset; header/tabs stay 0).
+    func hairlineTop(_ color: Color = VocabbyTheme.hairline, inset: CGFloat = 0) -> some View {
+        overlay(alignment: .top) {
+            color.frame(height: 1)
+                .padding(.horizontal, inset)
+        }
     }
 
     /// Adds the stronger ink rule below pane headers / hero numbers.
-    func inkRuleBottom() -> some View {
-        overlay(VocabbyTheme.inkRule.frame(height: 1), alignment: .bottom)
+    func inkRuleBottom(inset: CGFloat = 0) -> some View {
+        overlay(alignment: .bottom) {
+            VocabbyTheme.inkRule.frame(height: 1)
+                .padding(.horizontal, inset)
+        }
+    }
+
+    /// Popover body section rule — inset 16pt so only header + tabs rules
+    /// stay edge-to-edge (design: body hairlines leave a small side gap).
+    func popoverHairlineTop(_ color: Color = VocabbyTheme.hairline) -> some View {
+        hairlineTop(color, inset: InstrumentPopoverMetrics.contentInset)
+    }
+
+    /// Popover chart ink rule under bars — same inset as body hairlines.
+    func popoverInkRuleBottom() -> some View {
+        inkRuleBottom(inset: InstrumentPopoverMetrics.contentInset)
+    }
+
+    /// Horizontal content inset for popover text/controls (16pt).
+    /// Pair with `popoverHairlineTop` / `popoverInkRuleBottom` for rules.
+    func popoverContentInset() -> some View {
+        padding(.horizontal, InstrumentPopoverMetrics.contentInset)
     }
 
     /// Uppercase mono eyebrow label style (`.summary-label`, `.sw-section-header`,
@@ -95,4 +118,21 @@ extension View {
 enum InstrumentShape {
     static let controlRadius: CGFloat = 4
     static let plateRadius: CGFloat = 4
+}
+
+/// Popover shell metrics.
+/// Only the header ink-rule and tabs hairline are edge-to-edge; body rules
+/// use `contentInset` so they stop short of the left/right edges.
+enum InstrumentPopoverMetrics {
+    static let contentInset: CGFloat = 16
+}
+
+/// Inset 1pt rule for popover body (not header/tabs).
+struct PopoverInsetHairline: View {
+    var color: Color = VocabbyTheme.hairline
+    var body: some View {
+        color
+            .frame(height: 1)
+            .padding(.horizontal, InstrumentPopoverMetrics.contentInset)
+    }
 }
