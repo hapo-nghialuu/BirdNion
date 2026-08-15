@@ -756,6 +756,9 @@ fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), Stri
         .builder()
         .title(title)
         .body(body)
+        // Match the icon name installed by the Linux desktop bundle instead
+        // of relying on the notification daemon to infer it from the process.
+        .icon("birdnion")
         .show()
         .map_err(|e| e.to_string())
 }

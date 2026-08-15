@@ -201,18 +201,11 @@ html.popover-capped .app-body {
   width: 28px;
   height: 28px;
   border-radius: 7px;
-  object-fit: contain;
+  background: center / contain no-repeat url("/logos/app.png");
   flex-shrink: 0;
 }
 
-.app-titles { min-width: 0; }
-
-.app-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--primary);
-  line-height: 1.2;
-}
+[data-theme="dark"] .app-logo { background-image: url("/logos/app-dark.png"); }
 
 .app-status {
   font-size: 10px;
@@ -2717,14 +2710,16 @@ body.settings-body-root {
 }
 
 .about-hero-icon {
+  display: block;
   width: 96px;
   height: 96px;
   border-radius: 22px;
-  object-fit: contain;
+  background: center / contain no-repeat url("/logos/app.png");
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
+[data-theme="dark"] .about-hero-icon { background-image: url("/logos/app-dark.png"); }
 .about-hero-icon:hover {
   transform: scale(1.04);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 22%, transparent);
@@ -3467,8 +3462,7 @@ body.settings-body-root {
   border-bottom: 1px solid var(--ink-rule);
 }
 
-.app-logo { border-radius: 0; width: 24px; height: 24px; }
-.app-title { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
+.app-logo { border-radius: 0; width: 42px; height: 28px; }
 
 /* status pill → mono caps + square dot */
 .status-pill {

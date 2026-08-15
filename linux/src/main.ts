@@ -215,18 +215,14 @@ function goTab(id: string) {
   render();
 }
 
-/** macOS BirdNionHeader remake: logo + title + status + refresh + appearance. */
+/** macOS BirdNionHeader parity: brand mark + status + refresh + appearance. */
 function appHeader(): HTMLElement {
   const head = el("header", "app-header");
   const brand = el("div", "app-brand");
-  const icon = document.createElement("img");
-  icon.className = "app-logo";
-  icon.src = "/logos/app.png";
-  icon.alt = "BirdNion";
-  icon.draggable = false;
-  const titles = el("div", "app-titles");
-  titles.append(el("div", "app-title", "BirdNion"));
-  brand.append(icon, titles);
+  const icon = el("span", "app-logo");
+  icon.setAttribute("role", "img");
+  icon.setAttribute("aria-label", "BirdNion");
+  brand.append(icon);
 
   // Status pill (ready / updating)
   const refreshing = state.refreshing;
