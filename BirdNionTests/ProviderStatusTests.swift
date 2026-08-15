@@ -78,7 +78,7 @@ final class ProviderStatusTests: XCTestCase {
 
     func testVietnameseTableDoesNotKeepEnglishActionLabels() {
         XCTAssertEqual(L10n.t("popover.refresh", "vi"), "Làm mới")
-        XCTAssertEqual(L10n.t("popover.settings", "vi"), "Cài đặt…")
+        XCTAssertEqual(L10n.t("popover.settings", "vi"), "Cài đặt")
         XCTAssertEqual(L10n.t("chart.latestTokens", "vi"), "Token gần nhất")
     }
 
