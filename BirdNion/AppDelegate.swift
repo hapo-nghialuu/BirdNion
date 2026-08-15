@@ -186,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Round the corners of the hosted content; the panel itself stays
         // clear so the rounded edges are transparent and the shadow follows.
         p.contentView?.wantsLayer = true
-        p.contentView?.layer?.cornerRadius = 16
+        p.contentView?.layer?.cornerRadius = 3
         p.contentView?.layer?.masksToBounds = true
         panel = p
 
