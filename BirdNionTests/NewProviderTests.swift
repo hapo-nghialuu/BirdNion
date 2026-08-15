@@ -493,13 +493,13 @@ final class NewProviderTests: XCTestCase {
     }
 
     /// Parse a signals.json fixture from a temp session directory.
+    /// Full lifetime T = before + context (CodexBar / Linux semantics).
     func testGrokCostScannerParseSignalsFixture() throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let session = base.appendingPathComponent("sessions/proj/sess-1")
         try fm.createDirectory(at: session, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: base) }
-        let baselineURL = base.appendingPathComponent("baselines.json")
 
         let signals = """
         {"totalTokensBeforeCompaction":0,"contextTokensUsed":1000000,\
@@ -519,8 +519,7 @@ final class NewProviderTests: XCTestCase {
         try summary.write(to: session.appendingPathComponent("summary.json"),
                           atomically: true, encoding: .utf8)
 
-        let report = GrokCostScanner.scanFull(
-            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        let report = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
         XCTAssertEqual(report.todayTokens, 1_000_000)
         XCTAssertEqual(report.todayUSD, 3.0, accuracy: 0.01) // 1M × $3 blended
         XCTAssertEqual(report.last30Tokens, 1_000_000)
@@ -531,10 +530,9 @@ final class NewProviderTests: XCTestCase {
     //
     // Root cause: `usageReport` hardcoded `liveScanSucceeded: true` because
     // `scanFull` never returns nil — so when `~/.grok/sessions` doesn't exist
-    // at all (Grok never installed), the UI showed a false "Live" badge and
-    // `loadSessions` pruned every persisted baseline. `scanFullIfAvailable`
-    // distinguishes "root missing" (nil, no baseline touch) from "root exists
-    // but has zero sessions" (a real, live-eligible zero report).
+    // at all (Grok never installed), the UI showed a false "Live" badge.
+    // `scanFullIfAvailable` distinguishes "root missing" (nil) from "root
+    // exists but has zero sessions" (a real, live-eligible zero report).
 
     /// A completely missing sessions root must return `nil` — not a
     /// zero-value report — so the caller can report `liveScanSucceeded: false`
@@ -565,64 +563,15 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(report?.isEmpty, true)
     }
 
-    /// A missing sessions root must never touch (create, overwrite, or
-    /// prune) the session baseline store — verified against a baseline file
-    /// that already has real content, which must survive the call
-    /// byte-for-byte.
-    func testScanFullIfAvailableNeverTouchesBaselineWhenRootMissing() throws {
-        let fm = FileManager.default
-        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try fm.createDirectory(at: base, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: base) }
-        let home = base.appendingPathComponent("missing-home", isDirectory: true) // never created
-        let baselineURL = base.appendingPathComponent("baselines.json")
-
-        GrokSessionBaselineStore.save(["sess-a": 1_234], keepKeys: ["sess-a"], url: baselineURL)
-        let before = try Data(contentsOf: baselineURL)
-
-        let report = GrokCostScanner.scanFullIfAvailable(
-            homeURL: home, now: Date(), baselineURL: baselineURL)
-
-        XCTAssertNil(report)
-        let after = try Data(contentsOf: baselineURL)
-        XCTAssertEqual(before, after)
-        XCTAssertEqual(GrokSessionBaselineStore.load(url: baselineURL)["sess-a"], 1_234)
-    }
-
-    /// Baseline store: load/save roundtrip + prune of deleted session keys.
-    func testGrokSessionBaselineStoreRoundtripAndPrune() throws {
-        let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("grok-session-baselines.json")
-
-        XCTAssertTrue(GrokSessionBaselineStore.load(url: url).isEmpty)
-
-        GrokSessionBaselineStore.save(
-            ["sess-a": 1000, "sess-b": 2000, "sess-gone": 999],
-            keepKeys: ["sess-a", "sess-b"],
-            url: url)
-
-        let loaded = GrokSessionBaselineStore.load(url: url)
-        XCTAssertEqual(loaded["sess-a"], 1000)
-        XCTAssertEqual(loaded["sess-b"], 2000)
-        XCTAssertNil(loaded["sess-gone"])
-
-        let attrs = try fm.attributesOfItem(atPath: url.path)
-        let perms = attrs[.posixPermissions] as? NSNumber
-        XCTAssertEqual(perms?.intValue, 0o600)
-    }
-
-    /// Delta attribution: second scan with same data is 0; growth only; dip
-    /// after compaction yields 0 and keeps max-seen baseline.
-    func testGrokCostScannerDeltaAttributionIdempotentAndDip() throws {
+    /// Full-T attribution (CodexBar/Linux): each scan reports the current
+    /// lifetime total, is idempotent across rescans, grows with T, and
+    /// follows compaction dips to the new snapshot T.
+    func testGrokCostScannerFullTIdempotentAndGrowth() throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let session = base.appendingPathComponent("sessions/proj/sess-delta")
+        let session = base.appendingPathComponent("sessions/proj/sess-full")
         try fm.createDirectory(at: session, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: base) }
-        let baselineURL = base.appendingPathComponent("baselines.json")
 
         let now = Date()
         let iso = ISO8601DateFormatter()
@@ -642,43 +591,71 @@ final class NewProviderTests: XCTestCase {
                               atomically: true, encoding: .utf8)
         }
 
-        // First scan: empty baseline → full lifetime.
         try writeSignals(before: 800_000, context: 200_000)
-        let first = GrokCostScanner.scanFull(
-            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
+        let first = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
         XCTAssertEqual(first.todayTokens, 1_000_000)
 
-        // Second scan, same T → delta 0 (idempotent).
-        let second = GrokCostScanner.scanFull(
-            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
-        XCTAssertEqual(second.todayTokens, 0)
-        XCTAssertEqual(second.last30Tokens, 0)
+        // Second scan, same T → same full lifetime (idempotent live report).
+        let second = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+        XCTAssertEqual(second.todayTokens, 1_000_000)
+        XCTAssertEqual(second.last30Tokens, 1_000_000)
 
-        // Growth: only the increase is counted.
+        // Growth: full current T, not only the increase.
         try writeSignals(before: 900_000, context: 300_000) // T = 1_200_000
-        let growth = GrokCostScanner.scanFull(
-            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
-        XCTAssertEqual(growth.todayTokens, 200_000)
+        let growth = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+        XCTAssertEqual(growth.todayTokens, 1_200_000)
 
-        // Dip after compaction (T shrinks) → delta 0; baseline stays max-seen.
-        try writeSignals(before: 1_100_000, context: 50_000) // T = 1_150_000 < 1_200_000
-        let dip = GrokCostScanner.scanFull(
-            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
-        XCTAssertEqual(dip.todayTokens, 0)
-        XCTAssertEqual(GrokSessionBaselineStore.load(url: baselineURL)["sess-delta"], 1_200_000)
+        // Dip after compaction: report current snapshot T (CodexBar).
+        try writeSignals(before: 1_100_000, context: 50_000) // T = 1_150_000
+        let dip = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+        XCTAssertEqual(dip.todayTokens, 1_150_000)
 
-        // Recover toward max-seen still yields 0 (already counted).
-        try writeSignals(before: 1_000_000, context: 200_000) // T = 1_200_000
-        let recover = GrokCostScanner.scanFull(
-            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
-        XCTAssertEqual(recover.todayTokens, 0)
+        // preferHigher on history keeps the prior high-water when live dips.
+        let histURL = base.appendingPathComponent("cost-history.json")
+        _ = CostHistoryStore.apply(
+            source: .grok,
+            liveDays: growth.daily.map {
+                ($0.date, $0.usd, $0.tokens,
+                 $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
+            },
+            now: now, windowDays: 90, url: histURL)
+        let afterDip = CostHistoryStore.apply(
+            source: .grok,
+            liveDays: dip.daily.map {
+                ($0.date, $0.usd, $0.tokens,
+                 $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
+            },
+            now: now, windowDays: 90, url: histURL)
+        XCTAssertEqual(afterDip.last?.tokens, 1_200_000)
+    }
 
-        // Climb past max-seen → only new growth.
-        try writeSignals(before: 1_000_000, context: 300_000) // T = 1_300_000
-        let climb = GrokCostScanner.scanFull(
-            homeURL: base, now: now, windowDays: 90, baselineURL: baselineURL)
-        XCTAssertEqual(climb.todayTokens, 100_000)
-        XCTAssertEqual(GrokSessionBaselineStore.load(url: baselineURL)["sess-delta"], 1_300_000)
+    /// Sum of two sessions' full T on the same last-active day.
+    func testGrokCostScannerSumsMultipleSessionsFullT() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: base) }
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let summary = """
+        {"current_model_id":"grok-4.5","last_active_at":"\(iso.string(from: now))"}
+        """
+
+        for (name, before, context) in [("a", 500_000, 100_000), ("b", 200_000, 50_000)] {
+            let session = base.appendingPathComponent("sessions/proj/\(name)")
+            try fm.createDirectory(at: session, withIntermediateDirectories: true)
+            try summary.write(to: session.appendingPathComponent("summary.json"),
+                              atomically: true, encoding: .utf8)
+            let signals = """
+            {"totalTokensBeforeCompaction":\(before),"contextTokensUsed":\(context),\
+            "modelsUsed":["grok-4.5"],"primaryModelId":"grok-4.5"}
+            """
+            try signals.write(to: session.appendingPathComponent("signals.json"),
+                              atomically: true, encoding: .utf8)
+        }
+
+        let report = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+        XCTAssertEqual(report.todayTokens, 850_000)
     }
 
     /// `replacingSource: true` on Grok clears inflated multi-day double-count
@@ -703,8 +680,8 @@ final class NewProviderTests: XCTestCase {
             ],
             now: now, calendar: cal, windowDays: 90, url: url)
 
-        // One-shot reset: empty baselines → delta = full lifetime once at
-        // last-active (today only). Atomic replace, no empty intermediate.
+        // One-shot reset: full-T once at last-active (today only).
+        // Atomic replace, no empty intermediate.
         let window = CostHistoryStore.apply(
             source: .grok,
             liveDays: [
