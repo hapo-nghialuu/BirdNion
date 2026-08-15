@@ -72,8 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Stable starting height for panel creation and the synchronous
     /// pre-expansion performed before the tall All tab starts laying out.
     private let initialTallTabSeedHeight: CGFloat = 640
-    /// Pixels the panel is nudged up toward the menu bar from its anchor.
-    private let topNudge: CGFloat = 10
+    /// Extra gap below the status-item button (negative = sit under the bar).
+    /// Keep ≤ 0 so the panel never climbs into the menu bar itself.
+    private let topNudge: CGFloat = 0
 
     // Menu bar frames: either the bird, or provider percent frames when
     // enabled in Display settings.
@@ -276,18 +277,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostingController.view.layoutSubtreeIfNeeded()
         let fittingHeight = max(1, hostingController.view.fittingSize.height)
 
-        // Anchor: just below the status item button, centered, nudged up.
+        // Anchor: just below the status item button, centered. Never place the
+        // panel top above `visibleFrame.maxY` (bottom of the menu bar) so the
+        // popover cannot cover menu-bar icons.
         let buttonRect = buttonWindow.convertToScreen(
             button.convert(button.bounds, to: nil)
         )
-        let topY = buttonRect.minY + topNudge
+        let screen = buttonWindow.screen ?? NSScreen.main
+        var topY = buttonRect.minY + topNudge
+        if let screen {
+            topY = min(topY, screen.visibleFrame.maxY)
+        }
         panelTopY = topY
         var originX = buttonRect.midX - panelWidth / 2
 
         // Clamp height to the visible screen below the menu-bar anchor so
         // tall content (e.g. All tab) scrolls instead of running off-screen.
         // Clamp horizontally so the panel stays on screen.
-        let screen = buttonWindow.screen ?? NSScreen.main
         let height = clampedHeight(fittingHeight: fittingHeight, top: topY, screen: screen)
         if let screen {
             let vf = screen.visibleFrame
