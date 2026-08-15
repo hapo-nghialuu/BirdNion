@@ -103,6 +103,9 @@ struct QuotaOverview: View {
                                 ClaudeCodeQuickApplyButton(providerID: s.id)
                                     .id("\(s.id)-\(claudeCodeTargetRevision)")
                             }
+                            if s.id == "claude" {
+                                ClaudeCodeProfileSwitchSection()
+                            }
                             // Claude-specific: 30-day chart + top-model line.
                             // Only rendered for the Claude tab so other providers
                             // don't pull in the local session scan.
@@ -124,6 +127,7 @@ struct QuotaOverview: View {
                             // Codex-specific: account list (click to reveal) +
                             // CLI switch. Below the chart per user preference.
                             if s.id == "codex" {
+                                CodexProfileSwitchSection()
                                 CodexAccountsPopoverSection()
                             }
                             // FreeModel: account switcher (per-browser sessions
@@ -2357,6 +2361,437 @@ struct ActionRow: View {
         }
         .buttonStyle(.plain)
         .disabled(isLoading)
+    }
+}
+
+// MARK: - AI coding profile quick switch
+
+/// Pure row state shared by the Claude Code and Codex profile switchers.
+/// Every value is derived from the real config writers and proxy runtime;
+/// there is no optimistic or separately persisted activation flag.
+enum ProfileSwitchHealth: Equatable {
+    case needsSetup
+    case ready
+    case active
+    case stale
+
+    static func claude(ready: Bool,
+                       sync: ClaudeCodeConfigWriter.SyncState,
+                       usesProxy: Bool,
+                       proxyRunning: Bool) -> Self {
+        guard ready else { return .needsSetup }
+        switch sync {
+        case .off:
+            return .ready
+        case .stale:
+            return .stale
+        case .synced:
+            return usesProxy && !proxyRunning ? .stale : .active
+        }
+    }
+
+    static func codex(ready: Bool,
+                      selected: Bool,
+                      applied: Bool,
+                      usesProxy: Bool,
+                      proxyRunning: Bool) -> Self {
+        guard ready else { return .needsSetup }
+        guard selected else { return applied ? .stale : .ready }
+        guard applied else { return .stale }
+        return usesProxy && !proxyRunning ? .stale : .active
+    }
+
+    var color: Color {
+        switch self {
+        case .active: return VocabbyTheme.success
+        case .stale: return VocabbyTheme.warningFill
+        case .needsSetup: return VocabbyTheme.blue
+        case .ready: return VocabbyTheme.secondary
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .active: return "checkmark.circle.fill"
+        case .stale: return "arrow.triangle.2.circlepath.circle.fill"
+        case .needsSetup: return "exclamationmark.circle.fill"
+        case .ready: return "circle"
+        }
+    }
+}
+
+private struct AICodingProfileSwitchHeader: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let count: Int
+    @Binding var revealed: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.blue)
+                .frame(width: 30, height: 30)
+                .background(VocabbyTheme.blue.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text("\(count)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(VocabbyTheme.segment))
+            Image(systemName: revealed ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { revealed.toggle() }
+        .pointingHandCursor()
+    }
+}
+
+private struct AICodingProfileSwitchRow: View {
+    let name: String
+    let target: String
+    let stateText: String
+    let health: ProfileSwitchHealth
+    let busy: Bool
+    let actionsDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: health.icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(health.color)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.primary)
+                        .lineLimit(1)
+                    Text(target)
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 6)
+                if busy {
+                    ProgressView().controlSize(.small).tint(VocabbyTheme.blue)
+                } else {
+                    Text(stateText)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(health.color)
+                }
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(actionsDisabled || health == .active)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(name), \(stateText), \(target)")
+    }
+}
+
+/// Central switcher for custom Claude Code profiles. Preset-provider quick
+/// apply cards remain on their own provider tabs; this card owns only custom
+/// profiles and therefore does not duplicate an action on the Claude tab.
+struct ClaudeCodeProfileSwitchSection: View {
+    @EnvironmentObject var config: ConfigService
+    @EnvironmentObject var settings: SettingsStore
+    @ObservedObject private var localProxy = EmbeddedCLIProxyService.shared
+
+    @State private var profiles: [BirdNionConfigStore.ClaudeCodeProfile] = []
+    @State private var revealed = false
+    @State private var busyID: String?
+    @State private var errorText: String?
+
+    var body: some View {
+        Group {
+            if !profiles.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    AICodingProfileSwitchHeader(
+                        icon: "terminal",
+                        title: L10n.t("claudeCode.quickCard.title", settings.appLanguage),
+                        subtitle: activeProfileName ?? L10n.t("ccx.custom", settings.appLanguage),
+                        count: profiles.count,
+                        revealed: $revealed
+                    )
+                    if revealed {
+                        Divider().overlay(VocabbyTheme.border).padding(.vertical, 6)
+                        ForEach(profiles) { profile in
+                            let health = health(for: profile)
+                            AICodingProfileSwitchRow(
+                                name: profileName(profile),
+                                target: targetLabel(for: profile),
+                                stateText: stateLabel(health),
+                                health: health,
+                                busy: busyID == profile.id,
+                                actionsDisabled: busyID != nil,
+                                action: { activate(profile, health: health) }
+                            )
+                        }
+                        if let errorText {
+                            Text(errorText)
+                                .font(.system(size: 10))
+                                .foregroundStyle(VocabbyTheme.critical)
+                                .lineLimit(2)
+                                .padding(.top, 4)
+                        }
+                    }
+                }
+                .vocabbyCard()
+            }
+        }
+        .onAppear(perform: reload)
+    }
+
+    private var activeProfileName: String? {
+        profiles.first(where: { health(for: $0) == .active }).map(profileName)
+    }
+
+    private func health(for profile: BirdNionConfigStore.ClaudeCodeProfile) -> ProfileSwitchHealth {
+        guard let scope = scope(for: profile) else { return .needsSetup }
+        let ready = ClaudeCodeConfigWriter.isReady(profile)
+        let sync = ready
+            ? ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: scope, using: config)
+            : .off
+        return .claude(
+            ready: ready,
+            sync: sync,
+            usesProxy: profile.usesEmbeddedCLIProxy,
+            proxyRunning: EmbeddedCLIProxyService.isProfileRunning(
+                profile, runtimeState: localProxy.runtimeState)
+        )
+    }
+
+    private func activate(_ profile: BirdNionConfigStore.ClaudeCodeProfile,
+                          health: ProfileSwitchHealth) {
+        guard busyID == nil, health != .active else { return }
+        guard let targetScope = scope(for: profile), health != .needsSetup else {
+            openSettings()
+            return
+        }
+        busyID = profile.id
+        errorText = nil
+        Task { @MainActor in
+            do {
+                var prepared = profile
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(prepared)
+                if prepared.usesEmbeddedCLIProxy,
+                   !EmbeddedCLIProxyService.isProfileRunning(
+                       prepared, runtimeState: localProxy.runtimeState) {
+                    prepared = try await localProxy.prepare(profile: prepared)
+                }
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(prepared)
+                try ClaudeCodeConfigWriter.apply(
+                    profile: prepared, scope: targetScope, using: config)
+                if !prepared.usesEmbeddedCLIProxy {
+                    localProxy.deactivateForDirectUpstream()
+                }
+            } catch let error as EmbeddedCLIProxyService.ServiceError {
+                errorText = L10n.t(error.localizationKey, settings.appLanguage)
+            } catch {
+                errorText = error.localizedDescription
+            }
+            reload()
+            busyID = nil
+        }
+    }
+
+    private func scope(for profile: BirdNionConfigStore.ClaudeCodeProfile)
+    -> ClaudeCodeConfigWriter.Scope? {
+        guard profile.claudeCodeScope == "project" else { return .global }
+        guard let path = cleaned(profile.claudeCodeProjectPath) else { return nil }
+        return .project(URL(fileURLWithPath: path))
+    }
+
+    private func targetLabel(for profile: BirdNionConfigStore.ClaudeCodeProfile) -> String {
+        guard let targetScope = scope(for: profile) else {
+            return L10n.t("claudeCode.quickCard.projectTargetMissing", settings.appLanguage)
+        }
+        let path = ClaudeCodeConfigWriter.targetURL(scope: targetScope, config: config).path
+        return displayPath(path)
+    }
+
+    private func stateLabel(_ health: ProfileSwitchHealth) -> String {
+        switch health {
+        case .active: return L10n.t("codexConfig.state.active", settings.appLanguage)
+        case .ready: return L10n.t("codexConfig.state.ready", settings.appLanguage)
+        case .stale: return L10n.t("codexConfig.state.stale", settings.appLanguage)
+        case .needsSetup: return L10n.t("codexConfig.state.setup", settings.appLanguage)
+        }
+    }
+
+    private func profileName(_ profile: BirdNionConfigStore.ClaudeCodeProfile) -> String {
+        cleaned(profile.name) ?? String(profile.id.prefix(8))
+    }
+
+    private func reload() {
+        profiles = BirdNionConfigStore.claudeCodeProfiles()
+    }
+
+    private func openSettings() {
+        NotificationCenter.default.post(name: .openSettings, object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            NotificationCenter.default.post(name: .openClaudeCodeTab, object: nil)
+        }
+    }
+
+    private func cleaned(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    private func displayPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        guard path.hasPrefix(home + "/") else { return path }
+        return "~" + String(path.dropFirst(home.count))
+    }
+}
+
+/// Switcher for BirdNion-managed Codex CLI profiles. Native OAuth account
+/// switching remains a separate card because it changes authentication,
+/// whereas this card changes the CLI backend/model configuration.
+struct CodexProfileSwitchSection: View {
+    @EnvironmentObject var settings: SettingsStore
+    @ObservedObject private var localProxy = EmbeddedCLIProxyService.shared
+
+    @State private var profiles: [BirdNionConfigStore.CodexProfile] = []
+    @State private var activeID: String?
+    @State private var revealed = false
+    @State private var busyID: String?
+    @State private var errorText: String?
+
+    var body: some View {
+        Group {
+            if !profiles.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    AICodingProfileSwitchHeader(
+                        icon: "chevron.left.forwardslash.chevron.right",
+                        title: L10n.t("codexConfig.target", settings.appLanguage),
+                        subtitle: activeProfileName ?? L10n.t("ccx.custom", settings.appLanguage),
+                        count: profiles.count,
+                        revealed: $revealed
+                    )
+                    if revealed {
+                        Divider().overlay(VocabbyTheme.border).padding(.vertical, 6)
+                        ForEach(profiles) { profile in
+                            let health = health(for: profile)
+                            AICodingProfileSwitchRow(
+                                name: profileName(profile),
+                                target: L10n.t("codexConfig.target.path", settings.appLanguage),
+                                stateText: stateLabel(health),
+                                health: health,
+                                busy: busyID == profile.id,
+                                actionsDisabled: busyID != nil,
+                                action: { activate(profile, health: health) }
+                            )
+                        }
+                        if let errorText {
+                            Text(errorText)
+                                .font(.system(size: 10))
+                                .foregroundStyle(VocabbyTheme.critical)
+                                .lineLimit(2)
+                                .padding(.top, 4)
+                        }
+                    }
+                }
+                .vocabbyCard()
+            }
+        }
+        .onAppear(perform: reload)
+    }
+
+    private var activeProfileName: String? {
+        profiles.first(where: { health(for: $0) == .active }).map(profileName)
+    }
+
+    private func health(for profile: BirdNionConfigStore.CodexProfile) -> ProfileSwitchHealth {
+        .codex(
+            ready: profile.hasUpstreamConfiguration,
+            selected: activeID == profile.id,
+            applied: CodexConfigWriter.isApplied(profile),
+            usesProxy: profile.usesEmbeddedCLIProxy,
+            proxyRunning: EmbeddedCLIProxyService.isProfileRunning(
+                profile, runtimeState: localProxy.runtimeState)
+        )
+    }
+
+    private func activate(_ profile: BirdNionConfigStore.CodexProfile,
+                          health: ProfileSwitchHealth) {
+        guard busyID == nil, health != .active else { return }
+        guard health != .needsSetup else {
+            openSettings()
+            return
+        }
+        busyID = profile.id
+        errorText = nil
+        Task { @MainActor in
+            do {
+                var prepared = profile
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(prepared)
+                if prepared.usesEmbeddedCLIProxy {
+                    prepared = try await localProxy.prepare(codexProfile: prepared)
+                    try EmbeddedCLIProxyService.requireCurrentActivationProfile(prepared)
+                    try CodexConfigWriter.apply(profile: prepared)
+                } else {
+                    prepared.cliProxyAppliedSignature = nil
+                    try BirdNionConfigStore.saveCodexProfile(prepared)
+                    try CodexConfigWriter.apply(profile: prepared)
+                    try await localProxy.deactivateCodexProxyProfiles()
+                    try EmbeddedCLIProxyService.requireCurrentActivationProfile(prepared)
+                }
+                _ = try? CodexConfigWriter.writeProfileFile(for: prepared)
+            } catch let error as EmbeddedCLIProxyService.ServiceError {
+                errorText = L10n.t(error.localizationKey, settings.appLanguage)
+            } catch {
+                errorText = error.localizedDescription
+            }
+            reload()
+            busyID = nil
+        }
+    }
+
+    private func stateLabel(_ health: ProfileSwitchHealth) -> String {
+        switch health {
+        case .active: return L10n.t("codexConfig.state.active", settings.appLanguage)
+        case .ready: return L10n.t("codexConfig.state.ready", settings.appLanguage)
+        case .stale: return L10n.t("codexConfig.state.stale", settings.appLanguage)
+        case .needsSetup: return L10n.t("codexConfig.state.setup", settings.appLanguage)
+        }
+    }
+
+    private func profileName(_ profile: BirdNionConfigStore.CodexProfile) -> String {
+        let trimmed = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? String(profile.id.prefix(8)) : trimmed
+    }
+
+    private func reload() {
+        profiles = BirdNionConfigStore.codexProfiles()
+        activeID = CodexConfigWriter.activeProfileID()
+    }
+
+    private func openSettings() {
+        NotificationCenter.default.post(name: .openSettings, object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            NotificationCenter.default.post(name: .openClaudeCodeTab, object: nil)
+        }
     }
 }
 

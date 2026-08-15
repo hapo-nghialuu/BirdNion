@@ -285,6 +285,16 @@ async fn fetch_cookie_enrichment(cfg: &config::Provider) -> Option<Value> {
 }
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
+    // Bind the observation to the account selected when this existing fetch
+    // starts. Snapshot persistence is best-effort and never changes the fetch
+    // result or starts an additional request.
+    let account_id = codex_accounts::active_id();
+    let status = fetch_uncached(cfg).await;
+    let _ = codex_accounts::save_snapshot(&account_id, &status);
+    status
+}
+
+async fn fetch_uncached(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     let path = auth_file_path();
 

@@ -262,6 +262,26 @@ enum ClaudeCodeConfigWriter {
         try deactivate(scope: scope, using: config)
     }
 
+    /// Removes this profile's managed Claude Code block only when the complete
+    /// env spec still matches. A `.stale` state is deliberately left alone:
+    /// ownership cannot be proven from a shared base URL after values drift.
+    /// Exact duplicate specs at the same target are also ambiguous, so callers
+    /// pass them as competitors and deletion stays non-destructive.
+    @MainActor
+    @discardableResult
+    static func deactivateIfInstalled(profile: BirdNionConfigStore.ClaudeCodeProfile,
+                                      scope: Scope,
+                                      using config: ConfigService,
+                                      competingSpecsAtTarget: [EnvSpec] = []) throws -> Bool {
+        guard let expected = spec(forProfile: profile),
+              syncState(spec: expected, scope: scope, using: config) == .synced,
+              !competingSpecsAtTarget.contains(expected) else {
+            return false
+        }
+        try deactivate(profile: profile, scope: scope, using: config)
+        return true
+    }
+
     // MARK: - Import from pasted JSON
 
     enum ImportError: Error, Equatable {

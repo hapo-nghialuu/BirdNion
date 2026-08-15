@@ -20,9 +20,11 @@
 //! managed account by copying `auth.json`, mirroring `promoteSystem()`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::config;
+use crate::providers::{self, ProviderStatus};
 
 pub const SYSTEM_ID: &str = "system";
 
@@ -49,6 +51,21 @@ struct Stored {
     accounts: Vec<Entry>,
 }
 
+/// Last observed quota and health for one Codex account. Quota values are
+/// last-good: a failed scan updates health without discarding usable quota.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuotaSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_pct: Option<i32>,
+    #[serde(default)]
+    pub last_checked: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+}
+
 fn support_dir() -> PathBuf {
     // Sibling of settings.json (same directory config::config_path() resolves
     // its parent to), keeping every BirdNion app-state file under one root.
@@ -64,6 +81,69 @@ fn accounts_root_dir() -> PathBuf {
 
 fn metadata_path() -> PathBuf {
     support_dir().join("codex-accounts.json")
+}
+
+fn snapshots_path() -> PathBuf {
+    support_dir().join("codex-account-snapshots.json")
+}
+
+/// Missing or corrupt snapshots are non-fatal: this file is only a popover
+/// cache, never an authentication or routing source of truth.
+pub fn quota_snapshots() -> HashMap<String, AccountQuotaSnapshot> {
+    std::fs::read_to_string(snapshots_path())
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+fn persist_snapshots(
+    snapshots: &HashMap<String, AccountQuotaSnapshot>,
+) -> Result<(), String> {
+    std::fs::create_dir_all(support_dir()).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(snapshots).map_err(|e| e.to_string())?;
+    std::fs::write(snapshots_path(), json).map_err(|e| e.to_string())
+}
+
+/// Persist the result of an already-completed Codex provider fetch. No new
+/// request is initiated here. A failure keeps the last-good quota but records
+/// the current actionable error classification.
+pub fn save_snapshot(account_id: &str, status: &ProviderStatus) -> Result<(), String> {
+    let mut snapshots = quota_snapshots();
+    let previous = snapshots.get(account_id).cloned().unwrap_or_default();
+    let lowest = status.windows.iter().min_by_key(|window| window.remaining_pct);
+
+    let snapshot = if let Some(raw_error) = status.error.as_deref() {
+        AccountQuotaSnapshot {
+            label: previous.label,
+            remaining_pct: previous.remaining_pct,
+            last_checked: status.last_updated,
+            error_kind: providers::error_classifier::classify(Some(raw_error))
+                .map(|kind| kind.key_suffix().to_string()),
+        }
+    } else if let Some(window) = lowest {
+        AccountQuotaSnapshot {
+            label: Some(window.label.clone()),
+            remaining_pct: Some(window.remaining_pct.clamp(0, 100)),
+            last_checked: status.last_updated,
+            error_kind: None,
+        }
+    } else {
+        AccountQuotaSnapshot {
+            last_checked: status.last_updated,
+            error_kind: None,
+            ..previous
+        }
+    };
+
+    snapshots.insert(account_id.to_string(), snapshot);
+    persist_snapshots(&snapshots)
+}
+
+fn prune_snapshot(account_id: &str) {
+    let mut snapshots = quota_snapshots();
+    if snapshots.remove(account_id).is_some() {
+        let _ = persist_snapshots(&snapshots);
+    }
 }
 
 pub fn home_dir_for_account(id: &str) -> PathBuf {
@@ -233,6 +313,7 @@ pub fn remove(id: &str) -> Result<(), String> {
     if active_id() == id {
         set_active(SYSTEM_ID)?;
     }
+    prune_snapshot(id);
     Ok(())
 }
 
@@ -266,6 +347,7 @@ pub(crate) fn uuid_v4() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::QuotaWindow;
 
     // Shared process-wide lock (config.rs) — freemodel_accounts tests touch
     // the same BIRDNION_CONFIG env var.
@@ -276,6 +358,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn quota_status(remaining_pct: i32, checked_at: i64) -> ProviderStatus {
+        ProviderStatus {
+            id: "codex".into(),
+            display_name: "Codex".into(),
+            windows: vec![QuotaWindow {
+                label: "Week".into(),
+                used_pct: 100 - remaining_pct,
+                remaining_pct,
+                subtitle: None,
+                resets_at: None,
+                window_seconds: None,
+                semantic_key: None,
+                semantic_kind: None,
+            }],
+            last_updated: checked_at,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn quota_snapshots_missing_file_is_empty() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let base = temp_config_dir("snapshot-missing");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        assert!(quota_snapshots().is_empty());
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn quota_snapshot_roundtrip_success() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let base = temp_config_dir("snapshot-roundtrip");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        save_snapshot("account-1", &quota_status(42, 123)).unwrap();
+        let snapshot = quota_snapshots().remove("account-1").unwrap();
+        assert_eq!(snapshot.label.as_deref(), Some("Week"));
+        assert_eq!(snapshot.remaining_pct, Some(42));
+        assert_eq!(snapshot.last_checked, 123);
+        assert_eq!(snapshot.error_kind, None);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn failed_snapshot_preserves_last_good_quota_and_updates_health() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let base = temp_config_dir("snapshot-error");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        save_snapshot("account-1", &quota_status(55, 100)).unwrap();
+        let mut failure = ProviderStatus::failure(
+            "codex",
+            "Codex",
+            "Token Codex hết hạn — chạy codex để đăng nhập lại",
+        );
+        failure.last_updated = 200;
+        save_snapshot("account-1", &failure).unwrap();
+
+        let snapshot = quota_snapshots().remove("account-1").unwrap();
+        assert_eq!(snapshot.label.as_deref(), Some("Week"));
+        assert_eq!(snapshot.remaining_pct, Some(55));
+        assert_eq!(snapshot.last_checked, 200);
+        assert_eq!(snapshot.error_kind.as_deref(), Some("tokenInvalidOrMissing"));
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn remove_prunes_quota_snapshot() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let base = temp_config_dir("snapshot-prune");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        save_snapshot("managed-1", &quota_status(70, 100)).unwrap();
+        assert!(quota_snapshots().contains_key("managed-1"));
+        remove("managed-1").unwrap();
+        assert!(!quota_snapshots().contains_key("managed-1"));
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

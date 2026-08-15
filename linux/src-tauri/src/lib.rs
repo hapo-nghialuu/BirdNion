@@ -328,11 +328,16 @@ fn claude_code_profile_remove_env(profile_id: String) -> Result<bool, String> {
 struct CodexAccountsState {
     accounts: Vec<codex_accounts::CodexAccount>,
     active_id: String,
+    quota_snapshots: HashMap<String, codex_accounts::AccountQuotaSnapshot>,
 }
 
 #[tauri::command]
 fn codex_accounts_list() -> CodexAccountsState {
-    CodexAccountsState { accounts: codex_accounts::all_accounts(), active_id: codex_accounts::active_id() }
+    CodexAccountsState {
+        accounts: codex_accounts::all_accounts(),
+        active_id: codex_accounts::active_id(),
+        quota_snapshots: codex_accounts::quota_snapshots(),
+    }
 }
 
 /// "Lưu account hiện tại" — copies the current system `~/.codex/auth.json`

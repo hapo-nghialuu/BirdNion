@@ -561,6 +561,34 @@ final class ClaudeCodeTests: XCTestCase {
     }
 
     @MainActor
+    func testActivationGuardRejectsRemovedOrChangedClaudeProfile() throws {
+        let captured = openAIProfile()
+        let configURL = tempDir().appendingPathComponent("settings.json")
+        try BirdNionConfigStore.saveClaudeCodeProfile(captured, url: configURL)
+
+        XCTAssertTrue(EmbeddedCLIProxyService.activationProfileIsCurrent(
+            captured, in: [captured]))
+        XCTAssertNoThrow(try EmbeddedCLIProxyService.requireCurrentActivationProfile(
+            captured, configURL: configURL))
+
+        try BirdNionConfigStore.removeClaudeCodeProfile(id: captured.id, url: configURL)
+        XCTAssertThrowsError(try EmbeddedCLIProxyService.requireCurrentActivationProfile(
+            captured, configURL: configURL)) { error in
+            XCTAssertEqual(error as? EmbeddedCLIProxyService.ServiceError,
+                           .profileChangedDuringActivation)
+        }
+
+        var changed = captured
+        changed.token = "changed-while-activation-was-suspended"
+        try BirdNionConfigStore.saveClaudeCodeProfile(changed, url: configURL)
+        XCTAssertThrowsError(try EmbeddedCLIProxyService.requireCurrentActivationProfile(
+            captured, configURL: configURL)) { error in
+            XCTAssertEqual(error as? EmbeddedCLIProxyService.ServiceError,
+                           .profileChangedDuringActivation)
+        }
+    }
+
+    @MainActor
     func testLocalProxyStopOnlyMatchesBirdNionManagedHelper() {
         let configURL = URL(fileURLWithPath: "/tmp/birdnion/cli-proxy-api/config.yaml")
 
@@ -735,6 +763,68 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertTrue(env?.isEmpty ?? false)   // env cleared
         XCTAssertNil(root["apiKeyHelper"])
         XCTAssertNotNil(root["permissions"])   // top-level preserved
+    }
+
+    @MainActor
+    func testDeactivateIfInstalledOnlyClearsUnambiguousSyncedProfile() throws {
+        let config = ConfigService(homeOverride: tempDir())
+        var profile = freeModelProfile()
+        try ClaudeCodeConfigWriter.apply(profile: profile, scope: .global, using: config)
+
+        XCTAssertTrue(try ClaudeCodeConfigWriter.deactivateIfInstalled(
+            profile: profile, scope: .global, using: config))
+        var root = try readJSON(config.activePath)
+        XCTAssertTrue((root["env"] as? [String: Any])?.isEmpty ?? false)
+
+        try ClaudeCodeConfigWriter.apply(profile: profile, scope: .global, using: config)
+        profile.token = "changed-after-apply"
+        XCTAssertEqual(
+            ClaudeCodeConfigWriter.syncState(forProfile: profile, scope: .global, using: config),
+            .stale
+        )
+        XCTAssertFalse(try ClaudeCodeConfigWriter.deactivateIfInstalled(
+            profile: profile, scope: .global, using: config))
+
+        root = try readJSON(config.activePath)
+        var env = root["env"] as? [String: Any]
+        XCTAssertEqual(env?["ANTHROPIC_API_KEY"] as? String, "fe_oa_abc")
+
+        profile.token = "fe_oa_abc"
+        var duplicate = profile
+        duplicate.id = "duplicate"
+        XCTAssertFalse(try ClaudeCodeConfigWriter.deactivateIfInstalled(
+            profile: profile,
+            scope: .global,
+            using: config,
+            competingSpecsAtTarget: [try XCTUnwrap(
+                ClaudeCodeConfigWriter.spec(forProfile: duplicate)
+            )]
+        ))
+
+        var other = freeModelProfile()
+        other.id = "other"
+        other.baseURL = "https://other.example.dev"
+        try ClaudeCodeConfigWriter.apply(profile: other, scope: .global, using: config)
+        XCTAssertFalse(try ClaudeCodeConfigWriter.deactivateIfInstalled(
+            profile: profile, scope: .global, using: config))
+        root = try readJSON(config.activePath)
+        env = root["env"] as? [String: Any]
+        XCTAssertEqual(env?["ANTHROPIC_BASE_URL"] as? String, "https://other.example.dev")
+    }
+
+    func testClaudeProfileSwitchHealthUsesWriterAndProxySignals() {
+        XCTAssertEqual(ProfileSwitchHealth.claude(
+            ready: false, sync: .off, usesProxy: false, proxyRunning: false), .needsSetup)
+        XCTAssertEqual(ProfileSwitchHealth.claude(
+            ready: true, sync: .off, usesProxy: false, proxyRunning: false), .ready)
+        XCTAssertEqual(ProfileSwitchHealth.claude(
+            ready: true, sync: .stale, usesProxy: false, proxyRunning: false), .stale)
+        XCTAssertEqual(ProfileSwitchHealth.claude(
+            ready: true, sync: .synced, usesProxy: false, proxyRunning: false), .active)
+        XCTAssertEqual(ProfileSwitchHealth.claude(
+            ready: true, sync: .synced, usesProxy: true, proxyRunning: false), .stale)
+        XCTAssertEqual(ProfileSwitchHealth.claude(
+            ready: true, sync: .synced, usesProxy: true, proxyRunning: true), .active)
     }
 
     func testProfileCRUD() throws {

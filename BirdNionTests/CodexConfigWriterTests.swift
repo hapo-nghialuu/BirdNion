@@ -124,6 +124,36 @@ final class CodexConfigWriterTests: XCTestCase {
         XCTAssertFalse(EmbeddedCLIProxyService.isProfileRunning(direct, runtimeState: .running))
     }
 
+    @MainActor
+    func testActivationGuardRejectsRemovedOrChangedCodexProfile() throws {
+        let captured = profile(protocolValue: .openAIChat, connection: .localProxy)
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-activation-\(UUID().uuidString)/settings.json")
+        defer { try? FileManager.default.removeItem(at: configURL.deletingLastPathComponent()) }
+        try BirdNionConfigStore.saveCodexProfile(captured, url: configURL)
+
+        XCTAssertTrue(EmbeddedCLIProxyService.activationProfileIsCurrent(
+            captured, in: [captured]))
+        XCTAssertNoThrow(try EmbeddedCLIProxyService.requireCurrentActivationProfile(
+            captured, configURL: configURL))
+
+        try BirdNionConfigStore.removeCodexProfile(id: captured.id, url: configURL)
+        XCTAssertThrowsError(try EmbeddedCLIProxyService.requireCurrentActivationProfile(
+            captured, configURL: configURL)) { error in
+            XCTAssertEqual(error as? EmbeddedCLIProxyService.ServiceError,
+                           .profileChangedDuringActivation)
+        }
+
+        var changed = captured
+        changed.apiKey = "changed-while-activation-was-suspended"
+        try BirdNionConfigStore.saveCodexProfile(changed, url: configURL)
+        XCTAssertThrowsError(try EmbeddedCLIProxyService.requireCurrentActivationProfile(
+            captured, configURL: configURL)) { error in
+            XCTAssertEqual(error as? EmbeddedCLIProxyService.ServiceError,
+                           .profileChangedDuringActivation)
+        }
+    }
+
     func testResponsesProxyWritesResponsesUpstreamFormat() throws {
         var profile = profile(protocolValue: .responses, connection: .localProxy)
         profile.cliProxyAppliedSignature = profile.cliProxyConfigurationSignature
@@ -379,5 +409,34 @@ final class CodexConfigWriterTests: XCTestCase {
         XCTAssertNil(CodexConfigWriter.profileFlag(forProfileID: p.id, configURL: url))
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: url.deletingLastPathComponent().appendingPathComponent("bn-virouter.config.toml").path))
+    }
+
+    func testActivationHealthRequiresRunningProxyOnlyForProxyProfiles() {
+        XCTAssertTrue(CodexProfileActivationCard.isCurrentlyHealthy(
+            applied: true, usesEmbeddedProxy: false, proxyIsRunning: false))
+        XCTAssertTrue(CodexProfileActivationCard.isCurrentlyHealthy(
+            applied: true, usesEmbeddedProxy: true, proxyIsRunning: true))
+        XCTAssertFalse(CodexProfileActivationCard.isCurrentlyHealthy(
+            applied: true, usesEmbeddedProxy: true, proxyIsRunning: false))
+        XCTAssertFalse(CodexProfileActivationCard.isCurrentlyHealthy(
+            applied: false, usesEmbeddedProxy: false, proxyIsRunning: true))
+    }
+
+    func testCodexProfileSwitchHealthUsesSelectionApplyAndProxySignals() {
+        XCTAssertEqual(ProfileSwitchHealth.codex(
+            ready: false, selected: false, applied: false,
+            usesProxy: false, proxyRunning: false), .needsSetup)
+        XCTAssertEqual(ProfileSwitchHealth.codex(
+            ready: true, selected: false, applied: false,
+            usesProxy: false, proxyRunning: false), .ready)
+        XCTAssertEqual(ProfileSwitchHealth.codex(
+            ready: true, selected: true, applied: false,
+            usesProxy: false, proxyRunning: false), .stale)
+        XCTAssertEqual(ProfileSwitchHealth.codex(
+            ready: true, selected: true, applied: true,
+            usesProxy: true, proxyRunning: false), .stale)
+        XCTAssertEqual(ProfileSwitchHealth.codex(
+            ready: true, selected: true, applied: true,
+            usesProxy: true, proxyRunning: true), .active)
     }
 }

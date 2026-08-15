@@ -57,6 +57,14 @@ struct CodexProfileActivationCard: View {
     let onDeactivate: () -> Void
     let onDelete: () -> Void
 
+    /// Pure health mapping for `current`: a direct connection is healthy once
+    /// applied, but an embedded-proxy connection also needs the loopback
+    /// proxy process to actually be alive — otherwise the card would read
+    /// "Active" while Codex CLI calls silently fail against a dead proxy.
+    static func isCurrentlyHealthy(applied: Bool, usesEmbeddedProxy: Bool, proxyIsRunning: Bool) -> Bool {
+        applied && (!usesEmbeddedProxy || proxyIsRunning)
+    }
+
     var body: some View {
         SettingsCard(header: header ?? L10n.t("codexConfig.target", lang)) {
             HStack(spacing: 12) {

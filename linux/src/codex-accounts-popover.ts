@@ -3,13 +3,13 @@
 // "Tài khoản" + active label + count badge + chevron), expandable rows with
 // radio + switch + trash for managed accounts, and "Lưu account hiện tại".
 //
-// Quota badge: macOS reads CodexAccountSnapshotStore for per-account remaining
-// %; Linux has no snapshot store yet, so every row shows "—" (tertiary). Do
-// not block this feature on missing badge data.
+// Quota/health badge: passive snapshots are written by the existing Codex
+// refresh. Accounts never scanned on this machine still show "—".
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { t } from "./i18n";
+import { quotaTone } from "./provider-tab";
 import { settingsIcon } from "./settings-icons";
 
 /** Same name as settings-tab's PROVIDERS_CHANGED_EVENT (avoid circular import). */
@@ -17,7 +17,17 @@ const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 const EXPAND_KEY = "birdnion.codexAccountsExpanded";
 
 type CodexAccount = { id: string; email?: string | null; isSystem: boolean; homePath?: string | null };
-type CodexAccountsState = { accounts: CodexAccount[]; activeId: string };
+type AccountQuotaSnapshot = {
+  label?: string | null;
+  remainingPct?: number | null;
+  lastChecked: number;
+  errorKind?: string | null;
+};
+type CodexAccountsState = {
+  accounts: CodexAccount[];
+  activeId: string;
+  quotaSnapshots: Record<string, AccountQuotaSnapshot>;
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -29,6 +39,12 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 function accountLabel(account: CodexAccount): string {
   if (account.isSystem) return account.email?.trim() || t("codexAccountSystem");
   return account.email?.trim() || account.id;
+}
+
+function checkedSuffix(snapshot: AccountQuotaSnapshot): string {
+  if (!Number.isFinite(snapshot.lastChecked) || snapshot.lastChecked <= 0) return "";
+  const checked = new Date(snapshot.lastChecked * 1000).toLocaleString();
+  return ` · ${t("lastUpdated", { time: checked })}`;
 }
 
 /** Collapsible Codex accounts card for the popover. `onResize` fires when the
@@ -98,9 +114,31 @@ export function codexAccountsPopoverCard(onResize: () => void, onSwitched: () =>
       ));
       row.append(nameCol);
 
-      // Per-account quota: Linux has no snapshot store — always "—".
-      const quota = el("span", "fm-pop-quota", "—");
-      quota.title = t("codexAccountQuotaMissing");
+      // Passive per-account snapshot: updated only by the normal Codex fetch.
+      // Current health outranks a last-good percentage when the latest fetch
+      // failed; the backend keeps that percentage for the next success.
+      const snapshot = state.quotaSnapshots?.[account.id];
+      const remaining = snapshot?.remainingPct;
+      let quotaClass = "fm-pop-quota";
+      let quotaText = "—";
+      let quotaTitle = t("codexAccountQuotaMissing");
+      if (snapshot?.errorKind) {
+        quotaClass += " error";
+        quotaText = "!";
+        quotaTitle = `${t(`providerError.${snapshot.errorKind}.title`)} · ${t(`providerError.${snapshot.errorKind}.hint`)}`;
+        quotaTitle += checkedSuffix(snapshot);
+      } else if (typeof remaining === "number" && Number.isFinite(remaining)) {
+        const pct = Math.max(0, Math.min(100, Math.round(remaining)));
+        quotaClass += ` ${quotaTone(pct)}`;
+        quotaText = `${pct}%`;
+        quotaTitle = t("codexAccountQuotaHelp", {
+          label: snapshot.label?.trim() || "Codex",
+          n: pct,
+        }) + checkedSuffix(snapshot);
+      }
+      const quota = el("span", quotaClass, quotaText);
+      quota.title = quotaTitle;
+      quota.setAttribute("aria-label", quotaTitle);
       row.append(quota);
 
       if (isActive) {

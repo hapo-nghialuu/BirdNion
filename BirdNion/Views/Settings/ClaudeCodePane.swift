@@ -167,6 +167,7 @@ struct ClaudeCodePane: View {
             titleVisibility: .visible
         ) {
             Button(L10n.t("ccx.delete", lang), role: .destructive) { deleteProfile() }
+                .disabled(busy)
             Button(L10n.t("ccx.pasteJSON.cancel", lang), role: .cancel) {}
         } message: {
             Text(L10n.f("ccx.delete.confirmMessage", lang, workingProfileDisplayName))
@@ -563,6 +564,7 @@ struct ClaudeCodePane: View {
                     Button(role: .destructive) { showingDeleteProfileConfirmation = true } label: {
                         Label(L10n.t("ccx.delete", lang), systemImage: "trash")
                     }
+                    .disabled(busy)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -609,7 +611,11 @@ struct ClaudeCodePane: View {
                 return profilePowerState(for: profile, scope: currentScope()) == .on
             case .codex:
                 guard let codex = workingCodexProfile else { return false }
-                return activeCodexProfileID == codex.id && CodexConfigWriter.isApplied(codex)
+                return activeCodexProfileID == codex.id
+                    && CodexProfileActivationCard.isCurrentlyHealthy(
+                        applied: CodexConfigWriter.isApplied(codex),
+                        usesEmbeddedProxy: codex.usesEmbeddedCLIProxy,
+                        proxyIsRunning: EmbeddedCLIProxyService.isProfileRunning(codex, runtimeState: localProxy.runtimeState))
             }
         }()
 
@@ -722,7 +728,10 @@ struct ClaudeCodePane: View {
             CodexProfileActivationCard(
                 profile: codex,
                 active: activeCodexProfileID == codex.id,
-                current: CodexConfigWriter.isApplied(codex),
+                current: CodexProfileActivationCard.isCurrentlyHealthy(
+                    applied: CodexConfigWriter.isApplied(codex),
+                    usesEmbeddedProxy: codex.usesEmbeddedCLIProxy,
+                    proxyIsRunning: EmbeddedCLIProxyService.isProfileRunning(codex, runtimeState: localProxy.runtimeState)),
                 lang: lang,
                 busy: busy,
                 header: stepTitle(hasProxy ? 5 : 4, "codexConfig.target"),
@@ -984,7 +993,9 @@ struct ClaudeCodePane: View {
         busy = true
         Task { @MainActor in
             do {
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                 let prepared = try await localProxy.prepare(codexProfile: profile)
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(prepared)
                 workingCodexProfile = prepared
                 // A proxy restart rotates the local bearer; keep an existing
                 // overlay file in sync so --profile runs don't hit 401s.
@@ -1017,14 +1028,17 @@ struct ClaudeCodePane: View {
         busy = true
         Task { @MainActor in
             do {
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                 if profile.usesEmbeddedCLIProxy {
                     profile = try await localProxy.prepare(codexProfile: profile)
+                    try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                     try CodexConfigWriter.apply(profile: profile)
                 } else {
                     profile.cliProxyAppliedSignature = nil
                     try BirdNionConfigStore.saveCodexProfile(profile)
                     try CodexConfigWriter.apply(profile: profile)
                     try await localProxy.deactivateCodexProxyProfiles()
+                    try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                 }
                 workingCodexProfile = profile
                 // Refresh the per-project overlay file alongside the global
@@ -1057,13 +1071,17 @@ struct ClaudeCodePane: View {
         busy = true
         Task { @MainActor in
             do {
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                 _ = try CodexConfigWriter.deactivate()
                 profile.cliProxyAppliedSignature = nil
                 try BirdNionConfigStore.saveCodexProfile(profile)
                 try await localProxy.deactivateCodexProxyProfiles()
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                 workingCodexProfile = profile
                 reloadCodexProfiles()
                 statusMessage = L10n.t("codexConfig.deactivated", lang)
+            } catch let error as EmbeddedCLIProxyService.ServiceError {
+                errorMessage = embeddedCLIProxyErrorMessage(error)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -1937,9 +1955,23 @@ struct ClaudeCodePane: View {
     /// custom record does not exist — only the derived Codex record and its
     /// provider link are removed.
     private func deleteProfile() {
+        guard !busy else { return }
         do {
             if let id = selectedProfileID {
-                let codexID = profiles.first(where: { $0.id == id })?.codexProfileID
+                let selectedProfile = profiles.first(where: { $0.id == id })
+                let codexID = selectedProfile?.codexProfileID
+                if let selectedProfile {
+                    let targetScope = scope(for: selectedProfile)
+                    _ = try ClaudeCodeConfigWriter.deactivateIfInstalled(
+                        profile: selectedProfile,
+                        scope: targetScope,
+                        using: config,
+                        competingSpecsAtTarget: competingSpecs(
+                            excluding: selectedProfile.id,
+                            at: targetScope
+                        )
+                    )
+                }
                 try BirdNionConfigStore.removeClaudeCodeProfile(id: id)
                 if let codexID {
                     if activeCodexProfileID == codexID { _ = try? CodexConfigWriter.deactivate() }
@@ -1972,6 +2004,29 @@ struct ClaudeCodePane: View {
         }
     }
 
+    /// Other configured entries that could own the exact same target block.
+    /// Passing these to the writer prevents an ambiguous delete from clearing
+    /// a still-active profile with identical settings.
+    private func competingSpecs(
+        excluding profileID: String,
+        at targetScope: ClaudeCodeConfigWriter.Scope
+    ) -> [ClaudeCodeConfigWriter.EnvSpec] {
+        let target = ClaudeCodeConfigWriter.targetURL(scope: targetScope, config: config)
+            .standardizedFileURL
+        let custom = profiles.compactMap { profile -> ClaudeCodeConfigWriter.EnvSpec? in
+            guard profile.id != profileID,
+                  ClaudeCodeConfigWriter.targetURL(scope: scope(for: profile), config: config)
+                    .standardizedFileURL == target else { return nil }
+            return ClaudeCodeConfigWriter.spec(forProfile: profile)
+        }
+        let presets = providers.compactMap { provider -> ClaudeCodeConfigWriter.EnvSpec? in
+            guard ClaudeCodeConfigWriter.targetURL(scope: scope(forProvider: provider), config: config)
+                .standardizedFileURL == target else { return nil }
+            return ClaudeCodeConfigWriter.spec(forProvider: provider)
+        }
+        return custom + presets
+    }
+
     private func startLocalProxy() {
         guard var profile = workingProfile else { return }
         customFeedbackTarget = .proxy
@@ -1985,9 +2040,11 @@ struct ClaudeCodePane: View {
         busy = true
         Task { @MainActor in
             do {
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                 profile = profileWithCurrentTarget(profile)
                 try BirdNionConfigStore.saveClaudeCodeProfile(profile)
                 profile = try await EmbeddedCLIProxyService.shared.prepare(profile: profile)
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                 workingProfile = profile
                 reloadProfiles()
                 statusMessage = L10n.t("ccx.proxy.started", lang)
@@ -2057,7 +2114,9 @@ struct ClaudeCodePane: View {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             do {
-                var profile = profileWithCurrentTarget(profile)
+                var profile = profile
+                try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
+                profile = profileWithCurrentTarget(profile)
                 try BirdNionConfigStore.saveClaudeCodeProfile(profile)  // persist edits
                 if state == .on {
                     try ClaudeCodeConfigWriter.deactivate(profile: profile, scope: sc, using: config)
@@ -2069,6 +2128,7 @@ struct ClaudeCodePane: View {
                     if profile.usesEmbeddedCLIProxy,
                        (localProxy.runtimeState != .running || !profile.isCLIProxyConfigurationCurrent) {
                         profile = try await EmbeddedCLIProxyService.shared.prepare(profile: profile)
+                        try EmbeddedCLIProxyService.requireCurrentActivationProfile(profile)
                         workingProfile = profile
                     }
                     try ClaudeCodeConfigWriter.apply(profile: profile, scope: sc, using: config)
@@ -2140,11 +2200,7 @@ struct ClaudeCodePane: View {
     }
 
     private func embeddedCLIProxyErrorMessage(_ error: EmbeddedCLIProxyService.ServiceError) -> String {
-        switch error {
-        case .incompleteConfiguration: return L10n.t("ccx.proxy.error.incomplete", lang)
-        case .helperUnavailable: return L10n.t("ccx.proxy.error.helperUnavailable", lang)
-        case .didNotStart: return L10n.t("ccx.proxy.error.didNotStart", lang)
-        }
+        L10n.t(error.localizationKey, lang)
     }
 
     private func providerName(_ p: BirdNionConfigStore.Provider) -> String {

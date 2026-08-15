@@ -11,6 +11,16 @@ final class EmbeddedCLIProxyService: ObservableObject {
         case incompleteConfiguration
         case helperUnavailable
         case didNotStart
+        case profileChangedDuringActivation
+
+        var localizationKey: String {
+            switch self {
+            case .incompleteConfiguration: return "ccx.proxy.error.incomplete"
+            case .helperUnavailable: return "ccx.proxy.error.helperUnavailable"
+            case .didNotStart: return "ccx.proxy.error.didNotStart"
+            case .profileChangedDuringActivation: return "ccx.proxy.error.profileChanged"
+            }
+        }
     }
 
     static let shared = EmbeddedCLIProxyService()
@@ -25,17 +35,26 @@ final class EmbeddedCLIProxyService: ObservableObject {
     func prepare(profile: BirdNionConfigStore.ClaudeCodeProfile) async throws
     -> BirdNionConfigStore.ClaudeCodeProfile {
         guard profile.hasUpstreamConfiguration else { throw ServiceError.incompleteConfiguration }
+        try Self.requireCurrentActivationProfile(profile)
         runtimeState = .starting
         do {
             let prepared = try prepareClaudeProfile(replacing: profile)
             let activeCodex = Self.activeCodexProfiles(from: BirdNionConfigStore.codexProfiles())
             try await reload(claudeProfiles: [prepared], codexProfiles: activeCodex)
 
+            guard Self.activationProfileIsCurrent(
+                prepared, in: BirdNionConfigStore.claudeCodeProfiles()) else {
+                throw ServiceError.profileChangedDuringActivation
+            }
+
             var applied = prepared
             applied.cliProxyAppliedSignature = applied.cliProxyConfigurationSignature
             try BirdNionConfigStore.saveClaudeCodeProfile(applied)
             runtimeState = .running
             return applied
+        } catch let error as ServiceError where error == .profileChangedDuringActivation {
+            await reconcileStoredProfiles()
+            throw error
         } catch {
             runtimeState = .failed
             throw error
@@ -45,17 +64,26 @@ final class EmbeddedCLIProxyService: ObservableObject {
     func prepare(codexProfile: BirdNionConfigStore.CodexProfile) async throws
     -> BirdNionConfigStore.CodexProfile {
         guard codexProfile.hasUpstreamConfiguration else { throw ServiceError.incompleteConfiguration }
+        try Self.requireCurrentActivationProfile(codexProfile)
         runtimeState = .starting
         do {
             let prepared = try prepareCodexProfile(replacing: codexProfile)
             let activeClaude = Self.activeClaudeProfiles(from: BirdNionConfigStore.claudeCodeProfiles())
             try await reload(claudeProfiles: activeClaude, codexProfiles: [prepared])
 
+            guard Self.activationProfileIsCurrent(
+                prepared, in: BirdNionConfigStore.codexProfiles()) else {
+                throw ServiceError.profileChangedDuringActivation
+            }
+
             var applied = prepared
             applied.cliProxyAppliedSignature = applied.cliProxyConfigurationSignature
             try BirdNionConfigStore.saveCodexProfile(applied)
             runtimeState = .running
             return applied
+        } catch let error as ServiceError where error == .profileChangedDuringActivation {
+            await reconcileStoredProfiles()
+            throw error
         } catch {
             runtimeState = .failed
             throw error
@@ -190,11 +218,10 @@ final class EmbeddedCLIProxyService: ObservableObject {
     private func prepareClaudeProfile(replacing profile: BirdNionConfigStore.ClaudeCodeProfile) throws
     -> BirdNionConfigStore.ClaudeCodeProfile {
         var profiles = BirdNionConfigStore.claudeCodeProfiles()
-        if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
-            profiles[index] = profile
-        } else {
-            profiles.append(profile)
+        guard let profileIndex = profiles.firstIndex(where: { $0.id == profile.id }) else {
+            throw ServiceError.profileChangedDuringActivation
         }
+        profiles[profileIndex] = profile
 
         let sharedManagementKey = sharedManagementKey(
             excludingClaudeProfileID: profile.id,
@@ -231,11 +258,10 @@ final class EmbeddedCLIProxyService: ObservableObject {
     private func prepareCodexProfile(replacing profile: BirdNionConfigStore.CodexProfile) throws
     -> BirdNionConfigStore.CodexProfile {
         var profiles = BirdNionConfigStore.codexProfiles()
-        if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
-            profiles[index] = profile
-        } else {
-            profiles.append(profile)
+        guard let profileIndex = profiles.firstIndex(where: { $0.id == profile.id }) else {
+            throw ServiceError.profileChangedDuringActivation
         }
+        profiles[profileIndex] = profile
 
         let managementKey = sharedManagementKey(
             excludingCodexProfileID: profile.id,
@@ -314,6 +340,39 @@ final class EmbeddedCLIProxyService: ObservableObject {
     static func activeCodexProfiles(from profiles: [BirdNionConfigStore.CodexProfile])
     -> [BirdNionConfigStore.CodexProfile] {
         profiles.filter { $0.usesEmbeddedCLIProxy && $0.isCLIProxyConfigurationCurrent }
+    }
+
+    /// Async activation may resume after Settings edited or deleted its source
+    /// profile. Exact snapshot equality rejects both deletion and stale writes;
+    /// checking only the id would still let an older task overwrite newer edits.
+    static func activationProfileIsCurrent<Profile>(
+        _ profile: Profile,
+        in storedProfiles: [Profile]
+    ) -> Bool where Profile: Identifiable & Equatable, Profile.ID == String {
+        guard let stored = storedProfiles.first(where: { $0.id == profile.id }) else {
+            return false
+        }
+        return stored == profile
+    }
+
+    static func requireCurrentActivationProfile(
+        _ profile: BirdNionConfigStore.ClaudeCodeProfile,
+        configURL: URL = BirdNionConfigStore.configURL()
+    ) throws {
+        guard activationProfileIsCurrent(
+            profile, in: BirdNionConfigStore.claudeCodeProfiles(url: configURL)) else {
+            throw ServiceError.profileChangedDuringActivation
+        }
+    }
+
+    static func requireCurrentActivationProfile(
+        _ profile: BirdNionConfigStore.CodexProfile,
+        configURL: URL = BirdNionConfigStore.configURL()
+    ) throws {
+        guard activationProfileIsCurrent(
+            profile, in: BirdNionConfigStore.codexProfiles(url: configURL)) else {
+            throw ServiceError.profileChangedDuringActivation
+        }
     }
 
     /// A profile created before the dedicated port must be re-applied so its
