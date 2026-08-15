@@ -109,6 +109,7 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 - [x] [both] Digest tuần qua notification: rolling 7 ngày so với 7 ngày trước, top source/model, forecast; mặc định OFF và cảnh báo khi có nguồn dùng dữ liệu cũ
 - [x] [macOS] Quick switch custom Claude/Codex profile từ popover, kèm source/login health và activation fail-closed nếu profile bị sửa/xóa giữa `await`
 - [x] [Linux] Codex account quick switch hiển thị last-good quota + health snapshot thụ động, không thêm polling
+- [x] [both] First-provider onboarding Claude/Codex/Grok: phát hiện nguồn an toàn → bật và lưu → self-test thật → quota live; có Retry/Fix trong Settings và popover — 2026-08-15
 - [ ] [Linux] Custom Claude/Codex profile quick switch trong popover — deferred/accepted gap cho tới khi UX macOS ổn định
 - [ ] [both] Budget **per-provider** — chưa làm; budget tổng hiện tại không thay thế giới hạn riêng từng provider
 - [ ] [both] Export CSV/JSON chi phí theo ngày/model — deferred, ngoài scope đợt 2026-08-15
@@ -140,7 +141,7 @@ Chọn một hướng khi Phase 7–8 xong:
 
 | Date | Milestone |
 |---|---|
-| 2026-08-15 | Phase 8 in progress: Data Confidence, total monthly budget + forecast, profile quick switch/health, adaptive refresh và weekly digest trên macOS/Linux; CSV/JSON, per-provider budget và Windows vẫn deferred |
+| 2026-08-15 | Phase 8 in progress: thêm first-provider onboarding Claude/Codex/Grok trên macOS/Linux; Data Confidence, total monthly budget + forecast, profile quick switch/health, adaptive refresh và weekly digest đã có; CSV/JSON, per-provider budget và Windows vẫn deferred |
 | 2026-07-31 | 4 tính năng CodexBar: menu-bar metric resolver, bounded Codex cost scan (120 ngày, resumable), xAI Platform provider, Claude prepaid credits + Max multiplier |
 | 2026-07-07 | v0.8.6 — Settings parity CodexBar (hotkey, update check, storage footprint…) |
 | 2026-07-06 | Per-model breakdown tab All + fix drag-reorder + fix token clobber |

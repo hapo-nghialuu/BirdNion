@@ -112,7 +112,15 @@ struct ProvidersPane: View {
             // falls back to the canonical 7-provider list, but we still
             // want a fresh read so toggles from another pane propagate.
             rows = BirdNionConfigStore.allProviders()
-            if selectedID == nil { selectedID = rows.first?.id }
+            if selectedID == nil {
+                let routed = UserDefaults.standard.string(forKey: "birdnion.selectedProvider")
+                selectedID = rows.contains(where: { $0.id == routed }) ? routed : rows.first?.id
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openProviderSetup)) { note in
+            guard let id = note.object as? String,
+                  rows.contains(where: { $0.id == id }) else { return }
+            selectedID = id
         }
         .task(id: selectedID) {
             // Stale self-test results don't carry across provider switches.
@@ -188,6 +196,46 @@ struct ProvidersPane: View {
         case idle, running, pass
         case fail(kind: ProviderErrorKind, raw: String)
     }
+
+    enum OnboardingPhase: Equatable {
+        case needsSource, readyToTest, testing, live, failed
+    }
+
+    struct OnboardingDetection: Equatable {
+        let isReady: Bool
+        let source: String
+    }
+
+    static func onboardingDetection(
+        hasPrimary: Bool,
+        primaryLabel: String,
+        hasSecondary: Bool,
+        secondaryLabel: String,
+        fallbackLabel: String
+    ) -> OnboardingDetection {
+        OnboardingDetection(
+            isReady: hasPrimary || hasSecondary,
+            source: hasPrimary ? primaryLabel : hasSecondary ? secondaryLabel : fallbackLabel)
+    }
+
+    static func onboardingPhase(
+        testState: SelfTestState,
+        statusHasError: Bool,
+        statusHasQuota: Bool,
+        detectionReady: Bool
+    ) -> OnboardingPhase {
+        switch testState {
+        case .running: return .testing
+        case .pass: return .live
+        case .fail: return .failed
+        case .idle: break
+        }
+        if statusHasError { return .failed }
+        if statusHasQuota { return .live }
+        return detectionReady ? .readyToTest : .needsSource
+    }
+
+    static let onboardingProviderIDs: Set<String> = ["claude", "codex", "grok"]
 
     @State var selfTestState: [String: SelfTestState] = [:]
 

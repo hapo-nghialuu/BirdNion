@@ -186,4 +186,38 @@ final class ProviderStatusTests: XCTestCase {
         XCTAssertNil(copy.serviceStatus)
         XCTAssertNil(copy.serviceStatusLevel)
     }
+
+    func testOnboardingDetectionPrefersPrimaryWithoutReadingSecrets() {
+        let primary = ProvidersPane.onboardingDetection(
+            hasPrimary: true, primaryLabel: "Login file",
+            hasSecondary: true, secondaryLabel: "CLI", fallbackLabel: "None")
+        let secondary = ProvidersPane.onboardingDetection(
+            hasPrimary: false, primaryLabel: "Login file",
+            hasSecondary: true, secondaryLabel: "CLI", fallbackLabel: "None")
+        let missing = ProvidersPane.onboardingDetection(
+            hasPrimary: false, primaryLabel: "Login file",
+            hasSecondary: false, secondaryLabel: "CLI", fallbackLabel: "None")
+
+        XCTAssertEqual(primary, .init(isReady: true, source: "Login file"))
+        XCTAssertEqual(secondary, .init(isReady: true, source: "CLI"))
+        XCTAssertEqual(missing, .init(isReady: false, source: "None"))
+    }
+
+    func testOnboardingPhaseRequiresRealQuotaOrPassingSelfTestForLive() {
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .idle, statusHasError: false,
+            statusHasQuota: false, detectionReady: false), .needsSource)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .idle, statusHasError: false,
+            statusHasQuota: false, detectionReady: true), .readyToTest)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .running, statusHasError: false,
+            statusHasQuota: false, detectionReady: true), .testing)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .idle, statusHasError: true,
+            statusHasQuota: false, detectionReady: true), .failed)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .pass, statusHasError: false,
+            statusHasQuota: false, detectionReady: true), .live)
+    }
 }

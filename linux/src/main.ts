@@ -16,7 +16,7 @@ import { codexAccountsPopoverCard } from "./codex-accounts-popover";
 import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
-import { t } from "./i18n";
+import { currentLang, t } from "./i18n";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
@@ -106,8 +106,9 @@ let loadInFlight = false;
 /** Ignore focus-triggered refresh for a short window after opening Settings. */
 let suppressFocusRefreshUntil = 0;
 
-function openSettings(section?: string) {
+function openSettings(section?: string, providerId?: string) {
   if (section) localStorage.setItem("birdnion.settingsSection", section);
+  if (providerId) localStorage.setItem("birdnion.selectedProvider", providerId);
   // Opening Settings steals focus from main — don't immediately re-load main.
   suppressFocusRefreshUntil = Date.now() + 1500;
   void invoke("open_settings_window").catch((err) => {
@@ -555,6 +556,20 @@ function render() {
   const body = el("div", "app-body");
   app.append(body);
 
+  if (state.loadedOnce && state.statuses.length === 0) {
+    const connect = el("section", "card first-provider-cta");
+    connect.append(
+      el("div", "first-provider-title", currentLang() === "vi" ? "Kết nối provider đầu tiên" : "Connect your first provider"),
+      el("div", "first-provider-body", currentLang() === "vi"
+        ? "Phát hiện nguồn đăng nhập, chạy kiểm tra thật và hiển thị quota live."
+        : "Detect a sign-in source, run a real test, and show live quota."),
+    );
+    const button = el("button", "save-button", currentLang() === "vi" ? "Kết nối provider" : "Connect provider");
+    button.addEventListener("click", () => openSettings("providers", "claude"));
+    connect.append(button);
+    body.append(connect);
+  }
+
   if (state.tab === "all") {
     const pending = pendingScanSources();
     if (!state.claude && !state.codex && !state.grok) {
@@ -582,7 +597,11 @@ function render() {
   } else {
     const status = state.statuses.find((s) => s.id === state.tab);
     if (status) {
-      body.append(providerCard(status));
+      body.append(providerCard(
+        status,
+        () => { void refetchProvider(status.id); },
+        () => openSettings("providers", status.id),
+      ));
       void claudeCodeQuickApplyCard(status, () => openSettings("claudeCode"))
         .then((card) => {
           // Insert after the full provider stack (header + body cards).

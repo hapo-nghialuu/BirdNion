@@ -46,7 +46,9 @@ struct SettingsSceneRoot: View {
     @EnvironmentObject var config: ConfigService
     @EnvironmentObject var quota: QuotaService
 
-    @State private var selected: SettingsTab = .general
+    @State private var selected: SettingsTab =
+        UserDefaults.standard.string(forKey: "birdnion.settingsSection") == "providers"
+            ? .providers : .general
 
     /// One constant window size for all tabs — wide enough for the providers
     /// sidebar + detail, still fine for the single-column tabs. This MUST stay
@@ -81,6 +83,10 @@ struct SettingsSceneRoot: View {
         .onReceive(NotificationCenter.default.publisher(for: .openProvidersTab)) { _ in
             selected = .providers
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openProviderSetup)) { _ in
+            UserDefaults.standard.set("providers", forKey: "birdnion.settingsSection")
+            selected = .providers
+        }
     }
 
     /// Standard row for single-column tabs: nav-only sidebar + content pane.
@@ -96,6 +102,15 @@ struct SettingsSceneRoot: View {
 extension Notification.Name {
     /// Kept for existing quick-apply callers; the route now opens AI Coding.
     static let openClaudeCodeTab = Notification.Name("birdnion.openClaudeCodeTab")
+    static let openProviderSetup = Notification.Name("birdnion.openProviderSetup")
+}
+
+@MainActor
+func openProviderSettings(_ id: String) {
+    UserDefaults.standard.set("providers", forKey: "birdnion.settingsSection")
+    UserDefaults.standard.set(id, forKey: "birdnion.selectedProvider")
+    NotificationCenter.default.post(name: .openProviderSetup, object: id)
+    NotificationCenter.default.post(name: .openSettings, object: nil)
 }
 
 private struct SettingsWindowAppearanceView: NSViewRepresentable {

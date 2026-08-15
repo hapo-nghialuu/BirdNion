@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { t } from "./i18n";
+import { currentLang, t } from "./i18n";
 import { claudeCodeCard, shouldShowClaudeCode } from "./claude-code";
 import { isProviderStorageEnabled, isHidePersonalInfo } from "./settings-about";
 import { logoMark } from "./logos";
@@ -319,7 +319,11 @@ function providerHeaderCard(status: ProviderStatus): HTMLElement {
 }
 
 /** macOS `ProviderCard` — summary strip + divider + window rows (or error). */
-function providerBodyCard(status: ProviderStatus): HTMLElement {
+function providerBodyCard(
+  status: ProviderStatus,
+  onRetry?: () => void,
+  onFix?: () => void,
+): HTMLElement {
   const card = el("section", "card provider-body-card");
 
   if (status.pending) {
@@ -328,6 +332,15 @@ function providerBodyCard(status: ProviderStatus): HTMLElement {
   }
   if (status.error) {
     card.append(el("div", "provider-error", status.error));
+    if (["claude", "codex", "grok"].includes(status.id)) {
+      const actions = el("div", "provider-error-actions");
+      const retry = el("button", "sw-pill-btn", currentLang() === "vi" ? "Thử lại" : "Retry");
+      retry.addEventListener("click", () => onRetry?.());
+      const fix = el("button", "sw-pill-btn", currentLang() === "vi" ? "Sửa" : "Fix");
+      fix.addEventListener("click", () => onFix?.());
+      actions.append(retry, fix);
+      card.append(actions);
+    }
     return card;
   }
   if (status.windows.length === 0) {
@@ -370,10 +383,14 @@ function providerBodyCard(status: ProviderStatus): HTMLElement {
  * Full provider tab stack — macOS VStack of ProviderHeaderCard + ProviderCard.
  * Returns a wrapper so Claude Code card can insert after the whole stack.
  */
-export function providerCard(status: ProviderStatus): HTMLElement {
+export function providerCard(
+  status: ProviderStatus,
+  onRetry?: () => void,
+  onFix?: () => void,
+): HTMLElement {
   const stack = el("div", "provider-stack");
   stack.append(providerHeaderCard(status));
-  stack.append(providerBodyCard(status));
+  stack.append(providerBodyCard(status, onRetry, onFix));
   return stack;
 }
 

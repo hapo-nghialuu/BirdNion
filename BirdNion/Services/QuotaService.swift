@@ -135,6 +135,22 @@ final class QuotaService: ObservableObject {
         rebuildDisplayStatuses()
     }
 
+    /// Publishes the result of an explicit Settings self-test immediately so
+    /// onboarding can transition to live quota without waiting for the poller.
+    func applySelfTestStatus(_ status: ProviderStatus) {
+        guard providers.contains(where: { $0.id == status.id }) else { return }
+        if let index = statuses.firstIndex(where: { $0.id == status.id }) {
+            statuses[index] = status
+        } else {
+            statuses.append(status)
+        }
+        let byID = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
+        statuses = providers.compactMap { byID[$0.id] }
+        providerLastFetched[status.id] = Date()
+        rebuildDisplayStatuses()
+        persistStatuses()
+    }
+
     private func cleanupRemovedProvider(_ id: String) {
         failureNotificationRemove(Self.failureNotificationID(for: id))
         legacyFailureNotificationCleanup(id)

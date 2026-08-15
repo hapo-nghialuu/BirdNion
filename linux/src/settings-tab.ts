@@ -18,6 +18,10 @@ import {
  * popover can rebuild tab strip order (macOS `.birdnionProvidersChanged`). */
 export const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 
+type OnboardingDetection = { isReady: boolean; source: string };
+type OnboardingTestState = "idle" | "testing" | "live" | "failed";
+const ONBOARDING_IDS = new Set(["claude", "codex", "grok"]);
+
 async function persistProvidersAndNotify(settings: Settings): Promise<void> {
   await invoke("save_settings", { settings });
   await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
@@ -80,6 +84,8 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     || "claude";
   let searchQuery = "";
   let statuses: ProviderStatus[] = [];
+  const detections = new Map<string, OnboardingDetection>();
+  const onboardingTests = new Map<string, OnboardingTestState>();
 
   const root = el("div", "pp-root");
   const sidebar = el("div", "pp-sidebar");
@@ -237,6 +243,68 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     const enabled = cfg.enabled === true;
     const scroll = el("div", "pp-detail-scroll");
 
+    const runConnectionTest = async () => {
+      if (onboardingTests.get(selectedId) === "testing") return;
+      onboardingTests.set(selectedId, "testing");
+      renderDetail();
+      try {
+        cfg.enabled = true;
+        await persistProvidersAndNotify(settings);
+        const result = await invoke<ProviderStatus>("test_provider", { id: selectedId });
+        const index = statuses.findIndex((item) => item.id === selectedId);
+        if (index >= 0) statuses[index] = result;
+        else statuses.push(result);
+        onboardingTests.set(selectedId, result.error || result.windows.length === 0 ? "failed" : "live");
+        renderSidebar();
+        onSaved();
+      } catch {
+        onboardingTests.set(selectedId, "failed");
+      }
+      renderDetail();
+    };
+
+    const onboardingCard = (): HTMLElement | null => {
+      if (!ONBOARDING_IDS.has(selectedId)) return null;
+      const detection = detections.get(selectedId) ?? { isReady: false, source: "" };
+      const explicit = onboardingTests.get(selectedId) ?? "idle";
+      const phase: OnboardingTestState | "needsSource" | "readyToTest" =
+        explicit !== "idle" ? explicit
+          : st?.error ? "failed"
+          : st && st.windows.length > 0 ? "live"
+          : detection.isReady ? "readyToTest" : "needsSource";
+      const labels: Record<string, string> = {
+        needsSource: vi ? "Chưa phát hiện nguồn đăng nhập" : "No sign-in source detected",
+        readyToTest: vi ? `Đã phát hiện ${detection.source}` : `Detected ${detection.source}`,
+        testing: vi ? "Đang kiểm tra kết nối thật…" : "Testing the real connection…",
+        live: vi ? "Quota đang live" : "Quota is live",
+        failed: vi ? "Kết nối cần được sửa" : "Connection needs attention",
+      };
+      const group = el("div", "sw-group pp-onboarding");
+      group.append(el("div", "sw-section-header", vi ? "KẾT NỐI PROVIDER" : "CONNECT PROVIDER"));
+      const card = el("div", "sw-card pp-onboarding-card");
+      const status = el("div", `pp-onboarding-status ${phase}`, labels[phase]);
+      const note = el("div", "pp-field-hint",
+        vi
+          ? "BirdNion chỉ đánh dấu Live sau khi provider trả quota thật. Không sao chép hoặc hiển thị token."
+          : "BirdNion marks Live only after the provider returns real quota. Tokens are never copied or displayed.");
+      const actions = el("div", "pp-onboarding-actions");
+      const connect = el("button", "save-button",
+        phase === "failed" ? (vi ? "Thử lại" : "Retry") : (vi ? "Kết nối & kiểm tra" : "Connect & test"));
+      connect.toggleAttribute("disabled", phase === "testing");
+      connect.addEventListener("click", () => { void runConnectionTest(); });
+      actions.append(connect);
+      if (phase === "needsSource" || phase === "failed") {
+        const fix = el("button", "sw-pill-btn", vi ? "Sửa thiết lập" : "Fix setup");
+        fix.addEventListener("click", () => {
+          scroll.querySelector(".pp-setup-wrap")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        actions.append(fix);
+      }
+      card.append(status, note, actions);
+      group.append(card);
+      return group;
+    };
+
     // Header card — macOS detailHeader: logo + name + "version • updated"
     // subtitle + self-test (inline result) + reload + enable switch.
     const head = el("div", "sw-card pp-head-card");
@@ -257,11 +325,12 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
       testResult.textContent = t("provider.selfTest.running");
       try {
         const res = await invoke<ProviderStatus>("test_provider", { id: selectedId });
-        if (res.error) {
-          const suffix = (await invoke<string | null>("classify_provider_error", { raw: res.error }).catch(() => null)) ?? "unknown";
+        if (res.error || res.windows.length === 0) {
+          const raw = res.error || (vi ? "Provider không trả dữ liệu quota." : "Provider returned no quota data.");
+          const suffix = (await invoke<string | null>("classify_provider_error", { raw }).catch(() => null)) ?? "unknown";
           testResult.className = "pp-selftest-result fail";
           testResult.textContent = `${t("provider.selfTest.fail")} — ${t(`providerError.${suffix}.hint`)}`;
-          testResult.title = displayError(res.error);
+          testResult.title = displayError(raw);
         } else {
           testResult.className = "pp-selftest-result pass";
           testResult.textContent = t("provider.selfTest.pass");
@@ -296,6 +365,9 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     head.append(headRow);
     head.append(testResult);
     scroll.append(head);
+
+    const onboarding = onboardingCard();
+    if (onboarding) scroll.append(onboarding);
 
     // macOS detail-column order: info grid → usage → setup → (codex
     // accounts card) → warnings → links.
@@ -347,6 +419,11 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
   // Initial paint + background status fetch
   renderSidebar();
   renderDetail();
+  for (const id of ONBOARDING_IDS) {
+    void invoke<OnboardingDetection>("provider_onboarding_detection", { id })
+      .then((result) => { detections.set(id, result); if (id === selectedId) renderDetail(); })
+      .catch(() => {});
+  }
   void refreshStatuses().then(() => { renderSidebar(); renderDetail(); });
 
   return root;

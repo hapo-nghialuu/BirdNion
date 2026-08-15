@@ -537,6 +537,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // so popover tabs + menu-bar percent candidates reflect the new order, then
         // refresh statuses so the tab data is fresh too.
         services.rebuildProviders()
+        // Onboarding immediately runs its own user-initiated provider fetch
+        // and publishes that result. Avoid racing it with a duplicate full
+        // refresh while still rebuilding tabs synchronously.
+        if notification.object as? String == "onboardingSelfTest" { return }
         Task { @MainActor in
             // Force a genuine fetch (bypass per-provider interval throttles) and
             // mark it manual — same as the popup/header refresh button. Without

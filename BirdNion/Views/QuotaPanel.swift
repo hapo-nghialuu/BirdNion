@@ -869,6 +869,7 @@ struct XAISpendCard: View {
 /// by the parent so it can sit as its own mockup-style card above this one.
 struct ProviderCard: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
 
     let status: ProviderStatus
 
@@ -893,14 +894,28 @@ struct ProviderCard: View {
         // Design: windows list under hairline; optional CREDITS last row.
         VStack(alignment: .leading, spacing: 0) {
             if let err = status.error {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(VocabbyTheme.critical)
-                    Text(L10n.providerText(err, preference: settings.appLanguage))
-                        .font(.plexSans(11))
-                        .foregroundStyle(VocabbyTheme.critical)
-                        .lineLimit(2)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(VocabbyTheme.critical)
+                        Text(L10n.providerText(err, preference: settings.appLanguage))
+                            .font(.plexSans(11))
+                            .foregroundStyle(VocabbyTheme.critical)
+                            .lineLimit(2)
+                    }
+                    if ProvidersPane.onboardingProviderIDs.contains(status.id) {
+                        HStack(spacing: 8) {
+                            Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Thử lại" : "Retry") {
+                                Task { await quota.refresh(forceProviderIDs: [status.id]) }
+                            }
+                            .controlSize(.small)
+                            Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Sửa" : "Fix") {
+                                openProviderSettings(status.id)
+                            }
+                            .controlSize(.small)
+                        }
+                    }
                 }
                 .popoverContentInset()
                 .padding(.vertical, 10)
@@ -3788,9 +3803,9 @@ struct EmptyProvidersState: View {
             // notification the "Settings…" row below uses, so the click
             // reliably triggers `AppDelegate.openSettings(_:)`.
             Button {
-                NotificationCenter.default.post(name: .openSettings, object: nil)
+                openProviderSettings("claude")
             } label: {
-                Text(L10n.t("popover.openSettings", settings.appLanguage))
+                Text(L10n.languageCode(settings.appLanguage) == "vi" ? "Kết nối provider" : "Connect provider")
                     .font(.plexSans(13, weight: .semibold))
                     .padding(.horizontal, 18)
                     .padding(.vertical, 4)

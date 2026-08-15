@@ -54,6 +54,126 @@ private extension View {
 // MARK: - Provider detail shell (P4 module split)
 
 extension ProvidersPane {
+    func onboardingDetection(for id: String) -> OnboardingDetection {
+        let env = ProcessInfo.processInfo.environment
+        let fm = FileManager.default
+        switch id {
+        case "claude":
+            let home = env["HOME"] ?? NSHomeDirectory()
+            let file = URL(fileURLWithPath: home)
+                .appendingPathComponent(ClaudeOAuthStore.credentialsRelativePath)
+            let hasFile = fm.fileExists(atPath: file.path)
+            let hasCLI = ClaudeCLIResolver.isAvailable(environment: env)
+            return Self.onboardingDetection(
+                hasPrimary: hasFile, primaryLabel: "Claude Code",
+                hasSecondary: hasCLI, secondaryLabel: "Claude CLI",
+                fallbackLabel: "Claude Code / CLI")
+        case "codex":
+            let hasFile = fm.fileExists(atPath: CodexAuthStore.authFileURL(env: env).path)
+            let hasCLI = CodexAccountStore.codexBinary() != nil
+            return Self.onboardingDetection(
+                hasPrimary: hasFile, primaryLabel: "Codex login",
+                hasSecondary: hasCLI, secondaryLabel: "Codex CLI",
+                fallbackLabel: "Codex login / CLI")
+        case "grok":
+            let configuredHome = env["GROK_HOME"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let root = if let configuredHome, !configuredHome.isEmpty {
+                URL(fileURLWithPath: configuredHome, isDirectory: true)
+            } else {
+                fm.homeDirectoryForCurrentUser.appendingPathComponent(".grok", isDirectory: true)
+            }
+            let authURL = root.appendingPathComponent("auth.json")
+            let sessionsURL = root.appendingPathComponent("sessions", isDirectory: true)
+            let hasAuth = fm.fileExists(atPath: authURL.path)
+            let hasSessions = fm.fileExists(atPath: sessionsURL.path)
+            return Self.onboardingDetection(
+                hasPrimary: hasAuth, primaryLabel: "Grok login",
+                hasSecondary: hasSessions, secondaryLabel: "Grok sessions",
+                fallbackLabel: "Grok login / sessions")
+        default:
+            return OnboardingDetection(isReady: false, source: "")
+        }
+    }
+
+    func onboardingPhase(for row: BirdNionConfigStore.Provider) -> OnboardingPhase {
+        let current = status(for: row.id)
+        return Self.onboardingPhase(
+            testState: selfTestState[row.id] ?? .idle,
+            statusHasError: current?.error != nil,
+            statusHasQuota: !(current?.windows.isEmpty ?? true),
+            detectionReady: onboardingDetection(for: row.id).isReady)
+    }
+
+    func connectAndTest(_ idx: Int) {
+        let id = rows[idx].id
+        if rows[idx].enabled != true {
+            rows[idx].enabled = true
+            saveAll()
+            // NotificationCenter delivers this synchronously; AppDelegate
+            // rebuilds QuotaService before runSelfTest resolves the provider.
+            NotificationCenter.default.post(
+                name: .birdnionProvidersChanged,
+                object: "onboardingSelfTest")
+        }
+        runSelfTest(id: id)
+    }
+
+    private func onboardingCopy(_ vi: String, _ en: String) -> String {
+        L10n.languageCode(language) == "vi" ? vi : en
+    }
+
+    @ViewBuilder
+    func onboardingSection(_ idx: Int) -> some View {
+        let row = rows[idx]
+        if Self.onboardingProviderIDs.contains(row.id) {
+            let detection = onboardingDetection(for: row.id)
+            let phase = onboardingPhase(for: row)
+            InstrumentSection(header: onboardingCopy("KẾT NỐI PROVIDER", "CONNECT PROVIDER")) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(phase == .live ? SettingsTheme.success : phase == .failed ? SettingsTheme.critical : SettingsTheme.warning)
+                            .frame(width: 8, height: 8)
+                        Text({
+                            switch phase {
+                            case .needsSource: onboardingCopy("Chưa phát hiện nguồn đăng nhập", "No sign-in source detected")
+                            case .readyToTest: onboardingCopy("Đã phát hiện \(detection.source)", "Detected \(detection.source)")
+                            case .testing: onboardingCopy("Đang kiểm tra kết nối thật…", "Testing the real connection…")
+                            case .live: onboardingCopy("Quota đang live", "Quota is live")
+                            case .failed: onboardingCopy("Kết nối cần được sửa", "Connection needs attention")
+                            }
+                        }())
+                        .font(.plexSans(12, weight: .semibold))
+                        Spacer()
+                    }
+
+                    Text(onboardingCopy(
+                        "BirdNion chỉ đánh dấu Live sau khi provider trả quota thật. Không sao chép hoặc hiển thị token.",
+                        "BirdNion marks Live only after the provider returns real quota. Tokens are never copied or displayed."))
+                        .font(.plexSans(11))
+                        .foregroundStyle(SettingsTheme.secondary)
+
+                    HStack(spacing: 8) {
+                        Button(phase == .failed ? onboardingCopy("Thử lại", "Retry") : onboardingCopy("Kết nối & kiểm tra", "Connect & test")) {
+                            connectAndTest(idx)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(phase == .testing)
+
+                        if phase == .needsSource || phase == .failed {
+                            Button(onboardingCopy("Sửa thiết lập", "Fix setup")) {
+                                selectedID = row.id
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+                .padding(12)
+            }
+        }
+    }
+
     /// One fetch through the provider's real path (R2.5) — never
     /// QuotaService.refresh(). A disabled provider has no live instance in
     /// `quota.providers`; fail fast instead of entering `.running` (R2.9).
@@ -67,8 +187,14 @@ extension ProvidersPane {
         Task {
             do {
                 let status = try await provider.fetch()
+                quota.applySelfTestStatus(status)
                 if let err = status.error, !err.isEmpty {
                     selfTestState[id] = .fail(kind: classify(rawError: err) ?? .unknown, raw: err)
+                } else if status.windows.isEmpty {
+                    let raw = onboardingCopy(
+                        "Provider không trả dữ liệu quota.",
+                        "Provider returned no quota data.")
+                    selfTestState[id] = .fail(kind: .unknown, raw: raw)
                 } else {
                     selfTestState[id] = .pass
                 }
@@ -136,6 +262,7 @@ extension ProvidersPane {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     detailHeader(idx)
+                    onboardingSection(idx)
                     detailInfoGrid(rows[idx])
                     usageSection(rows[idx])
                     if rows[idx].id == "xai" {

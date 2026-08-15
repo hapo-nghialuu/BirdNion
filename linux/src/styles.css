@@ -183,6 +183,11 @@ html.popover-capped .app-body {
   color: var(--secondary);
   padding: 12px;
 }
+.first-provider-cta { padding: 18px; display: grid; gap: 8px; text-align: center; }
+.first-provider-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.first-provider-body { font-size: 12px; line-height: 1.45; color: var(--text2); }
+.first-provider-cta .save-button { justify-self: center; width: auto; margin: 4px 0 0; }
+.provider-error-actions { display: flex; gap: 8px; padding: 0 16px 12px; }
 
 /* --- App header (macOS BirdNionHeader) -------------------------------- */
 
@@ -2532,6 +2537,13 @@ body.settings-body-root {
 .pp-selftest-result.running { display: block; color: var(--text3); }
 .pp-selftest-result.pass { display: block; color: var(--success); }
 .pp-selftest-result.fail { display: block; color: var(--critical); }
+.pp-onboarding-card { padding: 12px 14px; display: grid; gap: 10px; }
+.pp-onboarding-status { font-size: 12px; font-weight: 600; color: var(--warning); }
+.pp-onboarding-status.live { color: var(--success); }
+.pp-onboarding-status.failed { color: var(--critical); }
+.pp-onboarding-status.testing { color: var(--text2); }
+.pp-onboarding-actions { display: flex; align-items: center; gap: 8px; }
+.pp-onboarding-actions .save-button { margin: 0; width: auto; }
 
 /* Setup field rows (label left, control right — macOS SettingsLabeledRow) */
 .pp-setup-wrap {

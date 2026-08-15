@@ -113,19 +113,92 @@ fn classify_provider_error(raw: Option<String>) -> Option<String> {
         .map(|kind| kind.key_suffix().to_string())
 }
 
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderOnboardingDetection {
+    is_ready: bool,
+    source: String,
+}
+
+fn onboarding_detection_from_flags(
+    has_primary: bool,
+    primary: &str,
+    has_secondary: bool,
+    secondary: &str,
+    fallback: &str,
+) -> ProviderOnboardingDetection {
+    ProviderOnboardingDetection {
+        is_ready: has_primary || has_secondary,
+        source: if has_primary { primary } else if has_secondary { secondary } else { fallback }.to_string(),
+    }
+}
+
+/// Safe readiness probe for first-run onboarding. It checks only path and
+/// executable existence; it never opens or parses a credential file.
+#[tauri::command]
+fn provider_onboarding_detection(id: String) -> ProviderOnboardingDetection {
+    use std::path::PathBuf;
+
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let executable_exists = |name: &str| {
+        std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+            .unwrap_or(false)
+    };
+    match id.as_str() {
+        "claude" => {
+            let has_file = home.join(".claude").join(".credentials.json").is_file();
+            let has_cli = executable_exists("claude");
+            onboarding_detection_from_flags(has_file, "Claude Code", has_cli, "Claude CLI", "Claude Code / CLI")
+        }
+        "codex" => {
+            let root = std::env::var_os("CODEX_HOME").map(PathBuf::from)
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| home.join(".codex"));
+            let has_file = root.join("auth.json").is_file();
+            let has_cli = executable_exists("codex");
+            onboarding_detection_from_flags(has_file, "Codex login", has_cli, "Codex CLI", "Codex login / CLI")
+        }
+        "grok" => {
+            let root = std::env::var_os("GROK_HOME").map(PathBuf::from)
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| home.join(".grok"));
+            let has_auth = root.join("auth.json").is_file();
+            let has_sessions = root.join("sessions").is_dir();
+            onboarding_detection_from_flags(has_auth, "Grok login", has_sessions, "Grok sessions", "Grok login / sessions")
+        }
+        _ => onboarding_detection_from_flags(false, "", false, "", ""),
+    }
+}
+
+#[cfg(test)]
+mod onboarding_detection_tests {
+    use super::*;
+
+    #[test]
+    fn detection_prefers_primary_then_secondary() {
+        assert_eq!(
+            onboarding_detection_from_flags(true, "login", true, "cli", "none"),
+            ProviderOnboardingDetection { is_ready: true, source: "login".into() });
+        assert_eq!(
+            onboarding_detection_from_flags(false, "login", true, "cli", "none"),
+            ProviderOnboardingDetection { is_ready: true, source: "cli".into() });
+        assert_eq!(
+            onboarding_detection_from_flags(false, "login", false, "cli", "none"),
+            ProviderOnboardingDetection { is_ready: false, source: "none".into() });
+    }
+}
+
 /// Runs a single self-test fetch for one provider (never the whole refresh
 /// loop). Returns a failure status keyed to `provider.selfTest.disabled`
-/// when the provider is disabled or not found in settings.json.
+/// when the provider is not found in settings.json. The Settings onboarding
+/// persists the enabled flag before this command, but the probe itself does
+/// not rely on a second config reload race.
 #[tauri::command]
 async fn test_provider(id: String) -> providers::ProviderStatus {
     let cfg = config::load().providers.into_iter().find(|p| p.id == id);
     match cfg {
-        Some(cfg) if cfg.enabled.unwrap_or(false) => providers::fetch(&cfg).await,
-        Some(cfg) => providers::ProviderStatus::failure(
-            &id,
-            &providers::display_name(&cfg),
-            "provider.selfTest.disabled",
-        ),
+        Some(cfg) => providers::fetch(&cfg).await,
         None => providers::ProviderStatus::failure(&id, &id, "provider.selfTest.disabled"),
     }
 }
@@ -918,6 +991,7 @@ pub fn run() {
             grok_usage_report,
             provider_statuses,
             classify_provider_error,
+            provider_onboarding_detection,
             test_provider,
             claude_admin_usage,
             claude_code_state,
