@@ -107,14 +107,13 @@ struct ClaudeCodePane: View {
                     title: L10n.t("settings.tab.aiCoding", lang),
                     subtitle: L10n.t("settings.aiCoding.subtitle", lang)
                 )
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 26)
+                .padding(.top, 22)
 
                 ScrollView {
                     detail
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 20)
+                        .padding(.horizontal, 26)
+                        .padding(.bottom, 30)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
@@ -307,13 +306,13 @@ struct ClaudeCodePane: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    /// Status dot: filled success when activated, outline border otherwise.
+    /// Status mark: filled square when activated, outline otherwise (instrument).
     private func listStatusDot(activated: Bool) -> some View {
-        Circle()
+        RoundedRectangle(cornerRadius: 0, style: .continuous)
             .fill(activated ? SettingsTheme.success : Color.clear)
-            .frame(width: 8, height: 8)
+            .frame(width: 7, height: 7)
             .overlay(
-                Circle()
+                RoundedRectangle(cornerRadius: 0, style: .continuous)
                     .strokeBorder(activated ? SettingsTheme.success : SettingsTheme.border,
                                   lineWidth: 1)
             )
@@ -461,7 +460,7 @@ struct ClaudeCodePane: View {
 
     @ViewBuilder
     private func presetDetail(_ p: BirdNionConfigStore.Provider) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
                 AICodingAgentSelectionCard(
                     selectedAgent: detailAgent,
                     profileID: "preset-\(p.id)",
@@ -519,12 +518,12 @@ struct ClaudeCodePane: View {
                 SettingsCard {
                     Toggle(isOn: $disable1M) {
                         Text(L10n.t("claudeCode.disable1M", lang))
-                            .font(.plexSans(13))
+                            .font(.plexSans(14, weight: .medium))
                             .foregroundStyle(SettingsTheme.primary)
                     }
                     .toggleStyle(.instrument)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 14)
+                    .hairlineTop(SettingsTheme.hairline)
                 }
     }
 
@@ -804,30 +803,26 @@ struct ClaudeCodePane: View {
                 .fixedSize()
                 .disabled(options.isEmpty)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            .padding(.vertical, 14)
+            .hairlineTop(SettingsTheme.hairline)
 
             if !profile.wrappedValue.requiresEmbeddedCLIProxy {
                 SettingsRowDivider()
-                HStack(spacing: 12) {
+                HStack(spacing: 20) {
                     Text(L10n.t("codexConfig.connection", lang))
-                        .font(.plexSans(13, weight: .semibold))
+                        .font(.plexSans(14, weight: .medium))
                         .foregroundStyle(SettingsTheme.primary)
-                    Spacer(minLength: 8)
-                    // Native segmented Picker — left as system control per the
-                    // Instrument redesign rule for `Picker(.segmented)` call sites.
-                    Picker("", selection: codexConnectionBinding(profile)) {
-                        Text(L10n.t("codexConfig.connection.direct", lang))
-                            .tag(BirdNionConfigStore.CodexProfile.ConnectionMode.direct)
-                        Text(L10n.t("codexConfig.connection.proxy", lang))
-                            .tag(BirdNionConfigStore.CodexProfile.ConnectionMode.localProxy)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 260)
+                    Spacer(minLength: 12)
+                    InstrumentSegmentedControl(
+                        options: [
+                            (.direct, L10n.t("codexConfig.connection.direct", lang)),
+                            (.localProxy, L10n.t("codexConfig.connection.proxy", lang)),
+                        ],
+                        selection: codexConnectionBinding(profile)
+                    )
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .padding(.vertical, 14)
+                .hairlineTop(SettingsTheme.hairline)
             }
         }
     }
@@ -1295,7 +1290,6 @@ struct ClaudeCodePane: View {
                 subtitle: profileActivationSubtitle(state: state, profile: profile),
                 target: visibleTargetLabel(),
                 state: state,
-                diameter: 64,
                 action: { powerTapProfile(profile, state: state, scope: scope) }
             )
 
@@ -1349,18 +1343,21 @@ struct ClaudeCodePane: View {
         let sc = currentScope()
         let sync = configured ? ClaudeCodeConfigWriter.syncState(forProvider: draft, scope: sc, using: config) : .off
         let state = powerState(configured: configured, sync: sync)
-        return SettingsCard {
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(L10n.t("aiCoding.step.activate", lang))
+                .plexEyebrow()
+                .padding(.top, 8)
+                .padding(.bottom, 4)
             activationPanelBody(
                 icon: Image(systemName: "terminal.fill"),
                 title: L10n.t("claudeCode.quickCard.title", lang),
                 subtitle: powerSubtitle(state: state, name: providerName(p)),
                 target: visibleTargetLabel(),
                 state: state,
-                diameter: 76,
                 action: { powerTap(draft, state: state, scope: sc) },
-                accessory: AnyView(HStack(spacing: 9) {
+                accessory: AnyView(HStack(spacing: 8) {
                     ProviderLogoMark(id: p.id, tint: SettingsTheme.accent)
-                        .frame(width: 18, height: 18)
+                        .frame(width: 16, height: 16)
                     Text(providerName(p))
                         .font(.plexSans(12, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
@@ -1375,42 +1372,36 @@ struct ClaudeCodePane: View {
                                      subtitle: String,
                                      target: String,
                                      state: ClaudeCodePowerButton.PowerState,
-                                     diameter: CGFloat,
                                      action: @escaping () -> Void,
                                      accessory: AnyView = AnyView(EmptyView())) -> some View {
         HStack(alignment: .center, spacing: 14) {
             icon
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(stateColor(state))
                 .frame(width: 38, height: 38)
-                .background(stateColor(state).opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .strokeBorder(stateColor(state).opacity(0.4), lineWidth: 1)
+                        .strokeBorder(stateColor(state), lineWidth: 1)
                 )
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(title)
-                        .font(.plexSans(15, weight: .semibold))
+                        .font(.plexSans(18, weight: .bold))
+                        .tracking(-0.3)
                         .foregroundStyle(SettingsTheme.primary)
-                    HStack(spacing: 4) {
-                        Image(systemName: stateIcon(state))
-                            .font(.system(size: 9, weight: .bold))
-                        Text(stateLabel(state))
-                            .font(.plexMono(10, weight: .medium))
-                            .tracking(0.6)
-                            .textCase(.uppercase)
-                    }
-                    .foregroundStyle(stateColor(state))
+                    Text(stateLabel(state))
+                        .font(.plexMono(10, weight: .medium))
+                        .tracking(0.5)
+                        .textCase(.uppercase)
+                        .foregroundStyle(stateColor(state))
                 }
                 Text(subtitle)
                     .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
-                    Label(target, systemImage: "scope")
+                    Label(target, systemImage: "arrow.right")
                         .font(.plexMono(10))
                         .foregroundStyle(SettingsTheme.tertiary)
                         .lineLimit(1)
@@ -1421,19 +1412,26 @@ struct ClaudeCodePane: View {
 
             Spacer(minLength: 10)
 
-            ClaudeCodePowerButton(
-                state: state,
-                subtitle: "",
-                diameter: diameter,
+            InstrumentPowerControl(
+                state: instrumentPowerState(state),
                 busy: busy,
-                subtitleColor: SettingsTheme.primary,
-                showsSubtitle: false,
+                size: 56,
                 action: action
             )
             .help(subtitle)
+            .accessibilityLabel(stateLabel(state))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 13)
+        .padding(.vertical, 14)
+        .hairlineTop(SettingsTheme.hairline)
+    }
+
+    private func instrumentPowerState(_ state: ClaudeCodePowerButton.PowerState) -> InstrumentPowerControl.State {
+        switch state {
+        case .on: return .on
+        case .off: return .off
+        case .stale: return .stale
+        case .needsSetup: return .needsSetup
+        }
     }
 
     private func powerState(configured: Bool,
@@ -1578,29 +1576,27 @@ struct ClaudeCodePane: View {
 
     private var scopeRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
+            HStack(spacing: 20) {
                 Text(L10n.t("claudeCode.scope", lang))
-                    .font(.plexSans(13, weight: .semibold))
+                    .font(.plexSans(14, weight: .medium))
                     .foregroundStyle(SettingsTheme.primary)
-                Spacer(minLength: 8)
-                // Native segmented Picker — left as system control per the
-                // Instrument redesign rule for `Picker(.segmented)` call sites.
-                Picker("", selection: scopeBinding) {
-                    Text(L10n.t("claudeCode.scope.global", lang)).tag(ScopeChoice.global)
-                    Text(L10n.t("claudeCode.scope.project", lang)).tag(ScopeChoice.project)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 200)
+                Spacer(minLength: 12)
+                InstrumentSegmentedControl(
+                    options: [
+                        (.global, L10n.t("claudeCode.scope.global", lang)),
+                        (.project, L10n.t("claudeCode.scope.project", lang)),
+                    ],
+                    selection: scopeBinding
+                )
             }
             if scope == .global {
                 Text(L10n.t("claudeCode.scope.globalPath", lang))
-                    .font(.plexSans(10))
+                    .font(.plexMono(11))
                     .foregroundStyle(SettingsTheme.tertiary)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 14)
+        .hairlineTop(SettingsTheme.hairline)
     }
 
     private var projectRow: some View {
@@ -1615,12 +1611,12 @@ struct ClaudeCodePane: View {
                 instrumentActionButton(L10n.t("claudeCode.project.choose", lang)) { chooseProjectDir() }
             }
             Text(L10n.t("claudeCode.project.gitignore", lang))
-                .font(.plexSans(10))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 14)
+        .hairlineTop(SettingsTheme.hairline)
     }
 
     private var removeEnvRow: some View {
@@ -1641,10 +1637,10 @@ struct ClaudeCodePane: View {
         HStack(spacing: 10) {
             if loadingModels {
                 Text(L10n.t("claudeCode.loadingModels", lang))
-                    .font(.plexSans(11)).foregroundStyle(SettingsTheme.secondary)
+                    .font(.plexSans(12)).foregroundStyle(SettingsTheme.secondary)
             } else if !models.isEmpty {
                 Text(L10n.f("claudeCode.modelsLoaded", lang, models.count))
-                    .font(.plexSans(11)).foregroundStyle(SettingsTheme.secondary)
+                    .font(.plexSans(12)).foregroundStyle(SettingsTheme.secondary)
             }
             Spacer(minLength: 8)
             if loadingModels {
@@ -1659,8 +1655,8 @@ struct ClaudeCodePane: View {
                 .disabled(loadingModels)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 14)
+        .hairlineTop(SettingsTheme.hairline)
     }
 
     /// Editable model id + a suggestions menu. Free text is required because
@@ -1697,8 +1693,8 @@ struct ClaudeCodePane: View {
             .fixedSize()
             .disabled(options.isEmpty)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 14)
+        .hairlineTop(SettingsTheme.hairline)
     }
 
     // MARK: - Data
@@ -2219,19 +2215,19 @@ struct ClaudeCodePane: View {
     }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 20) {
             Text(label)
-                .font(.plexSans(13, weight: .semibold))
+                .font(.plexSans(14, weight: .medium))
                 .foregroundStyle(SettingsTheme.primary)
-            Spacer(minLength: 8)
+            Spacer(minLength: 12)
             Text(value)
                 .font(.plexMono(12))
                 .foregroundStyle(SettingsTheme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 14)
+        .hairlineTop(SettingsTheme.hairline)
     }
 
     private func masked(_ key: String?) -> String {

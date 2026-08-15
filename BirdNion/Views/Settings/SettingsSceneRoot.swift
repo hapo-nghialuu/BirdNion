@@ -112,38 +112,38 @@ private struct SettingsWindowAppearanceView: NSViewRepresentable {
     private func apply(to view: NSView) {
         guard let window = view.window else { return }
         // Appearance is app-wide (SettingsStore.applyAppearance); here we only
-        // keep the window background matched to the theme's base surface so
+        // keep the window background matched to Instrument paper/ink so
         // AppKit clears to the right color during live resize in both modes.
         window.appearance = nil
+        // VocabbyTheme.background: light #FBFAF7 / dark #17170F
         window.backgroundColor = NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                ? NSColor(srgbRed: 30 / 255, green: 30 / 255, blue: 32 / 255, alpha: 1)
-                : NSColor(srgbRed: 244 / 255, green: 245 / 255, blue: 247 / 255, alpha: 1)
+                ? NSColor(srgbRed: 23 / 255, green: 23 / 255, blue: 15 / 255, alpha: 1)
+                : NSColor(srgbRed: 251 / 255, green: 250 / 255, blue: 247 / 255, alpha: 1)
         }
     }
 }
 
-// MARK: - Card-based layout primitives
+// MARK: - Instrument layout primitives
 //
-// We deliberately avoid SwiftUI's `Form(.grouped)`: hosted inside our
-// manually-created NSWindow it drives NSISEngine into infinite recursion on
-// re-layout (autoresizing-mask constraints fight the grouped layout). These
-// plain-SwiftUI containers reproduce the inset "card" look without touching
-// AppKit's constraint engine.
+// Avoid SwiftUI's `Form(.grouped)` — inside our NSWindow it can drive
+// NSISEngine recursion. These plain containers mirror the Linux instrument
+// Settings CSS (`.settings-page` / `.sw-card` transparent / `.sw-row`
+// hairline-top) so macOS Settings matches the popover redesign language.
 
-/// Scrollable settings page — a vertical stack of `SettingsCard`s on the
-/// window background. Use in place of `Form` at the root of each pane.
+/// Scrollable settings page — stack of section groups on paper background.
 struct SettingsPage<Content: View>: View {
     var maxContentWidth: CGFloat? = nil
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 0) {
                 content()
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 18)
+            .padding(.horizontal, 26)
+            .padding(.top, 22)
+            .padding(.bottom, 30)
             .frame(maxWidth: maxContentWidth ?? .infinity, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: maxContentWidth == nil ? .leading : .top)
         }
@@ -151,102 +151,100 @@ struct SettingsPage<Content: View>: View {
     }
 }
 
-/// One titled card group: uppercase eyebrow header, hairline-divided body
-/// (no filled/rounded card surface — Instrument redesign), optional footer.
-/// Use in place of `Section { … } header: { … } footer: { … }`.
+/// Section group: uppercase eyebrow + hairline-divided rows (no filled card).
+/// Rows supply their own top hairline via `SettingsLabeledRow` /
+/// `SettingsRowDivider` no longer draws a second rule.
 struct SettingsCard<Content: View>: View {
     var header: String? = nil
     var footer: LocalizedStringKey? = nil
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             if let header {
                 SettingsSectionHeader(title: header)
-                    .padding(.horizontal, 4)
             }
             VStack(spacing: 0) { content() }
-                .hairlineTop(SettingsTheme.hairline)
             if let footer {
                 Text(footer)
-                    .font(.plexSans(11))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.tertiary)
-                    .padding(.horizontal, 4)
+                    .padding(.top, 10)
             }
         }
     }
 }
 
-/// Thin divider between rows inside a `SettingsCard` — a plain hairline,
-/// full-width (no leading inset/card padding).
+/// Legacy separator between rows. Instrument rows already draw a top hairline
+/// on `SettingsLabeledRow`, so this is a no-op kept for call-site compatibility.
 struct SettingsRowDivider: View {
-    var body: some View {
-        HairlineRule(color: SettingsTheme.hairline)
-    }
+    var body: some View { EmptyView() }
 }
 
 // MARK: - Shared row views
 
-/// Pane-level title + optional subtitle (mockup: "Chung" / "Nâng cao" / …),
-/// underlined by the strong ink rule that replaces the old card container.
+/// Pane title + optional subtitle, underlined by the strong ink rule.
 struct SettingsPaneHeader: View {
     let title: String
     var subtitle: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.plexSans(17, weight: .bold))
+                .font(.plexSans(22, weight: .bold))
+                .tracking(-0.5)
                 .foregroundStyle(SettingsTheme.primary)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.plexSans(12))
+                    .font(.plexSans(13))
                     .foregroundStyle(SettingsTheme.secondary)
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 16)
         .inkRuleBottom()
+        .padding(.bottom, 4)
     }
 }
 
-/// Uppercase mono eyebrow header shown above each `SettingsCard` — matches the
-/// HỆ THỐNG / SỬ DỤNG / TỰ ĐỘNG style in the Instrument mockup.
+/// Uppercase mono eyebrow above each settings group (HỆ THỐNG / SỬ DỤNG / …).
 struct SettingsSectionHeader: View {
     let title: String
     var body: some View {
         Text(title)
             .plexEyebrow()
+            .padding(.top, 22)
+            .padding(.bottom, 4)
     }
 }
 
-/// Title + optional subtitle + trailing control. Self-contained padding so it
-/// sits correctly as a row inside a `SettingsCard`.
+/// Title + optional subtitle + trailing control. Top hairline replaces the
+/// old card-internal divider (Linux `.sw-row { border-top: hairline }`).
 struct SettingsLabeledRow<Content: View>: View {
     let title: String
     var subtitle: String? = nil
     @ViewBuilder let trailing: () -> Content
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: 20) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.plexSans(13))
+                    .font(.plexSans(14, weight: .medium))
                     .foregroundStyle(SettingsTheme.primary)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.plexSans(11))
+                        .font(.plexSans(12))
                         .foregroundStyle(SettingsTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 12)
             trailing()
                 .font(.plexSans(12))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(minHeight: 44)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .hairlineTop(SettingsTheme.hairline)
     }
 }

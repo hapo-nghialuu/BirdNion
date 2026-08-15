@@ -11,31 +11,31 @@ struct AICodingAgentSelectionCard: View {
     let onSelect: (AICodingAgent) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(header ?? L10n.t("aiCoding.step.agent", lang)).plexEyebrow()
-                .padding(.horizontal, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(header ?? L10n.t("aiCoding.step.agent", lang))
+                .plexEyebrow()
+                .padding(.top, 22)
+                .padding(.bottom, 4)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 20) {
                 Text(L10n.t("aiCoding.target", lang))
-                    .font(.plexSans(13, weight: .semibold))
+                    .font(.plexSans(14, weight: .medium))
                     .foregroundStyle(VocabbyTheme.primary)
-                    .frame(width: 110, alignment: .leading)
 
-                Picker("", selection: selection) {
-                    ForEach(AICodingAgent.allCases) { agent in
-                        Text(agent.title(language: lang)).tag(agent)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                // AppKit caches segmented selections across profile changes.
+                Spacer(minLength: 12)
+
+                InstrumentSegmentedControl(
+                    options: AICodingAgent.allCases.map {
+                        (value: $0, title: $0.title(language: lang))
+                    },
+                    selection: selection
+                )
+                // AppKit/SwiftUI can cache segmented state across profile switches.
                 .id(profileID)
-                .frame(maxWidth: 360, alignment: .trailing)
                 .accessibilityLabel(L10n.t("aiCoding.target", lang))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .hairlineTop()
+            .padding(.vertical, 14)
+            .hairlineTop(VocabbyTheme.hairline)
         }
     }
 
@@ -70,62 +70,57 @@ struct CodexProfileActivationCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(header ?? L10n.t("codexConfig.target", lang)).plexEyebrow()
-                .padding(.horizontal, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(header ?? L10n.t("codexConfig.target", lang))
+                .plexEyebrow()
+                .padding(.top, 22)
+                .padding(.bottom, 4)
 
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Image(systemName: active && current ? "checkmark.circle.fill" : "command")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(active && current ? VocabbyTheme.success : VocabbyTheme.blue)
-                        .frame(width: 34, height: 34)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: InstrumentShape.plateRadius, style: .continuous)
-                                .stroke(active && current ? VocabbyTheme.success : VocabbyTheme.blue, lineWidth: 1)
-                        )
+            HStack(spacing: 14) {
+                Image(systemName: active && current ? "checkmark.circle.fill" : "command")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(active && current ? VocabbyTheme.success : VocabbyTheme.primary)
+                    .frame(width: 38, height: 38)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                            .strokeBorder(active && current ? VocabbyTheme.success : VocabbyTheme.primary,
+                                          lineWidth: 1)
+                    )
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(statusTitle)
-                            .font(.plexSans(13, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.primary)
-                        Text(L10n.t("codexConfig.target.path", lang))
-                            .font(.plexMono(11))
-                            .foregroundStyle(VocabbyTheme.secondary)
-                    }
-
-                    Spacer(minLength: 10)
-
-                    actionButton
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .hairlineTop()
-
-                HStack(spacing: 8) {
-                    Text(profile.usesEmbeddedCLIProxy
-                         ? L10n.t("codexConfig.connection.proxy", lang)
-                         : L10n.t("codexConfig.connection.direct", lang))
-                        .font(.plexSans(11, weight: .medium))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(statusTitle)
+                        .font(.plexSans(15, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.primary)
+                    Text(L10n.t("codexConfig.target.path", lang))
+                        .font(.plexMono(11))
                         .foregroundStyle(VocabbyTheme.secondary)
-                    Spacer()
-                    Button(role: .destructive, action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 28, height: 26)
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-                    .controlSize(.small)
-                    .disabled(busy)
-                    .pointingHandCursor(enabled: !busy)
-                    .help(L10n.t("codexConfig.delete", lang))
-                    .accessibilityLabel(L10n.t("codexConfig.delete", lang))
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .hairlineTop()
+
+                Spacer(minLength: 10)
+
+                actionButton
             }
+            .padding(.vertical, 14)
+            .hairlineTop(VocabbyTheme.hairline)
+
+            HStack(spacing: 8) {
+                Text(profile.usesEmbeddedCLIProxy
+                     ? L10n.t("codexConfig.connection.proxy", lang)
+                     : L10n.t("codexConfig.connection.direct", lang))
+                    .font(.plexSans(12, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                Spacer()
+                Button(action: onDelete) {
+                    Label(L10n.t("codexConfig.delete", lang), systemImage: "trash")
+                }
+                .buttonStyle(.instrumentCritical)
+                .disabled(busy)
+                .pointingHandCursor(enabled: !busy)
+                .help(L10n.t("codexConfig.delete", lang))
+                .accessibilityLabel(L10n.t("codexConfig.delete", lang))
+            }
+            .padding(.vertical, 12)
+            .hairlineTop(VocabbyTheme.hairline)
         }
     }
 
@@ -134,25 +129,16 @@ struct CodexProfileActivationCard: View {
         if active && current {
             Button(action: onDeactivate) {
                 Label(L10n.t("codexConfig.deactivate", lang), systemImage: "power")
-                    .font(.plexMono(11, weight: .semibold))
-                    .textCase(.uppercase)
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-            .controlSize(.small)
-            .tint(VocabbyTheme.critical)
+            .buttonStyle(.instrumentCritical)
             .disabled(busy)
             .pointingHandCursor(enabled: !busy)
         } else {
             Button(action: onApply) {
                 Label(active ? L10n.t("codexConfig.update", lang) : L10n.t("codexConfig.apply", lang),
                       systemImage: active ? "arrow.triangle.2.circlepath" : "power")
-                    .font(.plexMono(11, weight: .semibold))
-                    .textCase(.uppercase)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-            .controlSize(.small)
+            .buttonStyle(.instrumentPrimary)
             .disabled(busy || !profile.hasUpstreamConfiguration)
             .pointingHandCursor(enabled: !busy && profile.hasUpstreamConfiguration)
         }

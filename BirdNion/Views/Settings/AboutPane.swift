@@ -92,6 +92,7 @@ struct AboutPane: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(L10n.t("settings.section.links", settings.appLanguage))
                     .plexEyebrow()
+                    .padding(.top, 22)
                     .padding(.bottom, 4)
 
                 AboutLinkRow(
@@ -117,6 +118,7 @@ struct AboutPane: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(L10n.t("about.section.updates", settings.appLanguage))
                     .plexEyebrow()
+                    .padding(.top, 22)
                     .padding(.bottom, 4)
 
                 SettingsLabeledRow(
@@ -125,7 +127,6 @@ struct AboutPane: View {
                 ) {
                     Toggle("", isOn: $settings.updateAutoCheckEnabled).labelsHidden().toggleStyle(.instrument)
                 }
-                .hairlineTop()
 
                 SettingsLabeledRow(
                     title: L10n.t("about.channel.title", settings.appLanguage),
@@ -142,7 +143,6 @@ struct AboutPane: View {
                         Task { await checker.check() }
                     }
                 }
-                .hairlineTop()
             }
 
             Text(L10n.t("settings.about.copyright", settings.appLanguage))
@@ -180,10 +180,9 @@ struct AboutPane: View {
             .help(L10n.t("settings.about.copyCommand", settings.appLanguage))
             .accessibilityLabel(L10n.t("settings.about.copyCommand", settings.appLanguage))
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 10)
-        .frame(minHeight: 44)
-        .hairlineTop()
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .hairlineTop(SettingsTheme.hairline)
     }
 
     /// Inline result line under the check / release-notes buttons.
@@ -267,51 +266,5 @@ struct AboutPane: View {
         if let url = URL(string: projectURL) {
             NSWorkspace.shared.open(url)
         }
-    }
-}
-
-// MARK: - Instrument button style
-//
-// Outlined, square-cornered button (`InstrumentShape.controlRadius`) with an
-// uppercase mono label — replaces `.borderedProminent` / `.bordered` for the
-// About pane's primary actions and copy button. Mirrors `.sw-pill-btn` in the
-// CSS: transparent fill, 1px border, fill only while pressed (kept close to
-// the existing press-highlight interaction of the native styles it replaces).
-private struct InstrumentButtonStyle: ButtonStyle {
-    var textColor: Color = VocabbyTheme.secondary
-    var borderColor: Color = VocabbyTheme.border
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.plexMono(10, weight: .medium))
-            .tracking(0.4)
-            .textCase(.uppercase)
-            .foregroundStyle(textColor)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .fill(configuration.isPressed ? VocabbyTheme.hoverSurface : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .strokeBorder(borderColor, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
-    }
-}
-
-private extension ButtonStyle where Self == InstrumentButtonStyle {
-    /// "KIỂM TRA CẬP NHẬT" — the primary action: ink border + ink text.
-    static var instrumentPrimary: InstrumentButtonStyle {
-        InstrumentButtonStyle(textColor: VocabbyTheme.primary, borderColor: VocabbyTheme.primary)
-    }
-    /// "GHI CHÚ PHÁT HÀNH" — secondary action: muted border + secondary text.
-    static var instrumentOutline: InstrumentButtonStyle {
-        InstrumentButtonStyle(textColor: VocabbyTheme.secondary, borderColor: VocabbyTheme.border)
-    }
-    /// "SAO CHÉP" — accent-colored label, muted border.
-    static var instrumentAccent: InstrumentButtonStyle {
-        InstrumentButtonStyle(textColor: VocabbyTheme.blue, borderColor: VocabbyTheme.border)
     }
 }

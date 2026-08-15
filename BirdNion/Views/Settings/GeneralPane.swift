@@ -254,16 +254,15 @@ struct GeneralPane: View {
                 }
             }
 
-            SettingsCard {
-                HStack {
-                    Spacer()
-                    Button(L10n.t("settings.quitApp", settings.appLanguage)) {
-                        NSApp.terminate(nil)
-                    }
+            HStack {
+                Spacer()
+                Button(L10n.t("settings.quitApp", settings.appLanguage)) {
+                    NSApp.terminate(nil)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .buttonStyle(.instrumentCritical)
             }
+            .padding(.top, 18)
+            .hairlineTop(SettingsTheme.hairline)
         }
     }
 }

@@ -20,6 +20,7 @@ struct AdvancedPane: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(L10n.t("settings.section.privacy", settings.appLanguage))
                     .plexEyebrow()
+                    .padding(.top, 22)
                     .padding(.bottom, 4)
 
                 SettingsLabeledRow(
@@ -28,12 +29,12 @@ struct AdvancedPane: View {
                 ) {
                     Toggle("", isOn: $settings.hidePersonalInfo).labelsHidden().toggleStyle(.instrument)
                 }
-                .hairlineTop()
             }
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(L10n.t("settings.section.developer", settings.appLanguage))
                     .plexEyebrow()
+                    .padding(.top, 22)
                     .padding(.bottom, 4)
 
                 SettingsLabeledRow(
@@ -42,7 +43,6 @@ struct AdvancedPane: View {
                 ) {
                     Toggle("", isOn: $settings.debugDisableKeychainAccess).labelsHidden().toggleStyle(.instrument)
                 }
-                .hairlineTop()
 
                 SettingsLabeledRow(
                     title: L10n.t("settings.storageFootprint.title", settings.appLanguage),
@@ -50,12 +50,10 @@ struct AdvancedPane: View {
                 ) {
                     Toggle("", isOn: $settings.providerStorageFootprintsEnabled).labelsHidden().toggleStyle(.instrument)
                 }
-                .hairlineTop()
 
                 Text(LocalizedStringKey(L10n.t("settings.developer.footer", settings.appLanguage)))
-                    .font(.plexSans(11))
+                    .font(.plexSans(12))
                     .foregroundStyle(VocabbyTheme.tertiary)
-                    .padding(.horizontal, 4)
                     .padding(.top, 10)
             }
 
@@ -63,6 +61,7 @@ struct AdvancedPane: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(L10n.t("settings.tab.debug", settings.appLanguage))
                     .plexEyebrow()
+                    .padding(.top, 22)
                     .padding(.bottom, 4)
 
                 SettingsLabeledRow(
@@ -71,7 +70,6 @@ struct AdvancedPane: View {
                 ) {
                     Toggle("", isOn: $settings.debugMenuEnabled).labelsHidden().toggleStyle(.instrument)
                 }
-                .hairlineTop()
 
                 if settings.debugMenuEnabled {
                     SettingsLabeledRow(
@@ -90,12 +88,10 @@ struct AdvancedPane: View {
                         .controlSize(.small)
                         .pointingHandCursor()
                     }
-                    .hairlineTop()
 
                     Text(LocalizedStringKey(L10n.t("settings.debug.footer", settings.appLanguage)))
-                        .font(.plexSans(11))
+                        .font(.plexSans(12))
                         .foregroundStyle(VocabbyTheme.tertiary)
-                        .padding(.horizontal, 4)
                         .padding(.top, 10)
                 }
             }
