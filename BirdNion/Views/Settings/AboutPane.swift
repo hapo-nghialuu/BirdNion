@@ -230,18 +230,15 @@ struct AboutPane: View {
         }
     }
 
-    /// Prefer the real bundle icon; fall back to the bundled asset.
-    @ViewBuilder
+    /// Use the dedicated brand mark instead of inheriting Finder's app-icon
+    /// presentation, which may include platform-specific framing.
     private var appIcon: some View {
-        if let nsIcon = NSApplication.shared.applicationIconImage {
-            Image(nsImage: nsIcon)
-                .resizable()
-                .interpolation(.high)
-        } else {
-            Image("OriginalImage")
-                .resizable()
-                .interpolation(.high)
-        }
+        Image("OriginalImage")
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .padding(6)
+            .accessibilityHidden(true)
     }
 
     /// Opens Terminal running the Homebrew cask upgrade. Terminal (not an

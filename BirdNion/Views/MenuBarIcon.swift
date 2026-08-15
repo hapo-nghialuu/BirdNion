@@ -5,7 +5,7 @@ import SwiftUI
 /// timer fallback; this type only describes each frame and renders the images
 /// it needs.
 ///
-/// The default frame is the bird logo. When the user enables menu-bar
+/// The default frame is the BirdNion logo. When the user enables menu-bar
 /// percentages, provider quota frames rotate in sorted order: **active**
 /// providers first (any window with remaining under 100% / used over 0), then
 /// alphabetically by `displayName`.
@@ -15,7 +15,7 @@ enum MenuBarIconRenderer {
 
     /// One possible menu-bar frame.
     enum Frame: Equatable {
-        /// Just the bird, no text.
+        /// Just the BirdNion logo, no text.
         case bird
         /// A provider: `percents` are its windows' `remainingPct` in order;
         /// `id` selects the brand logo drawn to the right of the percentages.
@@ -384,11 +384,9 @@ enum MenuBarIconRenderer {
         return String(format: "%.1f", value)
     }
 
-    /// The bird asset, scaled to `pointSize`. Deliberately not a template
-    /// image: that flag flattens the bird to a single colour and loses its
-    /// blue palette (see git history). The default menu bar slot is ~18pt;
-    /// 24pt ≈ the full NSStatusBar thickness — effectively the hard ceiling,
-    /// since macOS clips anything taller than the bar.
+    /// The BirdNion mark, scaled to `pointSize` while preserving its built-in
+    /// progress gradient. Template rendering would flatten every opaque pixel
+    /// to one color and make the progress bar look completely filled.
     static func iconImage(pointSize: CGFloat = 24) -> NSImage {
         scaled(NSImage(named: assetName), to: pointSize, isTemplate: false)
             ?? NSImage(size: NSSize(width: pointSize, height: pointSize))

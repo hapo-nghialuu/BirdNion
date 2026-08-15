@@ -348,17 +348,13 @@ struct BirdNionHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // Compact brand mark replaces the duplicated wordmark text.
             Image("OriginalImage")
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 28, height: 28)
-                .clipShape(RoundedRectangle(cornerRadius: 0, style: .continuous))
-                .accessibilityHidden(true)
-
-            Text("BirdNion")
-                .font(.plexSans(14, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
+                .frame(width: 42, height: 28)
+                .accessibilityLabel("BirdNion")
 
             // Status pill from existing ready/updating state — no new status invented.
             // Instrument redesign: plain mono caps + square dot, no pill
@@ -3099,6 +3095,7 @@ enum AboutPresenter {
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
 
         let alert = NSAlert()
+        alert.icon = NSApplication.shared.applicationIconImage
         alert.messageText = "BirdNion"
         alert.informativeText = """
         Version \(version) (\(build))

@@ -1331,6 +1331,10 @@ final class NewProviderTests: XCTestCase {
         }
     }
 
+    func testDefaultMenuBarLogoPreservesOriginalColors() {
+        XCTAssertFalse(MenuBarIconRenderer.iconImage().isTemplate)
+    }
+
     func testMenuBarFramesFallBackToBirdWhenPercentHiddenOrNoQuota() {
         let status = ProviderStatus(
             id: "hapo", displayName: "AI Hub",
