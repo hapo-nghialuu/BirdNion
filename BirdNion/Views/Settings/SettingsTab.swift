@@ -28,22 +28,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Fixed icon-tile colors from the approved remake mockup (hardcoded hex OK).
-    var iconBackground: Color {
-        switch self {
-        case .general:
-            return Color(red: 0.55, green: 0.55, blue: 0.58) // gray gear
-        case .providers:
-            return Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255) // #2563eb
-        case .aiCoding:
-            return Color(red: 0.55, green: 0.35, blue: 0.85) // purple terminal
-        case .advanced:
-            return Color(red: 0.55, green: 0.55, blue: 0.58) // gray sliders
-        case .about:
-            return Color(red: 0.20, green: 0.65, blue: 0.35) // green info
-        }
-    }
-
     /// All sidebar items in display order — one contiguous block; the
     /// contextual provider/AI-coding list renders below it when active.
     static let allSidebar: [SettingsTab] = [.general, .providers, .aiCoding, .advanced, .about]

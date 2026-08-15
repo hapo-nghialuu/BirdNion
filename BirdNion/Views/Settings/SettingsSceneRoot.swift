@@ -23,6 +23,8 @@ enum SettingsTheme {
     static let critical = VocabbyTheme.critical
     static let criticalSurface = VocabbyTheme.criticalSurface
     static let disabled = VocabbyTheme.disabled
+    static let hairline = VocabbyTheme.hairline
+    static let inkRule = VocabbyTheme.inkRule
 
     static func quotaColor(remaining: Int) -> Color {
         VocabbyTheme.quotaColor(remaining: remaining)
@@ -149,7 +151,8 @@ struct SettingsPage<Content: View>: View {
     }
 }
 
-/// One titled card group: uppercase header, rounded card body, optional footer.
+/// One titled card group: uppercase eyebrow header, hairline-divided body
+/// (no filled/rounded card surface — Instrument redesign), optional footer.
 /// Use in place of `Section { … } header: { … } footer: { … }`.
 struct SettingsCard<Content: View>: View {
     var header: String? = nil
@@ -163,18 +166,10 @@ struct SettingsCard<Content: View>: View {
                     .padding(.horizontal, 4)
             }
             VStack(spacing: 0) { content() }
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(SettingsTheme.card)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
-                )
-                .shadow(color: Color.black.opacity(0.025), radius: 2, x: 0, y: 1)
+                .hairlineTop(SettingsTheme.hairline)
             if let footer {
                 Text(footer)
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(SettingsTheme.tertiary)
                     .padding(.horizontal, 4)
             }
@@ -182,18 +177,18 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-/// Thin inset divider between rows inside a `SettingsCard`.
+/// Thin divider between rows inside a `SettingsCard` — a plain hairline,
+/// full-width (no leading inset/card padding).
 struct SettingsRowDivider: View {
     var body: some View {
-        Divider()
-            .overlay(SettingsTheme.border.opacity(0.72))
-            .padding(.leading, 14)
+        HairlineRule(color: SettingsTheme.hairline)
     }
 }
 
 // MARK: - Shared row views
 
-/// Pane-level title + optional subtitle (mockup: "Chung" / "Nâng cao" / …).
+/// Pane-level title + optional subtitle (mockup: "Chung" / "Nâng cao" / …),
+/// underlined by the strong ink rule that replaces the old card container.
 struct SettingsPaneHeader: View {
     let title: String
     var subtitle: String? = nil
@@ -201,27 +196,27 @@ struct SettingsPaneHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 17, weight: .bold))
+                .font(.plexSans(17, weight: .bold))
                 .foregroundStyle(SettingsTheme.primary)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.secondary)
             }
         }
         .padding(.horizontal, 4)
+        .padding(.bottom, 14)
+        .inkRuleBottom()
     }
 }
 
-/// Bold uppercase section header shown above each `SettingsCard` — matches the
-/// SYSTEM / USAGE / AUTOMATION style in the CodexBar mockup.
+/// Uppercase mono eyebrow header shown above each `SettingsCard` — matches the
+/// HỆ THỐNG / SỬ DỤNG / TỰ ĐỘNG style in the Instrument mockup.
 struct SettingsSectionHeader: View {
     let title: String
     var body: some View {
-        Text(title.uppercased())
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(SettingsTheme.secondary)
-            .tracking(0.4)
+        Text(title)
+            .plexEyebrow()
     }
 }
 
@@ -236,18 +231,18 @@ struct SettingsLabeledRow<Content: View>: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13))
+                    .font(.plexSans(13))
                     .foregroundStyle(SettingsTheme.primary)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)
             trailing()
-                .font(.system(size: 12))
+                .font(.plexSans(12))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

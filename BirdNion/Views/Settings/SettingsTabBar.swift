@@ -35,9 +35,11 @@ struct SettingsSidebar<Extra: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .overlay(alignment: .bottom) {
+                    SettingsTheme.hairline.frame(height: 1)
+                }
 
             // Five fixed rows — no scroll needed; the contextual list below
             // owns the remaining height instead.
@@ -50,7 +52,7 @@ struct SettingsSidebar<Extra: View>: View {
 
             if hasExtra {
                 Divider()
-                    .overlay(SettingsTheme.border)
+                    .overlay(SettingsTheme.hairline)
                     .padding(.vertical, 6)
                     .padding(.horizontal, 8)
 
@@ -61,10 +63,15 @@ struct SettingsSidebar<Extra: View>: View {
             Spacer(minLength: 0)
 
             Text("BirdNion \(appVersion)")
-                .font(.system(size: 10))
+                .font(.plexMono(10))
+                .tracking(0.6)
                 .foregroundStyle(SettingsTheme.tertiary)
+                .textCase(.uppercase)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
+                .overlay(alignment: .top) {
+                    SettingsTheme.hairline.frame(height: 1)
+                }
         }
         .frame(width: 210)
         .background(SettingsTheme.toolbar)
@@ -91,19 +98,9 @@ struct SettingsSidebar<Extra: View>: View {
                 text: $searchText
             )
             .textFieldStyle(.plain)
-            .font(.system(size: 12))
+            .font(.plexSans(12))
             .foregroundStyle(SettingsTheme.primary)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(SettingsTheme.control)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(SettingsTheme.border.opacity(0.8), lineWidth: 1)
-        )
     }
 
     // MARK: - Nav row
@@ -116,45 +113,36 @@ struct SettingsSidebar<Extra: View>: View {
         return Button {
             selected = tab
         } label: {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isSelected
-                              ? Color.white.opacity(0.22)
-                              : tab.iconBackground)
-                        .frame(width: 22, height: 22)
-                    Image(systemName: tab.icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isSelected ? Color.white : Color.white)
-                }
+            HStack(spacing: 9) {
+                // Plain, tile-less icon — the Instrument redesign drops the
+                // colored rounded icon-tile background used by the old design;
+                // the icon just inherits the row's ink/paper text color.
+                Image(systemName: tab.icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isSelected ? SettingsTheme.background : SettingsTheme.secondary)
+                    .frame(width: 14, height: 14)
 
                 Text(tab.title(language: settings.appLanguage))
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color.white : SettingsTheme.primary)
+                    .font(.plexSans(13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? SettingsTheme.background : SettingsTheme.secondary)
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
 
                 if let badge {
+                    // Plain mono text, no pill/capsule fill — mockup shows a
+                    // bare colored number/label, not a filled badge.
                     Text(badge)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.95) : SettingsTheme.success)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule()
-                                .fill(isSelected
-                                      ? Color.white.opacity(0.22)
-                                      : SettingsTheme.successSurface)
-                        )
+                        .font(.plexMono(10, weight: .semibold))
+                        .foregroundStyle(isSelected ? SettingsTheme.background : SettingsTheme.success)
                 }
             }
             .padding(.horizontal, 8)
             .frame(height: 32)
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .fill(isSelected
-                          ? SettingsTheme.accent
+                          ? SettingsTheme.primary
                           : (isHovering ? SettingsTheme.hoverSurface : Color.clear))
             )
             .contentShape(Rectangle())

@@ -1,5 +1,40 @@
 import SwiftUI
 
+// MARK: - Instrument redesign — inline action button chrome
+//
+// Outlined, square-cornered mono-uppercase button used for inline account
+// actions (Add / Refresh / Login / Reload) — replaces the native rounded
+// bordered button so these match `.sw-pill-btn` / `.save-button` in the CSS
+// reference (border: 1px solid currentColor, 4pt radius, mono 11pt caps).
+private struct InstrumentInlineButtonStyle: ButtonStyle {
+    var prominent: Bool = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let tint = prominent ? VocabbyTheme.background : SettingsTheme.accent
+        configuration.label
+            .font(.plexMono(11, weight: .medium))
+            .tracking(0.6)
+            .textCase(.uppercase)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .fill(prominent ? SettingsTheme.accent : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(prominent ? Color.clear : SettingsTheme.accent, lineWidth: 1)
+            )
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
+    }
+}
+
+private extension ButtonStyle where Self == InstrumentInlineButtonStyle {
+    static var instrumentInline: InstrumentInlineButtonStyle { InstrumentInlineButtonStyle() }
+}
+
 // MARK: - Provider multi-account sections (P4 module split)
 
 extension ProvidersPane {
@@ -10,11 +45,11 @@ extension ProvidersPane {
     /// OAuth stays single-account (system Keychain); this governs web/admin.
     @ViewBuilder
     func claudeAccountsSection() -> some View {
-        SettingsRowDivider()
+        // Instrument redesign: hairline-divided section in place of the old
+        // filled/rounded SettingsCard container (mirrors AdvancedPane.swift).
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.languageCode(language) == "vi" ? "Tài khoản Claude" : "Claude accounts")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SettingsTheme.primary)
+                .plexEyebrow(color: SettingsTheme.secondary)
 
             ForEach(Array(claudeAccounts.accounts.enumerated()), id: \.element.id) { idx, acc in
                 HStack(spacing: 8) {
@@ -28,10 +63,10 @@ extension ProvidersPane {
                         }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(acc.displayName)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.plexSans(12, weight: .medium))
                             .foregroundStyle(SettingsTheme.primary)
                         Text(acc.kind == .admin ? "Admin API key" : "Web sessionKey")
-                            .font(.system(size: 10))
+                            .font(.plexSans(10))
                             .foregroundStyle(SettingsTheme.tertiary)
                     }
                     Spacer()
@@ -39,11 +74,12 @@ extension ProvidersPane {
                         claudeAccounts = ClaudeTokenAccountStore.remove(id: acc.id)
                         Task { await quota.refresh() }
                     } label: {
-                        Image(systemName: "trash").foregroundStyle(SettingsTheme.tertiary)
+                        Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                     }
                     .buttonStyle(.plain)
                     .pointingHandCursor()
                 }
+                if idx < claudeAccounts.accounts.count - 1 { SettingsRowDivider() }
             }
 
             // Add-account form.
@@ -54,10 +90,10 @@ extension ProvidersPane {
                 }
                 .labelsHidden().pickerStyle(.menu).frame(width: 90)
                 TextField(L10n.languageCode(language) == "vi" ? "Nhãn" : "Label", text: $newAccountLabel)
-                    .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(width: 90)
+                    .textFieldStyle(.roundedBorder).font(.plexSans(11)).frame(width: 90)
                 SecureField(newAccountKind == .admin ? "sk-ant-admin..." : "sessionKey sk-ant-...",
                             text: $newAccountToken)
-                    .textFieldStyle(.roundedBorder).font(.system(size: 11))
+                    .textFieldStyle(.roundedBorder).font(.plexSans(11))
                 Button(L10n.languageCode(language) == "vi" ? "Thêm" : "Add") {
                     let token = newAccountToken.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !token.isEmpty else { return }
@@ -66,6 +102,8 @@ extension ProvidersPane {
                     newAccountToken = ""; newAccountLabel = ""
                     Task { await quota.refresh() }
                 }
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(newAccountToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -101,11 +139,10 @@ extension ProvidersPane {
 
     @ViewBuilder
     func kiloUsageSourcePicker() -> some View {
-        SettingsRowDivider()
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Text(L10n.t("provider.dataSource", language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -121,11 +158,12 @@ extension ProvidersPane {
                 .frame(width: 170)
             }
             Text(kiloSourceSubtitle(for: settings.kiloUsageDataSource))
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     /// Known orgs for the scope picker. Always folds in the currently-selected
@@ -143,11 +181,17 @@ extension ProvidersPane {
     @ViewBuilder
     func kiloOrganizationsSection() -> some View {
         let vi = L10n.languageCode(language) == "vi"
-        SettingsCard(header: vi ? "Tổ chức" : "Organizations") {
+        // Instrument redesign: hairline-divided section in place of the old
+        // filled/rounded SettingsCard container.
+        VStack(alignment: .leading, spacing: 0) {
+            Text(vi ? "Tổ chức" : "Organizations")
+                .plexEyebrow(color: SettingsTheme.secondary)
+                .padding(.bottom, 4)
+
             // Scope picker: Personal + known orgs.
             HStack(spacing: 12) {
                 Text(vi ? "Phạm vi" : "Scope")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -167,15 +211,13 @@ extension ProvidersPane {
                 .pickerStyle(.menu)
                 .frame(width: 180)
             }
-            .padding(.horizontal, 14)
             .padding(.vertical, 10)
-
-            SettingsRowDivider()
+            .hairlineTop()
 
             VStack(alignment: .leading, spacing: 6) {
                 if let err = kiloOrgError {
                     Text(L10n.providerText(err, preference: language))
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.critical)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -187,16 +229,19 @@ extension ProvidersPane {
                         Text(vi ? "Tải lại tổ chức" : "Refresh organizations")
                     }
                 }
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(kiloOrgRefreshing)
                 Text(vi
                      ? "Lấy danh sách tổ chức của tài khoản; chọn để xem hạn mức theo tổ chức."
                      : "Fetch the account's organizations; pick one to scope quota to it.")
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             }
-            .padding(.horizontal, 14)
             .padding(.vertical, 10)
+            .hairlineTop()
         }
+        .padding(.horizontal, 14)
     }
 
     func kiloRefreshOrganizations() {
@@ -235,11 +280,10 @@ extension ProvidersPane {
     /// Usage source picker for Antigravity — mirrors CodexBar's source picker.
     @ViewBuilder
     func antigravityUsageSourcePicker() -> some View {
-        SettingsRowDivider()
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Text(L10n.t("provider.dataSource", language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -257,6 +301,7 @@ extension ProvidersPane {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     func antigravityUsageSourceName(_ source: AntigravityUsageSource) -> String {
@@ -273,28 +318,34 @@ extension ProvidersPane {
     @ViewBuilder
     func antigravityOAuthAccountsSection() -> some View {
         let vi = L10n.languageCode(language) == "vi"
-        SettingsCard(header: vi ? "Tài khoản Google" : "Google Accounts") {
+        // Instrument redesign: hairline-divided section in place of the old
+        // filled/rounded SettingsCard container.
+        VStack(alignment: .leading, spacing: 0) {
+            Text(vi ? "Tài khoản Google" : "Google Accounts")
+                .plexEyebrow(color: SettingsTheme.secondary)
+                .padding(.bottom, 4)
+
             // Account list
             if antigravityStore.accounts.isEmpty {
                 Text(vi ? "Chưa có tài khoản nào." : "No accounts.")
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.tertiary)
-                    .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             } else {
                 ForEach(Array(antigravityStore.accounts.enumerated()), id: \.element.label) { idx, acc in
                     let isActive = antigravityStore.activeLabel == acc.label
                         || (antigravityStore.activeLabel == nil && idx == 0)
+                    if idx > 0 { SettingsRowDivider() }
                     HStack(spacing: 8) {
                         Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
                             .foregroundStyle(isActive ? SettingsTheme.accent : SettingsTheme.tertiary)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(acc.label)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.plexSans(12, weight: .medium))
                                 .foregroundStyle(SettingsTheme.primary)
                             if let email = acc.email {
                                 Text(email)
-                                    .font(.system(size: 10))
+                                    .font(.plexSans(10))
                                     .foregroundStyle(SettingsTheme.tertiary)
                             }
                         }
@@ -309,7 +360,7 @@ extension ProvidersPane {
                             }
                             .buttonStyle(.plain)
                             .pointingHandCursor()
-                            .font(.system(size: 11))
+                            .font(.plexSans(11))
                             .foregroundStyle(SettingsTheme.accent)
                         }
                         Button {
@@ -319,53 +370,49 @@ extension ProvidersPane {
                             antigravityStore = s
                             Task { await quota.refresh() }
                         } label: {
-                            Image(systemName: "trash").foregroundStyle(SettingsTheme.tertiary)
+                            Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                         }
                         .buttonStyle(.plain)
                         .pointingHandCursor()
                     }
-                    .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    if idx < antigravityStore.accounts.count - 1 { SettingsRowDivider() }
                 }
             }
-
-            SettingsRowDivider()
 
             // Add account via JSON paste
             VStack(alignment: .leading, spacing: 6) {
                 Text(vi ? "Thêm tài khoản" : "Add account")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexSans(12, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 HStack(spacing: 6) {
                     TextField(vi ? "Nhãn" : "Label", text: $antigravityNewLabel)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .frame(width: 100)
                     SecureField(vi ? "OAuth credentials JSON" : "OAuth credentials JSON", text: $antigravityNewJSON)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                     Button(vi ? "Thêm" : "Add") {
                         antigravityAddFromJSON()
                     }
+                    .buttonStyle(.instrumentInline)
+                    .pointingHandCursor()
                     .disabled(antigravityNewJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Text(vi
                      ? "Dán JSON: {\"client_id\":\"…\",\"client_secret\":\"…\",\"refresh_token\":\"…\"}"
                      : "Paste JSON: {\"client_id\":\"…\",\"client_secret\":\"…\",\"refresh_token\":\"…\"}")
-                    .font(.system(size: 10))
+                    .font(.plexMono(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             }
-            .padding(.horizontal, 14)
             .padding(.vertical, 10)
-
-            SettingsRowDivider()
+            .hairlineTop()
 
             // Login with Google + utility buttons
             VStack(alignment: .leading, spacing: 8) {
                 if let err = antigravityLoginError {
                     Text(L10n.providerText(err, preference: language))
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.critical)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -405,28 +452,27 @@ extension ProvidersPane {
                             Text(vi ? "Đăng nhập Google" : "Login with Google")
                         }
                     }
+                    .buttonStyle(.instrumentInline)
+                    .pointingHandCursor()
                     .disabled(antigravityLoginInProgress)
 
                     Button(vi ? "Mở file token" : "Open token file") {
                         NSWorkspace.shared.open(AntigravityOAuthStore.fileURL)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.instrumentInline)
                     .pointingHandCursor()
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsTheme.accent)
 
                     Button(vi ? "Tải lại" : "Reload") {
                         antigravityReloadTick += 1
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.instrumentInline)
                     .pointingHandCursor()
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsTheme.accent)
                 }
             }
-            .padding(.horizontal, 14)
             .padding(.vertical, 10)
+            .hairlineTop()
         }
+        .padding(.horizontal, 14)
     }
 
     // MARK: - Copilot accounts
@@ -441,28 +487,35 @@ extension ProvidersPane {
             return raw.isEmpty ? "github.com" : raw
         }()
 
-        SettingsCard(header: vi ? "Tài khoản GitHub" : "GitHub Accounts") {
+        // Instrument redesign: hairline-divided section in place of the old
+        // filled/rounded SettingsCard container.
+        VStack(alignment: .leading, spacing: 0) {
+            Text(vi ? "Tài khoản GitHub" : "GitHub Accounts")
+                .plexEyebrow(color: SettingsTheme.secondary)
+                .padding(.bottom, 4)
+
             // Account list
             if copilotStore.accounts.isEmpty {
                 Text(vi ? "Chưa có tài khoản nào." : "No accounts.")
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.tertiary)
-                    .padding(.horizontal, 14)
                     .padding(.vertical, 10)
             } else {
                 ForEach(Array(copilotStore.accounts.enumerated()), id: \.element.label) { i, acc in
                     let isActive = copilotStore.activeLabel == acc.label
                         || (copilotStore.activeLabel == nil && i == 0)
+                    if i > 0 { SettingsRowDivider() }
                     HStack(spacing: 8) {
                         Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
                             .foregroundStyle(isActive ? SettingsTheme.accent : SettingsTheme.tertiary)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(acc.login ?? acc.label)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.plexSans(12, weight: .medium))
                                 .foregroundStyle(SettingsTheme.primary)
                             if isActive {
                                 Text(vi ? "Đang dùng" : "Active")
-                                    .font(.system(size: 10))
+                                    .font(.plexMono(10, weight: .semibold))
+                                    .textCase(.uppercase)
                                     .foregroundStyle(SettingsTheme.accent)
                             }
                         }
@@ -477,7 +530,7 @@ extension ProvidersPane {
                             }
                             .buttonStyle(.plain)
                             .pointingHandCursor()
-                            .font(.system(size: 11))
+                            .font(.plexSans(11))
                             .foregroundStyle(SettingsTheme.accent)
                         }
                         Button {
@@ -487,18 +540,14 @@ extension ProvidersPane {
                             copilotStore = s
                             NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                         } label: {
-                            Image(systemName: "trash").foregroundStyle(SettingsTheme.tertiary)
+                            Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                         }
                         .buttonStyle(.plain)
                         .pointingHandCursor()
                     }
-                    .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    if i < copilotStore.accounts.count - 1 { SettingsRowDivider() }
                 }
             }
-
-            SettingsRowDivider()
 
             // Device user code display — shown while waiting for user to enter on GitHub
             if let userCode = copilotDeviceUserCode {
@@ -506,28 +555,26 @@ extension ProvidersPane {
                     Text(vi
                          ? "Nhập mã XXXX-XXXX sau tại github.com/login/device:"
                          : "Enter code at github.com/login/device:")
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.secondary)
                     Text(userCode)
-                        .font(.system(size: 20, weight: .bold).monospacedDigit())
+                        .font(.plexMono(20, weight: .bold))
                         .foregroundStyle(SettingsTheme.accent)
                         .padding(.vertical, 4)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                SettingsRowDivider()
+                .hairlineTop()
             }
 
             // Error display
             if let err = copilotLoginError {
                 Text(L10n.providerText(err, preference: language))
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(SettingsTheme.critical)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
                     .padding(.vertical, 6)
-                SettingsRowDivider()
+                    .hairlineTop()
             }
 
             // Action buttons
@@ -585,29 +632,28 @@ extension ProvidersPane {
                             Text(vi ? "Đăng nhập GitHub (Add Account)" : "Login with GitHub (Add Account)")
                         }
                     }
+                    .buttonStyle(.instrumentInline)
+                    .pointingHandCursor()
                     .disabled(copilotLoginInProgress)
                 }
                 HStack(spacing: 8) {
                     Button(vi ? "Mở file token" : "Open token file") {
                         NSWorkspace.shared.open(CopilotAccountStore.fileURL)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.instrumentInline)
                     .pointingHandCursor()
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsTheme.accent)
 
                     Button(vi ? "Tải lại" : "Reload") {
                         copilotReloadTick += 1
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.instrumentInline)
                     .pointingHandCursor()
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsTheme.accent)
                 }
             }
-            .padding(.horizontal, 14)
             .padding(.vertical, 10)
+            .hairlineTop()
         }
+        .padding(.horizontal, 14)
     }
 
     /// Parse best-effort OAuth credentials JSON and update the store.

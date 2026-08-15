@@ -490,12 +490,12 @@ struct TokenField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(L10n.t("provider.token", settings.appLanguage))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             HStack(spacing: 8) {
                 SecureField(L10n.t("provider.tokenPlaceholder", settings.appLanguage), text: $token)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(.plexMono(12))
                 Button(L10n.t("provider.save", settings.appLanguage)) {
                     guard !token.isEmpty else { return }
                     do {
@@ -524,7 +524,7 @@ struct TokenField: View {
             }
             if let banner {
                 Text(banner)
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(SettingsTheme.success)
             }
         }
@@ -585,7 +585,7 @@ struct QuotaWarningCard: View {
                 HStack(spacing: 8) {
                     SettingsCheckboxGlyph(isOn: custom.wrappedValue)
                     Text(L10n.f("provider.customThresholds", settings.appLanguage, title))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                 }
             }
@@ -603,7 +603,7 @@ struct QuotaWarningCard: View {
             } else {
                 let inherited = QuotaWarnConfig.globalThresholds.map { "\($0)%" }.joined(separator: ", ")
                 Text(L10n.f("provider.inherited", settings.appLanguage, inherited))
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(SettingsTheme.tertiary)
             }
         }
@@ -623,7 +623,7 @@ struct QuotaWarningCard: View {
             }
         ), in: 1...100, step: 5) {
             Text("\(label): \(levels.wrappedValue[index])%")
-                .font(.system(size: 11).monospacedDigit())
+                .font(.plexMono(11))
                 .foregroundStyle(SettingsTheme.primary)
         }
         .fixedSize()
@@ -670,7 +670,7 @@ struct ElevenLabsKeysCard: View {
         ) {
             if keys.isEmpty {
                 Text(L10n.t("elevenlabs.keysEmpty", settings.appLanguage))
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.secondary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -683,7 +683,7 @@ struct ElevenLabsKeysCard: View {
             addRow
             if let errorText {
                 Text(errorText)
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.critical)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 8)
@@ -711,10 +711,10 @@ struct ElevenLabsKeysCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName(key))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Text(key.preview + "…")
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.plexMono(10))
                     .foregroundStyle(SettingsTheme.secondary)
             }
 
@@ -722,7 +722,7 @@ struct ElevenLabsKeysCard: View {
 
             if isActive {
                 Text(L10n.t("elevenlabs.activeBadge", settings.appLanguage))
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.plexSans(10, weight: .semibold))
                     .foregroundStyle(SettingsTheme.accent)
             } else {
                 Button(L10n.t("elevenlabs.switchKey", settings.appLanguage)) {
@@ -748,11 +748,11 @@ struct ElevenLabsKeysCard: View {
         VStack(alignment: .leading, spacing: 8) {
             SecureField(L10n.t("elevenlabs.keyPlaceholder", settings.appLanguage), text: $newKey)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12).monospacedDigit())
+                .font(.plexMono(12))
             HStack(spacing: 8) {
                 TextField(L10n.t("elevenlabs.labelPlaceholder", settings.appLanguage), text: $newLabel)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                 Button(L10n.t("elevenlabs.addKey", settings.appLanguage)) {
                     addKey()
                 }
@@ -827,7 +827,7 @@ struct HiyoKeysCard: View {
         ) {
             if keys.isEmpty {
                 Text(L10n.t("hiyo.keysEmpty", settings.appLanguage))
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.secondary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -840,7 +840,7 @@ struct HiyoKeysCard: View {
             addRow
             if let errorText {
                 Text(errorText)
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.critical)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 8)
@@ -868,10 +868,10 @@ struct HiyoKeysCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName(key))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Text(key.preview + "…")
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.plexMono(10))
                     .foregroundStyle(SettingsTheme.secondary)
             }
 
@@ -879,7 +879,7 @@ struct HiyoKeysCard: View {
 
             if isActive {
                 Text(L10n.t("hiyo.activeBadge", settings.appLanguage))
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.plexSans(10, weight: .semibold))
                     .foregroundStyle(SettingsTheme.accent)
             } else {
                 Button(L10n.t("hiyo.switchKey", settings.appLanguage)) {
@@ -905,11 +905,11 @@ struct HiyoKeysCard: View {
         VStack(alignment: .leading, spacing: 8) {
             SecureField(L10n.t("hiyo.keyPlaceholder", settings.appLanguage), text: $newKey)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12).monospacedDigit())
+                .font(.plexMono(12))
             HStack(spacing: 8) {
                 TextField(L10n.t("hiyo.labelPlaceholder", settings.appLanguage), text: $newLabel)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                 Button(L10n.t("hiyo.addKey", settings.appLanguage)) {
                     addKey()
                 }
@@ -1015,12 +1015,12 @@ struct CodexAccountsCard: View {
                 Text(account.email ?? (account.isSystem
                                        ? L10n.t("provider.systemAccount", settings.appLanguage)
                                        : L10n.t("provider.accountGeneric", settings.appLanguage)))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Text(account.isSystem
                      ? L10n.t("provider.systemManaged", settings.appLanguage)
                      : L10n.t("provider.appManaged", settings.appLanguage))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.secondary)
             }
 
@@ -1067,7 +1067,7 @@ struct CodexAccountsCard: View {
             if busy {
                 ProgressView().controlSize(.small)
                 Text(L10n.t("provider.waitingLogin", settings.appLanguage))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.secondary)
             }
 
@@ -1075,7 +1075,7 @@ struct CodexAccountsCard: View {
 
             if let errorText {
                 Text(L10n.providerText(errorText, preference: settings.appLanguage))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.warning)
                     .lineLimit(1)
             }
@@ -1196,7 +1196,7 @@ struct CodexAutoPrimeCard: View {
             ) {
                 Toggle("", isOn: $settings.codexAutoPrimeEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(.instrument)
             }
 
             SettingsRowDivider()

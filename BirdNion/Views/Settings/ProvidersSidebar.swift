@@ -34,7 +34,7 @@ extension ProvidersPane {
     /// Provider roster — rendered inside the Settings sidebar column (below
     /// the nav block), so it fills the column width and scrolls on its own.
     var sidebar: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
             searchField
             // Scrollable provider list — the roster can hold 20+ providers, so
             // it must scroll independently (search field stays pinned above).
@@ -97,11 +97,12 @@ extension ProvidersPane {
     var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
+                .font(.plexMono(11))
                 .foregroundStyle(SettingsTheme.secondary)
                 .accessibilityHidden(true)
             TextField(L10n.t("provider.search", language), text: $searchText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.primary)
             if !searchText.isEmpty {
                 Button {
@@ -115,18 +116,12 @@ extension ProvidersPane {
                 .pointingHandCursor()
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(SettingsTheme.control)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1)
-        )
-        .padding(.horizontal, 6)
-        .padding(.bottom, 2)
+        // Instrument redesign: flat row, no filled/rounded control box — a
+        // single hairline separates the search field from the roster below
+        // (mirrors `.pp-search` in the CSS reference).
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .overlay(VocabbyTheme.hairline.frame(height: 1), alignment: .bottom)
     }
 
     func sidebarRow(_ row: BirdNionConfigStore.Provider, position: Int) -> some View {
@@ -157,12 +152,12 @@ extension ProvidersPane {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayName(for: row))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(row.enabled == true ? SettingsTheme.primary : SettingsTheme.secondary)
                 // Secondary line: remaining quota % tinted by level when available
                 // (mockup P4); errors stay critical; no quota → existing status text.
                 Text(statusSubtitle(for: row))
-                    .font(.system(size: 10))
+                    .font(.plexMono(10))
                     .foregroundStyle(sidebarSubtitleColor(for: row))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -173,23 +168,21 @@ extension ProvidersPane {
 
             statusDot(for: row)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isDropTarget
-                      ? SettingsTheme.accent.opacity(0.12)
-                      : (isSelected
-                         ? SettingsTheme.selectedSurface
-                         : (isHovered ? SettingsTheme.hoverSurface.opacity(0.62) : .clear)))
-                .padding(.horizontal, 6)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(isDropTarget ? SettingsTheme.accent.opacity(0.8) : .clear,
-                              lineWidth: 1.5)
-                .padding(.horizontal, 6)
-        )
+        // Instrument redesign: flush square row (no rounded highlight box) —
+        // selection/drop-target reads as a subtle fill + a 2pt left accent
+        // bar instead (mirrors `.pp-side-row` in the CSS reference).
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(isDropTarget
+                    ? SettingsTheme.accent.opacity(0.12)
+                    : (isSelected
+                       ? SettingsTheme.selectedSurface
+                       : (isHovered ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear)))
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(isDropTarget ? SettingsTheme.accent : (isSelected ? SettingsTheme.primary : Color.clear))
+                .frame(width: 2)
+        }
         .contentShape(Rectangle())
         .opacity(isDragged ? 0.42 : 1)
         .scaleEffect(isDragged ? 0.985 : 1)
@@ -223,13 +216,17 @@ extension ProvidersPane {
                 ProviderLogoView(id: row.id, tint: sidebarLogoTint(for: row, selected: false))
                     .frame(width: 22, height: 22)
                 Text(displayName(for: row))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .fill(SettingsTheme.card))
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(SettingsTheme.border, lineWidth: 1)
+            )
         }
         // Any sibling row can receive the dragged id and becomes visibly
         // highlighted before the user releases the mouse.

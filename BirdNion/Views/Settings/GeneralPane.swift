@@ -62,7 +62,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.showPercentInMenuBar)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(.instrument)
                 }
 
                 SettingsRowDivider()
@@ -73,7 +73,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.launchAtLogin)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(.instrument)
                         .onChange(of: settings.launchAtLogin) { _ in
                             settings.applyLaunchAtLogin()
                         }
@@ -109,7 +109,7 @@ struct GeneralPane: View {
                     title: L10n.t("settings.refreshOnOpen.title", settings.appLanguage),
                     subtitle: L10n.t("settings.refreshOnOpen.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.refreshOnMenuOpen).labelsHidden().toggleStyle(.switch)
+                    Toggle("", isOn: $settings.refreshOnMenuOpen).labelsHidden().toggleStyle(.instrument)
                 }
             }
 
@@ -151,7 +151,7 @@ struct GeneralPane: View {
                     title: L10n.t("settings.statusChecks.title", settings.appLanguage),
                     subtitle: L10n.t("settings.statusChecks.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.statusChecksEnabled).labelsHidden().toggleStyle(.switch)
+                    Toggle("", isOn: $settings.statusChecksEnabled).labelsHidden().toggleStyle(.instrument)
                 }
 
                 SettingsRowDivider()
@@ -160,7 +160,7 @@ struct GeneralPane: View {
                     title: L10n.t("settings.sessionNotifications.title", settings.appLanguage),
                     subtitle: L10n.t("settings.sessionNotifications.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.sessionQuotaNotificationsEnabled).labelsHidden().toggleStyle(.switch)
+                    Toggle("", isOn: $settings.sessionQuotaNotificationsEnabled).labelsHidden().toggleStyle(.instrument)
                 }
 
                 SettingsRowDivider()
@@ -171,7 +171,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.providerFailureNotificationsEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(.instrument)
                 }
 
                 SettingsRowDivider()
@@ -180,7 +180,7 @@ struct GeneralPane: View {
                     title: L10n.t("settings.quotaWarningNotifications.title", settings.appLanguage),
                     subtitle: L10n.t("settings.quotaWarningNotifications.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.quotaWarningNotificationsEnabled).labelsHidden().toggleStyle(.switch)
+                    Toggle("", isOn: $settings.quotaWarningNotificationsEnabled).labelsHidden().toggleStyle(.instrument)
                 }
 
                 if settings.quotaWarningNotificationsEnabled {
@@ -192,7 +192,7 @@ struct GeneralPane: View {
                     ) {
                         Stepper(value: $settings.quotaWarnLevel1, in: 5...95, step: 5) {
                             Text("\(settings.quotaWarnLevel1)%")
-                                .font(.system(size: 12).monospacedDigit())
+                                .font(.plexMono(12))
                         }
                         .fixedSize()
                     }
@@ -205,7 +205,7 @@ struct GeneralPane: View {
                     ) {
                         Stepper(value: $settings.quotaWarnLevel2, in: 1...90, step: 5) {
                             Text("\(settings.quotaWarnLevel2)%")
-                                .font(.system(size: 12).monospacedDigit())
+                                .font(.plexMono(12))
                         }
                         .fixedSize()
                     }
@@ -216,7 +216,7 @@ struct GeneralPane: View {
                         title: L10n.t("settings.warningSound.title", settings.appLanguage),
                         subtitle: L10n.t("settings.warningSound.subtitle", settings.appLanguage)
                     ) {
-                        Toggle("", isOn: $settings.quotaWarningSoundEnabled).labelsHidden().toggleStyle(.switch)
+                        Toggle("", isOn: $settings.quotaWarningSoundEnabled).labelsHidden().toggleStyle(.instrument)
                     }
 
                     SettingsRowDivider()
@@ -225,7 +225,7 @@ struct GeneralPane: View {
                         title: L10n.t("settings.warningAlert.title", settings.appLanguage),
                         subtitle: L10n.t("settings.warningAlert.subtitle", settings.appLanguage)
                     ) {
-                        Toggle("", isOn: $settings.quotaWarningOnScreenAlertEnabled).labelsHidden().toggleStyle(.switch)
+                        Toggle("", isOn: $settings.quotaWarningOnScreenAlertEnabled).labelsHidden().toggleStyle(.instrument)
                     }
                 }
 
@@ -237,7 +237,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.weeklyDigestEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(.instrument)
                         .onChange(of: settings.weeklyDigestEnabled) { enabled in
                             if enabled { WeeklyDigest.lastEvaluatedAt = nil }
                         }

@@ -263,7 +263,7 @@ struct ClaudeCodePane: View {
     private var providerList: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.t("claudeCode.selectProvider", lang))
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if !providers.isEmpty {
@@ -273,9 +273,6 @@ struct ClaudeCodePane: View {
                         if idx < providers.count - 1 { SettingsRowDivider() }
                     }
                 }
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SettingsTheme.card))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1))
             }
 
             // Custom user-defined backends. Add control lives under the card
@@ -291,9 +288,6 @@ struct ClaudeCodePane: View {
                         if idx < profiles.count - 1 { SettingsRowDivider() }
                     }
                 }
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SettingsTheme.card))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(SettingsTheme.border.opacity(0.75), lineWidth: 1))
             }
 
             Button { addProfile() } label: {
@@ -301,7 +295,7 @@ struct ClaudeCodePane: View {
                     Image(systemName: "plus")
                         .font(.system(size: 12, weight: .semibold))
                     Text(L10n.t("ccx.add", lang))
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.plexSans(12, weight: .medium))
                 }
                 .foregroundStyle(SettingsTheme.accent)
             }
@@ -346,7 +340,7 @@ struct ClaudeCodePane: View {
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(p.name.isEmpty ? L10n.t("ccx.newName", lang) : p.name)
-                        .font(.system(size: 13, weight: selected || activated ? .semibold : .regular))
+                        .font(.plexSans(13, weight: selected || activated ? .semibold : .regular))
                         .foregroundStyle(SettingsTheme.primary)
                         .lineLimit(1)
                     Text(combinedStatusLabel(
@@ -354,7 +348,7 @@ struct ClaudeCodePane: View {
                         codex: p.codexProfileID.flatMap { id in
                             codexProfiles.first { $0.id == id }.map(codexStatusLabel)
                         }))
-                        .font(.system(size: 10))
+                        .font(.plexMono(9, weight: .medium))
                         .foregroundStyle(activated ? SettingsTheme.success : SettingsTheme.tertiary)
                         .lineLimit(1)
                 }
@@ -370,6 +364,12 @@ struct ClaudeCodePane: View {
                         : (selected
                            ? SettingsTheme.selectedSurface
                         : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear))
+            )
+            .overlay(
+                Rectangle()
+                    .fill(activated ? SettingsTheme.success : (selected ? SettingsTheme.primary : Color.clear))
+                    .frame(width: 2),
+                alignment: .leading
             )
             .contentShape(Rectangle())
         }
@@ -403,7 +403,7 @@ struct ClaudeCodePane: View {
                     .frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(providerName(p))
-                        .font(.system(size: 13, weight: active || activated ? .semibold : .regular))
+                        .font(.plexSans(13, weight: active || activated ? .semibold : .regular))
                         .foregroundStyle(SettingsTheme.primary)
                         .lineLimit(1)
                     Text(combinedStatusLabel(
@@ -411,7 +411,7 @@ struct ClaudeCodePane: View {
                         codex: p.codexProfileID.flatMap { id in
                             codexProfiles.first { $0.id == id }.map(codexStatusLabel)
                         }))
-                        .font(.system(size: 10))
+                        .font(.plexMono(9, weight: .medium))
                         .foregroundStyle(activated ? SettingsTheme.success : SettingsTheme.tertiary)
                         .lineLimit(1)
                 }
@@ -426,6 +426,12 @@ struct ClaudeCodePane: View {
                         : (active
                            ? SettingsTheme.selectedSurface
                            : (hovering ? SettingsTheme.hoverSurface.opacity(0.62) : Color.clear)))
+            .overlay(
+                Rectangle()
+                    .fill(activated ? SettingsTheme.success : (active ? SettingsTheme.primary : Color.clear))
+                    .frame(width: 2),
+                alignment: .leading
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -477,10 +483,10 @@ struct ClaudeCodePane: View {
                 activationPanel(p)
 
                 if let msg = errorMessage {
-                    Text(msg).font(.system(size: 11)).foregroundStyle(SettingsTheme.critical)
+                    Text(msg).font(.plexSans(11)).foregroundStyle(SettingsTheme.critical)
                         .frame(maxWidth: .infinity, alignment: .center)
                 } else if let msg = statusMessage {
-                    Text(msg).font(.system(size: 11)).foregroundStyle(SettingsTheme.success)
+                    Text(msg).font(.plexSans(11)).foregroundStyle(SettingsTheme.success)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
 
@@ -513,11 +519,10 @@ struct ClaudeCodePane: View {
                 SettingsCard {
                     Toggle(isOn: $disable1M) {
                         Text(L10n.t("claudeCode.disable1M", lang))
-                            .font(.system(size: 13))
+                            .font(.plexSans(13))
                             .foregroundStyle(SettingsTheme.primary)
                     }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+                    .toggleStyle(.instrument)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                 }
@@ -561,8 +566,10 @@ struct ClaudeCodePane: View {
 
                 HStack {
                     Spacer()
-                    Button(role: .destructive) { showingDeleteProfileConfirmation = true } label: {
-                        Label(L10n.t("ccx.delete", lang), systemImage: "trash")
+                    instrumentActionButton(L10n.t("ccx.delete", lang),
+                                           systemImage: "trash",
+                                           tint: SettingsTheme.critical) {
+                        showingDeleteProfileConfirmation = true
                     }
                     .disabled(busy)
                 }
@@ -641,15 +648,15 @@ struct ClaudeCodePane: View {
             ForEach(Array(steps.enumerated()), id: \.offset) { idx, step in
                 if idx > 0 {
                     Text("·")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.plexMono(10, weight: .bold))
                         .foregroundStyle(SettingsTheme.border)
                 }
                 HStack(spacing: 2) {
                     Text("\(step.0).")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.plexMono(10, weight: .bold))
                         .foregroundStyle(SettingsTheme.accent)
                     Text((L10n.t(step.1, lang) + (step.2 ? " ✓" : "")).uppercased())
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.plexMono(10, weight: .bold))
                         .foregroundStyle(SettingsTheme.secondary)
                         .tracking(0.4)
                         .lineLimit(1)
@@ -755,12 +762,18 @@ struct ClaudeCodePane: View {
         return SettingsCard(header: header) {
             HStack(spacing: 8) {
                 Text(L10n.t("codexConfig.model", lang))
-                    .font(.system(size: 13))
+                    .font(.plexSans(13))
                     .foregroundStyle(SettingsTheme.primary)
                     .frame(width: 62, alignment: .leading)
                 TextField("gpt-5.6", text: profile.model)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12).monospaced())
+                    .textFieldStyle(.plain)
+                    .font(.plexMono(12))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                            .strokeBorder(SettingsTheme.border, lineWidth: 1)
+                    )
                 Button {
                     loadCodexModels()
                 } label: {
@@ -798,9 +811,11 @@ struct ClaudeCodePane: View {
                 SettingsRowDivider()
                 HStack(spacing: 12) {
                     Text(L10n.t("codexConfig.connection", lang))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
+                    // Native segmented Picker — left as system control per the
+                    // Instrument redesign rule for `Picker(.segmented)` call sites.
                     Picker("", selection: codexConnectionBinding(profile)) {
                         Text(L10n.t("codexConfig.connection.direct", lang))
                             .tag(BirdNionConfigStore.CodexProfile.ConnectionMode.direct)
@@ -839,10 +854,10 @@ struct ClaudeCodePane: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.t("codexConfig.projectUse.title", lang))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(command)
-                        .font(.system(size: 12).monospaced())
+                        .font(.plexMono(12))
                         .foregroundStyle(SettingsTheme.secondary)
                         .textSelection(.enabled)
                         .lineLimit(1)
@@ -854,10 +869,14 @@ struct ClaudeCodePane: View {
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.secondary)
                         .frame(width: 28, height: 28)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .strokeBorder(SettingsTheme.border, lineWidth: 1)
+                        )
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
                 .pointingHandCursor()
                 .help(L10n.t("codexConfig.projectUse.copy", lang))
                 .accessibilityLabel(L10n.t("codexConfig.projectUse.copy", lang))
@@ -1110,19 +1129,19 @@ struct ClaudeCodePane: View {
     private var pasteJSONSheet: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L10n.t("ccx.pasteJSON.title", lang))
-                .font(.system(size: 14, weight: .semibold))
+                .font(.plexSans(14, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Text(L10n.t("ccx.pasteJSON.hint", lang))
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextEditor(text: $pasteJSONText)
-                .font(.system(size: 12).monospaced())
+                .font(.plexMono(12))
                 .frame(minHeight: 200)
-                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .overlay(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .strokeBorder(SettingsTheme.border, lineWidth: 1))
             if let err = importError {
-                Text(err).font(.system(size: 11)).foregroundStyle(SettingsTheme.critical)
+                Text(err).font(.plexSans(11)).foregroundStyle(SettingsTheme.critical)
             }
             HStack {
                 Spacer()
@@ -1163,19 +1182,19 @@ struct ClaudeCodePane: View {
                     .foregroundStyle(SettingsTheme.accent)
                     .frame(width: 64, height: 64)
                     .background(SettingsTheme.accent.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(SettingsTheme.accent.opacity(0.12), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                            .strokeBorder(SettingsTheme.accent.opacity(0.4), lineWidth: 1)
                     )
 
                 Text(L10n.t("claudeCode.empty.remakeTitle", lang))
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.plexSans(16, weight: .bold))
                     .foregroundStyle(SettingsTheme.primary)
                     .multilineTextAlignment(.center)
 
                 Text(L10n.t("claudeCode.empty.remakeBody", lang))
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1210,7 +1229,7 @@ struct ClaudeCodePane: View {
                     ForEach(Array(stepLabels.enumerated()), id: \.offset) { idx, label in
                         HStack(spacing: 6) {
                             Text("\(idx + 1)")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.plexMono(10, weight: .bold))
                                 .foregroundStyle(SettingsTheme.accent)
                                 .frame(width: 20, height: 20)
                                 .overlay(
@@ -1218,7 +1237,7 @@ struct ClaudeCodePane: View {
                                         .strokeBorder(SettingsTheme.accent.opacity(0.4), lineWidth: 1)
                                 )
                             Text(label)
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.plexSans(11, weight: .medium))
                                 .foregroundStyle(SettingsTheme.secondary)
                                 .lineLimit(1)
                         }
@@ -1257,7 +1276,7 @@ struct ClaudeCodePane: View {
         if let feedback = customFeedback(for: target) {
             Label(feedback, systemImage: customFeedbackIsError
                   ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .font(.system(size: 11, weight: .medium))
+                .font(.plexSans(11, weight: .medium))
                 .foregroundStyle(customFeedbackIsError ? SettingsTheme.critical : SettingsTheme.success)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 4)
@@ -1293,7 +1312,7 @@ struct ClaudeCodePane: View {
                 SettingsRowDivider()
                 Label(feedback, systemImage: customFeedbackIsError
                       ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.plexSans(11, weight: .medium))
                     .foregroundStyle(customFeedbackIsError ? SettingsTheme.critical : SettingsTheme.success)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 14)
@@ -1343,7 +1362,7 @@ struct ClaudeCodePane: View {
                     ProviderLogoMark(id: p.id, tint: SettingsTheme.accent)
                         .frame(width: 18, height: 18)
                     Text(providerName(p))
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.plexSans(12, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                         .lineLimit(1)
                 })
@@ -1365,28 +1384,34 @@ struct ClaudeCodePane: View {
                 .foregroundStyle(stateColor(state))
                 .frame(width: 38, height: 38)
                 .background(stateColor(state).opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .strokeBorder(stateColor(state).opacity(0.4), lineWidth: 1)
+                )
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Text(title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.plexSans(15, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     HStack(spacing: 4) {
                         Image(systemName: stateIcon(state))
                             .font(.system(size: 9, weight: .bold))
                         Text(stateLabel(state))
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.plexMono(10, weight: .medium))
+                            .tracking(0.6)
+                            .textCase(.uppercase)
                     }
                     .foregroundStyle(stateColor(state))
                 }
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     Label(target, systemImage: "scope")
-                        .font(.system(size: 10).monospacedDigit())
+                        .font(.plexMono(10))
                         .foregroundStyle(SettingsTheme.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -1555,9 +1580,11 @@ struct ClaudeCodePane: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 Text(L10n.t("claudeCode.scope", lang))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
+                // Native segmented Picker — left as system control per the
+                // Instrument redesign rule for `Picker(.segmented)` call sites.
                 Picker("", selection: scopeBinding) {
                     Text(L10n.t("claudeCode.scope.global", lang)).tag(ScopeChoice.global)
                     Text(L10n.t("claudeCode.scope.project", lang)).tag(ScopeChoice.project)
@@ -1568,7 +1595,7 @@ struct ClaudeCodePane: View {
             }
             if scope == .global {
                 Text(L10n.t("claudeCode.scope.globalPath", lang))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             }
         }
@@ -1580,16 +1607,15 @@ struct ClaudeCodePane: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(projectDir?.path ?? L10n.t("claudeCode.project.none", lang))
-                    .font(.system(size: 11))
+                    .font(.plexMono(11))
                     .foregroundStyle(projectDir == nil ? SettingsTheme.tertiary : SettingsTheme.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
-                Button(L10n.t("claudeCode.project.choose", lang)) { chooseProjectDir() }
-                    .controlSize(.small)
+                instrumentActionButton(L10n.t("claudeCode.project.choose", lang)) { chooseProjectDir() }
             }
             Text(L10n.t("claudeCode.project.gitignore", lang))
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1602,14 +1628,12 @@ struct ClaudeCodePane: View {
             title: L10n.t("claudeCode.removeEnv.title", lang),
             subtitle: L10n.f("claudeCode.removeEnv.subtitle", lang, visibleTargetPath())
         ) {
-            Button(role: .destructive) {
+            instrumentActionButton(L10n.t("claudeCode.removeEnv.button", lang),
+                                   systemImage: "trash",
+                                   tint: SettingsTheme.critical) {
                 showingRemoveEnvConfirmation = true
-            } label: {
-                Label(L10n.t("claudeCode.removeEnv.button", lang), systemImage: "trash")
             }
-            .controlSize(.small)
             .disabled(removableScope() == nil || busy)
-            .pointingHandCursor()
         }
     }
 
@@ -1617,28 +1641,23 @@ struct ClaudeCodePane: View {
         HStack(spacing: 10) {
             if loadingModels {
                 Text(L10n.t("claudeCode.loadingModels", lang))
-                    .font(.system(size: 11)).foregroundStyle(SettingsTheme.secondary)
+                    .font(.plexSans(11)).foregroundStyle(SettingsTheme.secondary)
             } else if !models.isEmpty {
                 Text(L10n.f("claudeCode.modelsLoaded", lang, models.count))
-                    .font(.system(size: 11)).foregroundStyle(SettingsTheme.secondary)
+                    .font(.plexSans(11)).foregroundStyle(SettingsTheme.secondary)
             }
             Spacer(minLength: 8)
-            Button {
-                loadModels()
-            } label: {
-                HStack(spacing: 5) {
-                    if loadingModels {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    Text(models.isEmpty
-                         ? L10n.t("claudeCode.loadModels", lang)
-                         : L10n.t("claudeCode.reloadModels", lang))
-                }
+            if loadingModels {
+                ProgressView().controlSize(.small)
+            } else {
+                instrumentActionButton(
+                    models.isEmpty
+                        ? L10n.t("claudeCode.loadModels", lang)
+                        : L10n.t("claudeCode.reloadModels", lang),
+                    systemImage: "arrow.clockwise"
+                ) { loadModels() }
+                .disabled(loadingModels)
             }
-            .controlSize(.small)
-            .disabled(loadingModels)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1651,12 +1670,18 @@ struct ClaudeCodePane: View {
         let options = suggestionOptions(current: selection.wrappedValue)
         return HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 13))
+                .font(.plexSans(13))
                 .foregroundStyle(SettingsTheme.primary)
                 .frame(width: 62, alignment: .leading)
             TextField(L10n.t("claudeCode.model.pickPlaceholder", lang), text: selection)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12).monospaced())
+                .textFieldStyle(.plain)
+                .font(.plexMono(12))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .strokeBorder(SettingsTheme.border, lineWidth: 1)
+                )
             Menu {
                 ForEach(options, id: \.self) { id in
                     Button(id) { selection.wrappedValue = id }
@@ -2158,6 +2183,35 @@ struct ClaudeCodePane: View {
 
     // MARK: - Helpers
 
+    /// Outlined, square-corner, uppercase-mono action button — the Instrument
+    /// redesign's replacement for default bordered/rounded button chrome on
+    /// section actions (mirrors the "TẮT" / "DỪNG" / "SAO CHÉP" button style).
+    private func instrumentActionButton(_ title: String,
+                                        systemImage: String? = nil,
+                                        tint: Color = SettingsTheme.primary,
+                                        action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                Text(title.uppercased())
+                    .font(.plexMono(10, weight: .medium))
+                    .tracking(0.4)
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(tint.opacity(0.6), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
     /// "N. <title>" — steps are numbered in code because the proxy step can be
     /// skipped (direct upstream), shifting every number after it.
     private func stepTitle(_ number: Int, _ key: String) -> String {
@@ -2167,11 +2221,11 @@ struct ClaudeCodePane: View {
     private func infoRow(_ label: String, _ value: String) -> some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Spacer(minLength: 8)
             Text(value)
-                .font(.system(size: 12))
+                .font(.plexMono(12))
                 .foregroundStyle(SettingsTheme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)

@@ -1,5 +1,56 @@
 import SwiftUI
 
+// MARK: - Instrument redesign — local helpers (this file only)
+//
+// `SettingsCard` (SettingsSceneRoot.swift) renders the pre-redesign look: a
+// filled, rounded, shadowed box. The Instrument redesign replaces that with
+// a plain hairline-top divider + mono eyebrow header (mirrors `.card` /
+// `.pp-*` in `linux/src/styles.css`). `SettingsCard` itself is shared UI
+// infrastructure outside this file's scope, so `InstrumentSection` is a
+// local, call-site-only substitute used only by ProviderDetail's own
+// sections — same header/content API, no other view files are touched.
+private struct InstrumentSection<Content: View>: View {
+    var header: String? = nil
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let header {
+                // Mirrors the mockup: the eyebrow label itself carries no
+                // rule — only the row content below it does (matching
+                // `.pp-field-row { border-top: ... }` on every row, first
+                // one included), so the divider sits between header and
+                // content rather than above the header.
+                Text(header)
+                    .plexEyebrow()
+                    .padding(.horizontal, 4)
+                    .padding(.top, 18)
+                    .padding(.bottom, 4)
+            }
+            VStack(spacing: 0) { content() }
+                .hairlineTop()
+        }
+    }
+}
+
+private extension View {
+    /// Square, hairline-bordered field — replaces `.textFieldStyle(.roundedBorder)`'s
+    /// native rounded chrome with the Instrument look (flat background, square
+    /// corners, `VocabbyTheme.border` outline). Visual only — bindings/validation
+    /// on the wrapped `TextField`/`SecureField` are untouched.
+    func instrumentFieldStyle() -> some View {
+        self
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(VocabbyTheme.background)
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 1)
+            )
+    }
+}
+
 // MARK: - Provider detail shell (P4 module split)
 
 extension ProvidersPane {
@@ -38,7 +89,7 @@ extension ProvidersPane {
             HStack(spacing: 4) {
                 ProgressView().controlSize(.mini)
                 Text(L10n.t("provider.selfTest.running", language))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.secondary)
             }
         case .pass:
@@ -46,7 +97,7 @@ extension ProvidersPane {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(SettingsTheme.success)
                 Text(L10n.t("provider.selfTest.pass", language))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.success)
             }
         case .fail(let kind, let raw):
@@ -54,7 +105,7 @@ extension ProvidersPane {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(SettingsTheme.critical)
                 Text("\(L10n.t("provider.selfTest.fail", language)) — \(L10n.t(kind.hintKey, language))")
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.critical)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -119,9 +170,9 @@ extension ProvidersPane {
             // details (e.g. Codex) instead of overflowing past the bottom edge.
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
-            SettingsCard {
+            InstrumentSection {
                 Text(L10n.t("provider.choose", language))
-                    .font(.system(size: 13))
+                    .font(.plexSans(13))
                     .foregroundStyle(SettingsTheme.secondary)
                     .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
                     .padding(20)
@@ -132,17 +183,16 @@ extension ProvidersPane {
 
     func detailHeader(_ idx: Int) -> some View {
         let row = rows[idx]
-        return SettingsCard {
-            VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .center, spacing: 12) {
                 ProviderLogoView(id: row.id, tint: row.enabled == true ? SettingsTheme.accent : SettingsTheme.disabled)
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(displayName(for: row))
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.plexSans(16, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(headerSubtitle(for: row))
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.secondary)
                         .lineLimit(1)
                 }
@@ -185,7 +235,7 @@ extension ProvidersPane {
 
                 Toggle("", isOn: enabledBinding(idx))
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(.instrument)
                     .controlSize(.small)
                 }
                 if selfTestState[row.id] != nil, selfTestState[row.id] != .idle {
@@ -194,12 +244,12 @@ extension ProvidersPane {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-        }
+            .inkRuleBottom()
     }
 
     func detailInfoGrid(_ row: BirdNionConfigStore.Provider) -> some View {
         let s = status(for: row.id)
-        return SettingsCard(header: L10n.t("settings.section.info", language)) {
+        return InstrumentSection(header: L10n.t("settings.section.info", language)) {
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                 infoRow(
                     L10n.t("provider.status", language),
@@ -256,7 +306,7 @@ extension ProvidersPane {
                         GridRow {
                             Text(L10n.t("provider.buyCredits", language)).gridColumnAlignment(.leading)
                             Link(L10n.t("provider.openPage", language), destination: u)
-                                .font(.system(size: 12))
+                                .font(.plexSans(12))
                         }
                     }
                 }
@@ -282,7 +332,7 @@ extension ProvidersPane {
                     infoRow(L10n.t("provider.storage", language), storageText(for: row.id))
                 }
             }
-            .font(.system(size: 12))
+            .font(.plexSans(12))
             .foregroundStyle(SettingsTheme.secondary)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -350,33 +400,33 @@ extension ProvidersPane {
     @ViewBuilder
     func settingsSection(_ idx: Int) -> some View {
         let row = rows[idx]
-        SettingsCard(header: L10n.t("settings.section.setup", language)) {
+        InstrumentSection(header: L10n.t("settings.section.setup", language)) {
             // Account label (applies to all providers)
             VStack(alignment: .leading, spacing: 4) {
                 Text(L10n.t("provider.accountLabel", language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 TextField(L10n.t("provider.accountLabelPlaceholder", language), text: labelBinding(idx))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
+                    .instrumentFieldStyle()
+                    .font(.plexSans(12))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
 
-            SettingsRowDivider()
+            HairlineRule()
 
             if row.id == "codex" {
                 // Zero-config: just show login status.
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L10n.t("provider.signIn", language))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(codexLoginStatus())
-                        .font(.system(size: 12))
+                        .font(.plexSans(12))
                         .foregroundStyle(SettingsTheme.secondary)
                     Text(L10n.t("provider.codexSignInHint", language))
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.tertiary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -438,16 +488,16 @@ extension ProvidersPane {
             }
 
             if row.id == "xai" {
-                SettingsRowDivider()
+                HairlineRule()
                 xaiTeamIDSection(idx)
             }
 
             if row.id == "codex" {
-                SettingsRowDivider()
+                HairlineRule()
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 12) {
                         Text(L10n.t("provider.dataSource", language))
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.plexSans(13, weight: .semibold))
                             .foregroundStyle(SettingsTheme.primary)
                         Spacer(minLength: 8)
                         Picker("", selection: Binding(
@@ -463,7 +513,7 @@ extension ProvidersPane {
                         .frame(width: 150)
                     }
                     Text(codexSourceSubtitle(for: settings.codexUsageSource))
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(SettingsTheme.tertiary)
                 }
                 .padding(.horizontal, 14)
@@ -475,10 +525,10 @@ extension ProvidersPane {
             }
 
             if row.id == "minimax" {
-                SettingsRowDivider()
+                HairlineRule()
                 HStack(spacing: 12) {
                     Text(L10n.t("provider.apiRegion", language))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
@@ -498,10 +548,10 @@ extension ProvidersPane {
             }
 
             if row.id == "zai" {
-                SettingsRowDivider()
+                HairlineRule()
                 HStack(spacing: 12) {
                     Text(L10n.t("provider.apiRegion", language))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
@@ -521,10 +571,10 @@ extension ProvidersPane {
             }
 
             if row.id == "alibaba" {
-                SettingsRowDivider()
+                HairlineRule()
                 HStack(spacing: 12) {
                     Text(L10n.t("provider.apiRegion", language))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
@@ -544,10 +594,10 @@ extension ProvidersPane {
             }
 
             if row.id == "bedrock" {
-                SettingsRowDivider()
+                HairlineRule()
                 HStack(spacing: 12) {
                     Text(L10n.languageCode(language) == "vi" ? "Ngân sách tháng (USD)" : "Monthly budget (USD)")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     TextField("∞", text: Binding(
@@ -562,6 +612,7 @@ extension ProvidersPane {
                         }
                     ))
                     .multilineTextAlignment(.trailing)
+                    .instrumentFieldStyle()
                     .frame(width: 90)
                 }
                 .padding(.horizontal, 14)
@@ -569,15 +620,15 @@ extension ProvidersPane {
             }
 
             if row.id == "deepgram" {
-                SettingsRowDivider()
+                HairlineRule()
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Project ID")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(L10n.languageCode(language) == "vi"
                          ? "Tùy chọn. Để trống = lấy & gộp tất cả project của API key."
                          : "Optional. Leave blank to discover and aggregate all projects.")
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.secondary)
                     TextField("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", text: Binding(
                         get: { rows[idx].projectID ?? "" },
@@ -588,23 +639,23 @@ extension ProvidersPane {
                             NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                         }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .instrumentFieldStyle()
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             }
 
             if row.id == "openai" {
-                SettingsRowDivider()
+                HairlineRule()
                 VStack(alignment: .leading, spacing: 4) {
                     let vi = L10n.languageCode(language) == "vi"
                     Text(vi ? "OpenAI Project ID" : "OpenAI Project ID")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(vi
                          ? "Tùy chọn (proj_…). Dùng Admin API key (OPENAI_ADMIN_KEY). Không phải ChatGPT/Codex quota — đó là provider Codex."
                          : "Optional (proj_…). Prefer an Admin API key (OPENAI_ADMIN_KEY). Not ChatGPT/Codex quota — use the Codex provider for that.")
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     TextField("proj_…", text: Binding(
@@ -616,22 +667,22 @@ extension ProvidersPane {
                             NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                         }
                     ))
-                    .textFieldStyle(.roundedBorder)
+                    .instrumentFieldStyle()
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             }
 
             if row.id == "copilot" {
-                SettingsRowDivider()
+                HairlineRule()
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L10n.languageCode(language) == "vi" ? "GitHub Enterprise Host" : "GitHub Enterprise Host")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(L10n.languageCode(language) == "vi"
                          ? "Tùy chọn. Nhập GitHub Enterprise host (vd octocorp.ghe.com). Để trống = github.com."
                          : "Optional. Enter GitHub Enterprise host (e.g. octocorp.ghe.com). Leave blank = github.com.")
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     TextField("github.com", text: Binding(
@@ -643,8 +694,8 @@ extension ProvidersPane {
                             NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                         }
                     ))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12))
+                    .instrumentFieldStyle()
+                    .font(.plexSans(12))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -654,7 +705,7 @@ extension ProvidersPane {
                 claudeUsageSourcePicker()
                 claudeCookieSourcePicker()
                 if settings.claudeCookieSource == "manual" {
-                    SettingsRowDivider()
+                    HairlineRule()
                     claudeManualCookieField()
                 }
                 claudeOAuthKeychainPromptPicker()
@@ -684,14 +735,14 @@ extension ProvidersPane {
     /// back to. Mirrors CodexBar's per-provider override pattern.
     @ViewBuilder
     func providerRefreshIntervalPicker(for row: BirdNionConfigStore.Provider) -> some View {
-        SettingsRowDivider()
+        HairlineRule()
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.t("provider.refreshEvery", language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Text(L10n.f("provider.defaultGlobal", language, globalIntervalLabel))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             }
             Spacer(minLength: 8)
@@ -815,7 +866,7 @@ extension ProvidersPane {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Text(vi ? "Nguồn cookie" : "Cookie source")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -831,19 +882,19 @@ extension ProvidersPane {
             Text(vi
                  ? "Auto: tự đọc cookie từ trình duyệt (Brave/Chrome/Safari…). Manual: dán Cookie header bên dưới."
                  : "Auto imports browser cookies. Manual uses the pasted Cookie header below.")
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
             SecureField("Cookie: name=value; name2=value2 …", text: Binding(
                 get: { UserDefaults.standard.string(forKey: manualKey) ?? "" },
                 set: { UserDefaults.standard.set($0, forKey: manualKey) }
             ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(size: 11))
+            .instrumentFieldStyle()
+            .font(.plexSans(11))
             Text(vi
                  ? "Chỉ dùng khi chọn Manual. Lấy ở DevTools → Network → request → header Cookie."
                  : "Used only when source = Manual. Copy from DevTools → Network → Cookie header.")
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -859,11 +910,11 @@ extension ProvidersPane {
     /// an Anthropic Admin API key (handled by the field below when picked).
     @ViewBuilder
     func claudeUsageSourcePicker() -> some View {
-        SettingsRowDivider()
+        HairlineRule()
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Text(L10n.t("provider.dataSource", language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -883,7 +934,7 @@ extension ProvidersPane {
                 .frame(width: 170)
             }
             Text(sourceSubtitle(for: settings.claudeUsageDataSource))
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .padding(.horizontal, 14)
@@ -913,24 +964,25 @@ extension ProvidersPane {
     /// OpenAI web extras toggle + cookie source (auto/manual) for Codex.
     @ViewBuilder
     func codexWebExtrasControls() -> some View {
-        SettingsRowDivider()
+        HairlineRule()
         VStack(alignment: .leading, spacing: 6) {
             Toggle(isOn: Binding(
                 get: { settings.codexOpenAIWebEnabled },
                 set: { settings.codexOpenAIWebEnabled = $0; Task { await quota.refresh() } }
             )) {
                 Text(L10n.t("provider.openAIWebExtras", language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
             }
+            .toggleStyle(.instrument)
             Text(L10n.t("provider.openAIWebExtrasHelp", language))
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
 
             if settings.codexOpenAIWebEnabled {
                 HStack(spacing: 12) {
                     Text(L10n.t("provider.cookie", language))
-                        .font(.system(size: 12))
+                        .font(.plexSans(12))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
@@ -950,8 +1002,8 @@ extension ProvidersPane {
                         get: { settings.codexManualCookieHeader },
                         set: { settings.codexManualCookieHeader = $0 }
                     ))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
+                    .instrumentFieldStyle()
+                    .font(.plexSans(11))
                 }
             }
         }
@@ -962,10 +1014,10 @@ extension ProvidersPane {
     /// Cookie source picker — mirrors CodexBar's `ProviderCookieSource`.
     @ViewBuilder
     func claudeCookieSourcePicker() -> some View {
-        SettingsRowDivider()
+        HairlineRule()
         HStack(spacing: 12) {
             Text(L10n.t("provider.cookieClaude", language))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Spacer(minLength: 8)
             Picker("", selection: Binding(
@@ -992,16 +1044,16 @@ extension ProvidersPane {
     func claudeManualCookieField() -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(L10n.t("provider.manualCookie", language))
-                .font(.system(size: 12, weight: .semibold))
+                .font(.plexSans(12, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             SecureField("sessionKey=...; cf_clearance=...", text: Binding(
                 get: { settings.claudeManualCookieHeader },
                 set: { settings.claudeManualCookieHeader = $0 }
             ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(size: 11))
+            .instrumentFieldStyle()
+            .font(.plexSans(11))
             Text(L10n.t("provider.manualCookieHelp", language))
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .padding(.horizontal, 14)
@@ -1014,10 +1066,10 @@ extension ProvidersPane {
     /// `.always` prompts on every background fetch.
     @ViewBuilder
     func claudeOAuthKeychainPromptPicker() -> some View {
-        SettingsRowDivider()
+        HairlineRule()
         HStack(spacing: 12) {
             Text(L10n.t("provider.keychainOAuth", language))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Spacer(minLength: 8)
             Picker("", selection: Binding(
@@ -1047,11 +1099,11 @@ extension ProvidersPane {
         let hasGeneric = id == "gemini" || id == "kiro" || id == "bedrock"
         let hasKiroValue = id == "kiro"
         if hasCodex || hasGeneric || hasKiroValue {
-            SettingsCard(header: L10n.t("settings.section.menuBarDisplay", language)) {
+            InstrumentSection(header: L10n.t("settings.section.menuBarDisplay", language)) {
                 if hasCodex {
                     HStack(spacing: 12) {
                         Text(L10n.t("provider.menuBarMetric", language))
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.plexSans(13, weight: .semibold))
                             .foregroundStyle(SettingsTheme.primary)
                         Spacer(minLength: 8)
                         Picker("", selection: Binding(
@@ -1075,11 +1127,11 @@ extension ProvidersPane {
                     .padding(.vertical, 10)
                 }
                 if hasGeneric {
-                    if hasCodex { SettingsRowDivider() }
+                    if hasCodex { HairlineRule() }
                     menuBarMetricPicker(for: id)
                 }
                 if hasKiroValue {
-                    if hasCodex || hasGeneric { SettingsRowDivider() }
+                    if hasCodex || hasGeneric { HairlineRule() }
                     kiroMenuBarValuePicker()
                 }
             }
@@ -1099,7 +1151,7 @@ extension ProvidersPane {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Text(L10n.t("provider.menuBarMetric", language))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -1124,7 +1176,7 @@ extension ProvidersPane {
             }
             Text(vi ? "Chọn window nào lái % trên menu bar."
                     : "Choose which window drives the menu bar percent.")
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .padding(.horizontal, 14)
@@ -1152,7 +1204,7 @@ extension ProvidersPane {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 12) {
                 Text(vi ? "Giá trị menu bar Kiro" : "Kiro menu bar value")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -1172,7 +1224,7 @@ extension ProvidersPane {
             }
             Text(vi ? "Hiện credits, phần trăm, hoặc cả hai cạnh icon menu bar."
                     : "Show or hide Kiro credits, percent, or both next to the menu bar icon.")
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .padding(.horizontal, 14)
@@ -1197,15 +1249,15 @@ extension ProvidersPane {
         let vi = L10n.languageCode(language) == "vi"
         VStack(alignment: .leading, spacing: 4) {
             Text(vi ? "Đăng nhập" : "Sign in")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Text(geminiLoginStatus())
-                .font(.system(size: 12))
+                .font(.plexSans(12))
                 .foregroundStyle(SettingsTheme.secondary)
             Text(vi
                  ? "Gemini dùng đăng nhập Google qua Gemini CLI (~/.gemini/oauth_creds.json). Chạy `gemini` rồi đăng nhập."
                  : "Gemini uses Google sign-in via the Gemini CLI (~/.gemini/oauth_creds.json). Run `gemini` and log in.")
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1218,12 +1270,12 @@ extension ProvidersPane {
         let vi = L10n.languageCode(language) == "vi"
         VStack(alignment: .leading, spacing: 4) {
             Text(vi ? "Đăng nhập" : "Sign in")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Text(vi
                  ? "Kiro dùng Kiro CLI (không cần API token). Đăng nhập bằng `kiro-cli login`; usage lấy qua CLI."
                  : "Kiro uses the Kiro CLI (no API token). Sign in with `kiro-cli login`; usage is read via the CLI.")
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1247,15 +1299,15 @@ extension ProvidersPane {
         let vi = L10n.languageCode(language) == "vi"
         VStack(alignment: .leading, spacing: 4) {
             Text(vi ? "Đăng nhập" : "Sign in")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Text(grokLoginStatus())
-                .font(.system(size: 12))
+                .font(.plexSans(12))
                 .foregroundStyle(SettingsTheme.secondary)
             Text(vi
                  ? "Grok đọc `~/.grok/auth.json` (chạy `grok login`) và fallback billing grok.com qua cookie Chrome. Không cần dán API token."
                  : "Grok reads `~/.grok/auth.json` (`grok login`) and falls back to grok.com billing via Chrome cookies. No API token paste.")
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1278,14 +1330,14 @@ extension ProvidersPane {
             })
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.plexSans(12, weight: .medium))
                 .foregroundStyle(SettingsTheme.primary)
             if secure {
                 SecureField(placeholder, text: binding)
-                    .textFieldStyle(.roundedBorder).font(.system(size: 12))
+                    .instrumentFieldStyle().font(.plexSans(12))
             } else {
                 TextField(placeholder, text: binding)
-                    .textFieldStyle(.roundedBorder).font(.system(size: 12))
+                    .instrumentFieldStyle().font(.plexSans(12))
             }
         }
     }
@@ -1294,10 +1346,10 @@ extension ProvidersPane {
     func xaiTeamIDSection(_ idx: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(L10n.t("xai.teamId.title", language))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Text(L10n.t("xai.teamId.hint", language))
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("team_…", text: Binding(
@@ -1309,8 +1361,8 @@ extension ProvidersPane {
                     NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                 }
             ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(size: 12).monospacedDigit())
+            .instrumentFieldStyle()
+            .font(.plexMono(12))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1319,15 +1371,16 @@ extension ProvidersPane {
     @ViewBuilder
     func xaiCostSection(_ status: ProviderStatus?) -> some View {
         if let cost = status?.cost {
-            SettingsCard(header: L10n.t("settings.section.cost", language)) {
+            InstrumentSection(header: L10n.t("settings.section.cost", language)) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(L10n.languageCode(language) == "vi" ? "Chi tiêu" : "Spend")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.plexMono(11, weight: .semibold))
                         .foregroundStyle(SettingsTheme.secondary)
                         .tracking(0.5)
+                        .textCase(.uppercase)
                     Spacer(minLength: 8)
                     Text(UsageFormatter.usdString(cost.used))
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .font(.plexMono(12, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                 }
                 .padding(.horizontal, 14)
@@ -1336,7 +1389,7 @@ extension ProvidersPane {
                     Text(L10n.providerText(cost.period ?? "Last 30 days", preference: language))
                     Spacer()
                 }
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
@@ -1351,7 +1404,7 @@ extension ProvidersPane {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Text(vi ? "Xác thực" : "Authentication")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
@@ -1375,7 +1428,7 @@ extension ProvidersPane {
                 Text(vi
                      ? "Profile trong ~/.aws/config (dùng khóa tĩnh; SSO/assume-role chưa hỗ trợ)."
                      : "Named profile from ~/.aws/config (static keys; SSO/assume-role not yet supported).")
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             } else {
                 bedrockField(idx, title: "Access key ID",
@@ -1399,7 +1452,7 @@ extension ProvidersPane {
     func linksSection(_ row: BirdNionConfigStore.Provider) -> some View {
         let links = dashboardLinks(for: row.id)
         if !links.isEmpty {
-            SettingsCard(header: L10n.t("settings.section.links", language)) {
+            InstrumentSection(header: L10n.t("settings.section.links", language)) {
                 ForEach(Array(links.enumerated()), id: \.offset) { i, link in
                     Button {
                         NSWorkspace.shared.open(link.url)
@@ -1408,19 +1461,21 @@ extension ProvidersPane {
                             Image(systemName: link.icon)
                                 .frame(width: 16)
                             Text(link.title)
+                                .textCase(.uppercase)
+                                .tracking(0.4)
                             Spacer()
                             Image(systemName: "arrow.up.right")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(SettingsTheme.tertiary)
+                                .font(.plexMono(10, weight: .semibold))
                         }
-                        .foregroundStyle(SettingsTheme.primary)
+                        .font(.plexMono(11, weight: .medium))
+                        .foregroundStyle(SettingsTheme.accent)
                         .contentShape(Rectangle())
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                     }
                     .buttonStyle(.plain)
                     .pointingHandCursor()
-                    if i < links.count - 1 { SettingsRowDivider() }
+                    if i < links.count - 1 { HairlineRule() }
                 }
             }
         }

@@ -9,14 +9,18 @@ extension ProvidersPane {
     @ViewBuilder
     func usageSection(_ row: BirdNionConfigStore.Provider) -> some View {
         let s = status(for: row.id)
-        SettingsCard(header: L10n.t("settings.section.quota", language)) {
+        // Instrument redesign: hairline-divided section in place of the old
+        // filled/rounded SettingsCard container.
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L10n.t("settings.section.quota", language))
+                .plexEyebrow(color: SettingsTheme.secondary)
+                .padding(.bottom, 4)
+
             if let s, !s.windows.isEmpty {
-                ForEach(Array(s.windows.enumerated()), id: \.element.id) { i, w in
+                ForEach(s.windows) { w in
                     quotaWindowRow(w)
-                    if i < s.windows.count - 1 { SettingsRowDivider() }
                 }
                 if s.creditsRemaining != nil || s.creditsUnlimited {
-                    SettingsRowDivider()
                     creditsRow(s.creditsRemaining, unlimited: s.creditsUnlimited)
                 }
             } else if s == nil || s?.windows.isEmpty == true {
@@ -26,19 +30,19 @@ extension ProvidersPane {
                 Text(row.enabled == true
                      ? L10n.t("provider.noData.enabled", language)
                      : L10n.t("provider.noData.disabled", language))
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(SettingsTheme.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
                     .padding(.vertical, 10)
+                    .hairlineTop()
             }
             // Claude web extras (email/org/extra rate windows) stay with quota
             // data — not token-cost estimates.
             if row.id == "claude", let extras = s?.webExtras {
-                SettingsRowDivider()
                 webExtrasRows(extras)
             }
         }
+        .padding(.horizontal, 14)
         costSection(row, status: s)
     }
 
@@ -50,18 +54,24 @@ extension ProvidersPane {
         let hasClaudeWebCost = row.id == "claude" && s?.cost != nil
         let hasClaudeLocalCost = row.id == "claude" && (claudeCost.map { !$0.isEmpty } ?? false)
         if hasCodexCost || hasClaudeWebCost || hasClaudeLocalCost {
-            SettingsCard(header: L10n.t("settings.section.cost", language)) {
+            // Instrument redesign: hairline-divided section in place of the
+            // old filled/rounded SettingsCard container.
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.t("settings.section.cost", language))
+                    .plexEyebrow(color: SettingsTheme.secondary)
+                    .padding(.bottom, 4)
+
                 if row.id == "codex", let cost = codexCost, !cost.isEmpty {
                     costRows(cost)
                 }
                 if row.id == "claude", let cost = s?.cost {
                     webCostRow(cost)
-                    if let local = claudeCost, !local.isEmpty { SettingsRowDivider() }
                 }
                 if row.id == "claude", let cost = claudeCost, !cost.isEmpty {
                     costRows(cost)
                 }
             }
+            .padding(.horizontal, 14)
         }
     }
 
@@ -71,21 +81,21 @@ extension ProvidersPane {
         let barFillColor = SettingsTheme.quotaFillColor(remaining: w.remainingPct)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(L10n.windowLabel(w.label, preference: language).uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.secondary)
-                    .tracking(0.5)
+                Text(L10n.windowLabel(w.label, preference: language))
+                    .plexEyebrow(size: 11, color: SettingsTheme.secondary, tracking: 0.5)
                 Spacer()
                 Text("\(w.remainingPct)%")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(12, weight: .semibold))
                     .foregroundStyle(barTextColor)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    // Instrument redesign: flat square meter, no rounded ends
+                    // (mirrors `.window-track` / `.window-fill` — border-radius: 0).
+                    Rectangle()
                         .fill(SettingsTheme.track)
                         .frame(height: 8)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    Rectangle()
                         .fill(barFillColor)
                         .frame(width: max(0, geo.size.width * CGFloat(w.remainingPct) / 100), height: 8)
                 }
@@ -98,13 +108,13 @@ extension ProvidersPane {
                 HStack(alignment: .firstTextBaseline) {
                     if isWeek, let r = pace?.reservePct, r > 0 {
                         Text(L10n.f("provider.reserve", language, r))
-                            .font(.system(size: 10))
+                            .font(.plexMono(10))
                             .foregroundStyle(SettingsTheme.tertiary)
                     }
                     Spacer(minLength: 6)
                     if let rt = pace?.resetText {
                         Text(L10n.f("provider.resetAfter", language, rt))
-                            .font(.system(size: 10))
+                            .font(.plexMono(10))
                             .foregroundStyle(SettingsTheme.tertiary)
                     }
                 }
@@ -112,18 +122,18 @@ extension ProvidersPane {
                     Text(pace.lastsUntilReset
                          ? L10n.t("provider.enoughUntilReset", language)
                          : L10n.t("provider.mayRunOut", language))
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(pace.lastsUntilReset ? SettingsTheme.secondary : SettingsTheme.warning)
                 }
                 if let sub = w.subtitle, !sub.isEmpty {
                     Text(L10n.providerText(sub, preference: language))
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(SettingsTheme.tertiary)
                 }
             }
         }
-        .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     /// Remaining credit balance line (Codex). Shown only when the provider
@@ -131,16 +141,14 @@ extension ProvidersPane {
     func creditsRow(_ credits: Double?, unlimited: Bool) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(L10n.t("provider.credits", language))
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(SettingsTheme.secondary)
-                .tracking(0.5)
+                .plexEyebrow(size: 11, color: SettingsTheme.secondary, tracking: 0.5)
             Spacer()
             Text(unlimited ? L10n.t("provider.unlimited", language) : creditsText(credits ?? 0))
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .font(.plexMono(12, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
         }
-        .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     func creditsText(_ credits: Double) -> String {
@@ -170,8 +178,8 @@ extension ProvidersPane {
             costLine(L10n.t("provider.today", language), usd: todayUSD, tokens: todayTokens)
             costLine(L10n.t("provider.last30", language), usd: last30USD, tokens: last30Tokens)
         }
-        .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     /// Claude cost row, CodexBar parity. Renders a progress bar (used% of
@@ -188,20 +196,19 @@ extension ProvidersPane {
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.t("provider.cost", language))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.secondary)
-                    .tracking(0.5)
+                    .plexEyebrow(size: 11, color: SettingsTheme.secondary, tracking: 0.5)
                 Spacer()
                 Text("\(UsageFormatter.usdString(cost.used)) / \(UsageFormatter.usdString(cost.limit))")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(12, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    // Instrument redesign: flat square meter, no rounded ends.
+                    Rectangle()
                         .fill(SettingsTheme.track)
                         .frame(height: 8)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    Rectangle()
                         .fill(barColor)
                         .frame(width: max(0, geo.size.width * CGFloat(usedPct) / 100), height: 8)
                 }
@@ -209,22 +216,22 @@ extension ProvidersPane {
             .frame(height: 8)
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.f("provider.usedRemaining", language, usedPct, UsageFormatter.usdString(remaining)))
-                    .font(.system(size: 10))
+                    .font(.plexMono(10))
                     .foregroundStyle(SettingsTheme.secondary)
                 Spacer(minLength: 6)
                 if let reset = cost.resetsAt {
                     Text(L10n.f("provider.resetAfter", language, Self.resetCountdown(to: reset)))
-                        .font(.system(size: 10))
+                        .font(.plexMono(10))
                         .foregroundStyle(SettingsTheme.tertiary)
                 } else if let period = cost.period {
                     Text(period)
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(SettingsTheme.tertiary)
                 }
             }
         }
-        .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     /// Compact countdown to a future date. Mirrors `WindowPace.format` but
@@ -256,7 +263,7 @@ extension ProvidersPane {
             webInfoRow(label: L10n.t("provider.login", language), value: method)
         }
         if let source = extras.sourceLabel, !source.isEmpty {
-            webInfoRow(label: L10n.t("provider.source", language).uppercased(), value: source.uppercased())
+            webInfoRow(label: L10n.t("provider.source", language), value: source.uppercased())
         }
         // Named extra windows (e.g. "Daily Routines", "Sonnet") from the
         // web/CLI/OAuth sources. Previously plumbed but never rendered.
@@ -272,21 +279,20 @@ extension ProvidersPane {
         let barFillColor = SettingsTheme.quotaFillColor(remaining: remaining)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(w.title.uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.secondary)
-                    .tracking(0.5)
+                Text(w.title)
+                    .plexEyebrow(size: 11, color: SettingsTheme.secondary, tracking: 0.5)
                 Spacer()
                 Text("\(remaining)%")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(12, weight: .semibold))
                     .foregroundStyle(barTextColor)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    // Instrument redesign: flat square meter, no rounded ends.
+                    Rectangle()
                         .fill(SettingsTheme.track)
                         .frame(height: 8)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    Rectangle()
                         .fill(barFillColor)
                         .frame(width: max(0, geo.size.width * CGFloat(remaining) / 100), height: 8)
                 }
@@ -294,44 +300,40 @@ extension ProvidersPane {
             .frame(height: 8)
             if let reset = w.resetsAt {
                 Text(L10n.f("provider.resetAfter", language, Self.resetCountdown(to: reset)))
-                    .font(.system(size: 10))
+                    .font(.plexMono(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             } else if let desc = w.resetDescription, !desc.isEmpty {
                 Text(desc)
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             }
         }
-        .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     func webInfoRow(label: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(SettingsTheme.secondary)
-                .tracking(0.5)
+                .plexEyebrow(size: 11, color: SettingsTheme.secondary, tracking: 0.5)
             Spacer(minLength: 8)
             Text(value)
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .font(.plexMono(12, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(SettingsTheme.primary)
         }
-        .padding(.horizontal, 14)
         .padding(.vertical, 6)
+        .hairlineTop()
     }
 
     func costLine(_ label: String, usd: Double, tokens: Int) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(SettingsTheme.secondary)
-                .tracking(0.5)
+            Text(label)
+                .plexEyebrow(size: 11, color: SettingsTheme.secondary, tracking: 0.5)
             Spacer()
             Text("≈$\(String(format: "%.2f", usd)) · \(Self.formatTokens(tokens))")
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .font(.plexMono(12, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
         }
     }

@@ -19,38 +19,35 @@ struct ClaudeCodeCustomProfileForm: View {
                 ClaudeCodeCustomProfileConnectionFields(profile: $profile, lang: lang)
             }
 
-            SettingsCard(header: modelHeader ?? L10n.t("claudeCode.model", lang)) {
+            section(modelHeader ?? L10n.t("claudeCode.model", lang)) {
                 modelHeaderRow
-                SettingsRowDivider()
                 fieldRow(L10n.t("claudeCode.model.haiku", lang)) {
                     modelInput(text: modelBinding(\.haikuModel))
                 }
-                SettingsRowDivider()
                 fieldRow(L10n.t("claudeCode.model.sonnet", lang)) {
                     modelInput(text: modelBinding(\.sonnetModel))
                 }
-                SettingsRowDivider()
                 fieldRow(L10n.t("claudeCode.model.opus", lang)) {
                     modelInput(text: modelBinding(\.opusModel))
                 }
                 if let modelsError {
                     Text(modelsError)
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsTheme.critical)
+                        .font(.plexSans(11))
+                        .foregroundStyle(VocabbyTheme.critical)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.bottom, 8)
                 }
             }
 
-            SettingsCard(header: L10n.t("ccx.advanced", lang)) {
+            section(L10n.t("ccx.advanced", lang)) {
                 if !profile.usesEmbeddedCLIProxy {
                     fieldRow("apiKeyHelper") {
                         TextField(L10n.t("ccx.apiKeyHelper.placeholder", lang),
                                   text: optionalBinding(\.apiKeyHelper))
-                            .textFieldStyle(.roundedBorder).font(.system(size: 12).monospaced())
+                            .font(.plexMono(12))
+                            .instrumentInputStyle()
                     }
-                    SettingsRowDivider()
                 }
                 extraEnvEditor
             }
@@ -67,10 +64,10 @@ struct ClaudeCodeCustomProfileForm: View {
         HStack(spacing: 10) {
             if loadingModels {
                 Text(L10n.t("claudeCode.loadingModels", lang))
-                    .font(.system(size: 11)).foregroundStyle(SettingsTheme.secondary)
+                    .font(.plexSans(11)).foregroundStyle(VocabbyTheme.secondary)
             } else if !models.isEmpty {
                 Text(L10n.f("claudeCode.modelsLoaded", lang, models.count))
-                    .font(.system(size: 11)).foregroundStyle(SettingsTheme.secondary)
+                    .font(.plexSans(11)).foregroundStyle(VocabbyTheme.secondary)
             }
             Spacer(minLength: 8)
             Button {
@@ -86,21 +83,26 @@ struct ClaudeCodeCustomProfileForm: View {
                          ? L10n.t("claudeCode.loadModels", lang)
                          : L10n.t("claudeCode.reloadModels", lang))
                 }
+                .font(.plexMono(11, weight: .semibold))
+                .textCase(.uppercase)
             }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
             .controlSize(.small)
             .disabled(loadingModels || !canFetchModels)
             .pointingHandCursor()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     private func modelInput(text: Binding<String>) -> some View {
         let options = suggestionOptions(current: text.wrappedValue)
         return HStack(spacing: 8) {
             TextField(L10n.t("ccx.model.optional", lang), text: text)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12).monospaced())
+                .font(.plexMono(12))
+                .instrumentInputStyle()
             Menu {
                 ForEach(options, id: \.self) { id in
                     Button(id) { text.wrappedValue = id }
@@ -108,7 +110,7 @@ struct ClaudeCodeCustomProfileForm: View {
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.secondary)
+                    .foregroundStyle(VocabbyTheme.secondary)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -155,17 +157,21 @@ struct ClaudeCodeCustomProfileForm: View {
     private var extraEnvEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(L10n.t("ccx.extraEnv", lang))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SettingsTheme.primary)
+                .font(.plexSans(13, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
             ForEach(pairs) { pair in
                 HStack(spacing: 6) {
                     TextField("KEY", text: keyBinding(pair.id))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 11).monospaced())
-                    Text("=").foregroundStyle(SettingsTheme.tertiary)
+                        .font(.plexMono(11))
+                        .instrumentInputStyle()
+                    Text("=")
+                        .font(.plexMono(11))
+                        .foregroundStyle(VocabbyTheme.tertiary)
                     TextField("value", text: valueBinding(pair.id))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 11).monospaced())
+                        .font(.plexMono(11))
+                        .instrumentInputStyle()
                     Button { removePair(pair.id) } label: {
-                        Image(systemName: "minus.circle.fill").foregroundStyle(SettingsTheme.tertiary)
+                        Image(systemName: "minus.circle.fill").foregroundStyle(VocabbyTheme.tertiary)
                     }
                     .buttonStyle(.plain)
                     .pointingHandCursor()
@@ -173,30 +179,41 @@ struct ClaudeCodeCustomProfileForm: View {
             }
             Button { addPair() } label: {
                 Label(L10n.t("ccx.extraEnv.add", lang), systemImage: "plus.circle")
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(SettingsTheme.accent)
+            .foregroundStyle(VocabbyTheme.blue)
             .pointingHandCursor()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .hairlineTop()
     }
 
     // MARK: - Helpers
+
+    private func section<Content: View>(_ header: String,
+                                        @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(header).plexEyebrow()
+                .padding(.horizontal, 4)
+            VStack(spacing: 0) { content() }
+        }
+    }
 
     private func fieldRow<Content: View>(_ label: String,
                                          @ViewBuilder _ trailing: () -> Content) -> some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SettingsTheme.primary)
+                .font(.plexSans(13, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
                 .frame(width: 110, alignment: .leading)
             trailing()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
+        .hairlineTop()
     }
 
     /// Binding for an optional model field (empty string ⇄ nil).
@@ -234,5 +251,22 @@ struct ClaudeCodeCustomProfileForm: View {
     }
     private func removePair(_ id: String) {
         setPairs(pairs.filter { $0.id != id })
+    }
+}
+
+/// Square, hairline-bordered text field chrome matching the Instrument
+/// redesign's `.ccp-input` (border, no fill accent, 4pt corner) — replaces
+/// `.textFieldStyle(.roundedBorder)` call sites in this file.
+private extension View {
+    func instrumentInputStyle() -> some View {
+        self
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(VocabbyTheme.background)
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 1)
+            )
     }
 }

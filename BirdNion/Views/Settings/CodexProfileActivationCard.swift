@@ -11,11 +11,14 @@ struct AICodingAgentSelectionCard: View {
     let onSelect: (AICodingAgent) -> Void
 
     var body: some View {
-        SettingsCard(header: header ?? L10n.t("aiCoding.step.agent", lang)) {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(header ?? L10n.t("aiCoding.step.agent", lang)).plexEyebrow()
+                .padding(.horizontal, 4)
+
             HStack(spacing: 12) {
                 Text(L10n.t("aiCoding.target", lang))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
+                    .font(.plexSans(13, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
                     .frame(width: 110, alignment: .leading)
 
                 Picker("", selection: selection) {
@@ -32,6 +35,7 @@ struct AICodingAgentSelectionCard: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
+            .hairlineTop()
         }
     }
 
@@ -66,54 +70,62 @@ struct CodexProfileActivationCard: View {
     }
 
     var body: some View {
-        SettingsCard(header: header ?? L10n.t("codexConfig.target", lang)) {
-            HStack(spacing: 12) {
-                Image(systemName: active && current ? "checkmark.circle.fill" : "command")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(active && current ? SettingsTheme.success : SettingsTheme.accent)
-                    .frame(width: 34, height: 34)
-                    .background((active && current ? SettingsTheme.success : SettingsTheme.accent).opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        VStack(alignment: .leading, spacing: 6) {
+            Text(header ?? L10n.t("codexConfig.target", lang)).plexEyebrow()
+                .padding(.horizontal, 4)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(statusTitle)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(SettingsTheme.primary)
-                    Text(L10n.t("codexConfig.target.path", lang))
-                        .font(.system(size: 11).monospaced())
-                        .foregroundStyle(SettingsTheme.secondary)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Image(systemName: active && current ? "checkmark.circle.fill" : "command")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(active && current ? VocabbyTheme.success : VocabbyTheme.blue)
+                        .frame(width: 34, height: 34)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: InstrumentShape.plateRadius, style: .continuous)
+                                .stroke(active && current ? VocabbyTheme.success : VocabbyTheme.blue, lineWidth: 1)
+                        )
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(statusTitle)
+                            .font(.plexSans(13, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.primary)
+                        Text(L10n.t("codexConfig.target.path", lang))
+                            .font(.plexMono(11))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                    }
+
+                    Spacer(minLength: 10)
+
+                    actionButton
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .hairlineTop()
 
-                Spacer(minLength: 10)
-
-                actionButton
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            SettingsRowDivider()
-
-            HStack(spacing: 8) {
-                Text(profile.usesEmbeddedCLIProxy
-                     ? L10n.t("codexConfig.connection.proxy", lang)
-                     : L10n.t("codexConfig.connection.direct", lang))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(SettingsTheme.secondary)
-                Spacer()
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 28, height: 26)
+                HStack(spacing: 8) {
+                    Text(profile.usesEmbeddedCLIProxy
+                         ? L10n.t("codexConfig.connection.proxy", lang)
+                         : L10n.t("codexConfig.connection.direct", lang))
+                        .font(.plexSans(11, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                    Spacer()
+                    Button(role: .destructive, action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 28, height: 26)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
+                    .controlSize(.small)
+                    .disabled(busy)
+                    .pointingHandCursor(enabled: !busy)
+                    .help(L10n.t("codexConfig.delete", lang))
+                    .accessibilityLabel(L10n.t("codexConfig.delete", lang))
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(busy)
-                .pointingHandCursor(enabled: !busy)
-                .help(L10n.t("codexConfig.delete", lang))
-                .accessibilityLabel(L10n.t("codexConfig.delete", lang))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .hairlineTop()
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
         }
     }
 
@@ -122,20 +134,24 @@ struct CodexProfileActivationCard: View {
         if active && current {
             Button(action: onDeactivate) {
                 Label(L10n.t("codexConfig.deactivate", lang), systemImage: "power")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexMono(11, weight: .semibold))
+                    .textCase(.uppercase)
             }
             .buttonStyle(.bordered)
+            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
             .controlSize(.small)
-            .tint(SettingsTheme.critical)
+            .tint(VocabbyTheme.critical)
             .disabled(busy)
             .pointingHandCursor(enabled: !busy)
         } else {
             Button(action: onApply) {
                 Label(active ? L10n.t("codexConfig.update", lang) : L10n.t("codexConfig.apply", lang),
                       systemImage: active ? "arrow.triangle.2.circlepath" : "power")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexMono(11, weight: .semibold))
+                    .textCase(.uppercase)
             }
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
             .controlSize(.small)
             .disabled(busy || !profile.hasUpstreamConfiguration)
             .pointingHandCursor(enabled: !busy && profile.hasUpstreamConfiguration)

@@ -28,82 +28,91 @@ struct ClaudeCodeLocalProxyStatusCard: View {
     }
 
     var body: some View {
-        SettingsCard(header: header ?? L10n.t("ccx.step.proxy", lang)) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: presentation.icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(presentation.color)
-                    .frame(width: 34, height: 34)
-                    .background(presentation.color.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        VStack(alignment: .leading, spacing: 6) {
+            Text(header ?? L10n.t("ccx.step.proxy", lang)).plexEyebrow()
+                .padding(.horizontal, 4)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(SettingsTheme.primary)
-                    Text(presentation.detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsTheme.secondary)
+            VStack(spacing: 0) {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: presentation.icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(presentation.color)
+                        .frame(width: 34, height: 34)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: InstrumentShape.plateRadius, style: .continuous)
+                                .stroke(presentation.color, lineWidth: 1)
+                        )
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(presentation.title)
+                            .font(.plexSans(13, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.primary)
+                        Text(presentation.detail)
+                            .font(.plexSans(11))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    actionControl
+
+                    Button(action: onRefresh) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
+                    .controlSize(.small)
+                    .disabled(busy || runtimeState == .starting)
+                    .pointingHandCursor(enabled: !busy && runtimeState != .starting)
+                    .help(L10n.t("ccx.proxy.refresh", lang))
+                    .accessibilityLabel(L10n.t("ccx.proxy.refresh", lang))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .hairlineTop()
+
+                HStack(spacing: 12) {
+                    Text(L10n.t("ccx.proxy.localEndpoint", lang))
+                        .font(.plexSans(12, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.primary)
+                        .frame(width: 112, alignment: .leading)
+                    Text(endpoint)
+                        .font(.plexMono(12))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(endpoint, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
+                    .controlSize(.small)
+                    .pointingHandCursor()
+                    .help(L10n.t("ccx.proxy.copyEndpoint", lang))
+                    .accessibilityLabel(L10n.t("ccx.proxy.copyEndpoint", lang))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .hairlineTop()
+
+                if let feedback {
+                    Label(feedback, systemImage: feedbackIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .font(.plexSans(11, weight: .medium))
+                        .foregroundStyle(feedbackIsError ? VocabbyTheme.critical : VocabbyTheme.success)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .hairlineTop()
                 }
-
-                Spacer(minLength: 12)
-
-                actionControl
-
-                Button(action: onRefresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(busy || runtimeState == .starting)
-                .pointingHandCursor(enabled: !busy && runtimeState != .starting)
-                .help(L10n.t("ccx.proxy.refresh", lang))
-                .accessibilityLabel(L10n.t("ccx.proxy.refresh", lang))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            SettingsRowDivider()
-
-            HStack(spacing: 12) {
-                Text(L10n.t("ccx.proxy.localEndpoint", lang))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
-                    .frame(width: 112, alignment: .leading)
-                Text(endpoint)
-                    .font(.system(size: 12).monospaced())
-                    .foregroundStyle(SettingsTheme.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(endpoint, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .pointingHandCursor()
-                .help(L10n.t("ccx.proxy.copyEndpoint", lang))
-                .accessibilityLabel(L10n.t("ccx.proxy.copyEndpoint", lang))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-
-            if let feedback {
-                SettingsRowDivider()
-                Label(feedback, systemImage: feedbackIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(feedbackIsError ? SettingsTheme.critical : SettingsTheme.success)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
             }
         }
     }
@@ -118,19 +127,23 @@ struct ClaudeCodeLocalProxyStatusCard: View {
         case .stop:
             Button(action: onStop) {
                 Label(L10n.t("ccx.proxy.stop", lang), systemImage: "stop.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexMono(11, weight: .semibold))
+                    .textCase(.uppercase)
             }
             .buttonStyle(.bordered)
+            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
             .controlSize(.small)
-            .tint(SettingsTheme.critical)
+            .tint(VocabbyTheme.critical)
             .disabled(busy)
             .pointingHandCursor(enabled: !busy)
         case .start, .update, .retry:
             Button(action: onStart) {
                 Label(actionLabel, systemImage: actionIcon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexMono(11, weight: .semibold))
+                    .textCase(.uppercase)
             }
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
             .controlSize(.small)
             .disabled(busy || !hasUpstreamConfiguration)
             .pointingHandCursor(enabled: !busy && hasUpstreamConfiguration)
@@ -173,7 +186,7 @@ struct ClaudeCodeLocalProxyStatusCard: View {
         guard hasUpstreamConfiguration else {
             return (
                 "slider.horizontal.3",
-                SettingsTheme.warning,
+                VocabbyTheme.warningFill,
                 L10n.t("ccx.proxy.status.needsConfig", lang),
                 L10n.t("ccx.proxy.detail.needsConfig", lang)
             )
@@ -182,42 +195,42 @@ struct ClaudeCodeLocalProxyStatusCard: View {
         case .checking:
             return (
                 "magnifyingglass",
-                SettingsTheme.secondary,
+                VocabbyTheme.secondary,
                 L10n.t("ccx.proxy.status.checking", lang),
                 L10n.t("ccx.proxy.detail.checking", lang)
             )
         case .starting:
             return (
                 "arrow.triangle.2.circlepath",
-                SettingsTheme.accent,
+                VocabbyTheme.blue,
                 L10n.t("ccx.proxy.status.starting", lang),
                 L10n.t("ccx.proxy.detail.starting", lang)
             )
         case .running where configurationCurrent:
             return (
                 "checkmark.circle.fill",
-                SettingsTheme.success,
+                VocabbyTheme.success,
                 L10n.t("ccx.proxy.status.running", lang),
                 runningDetail ?? L10n.t("ccx.proxy.detail.running", lang)
             )
         case .running:
             return (
                 "arrow.triangle.2.circlepath.circle.fill",
-                SettingsTheme.warning,
+                VocabbyTheme.warningFill,
                 L10n.t("ccx.proxy.status.needsUpdate", lang),
                 L10n.t("ccx.proxy.detail.needsUpdate", lang)
             )
         case .stopped:
             return (
                 "stop.circle",
-                SettingsTheme.secondary,
+                VocabbyTheme.secondary,
                 L10n.t("ccx.proxy.status.stopped", lang),
                 stoppedDetail ?? L10n.t("ccx.proxy.detail.stopped", lang)
             )
         case .failed:
             return (
                 "exclamationmark.triangle.fill",
-                SettingsTheme.critical,
+                VocabbyTheme.critical,
                 L10n.t("ccx.proxy.status.failed", lang),
                 L10n.t("ccx.proxy.detail.failed", lang)
             )

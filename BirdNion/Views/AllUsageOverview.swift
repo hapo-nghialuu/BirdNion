@@ -404,7 +404,7 @@ struct AllUsageOverview: View {
         if !anyReportReady {
             // All enabled scans still in flight — same skeleton the provider card uses.
             VStack(alignment: .leading, spacing: 9) { LoadingQuotaSkeleton() }
-                .vocabbyCard()
+                .padding(.vertical, 16)
         } else {
             // Render whatever already landed; other sources fold in when
             // their scan finishes (the hint below says which are still running).
@@ -423,7 +423,7 @@ struct AllUsageOverview: View {
                         .frame(width: 10, height: 10)
                     Text((vi ? "Đang quét " : "Scanning ")
                          + pendingSources.joined(separator: ", ") + "…")
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
             }
@@ -438,10 +438,11 @@ struct AllUsageOverview: View {
             if report.isEmpty {
                 Text(vi ? "Chưa có dữ liệu sử dụng trong 120 ngày qua."
                         : "No usage recorded in the last 120 days.")
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .vocabbyCard()
+                    .padding(.vertical, 16)
+                    .hairlineTop()
             } else {
                 CombinedChartCard(report: report, claudeHourly: claude?.hourly ?? [])
                 CombinedHeatmapCard(report: report)
@@ -558,12 +559,10 @@ struct SourceConfidenceBadgeRow: View {
                 .frame(width: 12, height: 12)
                 .accessibilityHidden(true)
             Text(tag)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(stateColor(state))
+                .plexEyebrow(size: 9, color: stateColor(state), tracking: 0.6)
             if let compactFreshness {
                 Text("· \(compactFreshness)")
-                    .font(.system(size: 9))
-                    .monospacedDigit()
+                    .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
         }
@@ -604,39 +603,35 @@ struct BudgetForecastCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(L10n.t("budget.title", language))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                        .tracking(0.3)
+                        .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
                     Spacer(minLength: 8)
                     Text(statusLabel(status))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(statusColor(status))
+                        .plexEyebrow(size: 9, color: statusColor(status), tracking: 0.4)
                 }
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(L10n.t("budget.monthToDate", language))
-                            .font(.system(size: 9))
-                            .foregroundStyle(VocabbyTheme.tertiary)
+                            .plexEyebrow(size: 9, color: VocabbyTheme.tertiary)
                         Text(AllUsageFormat.usd(forecast.monthToDateUSD))
-                            .font(.system(size: 16, weight: .bold).monospacedDigit())
+                            .font(.plexMono(16, weight: .bold))
                             .foregroundStyle(VocabbyTheme.primary)
                     }
                     Spacer(minLength: 8)
                     VStack(alignment: .trailing, spacing: 1) {
                         Text(L10n.t("budget.projected", language))
-                            .font(.system(size: 9))
-                            .foregroundStyle(VocabbyTheme.tertiary)
+                            .plexEyebrow(size: 9, color: VocabbyTheme.tertiary)
                         Text(AllUsageFormat.usd(forecast.projectedTotalUSD))
-                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                            .font(.plexMono(13, weight: .semibold))
                             .foregroundStyle(statusColor(status))
                     }
                 }
                 progressBar(status: status)
                 Text(remainingText(budgetUSD: budgetUSD))
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
-            .vocabbyCard()
+            .padding(.vertical, 16)
+            .hairlineTop(VocabbyTheme.inkRule)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityText(budgetUSD: budgetUSD, status: status))
         }
@@ -645,11 +640,11 @@ struct BudgetForecastCard: View {
     private func progressBar(status: MonthlyForecastStatus) -> some View {
         let fraction = min(1, max(0, forecast.progressFraction ?? 0))
         return ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
+            Rectangle()
                 .fill(VocabbyTheme.track)
                 .frame(height: 5)
             GeometryReader { geo in
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                Rectangle()
                     .fill(statusColor(status))
                     .frame(width: geo.size.width * fraction, height: 5)
             }
@@ -766,32 +761,29 @@ struct CombinedChartCard: View {
             // Total-cost hero (mockup: 24px bold) + today secondary.
             VStack(alignment: .leading, spacing: 2) {
                 Text((vi ? "Tổng chi phí " : "Total cost ") + periodLabel(periodDays))
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                    .tracking(0.2)
+                    .plexEyebrow(size: 10, color: VocabbyTheme.secondary, tracking: 0.2)
                 // .top, not .firstTextBaseline: the trailing VStack has no
                 // valid text baseline, and collecting invalid baselines inside
                 // the auto-sizing popover host recurses NSISEngine (crash
                 // reproduced at launch, report 2026-07-20-131610).
                 HStack(alignment: .top, spacing: 10) {
                     Text(AllUsageFormat.usd(periodTotalUSD))
-                        .font(.system(size: 24, weight: .bold).monospacedDigit())
+                        .font(.plexMono(24, weight: .bold))
                         .foregroundStyle(VocabbyTheme.primary)
                     Spacer(minLength: 8)
                     VStack(alignment: .trailing, spacing: 1) {
                         Text(vi ? "Hôm nay" : "Today")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.tertiary)
+                            .plexEyebrow(size: 9, color: VocabbyTheme.tertiary)
                         Text(AllUsageFormat.usd(report.todayUSD))
-                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                            .font(.plexMono(12, weight: .semibold))
                             .foregroundStyle(VocabbyTheme.secondary)
                         Text(AllUsageFormat.tokens(report.todayTokens))
-                            .font(.system(size: 10).monospacedDigit())
+                            .font(.plexMono(10))
                             .foregroundStyle(VocabbyTheme.tertiary)
                     }
                 }
                 Text(AllUsageFormat.tokens(periodTotalTokens))
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.plexMono(11))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
             periodPicker
@@ -803,6 +795,7 @@ struct CombinedChartCard: View {
                 }
             }
             .frame(height: 56)
+            .inkRuleBottom()
             // Legend doubles as the per-source split for the chosen period
             // (token volume — same metric as the stacked bars).
             HStack(spacing: 12) {
@@ -823,12 +816,12 @@ struct CombinedChartCard: View {
             if is24h {
                 if let hovered = hoveredHour {
                     Text("\(hourLabel(hovered.date)) · \(AllUsageFormat.tokens(hovered.tokens)) · \(AllUsageFormat.usd(hovered.usd))")
-                        .font(.system(size: 10).monospacedDigit())
+                        .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.secondary)
                 }
                 Text(vi ? "Cột giờ chỉ gồm Claude — log Codex/Grok chỉ ghi theo ngày."
                         : "Hour bars are Claude-only — Codex/Grok logs have day resolution.")
-                    .font(.system(size: 9))
+                    .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
@@ -840,12 +833,13 @@ struct CombinedChartCard: View {
                 }
                 Text(vi ? "Ước tính từ log cục bộ của Claude Code CLI, Codex và Grok."
                         : "Estimated from local Claude Code CLI, Codex, and Grok logs.")
-                    .font(.system(size: 9))
+                    .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .vocabbyCard()
+        .padding(.vertical, 16)
+        .hairlineTop()
     }
 
     /// Full-width token-share distribution bar (GitHub language-bar style) +
@@ -873,7 +867,6 @@ struct CombinedChartCard: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .clipShape(Capsule())
                 }
                 .frame(height: 6)
 
@@ -881,16 +874,16 @@ struct CombinedChartCard: View {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                         let share = Double(row.tokens) / Double(total)
                         HStack(spacing: 8) {
-                            Circle().fill(row.color).frame(width: 7, height: 7)
+                            Rectangle().fill(row.color).frame(width: 7, height: 7)
                             Text(row.name)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.plexSans(12, weight: .medium))
                                 .foregroundStyle(VocabbyTheme.primary)
                             Text(String(format: "%.0f%%", share * 100))
-                                .font(.system(size: 11).monospacedDigit())
+                                .font(.plexMono(11))
                                 .foregroundStyle(VocabbyTheme.tertiary)
                             Spacer(minLength: 8)
                             Text(AllUsageFormat.usd(row.usd))
-                                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                .font(.plexMono(11, weight: .semibold))
                                 .foregroundStyle(VocabbyTheme.secondary)
                         }
                         .padding(.vertical, 5)
@@ -940,9 +933,11 @@ struct CombinedChartCard: View {
         return widths
     }
 
-    /// Compact 7/30/90-day window switcher (CodeBurn-style pills).
+    /// Plain text tabs with an accent underline on the active tab (mockup:
+    /// no filled pill background — just mono caps + a 2pt accent rule under
+    /// the selected period).
     private var periodPicker: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 18) {
             ForEach(Self.periods, id: \.self) { days in
                 let active = periodDays == days
                 Button {
@@ -952,19 +947,15 @@ struct CombinedChartCard: View {
                     hoveredHour = nil
                     detailHidden = false   // fresh window starts with detail visible
                 } label: {
-                    Text(periodLabel(days))
-                        .font(.system(size: 9, weight: active ? .semibold : .regular))
-                        .foregroundStyle(active ? VocabbyTheme.blue : VocabbyTheme.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(active ? VocabbyTheme.selectedSurface : VocabbyTheme.segment)
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule().stroke(active ? VocabbyTheme.blue.opacity(0.35)
-                                                    : VocabbyTheme.border,
-                                             lineWidth: 1)
-                        )
-                        .contentShape(Capsule())
+                    VStack(alignment: .center, spacing: 3) {
+                        Text(periodLabel(days))
+                            .font(.plexMono(9, weight: active ? .semibold : .regular))
+                            .foregroundStyle(active ? VocabbyTheme.primary : VocabbyTheme.secondary)
+                        Rectangle()
+                            .fill(active ? VocabbyTheme.blue : Color.clear)
+                            .frame(height: 2)
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -974,9 +965,9 @@ struct CombinedChartCard: View {
 
     private func legendDot(color: Color, label: String) -> some View {
         HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
+            Rectangle().fill(color).frame(width: 6, height: 6)
             Text(label)
-                .font(.system(size: 9).monospacedDigit())
+                .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
@@ -1012,7 +1003,6 @@ struct CombinedChartCard: View {
                                     .frame(height: 1)
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
@@ -1053,7 +1043,7 @@ struct CombinedChartCard: View {
                     let barHeight = max(geo.size.height * fraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        Rectangle()
                             .fill(hasTokens
                                   ? VocabbyTheme.chartClaude
                                   : VocabbyTheme.selectedSurface.opacity(0.76))
@@ -1089,7 +1079,7 @@ struct CombinedChartCard: View {
     private func detailRows(_ detail: CombinedDailyUsage) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(dayLabel(detail.date)) · \(AllUsageFormat.tokens(detail.tokens)) · \(AllUsageFormat.usd(detail.usd))")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             DaySourceModelRows(day: detail, vi: vi)
         }
@@ -1129,15 +1119,15 @@ private struct DaySourceModelRows: View {
             let rest = models.dropFirst(Self.maxRows)
             if !rest.isEmpty {
                 HStack(spacing: 8) {
-                    Circle().fill(VocabbyTheme.track).frame(width: 6, height: 6)
+                    Rectangle().fill(VocabbyTheme.track).frame(width: 6, height: 6)
                     Text(vi ? "+\(rest.count) model khác" : "+\(rest.count) more models")
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                     Spacer(minLength: 8)
                     Text(AllUsageFormat.tokensAndUSD(
                         rest.reduce(0) { $0 + $1.tokens },
                         rest.reduce(0) { $0 + $1.usd }))
-                        .font(.system(size: 10).monospacedDigit())
+                        .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
             }
@@ -1170,14 +1160,14 @@ private struct DaySourceModelRows: View {
 
     private func row(color: Color, label: String, tokens: Int, usd: Double) -> some View {
         HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 6, height: 6)
+            Rectangle().fill(color).frame(width: 6, height: 6)
             Text(label)
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
             Text(AllUsageFormat.tokensAndUSD(tokens, usd))
-                .font(.system(size: 10).monospacedDigit())
+                .font(.plexMono(10))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
@@ -1234,12 +1224,10 @@ struct CombinedHeatmapCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(vi ? "Hoạt động 120 ngày" : "120-day activity")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                    .tracking(0.3)
+                    .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
                 Spacer(minLength: 8)
                 Text("\(AllUsageFormat.usd(report.totalUSD)) · \(report.activeDays) \(vi ? "ngày active" : "active days")")
-                    .font(.system(size: 9).monospacedDigit())
+                    .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
             // Stats sit right next to the grid (leading-aligned) instead of
@@ -1257,7 +1245,8 @@ struct CombinedHeatmapCard: View {
                 dayDetail(day)
             }
         }
-        .vocabbyCard()
+        .padding(.vertical, 16)
+        .hairlineTop()
     }
 
     /// Per-source breakdown for the clicked cell — same layout as the chart
@@ -1266,12 +1255,12 @@ struct CombinedHeatmapCard: View {
     private func dayDetail(_ day: CombinedDailyUsage) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(L10n.dayMonth(day.date, preference: settings.appLanguage)) · \(AllUsageFormat.usd(day.usd)) · \(AllUsageFormat.tokens(day.tokens))")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             DaySourceModelRows(day: day, vi: vi)
             if !day.isActive {
                 Text(vi ? "Không có hoạt động." : "No activity.")
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
         }
@@ -1282,7 +1271,7 @@ struct CombinedHeatmapCard: View {
         VStack(alignment: .trailing, spacing: Self.cellGap) {
             ForEach(0..<7, id: \.self) { row in
                 Text(label(forRow: row))
-                    .font(.system(size: 8))
+                    .font(.plexMono(8))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .frame(height: Self.cellSize)
             }
@@ -1315,16 +1304,16 @@ struct CombinedHeatmapCard: View {
             let fraction = CombinedHeatmapIntensity.fraction(
                 tokens: day.tokens, maxTokens: maxTokens, isActive: day.isActive)
             let isSelected = selectedDay?.id == day.id
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
+            Rectangle()
                 .fill(VocabbyTheme.heatColor(fraction: fraction))
                 .frame(width: Self.cellSize, height: Self.cellSize)
                 .overlay(
                     // Selection ring wins over the today ring.
                     isSelected
-                        ? RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        ? Rectangle()
                             .stroke(VocabbyTheme.primary, lineWidth: 1.5)
                         : (day.date == today
-                            ? RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            ? Rectangle()
                                 .stroke(VocabbyTheme.blue, lineWidth: 1)
                             : nil)
                 )
@@ -1359,10 +1348,9 @@ struct CombinedHeatmapCard: View {
     private func stat(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
-                .font(.system(size: 9))
-                .foregroundStyle(VocabbyTheme.secondary)
+                .plexEyebrow(size: 9, color: VocabbyTheme.secondary)
             Text(value)
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
         }
     }
@@ -1385,30 +1373,28 @@ struct CombinedTopModelsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(vi ? "Model dùng nhiều (120 ngày)" : "Top models (120 days)")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .tracking(0.3)
+                .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
             ForEach(report.topModels) { model in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
-                        Circle()
+                        Rectangle()
                             .fill(color(for: model))
                             .frame(width: 6, height: 6)
                         Text(AllUsageFormat.shortName(model.name))
-                            .font(.system(size: 10))
+                            .font(.plexSans(10))
                             .foregroundStyle(VocabbyTheme.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         Text(AllUsageFormat.tokensAndUSD(model.tokens, model.usd))
-                            .font(.system(size: 10).monospacedDigit())
+                            .font(.plexMono(10))
                             .foregroundStyle(VocabbyTheme.tertiary)
                     }
                     ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        Rectangle()
                             .fill(VocabbyTheme.track)
                             .frame(height: 3)
                         GeometryReader { geo in
-                            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                            Rectangle()
                                 .fill(color(for: model))
                                 .frame(width: max(2, geo.size.width * CGFloat(Double(model.tokens) / totalTokens)),
                                        height: 3)
@@ -1418,7 +1404,8 @@ struct CombinedTopModelsCard: View {
                 }
             }
         }
-        .vocabbyCard()
+        .padding(.vertical, 16)
+        .hairlineTop()
     }
 
     private func color(for model: CombinedModelCost) -> Color {

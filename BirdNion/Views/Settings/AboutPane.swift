@@ -34,6 +34,10 @@ struct AboutPane: View {
 
             // MARK: Centered branding + primary actions
             VStack(spacing: 16) {
+                // App icon chrome (frame/clip/hover scale/shadow) is
+                // intentionally untouched — the logo asset must stay
+                // pixel-identical; only the surrounding text/buttons below
+                // move to the Instrument type + control language.
                 Button(action: openProjectHome) {
                     appIcon
                         .frame(width: 96, height: 96)
@@ -56,10 +60,11 @@ struct AboutPane: View {
 
                 VStack(spacing: 4) {
                     Text("BirdNion")
-                        .font(.system(size: 24, weight: .bold))
+                        .font(.plexSans(24, weight: .bold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(versionString)
-                        .font(.system(size: 12))
+                        .font(.plexMono(12))
+                        .textCase(.uppercase)
                         .foregroundStyle(SettingsTheme.secondary)
                 }
 
@@ -67,7 +72,7 @@ struct AboutPane: View {
                     Button(L10n.t("about.checkNow", settings.appLanguage)) {
                         Task { await checker.check() }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.instrumentPrimary)
                     .disabled(checker.state == .checking)
 
                     Button(L10n.t("settings.about.releaseNotes", settings.appLanguage)) {
@@ -75,7 +80,7 @@ struct AboutPane: View {
                             NSWorkspace.shared.open(url)
                         }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.instrumentOutline)
                 }
 
                 updateStatus
@@ -85,39 +90,45 @@ struct AboutPane: View {
             .padding(.bottom, 4)
 
             // MARK: Links (existing destinations + brew install row)
-            SettingsCard(header: L10n.t("settings.section.links", settings.appLanguage)) {
+            // Instrument redesign: hairline-divided section in place of the
+            // old filled/rounded SettingsCard container.
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.t("settings.section.links", settings.appLanguage))
+                    .plexEyebrow()
+                    .padding(.bottom, 4)
+
                 AboutLinkRow(
                     icon: "chevron.left.slash.chevron.right",
                     title: "GitHub",
                     url: projectURL
                 )
-                SettingsRowDivider()
                 AboutLinkRow(
                     icon: "globe",
                     title: "Website",
                     url: projectURL
                 )
-                SettingsRowDivider()
                 AboutLinkRow(
                     icon: "envelope",
                     title: "Email",
                     url: ProcessInfo.processInfo.environment["BIRDNION_SUPPORT_EMAIL"]
                         ?? "mailto:support@localhost"
                 )
-                SettingsRowDivider()
                 brewInstallRow
             }
 
             // MARK: Update preferences (behaviour preserved from pre-remake)
-            SettingsCard(header: L10n.t("about.section.updates", settings.appLanguage)) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.t("about.section.updates", settings.appLanguage))
+                    .plexEyebrow()
+                    .padding(.bottom, 4)
+
                 SettingsLabeledRow(
                     title: L10n.t("about.autoCheck.title", settings.appLanguage),
                     subtitle: L10n.t("about.autoCheck.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.updateAutoCheckEnabled).labelsHidden().toggleStyle(.switch)
+                    Toggle("", isOn: $settings.updateAutoCheckEnabled).labelsHidden().toggleStyle(.instrument)
                 }
-
-                SettingsRowDivider()
+                .hairlineTop()
 
                 SettingsLabeledRow(
                     title: L10n.t("about.channel.title", settings.appLanguage),
@@ -134,10 +145,11 @@ struct AboutPane: View {
                         Task { await checker.check() }
                     }
                 }
+                .hairlineTop()
             }
 
             Text(L10n.t("settings.about.copyright", settings.appLanguage))
-                .font(.system(size: 10))
+                .font(.plexMono(10))
                 .foregroundStyle(SettingsTheme.tertiary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 8)
@@ -149,10 +161,10 @@ struct AboutPane: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.t("settings.about.brewInstall", settings.appLanguage))
-                    .font(.system(size: 13))
+                    .font(.plexSans(13))
                     .foregroundStyle(SettingsTheme.primary)
                 Text(brewInstallCommand)
-                    .font(.system(size: 11).monospaced())
+                    .font(.plexMono(11))
                     .foregroundStyle(SettingsTheme.secondary)
                     .textSelection(.enabled)
                     .lineLimit(2)
@@ -163,19 +175,18 @@ struct AboutPane: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(brewInstallCommand, forType: .string)
             } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                Text(L10n.t("settings.about.copyCommand", settings.appLanguage))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.instrumentAccent)
             .controlSize(.small)
             .pointingHandCursor()
             .help(L10n.t("settings.about.copyCommand", settings.appLanguage))
             .accessibilityLabel(L10n.t("settings.about.copyCommand", settings.appLanguage))
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 4)
         .padding(.vertical, 10)
         .frame(minHeight: 44)
+        .hairlineTop()
     }
 
     /// Inline result line under the check / release-notes buttons.
@@ -188,17 +199,17 @@ struct AboutPane: View {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
                 Text(L10n.t("about.checking", settings.appLanguage))
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(SettingsTheme.secondary)
             }
         case .upToDate:
             Text(L10n.t("about.upToDate", settings.appLanguage))
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.secondary)
         case .available(let version, let url):
             HStack(spacing: 8) {
                 Text(L10n.f("about.updateAvailable", settings.appLanguage, version))
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.plexMono(11, weight: .semibold))
                     .foregroundStyle(SettingsTheme.accent)
                 // Semi-auto: open Terminal running the brew upgrade so the
                 // user sees progress and the cask can replace the running
@@ -214,7 +225,7 @@ struct AboutPane: View {
             }
         case .failed:
             Text(L10n.t("about.checkFailed", settings.appLanguage))
-                .font(.system(size: 11))
+                .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.warning)
         }
     }
@@ -253,5 +264,51 @@ struct AboutPane: View {
         if let url = URL(string: projectURL) {
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+// MARK: - Instrument button style
+//
+// Outlined, square-cornered button (`InstrumentShape.controlRadius`) with an
+// uppercase mono label — replaces `.borderedProminent` / `.bordered` for the
+// About pane's primary actions and copy button. Mirrors `.sw-pill-btn` in the
+// CSS: transparent fill, 1px border, fill only while pressed (kept close to
+// the existing press-highlight interaction of the native styles it replaces).
+private struct InstrumentButtonStyle: ButtonStyle {
+    var textColor: Color = VocabbyTheme.secondary
+    var borderColor: Color = VocabbyTheme.border
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.plexMono(10, weight: .medium))
+            .tracking(0.4)
+            .textCase(.uppercase)
+            .foregroundStyle(textColor)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .fill(configuration.isPressed ? VocabbyTheme.hoverSurface : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+    }
+}
+
+private extension ButtonStyle where Self == InstrumentButtonStyle {
+    /// "KIỂM TRA CẬP NHẬT" — the primary action: ink border + ink text.
+    static var instrumentPrimary: InstrumentButtonStyle {
+        InstrumentButtonStyle(textColor: VocabbyTheme.primary, borderColor: VocabbyTheme.primary)
+    }
+    /// "GHI CHÚ PHÁT HÀNH" — secondary action: muted border + secondary text.
+    static var instrumentOutline: InstrumentButtonStyle {
+        InstrumentButtonStyle(textColor: VocabbyTheme.secondary, borderColor: VocabbyTheme.border)
+    }
+    /// "SAO CHÉP" — accent-colored label, muted border.
+    static var instrumentAccent: InstrumentButtonStyle {
+        InstrumentButtonStyle(textColor: VocabbyTheme.blue, borderColor: VocabbyTheme.border)
     }
 }

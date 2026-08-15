@@ -33,9 +33,14 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 /// App-wide palette. Every semantic token is a dynamic NSColor that resolves
 /// per the effective appearance, so views keep using `VocabbyTheme.x` exactly
 /// as before and adapt to light/dark without plumbing a color scheme through.
-/// Light values are byte-identical to the original fixed-light palette
-/// (regression zero); dark values come from the approved remake mockups
-/// (plans/settings-remake-plan.md).
+///
+/// Values are the "Instrument" redesign palette — paper/ink, hairline
+/// dividers instead of filled cards, one accent color — ported 1:1 from the
+/// Linux/Tauri implementation (`linux/src/styles.css`, tokens `--bg` …
+/// `--heat-4`) so the macOS app and the Linux app read as the same product.
+/// Provider brand marks (`claude`, `codex`, `grok`, `providerTint(_:)`, …)
+/// are untouched — only surfaces, text, semantic states, and chart/heatmap
+/// colors move to the new palette.
 enum VocabbyTheme {
     /// Dynamic color: `light` under aqua, `dark` under darkAqua.
     private static func dyn(_ light: Int, _ dark: Int) -> Color {
@@ -52,41 +57,52 @@ enum VocabbyTheme {
     static let brandNavy  = fixed(0x1F2433)
     static let brandBlue  = fixed(0x469BE9)
 
-    // Surfaces
-    static let background = dyn(0xF4F5F7, 0x1E1E20)
-    static let card       = dyn(0xFEFEFF, 0x2C2C2E)
-    static let group      = dyn(0xFAFBFC, 0x37373A)
-    static let segment    = dyn(0xEEF0F4, 0x232326)
-    static let selectedSurface = dyn(0xE7F1FF, 0x313D52)
-    static let hoverSurface = dyn(0xE7EAF0, 0x3A3A3E)
+    // Surfaces — paper (light) / ink (dark). `card` == `background`: the
+    // redesign has no filled card surface, sections are separated by
+    // hairline dividers instead (see `hairline` / `inkRule` below).
+    static let background = dyn(0xFBFAF7, 0x17170F)  // --bg
+    static let card       = dyn(0xFBFAF7, 0x17170F)  // --surface
+    static let group      = dyn(0xF3F1EA, 0x1E1E16)  // --surface2 / --sidebar
+    static let segment    = dyn(0xF3F1EA, 0x1E1E16)  // --segment
+    static let selectedSurface = dyn(0xE9E6DC, 0x262620)  // --selected-surface
+    static let hoverSurface = dyn(0xEDEAE0, 0x262620)     // --hover-surface
 
     // Text
-    static let primary    = dyn(0x1C1F26, 0xF2F2F5)
-    static let secondary  = dyn(0x59616D, 0xA5A5AB)
-    static let tertiary   = dyn(0x6B7280, 0x7C7C82)
-    static let disabled   = dyn(0x9AA3AD, 0x6B6B70)
+    static let primary    = dyn(0x16150F, 0xF2F0E8)  // --text
+    static let secondary  = dyn(0x4B4941, 0xC9C6BC)  // --text2
+    static let tertiary   = dyn(0x6B6862, 0xA3A096)  // --text3
+    static let disabled   = dyn(0xB0ADA3, 0x4A4A40)  // --disabled
 
     // Accent + semantic states
-    static let blue       = dyn(0x0057B8, 0x4C8DFF)   // action
-    static let yellow     = dyn(0xA84B00, 0xF7B955)   // warning text
-    static let warningFill = dyn(0xB86A00, 0xD99A45)
-    static let warningSurface = dyn(0xFFF1D6, 0x4A3A20)
-    static let success    = dyn(0x15803D, 0x46C25F)
-    static let successSurface = dyn(0xEAF7EF, 0x263D2C)
-    static let critical   = dyn(0xD70015, 0xFF6369)
-    static let criticalSurface = dyn(0xFFE8EA, 0x4A2A2E)
+    static let blue       = dyn(0x1F4FD8, 0x7EA2FF)  // --accent (action)
+    static let yellow     = dyn(0x8F5F12, 0xE0A93F)  // --warning (text)
+    static let warningFill = dyn(0x8F5F12, 0xE0A93F) // --warning-fill
+    static let warningSurface = dyn(0xF5EEDD, 0x2A2418) // --warning-surface
+    static let success    = dyn(0x1F7A4C, 0x58C089)  // --success
+    static let successSurface = dyn(0xECF1EC, 0x1E2A20) // --success-surface
+    static let critical   = dyn(0xB4402F, 0xE5716A)  // --critical
+    static let criticalSurface = dyn(0xF7E7E3, 0x2C1D1B) // --critical-surface
 
     // Chrome
-    static let track      = dyn(0xE3E6EA, 0x3D3D41)
-    static let border     = dyn(0xD7DCE2, 0x3D3D41)
+    static let track      = dyn(0xE2DFD6, 0x2A2A22)  // --track
+    static let border     = dyn(0xDCD8CD, 0x33332B)  // --border
     static let badge      = group
 
-    // Charts — series colors stay constant so the stacked split reads the
-    // same in both themes; only near-black series get a dark override below.
-    static let chartBar    = fixed(0x469BE9)
-    static let chartCodex  = fixed(0x469BE9)
-    static let chartClaude = fixed(0xCC7C5E)   // brand orange
-    static let chartGrok   = dyn(0x111827, 0xC8CCD6)  // near-black is invisible on dark
+    // Hairline section dividers — replace the old rounded `card` fill.
+    // `hairline` is the quiet divider between stacked sections; `inkRule` is
+    // the stronger rule under headers/hero numbers (== `primary`, kept as
+    // its own token for call-site clarity, matching `--hairline` /
+    // `--ink-rule` in the CSS).
+    static let hairline   = dyn(0xE2DFD6, 0x2A2A22)  // --hairline
+    static let inkRule    = dyn(0x16150F, 0xF2F0E8)  // --ink-rule
+
+    // Charts — series colors now track the CSS `--claude` / `--codex` /
+    // `--grok` chart tokens (distinct from the `claude` / `codex` / `grok`
+    // brand-mark tints below, which stay untouched).
+    static let chartBar    = dyn(0x3C7FB5, 0x62A5DE)  // --chart-bar / --codex
+    static let chartCodex  = dyn(0x3C7FB5, 0x62A5DE)  // --codex
+    static let chartClaude = dyn(0xB5643F, 0xD98A63)  // --claude
+    static let chartGrok   = dyn(0x4A4A4A, 0xC8CCD6)  // --grok
 
     // Per-provider brand tints for the monochrome template logos.
     // Values mirror CodexBar's ProviderBranding.color exactly (see
@@ -187,15 +203,15 @@ enum VocabbyTheme {
         return isCurrent ? currentTint : tint.opacity(0.72)
     }
 
-    /// Heatmap cell fill for the All tab's activity grid.
-    /// GitHub-style contribution greens, lightened one step so the popover
-    /// heatmap is softer than the full GitHub calendar palette. The empty
-    /// cell follows the surface so it does not glare in dark mode.
-    static let heatEmpty = dyn(0xEBEDF0, 0x37373A)
-    static let heatL1    = fixed(0xC6F0CD)
-    static let heatL2    = fixed(0x8CDC9B)
-    static let heatL3    = fixed(0x5ABE73)
-    static let heatL4    = fixed(0x379B55)
+    /// Heatmap cell fill for the All tab's activity grid — Instrument
+    /// redesign uses the accent-blue scale (`--heat-0`…`--heat-4`) instead
+    /// of the old GitHub-style contribution greens, so activity intensity
+    /// reads as "more accent", consistent with the rest of the palette.
+    static let heatEmpty = dyn(0xEFEDE6, 0x23231C)  // --heat-0
+    static let heatL1    = dyn(0xD5DDF3, 0x2F3A5C)  // --heat-1
+    static let heatL2    = dyn(0xA9BCE8, 0x41528C)  // --heat-2
+    static let heatL3    = dyn(0x6E8DDB, 0x5A72C4)  // --heat-3
+    static let heatL4    = dyn(0x1F4FD8, 0x7EA2FF)  // --heat-4
 
     static func heatColor(fraction: Double) -> Color {
         guard fraction > 0 else { return heatEmpty }
@@ -213,5 +229,31 @@ private extension NSColor {
                   green: CGFloat((hex >> 8) & 0xFF) / 255,
                   blue: CGFloat(hex & 0xFF) / 255,
                   alpha: 1)
+    }
+}
+
+// MARK: - Fonts
+
+/// Font family names for the Instrument redesign — bundled via
+/// `BirdNion/Resources/Fonts/*.ttf` and registered at launch by
+/// `AppFonts.registerBundledFonts()`. Mirrors `--font-sans` / `--font-mono`
+/// in `linux/src/styles.css`.
+enum VocabbyFont {
+    static let sans = "IBM Plex Sans"
+    static let mono = "IBM Plex Mono"
+}
+
+extension Font {
+    /// Body/label/UI text — replaces `.system(size:weight:)` call sites the
+    /// redesign touches. Falls back to the system font automatically if the
+    /// bundled font failed to register (`Font.custom` degrades gracefully).
+    static func plexSans(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .custom(VocabbyFont.sans, size: size).weight(weight)
+    }
+
+    /// Numerals, percentages, money, timestamps, uppercase mono labels —
+    /// replaces `.system(size:weight:).monospacedDigit()` call sites.
+    static func plexMono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .custom(VocabbyFont.mono, size: size).weight(weight)
     }
 }

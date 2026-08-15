@@ -12,7 +12,7 @@ struct ClaudeCodePowerButton: View {
     let subtitle: String
     var diameter: CGFloat = 116
     var busy: Bool = false
-    var subtitleColor: Color = .primary
+    var subtitleColor: Color = VocabbyTheme.primary
     var showsSubtitle: Bool = true
     let action: () -> Void
 
@@ -57,7 +57,7 @@ struct ClaudeCodePowerButton: View {
 
             if showsSubtitle {
                 Text(subtitle)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.plexSans(14, weight: .semibold))
                     .foregroundStyle(subtitleColor)
                     .multilineTextAlignment(.center)
             }

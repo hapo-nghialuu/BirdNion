@@ -152,6 +152,15 @@
 		FFFF0001000000000000B001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFFF0002000000000000F001 /* AppDelegate.swift */; };
 		FFFF0003000000000000B002 /* ServicesContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFFF0004000000000000F002 /* ServicesContainer.swift */; };
 		PCST0001000000000000B001 /* ProviderCostSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCST0002000000000000F001 /* ProviderCostSnapshot.swift */; };
+		FNT00001000000000000B001 /* AppFonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = FNT00002000000000000F001 /* AppFonts.swift */; };
+		ICMP0001000000000000B001 /* InstrumentComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = ICMP0002000000000000F001 /* InstrumentComponents.swift */; };
+		FNT10001000000000000B001 /* IBMPlexSans-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT10002000000000000F001 /* IBMPlexSans-Regular.ttf */; };
+		FNT10003000000000000B002 /* IBMPlexSans-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT10004000000000000F002 /* IBMPlexSans-Medium.ttf */; };
+		FNT10005000000000000B003 /* IBMPlexSans-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT10006000000000000F003 /* IBMPlexSans-SemiBold.ttf */; };
+		FNT10007000000000000B004 /* IBMPlexSans-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT10008000000000000F004 /* IBMPlexSans-Bold.ttf */; };
+		FNT10009000000000000B005 /* IBMPlexMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT1000A000000000000F005 /* IBMPlexMono-Regular.ttf */; };
+		FNT1000B000000000000B006 /* IBMPlexMono-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT1000C000000000000F006 /* IBMPlexMono-Medium.ttf */; };
+		FNT1000D000000000000B007 /* IBMPlexMono-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT1000E000000000000F007 /* IBMPlexMono-SemiBold.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -311,6 +320,15 @@
 		FFFF0002000000000000F001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 
 		FFFF0004000000000000F002 /* ServicesContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServicesContainer.swift; sourceTree = "<group>"; };
+		FNT00002000000000000F001 /* AppFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/AppFonts.swift; sourceTree = "<group>"; };
+		ICMP0002000000000000F001 /* InstrumentComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/InstrumentComponents.swift; sourceTree = "<group>"; };
+		FNT10002000000000000F001 /* IBMPlexSans-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexSans-Regular.ttf"; sourceTree = "<group>"; };
+		FNT10004000000000000F002 /* IBMPlexSans-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexSans-Medium.ttf"; sourceTree = "<group>"; };
+		FNT10006000000000000F003 /* IBMPlexSans-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexSans-SemiBold.ttf"; sourceTree = "<group>"; };
+		FNT10008000000000000F004 /* IBMPlexSans-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexSans-Bold.ttf"; sourceTree = "<group>"; };
+		FNT1000A000000000000F005 /* IBMPlexMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Regular.ttf"; sourceTree = "<group>"; };
+		FNT1000C000000000000F006 /* IBMPlexMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Medium.ttf"; sourceTree = "<group>"; };
+		FNT1000E000000000000F007 /* IBMPlexMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-SemiBold.ttf"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -374,6 +392,13 @@
 		buildActionMask = 2147483647;
 		files = (
 			EEEE0004000000000000B001 /* Assets.xcassets in Resources */,
+			FNT10001000000000000B001 /* IBMPlexSans-Regular.ttf in Resources */,
+			FNT10003000000000000B002 /* IBMPlexSans-Medium.ttf in Resources */,
+			FNT10005000000000000B003 /* IBMPlexSans-SemiBold.ttf in Resources */,
+			FNT10007000000000000B004 /* IBMPlexSans-Bold.ttf in Resources */,
+			FNT10009000000000000B005 /* IBMPlexMono-Regular.ttf in Resources */,
+			FNT1000B000000000000B006 /* IBMPlexMono-Medium.ttf in Resources */,
+			FNT1000D000000000000B007 /* IBMPlexMono-SemiBold.ttf in Resources */,
 		);
 		runOnlyForDeploymentPostprocessing = 0;
 	};
@@ -628,6 +653,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AAAA0001000000000000B001 /* BirdNionApp.swift in Sources */,
+				FNT00001000000000000B001 /* AppFonts.swift in Sources */,
+				ICMP0001000000000000B001 /* InstrumentComponents.swift in Sources */,
 				BBBB0001000000000000B001 /* ProviderStatus.swift in Sources */,
 				PCST0001000000000000B001 /* ProviderCostSnapshot.swift in Sources */,
 				CLM00001000000000000B01 /* ClaudeUsageModels.swift in Sources */,

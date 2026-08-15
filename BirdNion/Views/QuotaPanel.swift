@@ -353,30 +353,26 @@ struct BirdNionHeader: View {
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 28, height: 28)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 0, style: .continuous))
                 .accessibilityHidden(true)
 
             Text("BirdNion")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.plexSans(14, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
 
             // Status pill from existing ready/updating state — no new status invented.
-            HStack(spacing: 4) {
-                Circle()
+            // Instrument redesign: plain mono caps + square dot, no pill
+            // background/border (matches CSS `.status-pill`).
+            HStack(spacing: 5) {
+                Rectangle()
                     .fill(statusTone)
-                    .frame(width: 6, height: 6)
+                    .frame(width: 5, height: 5)
                 Text(isRefreshing
                      ? L10n.t("popover.updating", settings.appLanguage)
                      : L10n.t("popover.ready", settings.appLanguage))
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.plexMono(10, weight: .bold))
                     .foregroundStyle(statusTone)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(statusSurface.opacity(0.85)))
-            .overlay(
-                Capsule().stroke(statusTone.opacity(0.22), lineWidth: 1)
-            )
             .accessibilityElement(children: .combine)
 
             Spacer(minLength: 8)
@@ -467,17 +463,18 @@ struct ProviderTabs: View {
             selectedId = "all"
         } label: {
             Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(active ? Color.white : VocabbyTheme.secondary)
+                .font(.plexSans(12, weight: .medium))
+                .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 5)
                 .frame(minHeight: Self.chipHeight)
                 .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
-                .clipShape(Capsule())
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
                 .overlay(
-                    Capsule().stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
                 )
-                .contentShape(Capsule())
+                .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(label)
@@ -491,7 +488,7 @@ struct ProviderTabs: View {
         // Brand tint on unselected logos; white on selected so the mark
         // remains visible against the accent pill fill.
         let logoTint: Color = active
-            ? Color.white
+            ? VocabbyTheme.background
             : (VocabbyTheme.providerTint(p.id) ?? VocabbyTheme.secondary)
         Button {
             selectedId = p.id
@@ -504,8 +501,8 @@ struct ProviderTabs: View {
                     .frame(width: 14, height: 14)
                 if active {
                     Text(p.displayName)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.white)
+                        .font(.plexSans(12, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.background)
                         .lineLimit(1)
                 }
             }
@@ -513,11 +510,12 @@ struct ProviderTabs: View {
             .padding(.vertical, 5)
             .frame(minHeight: Self.chipHeight)
             .background(active ? VocabbyTheme.blue : VocabbyTheme.segment)
-            .clipShape(Capsule())
+            .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
             .overlay(
-                Capsule().stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 0.5)
             )
-            .contentShape(Capsule())
+            .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(p.displayName)
@@ -748,11 +746,11 @@ struct ProviderHeaderCard: View {
                 .foregroundStyle(VocabbyTheme.blue)
                 .frame(width: 18, height: 18)
             Text(L10n.t("provider.creditsAvailable", settings.appLanguage))
-                .font(.system(size: 11, weight: .medium))
+                .font(.plexSans(11, weight: .medium))
                 .foregroundStyle(VocabbyTheme.primary)
             Spacer(minLength: 8)
             Text(creditsText(credits))
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .font(.plexMono(13, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.blue)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -761,9 +759,9 @@ struct ProviderHeaderCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(VocabbyTheme.blue.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                 .stroke(VocabbyTheme.blue.opacity(0.18), lineWidth: 1)
         )
         .accessibilityElement(children: .combine)
@@ -787,15 +785,15 @@ struct ProviderHeaderCard: View {
                     .frame(width: 24, height: 24)
                     .padding(5)
                     .background(VocabbyTheme.segment)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                             .stroke(VocabbyTheme.border, lineWidth: 1)
                     )
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(status.displayName)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.plexSans(13, weight: .semibold))
                             .foregroundStyle(VocabbyTheme.primary)
                         if !isPlaceholder && quota.isRefreshing {
                             // Provider has last-known data; a refresh is in
@@ -807,7 +805,7 @@ struct ProviderHeaderCard: View {
                                 .tint(VocabbyTheme.blue)
                                 .frame(width: 10, height: 10)
                             Text(L10n.t("popover.updating", settings.appLanguage).lowercased())
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
                     }
@@ -821,20 +819,20 @@ struct ProviderHeaderCard: View {
                                 .tint(VocabbyTheme.blue)
                                 .frame(width: 12, height: 12)
                             Text(L10n.t("provider.loading", settings.appLanguage))
-                                .font(.system(size: 11).monospacedDigit())
+                                .font(.plexMono(11))
                                 .foregroundStyle(VocabbyTheme.secondary)
                         } else {
                             Text(metadataParts.joined(separator: " · "))
-                                .font(.system(size: 11).monospacedDigit())
+                                .font(.plexMono(11))
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                         }
                     }
                     if !isPlaceholder, let svc = status.serviceStatus, !svc.isEmpty {
                         HStack(spacing: 4) {
-                            Circle().fill(serviceColor).frame(width: 6, height: 6)
+                            Rectangle().fill(serviceColor).frame(width: 6, height: 6)
                             Text(L10n.providerText(svc, preference: settings.appLanguage))
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.tertiary)
                                 .lineLimit(1)
                         }
@@ -843,7 +841,7 @@ struct ProviderHeaderCard: View {
                         Text(detailParts
                             .map { L10n.providerText($0, preference: settings.appLanguage) }
                             .joined(separator: " · "))
-                            .font(.system(size: 10).monospacedDigit())
+                            .font(.plexMono(10))
                             .foregroundStyle(VocabbyTheme.tertiary)
                             .lineLimit(1)
                     }
@@ -856,16 +854,12 @@ struct ProviderHeaderCard: View {
                 availableCreditsStrip(credits)
             }
         }
-        // Padding is tighter than the standard vocabbyCard so the logo
-        // doesn't grow the card height past the mockup header card.
-        .padding(.horizontal, 12)
+        // Instrument redesign: no filled/rounded card — plain background,
+        // vertical padding only (the section is bounded by the popover's own
+        // horizontal padding, matching the CSS `.card { padding: 16px 0 }`
+        // hairline-section pattern).
         .padding(.vertical, 10)
-        .background(VocabbyTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 0.5)
-        )
+        .background(VocabbyTheme.background)
     }
 }
 
@@ -882,27 +876,22 @@ struct XAISpendCard: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.t("xai.spend", settings.appLanguage))
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.plexMono(10, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .tracking(0.6)
                 Spacer()
                 Text(UsageFormatter.usdString(cost.used))
-                    .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(14, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
             }
             Text(L10n.providerText(cost.period ?? "Last 30 days", preference: settings.appLanguage))
-                .font(.system(size: 10))
+                .font(.plexSans(10))
                 .foregroundStyle(VocabbyTheme.secondary)
         }
-        .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(VocabbyTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 0.5)
-        )
+        .background(VocabbyTheme.background)
+        .hairlineTop()
     }
 }
 
@@ -923,7 +912,7 @@ struct ProviderCard: View {
                         .font(.system(size: 12))
                         .foregroundStyle(VocabbyTheme.critical)
                     Text(L10n.providerText(err, preference: settings.appLanguage))
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
                 }
@@ -931,11 +920,11 @@ struct ProviderCard: View {
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                         .fill(VocabbyTheme.criticalSurface.opacity(0.7))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                         .strokeBorder(VocabbyTheme.critical.opacity(0.16), lineWidth: 1)
                 )
             } else if status.windows.isEmpty {
@@ -992,7 +981,7 @@ struct CodexAccountsPopoverSection: View {
                 }
                 if let accountActionErrorText {
                     Text(L10n.f("provider.removeAccountFailed", settings.appLanguage, accountActionErrorText))
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
                         .padding(.vertical, 4)
@@ -1026,11 +1015,11 @@ struct CodexAccountsPopoverSection: View {
 
                 VStack(spacing: 4) {
                     Text(removeConfirmationTitle)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
                     Text(removeConfirmationMessage)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.plexSans(11, weight: .medium))
                         .foregroundStyle(Color.white.opacity(0.88))
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1043,12 +1032,12 @@ struct CodexAccountsPopoverSection: View {
                         }
                     } label: {
                         Text(removeConfirmationButtonTitle)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.plexSans(12, weight: .semibold))
                             .foregroundStyle(VocabbyTheme.critical)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                             .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                                     .fill(Color.white.opacity(0.26))
                             )
                     }
@@ -1059,12 +1048,12 @@ struct CodexAccountsPopoverSection: View {
                         dismissRemoveConfirmation()
                     } label: {
                         Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.plexSans(12, weight: .semibold))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                             .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                                     .fill(Color.white.opacity(0.26))
                             )
                     }
@@ -1075,11 +1064,11 @@ struct CodexAccountsPopoverSection: View {
             .padding(16)
             .frame(width: 260)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .fill(Color.black.opacity(0.72))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .stroke(Color.white.opacity(0.18), lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.35), radius: 16, y: 6)
@@ -1100,14 +1089,14 @@ struct CodexAccountsPopoverSection: View {
                 .foregroundStyle(VocabbyTheme.blue)
                 .frame(width: 30, height: 30)
                 .background(VocabbyTheme.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.t("popover.accounts", lang))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexSans(12, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                 Text(activeLabel)
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -1116,11 +1105,14 @@ struct CodexAccountsPopoverSection: View {
             Spacer(minLength: 8)
 
             Text("\(accounts.count)")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
-                .background(Capsule().fill(VocabbyTheme.segment))
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(VocabbyTheme.segment)
+                )
             Image(systemName: revealed ? "chevron.up" : "chevron.down")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.tertiary)
@@ -1145,18 +1137,18 @@ struct CodexAccountsPopoverSection: View {
                 Text(account.email ?? (account.isSystem
                                        ? L10n.t("provider.systemAccount", settings.appLanguage)
                                        : L10n.t("provider.accountGeneric", settings.appLanguage)))
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.plexSans(12, weight: .medium))
                     .foregroundStyle(VocabbyTheme.primary)
                     .lineLimit(1)
                 Text(account.isSystem
                      ? L10n.t("provider.systemManaged", settings.appLanguage)
                      : L10n.t("provider.appManaged", settings.appLanguage))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(VocabbyTheme.secondary)
             }
             Spacer(minLength: 6)
             Text(quota.text)
-                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .font(.plexMono(10, weight: .semibold))
                 .foregroundStyle(quota.color)
                 .lineLimit(1)
                 .accessibilityLabel(quota.help)
@@ -1173,7 +1165,7 @@ struct CodexAccountsPopoverSection: View {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 9, weight: .bold))
                     Text(L10n.t("popover.accountSelected", settings.appLanguage))
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.plexMono(9, weight: .semibold))
                 }
                 .foregroundStyle(VocabbyTheme.success)
                 .padding(.horizontal, 6)
@@ -1191,7 +1183,7 @@ struct CodexAccountsPopoverSection: View {
                         .foregroundStyle(VocabbyTheme.blue)
                         .frame(width: 20, height: 20)
                         .background(
-                            Circle()
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                                 .fill(VocabbyTheme.blue.opacity(0.10))
                         )
                 }
@@ -1325,18 +1317,18 @@ struct CodexAccountsPopoverSection: View {
                 if busy {
                     ProgressView().controlSize(.small)
                     Text(L10n.t("provider.waitingLogin", settings.appLanguage))
-                        .font(.system(size: 11))
+                        .font(.plexSans(11))
                         .foregroundStyle(VocabbyTheme.secondary)
                 } else {
                     Image(systemName: "plus.circle")
                         .font(.system(size: 12))
                     Text(L10n.t("provider.addAccount", settings.appLanguage))
-                        .font(.system(size: 12))
+                        .font(.plexSans(12))
                 }
             }
             if let addAccountErrorText {
                 Text(L10n.f("provider.addAccountFailed", settings.appLanguage, addAccountErrorText))
-                    .font(.system(size: 10))
+                    .font(.plexSans(10))
                     .foregroundStyle(VocabbyTheme.critical)
                     .lineLimit(2)
             }
@@ -1374,34 +1366,34 @@ struct CodexAccountsPopoverSection: View {
                 .foregroundStyle(tint)
                 .frame(width: 30, height: 30)
                 .background(tint.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(L10n.t("popover.cliCard.title", lang))
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.plexSans(12, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     HStack(spacing: 3) {
                         Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath.circle.fill")
                             .font(.system(size: 9, weight: .bold))
                         Text(L10n.t(alreadyInCLI ? "popover.accountSelected" : "popover.switchReady", lang))
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.plexMono(10, weight: .semibold))
                     }
                     .foregroundStyle(tint)
                 }
                 Text(hint)
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let switchErrorText {
                     Text(L10n.f("popover.switchFailed", lang, switchErrorText))
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(1)
                 } else {
                     Text("~/.codex/auth.json")
-                        .font(.system(size: 10).monospacedDigit())
+                        .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .lineLimit(1)
                 }
@@ -1445,9 +1437,9 @@ struct CodexAccountsPopoverSection: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(VocabbyTheme.group)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                 .stroke(VocabbyTheme.border, lineWidth: 1)
         )
         .padding(.top, 6)
@@ -1551,32 +1543,27 @@ struct QuotaSummaryStrip: View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.t("popover.lowestQuota", settings.appLanguage).uppercased())
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.plexMono(10, weight: .bold))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .tracking(0.6)
                 HStack(spacing: 6) {
-                    Circle()
+                    Rectangle()
                         .fill(tone)
                         .frame(width: 6, height: 6)
                     Text(windowCaption)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.plexSans(12, weight: .medium))
                         .foregroundStyle(VocabbyTheme.primary)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 8)
             Text("\(lowest?.remainingPct ?? 0)%")
-                .font(.system(size: 22, weight: .semibold).monospacedDigit())
+                .font(.plexMono(22, weight: .semibold))
                 .foregroundStyle(tone)
         }
-        .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(VocabbyTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 0.5)
-        )
+        .background(VocabbyTheme.background)
+        .overlay(InkRule(), alignment: .top)
         .accessibilityElement(children: .combine)
     }
 }
@@ -1676,7 +1663,7 @@ struct WindowRow: View {
         let pace = self.pace
         VStack(alignment: .leading, spacing: 5) {
             Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
-                .font(.system(size: 11, weight: .medium))
+                .font(.plexMono(11, weight: .medium))
                 .foregroundStyle(VocabbyTheme.secondary)
             QuotaBarWithPaceMarker(
                 remainingPct: window.isInactive ? 0 : window.remainingPct,
@@ -1689,28 +1676,28 @@ struct WindowRow: View {
                 Text(window.isInactive
                      ? "—"
                      : L10n.f("quota.left", settings.appLanguage, window.remainingPct))
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(10, weight: .semibold))
                     .foregroundStyle(percentTextColor)
                 Spacer()
                 if !resetText.isEmpty {
                     Text(resetText)
-                        .font(.system(size: 10).monospacedDigit())
+                        .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
             }
             if let sub = window.subtitle, !sub.isEmpty {
                 Text(L10n.providerText(sub, preference: settings.appLanguage))
-                    .font(.system(size: 10))
+                    .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.tertiary)
             } else if let pace {
                 HStack(alignment: .firstTextBaseline) {
                     Text(paceLeftText(pace))
-                        .font(.system(size: 10))
+                        .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                     Spacer()
                     if let right = paceRightText(pace) {
                         Text(right)
-                            .font(.system(size: 10))
+                            .font(.plexMono(10))
                             .foregroundStyle(pace.lastsUntilReset
                                 ? VocabbyTheme.tertiary : VocabbyTheme.quotaColor(remaining: 0))
                     }
@@ -1736,18 +1723,20 @@ struct QuotaBarWithPaceMarker: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule()
+                // Instrument redesign: thin square-cornered track/fill instead
+                // of a rounded capsule (matches CSS `.window-track`).
+                Rectangle()
                     .fill(VocabbyTheme.track)
                     .frame(height: QuotaBarLayout.compactHeight)
-                Capsule()
+                Rectangle()
                     .fill(fillColor)
                     .frame(
                         width: max(0, geo.size.width * CGFloat(remainingPct) / 100),
                         height: QuotaBarLayout.compactHeight)
                 if let marker = markerPct, marker > 0.5, marker < 99.5 {
                     // Taller-than-bar stripe like CodexBar's pace tip.
-                    RoundedRectangle(cornerRadius: 0.5)
-                        .fill(Color.primary.opacity(0.55))
+                    Rectangle()
+                        .fill(VocabbyTheme.primary.opacity(0.55))
                         .frame(width: 1.5, height: 8)
                         .offset(x: geo.size.width * CGFloat(marker) / 100 - 0.75, y: -2)
                 }
@@ -1800,7 +1789,7 @@ struct AntigravitySemanticQuotaRows: View {
         if !windows.isEmpty {
             VStack(alignment: .leading, spacing: 9) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexSans(12, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                 ForEach(windows) { window in
                     AntigravitySemanticQuotaRow(window: window, lastUpdated: lastUpdated)
@@ -1847,18 +1836,18 @@ private struct AntigravitySemanticQuotaRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.plexMono(13, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             AntigravityQuotaBar(remainingPct: window.remainingPct)
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.f("quota.left", settings.appLanguage, window.remainingPct))
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.plexMono(11))
                     .foregroundStyle(percentColor)
                 Spacer(minLength: 8)
                 if !resetText.isEmpty {
                     Text(resetText)
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.plexMono(11))
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
             }
@@ -1891,9 +1880,9 @@ private struct AntigravityQuotaBar: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Capsule()
+                Rectangle()
                     .fill(VocabbyTheme.track)
-                Capsule()
+                Rectangle()
                     .fill(googleGradient)
                     .frame(
                         width: geometry.size.width * CGFloat(max(0, min(100, remainingPct))) / 100,
@@ -1929,7 +1918,7 @@ struct ElevenLabsKeysPopoverSection: View {
                     .padding(.vertical, 6)
                 if keys.isEmpty {
                     Text(L10n.t("elevenlabs.keysEmpty", settings.appLanguage))
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .padding(.vertical, 4)
                 }
@@ -1938,7 +1927,7 @@ struct ElevenLabsKeysPopoverSection: View {
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
                         .padding(.vertical, 4)
@@ -1970,14 +1959,14 @@ struct ElevenLabsKeysPopoverSection: View {
                 .foregroundStyle(VocabbyTheme.blue)
                 .frame(width: 30, height: 30)
                 .background(VocabbyTheme.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.t("elevenlabs.popoverTitle", lang))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexSans(12, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                 Text(active.map(displayName) ?? L10n.t("elevenlabs.keysEmpty", lang))
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -1986,11 +1975,14 @@ struct ElevenLabsKeysPopoverSection: View {
             Spacer(minLength: 8)
 
             Text("\(keys.count)")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
-                .background(Capsule().fill(VocabbyTheme.segment))
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(VocabbyTheme.segment)
+                )
             Image(systemName: revealed ? "chevron.up" : "chevron.down")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.tertiary)
@@ -2009,12 +2001,12 @@ struct ElevenLabsKeysPopoverSection: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayName(key))
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.plexSans(12, weight: .medium))
                     .foregroundStyle(VocabbyTheme.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(key.preview + "…")
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
 
@@ -2028,7 +2020,10 @@ struct ElevenLabsKeysPopoverSection: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.blue)
                         .frame(width: 20, height: 20)
-                        .background(Circle().fill(VocabbyTheme.blue.opacity(0.10)))
+                        .background(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .fill(VocabbyTheme.blue.opacity(0.10))
+                        )
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
@@ -2101,7 +2096,7 @@ struct FreemodelAccountsPopoverSection: View {
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.system(size: 10))
+                        .font(.plexSans(10))
                         .foregroundStyle(VocabbyTheme.critical)
                         .lineLimit(2)
                         .padding(.vertical, 4)
@@ -2133,14 +2128,14 @@ struct FreemodelAccountsPopoverSection: View {
                 .foregroundStyle(VocabbyTheme.blue)
                 .frame(width: 30, height: 30)
                 .background(VocabbyTheme.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.t("popover.accounts", lang))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexSans(12, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                 Text(active.map(accountName) ?? L10n.t("freemodel.browserAuto", lang))
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -2149,11 +2144,14 @@ struct FreemodelAccountsPopoverSection: View {
             Spacer(minLength: 8)
 
             Text("\(accounts.count)")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
-                .background(Capsule().fill(VocabbyTheme.segment))
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(VocabbyTheme.segment)
+                )
             Image(systemName: revealed ? "chevron.up" : "chevron.down")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.tertiary)
@@ -2171,7 +2169,7 @@ struct FreemodelAccountsPopoverSection: View {
                 .foregroundStyle(isActive ? VocabbyTheme.blue : VocabbyTheme.tertiary)
 
             Text(accountName(account))
-                .font(.system(size: 12, weight: .medium))
+                .font(.plexSans(12, weight: .medium))
                 .foregroundStyle(VocabbyTheme.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -2187,7 +2185,10 @@ struct FreemodelAccountsPopoverSection: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.blue)
                         .frame(width: 20, height: 20)
-                        .background(Circle().fill(VocabbyTheme.blue.opacity(0.10)))
+                        .background(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .fill(VocabbyTheme.blue.opacity(0.10))
+                        )
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
@@ -2265,7 +2266,7 @@ struct ActionsList: View {
         HStack(spacing: 8) {
             if let lastRefreshCaption {
                 Text(lastRefreshCaption)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.plexMono(10, weight: .medium))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .lineLimit(1)
             }
@@ -2310,14 +2311,14 @@ struct ActionsList: View {
                 .foregroundStyle(tint)
                 .frame(width: 28, height: 28)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                         .fill(VocabbyTheme.segment)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                         .stroke(VocabbyTheme.border, lineWidth: 1)
                 )
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         }
         .buttonStyle(.plain)
         .help(label)
@@ -2346,12 +2347,12 @@ struct ActionRow: View {
                 }
                 .frame(width: 16, height: 16)
                 Text(label)
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(VocabbyTheme.primary)
                 Spacer()
                 if let s = shortcut {
                     Text(s)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.plexMono(10, weight: .medium))
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
             }
@@ -2434,23 +2435,26 @@ private struct AICodingProfileSwitchHeader: View {
                 .foregroundStyle(VocabbyTheme.blue)
                 .frame(width: 30, height: 30)
                 .background(VocabbyTheme.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.plexSans(12, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text("\(count)")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
-                .background(Capsule().fill(VocabbyTheme.segment))
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(VocabbyTheme.segment)
+                )
             Image(systemName: revealed ? "chevron.up" : "chevron.down")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.tertiary)
@@ -2479,11 +2483,11 @@ private struct AICodingProfileSwitchRow: View {
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.plexSans(12, weight: .medium))
                         .foregroundStyle(VocabbyTheme.primary)
                         .lineLimit(1)
                     Text(target)
-                        .font(.system(size: 10).monospacedDigit())
+                        .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -2493,7 +2497,7 @@ private struct AICodingProfileSwitchRow: View {
                     ProgressView().controlSize(.small).tint(VocabbyTheme.blue)
                 } else {
                     Text(stateText)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.plexMono(10, weight: .semibold))
                         .foregroundStyle(health.color)
                 }
             }
@@ -2547,7 +2551,7 @@ struct ClaudeCodeProfileSwitchSection: View {
                         }
                         if let errorText {
                             Text(errorText)
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.critical)
                                 .lineLimit(2)
                                 .padding(.top, 4)
@@ -2705,7 +2709,7 @@ struct CodexProfileSwitchSection: View {
                         }
                         if let errorText {
                             Text(errorText)
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.critical)
                                 .lineLimit(2)
                                 .padding(.top, 4)
@@ -2831,27 +2835,27 @@ struct ClaudeCodeQuickApplyButton: View {
                 .foregroundStyle(stateColor(state))
                 .frame(width: 30, height: 30)
                 .background(stateColor(state).opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(L10n.t("claudeCode.quickCard.title", lang))
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.plexSans(12, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     HStack(spacing: 3) {
                         Image(systemName: stateIcon(state))
                             .font(.system(size: 9, weight: .bold))
                         Text(stateLabel(state, lang: lang))
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.plexMono(10, weight: .semibold))
                     }
                     .foregroundStyle(stateColor(state))
                 }
                 Text(subtitle(state: state, provider: provider))
-                    .font(.system(size: 11))
+                    .font(.plexSans(11))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .lineLimit(1)
                 Text(targetLabel(provider))
-                    .font(.system(size: 10).monospacedDigit())
+                    .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -2873,9 +2877,9 @@ struct ClaudeCodeQuickApplyButton: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(VocabbyTheme.group)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                 .stroke(VocabbyTheme.border, lineWidth: 1)
         )
     }
@@ -3047,16 +3051,19 @@ struct MenuBarVisibilityToggle: View {
                 }
                 MenuBarVisibility.setShown(providerId: providerId, to: isOn)
             } label: {
+                // Instrument redesign: square switch track + square knob
+                // (matches CSS `.mb-vis-switch` / `.mb-vis-knob`), not the
+                // rounded capsule/circle pill switch.
                 ZStack {
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(isOn ? VocabbyTheme.blue : VocabbyTheme.track)
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .strokeBorder(isOn ? VocabbyTheme.blue.opacity(0.45) : VocabbyTheme.border,
                                       lineWidth: 1)
                     HStack {
                         if isOn { Spacer(minLength: 0) }
-                        Circle()
-                            .fill(VocabbyTheme.card)
+                        Rectangle()
+                            .fill(VocabbyTheme.background)
                             .frame(width: 12, height: 12)
                             .shadow(color: VocabbyTheme.brandNavy.opacity(isOn ? 0.18 : 0.10),
                                     radius: 1, x: 0, y: 1)
@@ -3107,15 +3114,16 @@ enum AboutPresenter {
 // MARK: - Card modifier
 
 struct VocabbyCard: ViewModifier {
+    // Instrument redesign: no filled/rounded/shadowed card — a plain top
+    // hairline divider instead (matches CSS `.card { border-radius: 0;
+    // border-top: 1px solid var(--hairline); padding: 16px 0; }`). Vertical
+    // padding only; horizontal inset now comes from the popover's own
+    // padding so hairline-divided sections span the full content width.
     func body(content: Content) -> some View {
         content
-            .padding(12)
-            .background(VocabbyTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 0.5)
-            )
+            .padding(.vertical, 12)
+            .background(VocabbyTheme.background)
+            .hairlineTop()
     }
 }
 
@@ -3197,12 +3205,12 @@ struct ClaudeUsageChartCard: View {
             if let detail = detailDay {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .font(.plexMono(11, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     ForEach(detail.models) { m in
                         HStack(spacing: 8) {
                             Text(m.name)
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
@@ -3212,7 +3220,7 @@ struct ClaudeUsageChartCard: View {
                             Text(m.usd < 0.005
                                 ? formatTokensShort(m.tokens)
                                 : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
-                                .font(.system(size: 10).monospacedDigit())
+                                .font(.plexMono(10))
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
                     }
@@ -3221,10 +3229,10 @@ struct ClaudeUsageChartCard: View {
             }
             // 30-day estimated total + provenance footnote.
             Text("\(L10n.t("chart.estTotal30", settings.appLanguage)): \(formatUSD(report.last30USD))")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             Text(L10n.t("chart.estimate", settings.appLanguage))
-                .font(.system(size: 9))
+                .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -3236,16 +3244,16 @@ struct ClaudeUsageChartCard: View {
                                alignTrailing: Bool = false) -> some View {
         VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.plexMono(9, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .tracking(0.3)
             if let amount {
                 Text(formatUSD(amount))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(16, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
             }
             Text(formatTokens(tokens))
-                .font(.system(size: 11).monospacedDigit())
+                .font(.plexMono(11))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
@@ -3265,7 +3273,7 @@ struct ClaudeUsageChartCard: View {
                     // target; the bar itself sits at the bottom.
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        RoundedRectangle(cornerRadius: 0, style: .continuous)
                             .fill(barColor(for: day))
                             .frame(height: barHeight)
                     }
@@ -3371,12 +3379,12 @@ struct CodexUsageChartCard: View {
             if let detail = detailDay {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .font(.plexMono(11, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     ForEach(detail.models) { m in
                         HStack(spacing: 8) {
                             Text(m.name)
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
@@ -3386,7 +3394,7 @@ struct CodexUsageChartCard: View {
                             Text(m.usd < 0.005
                                 ? formatTokensShort(m.tokens)
                                 : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
-                                .font(.system(size: 10).monospacedDigit())
+                                .font(.plexMono(10))
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
                     }
@@ -3395,12 +3403,12 @@ struct CodexUsageChartCard: View {
             }
             // 30-day estimated total + provenance footnote.
             Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatUSD(report.last30USD))")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             Text(vi
                  ? "Ước tính từ log phiên Codex CLI cục bộ trên máy này."
                  : "Estimated from this machine's local Codex CLI session logs.")
-                .font(.system(size: 9))
+                .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -3412,16 +3420,16 @@ struct CodexUsageChartCard: View {
                                alignTrailing: Bool = false) -> some View {
         VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.plexMono(9, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .tracking(0.3)
             if let amount {
                 Text(formatUSD(amount))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(16, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
             }
             Text(formatTokens(tokens))
-                .font(.system(size: 11).monospacedDigit())
+                .font(.plexMono(11))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
@@ -3437,7 +3445,7 @@ struct CodexUsageChartCard: View {
                     let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        RoundedRectangle(cornerRadius: 0, style: .continuous)
                             .fill(barColor(for: day))
                             .frame(height: barHeight)
                     }
@@ -3532,17 +3540,17 @@ struct KiroUsageChartCard: View {
             if let detail = detailDay {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(dayLabel(detail.date)) · \(formatTokens(detail.tokens)) · \(formatUSD(detail.usd))")
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .font(.plexMono(11, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     ForEach(detail.models) { m in
                         HStack(spacing: 8) {
                             Text(m.name)
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
                             Text("\(formatTokensShort(m.tokens)) · \(formatUSD(m.usd))")
-                                .font(.system(size: 10).monospacedDigit())
+                                .font(.plexMono(10))
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
                     }
@@ -3550,17 +3558,17 @@ struct KiroUsageChartCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatTokens(report.last30Tokens))")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             if let top = report.topModel, !top.isEmpty {
                 Text("\(vi ? "Model dùng nhiều" : "Top model"): \(top)")
-                    .font(.system(size: 9))
+                    .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
             Text(vi
                  ? "Ước tính từ log Kiro CLI cục bộ (kiro-cli sessions)."
                  : "Estimated from local Kiro CLI sessions (kiro-cli data.sqlite3).")
-                .font(.system(size: 9))
+                .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -3572,16 +3580,16 @@ struct KiroUsageChartCard: View {
                                alignTrailing: Bool = false) -> some View {
         VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.plexMono(9, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .tracking(0.3)
             if let amount {
                 Text(formatUSD(amount))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(16, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
             }
             Text(formatTokens(tokens))
-                .font(.system(size: 11).monospacedDigit())
+                .font(.plexMono(11))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
@@ -3596,7 +3604,7 @@ struct KiroUsageChartCard: View {
                     let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        RoundedRectangle(cornerRadius: 0, style: .continuous)
                             .fill(barColor(for: day))
                             .frame(height: barHeight)
                     }
@@ -3691,12 +3699,12 @@ struct GrokUsageChartCard: View {
             if let detail = detailDay {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(dayLabel(detail.date)) · \(formatUSD(detail.usd)) · \(formatTokens(detail.tokens))")
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .font(.plexMono(11, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     ForEach(detail.models) { m in
                         HStack(spacing: 8) {
                             Text(m.name)
-                                .font(.system(size: 10))
+                                .font(.plexSans(10))
                                 .foregroundStyle(VocabbyTheme.secondary)
                                 .lineLimit(1)
                             Spacer(minLength: 8)
@@ -3706,7 +3714,7 @@ struct GrokUsageChartCard: View {
                             Text(m.usd < 0.005
                                 ? formatTokensShort(m.tokens)
                                 : "\(formatUSD(m.usd)) · \(formatTokensShort(m.tokens))")
-                                .font(.system(size: 10).monospacedDigit())
+                                .font(.plexMono(10))
                                 .foregroundStyle(VocabbyTheme.tertiary)
                         }
                     }
@@ -3714,17 +3722,17 @@ struct GrokUsageChartCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text("\(vi ? "Ước tính 30 ngày" : "Est. 30-day total"): \(formatUSD(report.last30USD))")
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             if let top = report.topModel, !top.isEmpty {
                 Text("\(vi ? "Model dùng nhiều" : "Top model"): \(top)")
-                    .font(.system(size: 9))
+                    .font(.plexMono(9))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
             Text(vi
                  ? "Ước tính từ log Grok Build cục bộ (~/.grok/sessions)."
                  : "Estimated from local Grok Build logs (~/.grok/sessions).")
-                .font(.system(size: 9))
+                .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -3736,16 +3744,16 @@ struct GrokUsageChartCard: View {
                                alignTrailing: Bool = false) -> some View {
         VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.plexMono(9, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .tracking(0.3)
             if let amount {
                 Text(formatUSD(amount))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .font(.plexMono(16, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
             }
             Text(formatTokens(tokens))
-                .font(.system(size: 11).monospacedDigit())
+                .font(.plexMono(11))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
@@ -3760,7 +3768,7 @@ struct GrokUsageChartCard: View {
                     let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        RoundedRectangle(cornerRadius: 0, style: .continuous)
                             .fill(barColor(for: day))
                             .frame(height: barHeight)
                     }
@@ -3824,7 +3832,7 @@ struct ClaudeAdminUsageChartCard: View {
         let latest = snapshot.latestDay
         return VStack(alignment: .leading, spacing: 8) {
             Text(vi ? "Admin API · Tổ chức (30 ngày)" : "Admin API · Org (30 days)")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.plexMono(9, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .tracking(0.3)
             HStack(alignment: .top, spacing: 16) {
@@ -3836,12 +3844,12 @@ struct ClaudeAdminUsageChartCard: View {
             barChart.frame(height: 56)
             if let model = snapshot.topModels.first {
                 Text((vi ? "Model nhiều nhất: " : "Top model: ") + model.name)
-                    .font(.system(size: 10))
+                    .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.secondary)
             }
             if let item = snapshot.topCostItems.first {
                 Text((vi ? "Chi nhiều nhất: " : "Top cost: ") + "\(item.name) · \(formatUSD(item.costUSD))")
-                    .font(.system(size: 10))
+                    .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.tertiary)
             }
         }
@@ -3853,14 +3861,14 @@ struct ClaudeAdminUsageChartCard: View {
                         alignTrailing: Bool = false) -> some View {
         VStack(alignment: alignTrailing ? .trailing : .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.plexMono(9, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.secondary)
                 .tracking(0.3)
             Text(formatUSD(amount))
-                .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                .font(.plexMono(16, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             Text(formatTokens(tokens))
-                .font(.system(size: 11).monospacedDigit())
+                .font(.plexMono(11))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
     }
@@ -3873,7 +3881,7 @@ struct ClaudeAdminUsageChartCard: View {
                     let fraction = UsageChartScaling.fraction(
                         value: Double(day.totalTokens), maximum: Double(maxBarTokens))
                     let barHeight = max(geo.size.height * fraction, hasTokens ? 3 : 1)
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    RoundedRectangle(cornerRadius: 0, style: .continuous)
                         .fill(VocabbyTheme.activityChartBarColor(
                             isCurrent: day.id == snapshot.daily.last?.id,
                             hasActivity: day.totalTokens > 0
@@ -3951,13 +3959,13 @@ struct EmptyProvidersState: View {
 
             VStack(spacing: 5) {
                 Text(L10n.t("popover.noProviders", settings.appLanguage))
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.plexSans(16, weight: .bold))
                     .foregroundStyle(VocabbyTheme.primary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Text(L10n.t("popover.noProvidersBody", settings.appLanguage))
-                    .font(.system(size: 12))
+                    .font(.plexSans(12))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .multilineTextAlignment(.center)
                     .lineSpacing(2)
@@ -3973,7 +3981,7 @@ struct EmptyProvidersState: View {
                 NotificationCenter.default.post(name: .openSettings, object: nil)
             } label: {
                 Text(L10n.t("popover.openSettings", settings.appLanguage))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.plexSans(13, weight: .semibold))
                     .padding(.horizontal, 18)
                     .padding(.vertical, 4)
             }

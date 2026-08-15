@@ -22,7 +22,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
             if header != nil || onPasteJSON != nil {
                 HStack(spacing: 8) {
                     if let header {
-                        SettingsSectionHeader(title: header)
+                        Text(header).plexEyebrow()
                     }
 
                     Spacer(minLength: 8)
@@ -30,7 +30,11 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                     if let onPasteJSON {
                         Button(action: onPasteJSON) {
                             Label(L10n.t("ccx.pasteJSON", lang), systemImage: "doc.on.clipboard")
+                                .font(.plexMono(11, weight: .semibold))
+                                .textCase(.uppercase)
                         }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
                         .controlSize(.small)
                         .pointingHandCursor()
                     }
@@ -38,13 +42,12 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                 .padding(.horizontal, 4)
             }
 
-            SettingsCard {
+            VStack(spacing: 0) {
                 fieldRow(L10n.t("ccx.name", lang)) {
                     TextField(L10n.t("ccx.name.placeholder", lang), text: $profile.name)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12))
+                        .font(.plexSans(12))
+                        .instrumentInputStyle()
                 }
-                SettingsRowDivider()
                 fieldRow(L10n.t("ccx.compatibility", lang)) {
                     Picker("", selection: protocolSelection) {
                         Text(L10n.t("codexConfig.protocol.anthropic", lang)).tag("anthropic")
@@ -60,14 +63,11 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                     .help(L10n.t("ccx.compatibility.hint", lang))
                     .accessibilityLabel(L10n.t("ccx.compatibility", lang))
                 }
-                SettingsRowDivider()
                 if !profile.isOpenAICompatible {
                     connectionModeRow
-                    SettingsRowDivider()
                 }
                 upstreamFields
                 if !profile.usesEmbeddedCLIProxy {
-                    SettingsRowDivider()
                     tokenEnvironmentRow
                 }
             }
@@ -87,10 +87,9 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
     private var anthropicFields: some View {
         fieldRow(L10n.t("claudeCode.baseURL", lang)) {
             TextField("https://api.example.com", text: $profile.baseURL)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12).monospaced())
+                .font(.plexMono(12))
+                .instrumentInputStyle()
         }
-        SettingsRowDivider()
         fieldRow(L10n.t("claudeCode.token", lang)) {
             secretInput("anthropic-token", text: $profile.token)
         }
@@ -112,10 +111,9 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
     private var openAIFields: some View {
         fieldRow(L10n.t("ccx.openai.baseURL", lang)) {
             TextField("https://api.example.com/v1", text: optionalBinding(\.openAIBaseURL))
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12).monospaced())
+                .font(.plexMono(12))
+                .instrumentInputStyle()
         }
-        SettingsRowDivider()
         fieldRow(L10n.t("ccx.openai.apiKey", lang)) {
             secretInput("openai-api-key", text: optionalBinding(\.openAIAPIKey))
         }
@@ -195,15 +193,15 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                     SecureField(L10n.t("config.enter", lang), text: text)
                 }
             }
-            .textFieldStyle(.roundedBorder)
-            .font(.system(size: 12).monospaced())
+            .font(.plexMono(12))
+            .instrumentInputStyle()
 
             Button {
                 if isVisible { visibleSecrets.remove(id) } else { visibleSecrets.insert(id) }
             } label: {
                 Image(systemName: isVisible ? "eye.slash" : "eye")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.secondary)
+                    .foregroundStyle(VocabbyTheme.secondary)
                     .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
@@ -229,12 +227,30 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                                          @ViewBuilder _ trailing: () -> Content) -> some View {
         HStack(spacing: 12) {
             Text(label)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SettingsTheme.primary)
+                .font(.plexSans(13, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
                 .frame(width: 110, alignment: .leading)
             trailing()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
+        .hairlineTop()
+    }
+}
+
+/// Square, hairline-bordered text field chrome matching the Instrument
+/// redesign's `.ccp-input` (border, no fill accent, 4pt corner) — replaces
+/// `.textFieldStyle(.roundedBorder)` call sites in this file.
+private extension View {
+    func instrumentInputStyle() -> some View {
+        self
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(VocabbyTheme.background)
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .stroke(VocabbyTheme.border, lineWidth: 1)
+            )
     }
 }

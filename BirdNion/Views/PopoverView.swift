@@ -94,14 +94,14 @@ struct PopoverView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 11, weight: .semibold))
                     Text("Quota")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.plexSans(11, weight: .semibold))
                 }
                 .foregroundStyle(VocabbyTheme.blue)
             }
             .buttonStyle(.plain)
             Spacer()
             Text(sectionTitle)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.plexSans(12, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
             Spacer()
             // Right-side spacer to keep the title visually centered relative

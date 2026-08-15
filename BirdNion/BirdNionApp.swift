@@ -8,6 +8,7 @@ struct BirdNionApp: App {
     @State private var quota: QuotaService
 
     init() {
+        AppFonts.registerBundledFonts()
         let services = ServicesContainer()
         ServicesContainer.register(services: services)
         _settings = State(initialValue: services.settings)
