@@ -388,14 +388,17 @@ struct BirdNionHeader: View {
                     NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                 }
 
-                // Design: second header action is Settings (sun glyph in mock).
+                // Toggle light ↔ dark. Icon shows the *target* mode (sun → go
+                // light, moon → go dark). Settings stays on the footer gear.
                 headerIconButton(
-                    systemName: "sun.max",
+                    systemName: isEffectivelyDark ? "sun.max" : "moon",
                     spinning: false,
-                    label: L10n.t("popover.settings", settings.appLanguage),
+                    label: isEffectivelyDark
+                        ? L10n.t("popover.appearance.light", settings.appLanguage)
+                        : L10n.t("popover.appearance.dark", settings.appLanguage),
                     disabled: false
                 ) {
-                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                    toggleAppearance()
                 }
             }
         }
@@ -407,6 +410,21 @@ struct BirdNionHeader: View {
         }
     }
 
+    /// Resolved dark/light for the header toggle (auto follows system).
+    private var isEffectivelyDark: Bool {
+        switch AppAppearance(rawValue: settings.appAppearance) ?? .auto {
+        case .dark: return true
+        case .light: return false
+        case .auto:
+            return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+    }
+
+    private func toggleAppearance() {
+        let next: AppAppearance = isEffectivelyDark ? .light : .dark
+        settings.appAppearance = next.rawValue
+        settings.applyAppearance()
+    }
 
     /// Design header actions: 26×26, r4, border #DCD8CD, icon 14.
     private func headerIconButton(systemName: String?,
