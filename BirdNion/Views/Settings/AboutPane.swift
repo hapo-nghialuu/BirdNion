@@ -34,10 +34,7 @@ struct AboutPane: View {
 
             // MARK: Centered branding + primary actions
             VStack(spacing: 16) {
-                // App icon chrome (frame/clip/hover scale/shadow) is
-                // intentionally untouched — the logo asset must stay
-                // pixel-identical; only the surrounding text/buttons below
-                // move to the Instrument type + control language.
+                // Preserve the mark's own progress gradient.
                 Button(action: openProjectHome) {
                     appIcon
                         .frame(width: 96, height: 96)
@@ -211,11 +208,11 @@ struct AboutPane: View {
                 Text(L10n.f("about.updateAvailable", settings.appLanguage, version))
                     .font(.plexMono(11, weight: .semibold))
                     .foregroundStyle(SettingsTheme.accent)
-                // Semi-auto: open Terminal running the brew upgrade so the
-                // user sees progress and the cask can replace the running
-                // bundle. No Sparkle / Developer ID needed.
+                // macOS only: open Terminal with brew upgrade, then quit so
+                // the formula can replace bits without a running app lock.
+                // No Sparkle / Developer ID needed.
                 Button(L10n.t("about.updateNow", settings.appLanguage)) {
-                    runBrewUpgrade()
+                    runBrewUpgradeAndQuit()
                 }
                 .controlSize(.small)
                 Button(L10n.t("about.openRelease", settings.appLanguage)) {
@@ -241,20 +238,29 @@ struct AboutPane: View {
             .accessibilityHidden(true)
     }
 
-    /// Opens Terminal running the Homebrew cask upgrade. Terminal (not an
-    /// in-process Process) so the user sees download/replace progress and the
-    /// cask can swap the running bundle; the new version applies on relaunch.
-    private func runBrewUpgrade() {
+    /// Opens Terminal with `brew update && brew upgrade herdr`, waits until
+    /// Terminal has been handed the script, then quits BirdNion so the upgrade
+    /// is not blocked by a running app. macOS-only path (About pane).
+    private func runBrewUpgradeAndQuit() {
+        let upgradeCommand = "brew update && brew upgrade herdr"
         let script = """
         tell application "Terminal"
             activate
-            do script "brew upgrade --cask birdnion"
+            do script "\(upgradeCommand)"
         end tell
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", script]
-        try? process.run()
+        // Wait for osascript to finish launching Terminal before we exit;
+        // otherwise the child can die with the app and the tab never opens.
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // Still quit below so the user is not stuck mid-update flow.
+        }
+        NSApplication.shared.terminate(nil)
     }
 
     private func openProjectHome() {
