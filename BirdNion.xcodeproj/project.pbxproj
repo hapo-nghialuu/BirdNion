@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		AAAA0001000000000000B001 /* BirdNionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA0002000000000000F001 /* BirdNionApp.swift */; };
 		BBBB0001000000000000B001 /* ProviderStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBB0002000000000000F001 /* ProviderStatus.swift */; };
+		PSPG0001000000000000B001 /* ProviderStatusPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = PSPG0002000000000000F001 /* ProviderStatusPage.swift */; };
 		BBBB0003000000000000B002 /* QuotaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBB0004000000000000F002 /* QuotaProvider.swift */; };
 		CCCC0001000000000000B001 /* ProviderStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0002000000000000F001 /* ProviderStatusTests.swift */; };
 		CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */; };
@@ -178,6 +179,7 @@
 		AAAA0002000000000000F001 /* BirdNionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionApp.swift; sourceTree = "<group>"; };
 		AAAA0004000000000000F003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BBBB0002000000000000F001 /* ProviderStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderStatus.swift; sourceTree = "<group>"; };
+		PSPG0002000000000000F001 /* ProviderStatusPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderStatusPage.swift; sourceTree = "<group>"; };
 		PCST0002000000000000F001 /* ProviderCostSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/ProviderCostSnapshot.swift; sourceTree = "<group>"; };
 		CLM00002000000000000F01 /* ClaudeUsageModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Core/ClaudeUsageModels.swift; sourceTree = "<group>"; };
 		CLP00002000000000000F01 /* ClaudeSourcePlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Core/ClaudeSourcePlanner.swift; sourceTree = "<group>"; };
@@ -485,6 +487,7 @@
 			isa = PBXGroup;
 			children = (
 				BBBB0002000000000000F001 /* ProviderStatus.swift */,
+				PSPG0002000000000000F001 /* ProviderStatusPage.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -656,6 +659,7 @@
 				FNT00001000000000000B001 /* AppFonts.swift in Sources */,
 				ICMP0001000000000000B001 /* InstrumentComponents.swift in Sources */,
 				BBBB0001000000000000B001 /* ProviderStatus.swift in Sources */,
+				PSPG0001000000000000B001 /* ProviderStatusPage.swift in Sources */,
 				PCST0001000000000000B001 /* ProviderCostSnapshot.swift in Sources */,
 				CLM00001000000000000B01 /* ClaudeUsageModels.swift in Sources */,
 				CLP00001000000000000B01 /* ClaudeSourcePlanner.swift in Sources */,

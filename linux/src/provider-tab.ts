@@ -4,9 +4,14 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { currentLang, t } from "./i18n";
 import { claudeCodeCard, shouldShowClaudeCode } from "./claude-code";
-import { isProviderStorageEnabled, isHidePersonalInfo } from "./settings-about";
+import {
+  isProviderStorageEnabled,
+  isHidePersonalInfo,
+  isStatusChecksEnabled,
+} from "./settings-about";
 import { logoMark } from "./logos";
 
 /** Same name as `PROVIDERS_CHANGED_EVENT` in settings-tab (avoid circular import). */
@@ -315,7 +320,98 @@ function providerHeaderCard(status: ProviderStatus): HTMLElement {
     menuBarVisibilityToggle(status.id, !!status.error && !status.pending),
   );
   card.append(row);
+
+  // macOS ServiceStatusStrip — issue badge (Claude/Codex) or link-only (Grok).
+  const statusStrip = serviceStatusStrip(status);
+  if (statusStrip) card.append(statusStrip);
+
   return card;
+}
+
+/** Public status-page URL for popover strip / Settings links. */
+function statusPageURL(providerId: string): string | null {
+  switch (providerId) {
+    case "claude":
+      return "https://status.claude.com/";
+    case "codex":
+    case "openai":
+      return "https://status.openai.com/";
+    case "grok":
+    case "xai":
+      return "https://status.x.ai";
+    default:
+      return null;
+  }
+}
+
+function isLinkOnlyStatus(providerId: string): boolean {
+  return providerId === "grok" || providerId === "xai";
+}
+
+function hasServiceIssue(level: string | undefined | null): boolean {
+  return !!level && level !== "none";
+}
+
+function serviceDotClass(level: string | undefined): string {
+  switch (level) {
+    case "none":
+      return "ok";
+    case "minor":
+    case "maintenance":
+    case "major":
+      return "warn";
+    case "critical":
+      return "critical";
+    default:
+      return "unknown";
+  }
+}
+
+/**
+ * Compact status-page row under the provider header (macOS `ServiceStatusStrip`).
+ * Claude/Codex: only when the feed reports a non-operational indicator.
+ * Grok/xAI: always a static link (no public component feed).
+ */
+function serviceStatusStrip(status: ProviderStatus): HTMLElement | null {
+  const url = statusPageURL(status.id);
+  if (!url) return null;
+
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "service-status-strip";
+  row.title = url;
+
+  if (isLinkOnlyStatus(status.id)) {
+    row.append(el("span", "service-status-icon", "∿"));
+    row.append(
+      el(
+        "span",
+        "service-status-label",
+        t("link.status").toUpperCase(),
+      ),
+    );
+  } else {
+    if (!isStatusChecksEnabled()) return null;
+    if (!hasServiceIssue(status.serviceStatusLevel)) return null;
+    const text = status.serviceStatus?.trim();
+    if (!text) return null;
+    row.append(
+      el("span", `service-status-dot ${serviceDotClass(status.serviceStatusLevel)}`),
+    );
+    const label = text === "All Systems Operational"
+      ? t("provider.allOperational")
+      : text;
+    row.append(el("span", "service-status-text", label));
+  }
+
+  row.append(el("span", "service-status-spacer"));
+  row.append(el("span", "service-status-open", "↗"));
+  row.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    void openUrl(url).catch(() => {});
+  });
+  return row;
 }
 
 /** macOS `ProviderCard` — summary strip + divider + window rows (or error). */

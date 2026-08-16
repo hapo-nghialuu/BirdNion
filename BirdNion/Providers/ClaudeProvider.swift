@@ -54,7 +54,11 @@ final class ClaudeProvider: QuotaProvider {
         let allowPrompt = Self.allowKeychainPrompt(
             mode: ClaudeOAuthKeychainPromptPreference.current(),
             interaction: ProviderInteractionContext.current)
-        async let statusAsync = Self.fetchServiceStatus()
+        // Same preference gate as Codex (`statusChecksEnabled`) so Settings →
+        // "Check provider status" also stops the Anthropic statuspage probe.
+        async let statusAsync: ClaudeServiceStatus? = Self.statusChecksEnabled
+            ? Self.fetchServiceStatus()
+            : nil
         do {
             let result = try await ClaudeUsageOrchestrator.loadLatestUsage(
                 session: session, allowKeychainPrompt: allowPrompt)
@@ -214,6 +218,11 @@ final class ClaudeProvider: QuotaProvider {
     }
 
     // MARK: - Service status (status.anthropic.com)
+
+    /// Reads the same `statusChecksEnabled` preference Settings binds (default on).
+    private static var statusChecksEnabled: Bool {
+        (UserDefaults.standard.object(forKey: "statusChecksEnabled") as? Bool) ?? true
+    }
 
     /// Best-effort Anthropic status badge. Short timeout, never throws.
     static func fetchServiceStatus() async -> ClaudeServiceStatus? {

@@ -92,6 +92,8 @@ struct QuotaOverview: View {
                         // owned by each section's padding/rules (body pad 16).
                         VStack(alignment: .leading, spacing: 0) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
+                            // Service-status strip (Claude/Codex issue badge or Grok link).
+                            ServiceStatusStrip(status: s)
                             if s.error == nil, !s.windows.isEmpty {
                                 QuotaSummaryStrip(status: s)
                             }
@@ -827,6 +829,91 @@ struct ProviderHeaderCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(L10n.t("provider.creditsAvailable", language) + ": " + creditsText)
+    }
+}
+
+// MARK: - Service status strip
+
+/// Compact status-page row under the provider header.
+/// Claude/Codex: only when the polled feed reports a non-operational indicator.
+/// Grok/xAI: always a static link (no public component feed).
+struct ServiceStatusStrip: View {
+    @EnvironmentObject var settings: SettingsStore
+    let status: ProviderStatus
+
+    private var kind: ProviderStatusPage.StripKind? {
+        ProviderStatusPage.stripKind(
+            for: status,
+            statusChecksEnabled: settings.statusChecksEnabled)
+    }
+
+    private var pageURL: URL? { ProviderStatusPage.url(for: status.id) }
+
+    var body: some View {
+        if let kind, let url = pageURL {
+            Button {
+                NSWorkspace.shared.open(url)
+            } label: {
+                HStack(spacing: 8) {
+                    switch kind {
+                    case .linkOnly:
+                        Image(systemName: "waveform.path.ecg")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .frame(width: 12, height: 12)
+                        Text(L10n.t("provider.link.status", settings.appLanguage).uppercased())
+                            .font(.plexMono(11, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .tracking(0.3)
+                            .lineLimit(1)
+                    case .issue(let text, let level):
+                        Circle()
+                            .fill(dotColor(for: level))
+                            .frame(width: 8, height: 8)
+                        Text(L10n.providerText(text, preference: settings.appLanguage))
+                            .font(.plexSans(12, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "arrow.up.right")
+                        .font(.plexMono(10, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .popoverContentInset()
+            .padding(.top, 8)
+            .padding(.bottom, 10)
+            .overlay(alignment: .bottom) {
+                PopoverInsetHairline()
+            }
+            .accessibilityLabel(accessibilityLabel(for: kind))
+            .help(url.absoluteString)
+        }
+    }
+
+    private func dotColor(for level: String) -> Color {
+        switch ProviderStatusPage.severity(for: level) {
+        case .ok: return VocabbyTheme.success
+        case .warning: return VocabbyTheme.warningFill
+        case .critical: return VocabbyTheme.critical
+        case .unknown: return VocabbyTheme.disabled
+        }
+    }
+
+    private func accessibilityLabel(for kind: ProviderStatusPage.StripKind) -> String {
+        switch kind {
+        case .linkOnly:
+            return L10n.t("provider.link.status", settings.appLanguage)
+        case .issue(let text, _):
+            return L10n.t("provider.serviceStatus", settings.appLanguage)
+                + ": "
+                + L10n.providerText(text, preference: settings.appLanguage)
+        }
     }
 }
 

@@ -82,6 +82,63 @@ final class ProviderStatusTests: XCTestCase {
         XCTAssertEqual(L10n.t("chart.latestTokens", "vi"), "Token gần nhất")
     }
 
+    // MARK: - ProviderStatusPage strip rules
+
+    func testStatusPageURLsForClaudeCodexGrok() {
+        XCTAssertEqual(
+            ProviderStatusPage.url(for: "claude")?.absoluteString,
+            "https://status.claude.com/")
+        XCTAssertEqual(
+            ProviderStatusPage.url(for: "codex")?.absoluteString,
+            "https://status.openai.com/")
+        XCTAssertEqual(
+            ProviderStatusPage.url(for: "grok")?.absoluteString,
+            "https://status.x.ai")
+        XCTAssertNil(ProviderStatusPage.url(for: "minimax"))
+    }
+
+    func testStatusPageHasIssueLevels() {
+        XCTAssertFalse(ProviderStatusPage.hasIssue(level: nil))
+        XCTAssertFalse(ProviderStatusPage.hasIssue(level: "none"))
+        XCTAssertTrue(ProviderStatusPage.hasIssue(level: "minor"))
+        XCTAssertTrue(ProviderStatusPage.hasIssue(level: "critical"))
+        XCTAssertTrue(ProviderStatusPage.hasIssue(level: "maintenance"))
+    }
+
+    func testStripKindHidesOperationalClaude() {
+        let s = ProviderStatus(
+            id: "claude", displayName: "Claude", windows: [], lastUpdated: Date(),
+            serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
+        XCTAssertNil(ProviderStatusPage.stripKind(for: s, statusChecksEnabled: true))
+    }
+
+    func testStripKindShowsClaudeIssue() {
+        let s = ProviderStatus(
+            id: "claude", displayName: "Claude", windows: [], lastUpdated: Date(),
+            serviceStatus: "Partial System Outage", serviceStatusLevel: "major")
+        XCTAssertEqual(
+            ProviderStatusPage.stripKind(for: s, statusChecksEnabled: true),
+            .issue(text: "Partial System Outage", level: "major"))
+    }
+
+    func testStripKindHidesWhenStatusChecksDisabled() {
+        let s = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
+            serviceStatus: "Major Outage", serviceStatusLevel: "critical")
+        XCTAssertNil(ProviderStatusPage.stripKind(for: s, statusChecksEnabled: false))
+    }
+
+    func testStripKindGrokAlwaysLinkOnly() {
+        let s = ProviderStatus(
+            id: "grok", displayName: "Grok", windows: [], lastUpdated: Date())
+        XCTAssertEqual(
+            ProviderStatusPage.stripKind(for: s, statusChecksEnabled: false),
+            .linkOnly)
+        XCTAssertEqual(
+            ProviderStatusPage.stripKind(for: s, statusChecksEnabled: true),
+            .linkOnly)
+    }
+
     func testProviderReorderMovesDownAfterHoveredRow() {
         let rows = ["a", "b", "c", "d"].map { BirdNionConfigStore.Provider(id: $0) }
         let reordered = ProvidersPane.reorderedProviders(
