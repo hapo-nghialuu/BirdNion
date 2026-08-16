@@ -25,7 +25,7 @@
 	<key>HapoMeURL</key>
 	<string>$(HAPO_ME_URL)</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
+	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

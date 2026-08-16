@@ -8,14 +8,15 @@
 #
 # What it does, in order:
 #   1. Verify clean working tree (no uncommitted changes)
-#   2. Update MARKETING_VERSION + CFBundleShortVersionString in source
-#   3. xcodebuild -quiet build the Release .app
-#   4. Copy build/Release/BirdNion.app → ~/Desktop/BirdNion.app
-#   5. Zip → ~/Desktop/BirdNion-<version>.zip
-#   6. Commit + push the exact source used for the build
-#   7. gh release create/upload v<version> targeting that source commit
-#   8. Update Casks/birdnion.rb (version + sha256), commit + push to same repo
-#   9. Update homebrew-tap/Casks/birdnion.rb, commit + push tap
+#   2. Release verification gate: macOS build+test, Linux TS build, Rust tests
+#   3. Update MARKETING_VERSION + CFBundleShortVersionString in source
+#   4. xcodebuild -quiet build the Release .app
+#   5. Copy build/Release/BirdNion.app → ~/Desktop/BirdNion.app
+#   6. Zip → ~/Desktop/BirdNion-<version>.zip
+#   7. Commit + push the exact source used for the build
+#   8. gh release create/upload v<version> targeting that source commit
+#   9. Update Casks/birdnion.rb (version + sha256), commit + push to same repo
+#   10. Update homebrew-tap/Casks/birdnion.rb, commit + push tap
 #
 # Install after release:
 #   brew install --cask hapo-nghialuu/tap/birdnion
@@ -100,7 +101,31 @@ if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
   exit 1
 fi
 
-# 2. Bump versions in source
+# 2. Release verification gate — must pass before any version mutation or
+# publish action below. Runs the same checks a reviewer would: full macOS
+# build+test, the Linux TS build, and the Linux Rust test suite. Every
+# command runs directly (no pipe into grep/tail/etc.) so `set -e` sees the
+# command's own exit code — piping into a filter can silently replace a
+# real failure with the filter's own (usually zero) exit status.
+if [[ "$SKIP_BUILD" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
+  echo "==> Release verification gate"
+
+  echo "--> macOS build + test (Debug)"
+  xcodebuild test -project "$REPO_ROOT/BirdNion.xcodeproj" -scheme BirdNion \
+    -configuration Debug -destination 'platform=macOS'
+
+  echo "--> Linux: npm ci + build (tsc + vite)"
+  (cd "$REPO_ROOT/linux" && npm ci && npm run build)
+
+  echo "--> Linux: cargo test"
+  (cd "$REPO_ROOT/linux/src-tauri" && cargo test)
+
+  echo "    verification gate passed"
+else
+  echo "==> Skipping release verification gate (--skip-build or --dry-run)"
+fi
+
+# 3. Bump versions in source
 echo "==> Bumping versions to ${VERSION}"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   plutil -replace CFBundleShortVersionString -string "$VERSION" \
@@ -118,7 +143,7 @@ with open(path, 'w') as f:
 PY
 fi
 
-# 3. Build (Release, ad-hoc)
+# 4. Build (Release, ad-hoc)
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> xcodebuild"
   # Publish a universal macOS app so both Apple Silicon and Intel users can
@@ -145,7 +170,7 @@ if [[ -z "$BUILT_APP" ]] || [[ ! -d "$BUILT_APP" ]]; then
   exit 1
 fi
 
-# 4. Copy to ~/Desktop/BirdNion.app (overwrite)
+# 5. Copy to ~/Desktop/BirdNion.app (overwrite)
 echo "==> Packaging"
 run rm -rf "$DESKTOP/BirdNion.app"
 run cp -R "$BUILT_APP" "$DESKTOP/BirdNion.app"
@@ -178,7 +203,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   fi
 fi
 
-# 5. Zip
+# 6. Zip
 ZIP_PATH="$DESKTOP/$ZIP_NAME"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "  [dry-run] would zip $DESKTOP/BirdNion.app → $ZIP_PATH"
@@ -191,7 +216,7 @@ fi
 echo "    zip: $ZIP_PATH"
 echo "    sha256: $ZIP_SHA"
 
-# 6. Commit and push the exact source used for this build before creating its tag.
+# 7. Commit and push the exact source used for this build before creating its tag.
 echo "==> Publishing release source"
 SOURCE_COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD)
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -208,7 +233,7 @@ else
 fi
 echo "    source: $SOURCE_COMMIT"
 
-# 7. Upload to GitHub release and bind the tag to the published source commit.
+# 8. Upload to GitHub release and bind the tag to the published source commit.
 TAG="v${VERSION}"
 echo "==> gh release ${TAG}"
 if gh release view "$TAG" --repo "$ASSET_REPO" >/dev/null 2>&1; then
@@ -240,7 +265,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   echo "    upload verified: SHA matches"
 fi
 
-# 8. Update Casks/birdnion.rb in this repo, commit + push
+# 9. Update Casks/birdnion.rb in this repo, commit + push
 echo "==> Updating Casks/birdnion.rb"
 CASK="$REPO_ROOT/Casks/birdnion.rb"
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -259,7 +284,7 @@ PY
   git -C "$REPO_ROOT" push origin main
 fi
 
-# 9. Also update homebrew-tap so `brew tap hapo-nghialuu/tap` picks up the new version
+# 10. Also update homebrew-tap so `brew tap hapo-nghialuu/tap` picks up the new version
 echo "==> Updating homebrew-tap cask"
 TAP_DIR=$(brew --repository "$TAP_REPO" 2>/dev/null || echo "")
 if [[ -z "$TAP_DIR" ]] || [[ ! -d "$TAP_DIR" ]]; then
