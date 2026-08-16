@@ -92,8 +92,6 @@ struct QuotaOverview: View {
                         // owned by each section's padding/rules (body pad 16).
                         VStack(alignment: .leading, spacing: 0) {
                             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
-                            // Service-status strip (Claude/Codex issue badge or Grok link).
-                            ServiceStatusStrip(status: s)
                             if s.error == nil, !s.windows.isEmpty {
                                 QuotaSummaryStrip(status: s)
                             }
@@ -156,6 +154,9 @@ struct QuotaOverview: View {
                                !report.isEmpty {
                                 KiroUsageChartCard(report: report)
                             }
+                            // Status page at the bottom of the provider stack
+                            // (flat row, same instrument language as credits/meta).
+                            ServiceStatusStrip(status: s)
                         }
                     }
                 }
@@ -834,10 +835,10 @@ struct ProviderHeaderCard: View {
 
 // MARK: - Service status strip
 
-/// Compact status-page row under the provider header.
-/// Always shows for Claude / Codex / Grok when a status URL exists:
-/// green = operational, red = issue, gray = unknown (Grok / not polled yet),
-/// plus a trailing “Trạng thái” link that opens the status page.
+/// Flat footer row at the bottom of each provider stack — same language as
+/// credits/meta rows (mono eyebrow, hairline top, no filled chip).
+/// Claude / Codex: `TÌNH TRẠNG` · ● Ổn định / Sự cố · ↗
+/// Grok: link only (no health claim — xAI has no public status feed).
 struct ServiceStatusStrip: View {
     @EnvironmentObject var settings: SettingsStore
     let status: ProviderStatus
@@ -847,13 +848,17 @@ struct ServiceStatusStrip: View {
     private var strip: ProviderStatusPage.Strip? {
         ProviderStatusPage.strip(
             for: status,
-            statusChecksEnabled: settings.statusChecksEnabled,
-            operationalLabel: L10n.t("provider.serviceStatus.ok", lang),
-            issueFallbackLabel: L10n.t("provider.serviceStatus.issue", lang),
-            unknownLabel: L10n.t("provider.serviceStatus.unknown", lang))
+            statusChecksEnabled: settings.statusChecksEnabled)
     }
 
     private var pageURL: URL? { ProviderStatusPage.url(for: status.id) }
+
+    private var detailTooltip: String {
+        if let detail = ProviderStatusPage.detailText(for: status) {
+            return L10n.providerText(detail, preference: lang)
+        }
+        return pageURL?.absoluteString ?? ""
+    }
 
     var body: some View {
         if let strip, let url = pageURL {
@@ -861,53 +866,78 @@ struct ServiceStatusStrip: View {
                 NSWorkspace.shared.open(url)
             } label: {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(dotColor(for: strip.health))
-                        .frame(width: 8, height: 8)
-                    Text(displayLabel(for: strip))
-                        .font(.plexSans(12, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    Text(L10n.t("provider.serviceStatus", lang).uppercased())
+                        .font(.plexMono(10, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.muted)
+                        .tracking(0.6)
                     Spacer(minLength: 8)
-                    Text(L10n.t("provider.link.status", lang))
-                        .font(.plexMono(11, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.blue)
-                        .lineLimit(1)
-                    Image(systemName: "arrow.up.right")
-                        .font(.plexMono(10, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.blue)
+                    trailing(for: strip)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
             .popoverContentInset()
-            .padding(.top, 8)
-            .padding(.bottom, 10)
-            .overlay(alignment: .bottom) {
+            .padding(.vertical, 12)
+            .overlay(alignment: .top) {
                 PopoverInsetHairline()
             }
-            .accessibilityLabel(
-                L10n.t("provider.serviceStatus", lang)
-                    + ": "
-                    + displayLabel(for: strip)
-            )
-            .help(url.absoluteString)
+            .accessibilityLabel(accessibilityLabel(for: strip))
+            .help(detailTooltip)
         }
     }
 
-    /// Green = ok, red = any issue, gray = unknown (no feed / checks off).
-    private func dotColor(for health: ProviderStatusPage.Health) -> Color {
+    @ViewBuilder
+    private func trailing(for strip: ProviderStatusPage.Strip) -> some View {
+        switch strip {
+        case .health(let health):
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(accent(for: health))
+                    .frame(width: 7, height: 7)
+                Text(shortLabel(for: health))
+                    .font(.plexMono(11, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.primary)
+                    .lineLimit(1)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+        case .linkOnly:
+            // Grok: open status page only — no green/red claim without a feed.
+            HStack(spacing: 4) {
+                Text(L10n.t("provider.link.status", lang))
+                    .font(.plexMono(11, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.blue)
+                    .lineLimit(1)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.blue)
+            }
+        }
+    }
+
+    private func shortLabel(for health: ProviderStatusPage.Health) -> String {
+        switch health {
+        case .ok: return L10n.t("provider.serviceStatus.ok", lang)
+        case .issue: return L10n.t("provider.serviceStatus.issue", lang)
+        }
+    }
+
+    private func accent(for health: ProviderStatusPage.Health) -> Color {
         switch health {
         case .ok: return VocabbyTheme.success
         case .issue: return VocabbyTheme.critical
-        case .unknown: return VocabbyTheme.disabled
         }
     }
 
-    private func displayLabel(for strip: ProviderStatusPage.Strip) -> String {
-        L10n.providerText(strip.label, preference: lang)
+    private func accessibilityLabel(for strip: ProviderStatusPage.Strip) -> String {
+        switch strip {
+        case .health(let health):
+            return L10n.t("provider.serviceStatus", lang) + ": " + shortLabel(for: health)
+        case .linkOnly:
+            return L10n.t("provider.link.status", lang)
+        }
     }
 }
 

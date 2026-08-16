@@ -105,54 +105,45 @@ final class ProviderStatusTests: XCTestCase {
         XCTAssertTrue(ProviderStatusPage.hasIssue(level: "maintenance"))
         XCTAssertEqual(ProviderStatusPage.health(level: "none"), .ok)
         XCTAssertEqual(ProviderStatusPage.health(level: "major"), .issue)
-        XCTAssertEqual(ProviderStatusPage.health(level: nil), .unknown)
+        XCTAssertNil(ProviderStatusPage.health(level: nil))
     }
 
-    func testStripAlwaysShowsOperationalClaudeAsOk() {
+    func testStripOperationalClaudeAsHealthOk() {
         let s = ProviderStatus(
             id: "claude", displayName: "Claude", windows: [], lastUpdated: Date(),
             serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
-        let strip = ProviderStatusPage.strip(
-            for: s, statusChecksEnabled: true,
-            operationalLabel: "Operational", issueFallbackLabel: "Issues",
-            unknownLabel: "No data yet")
-        XCTAssertEqual(strip?.health, .ok)
-        XCTAssertEqual(strip?.label, "All Systems Operational")
+        XCTAssertEqual(
+            ProviderStatusPage.strip(for: s, statusChecksEnabled: true),
+            .health(.ok))
     }
 
-    func testStripShowsClaudeIssueAsRed() {
+    func testStripClaudeIssueAsHealthIssue() {
         let s = ProviderStatus(
             id: "claude", displayName: "Claude", windows: [], lastUpdated: Date(),
             serviceStatus: "Partial System Outage", serviceStatusLevel: "major")
-        let strip = ProviderStatusPage.strip(
-            for: s, statusChecksEnabled: true,
-            operationalLabel: "Operational", issueFallbackLabel: "Issues",
-            unknownLabel: "No data yet")
-        XCTAssertEqual(strip?.health, .issue)
-        XCTAssertEqual(strip?.label, "Partial System Outage")
+        XCTAssertEqual(
+            ProviderStatusPage.strip(for: s, statusChecksEnabled: true),
+            .health(.issue))
     }
 
-    func testStripUnknownWhenStatusChecksDisabled() {
+    func testStripLinkOnlyWhenStatusChecksDisabled() {
         let s = ProviderStatus(
             id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
             serviceStatus: "Major Outage", serviceStatusLevel: "critical")
-        let strip = ProviderStatusPage.strip(
-            for: s, statusChecksEnabled: false,
-            operationalLabel: "Operational", issueFallbackLabel: "Issues",
-            unknownLabel: "No data yet")
-        XCTAssertEqual(strip?.health, .unknown)
-        XCTAssertEqual(strip?.label, "No data yet")
+        XCTAssertEqual(
+            ProviderStatusPage.strip(for: s, statusChecksEnabled: false),
+            .linkOnly)
     }
 
-    func testStripGrokAlwaysUnknownWithLink() {
+    func testStripGrokIsLinkOnly() {
         let s = ProviderStatus(
             id: "grok", displayName: "Grok", windows: [], lastUpdated: Date())
-        let strip = ProviderStatusPage.strip(
-            for: s, statusChecksEnabled: true,
-            operationalLabel: "Operational", issueFallbackLabel: "Issues",
-            unknownLabel: "No data yet")
-        XCTAssertEqual(strip?.health, .unknown)
-        XCTAssertEqual(strip?.label, "No data yet")
+        XCTAssertEqual(
+            ProviderStatusPage.strip(for: s, statusChecksEnabled: true),
+            .linkOnly)
+        XCTAssertEqual(
+            ProviderStatusPage.strip(for: s, statusChecksEnabled: false),
+            .linkOnly)
     }
 
     func testStripCodexOkAndIssue() {
@@ -160,20 +151,22 @@ final class ProviderStatusTests: XCTestCase {
             id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
             serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
         XCTAssertEqual(
-            ProviderStatusPage.strip(
-                for: ok, statusChecksEnabled: true,
-                operationalLabel: "Operational", issueFallbackLabel: "Issues",
-                unknownLabel: "No data yet")?.health,
-            .ok)
+            ProviderStatusPage.strip(for: ok, statusChecksEnabled: true),
+            .health(.ok))
         let bad = ProviderStatus(
             id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
             serviceStatus: nil, serviceStatusLevel: "critical")
         XCTAssertEqual(
-            ProviderStatusPage.strip(
-                for: bad, statusChecksEnabled: true,
-                operationalLabel: "Operational", issueFallbackLabel: "Issues",
-                unknownLabel: "No data yet")?.label,
-            "Issues")
+            ProviderStatusPage.strip(for: bad, statusChecksEnabled: true),
+            .health(.issue))
+    }
+
+    func testStripNotYetPolledIsLinkOnly() {
+        let s = ProviderStatus(
+            id: "claude", displayName: "Claude", windows: [], lastUpdated: Date())
+        XCTAssertEqual(
+            ProviderStatusPage.strip(for: s, statusChecksEnabled: true),
+            .linkOnly)
     }
 
     func testProviderReorderMovesDownAfterHoveredRow() {

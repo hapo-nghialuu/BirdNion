@@ -959,49 +959,56 @@ html.popover-capped .app-body {
   line-height: 1.3;
 }
 
-/* macOS ServiceStatusStrip — under provider header */
+/* macOS ServiceStatusStrip — flat footer row at bottom of provider stack */
 .service-status-strip {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  margin-top: 8px;
-  padding: 0;
+  margin: 0;
+  padding: 12px 14px;
   border: 0;
+  border-top: 1px solid var(--border);
   background: transparent;
   cursor: pointer;
   text-align: left;
   color: var(--text);
   font: inherit;
+  box-sizing: border-box;
 }
-.service-status-strip:hover .service-status-link,
-.service-status-strip:hover .service-status-open {
-  opacity: 0.85;
-}
-.service-status-dot {
-  flex: 0 0 8px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--disabled);
-}
-/* Binary health: green = ok, red = issue, gray = unknown */
-.service-status-dot.ok { background: var(--success); }
-.service-status-dot.issue { background: var(--critical); }
-.service-status-dot.unknown { background: var(--disabled); }
-.service-status-text {
-  font-size: 12px;
+.service-status-eyebrow {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 500;
-  color: var(--text);
-  line-height: 1.3;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  letter-spacing: 0.6px;
+  color: var(--muted, var(--text3));
   white-space: nowrap;
 }
 .service-status-spacer { flex: 1 1 auto; min-width: 8px; }
+.service-status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.service-status-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.service-status-dot.ok { background: var(--success); }
+.service-status-dot.issue { background: var(--critical); }
+.service-status-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.3;
+  white-space: nowrap;
+}
 .service-status-link {
-  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
@@ -1010,10 +1017,15 @@ html.popover-capped .app-body {
 }
 .service-status-open {
   flex: 0 0 auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
+  color: var(--text3);
+}
+.service-status-value.link .service-status-open {
   color: var(--accent);
+}
+.service-status-strip:hover .service-status-open {
+  opacity: 0.8;
 }
 
 .provider-extras { font-size: 10px; color: var(--tertiary); }

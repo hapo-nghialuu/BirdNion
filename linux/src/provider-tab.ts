@@ -320,11 +320,6 @@ function providerHeaderCard(status: ProviderStatus): HTMLElement {
     menuBarVisibilityToggle(status.id, !!status.error && !status.pending),
   );
   card.append(row);
-
-  // macOS ServiceStatusStrip — issue badge (Claude/Codex) or link-only (Grok).
-  const statusStrip = serviceStatusStrip(status);
-  if (statusStrip) card.append(statusStrip);
-
   return card;
 }
 
@@ -348,55 +343,67 @@ function isLinkOnlyStatus(providerId: string): boolean {
   return providerId === "grok" || providerId === "xai";
 }
 
-/** Binary health for the strip: green / red / gray (macOS ProviderStatusPage.Health). */
-type ServiceHealth = "ok" | "issue" | "unknown";
+/** macOS ProviderStatusPage.Strip — health chip or plain link. */
+type ServiceStrip =
+  | { kind: "health"; health: "ok" | "issue" }
+  | { kind: "linkOnly" };
 
-function serviceHealth(
-  status: ProviderStatus,
-): { health: ServiceHealth; label: string } {
+function serviceStrip(status: ProviderStatus): ServiceStrip {
   if (isLinkOnlyStatus(status.id) || !isStatusChecksEnabled()) {
-    return { health: "unknown", label: t("provider.serviceStatus.unknown") };
+    return { kind: "linkOnly" };
   }
   const level = status.serviceStatusLevel;
-  if (!level) {
-    return { health: "unknown", label: t("provider.serviceStatus.unknown") };
-  }
-  if (level === "none") {
-    const raw = status.serviceStatus?.trim();
-    return {
-      health: "ok",
-      label: raw
-        ? (raw === "All Systems Operational" ? t("provider.allOperational") : raw)
-        : t("provider.serviceStatus.ok"),
-    };
-  }
-  const raw = status.serviceStatus?.trim();
-  return {
-    health: "issue",
-    label: raw || t("provider.serviceStatus.issue"),
-  };
+  if (!level) return { kind: "linkOnly" };
+  if (level === "none") return { kind: "health", health: "ok" };
+  return { kind: "health", health: "issue" };
 }
 
 /**
- * Compact status-page row under the provider header (macOS `ServiceStatusStrip`).
- * Always shown for Claude / Codex / Grok: green = ok, red = issue, gray =
- * unknown, plus a trailing status-page link.
+ * Flat footer row at the bottom of the provider tab (macOS `ServiceStatusStrip`).
+ * Same instrument language as credits/meta: mono eyebrow, top hairline, no chip.
+ * Claude/Codex: health dot + short label. Grok: status-page link only.
+ * Call after charts/accounts so it stays the last provider-local row.
  */
-function serviceStatusStrip(status: ProviderStatus): HTMLElement | null {
+export function serviceStatusStrip(status: ProviderStatus): HTMLElement | null {
   const url = statusPageURL(status.id);
   if (!url) return null;
 
-  const { health, label } = serviceHealth(status);
+  const strip = serviceStrip(status);
   const row = document.createElement("button");
   row.type = "button";
   row.className = "service-status-strip";
-  row.title = url;
+  row.title = status.serviceStatus?.trim() || url;
 
-  row.append(el("span", `service-status-dot ${health}`));
-  row.append(el("span", "service-status-text", label));
+  row.append(
+    el(
+      "span",
+      "service-status-eyebrow",
+      t("provider.serviceStatus").toUpperCase(),
+    ),
+  );
   row.append(el("span", "service-status-spacer"));
-  row.append(el("span", "service-status-link", t("link.status")));
-  row.append(el("span", "service-status-open", "↗"));
+
+  if (strip.kind === "health") {
+    const value = el("span", "service-status-value");
+    value.append(el("span", `service-status-dot ${strip.health}`));
+    value.append(
+      el(
+        "span",
+        "service-status-text",
+        strip.health === "ok"
+          ? t("provider.serviceStatus.ok")
+          : t("provider.serviceStatus.issue"),
+      ),
+    );
+    value.append(el("span", "service-status-open", "↗"));
+    row.append(value);
+  } else {
+    const value = el("span", "service-status-value link");
+    value.append(el("span", "service-status-link", t("link.status")));
+    value.append(el("span", "service-status-open", "↗"));
+    row.append(value);
+  }
+
   row.addEventListener("click", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();

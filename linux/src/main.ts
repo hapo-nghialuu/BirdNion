@@ -9,7 +9,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { combine, UsageReport } from "./usage";
 import { chartCard, heatmapCard, topModelsCard, confidenceRow, budgetForecastCard } from "./all-tab";
-import { providerCard, claudeCodeQuickApplyCard, loadingSkeleton, lowestWindow, ProviderStatus } from "./provider-tab";
+import {
+  providerCard,
+  claudeCodeQuickApplyCard,
+  loadingSkeleton,
+  lowestWindow,
+  serviceStatusStrip,
+  ProviderStatus,
+} from "./provider-tab";
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
 import { codexAccountsPopoverCard } from "./codex-accounts-popover";
@@ -688,6 +695,11 @@ function render() {
       ));
     }
 
+    // Status page row — last provider-local content (macOS ServiceStatusStrip).
+    if (status) {
+      const strip = serviceStatusStrip(status);
+      if (strip) body.append(strip);
+    }
   }
   app.append(popoverFooter());
   scheduleFitWindow();

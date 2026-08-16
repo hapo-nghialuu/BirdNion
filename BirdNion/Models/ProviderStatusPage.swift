@@ -20,26 +20,25 @@ enum ProviderStatusPage {
         }
     }
 
-    /// Providers without a pollable feed — health stays `.unknown` until a feed exists.
+    /// Providers without a pollable feed — strip is a plain status-page link only.
     static func isLinkOnly(_ providerID: String) -> Bool {
         providerID == "grok" || providerID == "xai"
     }
 
-    /// Binary overall health for the popover strip (green / red / gray).
+    /// Binary overall health for polled providers (green / red).
     enum Health: Equatable {
         /// Indicator `none` — systems operational.
         case ok
         /// Any non-operational indicator (minor → critical, maintenance).
         case issue
-        /// No feed, checks off, or not yet polled.
-        case unknown
     }
 
-    /// One row: overall health + status label; the view always pairs it with a link.
-    struct Strip: Equatable {
-        let health: Health
-        /// Primary status text (left of the link).
-        let label: String
+    /// What the popover renders under the provider header.
+    enum Strip: Equatable {
+        /// Polled overall status chip (Claude / Codex when feed has a reading).
+        case health(Health)
+        /// Status-page deep link only (Grok, checks off, or not yet polled).
+        case linkOnly
     }
 
     /// True when the statuspage indicator is non-operational.
@@ -48,44 +47,37 @@ enum ProviderStatusPage {
         return level != "none"
     }
 
-    /// Overall health from a statuspage indicator string.
-    static func health(level: String?) -> Health {
-        guard let level, !level.isEmpty else { return .unknown }
+    /// Overall health from a statuspage indicator string. `nil` / empty → unknown (no chip).
+    static func health(level: String?) -> Health? {
+        guard let level, !level.isEmpty else { return nil }
         return level == "none" ? .ok : .issue
     }
 
     /// Returns nil when this provider has no status page URL.
     ///
-    /// Always shows a strip for Claude / Codex / Grok when a URL exists so the
-    /// user can open the status page; health is green (ok), red (issue), or
-    /// gray (unknown / link-only / checks off).
+    /// - Grok / xAI → always `.linkOnly` (no fake gray “status”).
+    /// - Claude / Codex with a polled indicator → `.health`.
+    /// - Checks off or not yet polled → `.linkOnly` (link still available).
     static func strip(
         for status: ProviderStatus,
-        statusChecksEnabled: Bool,
-        operationalLabel: String,
-        issueFallbackLabel: String,
-        unknownLabel: String
+        statusChecksEnabled: Bool
     ) -> Strip? {
         guard url(for: status.id) != nil else { return nil }
 
         if isLinkOnly(status.id) {
-            return Strip(health: .unknown, label: unknownLabel)
+            return .linkOnly
         }
 
-        guard statusChecksEnabled else {
-            return Strip(health: .unknown, label: unknownLabel)
+        guard statusChecksEnabled else { return .linkOnly }
+        guard let h = health(level: status.serviceStatusLevel) else {
+            return .linkOnly
         }
+        return .health(h)
+    }
 
-        let level = status.serviceStatusLevel
-        switch health(level: level) {
-        case .ok:
-            let raw = status.serviceStatus?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return Strip(health: .ok, label: raw.isEmpty ? operationalLabel : raw)
-        case .issue:
-            let raw = status.serviceStatus?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return Strip(health: .issue, label: raw.isEmpty ? issueFallbackLabel : raw)
-        case .unknown:
-            return Strip(health: .unknown, label: unknownLabel)
-        }
+    /// Optional feed description for tooltips (full sentence from statuspage).
+    static func detailText(for status: ProviderStatus) -> String? {
+        let raw = status.serviceStatus?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? nil : raw
     }
 }
