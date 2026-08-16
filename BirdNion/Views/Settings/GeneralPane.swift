@@ -147,6 +147,23 @@ struct GeneralPane: View {
                 }
             }
 
+            SettingsCard(
+                header: L10n.t("budget.perProvider.title", settings.appLanguage),
+                footer: LocalizedStringKey(L10n.t("settings.perProviderBudget.subtitle", settings.appLanguage))
+            ) {
+                perProviderBudgetRow(
+                    title: L10n.t("settings.claudeBudget.title", settings.appLanguage),
+                    value: $settings.claudeMonthlyBudgetUSD)
+                SettingsRowDivider()
+                perProviderBudgetRow(
+                    title: L10n.t("settings.codexBudget.title", settings.appLanguage),
+                    value: $settings.codexMonthlyBudgetUSD)
+                SettingsRowDivider()
+                perProviderBudgetRow(
+                    title: L10n.t("settings.grokBudget.title", settings.appLanguage),
+                    value: $settings.grokMonthlyBudgetUSD)
+            }
+
             SettingsCard(header: L10n.t("settings.section.notifications", settings.appLanguage)) {
                 SettingsLabeledRow(
                     title: L10n.t("settings.statusChecks.title", settings.appLanguage),
@@ -264,6 +281,27 @@ struct GeneralPane: View {
             }
             .padding(.top, 18)
             .hairlineTop(SettingsTheme.hairline)
+        }
+    }
+
+    /// One per-provider budget field — same blank/invalid/non-positive →
+    /// "off" (0) normalization as the total budget field above, factored out
+    /// so the three Claude/Codex/Grok rows share one validation path.
+    private func perProviderBudgetRow(title: String, value: Binding<Double>) -> some View {
+        SettingsLabeledRow(title: title) {
+            TextField("∞", text: Binding(
+                get: { value.wrappedValue > 0 ? String(value.wrappedValue) : "" },
+                set: { raw in
+                    let trimmed = raw.trimmingCharacters(in: .whitespaces)
+                    guard let parsed = Double(trimmed), parsed.isFinite, parsed > 0 else {
+                        value.wrappedValue = 0
+                        return
+                    }
+                    value.wrappedValue = parsed
+                }
+            ))
+            .multilineTextAlignment(.trailing)
+            .frame(width: 90)
         }
     }
 }

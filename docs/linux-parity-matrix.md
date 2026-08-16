@@ -1,6 +1,6 @@
 # Linux ↔ macOS parity matrix
 
-Baseline updated 2026-08-15: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh và weekly digest.
+Baseline updated 2026-08-16: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest và per-provider budget.
 
 | Area | macOS | Linux target | Status |
 |---|---|---|---|
@@ -14,9 +14,9 @@ Baseline updated 2026-08-15: macOS + Linux after Data Confidence, budget/forecas
 | Last-good provider status | giữ `serviceStatus`/level khi refresh mới thiếu status | giữ `serviceStatus`/level từ cached status | **done** |
 | All tab 3 sources | AllUsageOverview | `usage.ts` + `all-tab.ts` (Claude/Codex/Grok) | **done** |
 | Total monthly budget + forecast | local `monthlyBudgetUSD`, Claude+Codex+Grok linear forecast | local `birdnion.monthlyBudgetUSD`, cùng scope/logic | **done** |
-| Per-provider budget | chưa triển khai | chưa triển khai | **gap (deferred)** |
+| Per-provider budget (Claude/Codex/Grok) | `UserDefaults` `claude/codex/grokBudgetUSD`, `ProviderBudgetCard` trong tab provider tương ứng (MTD/budget/forecast/remaining-over, trust-unavailable no false-green) | `localStorage` `birdnion.claude/codex/grokBudgetUSD`, `providerBudgetCard` cùng logic | **done** |
 | Adaptive refresh | base interval × 1/2/4/8; forced/manual bypass + success reset | cùng multiplier/bypass/reset, dùng tick sẵn có | **done** |
-| Weekly digest | rolling 7 ngày, default OFF, partial-data caveat | cùng cửa sổ/cadence, default OFF | **done** |
+| Weekly digest | rolling 7 ngày, default OFF, partial-data caveat, cảnh báo budget tổng + per-provider chỉ khi forecast-over/already-over | cùng cửa sổ/cadence, default OFF, cùng logic cảnh báo budget | **done** |
 | Per-provider cost chart | Claude/Codex/Grok cards | `source-chart.ts` + main tab branch | **done** |
 | Settings structure | multi-tab | section nav: Providers / General / About | **done** |
 | Heatmap greens | VocabbyTheme.heat* | `styles.css` soft GitHub greens | **done** |

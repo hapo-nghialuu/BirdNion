@@ -46,6 +46,28 @@ final class WeeklyDigestTests: XCTestCase {
         CostHistoryStore.UsageScanConfidence(included: true, live: false, scannedAt: now)
     }
 
+    private func grokDay(_ offset: Int, usd: Double, tokens: Int) -> GrokDailyUsage {
+        GrokDailyUsage(date: day(offset), usd: usd, tokens: tokens, models: [])
+    }
+
+    private func grokReport(daily: [GrokDailyUsage],
+                            confidence: CostHistoryStore.UsageScanConfidence = .unavailable
+    ) -> GrokUsageReport {
+        GrokUsageReport(todayUSD: 0, todayTokens: 0, last30USD: 0, last30Tokens: 0,
+                        daily: daily, topModel: nil, scanConfidence: confidence)
+    }
+
+    /// Fixed calendar date — for forecast-status assertions that depend on
+    /// `daysElapsed`/`daysInMonth` (e.g. `.forecastOver` vs `.onTrack`), the
+    /// class's live `now`/`day(offset)` would make the expected status
+    /// depend on which real-world day the suite happens to run on. Mirrors
+    /// `CombinedUsageReportTests`'s `date(_:_:_:)` helper.
+    private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        var comp = DateComponents()
+        comp.year = year; comp.month = month; comp.day = day
+        return calendar.date(from: comp)!
+    }
+
     // MARK: - Suppression (contract #3 / #4)
 
     func testSuppressesWhenNoSourceIsLive() {
@@ -223,6 +245,143 @@ final class WeeklyDigestTests: XCTestCase {
         XCTAssertNil(evaluation.forecast.status)
         XCTAssertTrue(evaluation.shouldSend)
         XCTAssertFalse(evaluation.body.contains("Monthly forecast"))
+    }
+
+    // MARK: - Per-provider budget risk (independent of the total budget)
+
+    /// A configured, live-confidence Codex budget that the linear forecast
+    /// projects to exceed surfaces a risk line — even though the combined
+    /// (total) budget stays unconfigured. Pinned to day 5 of a 31-day month
+    /// (matches `CombinedUsageReportTests.testMonthlyForecastStatusForecastOverNotYetOver`:
+    /// dailyAvg 50/5=10, projected 10*31=310>200, MTD 50<200) — day-of-month
+    /// independent, unlike the live `now`/`day(offset)` helpers.
+    func testPerProviderBudgetSurfacesForecastOverRiskLine() {
+        let fixedNow = date(2026, 3, 5)
+        let claude = claudeReport(
+            daily: [ClaudeDailyUsage(date: fixedNow, usd: 1, tokens: 10, models: [])],
+            confidence: liveConfidence())
+        let codex = codexReport(
+            daily: [CodexDailyUsage(date: fixedNow, usd: 50, tokens: 10, models: [])],
+            confidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claude, codex: codex, grok: nil,
+            includeClaude: true, includeCodex: true, includeGrok: false,
+            budgetUSD: nil, claudeBudgetUSD: nil, codexBudgetUSD: 200, grokBudgetUSD: nil,
+            now: fixedNow, calendar: calendar, language: "en")
+
+        XCTAssertEqual(evaluation.providerBudgetRisks.count, 1)
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.source, .codex)
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.status, .forecastOver)
+        // dailyAvg 50/5=10, projected 10*31=310 — the forecast-over line must
+        // report the projected total, not month-to-date (50), so this string
+        // pins the exact value AllUsageFormat.usd renders for it.
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.projectedTotalUSD, 310)
+        XCTAssertTrue(evaluation.body.contains("Codex"))
+        XCTAssertTrue(evaluation.body.contains("may exceed budget (forecast $310.00 of $200.00)"))
+    }
+
+    /// Month-to-date already past a provider's own budget → `.alreadyOver`,
+    /// worded distinctly from `.forecastOver` in the digest body.
+    func testPerProviderBudgetSurfacesAlreadyOverRiskLine() {
+        let claude = claudeReport(daily: [claudeDay(0, usd: 500, tokens: 1000)], confidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claude, codex: nil, grok: nil,
+            includeClaude: true, includeCodex: false, includeGrok: false,
+            budgetUSD: nil, claudeBudgetUSD: 10, codexBudgetUSD: nil, grokBudgetUSD: nil,
+            now: now, calendar: calendar, language: "en")
+
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.status, .alreadyOver)
+        XCTAssertTrue(evaluation.body.contains("Claude"))
+        XCTAssertTrue(evaluation.body.contains("already over budget"))
+    }
+
+    /// A provider on track against its own budget contributes no risk line
+    /// — the digest only calls out risk, staying concise.
+    func testPerProviderBudgetOnTrackProducesNoRiskLine() {
+        let claude = claudeReport(daily: [claudeDay(0, usd: 1, tokens: 10)], confidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claude, codex: nil, grok: nil,
+            includeClaude: true, includeCodex: false, includeGrok: false,
+            budgetUSD: nil, claudeBudgetUSD: 1_000, codexBudgetUSD: nil, grokBudgetUSD: nil,
+            now: now, calendar: calendar, language: "en")
+
+        XCTAssertTrue(evaluation.providerBudgetRisks.isEmpty)
+    }
+
+    /// Trust rule: a configured budget for a source whose confidence is
+    /// `.unavailable` (never landed a scan) must never produce a risk line
+    /// — an implicit zero must not be reported as "on track" or "over".
+    func testPerProviderBudgetNeverRisksAnUnavailableSource() {
+        let grok = grokReport(daily: [], confidence: .unavailable)
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: nil, codex: nil, grok: grok,
+            includeClaude: false, includeCodex: false, includeGrok: true,
+            budgetUSD: nil, claudeBudgetUSD: nil, codexBudgetUSD: nil, grokBudgetUSD: 10,
+            now: now, calendar: calendar, language: "en")
+
+        XCTAssertTrue(evaluation.providerBudgetRisks.isEmpty)
+        XCTAssertFalse(evaluation.body.contains("Grok"))
+    }
+
+    /// History-only confidence (a landed scan that just isn't live this
+    /// cycle) still calculates a risk line — only `.unavailable` is gated.
+    func testPerProviderBudgetCalculatesForHistoryOnlyConfidence() {
+        let claude = claudeReport(daily: [claudeDay(0, usd: 1, tokens: 10)], confidence: liveConfidence())
+        let codex = codexReport(daily: [codexDay(0, usd: 500, tokens: 10)], confidence: historyOnlyConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claude, codex: codex, grok: nil,
+            includeClaude: true, includeCodex: true, includeGrok: false,
+            budgetUSD: nil, claudeBudgetUSD: nil, codexBudgetUSD: 10, grokBudgetUSD: nil,
+            now: now, calendar: calendar, language: "en")
+
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.source, .codex)
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.status, .alreadyOver)
+    }
+
+    /// Independent budgets/statuses: Claude already-over its own (small)
+    /// budget while Codex, spending more but against a larger budget, stays
+    /// on track and produces no line of its own. Pinned to day 5 of a
+    /// 31-day month: codex dailyAvg 60/5=12, projected 12*31=372<1_000 →
+    /// `.onTrack` regardless of real-world test-run date (day 1 with the
+    /// live `now`/`day(offset)` helpers would have projected 60*31=1_860,
+    /// wrongly forecast-over).
+    func testPerProviderBudgetsAreIndependentAcrossSources() {
+        let fixedNow = date(2026, 3, 5)
+        let claude = claudeReport(
+            daily: [ClaudeDailyUsage(date: fixedNow, usd: 50, tokens: 10, models: [])],
+            confidence: liveConfidence())
+        let codex = codexReport(
+            daily: [CodexDailyUsage(date: fixedNow, usd: 60, tokens: 10, models: [])],
+            confidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claude, codex: codex, grok: nil,
+            includeClaude: true, includeCodex: true, includeGrok: false,
+            budgetUSD: nil, claudeBudgetUSD: 10, codexBudgetUSD: 1_000, grokBudgetUSD: nil,
+            now: fixedNow, calendar: calendar, language: "en")
+
+        XCTAssertEqual(evaluation.providerBudgetRisks.count, 1)
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.source, .claude)
+    }
+
+    /// Blank/invalid/non-positive per-provider budgets normalize to "off" —
+    /// same rule as the combined budget — and never produce a risk line.
+    func testPerProviderBudgetInvalidOrOffProducesNoRiskLine() {
+        let claude = claudeReport(daily: [claudeDay(0, usd: 500, tokens: 10)], confidence: liveConfidence())
+
+        for invalid in [0.0, -25.0, Double.nan, Double.infinity] {
+            let evaluation = WeeklyDigest.evaluate(
+                claude: claude, codex: nil, grok: nil,
+                includeClaude: true, includeCodex: false, includeGrok: false,
+                budgetUSD: nil, claudeBudgetUSD: invalid, codexBudgetUSD: nil, grokBudgetUSD: nil,
+                now: now, calendar: calendar, language: "en")
+            XCTAssertTrue(evaluation.providerBudgetRisks.isEmpty, "budget \(invalid) should normalize to off")
+        }
     }
 
     // MARK: - Cadence (contract #6)

@@ -10,6 +10,7 @@ import AppKit
 ///   - Bottom: app-level actions.
 struct QuotaOverview: View {
     @EnvironmentObject var quota: QuotaService
+    @EnvironmentObject var settings: SettingsStore
     /// Persisted so re-opening the popover lands on the tab the user last
     /// chose — either the "all" pseudo-tab or a provider id.
     private static let selectedTabKey = "popover.selectedTab"
@@ -120,11 +121,47 @@ struct QuotaOverview: View {
                                !admin.daily.isEmpty {
                                 ClaudeAdminUsageChartCard(snapshot: admin)
                             }
+                            // Claude-specific: own monthly budget vs. spend —
+                            // only when a Claude budget is configured; renders
+                            // even before the scan lands (confidence nil →
+                            // "no cost data" row, never a fake status).
+                            if s.id == "claude", settings.claudeMonthlyBudgetUSD.isFinite,
+                               settings.claudeMonthlyBudgetUSD > 0 {
+                                let claudeBudgetCombined = claudeReport.map {
+                                    CombinedUsageReport.build(
+                                        claude: $0, codex: nil, grok: nil,
+                                        includeClaude: true, includeCodex: false, includeGrok: false)
+                                }
+                                ProviderBudgetCard(
+                                    providerId: "claude", providerName: "Claude",
+                                    color: VocabbyTheme.chartClaude,
+                                    budgetUSD: settings.claudeMonthlyBudgetUSD,
+                                    confidence: claudeBudgetCombined?.claudeConfidence,
+                                    daily: claudeBudgetCombined?.daily ?? [],
+                                    source: .claude)
+                            }
                             // Codex-specific: 30-day cost chart + top-model line,
                             // scanned only when the Codex tab is open.
                             if s.id == "codex", let report = codexReport,
                                !report.isEmpty {
                                 CodexUsageChartCard(report: report)
+                            }
+                            // Codex-specific: own monthly budget vs. spend —
+                            // same gating/trust rule as the Claude card above.
+                            if s.id == "codex", settings.codexMonthlyBudgetUSD.isFinite,
+                               settings.codexMonthlyBudgetUSD > 0 {
+                                let codexBudgetCombined = codexReport.map {
+                                    CombinedUsageReport.build(
+                                        claude: nil, codex: $0, grok: nil,
+                                        includeClaude: false, includeCodex: true, includeGrok: false)
+                                }
+                                ProviderBudgetCard(
+                                    providerId: "codex", providerName: "Codex",
+                                    color: VocabbyTheme.chartCodex,
+                                    budgetUSD: settings.codexMonthlyBudgetUSD,
+                                    confidence: codexBudgetCombined?.codexConfidence,
+                                    daily: codexBudgetCombined?.daily ?? [],
+                                    source: .codex)
                             }
                             // Codex-specific: account list (click to reveal) +
                             // CLI switch. Below the chart per user preference.
@@ -146,6 +183,23 @@ struct QuotaOverview: View {
                             if s.id == "grok", let report = grokReport,
                                !report.isEmpty {
                                 GrokUsageChartCard(report: report)
+                            }
+                            // Grok-specific: own monthly budget vs. spend —
+                            // same gating/trust rule as the Claude/Codex cards.
+                            if s.id == "grok", settings.grokMonthlyBudgetUSD.isFinite,
+                               settings.grokMonthlyBudgetUSD > 0 {
+                                let grokBudgetCombined = grokReport.map {
+                                    CombinedUsageReport.build(
+                                        claude: nil, codex: nil, grok: $0,
+                                        includeClaude: false, includeCodex: false, includeGrok: true)
+                                }
+                                ProviderBudgetCard(
+                                    providerId: "grok", providerName: "Grok",
+                                    color: VocabbyTheme.chartGrok,
+                                    budgetUSD: settings.grokMonthlyBudgetUSD,
+                                    confidence: grokBudgetCombined?.grokConfidence,
+                                    daily: grokBudgetCombined?.daily ?? [],
+                                    source: .grok)
                             }
                             // Kiro: 30-day usage chart from local kiro-cli
                             // sessions (~/.kiro/sessions sidecars with real

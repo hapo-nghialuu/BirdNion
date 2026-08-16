@@ -135,10 +135,14 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 
 ### 4.2 Monthly budget, forecast và weekly digest
 
-- `MonthlyForecast` cộng chi phí local Claude + Codex + Grok từ đầu tháng đến hiện tại rồi linear-project tới cuối tháng. Budget tổng là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API và chưa phải per-provider budget.
+- `MonthlyForecast` cộng chi phí local Claude + Codex + Grok từ đầu tháng đến hiện tại rồi linear-project tới cuối tháng. Budget tổng là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API.
+- **Budget per-provider** (Claude/Codex/Grok riêng biệt, độc lập với budget tổng): cùng công thức `MonthlyForecast.build(source:)` nhưng chỉ cộng daily USD của đúng 1 source. Lưu ở UserDefaults `claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD` (macOS) và `localStorage` `birdnion.claudeBudgetUSD`/`birdnion.codexBudgetUSD`/`birdnion.grokBudgetUSD` (Linux) — **không** ghi vào provider `settings.json`.
+  - Tab provider tương ứng (`ProviderBudgetCard` macOS / `providerBudgetCard` Linux, không phải All tab — All tab chỉ hiển thị budget tổng) hiển thị mỗi provider có budget > 0: MTD/budget, linear projection, remaining hoặc over, status on-track/forecast-over/already-over.
+  - Trust rule: provider có `confidence == .unavailable` (không live lẫn không lịch sử) hiện "chưa có dữ liệu chi phí" thay vì tính forecast — không bao giờ hiện on-track (xanh) giả khi thiếu bằng chứng. History-only vẫn tính bình thường.
 - Weekly digest mặc định OFF. Cửa sổ hiện tại là hôm nay + 6 ngày trước; cửa sổ so sánh là 7 ngày liền trước đó.
 - Digest đi nhờ refresh/tick sẵn có. `lastEvaluatedAt` giới hạn cadence và vẫn được ghi khi suppress/error; `lastSentAt` chỉ ghi sau khi notification thành công.
 - Không gửi khi không có live source hoặc tổng USD/token bằng 0. Nếu một phần nguồn không live, notification ghi rõ nguồn dùng cached data.
+- Digest chỉ cảnh báo budget khi trạng thái là `forecast-over` hoặc `already-over` (không nhắc khi `on-track`), cho cả budget tổng và từng provider có cấu hình riêng. `forecast-over` dùng số dự phóng cuối tháng (`projectedTotalUSD`); `already-over` dùng số đã chi thực tế tháng này (`monthToDateUSD`).
 
 ## 5. Lưu trữ & bảo mật
 
@@ -152,6 +156,7 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 | Per-provider refresh override | `UserDefaults.refreshInterval.<id>` | standard |
 | Per-provider menu-bar visibility | `UserDefaults.menuBarVisibility.<id>` | standard |
 | Total monthly budget | macOS `UserDefaults.monthlyBudgetUSD`; Linux local storage `birdnion.monthlyBudgetUSD` | local preference |
+| Per-provider budget (Claude/Codex/Grok) | macOS `UserDefaults.claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD`; Linux local storage `birdnion.claudeBudgetUSD`/`birdnion.codexBudgetUSD`/`birdnion.grokBudgetUSD` — không phải provider `settings.json` | local preference |
 | Weekly digest toggle/cadence | macOS `weeklyDigest*`; Linux local storage `birdnion.weeklyDigest*` | local preference, default OFF |
 | Local token scanner cache | in-memory (5 min TTL) | n/a |
 
@@ -280,6 +285,7 @@ Scripts/
 - [x] Local token scanner: 30-day chart for Claude usage
 - [x] Data confidence + freshness + last-good service status trên macOS/Linux
 - [x] Total monthly budget + linear forecast trên macOS/Linux
+- [x] Per-provider budget (Claude/Codex/Grok) + trust-unavailable no false-green trên macOS/Linux
 - [x] Adaptive refresh 1×/2×/4×/8×, manual/forced bypass, không timer mới
 - [x] Weekly digest rolling 7 ngày, default OFF, trên macOS/Linux
 - [x] macOS custom profile quick switch fail-closed; Linux Codex account quota/health snapshot
@@ -296,6 +302,7 @@ Scripts/
 | Per-provider refresh interval | Provider chậm/rate-limited poll ít hơn, user tự chỉnh |
 | Adaptive multiplier capped 8× | Giảm request khi provider lỗi mà không tạo scheduler mới hoặc gây starvation vô hạn |
 | Total budget là local preference | Forecast minh bạch trên dữ liệu scanner; không giả là provider billing |
+| Per-provider budget lưu UserDefaults/localStorage, không ghi vào `settings.json` | Cùng convention "local UI preference" với budget tổng; tách khỏi token/config của provider |
 | Weekly digest default OFF | Tránh tự đưa số liệu chi phí ra ngoài popover khi user chưa opt in |
 | Exact-snapshot activation guard | Delete/edit profile thắng async activation; stale continuation fail closed |
 | Menu-bar visibility toggle per provider | User loại provider không quan tâm khỏi chuỗi % trên menu bar |
@@ -309,7 +316,7 @@ Scripts/
 - **Mac App Store** — nếu muốn mass distribution, cần review process
 - **Claude code API key** flow — hiện support Anthropic key, có thể extend cho setup token từ CLI
 - **Local memory** — track Anthropic Max weekly + Sonnet daily qua `~/.claude/projects/`
-- **Phase 8 còn lại** — per-provider budget, CSV/JSON export, Linux custom-profile popover và Windows port
+- **Phase 8 còn lại** — CSV/JSON export, Linux custom-profile popover và Windows port
 
 ## File liên quan
 

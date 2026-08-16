@@ -280,6 +280,21 @@ export type MonthlyForecast = {
   status: BudgetStatus;
 };
 
+/** Which `CombinedDay` field `monthlyForecast` sums per day. `"total"` (the
+ * default) preserves the pre-existing combined-budget behavior; the
+ * per-source variants isolate one provider's own daily USD so a
+ * per-provider budget never mixes in the other sources' spend. */
+export type MonthlyForecastSource = "total" | "claude" | "codex" | "grok";
+
+function monthlyForecastDayUsd(d: CombinedDay, source: MonthlyForecastSource): number {
+  switch (source) {
+    case "claude": return d.claudeUsd;
+    case "codex": return d.codexUsd;
+    case "grok": return d.grokUsd;
+    default: return d.usd;
+  }
+}
+
 /** Pure month-to-date + linear-projection forecast for the All-tab budget
  * card. Filters `daily` to the CURRENT local calendar month only (not a
  * rolling 30-day window), through today (a same-month bucket dated AFTER
@@ -292,11 +307,14 @@ export type MonthlyForecast = {
  * all return `null` so the caller hides the card entirely (feature off),
  * matching `getMonthlyBudgetUsd`'s own validation. Non-finite or negative
  * per-day `usd` (corrupt scan data) is ignored (counted as 0) rather than
- * poisoning the sum — `Math.max(0, NaN)` is `NaN`, not `0`. */
+ * poisoning the sum — `Math.max(0, NaN)` is `NaN`, not `0`. `source`
+ * (default `"total"`) selects which field is summed/validated — each
+ * source's validity is judged independently of the others'. */
 export function monthlyForecast(
   daily: CombinedDay[],
   budgetUsd: number | null | undefined,
   now: Date = new Date(),
+  source: MonthlyForecastSource = "total",
 ): MonthlyForecast | null {
   if (budgetUsd == null || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
 
@@ -306,7 +324,10 @@ export function monthlyForecast(
   const todayKey = `${prefix}${String(now.getDate()).padStart(2, "0")}`;
   const monthToDateUsd = daily
     .filter((d) => d.date.startsWith(prefix) && d.date <= todayKey)
-    .reduce((sum, d) => sum + (Number.isFinite(d.usd) && d.usd > 0 ? d.usd : 0), 0);
+    .reduce((sum, d) => {
+      const v = monthlyForecastDayUsd(d, source);
+      return sum + (Number.isFinite(v) && v > 0 ? v : 0);
+    }, 0);
 
   // `new Date(year, month + 1, 0)` is the last day of `month` — correctly
   // resolves 28/29 (leap year) Feb, 30- vs 31-day months, and Dec → next

@@ -162,6 +162,87 @@ export function budgetForecastCard(combined: Combined, budgetUsd: number | null)
   return card;
 }
 
+type ProviderBudgetEntry = {
+  id: UsageSourceId;
+  label: string;
+  report: UsageReport | null;
+  budget: number | null;
+};
+
+/** One provider's own monthly budget vs. spend, mounted directly on that
+ * provider's own tab (Claude/Codex/Grok popover body) — independent of the
+ * combined `budgetForecastCard` above, which only ever shows on the All tab.
+ * `combined` must already be scoped to just this source (`main.ts` builds it
+ * via `combine()` with the other two sources passed as `null`) so
+ * `monthlyForecast(..., source)` never mixes in another provider's spend.
+ * Returns `null` when this provider has no budget configured — the caller
+ * then renders nothing.
+ *
+ * Trust rule: a source whose `scanConfidence` is `"unavailable"` (disabled,
+ * or never landed a scan) never claims "on track" from an implicit zero —
+ * it renders a "no cost data" row instead of a forecast. `"history"`
+ * confidence still calculates normally (same states as `confidenceRow`
+ * above, so the UX stays consistent). */
+export function providerBudgetCard(
+  id: UsageSourceId,
+  label: string,
+  report: UsageReport | null,
+  combined: Combined,
+  budgetUsd: number | null,
+): HTMLElement | null {
+  if (budgetUsd == null || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
+
+  const card = el("section", "card budget-provider-card");
+  card.append(el("div", "summary-label", t("budgetMonthly")));
+  card.append(providerBudgetRow({ id, label, report, budget: budgetUsd }, combined));
+  return card;
+}
+
+function providerBudgetRow(entry: ProviderBudgetEntry, combined: Combined): HTMLElement {
+  const state = scanConfidence(entry.report);
+  const row = el("div", "budget-provider-row");
+  const left = el("span", "legend-item");
+  left.append(logoMark(entry.id, `confidence-logo confidence-logo-${entry.id}`));
+  left.append(el("span", "budget-provider-name", entry.label));
+  row.append(left);
+
+  if (state === "unavailable") {
+    row.append(el("span", "budget-provider-nodata", t("budgetPerProviderNoData")));
+    const hint = t("budgetPerProviderNoDataHint", { source: entry.label });
+    row.title = hint;
+    row.setAttribute("aria-label", hint);
+    return row;
+  }
+
+  // `entries` is already filtered to `budget > 0`, so `forecast` is never
+  // null here — the guard just keeps this function total.
+  const forecast = monthlyForecast(combined.daily, entry.budget, new Date(), entry.id);
+  if (!forecast) {
+    row.append(el("span", "budget-provider-nodata", t("budgetPerProviderNoData")));
+    return row;
+  }
+  const tone = budgetTone(forecast.status);
+  const statusLabel = t(`budgetStatus.${forecast.status}`);
+  row.append(el("span", "budget-provider-amounts",
+    `${usd(forecast.monthToDateUsd)} / ${usd(forecast.budgetUsd)}`));
+
+  const daysLeft = Math.max(0, forecast.daysInMonth - forecast.daysElapsed);
+  const remainLabel = forecast.remainingUsd >= 0
+    ? t("budgetRemainingWithDays", { amount: usd(forecast.remainingUsd), n: daysLeft })
+    : t("budgetOverBy", { amount: usd(-forecast.remainingUsd) });
+  row.append(el("span", `budget-provider-status ${tone}`, `${remainLabel} · ${statusLabel}`));
+
+  const hint = t("budgetHint", {
+    mtd: usd(forecast.monthToDateUsd),
+    projected: usd(forecast.projectedUsd),
+    budget: usd(forecast.budgetUsd),
+    status: statusLabel,
+  });
+  row.title = hint;
+  row.setAttribute("aria-label", hint);
+  return row;
+}
+
 // --- Chart card -----------------------------------------------------------
 
 export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTMLElement {

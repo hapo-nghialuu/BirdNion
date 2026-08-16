@@ -10,9 +10,9 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   combine, monthlyForecast, scanConfidence, usd, tokens as tokensLabel,
   digestWindowStats, type UsageReport, type UsageSourceId, type DigestWindowStats,
-  type MonthlyForecast,
+  type MonthlyForecast, type Combined,
 } from "./usage";
-import { getMonthlyBudgetUsd } from "./settings-about";
+import { getMonthlyBudgetUsd, getProviderBudgetUsd } from "./settings-about";
 import { NAME_BY_ID } from "./settings-tab";
 import { t } from "./i18n";
 
@@ -94,11 +94,40 @@ function budgetStatusLabel(status: MonthlyForecast["status"]): string {
   return t("weeklyDigestBudgetOnTrack");
 }
 
+/** Configured providers forecast-over or already-over their OWN budget this
+ * cycle — never a source whose confidence is `"unavailable"` (trust rule:
+ * an implicit zero must not be reported as risk), and never `"on-track"`
+ * (the digest only calls out risk, keeping the notification concise). */
+function providerBudgetRiskLines(
+  combined: Combined,
+  reports: Record<UsageSourceId, UsageReport | null>,
+  budgets: Record<UsageSourceId, number | null>,
+  now: Date,
+): string[] {
+  const lines: string[] = [];
+  for (const s of SOURCES) {
+    const budget = budgets[s];
+    if (budget == null) continue;
+    if (scanConfidence(reports[s]) === "unavailable") continue;
+    const forecast = monthlyForecast(combined.daily, budget, now, s);
+    if (!forecast || forecast.status === "on-track") continue;
+    const isAlreadyOver = forecast.status === "already-over";
+    const key = isAlreadyOver ? "weeklyDigestProviderBudgetOver" : "weeklyDigestProviderBudgetForecast";
+    lines.push(t(key, {
+      source: NAME_BY_ID.get(s) ?? s,
+      usd: usd(isAlreadyOver ? forecast.monthToDateUsd : forecast.projectedUsd),
+      budget: usd(forecast.budgetUsd),
+    }));
+  }
+  return lines;
+}
+
 function buildBody(
   current: DigestWindowStats,
   prior: DigestWindowStats,
   forecast: MonthlyForecast | null,
   nonLive: UsageSourceId[],
+  providerRiskLines: string[],
 ): string {
   const lines: string[] = [
     t("weeklyDigestSummary", { usd: usd(current.usd), tokens: tokensLabel(current.tokens) }),
@@ -121,6 +150,7 @@ function buildBody(
     const names = nonLive.map((s) => NAME_BY_ID.get(s) ?? s).join(", ");
     lines.push(t("weeklyDigestCaveat", { sources: names }));
   }
+  lines.push(...providerRiskLines);
   return lines.join("\n");
 }
 
@@ -144,7 +174,13 @@ async function evaluateAndMaybeNotify(): Promise<void> {
     if (!anyLive || (current.usd <= 0 && current.tokens <= 0)) return; // suppress, still evaluated
 
     const forecast = monthlyForecast(combined.daily, getMonthlyBudgetUsd(), now);
-    const body = buildBody(current, prior, forecast, nonLive);
+    const providerBudgets: Record<UsageSourceId, number | null> = {
+      claude: getProviderBudgetUsd("claude"),
+      codex: getProviderBudgetUsd("codex"),
+      grok: getProviderBudgetUsd("grok"),
+    };
+    const providerRiskLines = providerBudgetRiskLines(combined, reports, providerBudgets, now);
+    const body = buildBody(current, prior, forecast, nonLive, providerRiskLines);
     await invoke("notify", { title: t("weeklyDigestTitle"), body });
     markSent();
   } catch {

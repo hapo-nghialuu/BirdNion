@@ -590,4 +590,69 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(f.projectedTotalUSD, 0, accuracy: 0.001)
         XCTAssertEqual(f.status, .onTrack)
     }
+
+    // MARK: - Phase 3: MonthlyForecast per-source (pure)
+
+    private func combinedDay(_ d: Date, claudeUSD: Double = 0, codexUSD: Double = 0, grokUSD: Double = 0) -> CombinedDailyUsage {
+        CombinedDailyUsage(date: d, claudeUSD: claudeUSD, claudeTokens: 0,
+                           codexUSD: codexUSD, codexTokens: 0, grokUSD: grokUSD, grokTokens: 0)
+    }
+
+    /// Per-source forecast (`.claude`) sums only `claudeUSD`, ignoring the
+    /// same day's `codexUSD` entirely — a Codex budget never leaks into a
+    /// Claude-only forecast and vice versa.
+    func testMonthlyForecastPerSourceUsesOnlyThatSourcesUSD() {
+        let now = date(2026, 3, 10)
+        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 20, codexUSD: 100)]
+        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: calendar)
+        let codexForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .codex, now: now, calendar: calendar)
+        XCTAssertEqual(claudeForecast.monthToDateUSD, 20, accuracy: 0.001)
+        XCTAssertEqual(codexForecast.monthToDateUSD, 100, accuracy: 0.001)
+    }
+
+    /// A non-finite value in ANOTHER source's field must not poison or
+    /// exclude this source's own valid value — each source's validity is
+    /// judged independently, not via the combined `usd` getter (which would
+    /// itself be NaN here).
+    func testMonthlyForecastPerSourceIgnoresOtherSourcesInvalidValue() {
+        let now = date(2026, 3, 10)
+        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 20, codexUSD: Double.nan)]
+        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: calendar)
+        XCTAssertFalse(claudeForecast.monthToDateUSD.isNaN)
+        XCTAssertEqual(claudeForecast.monthToDateUSD, 20, accuracy: 0.001)
+    }
+
+    /// This source's own negative/non-finite value is excluded (contributes
+    /// 0) — same rule as the combined `.total` case, scoped to one field.
+    func testMonthlyForecastPerSourceExcludesOwnInvalidValue() {
+        let now = date(2026, 3, 10)
+        let daily = [
+            combinedDay(date(2026, 3, 5), claudeUSD: 20),
+            combinedDay(date(2026, 3, 6), claudeUSD: -5),
+            combinedDay(date(2026, 3, 7), claudeUSD: Double.nan),
+        ]
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: calendar)
+        XCTAssertEqual(f.monthToDateUSD, 20, accuracy: 0.001)
+    }
+
+    /// Omitting `source` preserves the pre-existing combined-budget
+    /// behavior — the default must still sum every source.
+    func testMonthlyForecastDefaultSourceIsTotal() {
+        let now = date(2026, 3, 10)
+        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 20, codexUSD: 30, grokUSD: 5)]
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: 100, now: now, calendar: calendar)
+        XCTAssertEqual(f.monthToDateUSD, 55, accuracy: 0.001)
+    }
+
+    /// Independent per-source status: Codex over its own (small) budget
+    /// while Claude, spending less but against a larger budget, stays on
+    /// track — proves the two forecasts don't share state.
+    func testMonthlyForecastPerSourceIndependentStatus() {
+        let now = date(2026, 3, 5)
+        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 10, codexUSD: 300)]
+        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 200, source: .claude, now: now, calendar: calendar)
+        let codexForecast = MonthlyForecast.build(daily: daily, budgetUSD: 200, source: .codex, now: now, calendar: calendar)
+        XCTAssertEqual(claudeForecast.status, .onTrack)
+        XCTAssertEqual(codexForecast.status, .alreadyOver)
+    }
 }

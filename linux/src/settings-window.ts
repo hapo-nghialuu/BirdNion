@@ -15,8 +15,10 @@ import {
   isShowTrayPercentEnabled, setShowTrayPercentEnabled,
   isHidePersonalInfo, setHidePersonalInfo,
   getMonthlyBudgetUsd, setMonthlyBudgetUsd,
+  getProviderBudgetUsd, setProviderBudgetUsd,
   REFRESH_OPTIONS, aboutSection,
 } from "./settings-about";
+import type { UsageSourceId } from "./usage";
 import { isWeeklyDigestEnabled, setWeeklyDigestEnabled } from "./weekly-digest";
 import { providersPane } from "./settings-tab";
 import { claudeCodePane } from "./claude-code-pane";
@@ -112,6 +114,27 @@ function page(...children: HTMLElement[]): HTMLElement {
   const p = el("div", "settings-page");
   for (const c of children) p.append(c);
   return p;
+}
+
+/** One per-provider budget field — same blank/invalid/<=0 → "off"
+ * round-trip as the combined `budgetInput` above, factored so the three
+ * Claude/Codex/Grok rows share one validation path. */
+function providerBudgetInput(provider: UsageSourceId): HTMLInputElement {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "1";
+  input.className = "sw-input-num";
+  input.placeholder = t("settingsMonthlyBudgetPlaceholder");
+  const current = getProviderBudgetUsd(provider);
+  input.value = current != null ? String(current) : "";
+  input.addEventListener("change", () => {
+    const raw = input.value.trim();
+    setProviderBudgetUsd(provider, raw === "" ? null : Number(raw));
+    const normalized = getProviderBudgetUsd(provider);
+    input.value = normalized != null ? String(normalized) : "";
+  });
+  return input;
 }
 
 // --- Panes ----------------------------------------------------------------
@@ -234,6 +257,21 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     isManualRefresh() ? t("settingsGlobalPollingManualHint") : undefined,
   );
 
+  // Per-provider budgets (USD) — independent of the combined budget above,
+  // same localStorage-only/"off" normalization, one input per source
+  // (`providerBudgetInput` shares the validation path across all three).
+  const providerBudgetTitleKeys: Record<UsageSourceId, string> = {
+    claude: "settingsClaudeBudget", codex: "settingsCodexBudget", grok: "settingsGrokBudget",
+  };
+  const providerBudgetRows = (["claude", "codex", "grok"] as UsageSourceId[]).map(
+    (provider) => labeledRow(t(providerBudgetTitleKeys[provider]), "", providerBudgetInput(provider)),
+  );
+  const perProviderBudget = card(
+    t("budgetPerProviderTitle"),
+    providerBudgetRows,
+    t("settingsPerProviderBudgetSub"),
+  );
+
   const autoRows = [
     labeledRow(t("settingsStatusChecks"), t("settingsStatusChecksSub"), statusChecks),
     labeledRow(t("settingsSessionNotify"), t("settingsSessionNotifySub"), sessionNotify),
@@ -287,7 +325,7 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
 
   return page(
     paneHeader(t("settingsTabGeneral"), t("settingsGeneralSubtitle")),
-    system, usage, automation, shortcut, refreshCard, quitGroup,
+    system, usage, perProviderBudget, automation, shortcut, refreshCard, quitGroup,
   );
 }
 

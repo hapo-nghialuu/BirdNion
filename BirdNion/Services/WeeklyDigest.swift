@@ -65,6 +65,23 @@ enum WeeklyDigest {
         UserDefaults.standard.double(forKey: "monthlyBudgetUSD")
     }
 
+    /// Per-provider budgets — same keys `SettingsStore`'s `@AppStorage`
+    /// writes (`claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD`), same "0 =
+    /// not configured" convention as `budgetUSD` above. Used as `evaluate`'s
+    /// default arguments (mirrors the existing `now: Date = Date()` pattern)
+    /// so the real `QuotaService` call site — which only ever passes the
+    /// combined `budgetUSD` — still picks up per-provider budgets for free,
+    /// while tests stay deterministic by passing explicit values.
+    static var claudeBudgetUSD: Double {
+        UserDefaults.standard.double(forKey: "claudeBudgetUSD")
+    }
+    static var codexBudgetUSD: Double {
+        UserDefaults.standard.double(forKey: "codexBudgetUSD")
+    }
+    static var grokBudgetUSD: Double {
+        UserDefaults.standard.double(forKey: "grokBudgetUSD")
+    }
+
     /// Pure cadence gate — no ambient `Date()`, so it is directly testable.
     static func isDue(now: Date, lastEvaluatedAt: Date?) -> Bool {
         guard let lastEvaluatedAt else { return true }
@@ -85,6 +102,18 @@ enum WeeklyDigest {
         }
     }
 
+    /// One provider whose own budget is configured and forecast-over or
+    /// already-over this cycle. Never built for an unavailable source (see
+    /// `evaluate`'s trust-rule gate) and never for `.onTrack` — the digest
+    /// only calls out risk, keeping the notification concise.
+    struct ProviderBudgetRisk: Equatable {
+        let source: SourceID
+        let status: MonthlyForecastStatus
+        let monthToDateUSD: Double
+        let projectedTotalUSD: Double
+        let budgetUSD: Double
+    }
+
     /// Deterministic outcome of one evaluation pass. `shouldSend == false`
     /// still means the evaluation ran — the caller stamps `lastEvaluatedAt`
     /// either way so a suppressed week doesn't rescan on every refresh.
@@ -103,6 +132,9 @@ enum WeeklyDigest {
         /// Enabled sources whose confidence is history-only or unavailable
         /// this cycle (i.e. not a live scan) — surfaced as a short caveat.
         let nonLiveSources: [SourceID]
+        /// Configured providers forecast-over or already-over their own
+        /// budget this cycle — never includes an unavailable source.
+        let providerBudgetRisks: [ProviderBudgetRisk]
         let title: String
         let body: String
     }
@@ -206,6 +238,9 @@ enum WeeklyDigest {
         includeCodex: Bool,
         includeGrok: Bool,
         budgetUSD: Double?,
+        claudeBudgetUSD: Double? = WeeklyDigest.claudeBudgetUSD,
+        codexBudgetUSD: Double? = WeeklyDigest.codexBudgetUSD,
+        grokBudgetUSD: Double? = WeeklyDigest.grokBudgetUSD,
         now: Date = Date(),
         calendar: Calendar = .current,
         language: String? = nil
@@ -235,11 +270,35 @@ enum WeeklyDigest {
         let model = topModel(in: windows.current)
         let forecast = MonthlyForecast.build(daily: combined.daily, budgetUSD: budgetUSD, now: now, calendar: calendar)
 
+        // Trust rule: a provider whose confidence is `nil` or `included ==
+        // false` (disabled, or never landed a scan) never contributes a risk
+        // line from an implicit-zero forecast — only `.claude`/`.codex`/
+        // `.grok` confidence with `included == true` (live OR history-only)
+        // may calculate. `.onTrack` is intentionally excluded too — the
+        // digest only calls out risk.
+        let providerBudgetInputs: [(SourceID, CostHistoryStore.UsageScanConfidence?, Double?, CombinedUsageSource)] = [
+            (.claude, combined.claudeConfidence, claudeBudgetUSD, .claude),
+            (.codex, combined.codexConfidence, codexBudgetUSD, .codex),
+            (.grok, combined.grokConfidence, grokBudgetUSD, .grok),
+        ]
+        let providerBudgetRisks: [ProviderBudgetRisk] = providerBudgetInputs.compactMap { source, confidence, budget, usageSource in
+            guard let confidence, confidence.included else { return nil }
+            guard let budget, budget.isFinite, budget > 0 else { return nil }
+            let providerForecast = MonthlyForecast.build(
+                daily: combined.daily, budgetUSD: budget, source: usageSource, now: now, calendar: calendar)
+            guard let status = providerForecast.status, status != .onTrack else { return nil }
+            return ProviderBudgetRisk(
+                source: source, status: status,
+                monthToDateUSD: providerForecast.monthToDateUSD,
+                projectedTotalUSD: providerForecast.projectedTotalUSD, budgetUSD: budget)
+        }
+
         let title = L10n.t("weeklyDigest.title", language)
         let body = shouldSend
             ? Self.body(currentUSD: current.usd, currentTokens: current.tokens,
                        changePercent: changePct, topSource: top, topModel: model,
-                       forecast: forecast, nonLiveSources: nonLiveSources, language: language)
+                       forecast: forecast, nonLiveSources: nonLiveSources,
+                       providerBudgetRisks: providerBudgetRisks, language: language)
             : ""
 
         return Evaluation(
@@ -249,6 +308,7 @@ enum WeeklyDigest {
             changePercent: changePct,
             topSource: top, topModel: model,
             forecast: forecast, nonLiveSources: nonLiveSources,
+            providerBudgetRisks: providerBudgetRisks,
             title: title, body: body)
     }
 
@@ -259,7 +319,8 @@ enum WeeklyDigest {
     private static func body(
         currentUSD: Double, currentTokens: Int,
         changePercent: Double?, topSource: SourceID?, topModel: CombinedModelCost?,
-        forecast: MonthlyForecast, nonLiveSources: [SourceID], language: String?
+        forecast: MonthlyForecast, nonLiveSources: [SourceID],
+        providerBudgetRisks: [ProviderBudgetRisk], language: String?
     ) -> String {
         var parts: [String] = []
         parts.append(L10n.f("weeklyDigest.body.totals", language,
@@ -290,6 +351,17 @@ enum WeeklyDigest {
         if !nonLiveSources.isEmpty {
             let names = nonLiveSources.map(\.displayName).joined(separator: ", ")
             parts.append(L10n.f("weeklyDigest.body.caveat", language, names))
+        }
+        for risk in providerBudgetRisks {
+            // `.onTrack` never reaches this loop (filtered out when the risk
+            // list is built), so `.alreadyOver` reports actual month-to-date
+            // spend while `.forecastOver` reports the projected total.
+            let key = risk.status == .alreadyOver
+                ? "weeklyDigest.body.providerBudget.alreadyOver"
+                : "weeklyDigest.body.providerBudget.forecastOver"
+            let amountUSD = risk.status == .alreadyOver ? risk.monthToDateUSD : risk.projectedTotalUSD
+            parts.append(L10n.f(key, language, risk.source.displayName,
+                                AllUsageFormat.usd(amountUSD), AllUsageFormat.usd(risk.budgetUSD)))
         }
         return parts.joined(separator: " ")
     }

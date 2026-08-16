@@ -7,6 +7,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t } from "./i18n";
+import type { UsageSourceId } from "./usage";
 
 const UPDATE_CHANNEL_KEY = "birdnion.updateChannel";
 
@@ -191,6 +192,34 @@ export function setMonthlyBudgetUsd(n: number | null): void {
   if (valid == null) localStorage.removeItem(MONTHLY_BUDGET_KEY);
   else localStorage.setItem(MONTHLY_BUDGET_KEY, String(valid));
   window.dispatchEvent(new CustomEvent(MONTHLY_BUDGET_CHANGED_EVENT, { detail: { budget: valid } }));
+}
+
+/** Per-provider monthly budgets (USD) — independent of `monthlyBudgetUSD`
+ * above. Same local-UI-preference/localStorage-only convention (never
+ * settings.json, never a credential) and the same blank/invalid/<=0 →
+ * "off" (`null`) normalization, keyed by provider instead of three
+ * near-duplicate get/set pairs. */
+export const PROVIDER_BUDGET_STORAGE_KEYS: Record<UsageSourceId, string> = {
+  claude: "birdnion.claudeBudgetUSD",
+  codex: "birdnion.codexBudgetUSD",
+  grok: "birdnion.grokBudgetUSD",
+};
+/** Same-window event — mirrors `MONTHLY_BUDGET_CHANGED_EVENT` — since
+ * `storage` only fires in OTHER windows. */
+export const PROVIDER_BUDGET_CHANGED_EVENT = "birdnion-provider-budget-changed";
+
+export function getProviderBudgetUsd(provider: UsageSourceId): number | null {
+  const raw = localStorage.getItem(PROVIDER_BUDGET_STORAGE_KEYS[provider]);
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function setProviderBudgetUsd(provider: UsageSourceId, n: number | null): void {
+  const valid = n != null && Number.isFinite(n) && n > 0 ? n : null;
+  if (valid == null) localStorage.removeItem(PROVIDER_BUDGET_STORAGE_KEYS[provider]);
+  else localStorage.setItem(PROVIDER_BUDGET_STORAGE_KEYS[provider], String(valid));
+  window.dispatchEvent(new CustomEvent(PROVIDER_BUDGET_CHANGED_EVENT, { detail: { provider, budget: valid } }));
 }
 
 export function isHidePersonalInfo(): boolean {

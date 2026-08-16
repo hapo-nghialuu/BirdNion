@@ -7,8 +7,10 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { combine, UsageReport } from "./usage";
-import { chartCard, heatmapCard, topModelsCard, confidenceRow, budgetForecastCard } from "./all-tab";
+import { combine, UsageReport, UsageSourceId } from "./usage";
+import {
+  chartCard, heatmapCard, topModelsCard, confidenceRow, budgetForecastCard, providerBudgetCard,
+} from "./all-tab";
 import {
   providerCard,
   claudeCodeQuickApplyCard,
@@ -28,7 +30,8 @@ import { currentLang, t } from "./i18n";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
-  MONTHLY_BUDGET_CHANGED_EVENT,
+  MONTHLY_BUDGET_CHANGED_EVENT, getProviderBudgetUsd, PROVIDER_BUDGET_STORAGE_KEYS,
+  PROVIDER_BUDGET_CHANGED_EVENT,
 } from "./settings-about";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -639,6 +642,7 @@ function render() {
       if (pending.length > 0) body.append(scanningHint(pending));
       const combined = combine(state.claude, state.codex, state.grok);
       // Design order: chart/share → confidence → budget → heatmap → models.
+      // Per-provider budgets live on each provider's own tab now, not here.
       body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(confidenceRow(state.claude, state.codex, state.grok, pending));
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
@@ -688,6 +692,24 @@ function render() {
       body.append(sourceChartCard(state.codex, "codex"));
     } else if (state.tab === "grok" && state.grok) {
       body.append(sourceChartCard(state.grok, "grok"));
+    }
+    // Per-provider monthly budget — only when THIS tab's own budget is
+    // configured (macOS ProviderBudgetCard parity). `combine()` is scoped to
+    // just this source (other two passed `null`) so `monthlyForecast` never
+    // mixes in another provider's spend. Renders even before the scan lands
+    // (report null → scanConfidence "unavailable" → "no cost data" row).
+    if (state.tab === "claude" || state.tab === "codex" || state.tab === "grok") {
+      const sourceId = state.tab as UsageSourceId;
+      const sourceReport = state[sourceId];
+      const sourceCombined = combine(
+        sourceId === "claude" ? sourceReport : null,
+        sourceId === "codex" ? sourceReport : null,
+        sourceId === "grok" ? sourceReport : null,
+      );
+      const providerBudget = providerBudgetCard(
+        sourceId, NAME_BY_ID.get(sourceId) ?? sourceId, sourceReport, sourceCombined,
+        getProviderBudgetUsd(sourceId));
+      if (providerBudget) body.append(providerBudget);
     }
     // Codex: account switcher BELOW the cost chart (macOS CodexAccountsPopoverSection).
     if (state.tab === "codex") {
@@ -1482,6 +1504,18 @@ window.addEventListener("storage", (e) => {
   if (e.key === MONTHLY_BUDGET_STORAGE_KEY) onMonthlyBudgetChanged();
 });
 window.addEventListener(MONTHLY_BUDGET_CHANGED_EVENT, onMonthlyBudgetChanged);
+
+/** Repaint the current provider tab's budget card when its own Claude/Codex/
+ * Grok budget changes — same webview-relay pattern as `onMonthlyBudgetChanged`. */
+function onProviderBudgetChanged() {
+  if (isSettingsWindow()) return;
+  if (state.tab === "claude" || state.tab === "codex" || state.tab === "grok") render();
+}
+const providerBudgetKeys = new Set(Object.values(PROVIDER_BUDGET_STORAGE_KEYS));
+window.addEventListener("storage", (e) => {
+  if (e.key && providerBudgetKeys.has(e.key)) onProviderBudgetChanged();
+});
+window.addEventListener(PROVIDER_BUDGET_CHANGED_EVENT, onProviderBudgetChanged);
 
 window.addEventListener("DOMContentLoaded", () => {
   initTheme();

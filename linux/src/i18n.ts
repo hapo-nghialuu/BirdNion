@@ -204,6 +204,19 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     en: "Estimated from local Claude, Codex, Grok logs on the All tab — not synced across machines or with macOS.",
   },
   settingsMonthlyBudgetPlaceholder: { vi: "Tắt", en: "Off" },
+  budgetPerProviderTitle: { vi: "Ngân sách theo nhà cung cấp", en: "Per-provider budgets" },
+  settingsPerProviderBudgetSub: {
+    vi: "Ngân sách riêng cho từng nhà cung cấp — độc lập với ngân sách tổng ở trên, dựa trên chi phí ước tính cục bộ của riêng nhà cung cấp đó.",
+    en: "A separate budget per provider — independent of the total budget above, based on that provider's own local estimated cost.",
+  },
+  settingsClaudeBudget: { vi: "Ngân sách Claude (USD)", en: "Claude budget (USD)" },
+  settingsCodexBudget: { vi: "Ngân sách Codex (USD)", en: "Codex budget (USD)" },
+  settingsGrokBudget: { vi: "Ngân sách Grok (USD)", en: "Grok budget (USD)" },
+  budgetPerProviderNoData: { vi: "Chưa có dữ liệu chi phí", en: "No cost data yet" },
+  budgetPerProviderNoDataHint: {
+    vi: "{source}: chưa có dữ liệu chi phí — không đủ căn cứ để đánh giá ngân sách.",
+    en: "{source}: no cost data available yet — not enough evidence to assess this budget.",
+  },
   settingsStatusChecks: { vi: "Kiểm tra trạng thái", en: "Status checks" },
   settingsStatusChecksSub: {
     vi: "Poll trạng thái của các nhà cung cấp.",
@@ -246,6 +259,14 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   weeklyDigestCaveat: {
     vi: "Dữ liệu lịch sử (chưa quét mới) cho: {sources}.",
     en: "Historical (not freshly scanned) data for: {sources}.",
+  },
+  weeklyDigestProviderBudgetForecast: {
+    vi: "{source}: dự phóng vượt ngân sách ({usd} / {budget}).",
+    en: "{source}: may exceed budget (forecast {usd} of {budget}).",
+  },
+  weeklyDigestProviderBudgetOver: {
+    vi: "{source}: đã vượt ngân sách ({usd} / {budget}).",
+    en: "{source}: already over budget ({usd} of {budget}).",
   },
   settingsHotkey: { vi: "Mở popover", en: "Open popover" },
   settingsHotkeySub: {

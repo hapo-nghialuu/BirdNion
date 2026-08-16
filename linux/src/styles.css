@@ -3994,6 +3994,33 @@ body.settings-body-root {
 .budget-remaining.critical { color: var(--warning); }
 .budget-remaining.ok { color: var(--success); }
 
+/* Compact per-provider budget summary — one row per configured source,
+ * independent of the combined budget card above. */
+.budget-provider-card { padding-top: 14px; }
+.budget-provider-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.budget-provider-name { font-weight: 600; min-width: 46px; }
+.budget-provider-amounts { color: var(--text); font-weight: 600; white-space: nowrap; }
+.budget-provider-nodata { color: var(--disabled); font-size: 10px; }
+.budget-provider-status {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  text-align: right;
+  white-space: nowrap;
+}
+.budget-provider-status.ok { color: var(--success); }
+.budget-provider-status.warning { color: var(--warning); }
+.budget-provider-status.critical { color: var(--critical); }
+
 .chart-axis {
   display: flex;
   justify-content: space-between;
