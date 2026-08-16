@@ -7,6 +7,12 @@ enum MenuBarPercentDisplay {
     static var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: defaultsKey)
     }
+
+    /// Write + notify so AppDelegate rebuilds menu-bar frames immediately.
+    static func setEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: defaultsKey)
+        NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
+    }
 }
 
 /// Central user-preferences store. Each property uses `@AppStorage` so SwiftUI
@@ -104,7 +110,25 @@ final class SettingsStore: ObservableObject {
     /// "stable" hides GitHub prereleases; "beta" includes them.
     @AppStorage("updateChannel") var updateChannel: String = "stable"
     @AppStorage("hidePersonalInfo") var hidePersonalInfo: Bool = false
-    @AppStorage(MenuBarPercentDisplay.defaultsKey) var showPercentInMenuBar: Bool = false
+    /// Menu-bar percent rotation. Stored in UserDefaults under
+    /// `MenuBarPercentDisplay.defaultsKey`. Not `@AppStorage`: projected
+    /// Bindings of `@AppStorage` on this class can fail to write (toggle
+    /// appears stuck off). Use `showPercentInMenuBarBinding` in Settings.
+    var showPercentInMenuBar: Bool {
+        get { MenuBarPercentDisplay.isEnabled }
+        set {
+            MenuBarPercentDisplay.setEnabled(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var showPercentInMenuBarBinding: Binding<Bool> {
+        Binding(
+            get: { MenuBarPercentDisplay.isEnabled },
+            set: { self.showPercentInMenuBar = $0 }
+        )
+    }
+
     @AppStorage("mergeIcons") var mergeIcons: Bool = true
     @AppStorage("switcherShowsIcons") var switcherShowsIcons: Bool = true
     /// MiniMax API host region: "io" (global) or "com" (mainland China).

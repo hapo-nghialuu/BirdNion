@@ -17,8 +17,10 @@ import SwiftUI
 /// is a small square, not a circle.
 struct InstrumentToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
+        // Explicit assignment (not `toggle()`) so Bindings projected from
+        // `@AppStorage` on a class-based store always hit the setter.
         Button {
-            configuration.isOn.toggle()
+            configuration.isOn = !configuration.isOn
         } label: {
             HStack(spacing: 8) {
                 configuration.label
@@ -27,17 +29,23 @@ struct InstrumentToggleStyle: ToggleStyle {
                         .fill(configuration.isOn ? VocabbyTheme.blue : Color.clear)
                         .overlay(
                             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .strokeBorder(configuration.isOn ? Color.clear : VocabbyTheme.secondary, lineWidth: 1)
+                                .strokeBorder(
+                                    configuration.isOn ? Color.clear : VocabbyTheme.secondary,
+                                    lineWidth: 1.5)
                         )
                         .frame(width: 40, height: 20)
                     RoundedRectangle(cornerRadius: 0, style: .continuous)
-                        .fill(configuration.isOn ? VocabbyTheme.background : VocabbyTheme.secondary)
+                        .fill(configuration.isOn ? VocabbyTheme.background : VocabbyTheme.primary)
                         .frame(width: 14, height: 14)
                         .padding(3)
                 }
+                .frame(width: 40, height: 20)
+                .contentShape(Rectangle())
             }
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
+        .accessibilityAddTraits(.isButton)
     }
 }
 

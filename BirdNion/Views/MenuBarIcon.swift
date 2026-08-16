@@ -51,6 +51,8 @@ enum MenuBarIconRenderer {
     static let stackedProviderImageHeight: CGFloat = 24
     static let providerLogoBasePointSize: CGFloat = 18
     static let freemodelLogoScale: CGFloat = 1.1
+    /// Claude's mark is denser at menu-bar sizes — +15% over the base logo.
+    static let claudeLogoScale: CGFloat = 1.15
 
     static func attributedStackedTitle(_ title: String, font: NSFont) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
@@ -387,7 +389,8 @@ enum MenuBarIconRenderer {
     /// The BirdNion mark, scaled to `pointSize` while preserving its built-in
     /// progress gradient. Template rendering would flatten every opaque pixel
     /// to one color and make the progress bar look completely filled.
-    static func iconImage(pointSize: CGFloat = 24) -> NSImage {
+    /// Default menu-bar mark size (compact in the status item).
+    static func iconImage(pointSize: CGFloat = 18) -> NSImage {
         scaled(NSImage(named: assetName), to: pointSize, isTemplate: false)
             ?? NSImage(size: NSSize(width: pointSize, height: pointSize))
     }
@@ -398,7 +401,11 @@ enum MenuBarIconRenderer {
         for id: String,
         base: CGFloat = 18
     ) -> CGFloat {
-        ["freemodel", "claude"].contains(id) ? base * freemodelLogoScale : base
+        switch id {
+        case "claude": return base * claudeLogoScale
+        case "freemodel": return base * freemodelLogoScale
+        default: return base
+        }
     }
 
     static func providerLogo(

@@ -60,9 +60,10 @@ struct GeneralPane: View {
                     title: L10n.t("settings.showPercentInMenuBar.title", settings.appLanguage),
                     subtitle: L10n.t("settings.showPercentInMenuBar.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.showPercentInMenuBar)
+                    Toggle("", isOn: settings.showPercentInMenuBarBinding)
                         .labelsHidden()
                         .toggleStyle(.instrument)
+                        .accessibilityLabel(L10n.t("settings.showPercentInMenuBar.title", settings.appLanguage))
                 }
 
                 SettingsRowDivider()
