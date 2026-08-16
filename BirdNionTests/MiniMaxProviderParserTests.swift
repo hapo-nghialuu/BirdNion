@@ -477,4 +477,77 @@ final class BirdNionConfigStoreTests: XCTestCase {
         XCTAssertEqual(BirdNionConfigStore.configURL(home: home, env: [:]),
                        home.appendingPathComponent(".config/birdnion/settings.json"))
     }
+
+    // MARK: - Fail-closed + lossless save (reliability hardening)
+
+    private func writeRaw(_ raw: String) throws {
+        try FileManager.default.createDirectory(at: testConfigURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try raw.data(using: .utf8)!.write(to: testConfigURL)
+    }
+
+    func testSaveRefusesToOverwriteMalformedExistingFile() throws {
+        let raw = "{ this is not valid json"
+        try writeRaw(raw)
+
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        )
+        // File on disk must stay byte-for-byte untouched — never silently
+        // replaced by a fresh/empty document.
+        XCTAssertEqual(try String(contentsOf: testConfigURL, encoding: .utf8), raw)
+    }
+
+    func testSaveRefusesToOverwriteEmptyExistingFile() throws {
+        try writeRaw("")
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        )
+    }
+
+    func testSavePreservesUnknownTopLevelKey() throws {
+        try writeRaw(#"{"version":1,"providers":[],"futureFeatureFlag":true}"#)
+
+        try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+
+        let raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: testConfigURL)) as? [String: Any]
+        )
+        XCTAssertEqual(raw["futureFeatureFlag"] as? Bool, true)
+        XCTAssertNotNil(raw["providers"])
+    }
+
+    func testSavePreservesUnknownPerProviderKey() throws {
+        try writeRaw(#"{"version":1,"providers":[{"id":"claude","enabled":true,"futureProviderField":"keep-me"}]}"#)
+
+        var provider = try XCTUnwrap(BirdNionConfigStore.provider(id: "claude", url: testConfigURL))
+        provider.accountLabel = "My Account"
+        try BirdNionConfigStore.save(provider, url: testConfigURL)
+
+        let raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: testConfigURL)) as? [String: Any]
+        )
+        let providers = try XCTUnwrap(raw["providers"] as? [[String: Any]])
+        let claude = try XCTUnwrap(providers.first { $0["id"] as? String == "claude" })
+        XCTAssertEqual(claude["futureProviderField"] as? String, "keep-me")
+        XCTAssertEqual(claude["accountLabel"] as? String, "My Account")
+    }
+
+    func testSaveClearsKnownOptionalFieldWithoutResurrectingIt() throws {
+        try writeRaw(#"{"version":1,"providers":[{"id":"claude","enabled":true,"accountLabel":"Old Label"}]}"#)
+
+        var provider = try XCTUnwrap(BirdNionConfigStore.provider(id: "claude", url: testConfigURL))
+        XCTAssertEqual(provider.accountLabel, "Old Label")
+        provider.accountLabel = nil
+        try BirdNionConfigStore.save(provider, url: testConfigURL)
+
+        let raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: testConfigURL)) as? [String: Any]
+        )
+        let providers = try XCTUnwrap(raw["providers"] as? [[String: Any]])
+        let claude = try XCTUnwrap(providers.first { $0["id"] as? String == "claude" })
+        // Cleared, not resurrected by the unknown-key merge (which only ever
+        // applies to keys this build doesn't model).
+        XCTAssertNil(claude["accountLabel"])
+    }
 }

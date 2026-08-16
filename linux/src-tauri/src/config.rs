@@ -304,6 +304,10 @@ pub struct Provider {
     /// Mirrors macOS `MenuBarMetricPreference` enum stored in UserDefaults `menuBarMetric.<provider>`.
     #[serde(default, rename = "menuBarMetric", skip_serializing_if = "Option::is_none")]
     pub menu_bar_metric: Option<String>,
+    /// Any per-provider keys this build doesn't model yet (e.g. written by a
+    /// newer macOS version) must survive a Linux round-trip save.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Resolve menu bar metric preference from provider config.
@@ -503,8 +507,23 @@ pub fn remove_codex_profile(id: &str) -> Result<(), String> {
 
 /// Persist settings atomically with owner-only permissions (0600), matching
 /// the macOS store — the file holds API keys in plaintext by design.
+///
+/// Fail-closed: every write path starts from `load()`, which silently falls
+/// back to `Settings::default()` when the on-disk file can't be parsed. Left
+/// unchecked, that fallback would get written straight over a malformed-but-
+/// still-present file, destroying whatever the user (or a newer app version)
+/// had there. So if a file already exists on disk, it must still parse as
+/// valid `Settings` JSON or this call refuses to overwrite it.
 pub fn save(settings: &Settings) -> Result<(), String> {
     let path = config_path();
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        if serde_json::from_str::<Settings>(&existing).is_err() {
+            return Err(format!(
+                "refusing to overwrite unreadable config at {}: existing file is not valid JSON",
+                path.display()
+            ));
+        }
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
@@ -743,5 +762,145 @@ mod codex_sync_tests {
         let back: CodexProfile = serde_json::from_value(v).unwrap();
         assert_eq!(back.id, "id-1");
         assert_eq!(back.cli_proxy_provider_name(), "birdnion-codex-id-1");
+    }
+}
+
+/// Regression coverage for the fail-closed + lossless-save invariant: `save()`
+/// must never silently overwrite an existing-but-unreadable config file, and
+/// must round-trip unknown top-level / per-provider keys untouched.
+#[cfg(test)]
+mod fail_closed_and_lossless_tests {
+    use super::*;
+
+    fn temp_config(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("birdnion-config-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn save_refuses_to_overwrite_malformed_existing_file() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("malformed");
+        let path = base.join("settings.json");
+        std::fs::write(&path, "{ this is not valid json").unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let result = save(&Settings { version: 1, ..Default::default() });
+        assert!(result.is_err());
+        // The file on disk must be byte-for-byte untouched.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ this is not valid json");
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_refuses_to_overwrite_empty_existing_file() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("empty");
+        let path = base.join("settings.json");
+        std::fs::write(&path, "").unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        assert!(save(&Settings::default()).is_err());
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_allows_first_write_when_file_absent() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("absent");
+        let path = base.join("settings.json");
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        assert!(save(&Settings { version: 1, ..Default::default() }).is_ok());
+        assert!(path.exists());
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_preserves_unknown_top_level_key() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("top-level");
+        let path = base.join("settings.json");
+        std::fs::write(&path, r#"{"version":1,"providers":[],"futureFeatureFlag":true}"#).unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let mut settings = load();
+        settings.version = 2;
+        save(&settings).unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw.get("futureFeatureFlag"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(raw.get("version"), Some(&serde_json::Value::from(2)));
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_preserves_unknown_per_provider_key() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("per-provider");
+        let path = base.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"providers":[{"id":"claude","enabled":true,"futureProviderField":"keep-me"}]}"#,
+        )
+        .unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let mut settings = load();
+        settings.providers[0].account_label = Some("My Account".into());
+        save(&settings).unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let provider = &raw["providers"][0];
+        assert_eq!(
+            provider.get("futureProviderField"),
+            Some(&serde_json::Value::from("keep-me"))
+        );
+        assert_eq!(
+            provider.get("accountLabel"),
+            Some(&serde_json::Value::from("My Account"))
+        );
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_clears_known_optional_field() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("clear-field");
+        let path = base.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"providers":[{"id":"claude","enabled":true,"accountLabel":"Old Label"}]}"#,
+        )
+        .unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let mut settings = load();
+        settings.providers[0].account_label = None;
+        save(&settings).unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let provider = &raw["providers"][0];
+        // Cleared, not resurrected by the unknown-key merge (which only ever
+        // applies to keys this build doesn't model).
+        assert_eq!(provider.get("accountLabel"), Some(&serde_json::Value::Null));
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

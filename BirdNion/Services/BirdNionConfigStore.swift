@@ -750,13 +750,86 @@ enum BirdNionConfigStore {
         try writeConfig(config, url: url)
     }
 
+    /// Thrown by `writeConfig` instead of silently starting from an empty
+    /// document when a config file already exists on disk but can't be read
+    /// back as valid JSON. Every write path builds its in-memory `Config` by
+    /// calling `read(url:)` first, which itself falls back to an empty
+    /// document on any decode failure — without this guard that fallback
+    /// would get written straight over the user's malformed-but-still-present
+    /// file, destroying whatever was in it.
+    enum ConfigStoreError: LocalizedError {
+        case malformedExistingFile(path: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .malformedExistingFile(let path):
+                return "Refusing to overwrite unreadable config at \(path): existing file is not valid JSON."
+            }
+        }
+    }
+
+    /// Top-level `Config` keys this build actively models. Any other key
+    /// found in an existing on-disk document (e.g. written by a newer
+    /// BirdNion version) is preserved verbatim across a save.
+    private static let knownTopLevelKeys: Set<String> = [
+        "version", "providers", "claudeCodeProfiles", "codexProfiles",
+    ]
+
+    /// `Provider` keys this build actively models — mirrors its stored
+    /// property names (no custom `CodingKeys`, so JSON key == property name).
+    /// Any other per-provider key in an existing document is preserved.
+    private static let knownProviderKeys: Set<String> = [
+        "id", "apiKey", "enabled", "region", "budget", "projectID", "secretKey",
+        "awsAuthMode", "awsProfile", "baseURL", "displayName", "accountLabel",
+        "cookieHeader", "claudeHaikuModel", "claudeSonnetModel", "claudeOpusModel",
+        "claudeDisable1M", "claudeCodeScope", "claudeCodeProjectPath",
+        "codexProfileID", "preferredAgent",
+    ]
+
+    /// Encodes `config`, then — when a file already exists at `url` — merges
+    /// in every top-level and per-provider key this build doesn't model so a
+    /// save never drops data written by another version. Fails closed
+    /// (throws, writes nothing) when that existing file can't be parsed:
+    /// never silently replace it with a fresh/empty document.
     private static func writeConfig(_ config: Config, url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(config)
+        let freshData = try encoder.encode(config)
+        var topLevel = (try? JSONSerialization.jsonObject(with: freshData)) as? [String: Any] ?? [:]
+
+        if FileManager.default.fileExists(atPath: url.path) {
+            guard let existingData = try? Data(contentsOf: url), !existingData.isEmpty,
+                  let existingTopLevel = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any],
+                  (try? JSONDecoder().decode(Config.self, from: existingData)) != nil
+            else {
+                throw ConfigStoreError.malformedExistingFile(path: url.path)
+            }
+
+            for (key, value) in existingTopLevel where !knownTopLevelKeys.contains(key) {
+                topLevel[key] = value
+            }
+            if let existingProviders = existingTopLevel["providers"] as? [[String: Any]] {
+                var rawByID: [String: [String: Any]] = [:]
+                for raw in existingProviders {
+                    if let id = raw["id"] as? String { rawByID[id] = raw }
+                }
+                if let freshProviders = topLevel["providers"] as? [[String: Any]] {
+                    topLevel["providers"] = freshProviders.map { fresh -> [String: Any] in
+                        guard let id = fresh["id"] as? String, let rawExisting = rawByID[id] else { return fresh }
+                        var merged = fresh
+                        for (key, value) in rawExisting where !knownProviderKeys.contains(key) {
+                            merged[key] = value
+                        }
+                        return merged
+                    }
+                }
+            }
+        }
+
+        let mergedData = try JSONSerialization.data(withJSONObject: topLevel, options: [.prettyPrinted, .sortedKeys])
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
-        try data.write(to: url, options: [.atomic])
+        try mergedData.write(to: url, options: [.atomic])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
