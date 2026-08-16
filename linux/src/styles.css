@@ -1150,6 +1150,26 @@ html.popover-capped .app-body {
   padding: 8px 10px;
 }
 
+/* Shown above quota windows when the last refresh failed transiently
+ * (network/timeout, rate-limit, 5xx) while a last-good snapshot is still
+ * on screen — macOS StaleQuotaBanner parity. Amber, not critical red: the
+ * data is still shown, just possibly outdated. */
+.provider-stale-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning-surface) 85%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 22%, transparent);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+.provider-stale-title { font-weight: 600; }
+.provider-stale-hint { color: var(--secondary); opacity: 0.85; }
+.provider-stale-meta { color: var(--tertiary); opacity: 0.85; }
+.provider-stale-actions { display: flex; gap: 8px; margin-top: 2px; }
+
 /* macOS LoadingQuotaSkeleton: 124×10 / full×8 / 180×8 grey bars @0.75. */
 .quota-skeleton {
   display: flex;

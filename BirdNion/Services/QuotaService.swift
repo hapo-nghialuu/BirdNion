@@ -4,6 +4,23 @@ import SwiftUI
 import UserNotifications
 import os
 
+/// A refresh failure recorded while the popover still shows a prior
+/// last-good snapshot (see `isTransientForLastGood`). Deliberately kept OUT
+/// of `ProviderStatus` — and therefore out of the disk cache — so surfacing
+/// it never requires breaking the `windows.isEmpty == (error != nil)`
+/// invariant, and so it never survives a relaunch: a transient hiccup from a
+/// past session must not resurrect a stale-data banner before this session's
+/// own polling has had a chance to succeed or fail again.
+struct StaleQuotaWarning: Equatable {
+    /// Classified reason for the refresh failure being suppressed behind the
+    /// last-good snapshot (network/timeout, rate-limit, or a genuine 5xx) —
+    /// drives the localized, actionable cause line. Never the raw error text.
+    let kind: ProviderErrorKind
+    /// `lastUpdated` of the preserved last-good snapshot — when the windows
+    /// currently on screen were actually fetched successfully.
+    let lastGoodUpdated: Date
+}
+
 /// Polls every enabled provider in parallel on a 120s ± 10s loop.
 /// Throwing providers are caught and recorded on the status (no crash).
 @MainActor
@@ -30,6 +47,22 @@ final class QuotaService: ObservableObject {
     /// Per provider+window warning state: last seen remaining % and the set of
     /// thresholds already fired (so we notify once per crossing, not every poll).
     private var warnState: [String: [String: (last: Int, fired: Set<Int>)]] = [:]
+
+    /// Per-provider stale-data warning, populated only while a *transient*
+    /// refresh error is being suppressed behind a preserved last-good
+    /// snapshot (see `runRefreshPass`). Intentionally NOT `@Published` or
+    /// persisted: SwiftUI already re-renders alongside the `statuses` publish
+    /// that happens in the very same refresh iteration, and a fresh launch
+    /// always starts empty — see `StaleQuotaWarning`'s doc comment.
+    private var staleWarnings: [String: StaleQuotaWarning] = [:]
+
+    /// Current stale-data warning for a provider, if its last refresh failed
+    /// transiently while a last-good snapshot was preserved. `nil` once a
+    /// fresh success or a non-transient error lands (both replace the entry
+    /// with the fresh status instead of preserving the old one).
+    func staleWarning(for id: String) -> StaleQuotaWarning? {
+        staleWarnings[id]
+    }
 
     private(set) var providers: [QuotaProvider] = []
     private var interval: TimeInterval
@@ -139,6 +172,10 @@ final class QuotaService: ObservableObject {
     /// onboarding can transition to live quota without waiting for the poller.
     func applySelfTestStatus(_ status: ProviderStatus) {
         guard providers.contains(where: { $0.id == status.id }) else { return }
+        // The self-test result fully replaces the entry (success or fresh
+        // error) rather than merging against a prior snapshot, so any
+        // preserved stale-data warning no longer applies.
+        staleWarnings.removeValue(forKey: status.id)
         if let index = statuses.firstIndex(where: { $0.id == status.id }) {
             statuses[index] = status
         } else {
@@ -158,6 +195,7 @@ final class QuotaService: ObservableObject {
         adaptiveFailureCounts.removeValue(forKey: id)
         providerLastFetched.removeValue(forKey: id)
         warnState.removeValue(forKey: id)
+        staleWarnings.removeValue(forKey: id)
     }
 
     /// Move a provider to a new position in the polling + tab order. The
@@ -348,6 +386,10 @@ final class QuotaService: ObservableObject {
     /// refetch completes. No-op when nothing is cached for that account.
     func applyCachedCodexStatus() {
         guard let cached = CodexAccountSnapshotStore.shared.currentSnapshot() else { return }
+        // A different account's cached snapshot is a fresh context — any
+        // stale-data warning attached to the previous account no longer
+        // applies here.
+        staleWarnings.removeValue(forKey: "codex")
         if let idx = statuses.firstIndex(where: { $0.id == "codex" }) {
             statuses[idx] = cached
         } else {
@@ -507,10 +549,13 @@ final class QuotaService: ObservableObject {
                 // expired, or the response shape genuinely changed — so
                 // surface the fresh error instead of a stale "still fine"
                 // reading.
-                if status.error != nil, previous?.isRenderableSnapshot == true,
+                if status.error != nil, let previous, previous.isRenderableSnapshot,
                    isTransientForLastGood(rawError: status.error) {
+                    let kind = classify(rawError: status.error) ?? .unknown
+                    staleWarnings[id] = StaleQuotaWarning(kind: kind, lastGoodUpdated: previous.lastUpdated)
                     log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
                 } else {
+                    staleWarnings.removeValue(forKey: id)
                     pending[id] = Self.preservingLastGoodServiceStatus(status, previous: previous)
                 }
                 providerLastFetched[id] = Date()

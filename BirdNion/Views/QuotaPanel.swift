@@ -1044,8 +1044,14 @@ struct ProviderCard: View {
                     .popoverContentInset()
                     .padding(.vertical, 8)
             } else if status.id == "antigravity" {
+                if let warning = quota.staleWarning(for: status.id) {
+                    StaleQuotaBanner(providerID: status.id, warning: warning)
+                }
                 AntigravitySemanticQuotaRows(windows: status.windows, lastUpdated: status.lastUpdated)
             } else {
+                if let warning = quota.staleWarning(for: status.id) {
+                    StaleQuotaBanner(providerID: status.id, warning: warning)
+                }
                 ForEach(status.windows) { win in
                     WindowRow(
                         window: win,
@@ -1066,6 +1072,52 @@ struct ProviderCard: View {
         .overlay(alignment: .top) {
             PopoverInsetHairline()
         }
+    }
+}
+
+/// Shown above a provider's quota windows when the most recent refresh
+/// failed *transiently* (network/timeout, rate-limit, genuine 5xx) while a
+/// prior last-good snapshot is still on screen — see
+/// `QuotaService.staleWarning(for:)`. Windows stay visible; this only adds
+/// an actionable, localized notice plus the last successful update time and
+/// keeps Retry reachable even though there is no error card here. Never
+/// shows the raw provider error/response — only the classified kind/hint.
+private struct StaleQuotaBanner: View {
+    @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+
+    let providerID: String
+    let warning: StaleQuotaWarning
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VocabbyTheme.warningFill)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.t("staleQuota.notice", settings.appLanguage))
+                        .font(.plexSans(11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.warningFill)
+                    Text(L10n.t(warning.kind.hintKey, settings.appLanguage))
+                        .font(.plexSans(10))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                    Text(L10n.f("popover.lastUpdated", settings.appLanguage,
+                                L10n.relativeUpdated(from: warning.lastGoodUpdated, preference: settings.appLanguage)))
+                        .font(.plexSans(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+            Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Thử lại" : "Retry") {
+                Task { await quota.refresh(forceProviderIDs: [providerID]) }
+            }
+            .controlSize(.small)
+        }
+        .padding(8)
+        .background(VocabbyTheme.warningSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .popoverContentInset()
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 }
 

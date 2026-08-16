@@ -58,6 +58,15 @@ export type ProviderStatus = {
   pending?: boolean;
 };
 
+/** Stale-data warning for a provider whose most recent refresh failed
+ * *transiently* (network/timeout, rate-limit, genuine 5xx) while a prior
+ * last-good snapshot is still on screen — see `main.ts`'s `withLastGood`.
+ * `kind` is the classifier suffix used for `providerError.<kind>.*` i18n
+ * keys; `lastGoodUpdated` is the preserved snapshot's `lastUpdated`.
+ * Deliberately separate from `ProviderStatus` — same reasons as the macOS
+ * `QuotaService.StaleQuotaWarning` this mirrors. */
+export type StaleQuotaWarning = { kind: string; lastGoodUpdated: number };
+
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   node.className = className;
@@ -412,11 +421,31 @@ export function serviceStatusStrip(status: ProviderStatus): HTMLElement | null {
   return row;
 }
 
+/** Shown above the quota windows when the last refresh failed *transiently*
+ * (network/timeout, rate-limit, genuine 5xx) while these windows are still
+ * the last-good snapshot — macOS `StaleQuotaBanner` parity. Keeps Retry
+ * reachable even though there is no error card here, and never shows the
+ * raw provider error/response — only the classified kind/hint. */
+function staleQuotaBanner(warning: StaleQuotaWarning, onRetry?: () => void): HTMLElement {
+  const banner = el("div", "provider-stale-banner");
+  banner.append(el("div", "provider-stale-title", t("staleQuota.notice")));
+  banner.append(el("div", "provider-stale-hint", t(`providerError.${warning.kind}.hint`)));
+  const updated = relativeUpdated(warning.lastGoodUpdated);
+  if (updated) banner.append(el("div", "provider-stale-meta", t("lastUpdated", { time: updated })));
+  const actions = el("div", "provider-stale-actions");
+  const retry = el("button", "sw-pill-btn", currentLang() === "vi" ? "Thử lại" : "Retry");
+  retry.addEventListener("click", () => onRetry?.());
+  actions.append(retry);
+  banner.append(actions);
+  return banner;
+}
+
 /** macOS `ProviderCard` — summary strip + divider + window rows (or error). */
 function providerBodyCard(
   status: ProviderStatus,
   onRetry?: () => void,
   onFix?: () => void,
+  staleWarning?: StaleQuotaWarning,
 ): HTMLElement {
   const card = el("section", "card provider-body-card");
 
@@ -463,12 +492,14 @@ function providerBodyCard(
   }
 
   if (status.id === "antigravity") {
+    if (staleWarning) card.append(staleQuotaBanner(staleWarning, onRetry));
     for (const win of status.windows.slice(0, 4)) {
       card.append(windowRow(win, status.lastUpdated));
     }
     return card;
   }
 
+  if (staleWarning) card.append(staleQuotaBanner(staleWarning, onRetry));
   card.append(quotaSummaryStrip(status));
   card.append(el("div", "provider-divider", ""));
   for (const win of status.windows) {
@@ -501,10 +532,11 @@ export function providerCard(
   status: ProviderStatus,
   onRetry?: () => void,
   onFix?: () => void,
+  staleWarning?: StaleQuotaWarning,
 ): HTMLElement {
   const stack = el("div", "provider-stack");
   stack.append(providerHeaderCard(status));
-  stack.append(providerBodyCard(status, onRetry, onFix));
+  stack.append(providerBodyCard(status, onRetry, onFix, staleWarning));
   return stack;
 }
 

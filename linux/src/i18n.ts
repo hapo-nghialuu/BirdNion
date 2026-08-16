@@ -349,6 +349,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   },
   "providerError.unknown.title": { vi: "Lỗi không xác định", en: "Unknown error" },
   "providerError.unknown.hint": { vi: "Lỗi không xác định — xem chi tiết", en: "Unknown error — see details" },
+  "staleQuota.notice": { vi: "Dữ liệu quota có thể đã cũ", en: "Quota data may be outdated" },
 
   // Self-test (Settings detail; not on popover card — macOS uses menu-bar toggle there)
   "provider.selfTest": { vi: "Kiểm tra", en: "Self-test" },

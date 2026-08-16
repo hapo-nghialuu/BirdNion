@@ -16,6 +16,7 @@ import {
   lowestWindow,
   serviceStatusStrip,
   ProviderStatus,
+  StaleQuotaWarning,
 } from "./provider-tab";
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
@@ -653,6 +654,7 @@ function render() {
         status,
         () => { void refetchProvider(status.id); },
         () => openSettings("providers", status.id),
+        staleWarningFor(status.id),
       ));
       void claudeCodeQuickApplyCard(status, () => openSettings("claudeCode"))
         .then((card) => {
@@ -1162,6 +1164,17 @@ function isRenderableSnapshot(status: ProviderStatus): boolean {
   );
 }
 
+/** Per-provider stale-data warning (see `StaleQuotaWarning` in
+ * `provider-tab.ts`), populated only while a *transient* refresh error is
+ * being suppressed behind a preserved last-good snapshot. Deliberately kept
+ * OUT of `ProviderStatus`: nothing on Linux persists `state.statuses` across
+ * a relaunch either, so this map always starts empty on a fresh launch. */
+const staleWarnings = new Map<string, StaleQuotaWarning>();
+
+function staleWarningFor(id: string): StaleQuotaWarning | undefined {
+  return staleWarnings.get(id);
+}
+
 /** Last-good policy (macOS `QuotaService` parity): keep showing the cached
  * status instead of collapsing to an error-only card when the fresh error is
  * *transient* (network/timeout, rate-limit, genuine 5xx — see the shared
@@ -1169,12 +1182,25 @@ function isRenderableSnapshot(status: ProviderStatus): boolean {
  * renderable snapshot. Any other error (credential, cookie, schema, unknown)
  * always replaces with the fresh error status — those numbers can no longer
  * be trusted. A successful fresh status is untouched here beyond the
- * existing service-status gap-fill. */
+ * existing service-status gap-fill. Fresh success or a non-transient error
+ * both clear any previously recorded `staleWarnings` entry for this id. */
 async function withLastGood(cached: ProviderStatus | undefined, fresh: ProviderStatus): Promise<ProviderStatus> {
-  if (!fresh.error) return withLastGoodServiceStatus(cached, fresh);
-  if (!cached || !isRenderableSnapshot(cached)) return fresh;
+  if (!fresh.error) {
+    staleWarnings.delete(fresh.id);
+    return withLastGoodServiceStatus(cached, fresh);
+  }
+  if (!cached || !isRenderableSnapshot(cached)) {
+    staleWarnings.delete(fresh.id);
+    return fresh;
+  }
   const transient = await invoke<boolean>("is_transient_provider_error", { raw: fresh.error }).catch(() => false);
-  return transient ? cached : fresh;
+  if (!transient) {
+    staleWarnings.delete(fresh.id);
+    return fresh;
+  }
+  const kind = (await invoke<string | null>("classify_provider_error", { raw: fresh.error }).catch(() => null)) ?? "unknown";
+  staleWarnings.set(fresh.id, { kind, lastGoodUpdated: cached.lastUpdated });
+  return cached;
 }
 
 /** Merge freshly fetched statuses over the cached ones by id, preserving the
@@ -1232,6 +1258,9 @@ async function rebuildProviderOrderFromSettings() {
       lastFetched.delete(id);
       adaptiveFailureStreaks.delete(id);
     }
+  }
+  for (const id of [...staleWarnings.keys()]) {
+    if (!keep.has(id)) staleWarnings.delete(id);
   }
   if (state.tab !== "all" && !keep.has(state.tab)) {
     state.tab = state.statuses[0]?.id ?? "all";

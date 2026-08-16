@@ -120,6 +120,121 @@ final class QuotaServicePollingTests: XCTestCase {
         XCTAssertEqual(status?.windows.first?.remainingPct, 80)
     }
 
+    // MARK: - Stale quota warning metadata (separate from ProviderStatus/cache)
+
+    @MainActor
+    func testTransientRefreshErrorSetsStaleWarningWithLastGoodTimestamp() async {
+        let provider = GoodThenErrorProvider(id: "claude", displayName: "Claude")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+        let lastGood = svc.statuses.first?.lastUpdated
+        XCTAssertNotNil(lastGood)
+        XCTAssertNil(svc.staleWarning(for: "claude"))
+
+        await svc.refresh(forceProviderIDs: ["claude"])
+
+        // Windows stay visible and error stays nil (ProviderStatus invariant
+        // preserved) while the transient failure surfaces as metadata only.
+        let status = svc.statuses.first
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(status?.windows.first?.remainingPct, 80)
+        let warning = svc.staleWarning(for: "claude")
+        XCTAssertEqual(warning?.kind, .networkUnreachableOrTimeout)
+        XCTAssertEqual(warning?.lastGoodUpdated, lastGood)
+    }
+
+    @MainActor
+    func testFreshSuccessClearsStaleWarning() async {
+        let provider = GoodThenErrorThenGoodProvider(id: "claude", displayName: "Claude")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+        XCTAssertNil(svc.staleWarning(for: "claude"))
+
+        await svc.refresh(forceProviderIDs: ["claude"]) // transient failure
+        XCTAssertNotNil(svc.staleWarning(for: "claude"))
+
+        await svc.refresh(forceProviderIDs: ["claude"]) // fresh success
+        XCTAssertNil(svc.staleWarning(for: "claude"))
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 60)
+    }
+
+    @MainActor
+    func testCredentialErrorNeverSetsStaleWarning() async {
+        // A non-transient error replaces the snapshot outright (existing
+        // behavior); it must never also leave a stale-data warning behind.
+        let provider = GoodThenUnauthorizedProvider(id: "minimax", displayName: "MiniMax")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+        await svc.refresh()
+
+        await svc.refresh(forceProviderIDs: ["minimax"])
+        XCTAssertNotNil(svc.statuses.first?.error)
+        XCTAssertNil(svc.staleWarning(for: "minimax"))
+    }
+
+    @MainActor
+    func testCookieAndSchemaErrorsNeverSetStaleWarning() async {
+        let cookie = GoodThenErrorMessageProvider(id: "cursor", displayName: "Cursor",
+                                                  secondError: "Cookie hết hạn")
+        let cookieSvc = QuotaService(providers: [cookie], interval: 0.1)
+        await cookieSvc.refresh()
+        await cookieSvc.refresh(forceProviderIDs: ["cursor"])
+        XCTAssertNil(cookieSvc.staleWarning(for: "cursor"))
+
+        let schema = GoodThenErrorMessageProvider(id: "zai", displayName: "z.ai",
+                                                  secondError: "Response không hợp lệ")
+        let schemaSvc = QuotaService(providers: [schema], interval: 0.1)
+        await schemaSvc.refresh()
+        await schemaSvc.refresh(forceProviderIDs: ["zai"])
+        XCTAssertNil(schemaSvc.staleWarning(for: "zai"))
+    }
+
+    @MainActor
+    func testInitialFailureWithoutPriorGoodNeverSetsStaleWarning() async {
+        // No last-good snapshot exists yet — the first failure must surface
+        // as a normal error, never simulate stale-but-fine data.
+        let bad = ThrowingProvider(id: "b", displayName: "B")
+        let svc = QuotaService(providers: [bad], interval: 0.1)
+        await svc.refresh()
+        XCTAssertNotNil(svc.statuses.first?.error)
+        XCTAssertNil(svc.staleWarning(for: "b"))
+    }
+
+    @MainActor
+    func testRemovedProviderClearsStaleWarning() async {
+        let provider = GoodThenErrorProvider(id: "claude", displayName: "Claude")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+        await svc.refresh()
+        await svc.refresh(forceProviderIDs: ["claude"])
+        XCTAssertNotNil(svc.staleWarning(for: "claude"))
+
+        svc.setProviders([])
+        XCTAssertNil(svc.staleWarning(for: "claude"))
+    }
+
+    @MainActor
+    func testStaleWarningNeverResurrectedAfterRelaunchRestore() async {
+        // The stale-warning map lives only in memory (never part of
+        // ProviderStatus / the disk cache), so restoring a previous
+        // session's snapshot must never resurrect an old warning.
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        ProviderStatusCache.write([
+            ProviderStatus(id: "claude", displayName: "Claude",
+                           windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+                           lastUpdated: Date()),
+        ], url: cacheURL)
+
+        let provider = CountingProvider(id: "claude", displayName: "Claude")
+        let svc = QuotaService(providers: [provider], interval: 3_600, statusCacheURL: cacheURL)
+        svc.restorePersistedStatuses()
+        XCTAssertEqual(svc.statuses.count, 1)
+        XCTAssertNil(svc.staleWarning(for: "claude"))
+    }
+
     // MARK: - Shared provider fetch deadline
 
     @MainActor
@@ -979,6 +1094,39 @@ private final class GoodThenErrorMessageProvider: QuotaProvider {
         }
         return ProviderStatus(id: id, displayName: displayName, windows: [],
                               lastUpdated: Date(), error: secondError)
+    }
+}
+
+/// First fetch succeeds, second fetch fails transiently (timeout), third
+/// fetch succeeds again with fresh windows — proves a fresh success clears
+/// a preserved stale-data warning instead of leaving it stuck.
+private final class GoodThenErrorThenGoodProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    private var fetchCount = 0
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        fetchCount += 1
+        switch fetchCount {
+        case 1:
+            return ProviderStatus(
+                id: id, displayName: displayName,
+                windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+                lastUpdated: Date())
+        case 2:
+            return ProviderStatus(id: id, displayName: displayName, windows: [],
+                                  lastUpdated: Date(), error: "\(displayName): timeout")
+        default:
+            return ProviderStatus(
+                id: id, displayName: displayName,
+                windows: [QuotaWindow(label: "5 giờ", usedPct: 40, remainingPct: 60)],
+                lastUpdated: Date())
+        }
     }
 }
 
