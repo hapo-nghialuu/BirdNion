@@ -110,9 +110,15 @@ fi
 if [[ "$SKIP_BUILD" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
   echo "==> Release verification gate"
 
+  TEST_ARCH="$(uname -m)"
+  case "$TEST_ARCH" in
+    arm64|x86_64) ;;
+    *) echo "Unsupported macOS test architecture: $TEST_ARCH" >&2; exit 1 ;;
+  esac
+
   echo "--> macOS build + test (Debug)"
   xcodebuild test -project "$REPO_ROOT/BirdNion.xcodeproj" -scheme BirdNion \
-    -configuration Debug -destination 'platform=macOS,arch=arm64' \
+    -configuration Debug -destination "platform=macOS,arch=$TEST_ARCH" \
     -parallel-testing-enabled NO
 
   echo "--> Linux: npm ci + build (tsc + vite)"
