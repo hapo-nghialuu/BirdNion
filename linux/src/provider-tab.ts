@@ -331,16 +331,36 @@ function providerBodyCard(
     return card;
   }
   if (status.error) {
-    card.append(el("div", "provider-error", status.error));
-    if (["claude", "codex", "grok"].includes(status.id)) {
-      const actions = el("div", "provider-error-actions");
-      const retry = el("button", "sw-pill-btn", currentLang() === "vi" ? "Thử lại" : "Retry");
-      retry.addEventListener("click", () => onRetry?.());
-      const fix = el("button", "sw-pill-btn", currentLang() === "vi" ? "Sửa" : "Fix");
-      fix.addEventListener("click", () => onFix?.());
-      actions.append(retry, fix);
-      card.append(actions);
-    }
+    // Raw error text first (synchronous paint); the classifier round-trip
+    // below swaps it for the localized, actionable hint and decides whether
+    // "Fix" belongs next to Retry. Raw text stays reachable via the title
+    // attribute (macOS keeps it in the row `.help()` tooltip the same way).
+    const errorBox = el("div", "provider-error", status.error);
+    errorBox.title = status.error;
+    card.append(errorBox);
+
+    // Retry is always available for a provider error; Fix only shows for
+    // config/credential/cookie kinds — never for rate-limit/network, which
+    // Settings can't do anything about.
+    const actions = el("div", "provider-error-actions");
+    const retry = el("button", "sw-pill-btn", currentLang() === "vi" ? "Thử lại" : "Retry");
+    retry.addEventListener("click", () => onRetry?.());
+    actions.append(retry);
+    card.append(actions);
+
+    void invoke<string | null>("classify_provider_error", { raw: status.error })
+      .then((suffix) => {
+        if (!suffix) return;
+        errorBox.textContent = t(`providerError.${suffix}.hint`);
+        return invoke<boolean>("is_fixable_provider_error", { raw: status.error });
+      })
+      .then((fixable) => {
+        if (!fixable) return;
+        const fix = el("button", "sw-pill-btn", currentLang() === "vi" ? "Sửa" : "Fix");
+        fix.addEventListener("click", () => onFix?.());
+        actions.append(fix);
+      })
+      .catch(() => {});
     return card;
   }
   if (status.windows.length === 0) {

@@ -57,6 +57,111 @@ final class QuotaServicePollingTests: XCTestCase {
     }
 
     @MainActor
+    func testCookieErrorClearsPreviousGoodStatus() async {
+        // A cookie error means the shown numbers can't be trusted either
+        // (session expired) — must clear the stale snapshot, same as a
+        // credential error, not preserve it like a transient timeout.
+        let provider = GoodThenErrorMessageProvider(id: "cursor", displayName: "Cursor",
+                                                    secondError: "Cookie hết hạn")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 80)
+
+        await svc.refresh(forceProviderIDs: ["cursor"])
+        let status = svc.statuses.first
+        XCTAssertNotNil(status?.error)
+        XCTAssertTrue(status?.windows.isEmpty ?? false)
+    }
+
+    @MainActor
+    func testGenericSchemaErrorClearsPreviousGoodStatus() async {
+        // A non-5xx schema error (unexpected response shape) may signal the
+        // app needs an update — the old reading isn't reliable either, so it
+        // must clear, not preserve.
+        let provider = GoodThenErrorMessageProvider(id: "zai", displayName: "z.ai",
+                                                    secondError: "Response không hợp lệ")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 80)
+
+        await svc.refresh(forceProviderIDs: ["zai"])
+        let status = svc.statuses.first
+        XCTAssertNotNil(status?.error)
+        XCTAssertTrue(status?.windows.isEmpty ?? false)
+    }
+
+    @MainActor
+    func testServer5xxErrorPreservesPreviousGoodStatus() async {
+        // A genuine 5xx is a transient server-side error — preserve the
+        // last-good reading, same as `testRefreshKeepsPreviousGoodStatusWhenProviderReturnsError`.
+        let provider = GoodThenErrorMessageProvider(id: "groq", displayName: "Groq",
+                                                    secondError: "server responded (503)")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 80)
+
+        await svc.refresh(forceProviderIDs: ["groq"])
+        let status = svc.statuses.first
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(status?.windows.first?.remainingPct, 80)
+    }
+
+    @MainActor
+    func testRateLimitedErrorPreservesPreviousGoodStatus() async {
+        let provider = GoodThenErrorMessageProvider(id: "openrouter", displayName: "OpenRouter",
+                                                    secondError: "HTTP 429 rate limit exceeded")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 80)
+
+        await svc.refresh(forceProviderIDs: ["openrouter"])
+        let status = svc.statuses.first
+        XCTAssertNil(status?.error)
+        XCTAssertEqual(status?.windows.first?.remainingPct, 80)
+    }
+
+    // MARK: - Shared provider fetch deadline
+
+    @MainActor
+    func testFetchWithDeadlineTimesOutSlowProvider() async {
+        let provider = HangingProvider(id: "slow", displayName: "Slow")
+        let status = await provider.fetchWithDeadline(deadline: 0.05)
+        XCTAssertNotNil(status.error)
+        XCTAssertTrue(status.windows.isEmpty)
+        XCTAssertEqual(classify(rawError: status.error), .networkUnreachableOrTimeout)
+    }
+
+    @MainActor
+    func testFetchWithDeadlineReturnsFastProviderResultUnchanged() async {
+        let expected = ProviderStatus(id: "fast", displayName: "Fast",
+                                      windows: [QuotaWindow(label: "5 giờ", usedPct: 5, remainingPct: 95)],
+                                      lastUpdated: Date())
+        let provider = StubProvider(id: "fast", displayName: "Fast", status: expected)
+        let status = await provider.fetchWithDeadline(deadline: 5)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.first?.remainingPct, 95)
+    }
+
+    /// Regression for the structured-concurrency trap: a `withTaskGroup`-based
+    /// race only returns once every child has actually finished, even after
+    /// `cancelAll()`, because cancellation is cooperative. `NonCooperativeHangingProvider`
+    /// swallows `CancellationError` and keeps running for ~2s regardless, so
+    /// this test fails (times out around 2s) against that old implementation
+    /// and passes quickly against the unstructured continuation race.
+    @MainActor
+    func testFetchWithDeadlineReturnsOnTimeEvenWhenProviderIgnoresCancellation() async {
+        let provider = NonCooperativeHangingProvider(id: "noncoop", displayName: "NonCoop")
+        let start = Date()
+        let status = await provider.fetchWithDeadline(deadline: 0.05)
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 1.0,
+                          "deadline must return promptly even when the loser ignores cancellation")
+        XCTAssertNotNil(status.error)
+        XCTAssertTrue(status.windows.isEmpty)
+        XCTAssertEqual(classify(rawError: status.error), .networkUnreachableOrTimeout)
+    }
+
+    @MainActor
     func testForcedRefreshBypassesProviderInterval() async {
         let provider = CountingProvider(id: "codex", displayName: "Codex")
         let svc = QuotaService(providers: [provider], interval: 3_600)
@@ -844,5 +949,83 @@ private final class GoodThenUnauthorizedProvider: QuotaProvider {
             windows: [],
             lastUpdated: Date(),
             error: "HTTP 401")
+    }
+}
+
+/// First fetch succeeds; every later fetch returns the given error string
+/// verbatim. Parameterized version of `GoodThenErrorProvider` /
+/// `GoodThenUnauthorizedProvider` for exercising the last-good transient
+/// policy across every `ProviderErrorKind`.
+private final class GoodThenErrorMessageProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    let secondError: String
+    private var fetchCount = 0
+
+    init(id: String, displayName: String, secondError: String) {
+        self.id = id
+        self.displayName = displayName
+        self.secondError = secondError
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        fetchCount += 1
+        if fetchCount == 1 {
+            return ProviderStatus(
+                id: id,
+                displayName: displayName,
+                windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+                lastUpdated: Date())
+        }
+        return ProviderStatus(id: id, displayName: displayName, windows: [],
+                              lastUpdated: Date(), error: secondError)
+    }
+}
+
+/// Never returns before ~2s — used to prove `QuotaProvider.fetchWithDeadline`
+/// bounds a hung fetch instead of stalling the caller forever. `Task.sleep`
+/// itself IS cancellation-aware (it throws `CancellationError` once
+/// cancelled), so this provider still cooperates with `fetchTask.cancel()`.
+/// See `NonCooperativeHangingProvider` below for a fetch that ignores
+/// cancellation entirely.
+private final class HangingProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        // Deliberately much slower than any test deadline used against it.
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        return ProviderStatus(id: id, displayName: displayName,
+                              windows: [QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)],
+                              lastUpdated: Date())
+    }
+}
+
+/// Ignores cancellation entirely — swallows the `CancellationError` from
+/// `Task.sleep` via `try?` and keeps looping for the full ~2s regardless of
+/// `fetchTask.cancel()`. Simulates a provider blocked on synchronous I/O (or
+/// any fetch that never checks `Task.isCancelled`). Proves
+/// `fetchWithDeadline` returns on time even when the loser never cooperates.
+private final class NonCooperativeHangingProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        for _ in 0..<40 {
+            try? await Task.sleep(nanoseconds: 50_000_000) // 40 × 50ms ≈ 2s, cancellation ignored
+        }
+        return ProviderStatus(id: id, displayName: displayName,
+                              windows: [QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)],
+                              lastUpdated: Date())
     }
 }

@@ -175,9 +175,55 @@ pub fn display_name(cfg: &config::Provider) -> String {
     .to_string()
 }
 
-/// Fetch one provider's status by id. Unknown/not-yet-ported ids return a
-/// clear "chưa hỗ trợ" status instead of failing the whole refresh.
+/// Hard outer deadline for a single provider fetch, shared by the JS refresh
+/// poller (`provider_statuses`) AND the Settings self-test (`test_provider`)
+/// — both funnel through `fetch()` below. Mirrors macOS
+/// `ProviderFetchDeadline`: a pure backstop well above the slowest known
+/// legitimate chain (e.g. Claude's cold CLI probe), not a replacement for
+/// any provider's own internal timeouts.
+pub const FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(200);
+
+/// Fetch one provider's status by id, bounded by `FETCH_DEADLINE` so a
+/// hung/misbehaving provider can never stall the caller — refresh pass or
+/// self-test — forever. Unknown/not-yet-ported ids return a clear "chưa hỗ
+/// trợ" status instead of failing the whole refresh.
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
+    fetch_with_deadline(cfg, FETCH_DEADLINE).await
+}
+
+/// Races `dispatch(cfg)` against `deadline` via `with_deadline`. Extracted
+/// from `fetch()` so tests can pass a tiny deadline without waiting out the
+/// real `FETCH_DEADLINE`.
+async fn fetch_with_deadline(cfg: &config::Provider, deadline: std::time::Duration) -> ProviderStatus {
+    with_deadline(cfg, deadline, dispatch(cfg)).await
+}
+
+/// Races an arbitrary fetch future against `deadline`. Whichever finishes
+/// first wins; the loser is dropped (best-effort cancellation — a future
+/// blocked on non-cooperative I/O may keep its underlying work running, but
+/// this call never waits past `deadline`). The timeout status's error
+/// message contains "Timeout" so `error_classifier::classify` resolves it to
+/// `NetworkUnreachableOrTimeout`. Split out from `fetch_with_deadline` so
+/// tests can race a deliberately slow fake future without depending on
+/// `dispatch`'s real provider modules.
+async fn with_deadline<F>(cfg: &config::Provider, deadline: std::time::Duration, fut: F) -> ProviderStatus
+where
+    F: std::future::Future<Output = ProviderStatus>,
+{
+    match tokio::time::timeout(deadline, fut).await {
+        Ok(status) => status,
+        Err(_) => ProviderStatus::failure(
+            &cfg.id,
+            &display_name(cfg),
+            format!("Timeout: provider did not respond within {}s", deadline.as_secs()),
+        ),
+    }
+}
+
+/// Provider id -> concrete fetch dispatch. Never call directly outside of
+/// `fetch()` / `fetch_with_deadline()` — that's what applies the shared
+/// deadline.
+async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
     match cfg.id.as_str() {
         "openrouter" => openrouter::fetch(cfg).await,
         "deepseek" => deepseek::fetch(cfg).await,
@@ -269,6 +315,49 @@ mod tests {
         let ids: Vec<String> = vec![];
         let result = filter_enabled(providers, Some(&ids));
         assert!(result.is_empty());
+    }
+
+    /// Throwaway current-thread runtime — avoids the `#[tokio::test]` macro
+    /// (which needs tokio's "macros" feature; this crate only enables
+    /// "time" + "rt", matching the antigravity.rs sleep-only precedent).
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    #[test]
+    fn with_deadline_times_out_a_slow_future() {
+        let cfg = provider("slow");
+        let slow = async {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            ProviderStatus::failure("slow", "Slow", "should never be seen")
+        };
+        let status = block_on(with_deadline(&cfg, std::time::Duration::from_millis(20), slow));
+        let err = status.error.expect("timeout must set an error");
+        assert!(err.contains("Timeout"), "unexpected error: {err}");
+        assert!(status.windows.is_empty());
+        assert_eq!(
+            error_classifier::classify(Some(&err)),
+            Some(error_classifier::ProviderErrorKind::NetworkUnreachableOrTimeout)
+        );
+    }
+
+    #[test]
+    fn with_deadline_returns_fast_future_result_unchanged() {
+        let cfg = provider("fast");
+        let fast = async {
+            ProviderStatus {
+                id: "fast".into(),
+                display_name: "Fast".into(),
+                ..Default::default()
+            }
+        };
+        let status = block_on(with_deadline(&cfg, std::time::Duration::from_secs(5), fast));
+        assert!(status.error.is_none());
+        assert_eq!(status.id, "fast");
     }
 }
 

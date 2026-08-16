@@ -113,6 +113,26 @@ fn classify_provider_error(raw: Option<String>) -> Option<String> {
         .map(|kind| kind.key_suffix().to_string())
 }
 
+/// Whether a raw provider error is transient enough that the JS poller
+/// should keep showing the last-good quota windows instead of collapsing to
+/// an error-only card (network/timeout, rate-limit, genuine 5xx). Single
+/// source of truth shared with the macOS `isTransientForLastGood` policy —
+/// see `providers::error_classifier::is_transient_for_last_good`.
+#[tauri::command]
+fn is_transient_provider_error(raw: Option<String>) -> bool {
+    providers::error_classifier::is_transient_for_last_good(raw.as_deref())
+}
+
+/// Whether a raw provider error is something Settings can actually fix —
+/// gates the popover/self-test "Fix" button so it never shows for rate-limit
+/// or network errors. See `ProviderErrorKind::is_fixable`.
+#[tauri::command]
+fn is_fixable_provider_error(raw: Option<String>) -> bool {
+    providers::error_classifier::classify(raw.as_deref())
+        .map(|kind| kind.is_fixable())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderOnboardingDetection {
@@ -991,6 +1011,8 @@ pub fn run() {
             grok_usage_report,
             provider_statuses,
             classify_provider_error,
+            is_transient_provider_error,
+            is_fixable_provider_error,
             provider_onboarding_detection,
             test_provider,
             claude_admin_usage,

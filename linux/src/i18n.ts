@@ -322,6 +322,11 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     vi: "Cookie hết hạn — đăng nhập lại trình duyệt",
     en: "Cookie expired — sign in again in your browser",
   },
+  "providerError.notConfigured.title": { vi: "Chưa cấu hình", en: "Not configured" },
+  "providerError.notConfigured.hint": {
+    vi: "Chưa cấu hình — kết nối provider trong Cài đặt",
+    en: "Not configured — connect this provider in Settings",
+  },
   "providerError.tokenInvalidOrMissing.title": { vi: "Token không hợp lệ", en: "Invalid token" },
   "providerError.tokenInvalidOrMissing.hint": {
     vi: "Token sai — dán lại API key",

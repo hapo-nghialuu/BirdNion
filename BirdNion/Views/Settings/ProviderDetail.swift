@@ -185,22 +185,20 @@ extension ProvidersPane {
         guard selfTestState[id] != .running else { return }
         selfTestState[id] = .running
         Task {
-            do {
-                let status = try await provider.fetch()
-                quota.applySelfTestStatus(status)
-                if let err = status.error, !err.isEmpty {
-                    selfTestState[id] = .fail(kind: classify(rawError: err) ?? .unknown, raw: err)
-                } else if status.windows.isEmpty {
-                    let raw = onboardingCopy(
-                        "Provider không trả dữ liệu quota.",
-                        "Provider returned no quota data.")
-                    selfTestState[id] = .fail(kind: .unknown, raw: raw)
-                } else {
-                    selfTestState[id] = .pass
-                }
-            } catch {
-                let raw = "\(error)"
-                selfTestState[id] = .fail(kind: classify(rawError: raw) ?? .unknown, raw: raw)
+            // Same shared deadline as the background refresh loop
+            // (`QuotaProvider.fetchWithDeadline`) — a hung provider must not
+            // leave the self-test button spinning forever.
+            let status = await provider.fetchWithDeadline()
+            quota.applySelfTestStatus(status)
+            if let err = status.error, !err.isEmpty {
+                selfTestState[id] = .fail(kind: classify(rawError: err) ?? .unknown, raw: err)
+            } else if status.windows.isEmpty {
+                let raw = onboardingCopy(
+                    "Provider không trả dữ liệu quota.",
+                    "Provider returned no quota data.")
+                selfTestState[id] = .fail(kind: .unknown, raw: raw)
+            } else {
+                selfTestState[id] = .pass
             }
         }
     }

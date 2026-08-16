@@ -5,7 +5,8 @@ import Foundation
 /// (see the classification precedence invariant below).
 enum ProviderErrorKind: String, CaseIterable, Equatable, Sendable {
     case cookieExpiredOrMissing      // browser session cookie missing/expired -> re-login browser
-    case tokenInvalidOrMissing       // API key / OAuth token missing/wrong/expired -> re-paste token
+    case notConfigured               // provider never set up (no token/login attempted yet) -> open Settings
+    case tokenInvalidOrMissing       // API key / OAuth token present but wrong/expired -> re-paste token
     case apiSchemaChanged            // unexpected/invalid response shape or 5xx -> app may need update
     case networkUnreachableOrTimeout // network down / timeout -> check connection, retry
     case rateLimited                 // HTTP 429 / rate-limit -> wait and retry
@@ -15,6 +16,20 @@ enum ProviderErrorKind: String, CaseIterable, Equatable, Sendable {
     var titleKey: String { "providerError.\(rawValue).title" }
     /// L10n key for the one-line remediation hint.
     var hintKey: String { "providerError.\(rawValue).hint" }
+
+    /// Whether this kind is something Settings can actually fix — i.e. the
+    /// popover/self-test "Fix" action makes sense and should open the
+    /// provider's Settings row. Rate-limit and network errors are not
+    /// configuration problems, so "Fix" must never show for them; a schema
+    /// change or unknown error isn't fixable from Settings either.
+    var isFixable: Bool {
+        switch self {
+        case .notConfigured, .tokenInvalidOrMissing, .cookieExpiredOrMissing:
+            return true
+        case .apiSchemaChanged, .networkUnreachableOrTimeout, .rateLimited, .unknown:
+            return false
+        }
+    }
 }
 
 /// Pure classifier: maps a raw provider error string to exactly one kind.
@@ -24,9 +39,10 @@ enum ProviderErrorKind: String, CaseIterable, Equatable, Sendable {
 ///   2. cookie marker        -> cookieExpiredOrMissing      (R0.3, beats 401/403)
 ///   3. 429 / rate-limit     -> rateLimited                 (R0.4, beats 401/403)
 ///   4. timeout/network      -> networkUnreachableOrTimeout (R0.5, beats schema)
-///   5. 401/403 / token      -> tokenInvalidOrMissing
-///   6. invalid-response/5xx -> apiSchemaChanged
-///   7. otherwise            -> unknown                     (R0.6)
+///   5. not-configured       -> notConfigured                (beats token: never set up != wrong value)
+///   6. 401/403 / token      -> tokenInvalidOrMissing
+///   7. invalid-response/5xx -> apiSchemaChanged
+///   8. otherwise            -> unknown                     (R0.6)
 /// Matching is case-insensitive substring/code containment over the raw string,
 /// which is intentionally bilingual (vi/en) and ad-hoc across providers.
 func classify(rawError: String?) -> ProviderErrorKind? {
@@ -42,7 +58,15 @@ func classify(rawError: String?) -> ProviderErrorKind? {
     let cookieMarkers = ["cookie", "session cookie", "cần auth", "__host-auth", "sessionkey"]
     let rateMarkers = ["rate limit", "too many", "quá nhiều"]
     let networkMarkers = ["timeout", "network", "mạng", "offline", "could not connect"]
-    let tokenMarkers = ["token", "api key", "unauthorized", "chưa cấu hình", "hết hạn"]
+    // "Never configured/logged in" is distinct from "token present but wrong":
+    // the former needs the user to CONNECT a source; the latter needs them to
+    // RE-PASTE/refresh one. Checked before `tokenMarkers` since several of
+    // these messages also contain "api key"/"token" (e.g. "API key is not
+    // configured").
+    let notConfiguredMarkers = ["not configured", "chưa cấu hình", "chưa đăng nhập", "not signed in",
+                                "not logged in", "no api key", "missing api key", "chưa có api key",
+                                "please configure", "chưa thiết lập", "chưa nhập"]
+    let tokenMarkers = ["token", "api key", "unauthorized", "hết hạn"]
     let schemaMarkers = ["không hợp lệ", "invalid", "thiếu trường", "missing field",
                          "parse", "json", "không nhận ra", "không có model"]
     let xAITeamNotFound = codes.contains(404) && s.contains("xai team")
@@ -50,6 +74,7 @@ func classify(rawError: String?) -> ProviderErrorKind? {
     if cookieMarkers.contains(where: s.contains) { return .cookieExpiredOrMissing }
     if rateMarkers.contains(where: s.contains) || codes.contains(429) { return .rateLimited }
     if networkMarkers.contains(where: s.contains) { return .networkUnreachableOrTimeout }
+    if notConfiguredMarkers.contains(where: s.contains) { return .notConfigured }
     if tokenMarkers.contains(where: s.contains) || codes.contains(401) || codes.contains(403) || xAITeamNotFound {
         return .tokenInvalidOrMissing
     }
@@ -57,6 +82,29 @@ func classify(rawError: String?) -> ProviderErrorKind? {
         return .apiSchemaChanged
     }
     return .unknown
+}
+
+/// Whether a raw provider error is transient enough to justify preserving a
+/// prior last-good snapshot instead of collapsing the UI to an error-only
+/// card. Transient = network/timeout, rate-limit, or a genuine 5xx server
+/// error. Credential, cookie, not-configured, and generic schema/unknown
+/// errors are NOT transient — the shown data may no longer be trustworthy
+/// (key revoked, cookie expired, response shape actually changed), so the
+/// caller must surface the fresh (error) status instead of hiding it behind
+/// stale numbers. Single source of truth shared by `QuotaService`'s
+/// last-good policy so background polls and self-tests agree.
+func isTransientForLastGood(rawError: String?) -> Bool {
+    guard let rawError, !rawError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return false
+    }
+    switch classify(rawError: rawError) {
+    case .networkUnreachableOrTimeout, .rateLimited:
+        return true
+    case .apiSchemaChanged:
+        return httpCodes(in: rawError.lowercased()).contains { (500..<600).contains($0) }
+    default:
+        return false
+    }
 }
 
 /// Extracts HTTP status codes that appear in an HTTP context only: "http NNN",

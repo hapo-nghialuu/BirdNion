@@ -894,22 +894,31 @@ struct ProviderCard: View {
         // Design: windows list under hairline; optional CREDITS last row.
         VStack(alignment: .leading, spacing: 0) {
             if let err = status.error {
+                // Same classifier semantics as the Settings self-test
+                // (`ProvidersPane.classifiedMessage`): show the actionable hint,
+                // not the raw string — the raw text stays reachable via
+                // `.help()`. Retry is always available for a provider error;
+                // Fix only shows when the kind is something Settings can
+                // actually fix (config/credential/cookie), never for a
+                // rate-limit or network error.
+                let kind = classify(rawError: err) ?? .unknown
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 12))
                             .foregroundStyle(VocabbyTheme.critical)
-                        Text(L10n.providerText(err, preference: settings.appLanguage))
+                        Text(L10n.t(kind.hintKey, settings.appLanguage))
                             .font(.plexSans(11))
                             .foregroundStyle(VocabbyTheme.critical)
                             .lineLimit(2)
+                            .help(L10n.providerText(err, preference: settings.appLanguage))
                     }
-                    if ProvidersPane.onboardingProviderIDs.contains(status.id) {
-                        HStack(spacing: 8) {
-                            Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Thử lại" : "Retry") {
-                                Task { await quota.refresh(forceProviderIDs: [status.id]) }
-                            }
-                            .controlSize(.small)
+                    HStack(spacing: 8) {
+                        Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Thử lại" : "Retry") {
+                            Task { await quota.refresh(forceProviderIDs: [status.id]) }
+                        }
+                        .controlSize(.small)
+                        if kind.isFixable {
                             Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Sửa" : "Fix") {
                                 openProviderSettings(status.id)
                             }

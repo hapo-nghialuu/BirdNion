@@ -139,6 +139,51 @@ function paintRefreshChrome() {
 /** Per-provider last-fetch timestamps (ms), used to honor `refreshInterval`
  * overrides independent of the global polling cadence. */
 const lastFetched = new Map<string, number>();
+/** Provider ids with a `provider_statuses` fetch currently in flight, shared
+ * by EVERY fetch path — `load()`'s per-provider fanout, `refetchProvider()`,
+ * and `tick()` — so a given provider is owned by exactly one caller at a
+ * time regardless of which path started it. Added right before the request
+ * fires, cleared in `finally` once it settles (success, error, or throw) so
+ * an id can never get stuck "in flight" forever.
+ *
+ * Without this, three races were possible: `setInterval` re-invokes `tick()`
+ * every `TICK_MS` regardless of whether the previous call resolved (and
+ * `lastFetched` only updates once a fetch actually completes, so a slow
+ * provider like Claude's ~160s cold CLI probe stayed "due" on every
+ * overlapping tick); `refetchProvider()` had no guard at all against firing
+ * for a provider `load()` or `tick()` was already fetching; and any two of
+ * those overlapping requests for the same provider could resolve out of
+ * order, letting a stale completion clobber a fresher one. */
+const inFlightProviderIds = new Set<string>();
+
+/** Pure filter: which of `dueIds` are actually fetchable right now, i.e. not
+ * already in flight from ANY caller (`load`, `refetchProvider`, or an
+ * earlier still-unresolved `tick`) — see `inFlightProviderIds`. Kept
+ * separate from `dueProviderIds` (which awaits `get_settings`) so this one
+ * decision is a plain function of its inputs — easy to audit/exercise even
+ * without a JS test runner wired up in this project. */
+export function eligibleForFetch(dueIds: string[], inFlight: ReadonlySet<string>): string[] {
+  return dueIds.filter((id) => !inFlight.has(id));
+}
+
+/** Shared per-provider ownership guard for the two single-id fetch paths
+ * (`load()`'s fanout and `refetchProvider()`). If `id` is already in
+ * `inFlightProviderIds` (from `load`, `refetchProvider`, or `tick`), this is
+ * a no-op — "don't create a duplicate request", matching the manual-retry
+ * UX: clicking Retry while a fetch for that provider is already in flight
+ * simply doesn't start a second one; the in-flight request's own caller
+ * still applies its result. Otherwise claims `id` for the duration of
+ * `fetchAndApply` and always releases it in `finally`, so an IPC error or
+ * thrown exception can never leave the id stuck. */
+async function withProviderInFlightGuard(id: string, fetchAndApply: () => Promise<void>): Promise<void> {
+  if (inFlightProviderIds.has(id)) return;
+  inFlightProviderIds.add(id);
+  try {
+    await fetchAndApply();
+  } finally {
+    inFlightProviderIds.delete(id);
+  }
+}
 /** Consecutive awaited failures per provider. The existing 10-second tick
  * remains the only timer; this state only stretches each failed provider's
  * own due interval so healthy providers keep their configured cadence. */
@@ -1087,12 +1132,45 @@ function withLastGoodServiceStatus(cached: ProviderStatus | undefined, fresh: Pr
   return { ...fresh, serviceStatus: cached.serviceStatus, serviceStatusLevel: cached.serviceStatusLevel };
 }
 
+/** Mirrors macOS `ProviderStatus.isRenderableSnapshot` — a prior status with
+ * meaningful content worth preserving across a transient refresh error. */
+function isRenderableSnapshot(status: ProviderStatus): boolean {
+  if (status.error) return false;
+  return (
+    status.windows.length > 0 ||
+    status.creditsRemaining != null ||
+    status.creditsUnlimited === true ||
+    status.planType != null ||
+    status.planName != null ||
+    status.accountLabel != null ||
+    status.version != null ||
+    status.serviceStatus != null ||
+    status.signedInEmail != null ||
+    status.sourceLabel != null
+  );
+}
+
+/** Last-good policy (macOS `QuotaService` parity): keep showing the cached
+ * status instead of collapsing to an error-only card when the fresh error is
+ * *transient* (network/timeout, rate-limit, genuine 5xx — see the shared
+ * Rust classifier `is_transient_provider_error`) AND the cache still holds a
+ * renderable snapshot. Any other error (credential, cookie, schema, unknown)
+ * always replaces with the fresh error status — those numbers can no longer
+ * be trusted. A successful fresh status is untouched here beyond the
+ * existing service-status gap-fill. */
+async function withLastGood(cached: ProviderStatus | undefined, fresh: ProviderStatus): Promise<ProviderStatus> {
+  if (!fresh.error) return withLastGoodServiceStatus(cached, fresh);
+  if (!cached || !isRenderableSnapshot(cached)) return fresh;
+  const transient = await invoke<boolean>("is_transient_provider_error", { raw: fresh.error }).catch(() => false);
+  return transient ? cached : fresh;
+}
+
 /** Merge freshly fetched statuses over the cached ones by id, preserving the
  * **cached order** (which is settings.providers order via seed/rebuild).
  * New ids not yet in cache are appended. */
-function mergeStatuses(cached: ProviderStatus[], fresh: ProviderStatus[]): ProviderStatus[] {
+async function mergeStatuses(cached: ProviderStatus[], fresh: ProviderStatus[]): Promise<ProviderStatus[]> {
   const byId = new Map(cached.map((s) => [s.id, s]));
-  for (const s of fresh) byId.set(s.id, withLastGoodServiceStatus(byId.get(s.id), s));
+  for (const s of fresh) byId.set(s.id, await withLastGood(byId.get(s.id), s));
   const order = [...cached.map((s) => s.id)];
   for (const s of fresh) if (!order.includes(s.id)) order.push(s.id);
   return order.map((id) => byId.get(id)!).filter(Boolean);
@@ -1199,10 +1277,10 @@ async function load(manual = false) {
     // card fills in the moment ITS fetch lands — a 15s-timeout provider never
     // holds up the others. Falls back to one batch call when settings are
     // unreadable (no id list to fan out over).
-    const publishStatuses = (requestedIds: string[], fresh: ProviderStatus[]) => {
+    const publishStatuses = async (requestedIds: string[], fresh: ProviderStatus[]) => {
       const prevIds = state.statuses.map((s) => s.id).join(",");
       recordFetchOutcomes(requestedIds, fresh, manual);
-      state.statuses = state.statuses.length > 0 ? mergeStatuses(state.statuses, fresh) : fresh;
+      state.statuses = state.statuses.length > 0 ? await mergeStatuses(state.statuses, fresh) : fresh;
       checkQuotaWarnings(fresh);
       evaluateFailureEpisodes(fresh);
       // Same gating as tick(): statuses don't feed the All-tab charts, so
@@ -1212,10 +1290,16 @@ async function load(manual = false) {
     };
     const enabledIds = settings?.providers.filter((p) => p.enabled === true).map((p) => p.id) ?? [];
     const statusesDone = (enabledIds.length > 0
+      // Per-id guard: skips a provider `refetchProvider()` or `tick()` is
+      // already fetching instead of firing a duplicate request for it.
       ? Promise.all(enabledIds.map((id) =>
-          invoke<ProviderStatus[]>("provider_statuses", { ids: [id] })
-            .catch(() => [] as ProviderStatus[])
-            .then((fresh) => publishStatuses([id], fresh))))
+          withProviderInFlightGuard(id, () =>
+            invoke<ProviderStatus[]>("provider_statuses", { ids: [id] })
+              .catch(() => [] as ProviderStatus[])
+              .then((fresh) => publishStatuses([id], fresh)))))
+      // Settings were unreadable, so the enabled-id list itself is unknown
+      // up front — this batch fetch can't be claimed per-id before firing.
+      // Rare/degraded path (`get_settings` itself failed); accepted gap.
       : invoke<ProviderStatus[]>("provider_statuses", { ids: null })
           .catch(() => [] as ProviderStatus[])
           .then((fresh) => publishStatuses(fresh.map((status) => status.id), fresh))
@@ -1242,17 +1326,22 @@ async function load(manual = false) {
   }
 }
 
-/** Re-fetches ONE provider immediately (e.g. after an account switch) and
- * merges the fresh status over the cached state. */
+/** Re-fetches ONE provider immediately (e.g. after an account switch or the
+ * user clicking Retry) and merges the fresh status over the cached state.
+ * Guarded by `inFlightProviderIds`: a no-op when `load()` or `tick()` is
+ * already fetching this same provider — "don't create a duplicate request"
+ * — the in-flight caller's own completion still applies the result. */
 async function refetchProvider(id: string) {
   if (isSettingsWindow()) return;
-  const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] }).catch(() => []);
-  recordFetchOutcomes([id], fresh, true);
-  if (fresh.length === 0) return;
-  state.statuses = mergeStatuses(state.statuses, fresh);
-  checkQuotaWarnings(fresh);
-  await updateTrayTooltip(state.statuses, await fetchTrayHidden());
-  render();
+  await withProviderInFlightGuard(id, async () => {
+    const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] }).catch(() => []);
+    recordFetchOutcomes([id], fresh, true);
+    if (fresh.length === 0) return;
+    state.statuses = await mergeStatuses(state.statuses, fresh);
+    checkQuotaWarnings(fresh);
+    await updateTrayTooltip(state.statuses, await fetchTrayHidden());
+    render();
+  });
 }
 
 /** Tick: only re-fetch providers whose own effective interval elapsed,
@@ -1263,21 +1352,30 @@ async function tick() {
   // Weekly Digest rides this existing cadence — evaluated even when no
   // provider quota is due this cycle (its own 7-day/in-flight gates decide).
   void checkWeeklyDigest().catch(() => {});
-  const ids = await dueProviderIds();
-  if (!ids || ids.length === 0) return;
+  const due = await dueProviderIds();
+  if (!due || due.length === 0) return;
+  // Exclude ids an earlier, still-unresolved tick already requested — see
+  // `inFlightProviderIds`.
+  const ids = eligibleForFetch(due, inFlightProviderIds);
+  if (ids.length === 0) return;
   const prevIds = state.statuses.map((s) => s.id).join(",");
-  const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
-  recordFetchOutcomes(ids, fresh, false);
-  state.statuses = mergeStatuses(state.statuses, fresh);
-  checkQuotaWarnings(state.statuses);
-  evaluateFailureEpisodes(fresh);
-  await updateTrayTooltip(state.statuses, await fetchTrayHidden());
-  // Avoid rebuilding the All-tab charts every 10s (felt like constant spin/flicker).
-  // Re-render only when the tab strip set changed, or user is on a provider tab.
-  const nextIds = state.statuses.map((s) => s.id).join(",");
-  const onProviderTab = state.tab !== "all";
-  if (onProviderTab || prevIds !== nextIds) {
-    render();
+  for (const id of ids) inFlightProviderIds.add(id);
+  try {
+    const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
+    recordFetchOutcomes(ids, fresh, false);
+    state.statuses = await mergeStatuses(state.statuses, fresh);
+    checkQuotaWarnings(state.statuses);
+    evaluateFailureEpisodes(fresh);
+    await updateTrayTooltip(state.statuses, await fetchTrayHidden());
+    // Avoid rebuilding the All-tab charts every 10s (felt like constant spin/flicker).
+    // Re-render only when the tab strip set changed, or user is on a provider tab.
+    const nextIds = state.statuses.map((s) => s.id).join(",");
+    const onProviderTab = state.tab !== "all";
+    if (onProviderTab || prevIds !== nextIds) {
+      render();
+    }
+  } finally {
+    for (const id of ids) inFlightProviderIds.delete(id);
   }
 }
 

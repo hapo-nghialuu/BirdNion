@@ -51,5 +51,8 @@ tauri-plugin-autostart = "2"
 # Folder picker + native confirm for the Claude Code pane (scope chooser).
 tauri-plugin-dialog = "2"
 # antigravity.rs: retry-backoff sleep (tokio is already the runtime Tauri
-# uses internally; declared directly here only for `time::sleep`).
-tokio = { version = "1", features = ["time"] }
+# uses internally; declared directly here only for `time::sleep`/`timeout`).
+# "rt" additionally lets tests build a throwaway runtime via
+# `Runtime::new().block_on(...)` for the provider fetch-deadline race,
+# without pulling in the `#[tokio::test]` macro's "macros" feature.
+tokio = { version = "1", features = ["time", "rt"] }

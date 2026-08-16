@@ -23,12 +23,26 @@ final class ProviderErrorClassifierTests: XCTestCase {
     }
 
     func testTokenInvalid() {
-        XCTAssertEqual(classify(rawError: "Chưa cấu hình token"), .tokenInvalidOrMissing)
+        // A token that's present but wrong/expired -> tokenInvalidOrMissing.
+        // "Never configured" phrasing is a DIFFERENT kind (see testNotConfigured).
+        XCTAssertEqual(classify(rawError: "Token hết hạn"), .tokenInvalidOrMissing)
         XCTAssertEqual(classify(rawError: "HTTP 401"), .tokenInvalidOrMissing)
         XCTAssertEqual(classify(rawError: "HTTP 403"), .tokenInvalidOrMissing)
         XCTAssertEqual(classify(rawError: "unauthorized"), .tokenInvalidOrMissing)
         XCTAssertEqual(classify(rawError: "xAI team was not found (HTTP 404). Check the Team ID."), .tokenInvalidOrMissing)
         XCTAssertEqual(classify(rawError: "Không tìm thấy xAI team (HTTP 404). Kiểm tra Team ID."), .tokenInvalidOrMissing)
+    }
+
+    func testNotConfigured() {
+        // "Never set up" is distinct from "wrong/expired" (R4 — Error UX).
+        XCTAssertEqual(classify(rawError: "Chưa cấu hình token"), .notConfigured)
+        XCTAssertEqual(classify(rawError: "Chưa đăng nhập Codex — chạy `codex` để đăng nhập"), .notConfigured)
+        XCTAssertEqual(
+            classify(rawError: "xAI Management API key is not configured. Set XAI_MANAGEMENT_API_KEY."),
+            .notConfigured
+        )
+        XCTAssertEqual(classify(rawError: "Antigravity: chưa đăng nhập Google (Login with Google trong Settings)"),
+                       .notConfigured)
     }
 
     func testSchemaChanged() {
@@ -88,7 +102,19 @@ final class ProviderErrorClassifierTests: XCTestCase {
     func testKindKeys() {
         XCTAssertEqual(ProviderErrorKind.rateLimited.titleKey, "providerError.rateLimited.title")
         XCTAssertEqual(ProviderErrorKind.cookieExpiredOrMissing.hintKey, "providerError.cookieExpiredOrMissing.hint")
-        XCTAssertEqual(ProviderErrorKind.allCases.count, 6)
+        XCTAssertEqual(ProviderErrorKind.allCases.count, 7)
+    }
+
+    // MARK: - Fix-button eligibility (R4 — Error UX)
+
+    func testIsFixableOnlyForConfigCredentialCookie() {
+        XCTAssertTrue(ProviderErrorKind.notConfigured.isFixable)
+        XCTAssertTrue(ProviderErrorKind.tokenInvalidOrMissing.isFixable)
+        XCTAssertTrue(ProviderErrorKind.cookieExpiredOrMissing.isFixable)
+        XCTAssertFalse(ProviderErrorKind.rateLimited.isFixable)
+        XCTAssertFalse(ProviderErrorKind.networkUnreachableOrTimeout.isFixable)
+        XCTAssertFalse(ProviderErrorKind.apiSchemaChanged.isFixable)
+        XCTAssertFalse(ProviderErrorKind.unknown.isFixable)
     }
 
     // MARK: - Localization resolution (R1.1–R1.3)
@@ -116,5 +142,36 @@ final class ProviderErrorClassifierTests: XCTestCase {
                 XCTAssertNotEqual(L10n.t(key, lang), key, "\(key) missing in \(lang)")
             }
         }
+    }
+
+    // MARK: - Last-good transient policy
+
+    func testNilAndEmptyAreNotTransient() {
+        XCTAssertFalse(isTransientForLastGood(rawError: nil))
+        XCTAssertFalse(isTransientForLastGood(rawError: ""))
+        XCTAssertFalse(isTransientForLastGood(rawError: "   "))
+    }
+
+    func testNetworkTimeoutAndRateLimitAreTransient() {
+        XCTAssertTrue(isTransientForLastGood(rawError: "Claude: timeout sau 12s"))
+        XCTAssertTrue(isTransientForLastGood(rawError: "Network: could not connect to host"))
+        XCTAssertTrue(isTransientForLastGood(rawError: "HTTP 429 rate limit exceeded"))
+    }
+
+    func testServer5xxIsTransientButGenericSchemaIsNot() {
+        XCTAssertTrue(isTransientForLastGood(rawError: "server responded (500)"))
+        XCTAssertTrue(isTransientForLastGood(rawError: "HTTP 503"))
+        XCTAssertFalse(isTransientForLastGood(rawError: "Response không hợp lệ"))
+        XCTAssertFalse(isTransientForLastGood(rawError: "failed to parse json response"))
+    }
+
+    func testCredentialAndCookieErrorsAreNotTransient() {
+        XCTAssertFalse(isTransientForLastGood(rawError: "HTTP 401"))
+        XCTAssertFalse(isTransientForLastGood(rawError: "Chưa cấu hình token"))
+        XCTAssertFalse(isTransientForLastGood(rawError: "Cookie hết hạn"))
+    }
+
+    func testUnknownErrorIsNotTransient() {
+        XCTAssertFalse(isTransientForLastGood(rawError: "something weird happened"))
     }
 }

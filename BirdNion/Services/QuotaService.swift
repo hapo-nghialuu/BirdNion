@@ -475,17 +475,9 @@ final class QuotaService: ObservableObject {
                 group.addTask {
                     let t0 = Date()
                     let providerIdentity = ObjectIdentifier(p)
-                    do {
-                        let status = try await ProviderInteractionContext.$current
-                            .withValue(interaction) { try await p.fetch() }
-                        return (p.id, providerIdentity, status, Date().timeIntervalSince(t0))
-                    } catch {
-                        return (p.id, providerIdentity,
-                                ProviderStatus(id: p.id, displayName: p.displayName,
-                                               windows: [], lastUpdated: Date(),
-                                               error: "\(error)"),
-                                Date().timeIntervalSince(t0))
-                    }
+                    let status = await ProviderInteractionContext.$current
+                        .withValue(interaction) { await p.fetchWithDeadline() }
+                    return (p.id, providerIdentity, status, Date().timeIntervalSince(t0))
                 }
             }
             var timings: [(String, TimeInterval)] = []
@@ -509,12 +501,14 @@ final class QuotaService: ObservableObject {
                 }
                 // Preserve a good snapshot across a *transient* refresh error
                 // (timeout, rate-limit, 5xx) so the popover doesn't flicker to
-                // empty. But a credential error (401/403 / invalid token) means
-                // the shown numbers are no longer trustworthy — the key was
-                // revoked, rotated, or replaced — so surface the error instead
-                // of a stale "still fine" reading.
-                let isCredentialError = classify(rawError: status.error) == .tokenInvalidOrMissing
-                if status.error != nil, previous?.isRenderableSnapshot == true, !isCredentialError {
+                // empty. But a credential, cookie, not-configured, or generic
+                // schema error means the shown numbers are no longer
+                // trustworthy — the key was revoked/rotated, the cookie
+                // expired, or the response shape genuinely changed — so
+                // surface the fresh error instead of a stale "still fine"
+                // reading.
+                if status.error != nil, previous?.isRenderableSnapshot == true,
+                   isTransientForLastGood(rawError: status.error) {
                     log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
                 } else {
                     pending[id] = Self.preservingLastGoodServiceStatus(status, previous: previous)
@@ -795,6 +789,82 @@ final class QuotaService: ObservableObject {
         guard status.serviceStatus == nil, status.serviceStatusLevel == nil else { return status }
         guard previous.serviceStatus != nil || previous.serviceStatusLevel != nil else { return status }
         return status.withServiceStatus(previous.serviceStatus, level: previous.serviceStatusLevel)
+    }
+}
+
+// MARK: - Shared provider fetch deadline
+
+/// Hard outer deadline for a single provider fetch, shared by the background
+/// refresh loop AND Settings self-test (`ProvidersPane.runSelfTest`) so one
+/// hung/misbehaving provider can never stall a whole refresh pass — and
+/// therefore the next auto-refresh cycle — or leave a self-test spinning
+/// forever.
+///
+/// This is a pure backstop, not a replacement for each provider's own
+/// internal budgets: it sits well above the slowest known legitimate chain
+/// (Claude's cold CLI probe, observed up to ~160s with its OAuth/CLI/web
+/// fallback chain) so no existing provider is cut off mid-flight.
+enum ProviderFetchDeadline {
+    static let seconds: TimeInterval = 200
+}
+
+/// Serializes the single "who resumes the continuation" decision below so a
+/// slow fetch that finishes right as the deadline fires can never resume
+/// twice (which would trap). An `actor` gives mutual exclusion without a
+/// manual lock.
+private actor ProviderFetchDeadlineResumeBox {
+    private var didResume = false
+
+    func resumeOnce(_ continuation: CheckedContinuation<ProviderStatus, Never>, with status: ProviderStatus) {
+        guard !didResume else { return }
+        didResume = true
+        continuation.resume(returning: status)
+    }
+}
+
+extension QuotaProvider {
+    /// Races `fetch()` against `deadline` (defaults to
+    /// `ProviderFetchDeadline.seconds`; overridable for tests) and returns
+    /// whichever finishes first.
+    ///
+    /// Deliberately NOT implemented with `withTaskGroup`: a structured task
+    /// group only returns once every child task has actually finished, even
+    /// after `cancelAll()` — cancellation is cooperative, so a provider that
+    /// never checks `Task.isCancelled` (blocked on synchronous I/O, or a
+    /// loop that swallows `CancellationError`) would keep the whole group —
+    /// and therefore this function — from returning until IT finishes,
+    /// silently defeating the deadline. Racing via an unstructured `Task`
+    /// plus a checked continuation lets this function return the moment the
+    /// deadline fires regardless of whether the fetch cooperates; the loser
+    /// keeps running detached (best-effort — it may never actually stop) but
+    /// can no longer hold up the caller. The timeout status's error message
+    /// contains "Timeout" so `classify(rawError:)` resolves it to
+    /// `.networkUnreachableOrTimeout`.
+    func fetchWithDeadline(deadline: TimeInterval = ProviderFetchDeadline.seconds) async -> ProviderStatus {
+        let timeoutStatus = ProviderStatus(
+            id: id, displayName: displayName, windows: [], lastUpdated: Date(),
+            error: "Timeout: provider did not respond within \(Int(deadline))s")
+        let box = ProviderFetchDeadlineResumeBox()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<ProviderStatus, Never>) in
+            let fetchTask = Task {
+                let status: ProviderStatus
+                do {
+                    status = try await self.fetch()
+                } catch {
+                    status = ProviderStatus(id: self.id, displayName: self.displayName,
+                                             windows: [], lastUpdated: Date(), error: "\(error)")
+                }
+                await box.resumeOnce(continuation, with: status)
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, deadline) * 1_000_000_000))
+                // Best-effort: stops a cooperative provider early; a
+                // non-cooperative one ignores this and keeps running
+                // detached, but the resume below still fires on time.
+                fetchTask.cancel()
+                await box.resumeOnce(continuation, with: timeoutStatus)
+            }
+        }
     }
 }
 
