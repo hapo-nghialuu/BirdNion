@@ -348,63 +348,54 @@ function isLinkOnlyStatus(providerId: string): boolean {
   return providerId === "grok" || providerId === "xai";
 }
 
-function hasServiceIssue(level: string | undefined | null): boolean {
-  return !!level && level !== "none";
-}
+/** Binary health for the strip: green / red / gray (macOS ProviderStatusPage.Health). */
+type ServiceHealth = "ok" | "issue" | "unknown";
 
-function serviceDotClass(level: string | undefined): string {
-  switch (level) {
-    case "none":
-      return "ok";
-    case "minor":
-    case "maintenance":
-    case "major":
-      return "warn";
-    case "critical":
-      return "critical";
-    default:
-      return "unknown";
+function serviceHealth(
+  status: ProviderStatus,
+): { health: ServiceHealth; label: string } {
+  if (isLinkOnlyStatus(status.id) || !isStatusChecksEnabled()) {
+    return { health: "unknown", label: t("provider.serviceStatus.unknown") };
   }
+  const level = status.serviceStatusLevel;
+  if (!level) {
+    return { health: "unknown", label: t("provider.serviceStatus.unknown") };
+  }
+  if (level === "none") {
+    const raw = status.serviceStatus?.trim();
+    return {
+      health: "ok",
+      label: raw
+        ? (raw === "All Systems Operational" ? t("provider.allOperational") : raw)
+        : t("provider.serviceStatus.ok"),
+    };
+  }
+  const raw = status.serviceStatus?.trim();
+  return {
+    health: "issue",
+    label: raw || t("provider.serviceStatus.issue"),
+  };
 }
 
 /**
  * Compact status-page row under the provider header (macOS `ServiceStatusStrip`).
- * Claude/Codex: only when the feed reports a non-operational indicator.
- * Grok/xAI: always a static link (no public component feed).
+ * Always shown for Claude / Codex / Grok: green = ok, red = issue, gray =
+ * unknown, plus a trailing status-page link.
  */
 function serviceStatusStrip(status: ProviderStatus): HTMLElement | null {
   const url = statusPageURL(status.id);
   if (!url) return null;
 
+  const { health, label } = serviceHealth(status);
   const row = document.createElement("button");
   row.type = "button";
   row.className = "service-status-strip";
   row.title = url;
 
-  if (isLinkOnlyStatus(status.id)) {
-    row.append(el("span", "service-status-icon", "∿"));
-    row.append(
-      el(
-        "span",
-        "service-status-label",
-        t("link.status").toUpperCase(),
-      ),
-    );
-  } else {
-    if (!isStatusChecksEnabled()) return null;
-    if (!hasServiceIssue(status.serviceStatusLevel)) return null;
-    const text = status.serviceStatus?.trim();
-    if (!text) return null;
-    row.append(
-      el("span", `service-status-dot ${serviceDotClass(status.serviceStatusLevel)}`),
-    );
-    const label = text === "All Systems Operational"
-      ? t("provider.allOperational")
-      : text;
-    row.append(el("span", "service-status-text", label));
-  }
-
+  row.append(el("span", `service-status-dot ${health}`));
+  row.append(el("span", "service-status-text", label));
   row.append(el("span", "service-status-spacer"));
+  row.append(el("span", "service-status-link", t("link.status")));
   row.append(el("span", "service-status-open", "↗"));
   row.addEventListener("click", (ev) => {
     ev.preventDefault();

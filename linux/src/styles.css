@@ -974,9 +974,9 @@ html.popover-capped .app-body {
   color: var(--text);
   font: inherit;
 }
-.service-status-strip:hover .service-status-label,
-.service-status-strip:hover .service-status-text {
-  color: var(--accent);
+.service-status-strip:hover .service-status-link,
+.service-status-strip:hover .service-status-open {
+  opacity: 0.85;
 }
 .service-status-dot {
   flex: 0 0 8px;
@@ -985,24 +985,10 @@ html.popover-capped .app-body {
   border-radius: 50%;
   background: var(--disabled);
 }
+/* Binary health: green = ok, red = issue, gray = unknown */
 .service-status-dot.ok { background: var(--success); }
-.service-status-dot.warn { background: var(--warning-fill); }
-.service-status-dot.critical { background: var(--critical); }
+.service-status-dot.issue { background: var(--critical); }
 .service-status-dot.unknown { background: var(--disabled); }
-.service-status-icon {
-  flex: 0 0 auto;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--text3);
-}
-.service-status-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.3px;
-  color: var(--text2);
-  white-space: nowrap;
-}
 .service-status-text {
   font-size: 12px;
   font-weight: 500;
@@ -1014,12 +1000,20 @@ html.popover-capped .app-body {
   white-space: nowrap;
 }
 .service-status-spacer { flex: 1 1 auto; min-width: 8px; }
+.service-status-link {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  white-space: nowrap;
+}
 .service-status-open {
   flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
-  color: var(--text3);
+  color: var(--accent);
 }
 
 .provider-extras { font-size: 10px; color: var(--tertiary); }

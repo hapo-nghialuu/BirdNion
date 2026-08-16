@@ -103,40 +103,77 @@ final class ProviderStatusTests: XCTestCase {
         XCTAssertTrue(ProviderStatusPage.hasIssue(level: "minor"))
         XCTAssertTrue(ProviderStatusPage.hasIssue(level: "critical"))
         XCTAssertTrue(ProviderStatusPage.hasIssue(level: "maintenance"))
+        XCTAssertEqual(ProviderStatusPage.health(level: "none"), .ok)
+        XCTAssertEqual(ProviderStatusPage.health(level: "major"), .issue)
+        XCTAssertEqual(ProviderStatusPage.health(level: nil), .unknown)
     }
 
-    func testStripKindHidesOperationalClaude() {
+    func testStripAlwaysShowsOperationalClaudeAsOk() {
         let s = ProviderStatus(
             id: "claude", displayName: "Claude", windows: [], lastUpdated: Date(),
             serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
-        XCTAssertNil(ProviderStatusPage.stripKind(for: s, statusChecksEnabled: true))
+        let strip = ProviderStatusPage.strip(
+            for: s, statusChecksEnabled: true,
+            operationalLabel: "Operational", issueFallbackLabel: "Issues",
+            unknownLabel: "No data yet")
+        XCTAssertEqual(strip?.health, .ok)
+        XCTAssertEqual(strip?.label, "All Systems Operational")
     }
 
-    func testStripKindShowsClaudeIssue() {
+    func testStripShowsClaudeIssueAsRed() {
         let s = ProviderStatus(
             id: "claude", displayName: "Claude", windows: [], lastUpdated: Date(),
             serviceStatus: "Partial System Outage", serviceStatusLevel: "major")
-        XCTAssertEqual(
-            ProviderStatusPage.stripKind(for: s, statusChecksEnabled: true),
-            .issue(text: "Partial System Outage", level: "major"))
+        let strip = ProviderStatusPage.strip(
+            for: s, statusChecksEnabled: true,
+            operationalLabel: "Operational", issueFallbackLabel: "Issues",
+            unknownLabel: "No data yet")
+        XCTAssertEqual(strip?.health, .issue)
+        XCTAssertEqual(strip?.label, "Partial System Outage")
     }
 
-    func testStripKindHidesWhenStatusChecksDisabled() {
+    func testStripUnknownWhenStatusChecksDisabled() {
         let s = ProviderStatus(
             id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
             serviceStatus: "Major Outage", serviceStatusLevel: "critical")
-        XCTAssertNil(ProviderStatusPage.stripKind(for: s, statusChecksEnabled: false))
+        let strip = ProviderStatusPage.strip(
+            for: s, statusChecksEnabled: false,
+            operationalLabel: "Operational", issueFallbackLabel: "Issues",
+            unknownLabel: "No data yet")
+        XCTAssertEqual(strip?.health, .unknown)
+        XCTAssertEqual(strip?.label, "No data yet")
     }
 
-    func testStripKindGrokAlwaysLinkOnly() {
+    func testStripGrokAlwaysUnknownWithLink() {
         let s = ProviderStatus(
             id: "grok", displayName: "Grok", windows: [], lastUpdated: Date())
+        let strip = ProviderStatusPage.strip(
+            for: s, statusChecksEnabled: true,
+            operationalLabel: "Operational", issueFallbackLabel: "Issues",
+            unknownLabel: "No data yet")
+        XCTAssertEqual(strip?.health, .unknown)
+        XCTAssertEqual(strip?.label, "No data yet")
+    }
+
+    func testStripCodexOkAndIssue() {
+        let ok = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
+            serviceStatus: "All Systems Operational", serviceStatusLevel: "none")
         XCTAssertEqual(
-            ProviderStatusPage.stripKind(for: s, statusChecksEnabled: false),
-            .linkOnly)
+            ProviderStatusPage.strip(
+                for: ok, statusChecksEnabled: true,
+                operationalLabel: "Operational", issueFallbackLabel: "Issues",
+                unknownLabel: "No data yet")?.health,
+            .ok)
+        let bad = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [], lastUpdated: Date(),
+            serviceStatus: nil, serviceStatusLevel: "critical")
         XCTAssertEqual(
-            ProviderStatusPage.stripKind(for: s, statusChecksEnabled: true),
-            .linkOnly)
+            ProviderStatusPage.strip(
+                for: bad, statusChecksEnabled: true,
+                operationalLabel: "Operational", issueFallbackLabel: "Issues",
+                unknownLabel: "No data yet")?.label,
+            "Issues")
     }
 
     func testProviderReorderMovesDownAfterHoveredRow() {

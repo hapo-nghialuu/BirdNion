@@ -20,60 +20,72 @@ enum ProviderStatusPage {
         }
     }
 
-    /// Providers without a pollable feed — strip is a static link only.
+    /// Providers without a pollable feed — health stays `.unknown` until a feed exists.
     static func isLinkOnly(_ providerID: String) -> Bool {
         providerID == "grok" || providerID == "xai"
     }
 
-    /// True when the statuspage indicator should surface as an issue (dot + text).
-    /// `none` / missing = operational; hide the polled strip to keep quota first.
+    /// Binary overall health for the popover strip (green / red / gray).
+    enum Health: Equatable {
+        /// Indicator `none` — systems operational.
+        case ok
+        /// Any non-operational indicator (minor → critical, maintenance).
+        case issue
+        /// No feed, checks off, or not yet polled.
+        case unknown
+    }
+
+    /// One row: overall health + status label; the view always pairs it with a link.
+    struct Strip: Equatable {
+        let health: Health
+        /// Primary status text (left of the link).
+        let label: String
+    }
+
+    /// True when the statuspage indicator is non-operational.
     static func hasIssue(level: String?) -> Bool {
         guard let level, !level.isEmpty else { return false }
         return level != "none"
     }
 
-    /// What the popover strip should render for this provider snapshot.
-    enum StripKind: Equatable {
-        /// Link-only row (Grok / xAI) — no severity dot.
-        case linkOnly
-        /// Incident / maintenance / unknown — colored dot + localized text.
-        case issue(text: String, level: String)
+    /// Overall health from a statuspage indicator string.
+    static func health(level: String?) -> Health {
+        guard let level, !level.isEmpty else { return .unknown }
+        return level == "none" ? .ok : .issue
     }
 
-    /// Returns nil when the strip should not appear.
+    /// Returns nil when this provider has no status page URL.
     ///
-    /// - Link-only providers always show when a URL exists.
-    /// - Polled providers show only when status checks are enabled and the
-    ///   latest snapshot reports a non-operational indicator with text.
-    static func stripKind(
+    /// Always shows a strip for Claude / Codex / Grok when a URL exists so the
+    /// user can open the status page; health is green (ok), red (issue), or
+    /// gray (unknown / link-only / checks off).
+    static func strip(
         for status: ProviderStatus,
-        statusChecksEnabled: Bool
-    ) -> StripKind? {
+        statusChecksEnabled: Bool,
+        operationalLabel: String,
+        issueFallbackLabel: String,
+        unknownLabel: String
+    ) -> Strip? {
         guard url(for: status.id) != nil else { return nil }
 
         if isLinkOnly(status.id) {
-            return .linkOnly
+            return Strip(health: .unknown, label: unknownLabel)
         }
 
-        guard statusChecksEnabled else { return nil }
-        guard hasIssue(level: status.serviceStatusLevel) else { return nil }
-        let text = status.serviceStatus?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !text.isEmpty else { return nil }
-        return .issue(text: text, level: status.serviceStatusLevel ?? "unknown")
-    }
-
-    /// Dot color key for issue levels (maps onto theme tokens in the view).
-    static func severity(for level: String?) -> Severity {
-        switch level {
-        case "none": return .ok
-        case "minor", "maintenance": return .warning
-        case "major": return .warning
-        case "critical": return .critical
-        default: return .unknown
+        guard statusChecksEnabled else {
+            return Strip(health: .unknown, label: unknownLabel)
         }
-    }
 
-    enum Severity: Equatable {
-        case ok, warning, critical, unknown
+        let level = status.serviceStatusLevel
+        switch health(level: level) {
+        case .ok:
+            let raw = status.serviceStatus?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return Strip(health: .ok, label: raw.isEmpty ? operationalLabel : raw)
+        case .issue:
+            let raw = status.serviceStatus?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return Strip(health: .issue, label: raw.isEmpty ? issueFallbackLabel : raw)
+        case .unknown:
+            return Strip(health: .unknown, label: unknownLabel)
+        }
     }
 }
