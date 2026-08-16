@@ -461,197 +461,173 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(r.codexConfidence.map(SourceConfidenceState.classify), .unavailable)
     }
 
-    // MARK: - Phase 2: MonthlyForecast (pure)
+    // MARK: - Phase 2: Weekly budget forecast (pure)
+
+    /// Gregorian / Monday-first calendar so week boundaries are deterministic
+    /// across CI locales (US Sun-start vs ISO Mon-start).
+    private var forecastCalendar: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(secondsFromGMT: 0)!
+        c.firstWeekday = 2 // Monday
+        return c
+    }
 
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         var comp = DateComponents()
         comp.year = year; comp.month = month; comp.day = day
-        return calendar.date(from: comp)!
+        return forecastCalendar.date(from: comp)!
     }
 
     private func combinedDay(_ d: Date, usd: Double) -> CombinedDailyUsage {
         CombinedDailyUsage(date: d, claudeUSD: usd, claudeTokens: 0, codexUSD: 0, codexTokens: 0)
     }
 
-    /// Day 1 of the month: `daysElapsed == 1` (no divide-by-zero), and the
-    /// projection is simply that single day's spend scaled to the full month.
-    func testMonthlyForecastDayOneOfMonth() {
-        let now = date(2026, 3, 1)
+    /// Monday (start of Mon-first week): daysElapsed == 1, daysInPeriod == 7,
+    /// projection scales that single day to the full week.
+    func testWeeklyForecastDayOneOfWeek() {
+        // 2026-03-09 is a Monday.
+        let now = date(2026, 3, 9)
         let f = MonthlyForecast.build(
-            daily: [combinedDay(now, usd: 10)], budgetUSD: 100, now: now, calendar: calendar)
+            daily: [combinedDay(now, usd: 10)], budgetUSD: 100, now: now, calendar: forecastCalendar)
         XCTAssertEqual(f.daysElapsed, 1)
-        XCTAssertEqual(f.daysInMonth, 31)
+        XCTAssertEqual(f.daysInMonth, 7)
         XCTAssertEqual(f.monthToDateUSD, 10, accuracy: 0.001)
-        XCTAssertEqual(f.projectedTotalUSD, 310, accuracy: 0.001)   // 10/1 * 31
+        XCTAssertEqual(f.projectedTotalUSD, 70, accuracy: 0.001) // 10/1 * 7
     }
 
-    /// 2028 is a leap year — February has 29 days.
-    func testMonthlyForecastLeapFebruaryDaysInMonth() {
-        let now = date(2028, 2, 15)
-        let f = MonthlyForecast.build(daily: [], budgetUSD: nil, now: now, calendar: calendar)
-        XCTAssertEqual(f.daysInMonth, 29)
+    /// Week length is always 7 regardless of month length / leap years.
+    func testWeeklyForecastDaysInPeriodIsAlwaysSeven() {
+        for (y, m, d) in [(2028, 2, 15), (2027, 2, 15), (2026, 1, 20)] as [(Int, Int, Int)] {
+            let now = date(y, m, d)
+            let f = MonthlyForecast.build(daily: [], budgetUSD: nil, now: now, calendar: forecastCalendar)
+            XCTAssertEqual(f.daysInMonth, 7, "\(y)-\(m)-\(d)")
+        }
     }
 
-    /// 2027 is not a leap year — February has 28 days.
-    func testMonthlyForecastNonLeapFebruaryDaysInMonth() {
-        let now = date(2027, 2, 15)
-        let f = MonthlyForecast.build(daily: [], budgetUSD: nil, now: now, calendar: calendar)
-        XCTAssertEqual(f.daysInMonth, 28)
-    }
-
-    /// January is a 31-day month.
-    func testMonthlyForecast31DayMonth() {
-        let now = date(2026, 1, 20)
-        let f = MonthlyForecast.build(daily: [], budgetUSD: nil, now: now, calendar: calendar)
-        XCTAssertEqual(f.daysInMonth, 31)
-    }
-
-    /// A bucket from the previous month, and one from the same month-number
-    /// a year earlier, must both be excluded from month-to-date — only the
-    /// exact (year, month) of `now` counts.
-    func testMonthlyForecastExcludesPreviousMonthAndYear() {
-        let now = date(2026, 3, 10)
+    /// Previous-week and out-of-week buckets are excluded — only the current
+    /// calendar week through today counts.
+    func testWeeklyForecastExcludesPreviousWeek() {
+        // Week of Mon 2026-03-09 … Sun 2026-03-15; "now" = Wed 2026-03-11.
+        let now = date(2026, 3, 11)
         let daily = [
-            combinedDay(date(2026, 2, 28), usd: 500),   // previous month, same year
-            combinedDay(date(2025, 3, 10), usd: 500),   // same month-number, previous year
-            combinedDay(date(2026, 3, 5), usd: 20),     // in-month
+            combinedDay(date(2026, 3, 8), usd: 500),   // previous week (Sun)
+            combinedDay(date(2026, 3, 9), usd: 20),    // Mon this week
+            combinedDay(date(2026, 3, 10), usd: 5),    // Tue this week
         ]
-        let f = MonthlyForecast.build(daily: daily, budgetUSD: nil, now: now, calendar: calendar)
-        XCTAssertEqual(f.monthToDateUSD, 20, accuracy: 0.001)
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: nil, now: now, calendar: forecastCalendar)
+        XCTAssertEqual(f.monthToDateUSD, 25, accuracy: 0.001)
+        XCTAssertEqual(f.daysElapsed, 3) // Mon=1, Tue=2, Wed=3
     }
 
-    /// A same-month bucket dated after today, a negative `usd`, and a NaN
-    /// `usd` must each be dropped rather than inflating/poisoning/shrinking
-    /// month-to-date — only the one genuinely valid past-or-today day counts.
-    func testMonthlyForecastIgnoresFutureNegativeAndNonFiniteBucketsButKeepsValidOne() {
-        let now = date(2026, 3, 10)
+    /// Future same-week, negative, and NaN buckets are dropped.
+    func testWeeklyForecastIgnoresFutureNegativeAndNonFiniteBuckets() {
+        let now = date(2026, 3, 11) // Wed
         let daily = [
-            combinedDay(date(2026, 3, 5), usd: 20),          // valid: in-month, on/before today
-            combinedDay(date(2026, 3, 15), usd: 1_000),      // future date (same month) — excluded
-            combinedDay(date(2026, 3, 8), usd: -50),         // negative — ignored, not subtracted
-            combinedDay(date(2026, 3, 9), usd: Double.nan),  // non-finite — must not poison the sum
+            combinedDay(date(2026, 3, 10), usd: 20),         // Tue valid
+            combinedDay(date(2026, 3, 13), usd: 1_000),      // Fri future — excluded
+            combinedDay(date(2026, 3, 9), usd: -50),         // negative ignored
+            combinedDay(date(2026, 3, 11), usd: Double.nan), // non-finite ignored
         ]
-        let f = MonthlyForecast.build(daily: daily, budgetUSD: nil, now: now, calendar: calendar)
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: nil, now: now, calendar: forecastCalendar)
         XCTAssertFalse(f.monthToDateUSD.isNaN)
         XCTAssertEqual(f.monthToDateUSD, 20, accuracy: 0.001)
     }
 
-    /// No budget configured: `budgetUSD`/`status`/`remainingBudgetUSD`/
-    /// `progressFraction` all read as `nil` — the card hides itself.
-    func testMonthlyForecastNoBudgetConfigured() {
-        let now = date(2026, 3, 10)
+    func testWeeklyForecastNoBudgetConfigured() {
+        let now = date(2026, 3, 11)
         let f = MonthlyForecast.build(
-            daily: [combinedDay(now, usd: 5)], budgetUSD: nil, now: now, calendar: calendar)
+            daily: [combinedDay(now, usd: 5)], budgetUSD: nil, now: now, calendar: forecastCalendar)
         XCTAssertNil(f.budgetUSD)
         XCTAssertNil(f.status)
         XCTAssertNil(f.remainingBudgetUSD)
         XCTAssertNil(f.progressFraction)
     }
 
-    /// Zero, negative, and non-finite budgets all normalize to "not configured".
-    func testMonthlyForecastInvalidOrNonpositiveBudgetNormalizesToNil() {
-        let now = date(2026, 3, 10)
+    func testWeeklyForecastInvalidOrNonpositiveBudgetNormalizesToNil() {
+        let now = date(2026, 3, 11)
         for invalid in [0.0, -25.0, Double.nan, Double.infinity] {
-            let f = MonthlyForecast.build(daily: [], budgetUSD: invalid, now: now, calendar: calendar)
+            let f = MonthlyForecast.build(daily: [], budgetUSD: invalid, now: now, calendar: forecastCalendar)
             XCTAssertNil(f.budgetUSD, "budget \(invalid) should normalize to nil")
             XCTAssertNil(f.status)
         }
     }
 
-    /// Month-to-date is still under budget, but the linear projection to
-    /// month-end exceeds it → `.forecastOver`, not `.alreadyOver`.
-    func testMonthlyForecastStatusForecastOverNotYetOver() {
-        let now = date(2026, 3, 5)   // day 5 of a 31-day month
+    /// Week-to-date under budget, but linear projection to week-end exceeds it.
+    func testWeeklyForecastStatusForecastOverNotYetOver() {
+        // Wed (day 3 of Mon-start week): spend 50 total on that day alone.
+        let now = date(2026, 3, 11)
         let f = MonthlyForecast.build(
-            daily: [combinedDay(now, usd: 50)], budgetUSD: 200, now: now, calendar: calendar)
-        // dailyAverage = 50/5 = 10; projected = 10*31 = 310 > 200; MTD 50 < 200.
+            daily: [combinedDay(now, usd: 50)], budgetUSD: 100, now: now, calendar: forecastCalendar)
+        // dailyAverage = 50/3; projected = 50/3*7 ≈ 116.67 > 100; WTD 50 < 100.
         XCTAssertEqual(f.status, .forecastOver)
         XCTAssertLessThan(f.monthToDateUSD, f.budgetUSD!)
         XCTAssertGreaterThan(f.projectedTotalUSD, f.budgetUSD!)
     }
 
-    /// Month-to-date has already exceeded the budget — reported as
-    /// `.alreadyOver` even though the projection is (necessarily) also over.
-    func testMonthlyForecastStatusAlreadyOver() {
-        let now = date(2026, 3, 5)
+    func testWeeklyForecastStatusAlreadyOver() {
+        let now = date(2026, 3, 11)
         let f = MonthlyForecast.build(
-            daily: [combinedDay(now, usd: 300)], budgetUSD: 200, now: now, calendar: calendar)
+            daily: [combinedDay(now, usd: 300)], budgetUSD: 200, now: now, calendar: forecastCalendar)
         XCTAssertEqual(f.status, .alreadyOver)
         XCTAssertEqual(f.remainingBudgetUSD ?? 1, -100, accuracy: 0.001)
     }
 
-    /// Zero spend this month with a budget configured is `.onTrack`, not an
-    /// error state — projected/MTD are both exactly zero.
-    func testMonthlyForecastZeroSpendMonth() {
-        let now = date(2026, 3, 10)
-        let daily = (1...10).map { combinedDay(date(2026, 3, $0), usd: 0) }
-        let f = MonthlyForecast.build(daily: daily, budgetUSD: 100, now: now, calendar: calendar)
+    func testWeeklyForecastZeroSpendWeek() {
+        let now = date(2026, 3, 11)
+        let daily = [9, 10, 11].map { combinedDay(date(2026, 3, $0), usd: 0) }
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: 100, now: now, calendar: forecastCalendar)
         XCTAssertEqual(f.monthToDateUSD, 0, accuracy: 0.001)
         XCTAssertEqual(f.projectedTotalUSD, 0, accuracy: 0.001)
         XCTAssertEqual(f.status, .onTrack)
     }
 
-    // MARK: - Phase 3: MonthlyForecast per-source (pure)
+    // MARK: - Phase 3: Weekly forecast per-source (pure)
 
     private func combinedDay(_ d: Date, claudeUSD: Double = 0, codexUSD: Double = 0, grokUSD: Double = 0) -> CombinedDailyUsage {
         CombinedDailyUsage(date: d, claudeUSD: claudeUSD, claudeTokens: 0,
                            codexUSD: codexUSD, codexTokens: 0, grokUSD: grokUSD, grokTokens: 0)
     }
 
-    /// Per-source forecast (`.claude`) sums only `claudeUSD`, ignoring the
-    /// same day's `codexUSD` entirely — a Codex budget never leaks into a
-    /// Claude-only forecast and vice versa.
-    func testMonthlyForecastPerSourceUsesOnlyThatSourcesUSD() {
-        let now = date(2026, 3, 10)
-        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 20, codexUSD: 100)]
-        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: calendar)
-        let codexForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .codex, now: now, calendar: calendar)
+    func testWeeklyForecastPerSourceUsesOnlyThatSourcesUSD() {
+        let now = date(2026, 3, 11)
+        let daily = [combinedDay(date(2026, 3, 10), claudeUSD: 20, codexUSD: 100)]
+        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: forecastCalendar)
+        let codexForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .codex, now: now, calendar: forecastCalendar)
         XCTAssertEqual(claudeForecast.monthToDateUSD, 20, accuracy: 0.001)
         XCTAssertEqual(codexForecast.monthToDateUSD, 100, accuracy: 0.001)
     }
 
-    /// A non-finite value in ANOTHER source's field must not poison or
-    /// exclude this source's own valid value — each source's validity is
-    /// judged independently, not via the combined `usd` getter (which would
-    /// itself be NaN here).
-    func testMonthlyForecastPerSourceIgnoresOtherSourcesInvalidValue() {
-        let now = date(2026, 3, 10)
-        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 20, codexUSD: Double.nan)]
-        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: calendar)
+    func testWeeklyForecastPerSourceIgnoresOtherSourcesInvalidValue() {
+        let now = date(2026, 3, 11)
+        let daily = [combinedDay(date(2026, 3, 10), claudeUSD: 20, codexUSD: Double.nan)]
+        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: forecastCalendar)
         XCTAssertFalse(claudeForecast.monthToDateUSD.isNaN)
         XCTAssertEqual(claudeForecast.monthToDateUSD, 20, accuracy: 0.001)
     }
 
-    /// This source's own negative/non-finite value is excluded (contributes
-    /// 0) — same rule as the combined `.total` case, scoped to one field.
-    func testMonthlyForecastPerSourceExcludesOwnInvalidValue() {
-        let now = date(2026, 3, 10)
+    func testWeeklyForecastPerSourceExcludesOwnInvalidValue() {
+        let now = date(2026, 3, 11)
         let daily = [
-            combinedDay(date(2026, 3, 5), claudeUSD: 20),
-            combinedDay(date(2026, 3, 6), claudeUSD: -5),
-            combinedDay(date(2026, 3, 7), claudeUSD: Double.nan),
+            combinedDay(date(2026, 3, 9), claudeUSD: 20),
+            combinedDay(date(2026, 3, 10), claudeUSD: -5),
+            combinedDay(date(2026, 3, 11), claudeUSD: Double.nan),
         ]
-        let f = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: calendar)
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: 50, source: .claude, now: now, calendar: forecastCalendar)
         XCTAssertEqual(f.monthToDateUSD, 20, accuracy: 0.001)
     }
 
-    /// Omitting `source` preserves the pre-existing combined-budget
-    /// behavior — the default must still sum every source.
-    func testMonthlyForecastDefaultSourceIsTotal() {
-        let now = date(2026, 3, 10)
-        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 20, codexUSD: 30, grokUSD: 5)]
-        let f = MonthlyForecast.build(daily: daily, budgetUSD: 100, now: now, calendar: calendar)
+    func testWeeklyForecastDefaultSourceIsTotal() {
+        let now = date(2026, 3, 11)
+        let daily = [combinedDay(date(2026, 3, 10), claudeUSD: 20, codexUSD: 30, grokUSD: 5)]
+        let f = MonthlyForecast.build(daily: daily, budgetUSD: 100, now: now, calendar: forecastCalendar)
         XCTAssertEqual(f.monthToDateUSD, 55, accuracy: 0.001)
     }
 
-    /// Independent per-source status: Codex over its own (small) budget
-    /// while Claude, spending less but against a larger budget, stays on
-    /// track — proves the two forecasts don't share state.
-    func testMonthlyForecastPerSourceIndependentStatus() {
-        let now = date(2026, 3, 5)
-        let daily = [combinedDay(date(2026, 3, 5), claudeUSD: 10, codexUSD: 300)]
-        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 200, source: .claude, now: now, calendar: calendar)
-        let codexForecast = MonthlyForecast.build(daily: daily, budgetUSD: 200, source: .codex, now: now, calendar: calendar)
+    func testWeeklyForecastPerSourceIndependentStatus() {
+        let now = date(2026, 3, 11)
+        let daily = [combinedDay(date(2026, 3, 11), claudeUSD: 10, codexUSD: 300)]
+        let claudeForecast = MonthlyForecast.build(daily: daily, budgetUSD: 200, source: .claude, now: now, calendar: forecastCalendar)
+        let codexForecast = MonthlyForecast.build(daily: daily, budgetUSD: 200, source: .codex, now: now, calendar: forecastCalendar)
         XCTAssertEqual(claudeForecast.status, .onTrack)
         XCTAssertEqual(codexForecast.status, .alreadyOver)
     }

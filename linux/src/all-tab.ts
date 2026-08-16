@@ -106,22 +106,23 @@ function budgetTone(status: BudgetStatus): string {
   return "ok";
 }
 
-/** Monthly budget + linear-projection forecast card. Only rendered when a
+/** Weekly budget + linear-projection forecast card. Only rendered when a
  * budget is configured (`monthlyForecast` returns non-null) — `main.ts`
- * places it right after `confidenceRow` and before `chartCard` so it still
- * shows on a fresh/all-zero usage report (no "active day" gate, unlike the
- * heatmap). Estimated from local Claude+Codex+Grok logs only, current
- * calendar month — purely a read-only summary, no notifications/scheduler. */
+ * places it right after `confidenceRow`. Estimated from local
+ * Claude+Codex+Grok logs only, current calendar week — read-only summary. */
 export function budgetForecastCard(combined: Combined, budgetUsd: number | null): HTMLElement | null {
   const forecast = monthlyForecast(combined.daily, budgetUsd);
   if (!forecast) return null;
-  const tone = budgetTone(forecast.status);
+  return renderFullBudgetCard(forecast);
+}
 
+function renderFullBudgetCard(forecast: NonNullable<ReturnType<typeof monthlyForecast>>): HTMLElement {
+  const tone = budgetTone(forecast.status);
   const statusLabel = t(`budgetStatus.${forecast.status}`);
   const card = el("section", "card budget-card");
 
-  // Design: title + status; big "$MTD / $budget" + "dự phóng $X"; bar;
-  // "CÒN LẠI $Y · N NGÀY NỮA HẾT THÁNG".
+  // Design: title + status; big "$WTD / $budget" + "dự phóng $X"; bar;
+  // "CÒN LẠI $Y · N NGÀY NỮA HẾT TUẦN".
   const head = el("div", "budget-head");
   head.append(el("span", "summary-label", t("budgetMonthly")));
   head.append(el("span", `budget-status ${tone}`, statusLabel));
@@ -162,27 +163,12 @@ export function budgetForecastCard(combined: Combined, budgetUsd: number | null)
   return card;
 }
 
-type ProviderBudgetEntry = {
-  id: UsageSourceId;
-  label: string;
-  report: UsageReport | null;
-  budget: number | null;
-};
-
-/** One provider's own monthly budget vs. spend, mounted directly on that
- * provider's own tab (Claude/Codex/Grok popover body) — independent of the
- * combined `budgetForecastCard` above, which only ever shows on the All tab.
- * `combined` must already be scoped to just this source (`main.ts` builds it
- * via `combine()` with the other two sources passed as `null`) so
- * `monthlyForecast(..., source)` never mixes in another provider's spend.
- * Returns `null` when this provider has no budget configured — the caller
- * then renders nothing.
+/** One provider's own weekly budget vs. spend — same full card layout as
+ * the All-tab `budgetForecastCard` (title + status, hero amounts, bar,
+ * remaining · days left). Returns `null` when no budget is configured.
  *
- * Trust rule: a source whose `scanConfidence` is `"unavailable"` (disabled,
- * or never landed a scan) never claims "on track" from an implicit zero —
- * it renders a "no cost data" row instead of a forecast. `"history"`
- * confidence still calculates normally (same states as `confidenceRow`
- * above, so the UX stays consistent). */
+ * Trust: `"unavailable"` confidence never claims "on track" from zero —
+ * renders a no-data row instead. */
 export function providerBudgetCard(
   id: UsageSourceId,
   label: string,
@@ -192,55 +178,26 @@ export function providerBudgetCard(
 ): HTMLElement | null {
   if (budgetUsd == null || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
 
-  const card = el("section", "card budget-provider-card");
-  card.append(el("div", "summary-label", t("budgetMonthly")));
-  card.append(providerBudgetRow({ id, label, report, budget: budgetUsd }, combined));
-  return card;
-}
-
-function providerBudgetRow(entry: ProviderBudgetEntry, combined: Combined): HTMLElement {
-  const state = scanConfidence(entry.report);
-  const row = el("div", "budget-provider-row");
-  const left = el("span", "legend-item");
-  left.append(logoMark(entry.id, `confidence-logo confidence-logo-${entry.id}`));
-  left.append(el("span", "budget-provider-name", entry.label));
-  row.append(left);
-
+  const state = scanConfidence(report);
   if (state === "unavailable") {
+    const card = el("section", "card budget-card");
+    card.append(el("div", "summary-label", t("budgetMonthly")));
+    const row = el("div", "budget-provider-row");
+    const left = el("span", "legend-item");
+    left.append(logoMark(id, `confidence-logo confidence-logo-${id}`));
+    left.append(el("span", "budget-provider-name", label));
+    row.append(left);
     row.append(el("span", "budget-provider-nodata", t("budgetPerProviderNoData")));
-    const hint = t("budgetPerProviderNoDataHint", { source: entry.label });
+    const hint = t("budgetPerProviderNoDataHint", { source: label });
     row.title = hint;
     row.setAttribute("aria-label", hint);
-    return row;
+    card.append(row);
+    return card;
   }
 
-  // `entries` is already filtered to `budget > 0`, so `forecast` is never
-  // null here — the guard just keeps this function total.
-  const forecast = monthlyForecast(combined.daily, entry.budget, new Date(), entry.id);
-  if (!forecast) {
-    row.append(el("span", "budget-provider-nodata", t("budgetPerProviderNoData")));
-    return row;
-  }
-  const tone = budgetTone(forecast.status);
-  const statusLabel = t(`budgetStatus.${forecast.status}`);
-  row.append(el("span", "budget-provider-amounts",
-    `${usd(forecast.monthToDateUsd)} / ${usd(forecast.budgetUsd)}`));
-
-  const daysLeft = Math.max(0, forecast.daysInMonth - forecast.daysElapsed);
-  const remainLabel = forecast.remainingUsd >= 0
-    ? t("budgetRemainingWithDays", { amount: usd(forecast.remainingUsd), n: daysLeft })
-    : t("budgetOverBy", { amount: usd(-forecast.remainingUsd) });
-  row.append(el("span", `budget-provider-status ${tone}`, `${remainLabel} · ${statusLabel}`));
-
-  const hint = t("budgetHint", {
-    mtd: usd(forecast.monthToDateUsd),
-    projected: usd(forecast.projectedUsd),
-    budget: usd(forecast.budgetUsd),
-    status: statusLabel,
-  });
-  row.title = hint;
-  row.setAttribute("aria-label", hint);
-  return row;
+  const forecast = monthlyForecast(combined.daily, budgetUsd, new Date(), id);
+  if (!forecast) return null;
+  return renderFullBudgetCard(forecast);
 }
 
 // --- Chart card -----------------------------------------------------------

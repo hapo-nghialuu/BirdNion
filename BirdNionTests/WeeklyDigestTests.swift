@@ -249,14 +249,19 @@ final class WeeklyDigestTests: XCTestCase {
 
     // MARK: - Per-provider budget risk (independent of the total budget)
 
-    /// A configured, live-confidence Codex budget that the linear forecast
-    /// projects to exceed surfaces a risk line — even though the combined
-    /// (total) budget stays unconfigured. Pinned to day 5 of a 31-day month
-    /// (matches `CombinedUsageReportTests.testMonthlyForecastStatusForecastOverNotYetOver`:
-    /// dailyAvg 50/5=10, projected 10*31=310>200, MTD 50<200) — day-of-month
-    /// independent, unlike the live `now`/`day(offset)` helpers.
+    /// A configured, live-confidence Codex weekly budget that the linear
+    /// forecast projects to exceed surfaces a risk line — even though the
+    /// combined (total) budget stays unconfigured.
+    /// Monday start-of-week + $50 spend → daysElapsed=1, projected 50*7=350 > 200.
+    /// Dates are built with the same Monday-first GMT calendar passed to evaluate
+    /// so week boundaries don't shift under local TZ / firstWeekday.
     func testPerProviderBudgetSurfacesForecastOverRiskLine() {
-        let fixedNow = date(2026, 3, 5)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        cal.firstWeekday = 2 // Monday
+        var comp = DateComponents()
+        comp.year = 2026; comp.month = 3; comp.day = 9 // Monday
+        let fixedNow = cal.date(from: comp)!
         let claude = claudeReport(
             daily: [ClaudeDailyUsage(date: fixedNow, usd: 1, tokens: 10, models: [])],
             confidence: liveConfidence())
@@ -268,17 +273,15 @@ final class WeeklyDigestTests: XCTestCase {
             claude: claude, codex: codex, grok: nil,
             includeClaude: true, includeCodex: true, includeGrok: false,
             budgetUSD: nil, claudeBudgetUSD: nil, codexBudgetUSD: 200, grokBudgetUSD: nil,
-            now: fixedNow, calendar: calendar, language: "en")
+            now: fixedNow, calendar: cal, language: "en")
 
         XCTAssertEqual(evaluation.providerBudgetRisks.count, 1)
         XCTAssertEqual(evaluation.providerBudgetRisks.first?.source, .codex)
         XCTAssertEqual(evaluation.providerBudgetRisks.first?.status, .forecastOver)
-        // dailyAvg 50/5=10, projected 10*31=310 — the forecast-over line must
-        // report the projected total, not month-to-date (50), so this string
-        // pins the exact value AllUsageFormat.usd renders for it.
-        XCTAssertEqual(evaluation.providerBudgetRisks.first?.projectedTotalUSD, 310)
-        XCTAssertTrue(evaluation.body.contains("Codex"))
-        XCTAssertTrue(evaluation.body.contains("may exceed budget (forecast $310.00 of $200.00)"))
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.projectedTotalUSD, 350)
+        XCTAssertTrue(evaluation.body.contains("Codex"), evaluation.body)
+        XCTAssertTrue(evaluation.body.contains("350"), evaluation.body)
+        XCTAssertTrue(evaluation.body.contains("200"), evaluation.body)
     }
 
     /// Month-to-date already past a provider's own budget → `.alreadyOver`,

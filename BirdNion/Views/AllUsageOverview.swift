@@ -320,10 +320,10 @@ extension CombinedUsageReport {
     }
 }
 
-// MARK: - Phase 2: monthly budget forecast (pure)
+// MARK: - Phase 2: weekly budget forecast (pure)
 
-/// Where month-to-date spend sits relative to a configured budget.
-/// `alreadyOver` takes precedence over `forecastOver` — a month that has
+/// Where week-to-date spend sits relative to a configured budget.
+/// `alreadyOver` takes precedence over `forecastOver` — a week that has
 /// already overshot is reported as over, not merely "on track to overshoot".
 enum MonthlyForecastStatus: Equatable {
     case onTrack
@@ -340,16 +340,20 @@ enum CombinedUsageSource: Equatable {
     case total, claude, codex, grok
 }
 
-/// Linear month-to-date spend projection for the All-tab budget card.
-/// Day-granularity (`CostHistoryStore` only has day-resolution buckets),
-/// unlike `WindowPace`'s sub-day precision for quota windows. Pure value
-/// type + pure `build`, no SwiftUI/file-I/O dependency — takes `now` and
-/// `calendar` explicitly so every calendar edge case is deterministic.
+/// Linear week-to-date spend projection for the All-tab and per-provider
+/// budget cards. Day-granularity (`CostHistoryStore` only has day-resolution
+/// buckets), unlike `WindowPace`'s sub-day precision for quota windows.
+/// Pure value type + pure `build` — takes `now` and `calendar` explicitly so
+/// every calendar edge case is deterministic.
+///
+/// "Week" follows `calendar` week boundaries (`dateInterval(of: .weekOfYear)`),
+/// so locale `firstWeekday` is respected (Mon-start vs Sun-start).
 struct MonthlyForecast: Equatable {
+    /// Spend from the start of the current calendar week through local today.
     let monthToDateUSD: Double
-    /// 1...`daysInMonth` — "today" always counts as elapsed.
+    /// 1...`daysInMonth` — "today" always counts as elapsed (never 0).
     let daysElapsed: Int
-    /// Calendar-aware length of the current month (28/29/30/31).
+    /// Length of the budget period in days (always 7 for a calendar week).
     let daysInMonth: Int
     let dailyAverageUSD: Double
     let projectedTotalUSD: Double
@@ -360,9 +364,9 @@ struct MonthlyForecast: Equatable {
     let status: MonthlyForecastStatus?
 
     var remainingBudgetUSD: Double? { budgetUSD.map { $0 - monthToDateUSD } }
-    /// Full calendar days left after today until month-end (0 on the last day).
+    /// Full calendar days left after today until week-end (0 on the last day).
     var daysRemainingInMonth: Int { max(0, daysInMonth - daysElapsed) }
-    /// Month-to-date spend as a fraction of budget (can exceed 1 when over).
+    /// Week-to-date spend as a fraction of budget (can exceed 1 when over).
     /// `nil` when no budget is configured.
     var progressFraction: Double? {
         guard let budgetUSD, budgetUSD > 0 else { return nil }
@@ -374,46 +378,51 @@ struct MonthlyForecast: Equatable {
                       source: CombinedUsageSource = .total,
                       now: Date = Date(),
                       calendar: Calendar = .current) -> MonthlyForecast {
-        // Same year AND month — `toGranularity: .month` compares era/year/
-        // month together, so a bucket from last December never leaks into
-        // a January month-to-date sum even though both are "December" or
-        // "January" by month-number alone across a year boundary.
-        // "Month-to-date" is strictly through local today: a same-month
-        // bucket dated after today (a caller passing malformed/preview data)
-        // is excluded rather than inflating a projection that hasn't
-        // happened yet. A non-finite (NaN/Infinity) or negative day `usd`
-        // is ignored rather than poisoning the whole sum to NaN or letting
-        // a bad negative value quietly shrink real spend. Filtered/summed on
-        // `source`'s own field (default `.total`, the pre-existing combined
-        // behavior) so a per-provider forecast never mixes in other sources.
+        // Calendar week containing `now` (respects firstWeekday). Week-to-date
+        // is strictly through local today: a same-week bucket dated after
+        // today is excluded. Non-finite / negative day USD is ignored rather
+        // than poisoning the sum. Filtered on `source`'s own field so a
+        // per-provider forecast never mixes in other sources.
         let startOfToday = calendar.startOfDay(for: now)
-        let monthToDateUSD = daily
-            .filter { calendar.isDate($0.date, equalTo: now, toGranularity: .month) && $0.date <= startOfToday }
+        let weekStart: Date = {
+            if let interval = calendar.dateInterval(of: .weekOfYear, for: now) {
+                return calendar.startOfDay(for: interval.start)
+            }
+            // Fallback: strip to start of day when week interval is unavailable.
+            return startOfToday
+        }()
+
+        let periodToDateUSD = daily
+            .filter { day in
+                let d = calendar.startOfDay(for: day.date)
+                return d >= weekStart && d <= startOfToday
+            }
             .reduce(0) { total, day in
                 let value = usdValue(day, source: source)
                 guard value.isFinite, value >= 0 else { return total }
                 return total + value
             }
 
-        let daysElapsed = max(1, calendar.component(.day, from: now))
-        let daysInMonth = calendar.range(of: .day, in: .month, for: now)?.count ?? 30
-        let dailyAverageUSD = monthToDateUSD / Double(daysElapsed)
-        let projectedTotalUSD = dailyAverageUSD * Double(daysInMonth)
+        let dayOffset = calendar.dateComponents([.day], from: weekStart, to: startOfToday).day ?? 0
+        let daysElapsed = max(1, min(7, dayOffset + 1))
+        let daysInPeriod = 7
+        let dailyAverageUSD = periodToDateUSD / Double(daysElapsed)
+        let projectedTotalUSD = dailyAverageUSD * Double(daysInPeriod)
 
         let normalizedBudget: Double? = {
             guard let budgetUSD, budgetUSD.isFinite, budgetUSD > 0 else { return nil }
             return budgetUSD
         }()
         let status: MonthlyForecastStatus? = normalizedBudget.map { budget in
-            if monthToDateUSD > budget { return .alreadyOver }
+            if periodToDateUSD > budget { return .alreadyOver }
             if projectedTotalUSD > budget { return .forecastOver }
             return .onTrack
         }
 
         return MonthlyForecast(
-            monthToDateUSD: monthToDateUSD,
+            monthToDateUSD: periodToDateUSD,
             daysElapsed: daysElapsed,
-            daysInMonth: daysInMonth,
+            daysInMonth: daysInPeriod,
             dailyAverageUSD: dailyAverageUSD,
             projectedTotalUSD: projectedTotalUSD,
             budgetUSD: normalizedBudget,
@@ -676,11 +685,11 @@ struct SourceConfidenceBadgeRow: View {
 
 // MARK: - Phase 2: budget vs. forecast card
 
-/// Month-to-date spend vs. a user-configured monthly budget, plus a linear
-/// forecast to month-end (`MonthlyForecast`). Passive read-out only — no
+/// Week-to-date spend vs. a user-configured weekly budget, plus a linear
+/// forecast to week-end (`MonthlyForecast`). Passive read-out only — no
 /// notifications, no scheduler. Hidden entirely when no budget is
 /// configured (`SettingsStore.monthlyBudgetUSD <= 0`); shown even when this
-/// month's spend is zero, same as the confidence badge row above.
+/// week's spend is zero, same as the confidence badge row above.
 struct BudgetForecastCard: View {
     @EnvironmentObject var settings: SettingsStore
     let report: CombinedUsageReport
@@ -785,18 +794,13 @@ struct BudgetForecastCard: View {
 
 // MARK: - Phase 3: single-provider budget card (provider tab)
 
-/// One provider's own monthly budget vs. spend, mounted directly on that
-/// provider's tab (Claude/Codex/Grok popover body) — independent of the
-/// combined `BudgetForecastCard` above, which only ever shows on the All
-/// tab. MTD/forecast uses ONLY this provider's own daily USD
-/// (`MonthlyForecast.build(source:)`), never a combined total. The call site
-/// gates mounting on `budgetUSD > 0` (no card when that provider's budget is
-/// unset); this view never claims "on track" from an implicit zero — a
-/// provider whose confidence classifies as `.unavailable` (no landed cost
-/// data — disabled or never scanned) renders a "no cost data" row instead of
-/// a forecast. History-only confidence still calculates normally (same
-/// `SourceConfidenceState` used by the All-tab badge row, so the UX stays
-/// consistent with the existing Data Confidence Pass).
+/// One provider's own weekly budget vs. spend, mounted on that provider's
+/// tab (Claude/Codex/Grok). Same visual design as the All-tab
+/// `BudgetForecastCard` (title + status, hero $spent/$budget, projection,
+/// progress bar, remaining · days left). WTD/forecast uses ONLY this
+/// provider's own daily USD. Hidden when `budgetUSD` is unset at the call
+/// site; `.unavailable` confidence shows a no-data row instead of a fake
+/// on-track claim.
 struct ProviderBudgetCard: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -816,52 +820,86 @@ struct ProviderBudgetCard: View {
     private var state: SourceConfidenceState { confidence.map(SourceConfidenceState.classify) ?? .unavailable }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.t("budget.title", language))
-                .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
-            row
+        VStack(alignment: .leading, spacing: 8) {
+            if state == .unavailable {
+                Text(L10n.t("budget.title", language))
+                    .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
+                HStack(spacing: 8) {
+                    ProviderLogoMark(id: providerId, tint: color)
+                        .frame(width: 12, height: 12)
+                        .accessibilityHidden(true)
+                    Text(providerName)
+                        .font(.plexMono(11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.primary)
+                    Text(L10n.t("budget.perProvider.noData", language))
+                        .font(.plexMono(10, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.disabled)
+                    Spacer(minLength: 0)
+                }
+            } else {
+                let forecast = MonthlyForecast.build(daily: daily, budgetUSD: budgetUSD, source: source)
+                if let status = forecast.status, let budget = forecast.budgetUSD {
+                    // Same layout language as All-tab BudgetForecastCard.
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(L10n.t("budget.title", language))
+                            .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
+                        Spacer(minLength: 8)
+                        Text(statusLabel(status))
+                            .plexEyebrow(size: 9, color: statusColor(status), tracking: 0.4)
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(AllUsageFormat.usd(forecast.monthToDateUSD))
+                                .font(.plexMono(24, weight: .bold))
+                                .foregroundStyle(VocabbyTheme.primary)
+                            Text("/ \(AllUsageFormat.usd(budget))")
+                                .font(.plexMono(14, weight: .medium))
+                                .foregroundStyle(VocabbyTheme.tertiary)
+                        }
+                        Spacer(minLength: 8)
+                        Text(L10n.f("budget.projectedAmount", language,
+                                    AllUsageFormat.usd(forecast.projectedTotalUSD)))
+                            .font(.plexMono(12, weight: .semibold))
+                            .foregroundStyle(statusColor(status))
+                            .multilineTextAlignment(.trailing)
+                    }
+                    progressBar(forecast: forecast, status: status)
+                    Text(remainingText(forecast: forecast, budgetUSD: budget))
+                        .font(.plexMono(10, weight: .medium))
+                        .foregroundStyle(statusColor(status).opacity(0.9))
+                        .textCase(.uppercase)
+                        .tracking(0.3)
+                }
+            }
         }
         .popoverContentInset()
         .padding(.vertical, 16)
         .popoverHairlineTop(VocabbyTheme.inkRule)
-    }
-
-    @ViewBuilder
-    private var row: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            ProviderLogoMark(id: providerId, tint: color)
-                .frame(width: 12, height: 12)
-                .accessibilityHidden(true)
-            Text(providerName)
-                .font(.plexMono(11, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
-                .frame(width: 50, alignment: .leading)
-            if state == .unavailable {
-                Text(L10n.t("budget.perProvider.noData", language))
-                    .font(.plexMono(10, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.disabled)
-                Spacer(minLength: 8)
-            } else {
-                let forecast = MonthlyForecast.build(daily: daily, budgetUSD: budgetUSD, source: source)
-                if let status = forecast.status {
-                    Text(AllUsageFormat.usd(forecast.monthToDateUSD))
-                        .font(.plexMono(11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                    Text("/ \(AllUsageFormat.usd(budgetUSD))")
-                        .font(.plexMono(10, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                    Spacer(minLength: 8)
-                    Text(remainingOrOverText(forecast: forecast))
-                        .font(.plexMono(9, weight: .semibold))
-                        .foregroundStyle(statusColor(status))
-                        .tracking(0.2)
-                        .multilineTextAlignment(.trailing)
-                }
-            }
-        }
-        .lineLimit(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText())
+    }
+
+    private func progressBar(forecast: MonthlyForecast, status: MonthlyForecastStatus) -> some View {
+        let fraction = min(1, max(0, forecast.progressFraction ?? 0))
+        return ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(VocabbyTheme.track)
+                .frame(height: 5)
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(statusColor(status))
+                    .frame(width: geo.size.width * fraction, height: 5)
+            }
+            .frame(height: 5)
+        }
+    }
+
+    private func statusLabel(_ status: MonthlyForecastStatus) -> String {
+        switch status {
+        case .onTrack: L10n.t("budget.onTrack", language)
+        case .forecastOver: L10n.t("budget.forecastOver", language)
+        case .alreadyOver: L10n.t("budget.alreadyOver", language)
+        }
     }
 
     private func statusColor(_ status: MonthlyForecastStatus) -> Color {
@@ -872,21 +910,14 @@ struct ProviderBudgetCard: View {
         }
     }
 
-    /// "dự phóng $X · ON TRACK" style compact trailing text — forecast
-    /// amount plus the short status tag, both tone-colored.
-    private func remainingOrOverText(forecast: MonthlyForecast) -> String {
-        guard let status = forecast.status else { return "" }
-        let statusTag: String
-        switch status {
-        case .onTrack: statusTag = L10n.t("budget.onTrack", language)
-        case .forecastOver: statusTag = L10n.t("budget.forecastOver", language)
-        case .alreadyOver: statusTag = L10n.t("budget.alreadyOver", language)
-        }
+    private func remainingText(forecast: MonthlyForecast, budgetUSD: Double) -> String {
         let remaining = forecast.remainingBudgetUSD ?? (budgetUSD - forecast.monthToDateUSD)
-        let amountTag = remaining >= 0
-            ? L10n.f("budget.remaining", language, AllUsageFormat.usd(remaining))
-            : L10n.f("budget.overBy", language, AllUsageFormat.usd(-remaining))
-        return "\(amountTag) · \(statusTag)"
+        let daysLeft = forecast.daysRemainingInMonth
+        if remaining >= 0 {
+            return L10n.f("budget.remainingWithDays", language,
+                          AllUsageFormat.usd(remaining), daysLeft)
+        }
+        return L10n.f("budget.overBy", language, AllUsageFormat.usd(-remaining))
     }
 
     private func accessibilityText() -> String {

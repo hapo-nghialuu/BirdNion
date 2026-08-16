@@ -256,18 +256,20 @@ export function digestWindowStats(
   };
 }
 
-// --- Budget & monthly forecast (Phase 2) ------------------------------------
+// --- Budget & weekly forecast (Phase 2) -------------------------------------
 
-/** `already-over`: month-to-date spend already exceeds the budget.
+/** `already-over`: week-to-date spend already exceeds the budget.
  * `forecast-over`: still under budget so far, but the linear projection
- * would exceed it by month end. `on-track`: neither. */
+ * would exceed it by week end. `on-track`: neither. */
 export type BudgetStatus = "on-track" | "forecast-over" | "already-over";
 
 export type MonthlyForecast = {
   budgetUsd: number;
+  /** Spend from start of the current local calendar week through today. */
   monthToDateUsd: number;
-  /** 1-based day of month "as of", inclusive of today. */
+  /** 1-based day of week "as of", inclusive of today (1…7). */
   daysElapsed: number;
+  /** Always 7 for a calendar week. */
   daysInMonth: number;
   /** Linear projection: `monthToDateUsd / daysElapsed * daysInMonth`. */
   projectedUsd: number;
@@ -295,21 +297,30 @@ function monthlyForecastDayUsd(d: CombinedDay, source: MonthlyForecastSource): n
   }
 }
 
-/** Pure month-to-date + linear-projection forecast for the All-tab budget
- * card. Filters `daily` to the CURRENT local calendar month only (not a
- * rolling 30-day window), through today (a same-month bucket dated AFTER
- * today — clock skew, a mocked `now` in tests — is excluded so "month to
- * date" never counts a day that hasn't happened yet), then projects a
- * full-month total assuming the same daily average holds for the rest of
- * the month. `now` is injectable for deterministic testing.
+/** Local calendar-week start (Sunday, matching JS `Date#getDay()` = 0). */
+function startOfLocalWeek(now: Date): Date {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+function ymdLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Pure week-to-date + linear-projection forecast for budget cards.
+ * Filters `daily` to the CURRENT local calendar week only (Sun–Sat, not a
+ * rolling 7-day window), through today, then projects a full-week total
+ * assuming the same daily average holds for the rest of the week. `now` is
+ * injectable for deterministic testing.
  *
  * `budgetUsd` must be a finite, positive number — blank/NaN/zero/negative
- * all return `null` so the caller hides the card entirely (feature off),
- * matching `getMonthlyBudgetUsd`'s own validation. Non-finite or negative
- * per-day `usd` (corrupt scan data) is ignored (counted as 0) rather than
- * poisoning the sum — `Math.max(0, NaN)` is `NaN`, not `0`. `source`
- * (default `"total"`) selects which field is summed/validated — each
- * source's validity is judged independently of the others'. */
+ * all return `null` so the caller hides the card entirely (feature off).
+ * Non-finite or negative per-day `usd` is ignored. `source` (default
+ * `"total"`) selects which field is summed. */
 export function monthlyForecast(
   daily: CombinedDay[],
   budgetUsd: number | null | undefined,
@@ -318,22 +329,23 @@ export function monthlyForecast(
 ): MonthlyForecast | null {
   if (budgetUsd == null || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
 
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const prefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
-  const todayKey = `${prefix}${String(now.getDate()).padStart(2, "0")}`;
+  const weekStart = startOfLocalWeek(now);
+  const todayKey = ymdLocal(now);
+  const weekStartKey = ymdLocal(weekStart);
   const monthToDateUsd = daily
-    .filter((d) => d.date.startsWith(prefix) && d.date <= todayKey)
+    .filter((d) => d.date >= weekStartKey && d.date <= todayKey)
     .reduce((sum, d) => {
       const v = monthlyForecastDayUsd(d, source);
       return sum + (Number.isFinite(v) && v > 0 ? v : 0);
     }, 0);
 
-  // `new Date(year, month + 1, 0)` is the last day of `month` — correctly
-  // resolves 28/29 (leap year) Feb, 30- vs 31-day months, and Dec → next
-  // year's Jan-0 rollover, all via the native calendar (no manual table).
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const daysElapsed = Math.min(Math.max(now.getDate(), 1), daysInMonth);
+  const daysInMonth = 7;
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const dayOffset = Math.floor(
+    (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - weekStart.getTime())
+      / msPerDay,
+  );
+  const daysElapsed = Math.min(Math.max(dayOffset + 1, 1), daysInMonth);
   const projectedUsd = (monthToDateUsd / daysElapsed) * daysInMonth;
 
   const status: BudgetStatus =
