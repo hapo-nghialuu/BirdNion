@@ -168,9 +168,25 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
 fi
 
 BUILT_APP="$REPO_ROOT/build/DerivedData/Build/Products/Release/BirdNion.app"
-if [[ ! -d "$BUILT_APP" ]]; then
-  BUILT_APP=$(find ~/Library/Developer/Xcode/DerivedData \
-                 -name "BirdNion.app" -path "*Release*" -type d 2>/dev/null | head -1)
+if [[ -d "$BUILT_APP" ]]; then
+  BUILT_VERSION=$(plutil -extract CFBundleShortVersionString raw \
+    "$BUILT_APP/Contents/Info.plist" 2>/dev/null || true)
+  if [[ "$BUILT_VERSION" != "$VERSION" ]]; then
+    BUILT_APP=""
+  fi
+else
+  BUILT_APP=""
+fi
+if [[ -z "$BUILT_APP" ]]; then
+  while IFS= read -r candidate; do
+    candidate_version=$(plutil -extract CFBundleShortVersionString raw \
+      "$candidate/Contents/Info.plist" 2>/dev/null || true)
+    if [[ "$candidate_version" == "$VERSION" ]]; then
+      BUILT_APP="$candidate"
+      break
+    fi
+  done < <(find ~/Library/Developer/Xcode/DerivedData \
+    -name "BirdNion.app" -path "*Release*" -type d 2>/dev/null)
 fi
 if [[ -z "$BUILT_APP" ]] || [[ ! -d "$BUILT_APP" ]]; then
   echo "Build output not found. Run without --skip-build." >&2
