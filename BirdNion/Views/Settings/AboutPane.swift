@@ -5,6 +5,8 @@ import SwiftUI
 /// command, and copyright. Layout follows the remake mockup; UpdateChecker
 /// behaviour is unchanged.
 struct AboutPane: View {
+    static let brewUpgradeCommand = "brew update && brew upgrade birdnion"
+
     @EnvironmentObject var settings: SettingsStore
     @ObservedObject private var checker = UpdateChecker.shared
     @State private var iconHover = false
@@ -237,15 +239,14 @@ struct AboutPane: View {
             .accessibilityHidden(true)
     }
 
-    /// Opens Terminal with `brew update && brew upgrade herdr`, waits until
+    /// Opens Terminal with `brew update && brew upgrade birdnion`, waits until
     /// Terminal has been handed the script, then quits BirdNion so the upgrade
     /// is not blocked by a running app. macOS-only path (About pane).
     private func runBrewUpgradeAndQuit() {
-        let upgradeCommand = "brew update && brew upgrade herdr"
         let script = """
         tell application "Terminal"
             activate
-            do script "\(upgradeCommand)"
+            do script "\(Self.brewUpgradeCommand)"
         end tell
         """
         let process = Process()

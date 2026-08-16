@@ -4,6 +4,10 @@ import XCTest
 /// Pure-logic tests for the GitHub-releases update checker and the provider
 /// storage byte formatting.
 final class UpdateCheckerTests: XCTestCase {
+    func testAboutPaneUsesBirdNionHomebrewUpgradeCommand() {
+        XCTAssertEqual(AboutPane.brewUpgradeCommand, "brew update && brew upgrade birdnion")
+    }
+
     // MARK: - SemVer
 
     func testIsNewerBasicOrdering() {
