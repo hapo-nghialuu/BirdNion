@@ -1113,14 +1113,14 @@ final class NewProviderTests: XCTestCase {
         XCTAssertGreaterThan(image.size.width, image.size.height)
     }
 
-    func testSelectedProviderLogosAreTenPercentLarger() {
+    func testProviderLogoPointSizeUsesProviderSpecificScale() {
         XCTAssertEqual(
             MenuBarIconRenderer.providerLogoPointSize(for: "freemodel"),
             19.8,
             accuracy: 0.001)
         XCTAssertEqual(
             MenuBarIconRenderer.providerLogoPointSize(for: "claude"),
-            19.8,
+            20.7,
             accuracy: 0.001)
         XCTAssertEqual(
             MenuBarIconRenderer.providerLogoPointSize(for: "codex"),
