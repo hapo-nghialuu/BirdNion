@@ -152,6 +152,11 @@ hoặc build bằng lệnh trên.
 
 ### Release flow
 
+Trước khi bump version hoặc publish bất cứ gì, `release.sh` chạy một **verification
+gate** (macOS `xcodebuild test`, Linux `npm run build`, Linux `cargo test`) và dừng
+lại nếu bất kỳ bước nào fail. Gate này bỏ qua khi chạy với `--skip-build` hoặc
+`--dry-run`.
+
 ```
 [Local]                    [GitHub: hapo-nghialuu/BirdNion]
 ─────────                   ────────────────────────────────

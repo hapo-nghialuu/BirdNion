@@ -110,6 +110,12 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 - [x] [macOS] Quick switch custom Claude/Codex profile từ popover, kèm source/login health và activation fail-closed nếu profile bị sửa/xóa giữa `await`
 - [x] [Linux] Codex account quick switch hiển thị last-good quota + health snapshot thụ động, không thêm polling
 - [x] [both] First-provider onboarding Claude/Codex/Grok: phát hiện nguồn an toàn → bật và lưu → self-test thật → quota live; có Retry/Fix trong Settings và popover — 2026-08-15
+- [x] [both] Reliability + Error UX hardening (2026-08-16): settings.json fail-closed (từ chối ghi khi file hiện hữu malformed/unreadable) + lossless save (giữ unknown top-level và per-provider keys) trên `BirdNionConfigStore` (macOS) và `config.rs` (Linux)
+- [x] [both] Provider fetch dùng hard deadline chung (200s, `ProviderFetchDeadline`/`FETCH_DEADLINE`) bọc ngoài cả refresh loop và self-test, để một provider treo không giữ app/refresh vô hạn
+- [x] [both] Sửa last-good policy: chỉ giữ quota cũ khi lỗi transient thật (network/timeout, rate-limit, 5xx thật) — cookie/credential/not-configured/schema khác giờ thay bằng lỗi mới thay vì bị che
+- [x] [both] Thêm `notConfigured` tách khỏi token sai trong classifier; popover Retry hiện cho mọi provider lỗi (không chỉ Claude/Codex/Grok), Fix chỉ hiện khi lỗi thật sự sửa được từ Settings (not-configured/credential/cookie)
+- [x] [macOS] Chuẩn hóa macOS minimum 14.0 — `Info.plist` (`LSMinimumSystemVersion`) trước đó lệch còn 13.0 so với `MACOSX_DEPLOYMENT_TARGET`/docs
+- [x] Release gate: `Scripts/release.sh` chạy macOS build+test, Linux TS build (`npm run build`), và Rust tests trước khi bump version hoặc publish
 - [ ] [Linux] Custom Claude/Codex profile quick switch trong popover — deferred/accepted gap cho tới khi UX macOS ổn định
 - [ ] [both] Budget **per-provider** — chưa làm; budget tổng hiện tại không thay thế giới hạn riêng từng provider
 - [ ] [both] Export CSV/JSON chi phí theo ngày/model — deferred, ngoài scope đợt 2026-08-15
@@ -141,6 +147,7 @@ Chọn một hướng khi Phase 7–8 xong:
 
 | Date | Milestone |
 |---|---|
+| 2026-08-16 | Reliability + Error UX hardening: config fail-closed/lossless (macOS + Linux), provider fetch hard deadline, sửa last-good chỉ giữ lỗi transient thật, thêm `notConfigured` + Retry/Fix đúng ngữ cảnh, macOS minimum 14.0, release verification gate trong `Scripts/release.sh` |
 | 2026-08-15 | Phase 8 in progress: thêm first-provider onboarding Claude/Codex/Grok trên macOS/Linux; Data Confidence, total monthly budget + forecast, profile quick switch/health, adaptive refresh và weekly digest đã có; CSV/JSON, per-provider budget và Windows vẫn deferred |
 | 2026-07-31 | 4 tính năng CodexBar: menu-bar metric resolver, bounded Codex cost scan (120 ngày, resumable), xAI Platform provider, Claude prepaid credits + Max multiplier |
 | 2026-07-07 | v0.8.6 — Settings parity CodexBar (hotkey, update check, storage footprint…) |
