@@ -112,7 +112,8 @@ if [[ "$SKIP_BUILD" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
 
   echo "--> macOS build + test (Debug)"
   xcodebuild test -project "$REPO_ROOT/BirdNion.xcodeproj" -scheme BirdNion \
-    -configuration Debug -destination 'platform=macOS'
+    -configuration Debug -destination 'platform=macOS,arch=arm64' \
+    -parallel-testing-enabled NO
 
   echo "--> Linux: npm ci + build (tsc + vite)"
   (cd "$REPO_ROOT/linux" && npm ci && npm run build)
