@@ -59,7 +59,7 @@ extension ProvidersPane {
                                          ? SettingsTheme.accent : SettingsTheme.tertiary)
                         .onTapGesture {
                             claudeAccounts = ClaudeTokenAccountStore.setActive(id: acc.id)
-                            Task { await quota.refresh() }
+                            quota.refreshFromSettings("claude")
                         }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(acc.displayName)
@@ -72,7 +72,7 @@ extension ProvidersPane {
                     Spacer()
                     Button {
                         claudeAccounts = ClaudeTokenAccountStore.remove(id: acc.id)
-                        Task { await quota.refresh() }
+                        quota.refreshFromSettings("claude")
                     } label: {
                         Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                     }
@@ -100,7 +100,7 @@ extension ProvidersPane {
                     claudeAccounts = ClaudeTokenAccountStore.add(ClaudeTokenAccount(
                         label: newAccountLabel, token: token, kind: newAccountKind))
                     newAccountToken = ""; newAccountLabel = ""
-                    Task { await quota.refresh() }
+                    quota.refreshFromSettings("claude")
                 }
                 .buttonStyle(.instrumentInline)
                 .pointingHandCursor()
@@ -147,7 +147,7 @@ extension ProvidersPane {
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
                     get: { settings.kiloUsageDataSource },
-                    set: { settings.kiloUsageDataSource = $0; Task { await quota.refresh() } }
+                    set: { settings.kiloUsageDataSource = $0; quota.refreshFromSettings("kilo") }
                 )) {
                     ForEach(KiloUsageSource.allCases) { src in
                         Text(kiloUsageSourceName(src)).tag(src.rawValue)
@@ -199,7 +199,7 @@ extension ProvidersPane {
                     set: { newID in
                         settings.kiloOrgID = newID
                         settings.kiloOrgName = kiloKnownOrgs.first(where: { $0.id == newID })?.name ?? ""
-                        Task { await quota.refresh() }
+                        quota.refreshFromSettings("kilo")
                     }
                 )) {
                     Text(vi ? "Cá nhân" : "Personal").tag("")
@@ -288,7 +288,7 @@ extension ProvidersPane {
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
                     get: { settings.antigravityUsageSource },
-                    set: { settings.antigravityUsageSource = $0; Task { await quota.refresh() } }
+                    set: { settings.antigravityUsageSource = $0; quota.refreshFromSettings("antigravity") }
                 )) {
                     ForEach(AntigravityUsageSource.allCases) { src in
                         Text(antigravityUsageSourceName(src)).tag(src.rawValue)
@@ -356,7 +356,7 @@ extension ProvidersPane {
                                 AntigravityOAuthStore.setActive(in: &s, label: acc.label)
                                 try? AntigravityOAuthStore.save(s)
                                 antigravityStore = s
-                                Task { await quota.refresh() }
+                                quota.refreshFromSettings("antigravity")
                             }
                             .buttonStyle(.plain)
                             .pointingHandCursor()
@@ -368,7 +368,7 @@ extension ProvidersPane {
                             AntigravityOAuthStore.removeAccount(from: &s, label: acc.label)
                             try? AntigravityOAuthStore.save(s)
                             antigravityStore = s
-                            Task { await quota.refresh() }
+                            quota.refreshFromSettings("antigravity")
                         } label: {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                         }
@@ -438,7 +438,7 @@ extension ProvidersPane {
                                                                   refreshToken: refreshToken, email: email)
                                 try? AntigravityOAuthStore.save(store)
                                 antigravityStore = store
-                                await quota.refresh()
+                                quota.refreshFromSettings("antigravity")
                             } catch {
                                 antigravityLoginError = error.localizedDescription
                             }
@@ -679,6 +679,6 @@ extension ProvidersPane {
         antigravityStore = s
         antigravityNewLabel = ""
         antigravityNewJSON = ""
-        Task { await quota.refresh() }
+        quota.refreshFromSettings("antigravity")
     }
 }

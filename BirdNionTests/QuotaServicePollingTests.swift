@@ -1177,3 +1177,144 @@ private final class NonCooperativeHangingProvider: QuotaProvider {
                               lastUpdated: Date())
     }
 }
+
+// MARK: - User-action interaction + failure-surface gate
+
+final class ProviderUserActionInteractionTests: XCTestCase {
+    /// `fetchWithDeadline` alone inherits the task-local default `.background`.
+    /// Settings self-test must not: Claude only reads its Keychain login when
+    /// the interaction is `.userInitiated`, so a background probe reported
+    /// "not configured" for a provider that was actually signed in.
+    func testFetchAsUserActionRunsUnderUserInitiatedInteraction() async {
+        let provider = InteractionRecordingProvider(id: "claude", displayName: "Claude")
+
+        _ = await provider.fetchAsUserAction()
+
+        XCTAssertEqual(provider.observedInteraction, .userInitiated)
+    }
+
+    /// Guards the regression itself: the bare deadline fetch stays `.background`
+    /// so only the explicit user-action seam relaxes provider gates.
+    func testFetchWithDeadlineStaysBackgroundByDefault() async {
+        let provider = InteractionRecordingProvider(id: "claude", displayName: "Claude")
+
+        _ = await provider.fetchWithDeadline()
+
+        XCTAssertEqual(provider.observedInteraction, .background)
+    }
+}
+
+final class NotConfiguredSurfaceGateTests: XCTestCase {
+    /// A background poll cannot read Claude's macOS Keychain login under the
+    /// default `.onlyOnUserAction` prompt policy, so it reports
+    /// "not configured" for a provider that is actually signed in. That first
+    /// failure must keep the last-good numbers (behind a stale-data warning)
+    /// instead of replacing them with an error card.
+    @MainActor
+    func testFirstNotConfiguredFailureKeepsPreviousGoodStatus() async {
+        let provider = GoodThenErrorMessageProvider(
+            id: "claude", displayName: "Claude",
+            secondError: "Claude: Chưa đăng nhập Claude — đăng nhập bằng Claude Code")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+        XCTAssertEqual(svc.statuses.first?.windows.first?.remainingPct, 80)
+
+        await svc.refresh(forceProviderIDs: ["claude"])
+
+        let status = svc.statuses.first
+        XCTAssertNil(status?.error, "first not-configured failure must not replace good data")
+        XCTAssertEqual(status?.windows.first?.remainingPct, 80)
+        XCTAssertEqual(svc.staleWarning(for: "claude")?.kind, .notConfigured)
+    }
+
+    /// One free pass only — a provider that really is unconfigured still
+    /// surfaces on the next poll rather than showing stale numbers forever.
+    @MainActor
+    func testSecondNotConfiguredFailureSurfacesError() async {
+        let provider = GoodThenErrorMessageProvider(
+            id: "claude", displayName: "Claude",
+            secondError: "Claude: Chưa đăng nhập Claude — đăng nhập bằng Claude Code")
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+        await svc.refresh(forceProviderIDs: ["claude"])
+        await svc.refresh(forceProviderIDs: ["claude"])
+
+        let status = svc.statuses.first
+        XCTAssertNotNil(status?.error)
+        XCTAssertTrue(status?.windows.isEmpty ?? false)
+        XCTAssertNil(svc.staleWarning(for: "claude"))
+    }
+
+    /// Nothing to protect on a cold start — surface immediately.
+    @MainActor
+    func testNotConfiguredWithoutPriorGoodSurfacesImmediately() async {
+        let provider = StubProvider(
+            id: "claude", displayName: "Claude",
+            status: ProviderStatus(id: "claude", displayName: "Claude", windows: [],
+                                   lastUpdated: Date(), error: "Chưa đăng nhập Claude"))
+        let svc = QuotaService(providers: [provider], interval: 0.1)
+
+        await svc.refresh()
+
+        XCTAssertNotNil(svc.statuses.first?.error)
+        XCTAssertNil(svc.staleWarning(for: "claude"))
+    }
+}
+
+final class ConsecutiveFailureGateTests: XCTestCase {
+    func testFirstFailureWithPriorDataIsSwallowed() {
+        var gate = ConsecutiveFailureGate()
+        XCTAssertFalse(gate.shouldSurfaceError(onFailureWithPriorData: true))
+        XCTAssertEqual(gate.streak, 1)
+    }
+
+    func testSecondConsecutiveFailureSurfaces() {
+        var gate = ConsecutiveFailureGate()
+        _ = gate.shouldSurfaceError(onFailureWithPriorData: true)
+        XCTAssertTrue(gate.shouldSurfaceError(onFailureWithPriorData: true))
+    }
+
+    /// No prior data on screen means there is nothing to protect — the very
+    /// first failure must surface so the user is not left staring at a blank card.
+    func testFailureWithoutPriorDataSurfacesImmediately() {
+        var gate = ConsecutiveFailureGate()
+        XCTAssertTrue(gate.shouldSurfaceError(onFailureWithPriorData: false))
+    }
+
+    func testSuccessResetsStreak() {
+        var gate = ConsecutiveFailureGate()
+        _ = gate.shouldSurfaceError(onFailureWithPriorData: true)
+        gate.recordSuccess()
+        XCTAssertEqual(gate.streak, 0)
+        XCTAssertFalse(gate.shouldSurfaceError(onFailureWithPriorData: true))
+    }
+
+    func testResetClearsStreak() {
+        var gate = ConsecutiveFailureGate()
+        _ = gate.shouldSurfaceError(onFailureWithPriorData: true)
+        _ = gate.shouldSurfaceError(onFailureWithPriorData: true)
+        gate.reset()
+        XCTAssertEqual(gate.streak, 0)
+    }
+}
+
+/// Records the interaction the fetch actually ran under.
+private final class InteractionRecordingProvider: QuotaProvider, @unchecked Sendable {
+    let id: String
+    let displayName: String
+    private(set) var observedInteraction: ProviderInteraction?
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        observedInteraction = ProviderInteractionContext.current
+        return ProviderStatus(id: id, displayName: displayName,
+                              windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+                              lastUpdated: Date())
+    }
+}
