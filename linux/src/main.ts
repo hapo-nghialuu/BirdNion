@@ -29,13 +29,13 @@ import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
-  isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
+  getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
   MONTHLY_BUDGET_CHANGED_EVENT, getProviderBudgetUsd, PROVIDER_BUDGET_STORAGE_KEYS,
-  PROVIDER_BUDGET_CHANGED_EVENT,
+  PROVIDER_BUDGET_CHANGED_EVENT, TRAY_DISPLAY_CHANGED_EVENT,
 } from "./settings-about";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
-import { logoMark, logoUrl, providerTintCss } from "./logos";
+import { logoMark, providerTintCss } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
 import { initTheme, setAppearance, resolveTheme } from "./theme";
@@ -802,141 +802,8 @@ async function classifyAndNotifyFailure(s: ProviderStatus) {
   }).catch(() => {});
 }
 
-/**
- * One rotating tray frame — macOS `MenuBarIconRenderer.Frame.provider` parity.
- * Visual: **`91%` then provider logo** (composite PNG; title left empty so
- * tray-icon's image-left layout cannot reverse the order).
- */
-type TrayFrame = {
-  providerId: string;
-  /** Percent text only, e.g. "91%" or "93%  82%" (macOS percentTitle). */
-  percentText: string;
-  tooltipPart: string;
-  /** Composite PNG: percent text + provider logo (white-tinted). */
-  iconPng: number[] | null;
-};
-
-/** How long each provider frame stays on the tray before advancing (macOS = 5s). */
-const TRAY_FRAME_MS = 5_000;
-let trayFrames: TrayFrame[] = [];
-let trayFrameIndex = 0;
-let trayRotationTimer: ReturnType<typeof setInterval> | null = null;
-/** Cache composite icons: `${providerId}|${percentText}` → PNG bytes. */
-const trayIconCache = new Map<string, number[]>();
-
 function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
-}
-
-/** macOS `MenuBarIconRenderer.percentTitle` — digits only, no provider name. */
-function trayPercentText(s: ProviderStatus): string {
-  return resolveTrayMetric(s, null)
-    .map((p: number) => `${clampPct(p)}%`)
-    .join("  ");
-}
-
-/** Pure resolver for tray metric preference.
- * Mirrors macOS `MenuBarIconRenderer.resolveTrayMetric`.
- * Does NOT mutate `s.windows`; operates on copied array.
- * Antigravity and FreeModel keep their special semantics. */
-function resolveTrayMetric(s: ProviderStatus, metricPref: string | null | undefined): number[] {
-  if (s.id === "antigravity") {
-    const labels = new Set([
-      "Gemini 5-hour",
-      "Gemini weekly",
-      "Claude/GPT 5-hour",
-      "Claude/GPT weekly",
-    ]);
-    const semantic = s.windows.filter((w) => labels.has(w.label));
-    const representative = (candidates: typeof semantic) => {
-      let selected = candidates[0];
-      for (const candidate of candidates.slice(1)) {
-        if (!selected || candidate.usedPct > selected.usedPct) {
-          selected = candidate;
-          continue;
-        }
-        if (candidate.usedPct === selected.usedPct) {
-          const candidateFiveHour = candidate.label.endsWith("5-hour");
-          const selectedFiveHour = selected.label.endsWith("5-hour");
-          if (candidateFiveHour && !selectedFiveHour) selected = candidate;
-        }
-      }
-      return selected;
-    };
-    const gemini = semantic.filter((w) => w.label.startsWith("Gemini "));
-    const claudeGpt = semantic.filter((w) => w.label.startsWith("Claude/GPT "));
-    const selected = representative(gemini) ?? representative(claudeGpt);
-    return selected ? [clampPct(selected.remainingPct)] : [];
-  }
-  if (s.id === "freemodel") {
-    const balance = s.windows.find((w) => w.label === "Số dư");
-    const fiveH = s.windows.find((w) => w.label === "5 giờ");
-    if (fiveH && fiveH.remainingPct <= 0 && balance && balance.remainingPct > 0) {
-      return [balance.remainingPct];
-    }
-    const out = s.windows.filter((w) => w.label !== "Số dư").map((w) => w.remainingPct);
-    if (out.length === 0 && balance) return [balance.remainingPct];
-    return out;
-  }
-
-  // Generic providers: resolve metric preference
-  // If no preference or "automatic", use default usable-first logic
-  if (!metricPref || metricPref === "automatic") {
-    const primaryWindows = s.windows.filter(w => w.label !== "Số dư" && !/bonus|balance/i.test(w.label));
-    const candidates = primaryWindows.length > 0 ? primaryWindows : s.windows;
-    if (candidates.length === 0) return [];
-    // Copy array before sorting to avoid mutation
-    const sorted = [...candidates].sort((a, b) => {
-      const aExhausted = a.remainingPct <= 0;
-      const bExhausted = b.remainingPct <= 0;
-      if (aExhausted !== bExhausted) return aExhausted ? -1 : 1;
-      return (b.usedPct ?? 0) - (a.usedPct ?? 0);
-    });
-    return [clampPct(sorted[0].remainingPct)];
-  }
-
-  // Apply metric preference: primary, secondary, primaryAndSecondary, tertiary, extraUsage, average, monthlyPlan
-  const windows = s.windows.filter(w => w.label !== "Số dư" && !/bonus|balance/i.test(w.label));
-  if (windows.length === 0) return [];
-
-  switch (metricPref) {
-    case "primary":
-      return [clampPct(windows[0].remainingPct)];
-    case "secondary":
-      return windows.length > 1 ? [clampPct(windows[1].remainingPct)] : [clampPct(windows[0].remainingPct)];
-    case "primaryAndSecondary":
-      if (windows.length > 1) {
-        return [clampPct(windows[0].remainingPct), clampPct(windows[1].remainingPct)];
-      }
-      return [clampPct(windows[0].remainingPct)];
-    case "tertiary":
-      return windows.length > 2 ? [clampPct(windows[2].remainingPct)] : [clampPct(windows[0].remainingPct)];
-    case "extraUsage": {
-      const extra = windows.find(w => /extra/i.test(w.label));
-      return extra ? [clampPct(extra.remainingPct)] : [clampPct(windows[0].remainingPct)];
-    }
-    case "average": {
-      const avg = windows.reduce((sum, w) => sum + w.remainingPct, 0) / windows.length;
-      return [clampPct(avg)];
-    }
-    case "monthlyPlan": {
-      const monthly = windows.find(w => /monthly|plan/i.test(w.label));
-      return monthly ? [clampPct(monthly.remainingPct)] : [clampPct(windows[0].remainingPct)];
-    }
-    default:
-      // Unknown preference: fallback to automatic
-      const primaryWindows = s.windows.filter(w => w.label !== "Số dư" && !/bonus|balance/i.test(w.label));
-      const candidates = primaryWindows.length > 0 ? primaryWindows : s.windows;
-      if (candidates.length === 0) return [];
-      // Copy array before sorting
-      const sorted = [...candidates].sort((a, b) => {
-        const aExhausted = a.remainingPct <= 0;
-        const bExhausted = b.remainingPct <= 0;
-        if (aExhausted !== bExhausted) return aExhausted ? -1 : 1;
-        return (b.usedPct ?? 0) - (a.usedPct ?? 0);
-      });
-      return [clampPct(sorted[0].remainingPct)];
-  }
 }
 
 /** Active = any window still consuming quota (remaining under 100 or used over 0).
@@ -945,143 +812,26 @@ function isActiveTrayProvider(s: ProviderStatus): boolean {
   return s.windows.some((w) => w.remainingPct < 100 || (w.usedPct ?? 0) > 0);
 }
 
-function loadTrayLogo(id: string): Promise<HTMLImageElement | null> {
-  const url = logoUrl(id);
-  if (!url) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.decoding = "async";
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = url;
-  });
-}
-
 /**
- * Paint `91%` + provider logo into one PNG (percent left, logo right).
+ * Tray image: always the BirdNion wordmark.
  *
- * Linux GNOME AppIndicator / StatusNotifier scales the tray image to the
- * **full panel height** (no fixed 18pt slot like macOS). Glyph size is
- * therefore a ratio of canvas height, not absolute px:
+ * Provider logos and quota percents used to be composited into a rotating
+ * bitmap here, but GNOME's AppIndicator keeps repainting whatever frame it
+ * last cached: turning "show percent" back off left a stale provider frame
+ * stuck on the panel. The quota numbers already live in the tooltip (and the
+ * popover), so the panel slot now stays a stable brand mark.
  *
- *   - GNOME top-bar text ≈ 36–42% of panel height (clock / locale chip).
- *   - v2 used 14/18 (78%) → huge. v3 used 12/22 (55%) → still oversized
- *     next to "vi" / network. v4 targets ≈ 38% with lighter weight.
- *
- * Never fall back to StatusNotifier `title` for the percent — the panel
- * paints that label at full system type size and it always looks too big.
+ * The `showPercentInTray` setting is deliberately left in Settings but no
+ * longer changes the icon; the per-provider quota list stays in the tooltip
+ * either way.
  */
-async function renderPercentProviderIcon(
-  providerId: string,
-  percentText: string,
-): Promise<number[] | null> {
-  // Size tag busts cache when we retune metrics.
-  const cacheKey = `v4|${providerId}|${percentText}`;
-  const cached = trayIconCache.get(cacheKey);
-  if (cached) return cached;
-
-  // Ratio template: text ~38% of canvas, logo ~46%, rest is breathing room
-  // so the panel scale-up doesn't make glyphs fill the whole tray slot.
-  const height = 32;
-  const fontPx = 12; // 12/32 = 37.5% of canvas height
-  const iconPx = 15; // 15/32 ≈ 47%
-  const gap = 3;
-  const padX = 2;
-  const dpr = Math.min(3, Math.max(2, Math.round(window.devicePixelRatio || 2)));
-  // Regular weight + UI sans (not mono 500): mono digits read heavier at the
-  // same px size and looked "to" next to GNOME indicators.
-  const font = `400 ${fontPx}px system-ui, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif`;
-
-  const measure = document.createElement("canvas").getContext("2d");
-  if (!measure) return null;
-  measure.font = font;
-  // ceil + 1px slack so anti-aliased edges aren't clipped after scale.
-  const textW = Math.ceil(measure.measureText(percentText).width) + 1;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.ceil((padX + textW + gap + iconPx + padX) * dpr));
-  canvas.height = Math.ceil(height * dpr);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.font = font;
-  ctx.fillStyle = "#ffffff";
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  // Optical center: alphabetic middle sits slightly high on sans faces.
-  ctx.fillText(percentText, padX, height / 2 + 0.75);
-
-  const logo = await loadTrayLogo(providerId);
-  if (logo) {
-    const ix = padX + textW + gap;
-    const iy = (height - iconPx) / 2;
-    // Offscreen: draw logo then white-tint alpha (macOS menu-bar logo tint).
-    const off = document.createElement("canvas");
-    off.width = Math.ceil(iconPx * dpr);
-    off.height = Math.ceil(iconPx * dpr);
-    const octx = off.getContext("2d");
-    if (octx) {
-      octx.imageSmoothingEnabled = true;
-      octx.imageSmoothingQuality = "high";
-      octx.drawImage(logo, 0, 0, off.width, off.height);
-      octx.globalCompositeOperation = "source-in";
-      octx.fillStyle = "#ffffff";
-      octx.fillRect(0, 0, off.width, off.height);
-      ctx.drawImage(off, ix, iy, iconPx, iconPx);
-    }
-  }
-
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob((b) => resolve(b), "image/png"));
-  if (!blob) return null;
-  const buf = new Uint8Array(await blob.arrayBuffer());
-  const bytes = Array.from(buf);
-  trayIconCache.set(cacheKey, bytes);
-  // Bound cache growth when percents churn.
-  if (trayIconCache.size > 64) {
-    const first = trayIconCache.keys().next().value;
-    if (first !== undefined) trayIconCache.delete(first);
-  }
-  return bytes;
-}
-
-/**
- * Tray frames: active first, then A→Z by displayName
- * (macOS `MenuBarIconRenderer.providerFrames` parity).
- *
- * Reads `menuBarMetric` from ProviderStatus if present, otherwise
- * falls back to settings lookup. Uses pure `resolveTrayMetric` resolver.
- */
-async function buildTrayFrames(statuses: ProviderStatus[], hidden: Set<string>): Promise<Omit<TrayFrame, "iconPng">[]> {
-  if (!isShowTrayPercentEnabled()) return [];
-
-  // Try to read metric from ProviderStatus first (if wired from Rust)
-  // Fall back to settings lookup only if needed
-  const settings = await invoke<Settings>("get_settings").catch(() => null);
-  const metricById = new Map<string, string | null>();
-  if (settings) {
-    for (const p of settings.providers) {
-      metricById.set(p.id, p.menuBarMetric ?? null);
-    }
-  }
-
-  return statuses
-    .filter((s) => !hidden.has(s.id) && !s.error && s.windows.length > 0
-      && (s.id !== "antigravity" || resolveTrayMetric(s, metricById.get(s.id)).length > 0))
+async function updateTrayTooltip(statuses: ProviderStatus[], hidden: Set<string>) {
+  const parts = statuses
+    .filter((s) => !hidden.has(s.id) && !s.error && s.windows.length > 0)
     .map((s) => {
-      const metric = metricById.get(s.id) ?? null;
-      const percents = resolveTrayMetric(s, metric);
-      const pctText = percents.length > 0
-        ? percents.map((p) => `${clampPct(p)}%`).join("  ")
-        : (lowestWindow(s) ? `${clampPct(lowestWindow(s)!.remainingPct)}%` : "");
-      // `.filter` above guarantees s.windows.length > 0, so lowestWindow
-      // always returns non-null here.
       const lowest = lowestWindow(s)!;
       return {
-        providerId: s.id,
-        percentText: pctText || trayPercentText(s),
-        tooltipPart: `${s.displayName} ${clampPct(lowest.remainingPct)}%`,
+        text: `${s.displayName} ${clampPct(lowest.remainingPct)}%`,
         active: isActiveTrayProvider(s),
         sortName: s.displayName,
       };
@@ -1090,69 +840,16 @@ async function buildTrayFrames(statuses: ProviderStatus[], hidden: Set<string>):
       if (a.active !== b.active) return a.active ? -1 : 1;
       return a.sortName.localeCompare(b.sortName, undefined, { sensitivity: "base" });
     })
-    .map(({ providerId, percentText, tooltipPart }) => ({
-      providerId,
-      percentText,
-      tooltipPart,
-    }));
-}
+    .map((p) => p.text);
 
-function applyTrayFrame() {
-  const tooltip = trayFrames.length
-    ? trayFrames.map((f) => f.tooltipPart).join(" · ")
-    : "BirdNion";
-  if (!trayFrames.length) {
-    // Bird / logo-only frame — restore default app icon, clear title.
-    void invoke("set_tray_status", {
-      tooltip,
-      title: null,
-      iconPng: null,
-    }).catch(() => {});
-    return;
-  }
-  const frame = trayFrames[trayFrameIndex % trayFrames.length]!;
-  // Never put the percent in StatusNotifier `title`: GNOME paints that label
-  // at full panel type size (the oversized "59%" next to the bird). Percent
-  // lives only inside the composite PNG; if paint failed, bird-only + tooltip.
-  void invoke("set_tray_status", {
+  const tooltip = parts.length > 0 ? parts.join(" \u00b7 ") : "BirdNion";
+  // `iconPng: null` keeps the bundled wordmark; `title` stays empty because the
+  // StatusNotifier label renders at full panel type size.
+  await invoke("set_tray_status", {
     tooltip,
     title: null,
-    iconPng: frame.iconPng,
+    iconPng: null,
   }).catch(() => {});
-}
-
-function startTrayRotation() {
-  if (trayRotationTimer != null) return;
-  trayRotationTimer = setInterval(() => {
-    if (trayFrames.length <= 1) return;
-    trayFrameIndex = (trayFrameIndex + 1) % trayFrames.length;
-    applyTrayFrame();
-  }, TRAY_FRAME_MS);
-}
-
-function stopTrayRotation() {
-  if (trayRotationTimer != null) {
-    clearInterval(trayRotationTimer);
-    trayRotationTimer = null;
-  }
-}
-
-/** Mirror the macOS menu-bar percent readout: rotating `%` + provider logo.
- * Providers with `showInTray === false` are skipped (`MenuBarVisibility`).
- * When Display → show-% is off, restore the default logo only. */
-async function updateTrayTooltip(statuses: ProviderStatus[], hidden: Set<string>) {
-  const built = await buildTrayFrames(statuses, hidden);
-  const withIcons: TrayFrame[] = await Promise.all(
-    built.map(async (f) => ({
-      ...f,
-      iconPng: await renderPercentProviderIcon(f.providerId, f.percentText),
-    })),
-  );
-  trayFrames = withIcons;
-  if (trayFrameIndex >= trayFrames.length) trayFrameIndex = 0;
-  applyTrayFrame();
-  if (trayFrames.length > 1) startTrayRotation();
-  else stopTrayRotation();
 }
 
 /** Data Confidence Pass: keep the previous `serviceStatus`/`serviceStatusLevel`
@@ -1532,6 +1229,12 @@ window.addEventListener("DOMContentLoaded", () => {
   // Settings webview → main: rebuild tab order (macOS providersDidChange).
   void listen(PROVIDERS_CHANGED_EVENT, () => {
     void rebuildProviderOrderFromSettings().catch(() => {});
+  });
+  // Settings webview → main: tray-percent toggled. Must be a Tauri event —
+  // Settings is a separate webview, so its `storage`/DOM events never arrive
+  // here, and the rotation timer would keep repainting the percent frame.
+  void listen(TRAY_DISPLAY_CHANGED_EVENT, () => {
+    onTrayDisplayPrefChanged();
   });
   load().catch((err) => {
     document.querySelector("#app")!.textContent = `${t("loadError")}: ${err}`;

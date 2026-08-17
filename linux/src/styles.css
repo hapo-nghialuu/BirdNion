@@ -3629,7 +3629,12 @@ body.settings-body-root {
 /* Selected chips stay icon-only (no expanded name). */
 .tab-pill.tab-icon.active .tab-pill-label { display: none; }
 .tab-pill:hover { border-color: var(--text); }
-.tab-pill.active {
+/* Selected chip is ink-filled, not accent-blue. The legacy rules above still
+ * carry `.tab-pill.tab-icon.active { background: var(--accent) }`, which is
+ * one class more specific than `.tab-pill.active` — match that specificity
+ * here so the icon chips follow the design's black fill too. */
+.tab-pill.active,
+.tab-pill.tab-icon.active {
   background: var(--text);
   border-color: var(--text);
   color: var(--bg);
@@ -3720,6 +3725,10 @@ body.settings-body-root {
 .quota-summary {
   display: flex;
   flex-direction: column;
+  /* Reset the legacy row-layout `align-items: center` above: as a column it
+   * shrink-wrapped every child, so the pct/meta row centred instead of
+   * spanning the card and pinning to both edges. */
+  align-items: stretch;
   gap: 0;
   margin-top: 16px;
   padding-top: 14px;
@@ -4492,6 +4501,18 @@ body.settings-body-root {
 }
 .cc-power-lg:hover:not(:disabled) { transform: scale(1.04); filter: brightness(1.05); }
 .cc-power-lg:active:not(:disabled) { transform: scale(0.96); }
+/* Attention badge — macOS ClaudeCodePowerButton draws a bare 16pt dot on a
+ * 116pt disc (~14%) sitting over the rim at 34% of the radius. The legacy
+ * rule used a fixed 10px dot with a thick white ring tucked 6px inside the
+ * disc, which read as a sticker rather than a status pip. */
+.cc-power-lg .cc-power-dot {
+  width: 8px;
+  height: 8px;
+  top: 5px;
+  right: 5px;
+  border: none;
+  box-shadow: 0 0 0 1.5px var(--card, #fff);
+}
 .ccp-field-row { padding: 12px 0; border-top: 1px solid var(--hairline); }
 .ccp-form-label { font-size: 13px; }
 .ccp-proxy-head { padding: 14px 0; border-top: 1px solid var(--hairline); }

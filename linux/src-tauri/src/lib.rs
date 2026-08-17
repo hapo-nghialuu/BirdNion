@@ -872,6 +872,41 @@ fn get_autostart(app: tauri::AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
 }
 
+/// Tray-slot wordmark: the light-on-dark "BN" mark. The app icon is the
+/// dark-ink variant made for light dock backgrounds, so reusing it here left
+/// the mark nearly invisible on the GNOME panel (dark by default).
+const TRAY_ICON_PNG: &[u8] = include_bytes!("../icons/tray.png");
+
+/// Default (no-percent) tray image. `None` when the bundled wordmark fails to
+/// decode, so callers can fall back to the app's own window icon.
+fn tray_default_icon() -> Option<Image<'static>> {
+    Image::from_bytes(TRAY_ICON_PNG).ok()
+}
+
+/// Fingerprint of the image last handed to the tray, so repeated polls that
+/// resolve to the same frame become no-ops.
+///
+/// `tray-icon`'s GTK backend writes every `set_icon` to a *new* temp PNG and
+/// deletes the previous one, so re-publishing an unchanged icon churned that
+/// file on every poll for no reason. The frontend now always passes the same
+/// (default) icon, which makes this skip the write entirely.
+static TRAY_ICON_FINGERPRINT: LazyLock<Mutex<Option<u64>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Cheap content hash — only used to detect "same frame as last time".
+fn tray_icon_fingerprint(icon_png: Option<&[u8]>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match icon_png {
+        // Discriminate the default-logo case from an (unlikely) empty payload.
+        None => 0u8.hash(&mut hasher),
+        Some(bytes) => {
+            1u8.hash(&mut hasher);
+            bytes.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 /// Tray status mirror of the macOS menu-bar percent readout.
 ///
 /// Visual contract (macOS NSStatusItem parity): **`91%` then provider logo**.
@@ -902,15 +937,41 @@ fn set_tray_status(
         // needed across tray-icon/ayatana versions — try both.
         let _ = tray.set_title(None::<&str>);
         let _ = tray.set_title(Some(""));
-        if let Some(bytes) = icon_png {
-            if let Ok(img) = Image::from_bytes(&bytes) {
-                let _ = tray.set_icon(Some(img));
-                // Colors (incl. white-tinted logos) are baked into the PNG.
-                let _ = tray.set_icon_as_template(false);
+
+        // Skip redundant repaints: `tray-icon` writes a fresh temp PNG (and
+        // deletes the old one) on every `set_icon`, so re-publishing the same
+        // frame each poll churned the file the panel is reading from.
+        let fingerprint = tray_icon_fingerprint(icon_png.as_deref());
+        let mut last = TRAY_ICON_FINGERPRINT.lock().unwrap();
+        if *last == Some(fingerprint) {
+            return;
+        }
+
+        let applied = match icon_png {
+            Some(bytes) => match Image::from_bytes(&bytes) {
+                Ok(img) => {
+                    let _ = tray.set_icon(Some(img));
+                    // Colors (incl. white-tinted logos) are baked into the PNG.
+                    let _ = tray.set_icon_as_template(false);
+                    true
+                }
+                Err(_) => false,
+            },
+            None => {
+                let fallback = tray_default_icon()
+                    .or_else(|| app.default_window_icon().cloned());
+                match fallback {
+                    Some(img) => {
+                        let _ = tray.set_icon(Some(img));
+                        let _ = tray.set_icon_as_template(false);
+                        true
+                    }
+                    None => false,
+                }
             }
-        } else if let Some(def) = app.default_window_icon() {
-            let _ = tray.set_icon(Some(def.clone()));
-            let _ = tray.set_icon_as_template(false);
+        };
+        if applied {
+            *last = Some(fingerprint);
         }
     }
 }
@@ -1082,7 +1143,10 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show, &settings, &about, &quit])?;
 
             let mut tray = TrayIconBuilder::with_id("main-tray")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(
+                    tray_default_icon()
+                        .unwrap_or_else(|| app.default_window_icon().unwrap().clone()),
+                )
                 .menu(&menu)
                 // macOS: left-click → popover; right-click → menu (matches NSStatusItem).
                 // Linux: menu on click is the only reliable path (no tray click events).

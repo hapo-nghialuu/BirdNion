@@ -5,6 +5,7 @@
 
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t } from "./i18n";
 import type { UsageSourceId } from "./usage";
@@ -150,9 +151,13 @@ export function isShowTrayPercentEnabled(): boolean {
 }
 export function setShowTrayPercentEnabled(v: boolean) {
   localStorage.setItem(SHOW_TRAY_PERCENT_KEY, String(v));
-  // Notify other webviews (main popover) so the tray title rebuilds immediately.
-  // `storage` events only fire cross-window; same-window listeners need this.
+  // Same-window listeners (this Settings webview) need the DOM event.
   window.dispatchEvent(new CustomEvent("birdnion-tray-display-changed", { detail: { enabled: v } }));
+  // The main popover is a SEPARATE webview: `storage` does not cross WebKitGTK
+  // webviews and `window.dispatchEvent` is local to this document, so neither
+  // reaches it. Without a Tauri event the popover kept its rotation timer
+  // running and re-published a percent frame seconds after this turned it off.
+  void emit(TRAY_DISPLAY_CHANGED_EVENT, { enabled: v }).catch(() => {});
   // Immediate clear when turning off — don't wait for main's next tick.
   if (!v) {
     void invoke("set_tray_status", {
@@ -164,6 +169,10 @@ export function setShowTrayPercentEnabled(v: boolean) {
 }
 
 export const TRAY_PERCENT_STORAGE_KEY = SHOW_TRAY_PERCENT_KEY;
+
+/** Tauri event carrying tray-percent toggles across webviews (Settings is its
+ * own window, so DOM/`storage` events never reach the popover). */
+export const TRAY_DISPLAY_CHANGED_EVENT = "birdnion-tray-display-changed";
 
 const MONTHLY_BUDGET_KEY = "birdnion.monthlyBudgetUSD";
 /** Exported so main.ts's cross-window `storage` listener can filter on this
