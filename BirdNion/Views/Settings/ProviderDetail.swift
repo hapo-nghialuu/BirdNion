@@ -187,8 +187,12 @@ extension ProvidersPane {
         Task {
             // Same shared deadline as the background refresh loop
             // (`QuotaProvider.fetchWithDeadline`) — a hung provider must not
-            // leave the self-test button spinning forever.
-            let status = await provider.fetchWithDeadline()
+            // leave the self-test button spinning forever. Runs as
+            // `.userInitiated`: this button IS a user action, and providers
+            // gate real sources on that (Claude only reads its Keychain login
+            // for a user-initiated fetch), so probing as `.background` reported
+            // "not configured" for providers that were actually signed in.
+            let status = await provider.fetchAsUserAction()
             quota.applySelfTestStatus(status)
             if let err = status.error, !err.isEmpty {
                 selfTestState[id] = .fail(kind: classify(rawError: err) ?? .unknown, raw: err)
@@ -605,7 +609,7 @@ extension ProvidersPane {
                         // array) doesn't clobber the just-saved token with the
                         // stale in-memory entry.
                         rows = BirdNionConfigStore.allProviders()
-                        Task { await quota.refresh() }
+                        quota.refreshFromSettings(row.id)
                     }
                 )
                 .padding(.horizontal, 14)
@@ -627,7 +631,7 @@ extension ProvidersPane {
                         Spacer(minLength: 8)
                         Picker("", selection: Binding(
                             get: { settings.codexUsageSource },
-                            set: { settings.codexUsageSource = $0; Task { await quota.refresh() } }
+                            set: { settings.codexUsageSource = $0; quota.refreshFromSettings("codex") }
                         )) {
                             ForEach(CodexUsageSource.allCases) { src in
                                 Text(codexUsageSourceName(src)).tag(src.rawValue)
@@ -658,7 +662,7 @@ extension ProvidersPane {
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.minimaxRegion },
-                        set: { settings.minimaxRegion = $0; Task { await quota.refresh() } }
+                        set: { settings.minimaxRegion = $0; quota.refreshFromSettings("minimax") }
                     )) {
                         ForEach(MiniMaxRegion.allCases) { r in
                             Text(miniMaxRegionName(r)).tag(r.rawValue)
@@ -681,7 +685,7 @@ extension ProvidersPane {
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.zaiRegion },
-                        set: { settings.zaiRegion = $0; Task { await quota.refresh() } }
+                        set: { settings.zaiRegion = $0; quota.refreshFromSettings("zai") }
                     )) {
                         ForEach(ZaiRegion.allCases) { r in
                             Text(zaiRegionName(r)).tag(r.rawValue)
@@ -704,7 +708,7 @@ extension ProvidersPane {
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.alibabaRegion },
-                        set: { settings.alibabaRegion = $0; Task { await quota.refresh() } }
+                        set: { settings.alibabaRegion = $0; quota.refreshFromSettings("alibaba") }
                     )) {
                         ForEach(AlibabaRegion.allCases) { r in
                             Text(alibabaRegionName(r)).tag(r.rawValue)
@@ -996,7 +1000,7 @@ extension ProvidersPane {
                 Spacer(minLength: 8)
                 Picker("", selection: Binding(
                     get: { UserDefaults.standard.string(forKey: sourceKey) ?? "auto" },
-                    set: { UserDefaults.standard.set($0, forKey: sourceKey); Task { await quota.refresh() } }
+                    set: { UserDefaults.standard.set($0, forKey: sourceKey); quota.refreshFromSettings(id) }
                 )) {
                     ForEach(ClaudeCookieSource.allCases) { s in
                         Text(cookieSourceName(s)).tag(s.rawValue)
@@ -1048,7 +1052,7 @@ extension ProvidersPane {
                     // poll every 30m) and marks the fetch user-initiated so
                     // rate-limit/Keychain gates don't suppress it.
                     set: { settings.claudeUsageDataSource = $0
-                           Task { await quota.refresh(forceProviderIDs: ["claude"]) } }
+                           quota.refreshFromSettings("claude") }
                 )) {
                     ForEach(ClaudeUsageDataSource.allCases) { src in
                         Text(claudeUsageSourceName(src)).tag(src.rawValue)
@@ -1093,7 +1097,7 @@ extension ProvidersPane {
         VStack(alignment: .leading, spacing: 6) {
             Toggle(isOn: Binding(
                 get: { settings.codexOpenAIWebEnabled },
-                set: { settings.codexOpenAIWebEnabled = $0; Task { await quota.refresh() } }
+                set: { settings.codexOpenAIWebEnabled = $0; quota.refreshFromSettings("codex") }
             )) {
                 Text(L10n.t("provider.openAIWebExtras", language))
                     .font(.plexSans(13, weight: .semibold))
@@ -1112,7 +1116,7 @@ extension ProvidersPane {
                     Spacer(minLength: 8)
                     Picker("", selection: Binding(
                         get: { settings.codexCookieSource },
-                        set: { settings.codexCookieSource = $0; Task { await quota.refresh() } }
+                        set: { settings.codexCookieSource = $0; quota.refreshFromSettings("codex") }
                     )) {
                         ForEach(ClaudeCookieSource.allCases) { src in
                             Text(cookieSourceName(src)).tag(src.rawValue)
@@ -1148,7 +1152,7 @@ extension ProvidersPane {
             Picker("", selection: Binding(
                 get: { settings.claudeCookieSource },
                 set: { settings.claudeCookieSource = $0
-                       Task { await quota.refresh(forceProviderIDs: ["claude"]) } }
+                       quota.refreshFromSettings("claude") }
             )) {
                 ForEach(ClaudeCookieSource.allCases) { src in
                     Text(cookieSourceName(src)).tag(src.rawValue)
@@ -1200,7 +1204,7 @@ extension ProvidersPane {
             Picker("", selection: Binding(
                 get: { settings.claudeOAuthKeychainPromptMode },
                 set: { settings.claudeOAuthKeychainPromptMode = $0
-                       Task { await quota.refresh(forceProviderIDs: ["claude"]) } }
+                       quota.refreshFromSettings("claude") }
             )) {
                 Text(L10n.t("prompt.never", language)).tag(ClaudeOAuthKeychainPromptMode.never.rawValue)
                 Text(L10n.t("prompt.onlyOnUserAction", language)).tag(ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue)

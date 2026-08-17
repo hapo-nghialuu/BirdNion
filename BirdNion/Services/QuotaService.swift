@@ -21,6 +21,32 @@ struct StaleQuotaWarning: Equatable {
     let lastGoodUpdated: Date
 }
 
+/// Tracks consecutive refresh failures per provider so a single flake never
+/// replaces good on-screen data with an error card. Ported from CodexBar's
+/// `ConsecutiveFailureGate` (`UsageStoreSupport.swift`).
+///
+/// Only the FIRST failure is swallowed, and only while a renderable snapshot is
+/// still showing — a provider that is genuinely broken still surfaces on the
+/// next pass, and a provider that never had data surfaces immediately.
+struct ConsecutiveFailureGate: Equatable {
+    private(set) var streak: Int = 0
+
+    mutating func recordSuccess() {
+        streak = 0
+    }
+
+    mutating func reset() {
+        streak = 0
+    }
+
+    /// Records one failure and returns whether the caller should show it.
+    mutating func shouldSurfaceError(onFailureWithPriorData hadPriorData: Bool) -> Bool {
+        streak += 1
+        if hadPriorData, streak == 1 { return false }
+        return true
+    }
+}
+
 /// Polls every enabled provider in parallel on a 120s ± 10s loop.
 /// Throwing providers are caught and recorded on the status (no crash).
 @MainActor
@@ -176,6 +202,14 @@ final class QuotaService: ObservableObject {
         // error) rather than merging against a prior snapshot, so any
         // preserved stale-data warning no longer applies.
         staleWarnings.removeValue(forKey: status.id)
+        // A self-test that reached real quota is proof the provider works, so
+        // the next background flake gets its one free pass again. A failing
+        // self-test deliberately leaves the streak alone — it already wrote its
+        // error straight into `statuses`, and the poller must not treat that as
+        // fresh prior data.
+        if status.error == nil {
+            errorSurfaceGates[status.id, default: ConsecutiveFailureGate()].recordSuccess()
+        }
         if let index = statuses.firstIndex(where: { $0.id == status.id }) {
             statuses[index] = status
         } else {
@@ -193,6 +227,7 @@ final class QuotaService: ObservableObject {
         legacyFailureNotificationCleanup(id)
         failureEpisode.removeValue(forKey: id)
         adaptiveFailureCounts.removeValue(forKey: id)
+        errorSurfaceGates.removeValue(forKey: id)
         providerLastFetched.removeValue(forKey: id)
         warnState.removeValue(forKey: id)
         staleWarnings.removeValue(forKey: id)
@@ -291,6 +326,11 @@ final class QuotaService: ObservableObject {
     /// wakes at the configured global cadence; this map only makes failed
     /// providers progressively less likely to perform another expensive fetch.
     private var adaptiveFailureCounts: [String: Int] = [:]
+    /// Per-provider gate deciding whether a refresh failure reaches the UI.
+    /// Separate from `adaptiveFailureCounts` (fetch cadence) and
+    /// `failureEpisode` (notifications) on purpose: this one governs only what
+    /// the popover/Settings card renders.
+    private var errorSurfaceGates: [String: ConsecutiveFailureGate] = [:]
 
     /// Where the last published statuses are cached across launches (nil =
     /// persistence disabled, e.g. in unit tests). See ProviderStatusCache.
@@ -396,6 +436,27 @@ final class QuotaService: ObservableObject {
             statuses.append(cached)
         }
         rebuildDisplayStatuses()
+    }
+
+    /// Fire-and-forget refresh for a control the user just changed in Settings
+    /// (source picker, region, token save, account switch). Every such control
+    /// must use this instead of a bare `refresh()`: an unforced pass fetches at
+    /// `.background`, which makes providers skip user-gated sources — the same
+    /// reason a Settings click on a Keychain-only Claude login reported "not
+    /// configured". Forcing also bypasses the per-provider interval and
+    /// adaptive backoff, so the click always produces a real fetch.
+    /// Mirrors CodexBar's `ProviderSettingsRefreshInteraction.perform`.
+    ///
+    /// `nonisolated` so it can be called straight from a `Binding` setter or a
+    /// button action regardless of that closure's isolation, the way the
+    /// `Task { await quota.refresh() }` it replaces could be; the hop to the
+    /// main actor happens inside.
+    nonisolated func refreshFromSettings(_ providerID: String) {
+        Task { @MainActor in
+            await RefreshInteraction.$isManual.withValue(true) {
+                await self.refresh(forceProviderIDs: [providerID])
+            }
+        }
     }
 
     func refresh(forceProviderIDs: Set<String> = []) async {
@@ -541,16 +602,39 @@ final class QuotaService: ObservableObject {
                 if status.error == nil {
                     successfulProviderIDs.insert(id)
                 }
+                // `.notConfigured` reached during a poll is the one ambiguous
+                // kind: it usually means the provider was never set up, but it
+                // also fires when the fetch DELIBERATELY skipped a user-gated
+                // source. A background pass never reads Claude's macOS Keychain
+                // login under the default `.onlyOnUserAction` prompt policy, so
+                // on a machine where the Keychain is the only credential source
+                // every poll "proved" a signed-in provider was unconfigured and
+                // wiped its numbers. Give that kind exactly one free pass while
+                // a good snapshot is on screen. Every other kind (token
+                // revoked, cookie expired, schema drift) is positive evidence
+                // from a real response and still surfaces on the first failure.
+                // The gate is NOT reset by a forced refresh: a user who clicks
+                // Retry and fails again must see the error, not a silent no-op.
+                let hadPriorData = previous?.isRenderableSnapshot == true
+                let suppressedAsFirstFlake: Bool
+                if status.error == nil {
+                    errorSurfaceGates[id, default: ConsecutiveFailureGate()].recordSuccess()
+                    suppressedAsFirstFlake = false
+                } else if classify(rawError: status.error) == .notConfigured {
+                    suppressedAsFirstFlake = !errorSurfaceGates[id, default: ConsecutiveFailureGate()]
+                        .shouldSurfaceError(onFailureWithPriorData: hadPriorData)
+                } else {
+                    suppressedAsFirstFlake = false
+                }
                 // Preserve a good snapshot across a *transient* refresh error
                 // (timeout, rate-limit, 5xx) so the popover doesn't flicker to
-                // empty. But a credential, cookie, not-configured, or generic
-                // schema error means the shown numbers are no longer
-                // trustworthy — the key was revoked/rotated, the cookie
-                // expired, or the response shape genuinely changed — so
-                // surface the fresh error instead of a stale "still fine"
-                // reading.
+                // empty. But a credential, cookie, or generic schema error means
+                // the shown numbers are no longer trustworthy — the key was
+                // revoked/rotated, the cookie expired, or the response shape
+                // genuinely changed — so surface the fresh error instead of a
+                // stale "still fine" reading.
                 if status.error != nil, let previous, previous.isRenderableSnapshot,
-                   isTransientForLastGood(rawError: status.error) {
+                   isTransientForLastGood(rawError: status.error) || suppressedAsFirstFlake {
                     let kind = classify(rawError: status.error) ?? .unknown
                     staleWarnings[id] = StaleQuotaWarning(kind: kind, lastGoodUpdated: previous.lastUpdated)
                     log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
@@ -868,6 +952,24 @@ private actor ProviderFetchDeadlineResumeBox {
 }
 
 extension QuotaProvider {
+    /// `fetchWithDeadline()` under an explicit `.userInitiated` interaction —
+    /// the entry point for one-shot probes the user asked for (Settings
+    /// self-test), which bypass `QuotaService.refresh()` and would otherwise
+    /// inherit the task-local default `.background`.
+    ///
+    /// That default is wrong for a user action and not merely cosmetic:
+    /// providers gate real sources on it. Claude only reads the macOS Keychain
+    /// item `Claude Code-credentials` when the interaction is `.userInitiated`
+    /// (prompt mode `.onlyOnUserAction`), so on a machine where the Keychain is
+    /// the ONLY credential source — no `~/.claude/.credentials.json`, no env
+    /// token — a `.background` self-test resolved no credentials and reported
+    /// "not configured" for a provider that was actually signed in.
+    func fetchAsUserAction(deadline: TimeInterval = ProviderFetchDeadline.seconds) async -> ProviderStatus {
+        await ProviderInteractionContext.$current.withValue(.userInitiated) {
+            await fetchWithDeadline(deadline: deadline)
+        }
+    }
+
     /// Races `fetch()` against `deadline` (defaults to
     /// `ProviderFetchDeadline.seconds`; overridable for tests) and returns
     /// whichever finishes first.
