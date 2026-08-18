@@ -307,9 +307,21 @@ enum ClaudeUsageOrchestrator {
 
     // MARK: - Settings + credentials
 
-    private static func readDataSource() -> ClaudeUsageDataSource {
-        let raw = UserDefaults.standard.string(forKey: "claudeUsageDataSource") ?? ClaudeUsageDataSource.oauth.rawValue
-        return ClaudeUsageDataSource(rawValue: raw) ?? .oauth
+    /// Selected Claude source, defaulting to `.auto` (OAuth → CLI → Web).
+    /// Must stay in sync with `SettingsStore.claudeUsageDataSource`, which
+    /// backs the Settings picker off the same key — a mismatch would show one
+    /// source in the UI while fetching with another.
+    ///
+    /// `.auto` is the only mode with a fallback chain (`ClaudeFetchPlan
+    /// .executionSteps`); every pinned mode runs a single step. That matters
+    /// on macOS, where a background poll cannot read the Claude Code Keychain
+    /// item under the default `.onlyOnUserAction` prompt policy: pinned
+    /// `.oauth` turned that into a hard "not configured" failure, while
+    /// `.auto` falls through to the CLI step, which reads the same login via
+    /// the `claude` binary's own Keychain ACL.
+    static func readDataSource(userDefaults: UserDefaults = .standard) -> ClaudeUsageDataSource {
+        let raw = userDefaults.string(forKey: "claudeUsageDataSource") ?? ClaudeUsageDataSource.auto.rawValue
+        return ClaudeUsageDataSource(rawValue: raw) ?? .auto
     }
 
     private static func readCookieSource() -> ClaudeCookieSource {

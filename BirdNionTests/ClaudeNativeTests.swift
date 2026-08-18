@@ -21,6 +21,58 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertFalse(plan.isNoSourceAvailable)
     }
 
+    /// Regression: BirdNion shipped `.oauth` as the default while CodexBar
+    /// defaults to `.auto`. `.oauth` pins the plan to a single step, so on
+    /// macOS — where Claude Code keeps its OAuth token only in the Keychain and
+    /// a background poll may not read it — every poll failed with
+    /// "not configured" for an account that was signed in. `.auto` keeps the
+    /// CLI/Web fallback that makes the failure recoverable.
+    func testUnsetDataSourceDefaultsToAuto() {
+        let suite = "birdnion.tests.claudeDataSource.unset"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.removePersistentDomain(forName: suite)
+
+        XCTAssertEqual(ClaudeUsageOrchestrator.readDataSource(userDefaults: defaults), .auto)
+    }
+
+    /// An unrecognized stored value must land on the mode WITH a fallback
+    /// chain, never on a pinned single-step mode.
+    func testUnrecognizedDataSourceFallsBackToAuto() {
+        let suite = "birdnion.tests.claudeDataSource.garbage"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("not-a-source", forKey: "claudeUsageDataSource")
+
+        XCTAssertEqual(ClaudeUsageOrchestrator.readDataSource(userDefaults: defaults), .auto)
+    }
+
+    /// The new default must not override a source the user actually chose.
+    func testExplicitlyStoredDataSourceIsRespected() {
+        let suite = "birdnion.tests.claudeDataSource.explicit"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        for source in ClaudeUsageDataSource.allCases {
+            defaults.set(source.rawValue, forKey: "claudeUsageDataSource")
+            XCTAssertEqual(ClaudeUsageOrchestrator.readDataSource(userDefaults: defaults), source)
+        }
+    }
+
+    /// The behavioral difference the default hinges on: `.auto` retries other
+    /// sources after OAuth fails, a pinned mode has nothing to fall through to.
+    func testAutoKeepsFallbackStepsWhileOAuthPinIsSingleStep() {
+        let auto = ClaudeSourcePlanner.resolve(input: ClaudeSourcePlanningInput(
+            selectedDataSource: .auto, webExtrasEnabled: true,
+            hasWebSession: true, hasCLI: true, hasOAuthCredentials: true))
+        XCTAssertEqual(auto.executionSteps.map(\.dataSource), [.oauth, .cli, .web])
+
+        let pinned = ClaudeSourcePlanner.resolve(input: ClaudeSourcePlanningInput(
+            selectedDataSource: .oauth, webExtrasEnabled: true,
+            hasWebSession: true, hasCLI: true, hasOAuthCredentials: true))
+        XCTAssertEqual(pinned.executionSteps.map(\.dataSource), [.oauth])
+    }
+
     func testExplicitSourceIgnoresAvailability() {
         let input = ClaudeSourcePlanningInput(
             selectedDataSource: .web, webExtrasEnabled: false,

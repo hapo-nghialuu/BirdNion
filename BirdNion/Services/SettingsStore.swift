@@ -191,10 +191,20 @@ final class SettingsStore: ObservableObject {
 
     /// Which data source `ClaudeProvider` should use. BirdNion's `.auto`
     /// walks OAuth → CLI → Web and stops at the first trusted result;
-    /// the other modes pin to a single strategy. Default `.oauth` matches
-    /// BirdNion's pre-parity behavior (no change for existing users).
+    /// the other modes pin to a single strategy — `.oauth` therefore has NO
+    /// fallback, so one failing step fails the whole fetch.
+    ///
+    /// Default `.auto`, matching CodexBar. It was `.oauth` to preserve
+    /// BirdNion's pre-parity behavior, but on macOS that combination is
+    /// broken by design: Claude Code stores its OAuth token only in the
+    /// Keychain, which a background poll may not read under the default
+    /// `.onlyOnUserAction` prompt policy. Pinned to `.oauth` every poll then
+    /// failed with "not configured" for a signed-in account; with `.auto` the
+    /// CLI step takes over, since the `claude` binary reads that Keychain item
+    /// under its own ACL. Users who explicitly picked a source have the key
+    /// set and are unaffected.
     /// `ClaudeProvider.readUsageDataSource()` reads the same UserDefaults key.
-    @AppStorage("claudeUsageDataSource") var claudeUsageDataSource: String = "oauth"
+    @AppStorage("claudeUsageDataSource") var claudeUsageDataSource: String = "auto"
     /// Whether `ClaudeUsageFetcher` should auto-detect browser cookies
     /// (`.auto`), use a user-pasted Cookie: header (`.manual`), or skip
     /// cookies entirely (`.off`). Default `.auto` matches CodexBar.
