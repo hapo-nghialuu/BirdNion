@@ -175,3 +175,45 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertFalse(isTransientForLastGood(rawError: "something weird happened"))
     }
 }
+
+/// The stale banner shows while last-good quota is still on screen, so it must
+/// name the cause instead of reusing the error card's remediation hint. Reusing
+/// `hintKey` there told users to "connect this provider in Settings" for a
+/// provider that was signed in and serving data.
+final class StaleCauseCopyTests: XCTestCase {
+    func testEveryKindHasStaleCauseCopyInBothLanguages() {
+        for kind in ProviderErrorKind.allCases {
+            for language in ["vi", "en"] {
+                let text = L10n.t(kind.staleCauseKey, language)
+                // L10n.t echoes the key back when no entry exists.
+                XCTAssertNotEqual(text, kind.staleCauseKey,
+                                  "missing \(language) copy for \(kind.staleCauseKey)")
+                XCTAssertFalse(text.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    /// Guards the regression directly: the banner string must never collapse
+    /// back onto the instruction-phrased error-card string.
+    func testStaleCauseIsDistinctFromErrorCardHint() {
+        for kind in ProviderErrorKind.allCases {
+            XCTAssertNotEqual(kind.staleCauseKey, kind.hintKey)
+            for language in ["vi", "en"] {
+                XCTAssertNotEqual(L10n.t(kind.staleCauseKey, language),
+                                  L10n.t(kind.hintKey, language),
+                                  "\(kind) reuses the error-card hint in \(language)")
+            }
+        }
+    }
+
+    /// The specific string the user saw: a signed-in Claude whose background
+    /// refresh was skipped must not be told to go configure anything.
+    func testNotConfiguredCauseDoesNotTellUserToOpenSettings() {
+        let english = L10n.t(ProviderErrorKind.notConfigured.staleCauseKey, "en").lowercased()
+        let vietnamese = L10n.t(ProviderErrorKind.notConfigured.staleCauseKey, "vi").lowercased()
+        XCTAssertFalse(english.contains("settings"))
+        XCTAssertFalse(english.contains("connect"))
+        XCTAssertFalse(vietnamese.contains("cài đặt"))
+        XCTAssertFalse(vietnamese.contains("kết nối"))
+    }
+}

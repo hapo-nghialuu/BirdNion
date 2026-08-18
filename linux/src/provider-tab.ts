@@ -421,22 +421,31 @@ export function serviceStatusStrip(status: ProviderStatus): HTMLElement | null {
   return row;
 }
 
-/** Shown above the quota windows when the last refresh failed *transiently*
- * (network/timeout, rate-limit, genuine 5xx) while these windows are still
- * the last-good snapshot — macOS `StaleQuotaBanner` parity. Keeps Retry
- * reachable even though there is no error card here, and never shows the
- * raw provider error/response — only the classified kind/hint. */
+/** Shown above the quota windows while these windows are still the last-good
+ * snapshot — macOS `StaleQuotaBanner` parity. Reached by a transient failure
+ * (network/timeout, rate-limit, genuine 5xx) or by the one free pass the
+ * consecutive-failure gate grants `notConfigured`.
+ *
+ * The windows stay visible, so this is a *notice*, not an error: it names the
+ * cause via `staleQuota.cause.*` rather than the error card's
+ * `providerError.*.hint`, which is phrased as an instruction and would tell
+ * the user to reconnect a provider that is working fine. Never shows the raw
+ * provider error/response. */
 function staleQuotaBanner(warning: StaleQuotaWarning, onRetry?: () => void): HTMLElement {
   const banner = el("div", "provider-stale-banner");
-  banner.append(el("div", "provider-stale-title", t("staleQuota.notice")));
-  banner.append(el("div", "provider-stale-hint", t(`providerError.${warning.kind}.hint`)));
+
+  // Title and action share a row so the banner reads as one block instead of a
+  // text stack with a button bolted underneath (macOS parity).
+  const head = el("div", "provider-stale-head");
+  head.append(el("span", "provider-stale-title", t("staleQuota.notice")));
+  const retry = el("button", "provider-stale-retry", currentLang() === "vi" ? "Thử lại" : "Retry");
+  retry.addEventListener("click", () => onRetry?.());
+  head.append(retry);
+  banner.append(head);
+
+  banner.append(el("div", "provider-stale-cause", t(`staleQuota.cause.${warning.kind}`)));
   const updated = relativeUpdated(warning.lastGoodUpdated);
   if (updated) banner.append(el("div", "provider-stale-meta", t("lastUpdated", { time: updated })));
-  const actions = el("div", "provider-stale-actions");
-  const retry = el("button", "sw-pill-btn", currentLang() === "vi" ? "Thử lại" : "Retry");
-  retry.addEventListener("click", () => onRetry?.());
-  actions.append(retry);
-  banner.append(actions);
   return banner;
 }
 

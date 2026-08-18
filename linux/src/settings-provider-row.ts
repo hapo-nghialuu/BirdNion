@@ -169,8 +169,10 @@ export function claudeSourceSelect(cfg: ProviderRowCfg): HTMLElement {
     optionEl.textContent = t(opt.labelKey);
     select.append(optionEl);
   }
-  select.value = cfg.source ?? "oauth";
-  select.addEventListener("change", () => { cfg.source = select.value === "oauth" ? null : select.value; });
+  // Default "auto" mirrors macOS `SettingsStore.claudeUsageDataSource`; null
+  // means "unset", so the default must be the value we store as null.
+  select.value = cfg.source ?? "auto";
+  select.addEventListener("change", () => { cfg.source = select.value === "auto" ? null : select.value; });
   wrap.append(select);
   return wrap;
 }

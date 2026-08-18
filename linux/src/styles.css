@@ -1165,10 +1165,43 @@ html.popover-capped .app-body {
   border-radius: 7px;
   padding: 8px 10px;
 }
+/* Title + Retry share a row so the banner reads as one block. */
+.provider-stale-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .provider-stale-title { font-weight: 600; }
-.provider-stale-hint { color: var(--secondary); opacity: 0.85; }
-.provider-stale-meta { color: var(--tertiary); opacity: 0.85; }
-.provider-stale-actions { display: flex; gap: 8px; margin-top: 2px; }
+.provider-stale-cause { color: var(--secondary); opacity: 0.85; }
+/* Mono/uppercase matches how every other timestamp renders in the popover. */
+.provider-stale-meta {
+  color: var(--tertiary);
+  opacity: 0.85;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+/* Outlined amber action, matching the macOS StaleBannerActionStyle. */
+.provider-stale-retry {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--warning);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.provider-stale-retry:hover {
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+}
+.provider-stale-retry:active { opacity: 0.65; }
 
 /* macOS LoadingQuotaSkeleton: 124×10 / full×8 / 180×8 grey bars @0.75. */
 .quota-skeleton {
