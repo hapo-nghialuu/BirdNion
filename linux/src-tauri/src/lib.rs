@@ -888,8 +888,10 @@ fn tray_default_icon() -> Option<Image<'static>> {
 ///
 /// `tray-icon`'s GTK backend writes every `set_icon` to a *new* temp PNG and
 /// deletes the previous one, so re-publishing an unchanged icon churned that
-/// file on every poll for no reason. The frontend now always passes the same
-/// (default) icon, which makes this skip the write entirely.
+/// file for nothing — the refresh poll re-sends the current frame on every
+/// tick, and a single-provider rotation re-sends the same frame every 5 s.
+/// A genuine change (new percent, or back to the plain wordmark) still has a
+/// different fingerprint and goes through.
 static TRAY_ICON_FINGERPRINT: LazyLock<Mutex<Option<u64>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Cheap content hash — only used to detect "same frame as last time".
