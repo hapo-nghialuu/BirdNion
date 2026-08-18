@@ -2075,7 +2075,8 @@ struct QuotaBarWithPaceMarker: View {
 // MARK: - Antigravity semantic quota rows
 
 /// Semantic quota rows for Antigravity, grouped by the model pool that shares
-/// each limit. Raw model windows never reach this view.
+/// each limit. Layout matches `WindowRow` (inset + hairline) so bars never
+/// hug the popover edge and GeometryReader cannot float fill strips.
 struct AntigravitySemanticQuotaRows: View {
     let windows: [QuotaWindow]
     let lastUpdated: Date
@@ -2111,12 +2112,21 @@ struct AntigravitySemanticQuotaRows: View {
     }
 
     @ViewBuilder
+    private func groupHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.plexMono(10, weight: .medium))
+            .foregroundStyle(VocabbyTheme.muted)
+            .tracking(0.6)
+            .popoverContentInset()
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
     private func quotaGroup(title: String, windows: [QuotaWindow]) -> some View {
         if !windows.isEmpty {
-            VStack(alignment: .leading, spacing: 9) {
-                Text(title)
-                    .font(.plexSans(12, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
+            VStack(alignment: .leading, spacing: 0) {
+                groupHeader(title)
                 ForEach(windows) { window in
                     AntigravitySemanticQuotaRow(window: window, lastUpdated: lastUpdated)
                 }
@@ -2125,12 +2135,12 @@ struct AntigravitySemanticQuotaRows: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             quotaGroup(title: "Gemini", windows: geminiWindows)
             if !geminiWindows.isEmpty && !claudeGPTWindows.isEmpty {
-                Divider()
-                    .overlay(VocabbyTheme.border.opacity(0.8))
-                    .padding(.vertical, 1)
+                PopoverInsetHairline()
+                    .popoverContentInset()
+                    .padding(.vertical, 4)
             }
             quotaGroup(title: "Claude/GPT", windows: claudeGPTWindows)
         }
@@ -2148,6 +2158,18 @@ private struct AntigravitySemanticQuotaRow: View {
         VocabbyTheme.quotaColor(remaining: window.remainingPct)
     }
 
+    /// Short window label: "Gemini 5-hour" → "5 HOURS", "Claude/GPT weekly" → "WEEK".
+    private var shortLabel: String {
+        let raw = window.label.lowercased()
+        if raw.contains("5-hour") || raw.contains("5 hour") {
+            return L10n.windowLabel("5 giờ", preference: settings.appLanguage).uppercased()
+        }
+        if raw.contains("week") {
+            return L10n.windowLabel("Tuần", preference: settings.appLanguage).uppercased()
+        }
+        return L10n.windowLabel(window.label, preference: settings.appLanguage).uppercased()
+    }
+
     private var resetText: String {
         if let resetDate = window.resetDate {
             return L10n.resetCountdown(to: resetDate, preference: settings.appLanguage)
@@ -2160,29 +2182,41 @@ private struct AntigravitySemanticQuotaRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(L10n.windowLabel(window.label, preference: settings.appLanguage))
-                .font(.plexMono(13, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            AntigravityQuotaBar(remainingPct: window.remainingPct)
+        // Same MetricRow rhythm as `WindowRow`: label+% · bar · used/reset.
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Text(L10n.f("quota.left", settings.appLanguage, window.remainingPct))
-                    .font(.plexMono(11))
+                Text(shortLabel)
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .tracking(0.6)
+                Spacer(minLength: 8)
+                Text("\(window.remainingPct)%")
+                    .font(.plexMono(12, weight: .semibold))
                     .foregroundStyle(percentColor)
+            }
+            AntigravityQuotaBar(remainingPct: window.remainingPct)
+                .padding(.top, 8)
+            HStack(alignment: .firstTextBaseline) {
+                Text(L10n.f("quota.usedPct", settings.appLanguage, window.usedPct).uppercased())
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
                 Spacer(minLength: 8)
                 if !resetText.isEmpty {
-                    Text(resetText)
-                        .font(.plexMono(11))
+                    Text(resetText.uppercased())
+                        .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
             }
+            .padding(.top, 7)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .popoverContentInset()
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            PopoverInsetHairline()
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(L10n.windowLabel(window.label, preference: settings.appLanguage)), "
-                + "\(window.remainingPct) percent left"
+            "\(shortLabel), \(window.remainingPct) percent left"
                 + (resetText.isEmpty ? "" : ", resets \(resetText)")
         )
     }
@@ -2204,19 +2238,20 @@ private struct AntigravityQuotaBar: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
+        // Match `QuotaBarWithPaceMarker`: fixed-height GeometryReader so the
+        // fill cannot float/expand into neighboring rows.
+        GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Rectangle()
                     .fill(VocabbyTheme.track)
+                    .frame(height: QuotaBarLayout.compactHeight)
                 Rectangle()
                     .fill(googleGradient)
                     .frame(
-                        width: geometry.size.width * CGFloat(max(0, min(100, remainingPct))) / 100,
-                        height: geometry.size.height,
-                        alignment: .leading)
+                        width: max(0, geo.size.width * CGFloat(max(0, min(100, remainingPct))) / 100),
+                        height: QuotaBarLayout.compactHeight)
             }
         }
-        .frame(maxWidth: .infinity)
         .frame(height: QuotaBarLayout.compactHeight)
     }
 }
