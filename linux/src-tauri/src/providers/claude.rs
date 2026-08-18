@@ -1,7 +1,7 @@
 //! Claude (Anthropic) quota provider — port of `ClaudeUsageOrchestrator.swift`.
 //! `cfg.source` selects the data source (mirrors macOS `ClaudeUsageDataSource`
-//! / `UserDefaults` key `claudeUsageDataSource`), default `"oauth"`:
-//!   - `"oauth"` (default) — `ClaudeOAuth.swift` port: `~/.claude/.credentials.json`
+//! / `UserDefaults` key `claudeUsageDataSource`), default `"auto"`:
+//!   - `"oauth"` — `ClaudeOAuth.swift` port: `~/.claude/.credentials.json`
 //!     (or env token), refreshed against `platform.claude.com`, usage from
 //!     `api.anthropic.com/api/oauth/usage`.
 //!   - `"web"` — `ClaudeWebAPIFetcher.swift` port (portable subset): browser
@@ -11,7 +11,9 @@
 //!     30-day cost total as a single window.
 //!   - `"cli"` — no PTY/CLI-session equivalent on Linux; always fails with a
 //!     explanatory message.
-//!   - `"auto"` — try oauth, then fall back to web.
+//!   - `"auto"` (default) — try oauth, then fall back to web. Matches the
+//!     macOS default so one shared `settings.json` behaves the same on both
+//!     platforms; a pinned mode has no fallback when its single step fails.
 //!
 //! The macOS-Keychain fallback is dropped — Linux has no Keychain.
 
@@ -189,9 +191,15 @@ async fn fetch_usage(access_token: &str) -> Result<Value, String> {
     }
 }
 
+/// Data source for `cfg`, defaulting to `"auto"`. Split out of `fetch` so the
+/// default is testable without touching the network.
+fn resolved_source(cfg: &config::Provider) -> &str {
+    cfg.source.as_deref().unwrap_or("auto")
+}
+
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
-    match cfg.source.as_deref().unwrap_or("oauth") {
+    match resolved_source(cfg) {
         "web" => fetch_web(cfg, &name).await,
         "api" => fetch_admin_api(cfg, &name).await,
         "cli" => ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trên Linux"),
@@ -622,6 +630,29 @@ fn plan_label(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) ->
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Regression: this file resolved an unset source to "oauth" while
+    /// `config.rs` documented the field as `"auto" (default)` and macOS
+    /// defaults to auto. A pinned mode runs a single step with no fallback,
+    /// so the mismatch silently removed Linux's oauth -> web recovery for
+    /// every user who never touched the picker.
+    #[test]
+    fn unset_source_defaults_to_auto() {
+        let cfg = config::Provider { id: "claude".to_string(), ..Default::default() };
+        assert_eq!(resolved_source(&cfg), "auto");
+    }
+
+    #[test]
+    fn explicit_source_is_respected() {
+        for source in ["auto", "oauth", "web", "cli", "api"] {
+            let cfg = config::Provider {
+                id: "claude".to_string(),
+                source: Some(source.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(resolved_source(&cfg), source);
+        }
+    }
 
     #[test]
     fn weekly_falls_back_to_all_models_limit() {
