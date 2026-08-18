@@ -371,6 +371,23 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "providerError.unknown.title": { vi: "Lỗi không xác định", en: "Unknown error" },
   "providerError.unknown.hint": { vi: "Lỗi không xác định — xem chi tiết", en: "Unknown error — see details" },
   "staleQuota.notice": { vi: "Dữ liệu quota có thể đã cũ", en: "Quota data may be outdated" },
+  // Cause line for the stale banner: states only WHY the refresh failed. The
+  // error card's `providerError.*.hint` strings are instructions and must not
+  // be reused here — the provider still has valid data on screen.
+  "staleQuota.cause.cookieExpiredOrMissing": {
+    vi: "Phiên trình duyệt đã hết hạn", en: "Browser session expired" },
+  "staleQuota.cause.notConfigured": {
+    vi: "Không làm mới được trong nền", en: "Couldn't refresh in the background" },
+  "staleQuota.cause.tokenInvalidOrMissing": {
+    vi: "Token bị từ chối", en: "Token was rejected" },
+  "staleQuota.cause.apiSchemaChanged": {
+    vi: "Provider trả phản hồi lạ", en: "Provider returned an unexpected response" },
+  "staleQuota.cause.networkUnreachableOrTimeout": {
+    vi: "Không kết nối được provider", en: "Couldn't reach the provider" },
+  "staleQuota.cause.rateLimited": {
+    vi: "Provider đang giới hạn tần suất", en: "Provider is rate limiting" },
+  "staleQuota.cause.unknown": {
+    vi: "Lần làm mới gần nhất thất bại", en: "The last refresh failed" },
 
   // Self-test (Settings detail; not on popover card — macOS uses menu-bar toggle there)
   "provider.selfTest": { vi: "Kiểm tra", en: "Self-test" },

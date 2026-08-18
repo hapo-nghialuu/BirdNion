@@ -1129,13 +1129,37 @@ struct ProviderCard: View {
     }
 }
 
-/// Shown above a provider's quota windows when the most recent refresh
-/// failed *transiently* (network/timeout, rate-limit, genuine 5xx) while a
-/// prior last-good snapshot is still on screen — see
-/// `QuotaService.staleWarning(for:)`. Windows stay visible; this only adds
-/// an actionable, localized notice plus the last successful update time and
-/// keeps Retry reachable even though there is no error card here. Never
-/// shows the raw provider error/response — only the classified kind/hint.
+/// Compact outlined action for the stale banner. The Settings pane's
+/// `InstrumentInlineButtonStyle` is scoped to `SettingsTheme`, so the popover
+/// carries its own warning-tinted variant rather than importing that idiom.
+private struct StaleBannerActionStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.plexMono(9, weight: .medium))
+            .tracking(0.5)
+            .textCase(.uppercase)
+            .foregroundStyle(VocabbyTheme.warningFill)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(VocabbyTheme.warningFill.opacity(configuration.isPressed ? 0.55 : 0.3), lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.65 : 1)
+            .contentShape(Rectangle())
+    }
+}
+
+/// Shown above a provider's quota windows when the most recent refresh failed
+/// while a prior last-good snapshot is still on screen — see
+/// `QuotaService.staleWarning(for:)`. Reached by a transient failure
+/// (network/timeout, rate-limit, genuine 5xx) or by the one free pass the
+/// consecutive-failure gate grants `.notConfigured`.
+///
+/// Windows stay visible, so this is a *notice*, not an error: it names the
+/// cause via `staleCauseKey` rather than the error card's `hintKey`, which is
+/// phrased as an instruction and would tell the user to reconnect a provider
+/// that is working fine. Never shows the raw provider error/response.
 private struct StaleQuotaBanner: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var quota: QuotaService
@@ -1143,32 +1167,53 @@ private struct StaleQuotaBanner: View {
     let providerID: String
     let warning: StaleQuotaWarning
 
+    private var isVietnamese: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
+            // Title and action share a row so the banner reads as one block
+            // instead of a text stack with a button bolted underneath.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 12))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.warningFill)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.t("staleQuota.notice", settings.appLanguage))
-                        .font(.plexSans(11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.warningFill)
-                    Text(L10n.t(warning.kind.hintKey, settings.appLanguage))
-                        .font(.plexSans(10))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                    Text(L10n.f("popover.lastUpdated", settings.appLanguage,
-                                L10n.relativeUpdated(from: warning.lastGoodUpdated, preference: settings.appLanguage)))
-                        .font(.plexSans(10))
-                        .foregroundStyle(VocabbyTheme.tertiary)
+                Text(L10n.t("staleQuota.notice", settings.appLanguage))
+                    .font(.plexSans(11, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.warningFill)
+                Spacer(minLength: 8)
+                Button(isVietnamese ? "Thử lại" : "Retry") {
+                    Task { await quota.refresh(forceProviderIDs: [providerID]) }
                 }
+                .buttonStyle(StaleBannerActionStyle())
+                .pointingHandCursor()
             }
-            Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Thử lại" : "Retry") {
-                Task { await quota.refresh(forceProviderIDs: [providerID]) }
-            }
-            .controlSize(.small)
+
+            Text(L10n.t(warning.kind.staleCauseKey, settings.appLanguage))
+                .font(.plexSans(10))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Mono/uppercase matches how the popover renders every other
+            // timestamp (header status, footer "UPDATED …").
+            Text(L10n.f("popover.lastUpdated", settings.appLanguage,
+                        L10n.relativeUpdated(from: warning.lastGoodUpdated, preference: settings.appLanguage)))
+                .font(.plexMono(9, weight: .medium))
+                .tracking(0.5)
+                .textCase(.uppercase)
+                .foregroundStyle(VocabbyTheme.tertiary)
         }
-        .padding(8)
-        .background(VocabbyTheme.warningSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(VocabbyTheme.warningSurface)
+        )
+        .overlay(
+            // Hairline outline mirrors the Linux banner and the app's rule-based
+            // chrome; a bare fill read as an untethered colour block.
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(VocabbyTheme.warningFill.opacity(0.22), lineWidth: 1)
+        )
         .popoverContentInset()
         .padding(.top, 8)
         .padding(.bottom, 2)

@@ -14,8 +14,17 @@ enum ProviderErrorKind: String, CaseIterable, Equatable, Sendable {
 
     /// L10n key for the short title.
     var titleKey: String { "providerError.\(rawValue).title" }
-    /// L10n key for the one-line remediation hint.
+    /// L10n key for the one-line remediation hint. Written for the ERROR CARD,
+    /// where the provider has no data and the user must act — so it is phrased
+    /// as an instruction ("connect this provider in Settings").
     var hintKey: String { "providerError.\(rawValue).hint" }
+    /// L10n key for the stale-data banner's cause line. Deliberately separate
+    /// from `hintKey`: the banner appears while last-good quota is still on
+    /// screen, so the provider is working and the remediation phrasing would be
+    /// wrong advice — telling the user to reconnect something that is fine.
+    /// These strings only state why the refresh did not land; the banner's own
+    /// title and "updated" line supply the rest.
+    var staleCauseKey: String { "staleQuota.cause.\(rawValue)" }
 
     /// Whether this kind is something Settings can actually fix — i.e. the
     /// popover/self-test "Fix" action makes sense and should open the
