@@ -6,6 +6,20 @@
 - [Homebrew](https://brew.sh) + [GitHub CLI](https://cli.github.com) (`brew install gh`) cho release flow.
 - Không cần dependency ngoài SwiftUI / AppKit / UserNotifications / Foundation — nhưng project link local SPM [CodexBarCore](https://github.com/hapo-nghialuu/CodexBar) tại `~/Desktop/CodexBar` (xem `project.pbxproj`).
 
+## Bản đồ build và release
+
+BirdNion có hai lane phân phối độc lập:
+
+- **macOS**: `Scripts/release.sh` chạy verification gate, bump version, build universal `.app`, tạo zip, tạo/cập nhật GitHub Release và cập nhật Homebrew cask.
+- **Linux**: `.github/workflows/linux-release.yml` hiện là workflow `workflow_dispatch` thủ công. Workflow không tự bump version và không tự tạo tag; nó nhận một tag release đã tồn tại, checkout ref được dispatch, rồi đính kèm `.deb`, `.rpm` và `.AppImage` vào release đó.
+
+Vì vậy, phải phân biệt hai khái niệm:
+
+1. **Tag/source commit**: tag `vX.Y.Z` trỏ tới một commit cụ thể, thường được tạo bởi lane macOS.
+2. **Linux build commit**: commit của ref dùng khi dispatch `linux-release.yml` (thường là `main` mới nhất).
+
+Workflow Linux chỉ kiểm tra `inputs.tag` khớp `linux/src-tauri/tauri.conf.json.version`; nó không kiểm tra tag phải trỏ cùng commit với `main`. Khi release lại Linux cho một tag macOS đã tồn tại, cần ghi rõ Linux asset được build từ commit nào.
+
 ## Mở project
 ```bash
 open BirdNion.xcodeproj
@@ -187,6 +201,249 @@ brew reinstall --cask birdnion
 xattr -l /Applications/BirdNion.app   # should NOT contain com.apple.quarantine
 plutil -p /Applications/BirdNion.app/Contents/Info.plist | grep CFBundleShortVersionString
 ```
+
+## Runbook Linux release thủ công
+
+### 1. Build và test local
+
+Có thể kiểm tra frontend và Rust trên macOS hoặc Linux:
+
+```bash
+cd linux
+npm ci
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Đóng gói native Linux phải chạy trên Ubuntu/Linux có đủ WebKitGTK và
+AppIndicator dependencies. Cài các dependency tương đương workflow:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+cd linux
+npm ci
+npm run tauri build
+```
+
+Workflow `linux-build.yml` là lane kiểm tra/đính kèm artifact, không publish
+vào GitHub Release. Nó chạy `cargo test`, `npx tsc --noEmit` và tạo đủ ba
+bundle trên `ubuntu-22.04`.
+
+### 2. Version và source commit
+
+Trước khi release Linux:
+
+```bash
+git status --short --branch
+git fetch origin main
+git log -1 --oneline origin/main
+node -p "require('./linux/src-tauri/tauri.conf.json').version"
+```
+
+Các version authority của Linux phải cùng một release version:
+
+- `linux/src-tauri/tauri.conf.json` — workflow dùng file này để so với tag.
+- `linux/src-tauri/Cargo.toml` — package Rust.
+- `linux/src-tauri/Cargo.lock` — lockfile cần được giữ nhất quán sau khi đổi package version.
+
+Workflow hiện không tự bump các file trên. Nếu `tauri.conf.json` chưa là
+`0.10.21`, phải sửa version trong source, test, commit và push trước khi
+dispatch `v0.10.21`.
+
+### 3. Build helper CLIProxyAPI cho Linux
+
+Linux app nhúng helper Go `cliproxyapi`. Helper này là **asset build-only**:
+workflow tải nó xuống để Tauri bundle có resource `binaries/cliproxyapi`, sau
+đó workflow xoá helper và file checksum khỏi GitHub Release khi toàn bộ job
+thành công. Người cài Ubuntu không tải helper này; chỉ tải `.deb`, `.rpm` hoặc
+`.AppImage` cuối cùng.
+
+Trên macOS để tạo helper Linux x86_64 từ checkout CLIProxyAPI local:
+
+```bash
+GOOS=linux GOARCH=amd64 \
+CLIPROXYAPI_SOURCE=/duong-dan-tuyet-doi/toi/CLIProxyAPI \
+linux/scripts/build-cliproxy.sh
+
+file linux/src-tauri/binaries/cliproxyapi
+```
+
+Kết quả phải là ELF Linux `x86-64`, không phải Mach-O macOS. Đổi tên bản
+upload và tạo checksum từ đúng thư mục chứa file để checksum có basename
+`cliproxyapi-linux-x86_64`; workflow Ubuntu chạy `sha256sum -c` trong thư mục
+đó:
+
+```bash
+cp linux/src-tauri/binaries/cliproxyapi /tmp/cliproxyapi-linux-x86_64
+(cd /tmp && \
+  shasum -a 256 cliproxyapi-linux-x86_64 \
+    > cliproxyapi-linux-x86_64.sha256)
+(cd /tmp && shasum -a 256 -c cliproxyapi-linux-x86_64.sha256)
+```
+
+Không commit helper vào Git. `linux/.gitignore` đã coi đây là binary được
+build bởi `linux/scripts/build-cliproxy.sh`.
+
+### 4. Đính helper vào release hiện có
+
+Linux workflow cần release/tag đã tồn tại. Upload đúng hai asset tạm thời:
+
+```bash
+gh release upload vX.Y.Z \
+  /tmp/cliproxyapi-linux-x86_64 \
+  /tmp/cliproxyapi-linux-x86_64.sha256 \
+  --repo hapo-nghialuu/BirdNion \
+  --clobber
+```
+
+Kiểm tra trước khi dispatch:
+
+```bash
+gh release view vX.Y.Z --repo hapo-nghialuu/BirdNion \
+  --json assets --jq '.assets[].name'
+```
+
+Danh sách tạm phải có asset macOS (nếu release đã có), helper và helper
+checksum; không được còn `.deb`, `.rpm` hoặc `.AppImage` cũ nếu đang release
+lại Linux.
+
+### 5. Dispatch Linux release
+
+Dispatch từ `main` mới nhất, truyền tag của release đã tồn tại:
+
+```bash
+gh workflow run linux-release.yml \
+  --repo hapo-nghialuu/BirdNion \
+  --ref main \
+  -f tag=vX.Y.Z
+```
+
+Lấy run id và theo dõi trực tiếp:
+
+```bash
+gh run list --repo hapo-nghialuu/BirdNion \
+  --workflow linux-release.yml --limit 3 \
+  --json databaseId,status,conclusion,headSha,url
+
+gh run watch RUN_ID \
+  --repo hapo-nghialuu/BirdNion \
+  --exit-status --interval 10
+```
+
+Các gate phải pass theo đúng thứ tự: checkout, version check, system
+dependencies, Node/Rust toolchain, `npm ci`, download + checksum helper, Rust
+tests, Tauri bundle, upload ba package và cleanup helper. GitHub warning về
+Node.js của action không tự làm release fail; vẫn phải ghi nhận warning, không
+che nó bằng cách lọc output.
+
+Workflow cần ba GitHub Actions secrets và tự kiểm tra chúng trước khi package:
+
+- `HAPO_BASE_URL`
+- `HAPO_ME_URL`
+- `HAPO_AUTH_TEMPLATE` — bắt buộc chứa literal `{token}`
+
+Workflow còn kiểm tra các giá trị này đã được bake vào Linux release binary.
+Không commit endpoint thật hoặc token vào repository.
+
+### 6. Verify sau khi workflow thành công
+
+```bash
+gh run view RUN_ID --repo hapo-nghialuu/BirdNion \
+  --json status,conclusion,headSha,url
+
+gh release view vX.Y.Z --repo hapo-nghialuu/BirdNion \
+  --json tagName,targetCommitish,assets,isDraft,isPrerelease,url
+```
+
+Release cuối phải có đúng các asset cần phát hành:
+
+- `BirdNion-<version>.zip` — macOS, nếu release này có lane macOS.
+- `BirdNion_<version>_amd64.deb`.
+- `BirdNion-<version>-1.x86_64.rpm`.
+- `BirdNion_<version>_amd64.AppImage`.
+
+`cliproxyapi-linux-x86_64` và `.sha256` phải biến mất sau cleanup. Đọc digest
+GitHub để lưu SHA256 của ba package; nếu cần kiểm chứng độc lập, download từng
+asset rồi chạy `shasum -a 256`/`sha256sum` tại máy nhận.
+
+### 7. Release lại Linux cho cùng một tag
+
+Chỉ xoá package Linux cũ sau khi đã xác định đúng asset id bằng REST API. Không
+dùng tag id, không xoá release, không xoá asset macOS:
+
+```bash
+gh api repos/hapo-nghialuu/BirdNion/releases/tags/vX.Y.Z \
+  --jq '.assets[] | [.name, (.id|tostring)] | @tsv'
+
+gh api --method DELETE \
+  repos/hapo-nghialuu/BirdNion/releases/assets/NUMERIC_ASSET_ID
+```
+
+`gh release view --json assets` hiển thị GraphQL node id; endpoint REST DELETE
+cần numeric asset id lấy từ `gh api` như lệnh trên. Sau khi xoá đúng ba
+package Linux, upload helper/checksum, dispatch lại workflow và chỉ coi release
+hoàn tất khi ba package mới xuất hiện, helper đã bị cleanup, còn asset macOS
+vẫn nguyên vẹn.
+
+Nếu workflow fail trước bước cleanup, helper có thể còn trên release. Khi retry,
+kiểm tra và xoá thủ công đúng hai helper asset; đồng thời kiểm tra package nào
+đã upload để tránh tạo asset trùng hoặc giữ package không thuộc lần build mới.
+
+### 8. Quy trình macOS chuẩn
+
+Release macOS dùng script thay vì bump thủ công:
+
+```bash
+git status --short --branch
+gh auth status
+source Scripts/dev-env.sh
+Scripts/release.sh X.Y.Z
+```
+
+Script yêu cầu branch `main`, cây git sạch và `HAPO_BASE_URL` cho release
+build. Gate chạy macOS `xcodebuild test`, Linux TypeScript build và Rust test
+trước khi đổi version hoặc publish. Sau đó script:
+
+1. bump `BirdNion/Info.plist` và `MARKETING_VERSION` trong `project.pbxproj`;
+2. build Release với `ONLY_ACTIVE_ARCH=NO` và `CLIPROXYAPI_UNIVERSAL=1`, nên app/helper có lane Apple Silicon + Intel;
+3. kiểm tra bundle version, Hapo build settings, zip và SHA256;
+4. commit/push đúng source commit đã build;
+5. tạo hoặc upload `vX.Y.Z`, tải lại asset và verify SHA;
+6. cập nhật cask trong repo BirdNion và repo `homebrew-tap`.
+
+`--skip-build` chỉ dùng khi đã có build hợp lệ và cố ý bỏ qua verification và
+build; `--dry-run` không publish. Sau release, lệnh update đúng là:
+
+```bash
+brew update && brew upgrade --cask birdnion
+```
+
+Không thay `birdnion` bằng tên project/agent khác.
+
+## Biên bản session Linux `v0.10.20`
+
+Đây là receipt lịch sử để đối chiếu quy trình trên:
+
+- Đã xoá đúng ba Linux asset cũ: `.deb` asset `518180192`, AppImage asset `518180193`, `.rpm` asset `518180194`.
+- Giữ nguyên `BirdNion-0.10.20.zip` của macOS, asset id `517775288`.
+- Pull/fetch `main` mới nhất và build từ `4e7c2762e39f64731353e58aec7fee59abcc9076`.
+- Tag `v0.10.20` vẫn có target commit macOS `9b36cc0c1b74de2b15147caa6409a5aabd5e4138`; đây là lý do phải ghi riêng Linux build commit.
+- Workflow [32088016909](https://github.com/hapo-nghialuu/BirdNion/actions/runs/32088016909) thành công trong `8m10s`.
+- SHA256 cuối của Linux assets: `.deb` `60e446cd5d234cfafb19fc08fd42cd56c79f4aa7d3fa9e0423b8ce62ed478d9a`; `.rpm` `85a9c523359f35d095071600b87c0cf6466bed5d01e16e53fa1ca0d13cfff9c9`; `.AppImage` `69d2d478658d5b13c4c2e84a1aa84d059bfd12eb2d7eab5da77531ef8c83a786`.
+- Helper và checksum helper đã được workflow xoá sau khi upload package; người dùng Linux không cần download chúng.
+
+## Vấn đề cần nhớ
+
+- Linux release hiện là manual-only; push tag không tự build Linux.
+- Linux package có thể được build từ `main` mới hơn source commit mà tag đang trỏ tới; luôn ghi `headSha` của workflow.
+- Native Linux packaging cần runner Ubuntu/Linux; local macOS chỉ nên build helper hoặc chạy frontend/Rust tests.
+- Không dùng checksum được tạo với absolute path; checksum file phải tham chiếu basename đúng với file download.
+- Không xoá tag/release để thay package Linux. Xác định numeric asset id, xoá đúng ba package, rồi xác minh lại toàn bộ asset sau workflow.
+- macOS hiện ad-hoc signed; Homebrew cask dùng postflight xoá quarantine. Notarization/Developer ID vẫn là việc riêng nếu cần phân phối production không qua postflight.
 
 ## Code signing
 
