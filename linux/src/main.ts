@@ -31,7 +31,7 @@ import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
   MONTHLY_BUDGET_CHANGED_EVENT, getProviderBudgetUsd, PROVIDER_BUDGET_STORAGE_KEYS,
-  PROVIDER_BUDGET_CHANGED_EVENT,
+  PROVIDER_BUDGET_CHANGED_EVENT, TRAY_DISPLAY_CHANGED_EVENT,
 } from "./settings-about";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -957,65 +957,99 @@ function loadTrayLogo(id: string): Promise<HTMLImageElement | null> {
   });
 }
 
+/** Bounding box of non-transparent pixels, or null when fully transparent.
+ * Used to strip the transparent margin brand SVGs ship with. */
+function opaqueBounds(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+): { x: number; y: number; w: number; h: number } | null {
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] === 0) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+
 /**
- * Paint `91%` + provider logo into one PNG (percent left, logo right).
+ * Paint `91%` then the provider logo into one PNG — macOS parity, one line.
  *
- * Linux GNOME AppIndicator / StatusNotifier scales the tray image to the
- * **full panel height** (no fixed 18pt slot like macOS). Glyph size is
- * therefore a ratio of canvas height, not absolute px:
+ * macOS sets the percent as the status button's `title` and the logo as its
+ * `image` (imageRight), so AppKit lays out 12pt text beside an 18pt logo in a
+ * 24pt-tall slot. GNOME has no equivalent: its StatusNotifier label paints at
+ * full system type size, so the percent has to live inside the icon bitmap.
  *
- *   - GNOME top-bar text ≈ 36–42% of panel height (clock / locale chip).
- *   - v2 used 14/18 (78%) → huge. v3 used 12/22 (55%) → still oversized
- *     next to "vi" / network. v4 targets ≈ 38% with lighter weight.
- *
- * Never fall back to StatusNotifier `title` for the percent — the panel
- * paints that label at full system type size and it always looks too big.
+ * The catch is that the panel fits that bitmap into a ~22px **square** slot,
+ * scaling by whichever side is larger. Every wasted pixel of width therefore
+ * shrinks the glyphs: at 94x64 the panel scaled by 0.23 and rendered the
+ * percent near 8px. Keeping the canvas tight to the content (~1.4 aspect,
+ * matching macOS's text+logo proportions) lifts that to ~0.5.
  */
 async function renderPercentProviderIcon(
   providerId: string,
   percentText: string,
 ): Promise<number[] | null> {
   // Size tag busts cache when we retune metrics.
-  const cacheKey = `v4|${providerId}|${percentText}`;
+  const cacheKey = `v16|${providerId}|${percentText}`;
   const cached = trayIconCache.get(cacheKey);
   if (cached) return cached;
 
-  // Ratio template: text ~38% of canvas, logo ~46%, rest is breathing room
-  // so the panel scale-up doesn't make glyphs fill the whole tray slot.
+  // macOS proportions inside a 32pt-tall box. The panel scales this bitmap to
+  // the panel height and keeps its aspect, so the on-screen glyph size follows
+  // `fontPx / height` — width is free, but an oversized font reads as shouting
+  // next to GNOME's own indicators.
+  // The panel scales this bitmap to the panel height and keeps its aspect, so
+  // on-screen size follows `ink height / canvas height` — NOT the nominal font
+  // size. Growing the logo to "fill" the box therefore just makes the logo
+  // huge next to unchanged digits; keep both proportional to each other.
   const height = 32;
-  const fontPx = 12; // 12/32 = 37.5% of canvas height
-  const iconPx = 15; // 15/32 ≈ 47%
+  // Trimming the logo's transparent margin (below) also shrank the canvas, and
+  // because the panel scales by height a narrower bitmap reads smaller overall
+  // — so the glyphs need to grow back to land at the size they did before.
+  const fontPx = 16;
+  const iconPx = 22;
   const gap = 3;
-  const padX = 2;
   const dpr = Math.min(3, Math.max(2, Math.round(window.devicePixelRatio || 2)));
-  // Regular weight + UI sans (not mono 500): mono digits read heavier at the
-  // same px size and looked "to" next to GNOME indicators.
-  const font = `400 ${fontPx}px system-ui, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif`;
+  // Bold, and Ubuntu/DejaVu ahead of `system-ui`: the panel downscales this
+  // bitmap, and `system-ui` has no real bold cut in WebKitGTK, so a heavier
+  // weight silently synthesised back to regular and lost strokes on the way.
+  const font = `700 ${fontPx}px Ubuntu, "DejaVu Sans", "Noto Sans", system-ui, sans-serif`;
 
   const measure = document.createElement("canvas").getContext("2d");
   if (!measure) return null;
   measure.font = font;
-  // ceil + 1px slack so anti-aliased edges aren't clipped after scale.
-  const textW = Math.ceil(measure.measureText(percentText).width) + 1;
+  // `width` is the advance, which bold faces overhang; use the painted extent
+  // so the logo cannot land on the tail of the "%" glyph.
+  const m = measure.measureText(percentText);
+  const textW = Math.ceil(Math.max(m.width, m.actualBoundingBoxRight ?? m.width)) + 1;
 
+  const width = textW + gap + iconPx;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.ceil((padX + textW + gap + iconPx + padX) * dpr));
+  canvas.width = Math.ceil(width * dpr);
   canvas.height = Math.ceil(height * dpr);
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, width, height);
+
   ctx.font = font;
   ctx.fillStyle = "#ffffff";
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   // Optical center: alphabetic middle sits slightly high on sans faces.
-  ctx.fillText(percentText, padX, height / 2 + 0.75);
+  ctx.fillText(percentText, 0, height / 2 + 0.75);
 
   const logo = await loadTrayLogo(providerId);
+  let drawnW = 0;
   if (logo) {
-    const ix = padX + textW + gap;
-    const iy = (height - iconPx) / 2;
     // Offscreen: draw logo then white-tint alpha (macOS menu-bar logo tint).
     const off = document.createElement("canvas");
     off.width = Math.ceil(iconPx * dpr);
@@ -1028,12 +1062,40 @@ async function renderPercentProviderIcon(
       octx.globalCompositeOperation = "source-in";
       octx.fillStyle = "#ffffff";
       octx.fillRect(0, 0, off.width, off.height);
-      ctx.drawImage(off, ix, iy, iconPx, iconPx);
+      // Brand SVGs carry their own transparent margin, which showed up as dead
+      // space between the digits and the panel edge. Measure the painted box
+      // and blit only that, so the mark sits flush in the tray slot.
+      const ink = opaqueBounds(octx, off.width, off.height);
+      if (ink) {
+        const scale = iconPx / Math.max(ink.w, ink.h);
+        drawnW = ink.w * scale / dpr;
+        ctx.drawImage(
+          off,
+          ink.x, ink.y, ink.w, ink.h,
+          textW + gap, (height - (ink.h * scale) / dpr) / 2,
+          drawnW, (ink.h * scale) / dpr,
+        );
+      } else {
+        drawnW = iconPx;
+        ctx.drawImage(off, textW + gap, (height - iconPx) / 2, iconPx, iconPx);
+      }
     }
   }
 
+  // Trim the reserved-but-unused tail (the logo usually paints narrower than
+  // `iconPx` once its own margin is gone) so the tray slot has no dead space.
+  const usedW = Math.ceil(textW + gap + (drawnW || iconPx));
+  let out: HTMLCanvasElement = canvas;
+  if (usedW < width) {
+    const tight = document.createElement("canvas");
+    tight.width = Math.ceil(usedW * dpr);
+    tight.height = canvas.height;
+    tight.getContext("2d")?.drawImage(canvas, 0, 0);
+    out = tight;
+  }
+
   const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob((b) => resolve(b), "image/png"));
+    out.toBlob((b) => resolve(b), "image/png"));
   if (!blob) return null;
   const buf = new Uint8Array(await blob.arrayBuffer());
   const bytes = Array.from(buf);
@@ -1532,6 +1594,12 @@ window.addEventListener("DOMContentLoaded", () => {
   // Settings webview → main: rebuild tab order (macOS providersDidChange).
   void listen(PROVIDERS_CHANGED_EVENT, () => {
     void rebuildProviderOrderFromSettings().catch(() => {});
+  });
+  // Settings webview → main: tray-percent toggled. Must be a Tauri event —
+  // Settings is a separate webview, so its `storage`/DOM events never arrive
+  // here, and the rotation timer would keep repainting the percent frame.
+  void listen(TRAY_DISPLAY_CHANGED_EVENT, () => {
+    onTrayDisplayPrefChanged();
   });
   load().catch((err) => {
     document.querySelector("#app")!.textContent = `${t("loadError")}: ${err}`;

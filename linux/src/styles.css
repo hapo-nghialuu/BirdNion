@@ -1673,8 +1673,9 @@ html.popover-capped .app-body {
 }
 
 .cc-power-off {
-  background: linear-gradient(135deg, #7a8494 0%, #3d4654 100%);
-  color: rgba(255, 255, 255, 0.78);
+  /* VocabbyTheme secondary -> brandNavy (macOS gradient pair). */
+  background: linear-gradient(135deg, #c9c6bc 0%, #1f2433 100%);
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .cc-power-stale {
@@ -1684,7 +1685,8 @@ html.popover-capped .app-body {
 }
 
 .cc-power-needsSetup {
-  background: linear-gradient(135deg, #8a93a0 0%, #3d4654 100%);
+  /* secondary @ 84% -> brandNavy; the muted ramp carries "not ready yet". */
+  background: linear-gradient(135deg, rgba(201, 198, 188, 0.84) 0%, #1f2433 100%);
   color: rgba(255, 255, 255, 0.72);
 }
 
@@ -3629,7 +3631,12 @@ body.settings-body-root {
 /* Selected chips stay icon-only (no expanded name). */
 .tab-pill.tab-icon.active .tab-pill-label { display: none; }
 .tab-pill:hover { border-color: var(--text); }
-.tab-pill.active {
+/* Selected chip is ink-filled, not accent-blue. The legacy rules above still
+ * carry `.tab-pill.tab-icon.active { background: var(--accent) }`, which is
+ * one class more specific than `.tab-pill.active` — match that specificity
+ * here so the icon chips follow the design's black fill too. */
+.tab-pill.active,
+.tab-pill.tab-icon.active {
   background: var(--text);
   border-color: var(--text);
   color: var(--bg);
@@ -3720,6 +3727,10 @@ body.settings-body-root {
 .quota-summary {
   display: flex;
   flex-direction: column;
+  /* Reset the legacy row-layout `align-items: center` above: as a column it
+   * shrink-wrapped every child, so the pct/meta row centred instead of
+   * spanning the card and pinning to both edges. */
+  align-items: stretch;
   gap: 0;
   margin-top: 16px;
   padding-top: 14px;
@@ -4472,26 +4483,67 @@ body.settings-body-root {
     0 0 0 1px rgba(0, 0, 0, 0.12),
     0 2px 8px rgba(0, 0, 0, 0.14);
 }
+/* macOS draws the glyph at 34% of the diameter, and dims it to 72% white for
+ * the states that are not actively backing Claude Code. */
 .cc-power-lg .cc-power-icon { width: 19px; height: 19px; color: #fff; }
+.cc-power-lg.cc-power-off .cc-power-icon,
+.cc-power-lg.cc-power-needsSetup .cc-power-icon { color: rgba(255, 255, 255, 0.72); }
+/* Two-stop diagonal gradients matching macOS ClaudeCodePowerButton exactly:
+ * topLeading -> bottomTrailing (135deg) over VocabbyTheme pairs. The previous
+ * four-stop ramps used cool greys that had no counterpart in the palette. */
 .cc-power-lg.cc-power-on {
-  background: linear-gradient(145deg, #73adff 0%, #469be9 38%, #1f4fd8 72%, #1a3a9e 100%);
-  box-shadow: 0 0 16px rgba(31, 79, 216, 0.42), 0 2px 6px rgba(0, 0, 0, 0.16);
+  /* brandBlue -> blue */
+  background: linear-gradient(135deg, #469be9 0%, #2f7fd0 100%);
+  box-shadow: 0 0 16px rgba(70, 155, 233, 0.42), 0 2px 6px rgba(0, 0, 0, 0.16);
   border-color: rgba(255, 255, 255, 0.28);
 }
 .cc-power-lg.cc-power-off {
-  background: linear-gradient(145deg, #949aa3 0%, #5c6370 42%, #343a44 78%, #1e2228 100%);
+  /* secondary -> brandNavy */
+  background: linear-gradient(135deg, #c9c6bc 0%, #1f2433 100%);
   color: rgba(255, 255, 255, 0.94);
 }
 .cc-power-lg.cc-power-stale {
-  background: linear-gradient(145deg, #ffd166 0%, #e0a93f 45%, #8f5f12 100%);
+  /* warningFill -> yellow */
+  background: linear-gradient(135deg, #e0a93f 0%, #8f5f12 100%);
   box-shadow: 0 0 12px rgba(224, 169, 63, 0.35);
 }
 .cc-power-lg.cc-power-needsSetup {
-  background: linear-gradient(145deg, #9ea3ab 0%, #666c76 50%, #3a3f48 100%);
-  opacity: 0.78;
+  /* secondary @ 84% -> brandNavy; macOS keeps the disc fully opaque and lets
+   * the muted gradient carry the "not ready yet" read. */
+  background: linear-gradient(135deg, rgba(201, 198, 188, 0.84) 0%, #1f2433 100%);
 }
 .cc-power-lg:hover:not(:disabled) { transform: scale(1.04); filter: brightness(1.05); }
 .cc-power-lg:active:not(:disabled) { transform: scale(0.96); }
+/* Attention badge — macOS ClaudeCodePowerButton draws a bare 16pt dot on a
+ * 116pt disc (~14%) sitting over the rim at 34% of the radius. The legacy
+ * rule used a fixed 10px dot with a thick white ring tucked 6px inside the
+ * disc, which read as a sticker rather than a status pip. */
+/* macOS renders the power glyph at `weight: .bold`, while the shared icon set
+ * draws SF *regular* (stroke 1.55). On a 58px disc that reads as a thin wiry
+ * symbol instead of the solid mark in the reference. */
+.cc-power .cc-power-icon path,
+.cc-power .cc-power-icon line,
+.cc-power-lg .cc-power-icon path,
+.cc-power-lg .cc-power-icon line {
+  /* The shared icon set sets stroke-width on the child paths, so the override
+   * has to target them rather than the <svg> wrapper. */
+  stroke-width: 2.1;
+}
+
+/* Attention badge — macOS ClaudeCodePowerButton draws a bare 16pt dot on a
+ * 116pt disc (~14%), centred 34% of the diameter out so it sits over the rim.
+ * Applies to BOTH sizes: the popover button is plain `.cc-power` (58px) and
+ * only the Settings pane adds `.cc-power-lg` (56px), so scoping this to the
+ * -lg variant left the popover on the old ringed sticker. */
+.cc-power .cc-power-dot,
+.cc-power-lg .cc-power-dot {
+  width: 8px;
+  height: 8px;
+  top: 5px;
+  right: 5px;
+  border: none;
+  box-shadow: none;
+}
 .ccp-field-row { padding: 12px 0; border-top: 1px solid var(--hairline); }
 .ccp-form-label { font-size: 13px; }
 .ccp-proxy-head { padding: 14px 0; border-top: 1px solid var(--hairline); }
