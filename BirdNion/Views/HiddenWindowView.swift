@@ -14,26 +14,48 @@ struct HiddenWindowView: View {
     var body: some View {
         Color.clear
             .frame(width: 20, height: 20)
-            .onReceive(NotificationCenter.default.publisher(for: .openSettingsWindow)) { _ in
+            .background(KeepaliveWindowConfigurator())
+            .onReceive(NotificationCenter.default.publisher(for: .openSettingsWindow)) { notification in
+                // Ack so AppDelegate/SettingsWindowOpener know the SwiftUI
+                // path ran (login-item launches sometimes miss this view).
+                (notification.object as? SettingsOpenRequest)?.wasHandled = true
                 Task { @MainActor in
                     self.openSettings()
                 }
             }
-            .onAppear {
-                if let window = NSApp.windows.first(where: { $0.title == "BirdNionLifecycleKeepalive" }) {
-                    window.styleMask = [.borderless]
-                    window.collectionBehavior = [.auxiliary, .ignoresCycle, .transient, .canJoinAllSpaces]
-                    window.isExcludedFromWindowsMenu = true
-                    window.level = .floating
-                    window.isOpaque = false
-                    window.alphaValue = 0
-                    window.backgroundColor = .clear
-                    window.hasShadow = false
-                    window.ignoresMouseEvents = true
-                    window.canHide = false
-                    window.setContentSize(NSSize(width: 1, height: 1))
-                    window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
-                }
-            }
+    }
+}
+
+/// Configures the keepalive WindowGroup via the hosting NSView's window —
+/// more reliable than matching by title in `onAppear` (title can lag / differ
+/// after a login-item cold start).
+@MainActor
+private struct KeepaliveWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> KeepaliveWindowConfiguratorView {
+        KeepaliveWindowConfiguratorView()
+    }
+
+    func updateNSView(_ nsView: KeepaliveWindowConfiguratorView, context: Context) {}
+}
+
+@MainActor
+private final class KeepaliveWindowConfiguratorView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        window.identifier = NSUserInterfaceItemIdentifier("BirdNionLifecycleKeepalive")
+        window.styleMask = [.borderless]
+        window.collectionBehavior = [.auxiliary, .ignoresCycle, .transient, .canJoinAllSpaces]
+        window.isExcludedFromWindowsMenu = true
+        window.level = .floating
+        window.isOpaque = false
+        window.alphaValue = 0
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.canHide = false
+        window.setContentSize(NSSize(width: 1, height: 1))
+        window.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        SettingsWindowOpener.markKeepaliveReady()
     }
 }

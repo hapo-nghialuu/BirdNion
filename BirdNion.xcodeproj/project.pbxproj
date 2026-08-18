@@ -47,6 +47,7 @@
 		GRK00001000000000000B01 /* GrokProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00002000000000000F01 /* GrokProvider.swift */; };
 		GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00004000000000000F01 /* GrokCostScanner.swift */; };
 		CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHS00002000000000000F01 /* CostHistoryStore.swift */; };
+		SWO00001000000000000B01 /* SettingsWindowOpener.swift in Sources */ = {isa = PBXBuildFile; fileRef = SWO00002000000000000F01 /* SettingsWindowOpener.swift */; };
 		XAI0001000000000000B001 /* XAIBillingFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAI0002000000000000F001 /* XAIBillingFetcher.swift */; };
 		XAI0003000000000000B001 /* XAIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAI0004000000000000F001 /* XAIProvider.swift */; };
 		XAIT0001000000000000B001 /* XAIBillingFetcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAIT0002000000000000F001 /* XAIBillingFetcherTests.swift */; };
@@ -233,6 +234,7 @@
 		GRK00002000000000000F01 /* GrokProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokProvider.swift; sourceTree = "<group>"; };
 		GRK00004000000000000F01 /* GrokCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokCostScanner.swift; sourceTree = "<group>"; };
 		CHS00002000000000000F01 /* CostHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CostHistoryStore.swift; sourceTree = "<group>"; };
+		SWO00002000000000000F01 /* SettingsWindowOpener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsWindowOpener.swift; sourceTree = "<group>"; };
 		OAI00002000000000000F01 /* OpenAIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenAIProvider.swift; sourceTree = "<group>"; };
 		XAI0002000000000000F001 /* XAIBillingFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XAIBillingFetcher.swift; sourceTree = "<group>"; };
 		XAI0004000000000000F001 /* XAIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XAIProvider.swift; sourceTree = "<group>"; };
@@ -704,6 +706,7 @@
 				GRK00001000000000000B01 /* GrokProvider.swift in Sources */,
 				GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
+				SWO00001000000000000B01 /* SettingsWindowOpener.swift in Sources */,
 				OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */,
 				XAI0001000000000000B001 /* XAIBillingFetcher.swift in Sources */,
 					XAI0003000000000000B001 /* XAIProvider.swift in Sources */,

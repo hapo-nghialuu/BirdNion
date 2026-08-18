@@ -86,6 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         services.start()
         // Restore the user's appearance choice before any window shows.
         services.settings.applyAppearance()
+        // Mount the keepalive WindowGroup early so the first Settings open
+        // after a cold start / login-item launch is not racing scene creation.
+        SettingsWindowOpener.warmup()
         Task { @MainActor in
             await EmbeddedCLIProxyService.shared.restoreIfConfigured()
         }
@@ -558,12 +561,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openSettings(_ sender: AnyObject?) {
-        // Dismiss the transient popover, bring the app forward, then ask the
-        // invisible keep-alive scene to call SwiftUI's openSettings action.
+        // Dismiss the transient popover, then open Settings via the shared
+        // opener: promotes LSUIElement → .regular (required after login-item
+        // launch), posts to HiddenWindowView's openSettings, and falls back
+        // to AppKit showSettingsWindow: when the keepalive isn't ready yet.
         hidePanel()
-        NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
+            SettingsWindowOpener.open()
         }
     }
 
