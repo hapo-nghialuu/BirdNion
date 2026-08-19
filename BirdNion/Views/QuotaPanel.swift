@@ -2137,11 +2137,9 @@ struct AntigravitySemanticQuotaRows: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             quotaGroup(title: "Gemini", windows: geminiWindows)
-            if !geminiWindows.isEmpty && !claudeGPTWindows.isEmpty {
-                PopoverInsetHairline()
-                    .popoverContentInset()
-                    .padding(.vertical, 4)
-            }
+            // No extra between-group rule: each row already draws the same
+            // inset hairline as `WindowRow` (aligned to the quota bar width).
+            // A second `.popoverContentInset()` rule here was shorter than the bar.
             quotaGroup(title: "Claude/GPT", windows: claudeGPTWindows)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2211,6 +2209,8 @@ private struct AntigravitySemanticQuotaRow: View {
         }
         .popoverContentInset()
         .padding(.vertical, 12)
+        // Same as `WindowRow`: overlay hairline on the full row width; the
+        // hairline's own horizontal inset matches the bar/text content edges.
         .overlay(alignment: .bottom) {
             PopoverInsetHairline()
         }
