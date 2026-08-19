@@ -213,14 +213,15 @@ enum ClaudeOAuthKeychainPromptMode: String, CaseIterable, Sendable, Codable {
 
 /// Reads the user's Keychain-prompt preference from UserDefaults. Simplified
 /// from CodexBar (no read-strategy matrix — BirdNion always uses the Security
-/// framework reader). Default `.onlyOnUserAction`.
+/// framework reader). Default `.never` so background/manual OAuth never pops
+/// the macOS Keychain dialog; CLI/Web cover signed-in Claude Code users.
 enum ClaudeOAuthKeychainPromptPreference {
     static let userDefaultsKey = "claudeOAuthKeychainPromptMode"
 
     static func current(userDefaults: UserDefaults = .standard) -> ClaudeOAuthKeychainPromptMode {
         guard let raw = userDefaults.string(forKey: userDefaultsKey),
               let mode = ClaudeOAuthKeychainPromptMode(rawValue: raw)
-        else { return .onlyOnUserAction }
+        else { return .never }
         return mode
     }
 }

@@ -1190,8 +1190,8 @@ extension ProvidersPane {
     }
 
     /// Keychain prompt policy picker — mirrors CodexBar's
-    /// `ClaudeOAuthKeychainPromptMode`. `.never` skips OAuth entirely (use
-    /// Web/CLI); `.onlyOnUserAction` prompts only on manual refresh;
+    /// `ClaudeOAuthKeychainPromptMode`. Default `.never` skips OAuth Keychain
+    /// (use Web/CLI); `.onlyOnUserAction` prompts only on manual refresh;
     /// `.always` prompts on every background fetch.
     @ViewBuilder
     func claudeOAuthKeychainPromptPicker() -> some View {
