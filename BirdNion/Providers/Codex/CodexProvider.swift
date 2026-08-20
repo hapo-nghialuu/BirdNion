@@ -213,6 +213,11 @@ final class CodexProvider: QuotaProvider {
     private static let sparkPrimaryLabel = "Codex Spark 5 giờ"
     private static let sparkWeeklyLabel = "Codex Spark Tuần"
 
+    /// True when a mapped `QuotaWindow` is a Codex Spark limit (popover filter).
+    static func isSparkWindowLabel(_ label: String) -> Bool {
+        label.lowercased().contains("spark")
+    }
+
     /// Heuristic: a Spark entry is identified by `metered_feature` or `limit_name`
     /// containing "spark" (case-insensitive). Mirrors CodexBar's `isSpark`.
     private static func isSparkEntry(_ e: CodexUsageResponse.AdditionalRateLimit) -> Bool {

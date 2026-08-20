@@ -1049,6 +1049,19 @@ struct ProviderCard: View {
         return credits
     }
 
+    /// Popover window list. Optional model-specific rows honor Settings toggles
+    /// (Codex Spark / Claude Fable, default on); other surfaces keep full data.
+    private var popoverWindows: [QuotaWindow] {
+        switch status.id {
+        case "codex" where !settings.codexShowSparkInPopover:
+            return status.windows.filter { !CodexProvider.isSparkWindowLabel($0.label) }
+        case "claude" where !settings.claudeShowFableInPopover:
+            return status.windows.filter { !ClaudeProvider.isFableWindowLabel($0.label) }
+        default:
+            return status.windows
+        }
+    }
+
     private func creditsText(_ credits: Double) -> String {
         credits.rounded() == credits
             ? String(Int(credits))
@@ -1106,7 +1119,7 @@ struct ProviderCard: View {
                 if let warning = quota.staleWarning(for: status.id) {
                     StaleQuotaBanner(providerID: status.id, warning: warning)
                 }
-                ForEach(status.windows) { win in
+                ForEach(popoverWindows) { win in
                     WindowRow(
                         window: win,
                         providerID: status.id,

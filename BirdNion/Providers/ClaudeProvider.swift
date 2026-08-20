@@ -38,6 +38,16 @@ final class ClaudeProvider: QuotaProvider {
         await runFetch()
     }
 
+    /// True when an extra rate window is the Claude Fable model-scoped limit.
+    static func isFableExtra(_ extra: NamedRateWindow) -> Bool {
+        extra.id.lowercased().contains("fable") || isFableWindowLabel(extra.title)
+    }
+
+    /// True when a mapped `QuotaWindow` label is Claude Fable (popover filter).
+    static func isFableWindowLabel(_ label: String) -> Bool {
+        label.lowercased().contains("fable")
+    }
+
     /// Keychain prompting mirrors CodexBar: `.always` may prompt anywhere,
     /// `.onlyOnUserAction` only during a user-forced refresh (background polls
     /// stay silent), `.never` never prompts.
@@ -99,15 +109,18 @@ final class ClaudeProvider: QuotaProvider {
                                   resetsAt: opus.resetsAt, seconds: 7 * 24 * 3600))
         }
         // Extra product windows ("Daily Routines") render as bars like
-        // CodexBar's menu card. Model-scoped weekly limits ("X only") stay out
-        // of the popover by user preference — they remain visible in the
-        // Settings cost section via webExtras. Supplementary: they never take
-        // over the lowest-quota headline.
-        for extra in snapshot.extraRateWindows
-        where extra.usageKnown && !extra.id.hasPrefix("claude-weekly-scoped-") {
+        // CodexBar's menu card. Other model-scoped weekly limits ("Sonnet only")
+        // stay out of `windows` (Settings cost keeps them via webExtras).
+        // Fable is an exception: included here so Settings → Claude can toggle
+        // popover visibility (default on); the popover filters when off.
+        for extra in snapshot.extraRateWindows where extra.usageKnown {
+            let isScoped = extra.id.hasPrefix("claude-weekly-scoped-")
+            let isFable = Self.isFableExtra(extra)
+            if isScoped && !isFable { continue }
             let used = max(0, min(100, Int(extra.window.usedPercent.rounded())))
             windows.append(QuotaWindow(
-                label: extra.title, usedPct: used, remainingPct: 100 - used,
+                label: isFable ? "Fable" : extra.title,
+                usedPct: used, remainingPct: 100 - used,
                 resetDate: extra.window.resetsAt,
                 windowSeconds: (extra.window.windowMinutes ?? 7 * 24 * 60) * 60,
                 isSupplementary: true))

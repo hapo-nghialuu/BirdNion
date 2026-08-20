@@ -98,6 +98,14 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertEqual(windows[1].remainingPct, 92)
     }
 
+    func testSparkWindowLabelDetection() {
+        XCTAssertTrue(CodexProvider.isSparkWindowLabel("Codex Spark 5 giờ"))
+        XCTAssertTrue(CodexProvider.isSparkWindowLabel("Codex Spark Tuần"))
+        XCTAssertTrue(CodexProvider.isSparkWindowLabel("CODEX SPARK"))
+        XCTAssertFalse(CodexProvider.isSparkWindowLabel("5 giờ"))
+        XCTAssertFalse(CodexProvider.isSparkWindowLabel("Tuần"))
+    }
+
     func testDecodeCreditsNumber() throws {
         let json = #"{"plan_type":"plus","credits":{"balance":12.5}}"#.data(using: .utf8)!
         let usage = try JSONDecoder().decode(CodexUsageResponse.self, from: json)

@@ -180,6 +180,12 @@ final class SettingsStore: ObservableObject {
     @AppStorage(CodexWebDashboard.enabledKey) var codexOpenAIWebEnabled: Bool = false
     @AppStorage(CodexWebDashboard.cookieSourceKey) var codexCookieSource: String = "auto"
     @AppStorage(CodexWebDashboard.manualCookieKey) var codexManualCookieHeader: String = ""
+    /// Show Codex Spark model-specific windows in the provider popover.
+    /// On by default; Settings / All-tab surfaces stay unchanged when off.
+    @AppStorage("codexShowSparkInPopover") var codexShowSparkInPopover: Bool = true
+    /// Show Claude Fable (model-scoped weekly) in the provider popover.
+    /// On by default; Settings cost / All-tab stay unchanged when off.
+    @AppStorage("claudeShowFableInPopover") var claudeShowFableInPopover: Bool = true
 
     // MARK: - Claude parity settings (CodexBar parity)
     //

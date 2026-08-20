@@ -650,6 +650,7 @@ extension ProvidersPane {
             }
 
             if row.id == "codex" {
+                codexShowSparkInPopoverToggle()
                 codexWebExtrasControls()
             }
 
@@ -837,6 +838,7 @@ extension ProvidersPane {
                     HairlineRule()
                     claudeManualCookieField()
                 }
+                claudeShowFableInPopoverToggle()
                 claudeOAuthKeychainPromptPicker()
                 claudeAccountsSection()
             }
@@ -1090,23 +1092,61 @@ extension ProvidersPane {
         }
     }
 
+    /// Title + help on the left, instrument switch trailing — same alignment
+    /// whether the row is on or off (avoids `[label][switch]` packing that
+    /// shifts with label length). Shared by Codex Spark, OpenAI web extras,
+    /// and Claude Fable.
+    @ViewBuilder
+    func providerInstrumentToggleRow(
+        titleKey: String,
+        helpKey: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.t(titleKey, language))
+                    .font(.plexSans(13, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(L10n.t(helpKey, language))
+                    .font(.plexSans(10))
+                    .foregroundStyle(SettingsTheme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.instrumentSwitch)
+                .accessibilityLabel(L10n.t(titleKey, language))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Show/hide Codex Spark windows in the provider popover (default on).
+    @ViewBuilder
+    func codexShowSparkInPopoverToggle() -> some View {
+        HairlineRule()
+        providerInstrumentToggleRow(
+            titleKey: "provider.codexShowSpark",
+            helpKey: "provider.codexShowSparkHelp",
+            isOn: $settings.codexShowSparkInPopover)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
     /// OpenAI web extras toggle + cookie source (auto/manual) for Codex.
     @ViewBuilder
     func codexWebExtrasControls() -> some View {
         HairlineRule()
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: Binding(
-                get: { settings.codexOpenAIWebEnabled },
-                set: { settings.codexOpenAIWebEnabled = $0; quota.refreshFromSettings("codex") }
-            )) {
-                Text(L10n.t("provider.openAIWebExtras", language))
-                    .font(.plexSans(13, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
-            }
-            .toggleStyle(.instrument)
-            Text(L10n.t("provider.openAIWebExtrasHelp", language))
-                .font(.plexSans(10))
-                .foregroundStyle(SettingsTheme.tertiary)
+            providerInstrumentToggleRow(
+                titleKey: "provider.openAIWebExtras",
+                helpKey: "provider.openAIWebExtrasHelp",
+                isOn: Binding(
+                    get: { settings.codexOpenAIWebEnabled },
+                    set: { settings.codexOpenAIWebEnabled = $0
+                           quota.refreshFromSettings("codex") }))
 
             if settings.codexOpenAIWebEnabled {
                 HStack(spacing: 12) {
@@ -1185,6 +1225,21 @@ extension ProvidersPane {
                 .font(.plexSans(10))
                 .foregroundStyle(SettingsTheme.tertiary)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// Show/hide Claude Fable in the provider popover (default on).
+    @ViewBuilder
+    func claudeShowFableInPopoverToggle() -> some View {
+        HairlineRule()
+        providerInstrumentToggleRow(
+            titleKey: "provider.claudeShowFable",
+            helpKey: "provider.claudeShowFableHelp",
+            isOn: Binding(
+                get: { settings.claudeShowFableInPopover },
+                set: { settings.claudeShowFableInPopover = $0
+                       quota.refreshFromSettings("claude") }))
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }

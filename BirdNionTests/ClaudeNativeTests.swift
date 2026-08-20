@@ -377,6 +377,37 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(status.webExtras?.extraRateWindows.count, 0)
     }
 
+    func testMaterializeIncludesFableButNotOtherScopedWeeklies() {
+        let fable = NamedRateWindow(
+            id: "claude-weekly-scoped-fable",
+            title: "Fable only",
+            window: RateWindow(usedPercent: 29, windowMinutes: 7 * 24 * 60,
+                               resetsAt: nil, resetDescription: nil),
+            usageKnown: true)
+        let sonnetOnly = NamedRateWindow(
+            id: "claude-weekly-scoped-sonnet",
+            title: "Sonnet only",
+            window: RateWindow(usedPercent: 10, windowMinutes: 7 * 24 * 60,
+                               resetsAt: nil, resetDescription: nil),
+            usageKnown: true)
+        let snapshot = ClaudeUsageSnapshot(
+            primary: RateWindow(usedPercent: 2, windowMinutes: 5 * 60,
+                                resetsAt: nil, resetDescription: nil),
+            secondary: nil,
+            opus: nil,
+            extraRateWindows: [fable, sonnetOnly])
+
+        let status = ClaudeProvider.materialize(
+            from: snapshot, override: nil, sourceLabel: "cli", status: nil,
+            allowKeychainRead: false)
+
+        XCTAssertTrue(status.windows.contains { $0.label == "Fable" && $0.isSupplementary })
+        XCTAssertFalse(status.windows.contains { $0.label.localizedCaseInsensitiveContains("Sonnet") })
+        XCTAssertTrue(ClaudeProvider.isFableWindowLabel("Fable"))
+        XCTAssertTrue(ClaudeProvider.isFableWindowLabel("Fable only"))
+        XCTAssertFalse(ClaudeProvider.isFableWindowLabel("5 giờ"))
+    }
+
     // MARK: - Prepaid Extra usage balance
 
     func testPrepaidBalanceParsesMinorUnits() throws {
