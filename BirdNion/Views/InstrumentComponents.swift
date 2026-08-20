@@ -24,23 +24,7 @@ struct InstrumentToggleStyle: ToggleStyle {
         } label: {
             HStack(spacing: 8) {
                 configuration.label
-                ZStack(alignment: configuration.isOn ? .trailing : .leading) {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(configuration.isOn ? VocabbyTheme.blue : Color.clear)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .strokeBorder(
-                                    configuration.isOn ? Color.clear : VocabbyTheme.secondary,
-                                    lineWidth: 1.5)
-                        )
-                        .frame(width: 40, height: 20)
-                    RoundedRectangle(cornerRadius: 0, style: .continuous)
-                        .fill(configuration.isOn ? VocabbyTheme.background : VocabbyTheme.primary)
-                        .frame(width: 14, height: 14)
-                        .padding(3)
-                }
-                .frame(width: 40, height: 20)
-                .contentShape(Rectangle())
+                InstrumentSwitchTrack(isOn: configuration.isOn)
             }
         }
         .buttonStyle(.plain)
@@ -49,8 +33,52 @@ struct InstrumentToggleStyle: ToggleStyle {
     }
 }
 
+/// Switch chrome only (40×20) for trailing controls in labeled rows. Use with
+/// `.labelsHidden()` so title/help stay outside the toggle and alignment does
+/// not shift with label length (Codex Spark / Claude Fable / OpenAI web).
+struct InstrumentSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn = !configuration.isOn
+        } label: {
+            InstrumentSwitchTrack(isOn: configuration.isOn)
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+private struct InstrumentSwitchTrack: View {
+    let isOn: Bool
+
+    var body: some View {
+        ZStack(alignment: isOn ? .trailing : .leading) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(isOn ? VocabbyTheme.blue : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .strokeBorder(
+                            isOn ? Color.clear : VocabbyTheme.secondary,
+                            lineWidth: 1.5)
+                )
+                .frame(width: 40, height: 20)
+            RoundedRectangle(cornerRadius: 0, style: .continuous)
+                .fill(isOn ? VocabbyTheme.background : VocabbyTheme.primary)
+                .frame(width: 14, height: 14)
+                .padding(3)
+        }
+        .frame(width: 40, height: 20)
+        .contentShape(Rectangle())
+    }
+}
+
 extension ToggleStyle where Self == InstrumentToggleStyle {
     static var instrument: InstrumentToggleStyle { InstrumentToggleStyle() }
+}
+
+extension ToggleStyle where Self == InstrumentSwitchStyle {
+    static var instrumentSwitch: InstrumentSwitchStyle { InstrumentSwitchStyle() }
 }
 
 /// A single hairline rule — the section separator that replaces filled,
