@@ -276,18 +276,33 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration) -> Result<String,
 async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(PROBE_TIMEOUT)
+        .danger_accept_invalid_certs(true)
         .build()
         .map_err(|e| format!("Client error: {e}"))?;
-    let url = format!("http://127.0.0.1:{port}{path}");
-    let mut req = client.post(&url).header("Content-Type", "application/json").header("Connect-Protocol-Version", "1").json(&body);
-    if !csrf_token.is_empty() {
-        req = req.header("X-Codeium-Csrf-Token", csrf_token);
+
+    let schemes = ["https", "http"];
+    let mut last_err = String::new();
+
+    for scheme in schemes {
+        let url = format!("{scheme}://127.0.0.1:{port}{path}");
+        let mut req = client.post(&url).header("Content-Type", "application/json").header("Connect-Protocol-Version", "1").json(&body);
+        if !csrf_token.is_empty() {
+            req = req.header("X-Codeium-Csrf-Token", csrf_token);
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().as_u16() == 200 => {
+                return resp.json::<Value>().await.map_err(|e| format!("Invalid JSON: {e}"));
+            }
+            Ok(resp) => {
+                last_err = format!("HTTP {}", resp.status().as_u16());
+            }
+            Err(e) => {
+                last_err = format!("Network: {e}");
+            }
+        }
     }
-    let resp = req.send().await.map_err(|e| format!("Network: {e}"))?;
-    if resp.status().as_u16() != 200 {
-        return Err(format!("HTTP {}", resp.status().as_u16()));
-    }
-    resp.json::<Value>().await.map_err(|e| format!("Invalid JSON: {e}"))
+
+    Err(last_err)
 }
 
 async fn try_summary_endpoint(cfg: &config::Provider, name: &str, process: &ProcessInfo, port: u16) -> Option<ProviderStatus> {

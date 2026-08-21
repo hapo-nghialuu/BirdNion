@@ -24,9 +24,33 @@ private struct AgModelQuota {
 // JSON body and return a plain JSON body — no gRPC-web binary framing needed.
 // This is exactly what CodexBarCore does in sendRequest(payload:endpoint:timeout:).
 
+private final class AntigravityLocalhostSessionDelegate: NSObject, URLSessionDelegate {
+    static let shared = AntigravityLocalhostSessionDelegate()
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let protectionSpace = challenge.protectionSpace
+        if protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+           let trust = protectionSpace.serverTrust,
+           (protectionSpace.host == "127.0.0.1" || protectionSpace.host == "localhost") {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+}
+
 private enum AntigravityHTTP {
     static let getUserStatusPath = "/exa.language_server_pb.LanguageServerService/GetUserStatus"
     static let quotaSummaryPath = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+
+    private static let localhostSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        return URLSession(configuration: config, delegate: AntigravityLocalhostSessionDelegate.shared, delegateQueue: nil)
+    }()
 
     static func defaultRequestBody() -> [String: Any] {
         [
@@ -64,7 +88,8 @@ private enum AntigravityHTTP {
         if !csrfToken.isEmpty {
             req.setValue(csrfToken, forHTTPHeaderField: "X-Codeium-Csrf-Token")
         }
-        let (data, response) = try await session.data(for: req)
+        let effectiveSession = (session == .shared) ? localhostSession : session
+        let (data, response) = try await effectiveSession.data(for: req)
         guard let http = response as? HTTPURLResponse else {
             throw AntigravityProviderError.apiError("Response không phải HTTP")
         }
@@ -109,16 +134,23 @@ private final class AgPipeCapture: @unchecked Sendable {
 }
 
 private enum AgProcessDetector {
-    static func detect(timeout: TimeInterval) async throws -> AgProcessInfo {
+    static func detectAll(timeout: TimeInterval) async throws -> [AgProcessInfo] {
         let result = try await runCommand(
             binary: "/bin/ps",
             args: ["-ax", "-o", "pid=,command="],
             timeout: timeout,
             label: "antigravity-ps"
         )
-        return try parseProcessList(result)
+        return parseProcessList(result)
     }
 
+    static func detect(timeout: TimeInterval) async throws -> AgProcessInfo {
+        let list = try await detectAll(timeout: timeout)
+        guard let first = list.first else {
+            throw AntigravityProviderError.notRunning
+        }
+        return first
+    }
     static func listeningPorts(pid: Int, timeout: TimeInterval) async throws -> [Int] {
         let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
@@ -140,7 +172,8 @@ private enum AgProcessDetector {
 
     // MARK: Private
 
-    private static func parseProcessList(_ output: String) throws -> AgProcessInfo {
+    private static func parseProcessList(_ output: String) -> [AgProcessInfo] {
+        var results: [AgProcessInfo] = []
         for rawLine in output.components(separatedBy: "\n") {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
@@ -154,19 +187,18 @@ private enum AgProcessDetector {
                 // IDE or app language server — has a CSRF token
                 let extPort = extractPort("--extension_server_port", from: command)
                 let extToken = extractFlag("--extension_server_csrf_token", from: command)
-                return AgProcessInfo(
+                results.append(AgProcessInfo(
                     pid: pid,
                     csrfToken: token,
                     extensionPort: extPort,
                     extensionServerCSRFToken: extToken
-                )
+                ))
             } else if isCLIProcess(lower) {
                 // agy / antigravity-cli — no CSRF required
-                return AgProcessInfo(pid: pid, csrfToken: "", extensionPort: nil, extensionServerCSRFToken: nil)
+                results.append(AgProcessInfo(pid: pid, csrfToken: "", extensionPort: nil, extensionServerCSRFToken: nil))
             }
-            // IDE/app process without a token → skip (missingCSRFToken scenario)
         }
-        throw AntigravityProviderError.notRunning
+        return results
     }
 
     private static func isAntigravityProcess(_ lower: String) -> Bool {
@@ -783,20 +815,24 @@ final class AntigravityProvider: QuotaProvider {
 
     /// Probe against an already-running language_server or agy found via `ps`.
     private func fetchFromRunningProcess() async -> ProviderStatus? {
-        let process: AgProcessInfo
+        let processes: [AgProcessInfo]
         do {
-            process = try await AgProcessDetector.detect(timeout: timeout)
-        } catch {
-            // notRunning is expected when IDE is closed — not an error
-            return nil
-        }
-        let ports: [Int]
-        do {
-            ports = try await AgProcessDetector.listeningPorts(pid: process.pid, timeout: timeout)
+            processes = try await AgProcessDetector.detectAll(timeout: timeout)
         } catch {
             return nil
         }
-        return await probeEndpoints(process: process, ports: ports)
+        for process in processes {
+            let ports: [Int]
+            do {
+                ports = try await AgProcessDetector.listeningPorts(pid: process.pid, timeout: min(timeout, 2.0))
+            } catch {
+                continue
+            }
+            if let status = await probeEndpoints(process: process, ports: ports) {
+                return status
+            }
+        }
+        return nil
     }
 
     /// Spawn `agy` CLI, wait for its server port, then probe.
@@ -819,12 +855,15 @@ final class AntigravityProvider: QuotaProvider {
 
     /// Try all ports with quota-summary first, then user-status.
     private func probeEndpoints(process: AgProcessInfo, ports: [Int]) async -> ProviderStatus? {
+        let schemes = ["https", "http"]
         for port in ports {
-            if let status = await trySummaryEndpoint(scheme: "http", port: port, process: process) {
-                return status
-            }
-            if let status = await tryUserStatusEndpoint(scheme: "http", port: port, process: process) {
-                return status
+            for scheme in schemes {
+                if let status = await trySummaryEndpoint(scheme: scheme, port: port, process: process) {
+                    return status
+                }
+                if let status = await tryUserStatusEndpoint(scheme: scheme, port: port, process: process) {
+                    return status
+                }
             }
         }
         return nil
