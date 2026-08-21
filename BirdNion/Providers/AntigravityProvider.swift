@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // MARK: - Model quota (ported from AntigravityModelQuota in AntigravityStatusProbe.swift)
 
@@ -24,9 +25,7 @@ private struct AgModelQuota {
 // JSON body and return a plain JSON body — no gRPC-web binary framing needed.
 // This is exactly what CodexBarCore does in sendRequest(payload:endpoint:timeout:).
 
-private final class AntigravityLocalhostSessionDelegate: NSObject, URLSessionDelegate {
-    static let shared = AntigravityLocalhostSessionDelegate()
-
+private final class AntigravityLocalhostSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
@@ -41,16 +40,26 @@ private final class AntigravityLocalhostSessionDelegate: NSObject, URLSessionDel
             completionHandler(.performDefaultHandling, nil)
         }
     }
-}
 
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let protectionSpace = challenge.protectionSpace
+        if protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+           let trust = protectionSpace.serverTrust,
+           (protectionSpace.host == "127.0.0.1" || protectionSpace.host == "localhost") {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+}
 private enum AntigravityHTTP {
     static let getUserStatusPath = "/exa.language_server_pb.LanguageServerService/GetUserStatus"
     static let quotaSummaryPath = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
-
-    private static let localhostSession: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        return URLSession(configuration: config, delegate: AntigravityLocalhostSessionDelegate.shared, delegateQueue: nil)
-    }()
 
     static func defaultRequestBody() -> [String: Any] {
         [
@@ -71,8 +80,7 @@ private enum AntigravityHTTP {
         path: String,
         csrfToken: String,
         body: [String: Any],
-        timeout: TimeInterval,
-        session: URLSession
+        timeout: TimeInterval
     ) async throws -> Data {
         guard let url = URL(string: "\(scheme)://127.0.0.1:\(port)\(path)") else {
             throw AntigravityProviderError.apiError("Invalid URL for port \(port)")
@@ -88,18 +96,37 @@ private enum AntigravityHTTP {
         if !csrfToken.isEmpty {
             req.setValue(csrfToken, forHTTPHeaderField: "X-Codeium-Csrf-Token")
         }
-        let effectiveSession = (session == .shared) ? localhostSession : session
-        let (data, response) = try await effectiveSession.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
-            throw AntigravityProviderError.apiError("Response không phải HTTP")
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
+
+        let delegate = AntigravityLocalhostSessionDelegate()
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let task = session.dataTask(with: req) { data, response, error in
+                session.invalidateAndCancel()
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    continuation.resume(throwing: AntigravityProviderError.apiError("Response không phải HTTP"))
+                    return
+                }
+                guard http.statusCode == 200, let data else {
+                    let msg = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    continuation.resume(throwing: AntigravityProviderError.apiError("HTTP \(http.statusCode): \(msg)"))
+                    return
+                }
+                continuation.resume(returning: data)
+            }
+            task.resume()
         }
-        guard http.statusCode == 200 else {
-            let msg = String(data: data, encoding: .utf8) ?? ""
-            throw AntigravityProviderError.apiError("HTTP \(http.statusCode): \(msg)")
-        }
-        return data
     }
 }
+
 
 // MARK: - Process detection (ported from AntigravityStatusProbe port detection)
 //
@@ -433,21 +460,96 @@ private enum AgCLIWarmSession {
         return nil
     }
 
-    /// Spawn `agy` và trả về pid sau khi process đã chạy.
-    /// Process được giữ alive trong background; caller chịu trách nhiệm terminate nếu cần.
-    /// Trả về `Process` (đang chạy) và pid.
-    static func spawnAgy(binary: String) throws -> (process: Process, pid: Int) {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = []
-        // agy is a long-lived warm-session process; discard logs so inherited
-        // pipes cannot fill up and block the process before it opens its port.
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        // Chạy trong home directory để agy không bị lỗi chdir
-        proc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        try proc.run()
-        return (proc, Int(proc.processIdentifier))
+    final class AgSpawnedProcess: @unchecked Sendable {
+        let pid: pid_t
+        let primaryFD: Int32
+        private var isTerminated = false
+        private let lock = NSLock()
+
+        init(pid: pid_t, primaryFD: Int32) {
+            self.pid = pid
+            self.primaryFD = primaryFD
+        }
+
+        func terminate() {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !isTerminated else { return }
+            isTerminated = true
+            kill(pid, SIGTERM)
+            close(primaryFD)
+        }
+
+        deinit {
+            terminate()
+        }
+    }
+
+    /// Spawn `agy` in a pseudo-terminal (PTY) so it initializes its embedded server.
+    static func spawnAgy(binary: String) throws -> (process: AgSpawnedProcess, pid: Int) {
+        var primaryFD: Int32 = -1
+        var secondaryFD: Int32 = -1
+        var win = winsize(ws_row: 50, ws_col: 160, ws_xpixel: 0, ws_ypixel: 0)
+        guard openpty(&primaryFD, &secondaryFD, nil, nil, &win) == 0 else {
+            throw AntigravityProviderError.apiError("openpty failed")
+        }
+        _ = fcntl(primaryFD, F_SETFL, O_NONBLOCK)
+
+        var fileActions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&fileActions) == 0 else {
+            close(primaryFD)
+            close(secondaryFD)
+            throw AntigravityProviderError.apiError("posix_spawn_file_actions_init failed")
+        }
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
+
+        posix_spawn_file_actions_adddup2(&fileActions, secondaryFD, 0)
+        posix_spawn_file_actions_adddup2(&fileActions, secondaryFD, 1)
+        posix_spawn_file_actions_adddup2(&fileActions, secondaryFD, 2)
+        posix_spawn_file_actions_addclose(&fileActions, primaryFD)
+        posix_spawn_file_actions_addclose(&fileActions, secondaryFD)
+
+        let home = NSHomeDirectory()
+        _ = home.withCString { path in
+            posix_spawn_file_actions_addchdir_np(&fileActions, path)
+        }
+
+        var attr: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attr) == 0 else {
+            close(primaryFD)
+            close(secondaryFD)
+            throw AntigravityProviderError.apiError("posix_spawnattr_init failed")
+        }
+        defer { posix_spawnattr_destroy(&attr) }
+
+        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+        posix_spawnattr_setflags(&attr, Int16(spawnFlags))
+        posix_spawnattr_setpgroup(&attr, 0)
+
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        env["PWD"] = home
+
+        let envStrings = env.map { "\($0.key)=\($0.value)" }
+        let cEnv: [UnsafeMutablePointer<CChar>?] = envStrings.map { strdup($0) } + [nil]
+        let cArgs: [UnsafeMutablePointer<CChar>?] = [strdup(binary), nil]
+
+        defer {
+            for ptr in cEnv where ptr != nil { free(ptr) }
+            for ptr in cArgs where ptr != nil { free(ptr) }
+        }
+
+        var childPID: pid_t = 0
+        let status = posix_spawn(&childPID, binary, &fileActions, &attr, cArgs, cEnv)
+        close(secondaryFD)
+
+        guard status == 0 else {
+            close(primaryFD)
+            throw AntigravityProviderError.apiError("posix_spawn failed with status \(status)")
+        }
+
+        let spawned = AgSpawnedProcess(pid: childPID, primaryFD: primaryFD)
+        return (spawned, Int(childPID))
     }
 
     /// Poll lsof cho đến khi pid có port đang listen, hoặc hết deadline.
@@ -468,9 +570,9 @@ private enum AgCLIWarmSession {
         throw AntigravityProviderError.timedOut
     }
 
-    /// Toàn bộ flow: resolve binary → spawn → wait for port → trả AgProcessInfo + ports.
+    /// Toàn bộ flow: resolve binary → spawn in PTY → wait for port → trả AgProcessInfo + ports.
     /// Throw nếu bất kỳ bước nào fail (caller sẽ bỏ qua).
-    static func warmAndProbe(overallTimeout: TimeInterval) async throws -> (process: AgProcessInfo, ports: [Int], spawnedProcess: Process?) {
+    static func warmAndProbe(overallTimeout: TimeInterval) async throws -> (process: AgProcessInfo, ports: [Int], spawnedProcess: AgSpawnedProcess?) {
         guard let binary = resolveAgyBinary() else {
             throw AntigravityProviderError.notRunning
         }
@@ -481,8 +583,7 @@ private enum AgCLIWarmSession {
             let info = AgProcessInfo(pid: pid, csrfToken: "", extensionPort: nil, extensionServerCSRFToken: nil)
             return (info, ports, proc)
         } catch {
-            // Nếu không mở được port → terminate process để không rò rỉ
-            if proc.isRunning { proc.terminate() }
+            proc.terminate()
             throw error
         }
     }
@@ -835,27 +936,40 @@ final class AntigravityProvider: QuotaProvider {
         return nil
     }
 
-    /// Spawn `agy` CLI, wait for its server port, then probe.
+    /// Spawn `agy` CLI, wait for its server port and API readiness, then probe.
     /// Returns nil (not an error) if agy binary is missing or port never opens.
     private func fetchViaCLIWarmSession() async -> ProviderStatus? {
-        let result: (process: AgProcessInfo, ports: [Int], spawnedProcess: Process?)
+        let result: (process: AgProcessInfo, ports: [Int], spawnedProcess: AgCLIWarmSession.AgSpawnedProcess?)
         do {
             result = try await AgCLIWarmSession.warmAndProbe(overallTimeout: timeout)
         } catch {
             // Binary not found or port never opened — silently skip
             return nil
         }
-        let status = await probeEndpoints(process: result.process, ports: result.ports)
-        // Terminate the spawned agy after we're done to avoid lingering processes
-        if let proc = result.spawnedProcess, proc.isRunning {
-            proc.terminate()
+        let deadline = Date().addingTimeInterval(min(timeout, 6.0))
+        var currentPorts = result.ports
+        var status: ProviderStatus?
+
+        while Date() < deadline {
+            if !currentPorts.isEmpty, let s = await probeEndpoints(process: result.process, ports: currentPorts) {
+                status = s
+                break
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if let freshPorts = try? await AgProcessDetector.listeningPorts(pid: result.process.pid, timeout: 1.0),
+               !freshPorts.isEmpty {
+                currentPorts = freshPorts
+            }
         }
+
+        // Terminate the spawned agy after we're done to avoid lingering processes
+        result.spawnedProcess?.terminate()
         return status
     }
 
     /// Try all ports with quota-summary first, then user-status.
     private func probeEndpoints(process: AgProcessInfo, ports: [Int]) async -> ProviderStatus? {
-        let schemes = ["https", "http"]
+        let schemes = ["http", "https"]
         for port in ports {
             for scheme in schemes {
                 if let status = await trySummaryEndpoint(scheme: scheme, port: port, process: process) {
@@ -883,8 +997,7 @@ final class AntigravityProvider: QuotaProvider {
                 path: AntigravityHTTP.quotaSummaryPath,
                 csrfToken: process.csrfToken,
                 body: ["forceRefresh": true],
-                timeout: timeout,
-                session: session
+                timeout: timeout
             )
             let (groups, _, _) = try AgResponseParser.parseQuotaSummary(data)
             let windows = quotaWindowsFromSummary(groups)
@@ -926,8 +1039,7 @@ final class AntigravityProvider: QuotaProvider {
                 path: AntigravityHTTP.getUserStatusPath,
                 csrfToken: process.csrfToken,
                 body: AntigravityHTTP.defaultRequestBody(),
-                timeout: timeout,
-                session: session
+                timeout: timeout
             )
             let (quotas, email, plan) = try AgResponseParser.parseUserStatus(data)
             let windows = quotaWindows(from: quotas)
@@ -983,8 +1095,7 @@ final class AntigravityProvider: QuotaProvider {
             path: AntigravityHTTP.getUserStatusPath,
             csrfToken: process.csrfToken,
             body: AntigravityHTTP.defaultRequestBody(),
-            timeout: min(timeout, 1.5),
-            session: session
+            timeout: min(timeout, 1.5)
         ),
         let (_, email, plan) = try? AgResponseParser.parseUserStatus(data)
         else { return (nil, nil) }

@@ -1936,4 +1936,10 @@ final class NewProviderTests: XCTestCase {
         XCTAssertTrue(windows.isEmpty)
     }
 
+    func testAntigravityLiveFetch() async throws {
+        let provider = AntigravityProvider()
+        let status = try await provider.fetch()
+        XCTAssertNil(status.error, "Antigravity fetch should not fail: \(status.error ?? "")")
+        XCTAssertFalse(status.windows.isEmpty, "Antigravity should return quota windows")
+    }
 }
