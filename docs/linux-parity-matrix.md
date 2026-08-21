@@ -1,6 +1,6 @@
 # Linux ↔ macOS parity matrix
 
-Baseline updated 2026-08-16: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest và per-provider budget.
+Baseline updated 2026-08-20: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest, per-provider budget và Usage Insights.
 
 | Area | macOS | Linux target | Status |
 |---|---|---|---|
@@ -10,6 +10,7 @@ Baseline updated 2026-08-16: macOS + Linux after Data Confidence, budget/forecas
 | Grok quota | GrokProvider.swift | `providers/grok.rs` | **done** |
 | Grok cost scanner | GrokCostScanner.swift | `grok_scanner.rs` | **done** |
 | Cost history | CostHistoryStore.swift | `cost_history.rs` (high-water merge) | **done** |
+| Usage Insights + project cost | compact All highlight; Settings `Insights` Overview/Projects; `ProjectCostHistoryStore` | compact All highlight; Settings `Insights`; `project_cost_history.rs` + `project_insights.rs` | **done** — Claude/Codex/Grok SHA-256 identity + safe basename; only unattributed residual stays `Unknown` |
 | Data confidence | `UsageScanConfidence` (`included` / `live` / `scannedAt`) + freshness badges | `UsageReport` cùng metadata + freshness badges | **done** |
 | Last-good provider status | giữ `serviceStatus`/level khi refresh mới thiếu status | giữ `serviceStatus`/level từ cached status | **done** |
 | All tab 3 sources | AllUsageOverview | `usage.ts` + `all-tab.ts` (Claude/Codex/Grok) | **done** |

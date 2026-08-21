@@ -90,7 +90,7 @@ enum WeeklyDigest {
 
     // MARK: - Pure model
 
-    enum SourceID: String, CaseIterable, Equatable {
+    enum SourceID: String, CaseIterable, Equatable, Sendable {
         case claude, codex, grok
 
         var displayName: String {
@@ -139,6 +139,18 @@ enum WeeklyDigest {
         let body: String
     }
 
+    /// Shared rolling-window projection for the digest and Usage Insights.
+    /// Keeping this pure prevents the two surfaces from drifting on week math.
+    struct Pulse: Equatable, Sendable {
+        let currentUSD: Double
+        let currentTokens: Int
+        let priorUSD: Double
+        let priorTokens: Int
+        let changePercent: Double?
+        let topSource: SourceID?
+        let topModel: CombinedModelCost?
+    }
+
     /// Splits `daily` into today + 6 prior calendar days and the 7 days
     /// immediately before that. Date boundaries are explicit so sparse or
     /// unexpectedly ordered input cannot turn "7 days" into "7 records".
@@ -161,6 +173,20 @@ enum WeeklyDigest {
     static func changePercent(currentUSD: Double, priorUSD: Double) -> Double? {
         guard priorUSD > 0 else { return nil }
         return (currentUSD - priorUSD) / priorUSD * 100
+    }
+
+    static func pulse(
+        daily: [CombinedDailyUsage], now: Date, calendar: Calendar = .current
+    ) -> Pulse {
+        let windows = rollingWindows(daily: daily, now: now, calendar: calendar)
+        let current = totals(windows.current)
+        let prior = totals(windows.prior)
+        return Pulse(
+            currentUSD: current.usd, currentTokens: current.tokens,
+            priorUSD: prior.usd, priorTokens: prior.tokens,
+            changePercent: changePercent(currentUSD: current.usd, priorUSD: prior.usd),
+            topSource: topSource(in: windows.current),
+            topModel: topModel(in: windows.current))
     }
 
     /// Highest-usage source in `window`, tie-broken by tokens → USD → id
@@ -249,9 +275,7 @@ enum WeeklyDigest {
             claude: claude, codex: codex, grok: grok,
             includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
             calendar: calendar, now: now)
-        let windows = rollingWindows(daily: combined.daily, now: now, calendar: calendar)
-        let current = totals(windows.current)
-        let prior = totals(windows.prior)
+        let pulse = pulse(daily: combined.daily, now: now, calendar: calendar)
 
         let confidences: [(SourceID, Bool, CostHistoryStore.UsageScanConfidence?)] = [
             (.claude, includeClaude, combined.claudeConfidence),
@@ -259,15 +283,12 @@ enum WeeklyDigest {
             (.grok, includeGrok, combined.grokConfidence),
         ]
         let hasLiveSource = confidences.contains { $0.1 && $0.2?.live == true }
-        let hasActivity = current.usd > 0 || current.tokens > 0
+        let hasActivity = pulse.currentUSD > 0 || pulse.currentTokens > 0
         let shouldSend = hasLiveSource && hasActivity
         let nonLiveSources = confidences
             .filter { $0.1 && $0.2?.live != true }
             .map(\.0)
 
-        let changePct = changePercent(currentUSD: current.usd, priorUSD: prior.usd)
-        let top = topSource(in: windows.current)
-        let model = topModel(in: windows.current)
         let forecast = MonthlyForecast.build(daily: combined.daily, budgetUSD: budgetUSD, now: now, calendar: calendar)
 
         // Trust rule: a provider whose confidence is `nil` or `included ==
@@ -295,18 +316,19 @@ enum WeeklyDigest {
 
         let title = L10n.t("weeklyDigest.title", language)
         let body = shouldSend
-            ? Self.body(currentUSD: current.usd, currentTokens: current.tokens,
-                       changePercent: changePct, topSource: top, topModel: model,
+            ? Self.body(currentUSD: pulse.currentUSD, currentTokens: pulse.currentTokens,
+                       changePercent: pulse.changePercent, topSource: pulse.topSource,
+                       topModel: pulse.topModel,
                        forecast: forecast, nonLiveSources: nonLiveSources,
                        providerBudgetRisks: providerBudgetRisks, language: language)
             : ""
 
         return Evaluation(
             shouldSend: shouldSend,
-            currentUSD: current.usd, currentTokens: current.tokens,
-            priorUSD: prior.usd, priorTokens: prior.tokens,
-            changePercent: changePct,
-            topSource: top, topModel: model,
+            currentUSD: pulse.currentUSD, currentTokens: pulse.currentTokens,
+            priorUSD: pulse.priorUSD, priorTokens: pulse.priorTokens,
+            changePercent: pulse.changePercent,
+            topSource: pulse.topSource, topModel: pulse.topModel,
             forecast: forecast, nonLiveSources: nonLiveSources,
             providerBudgetRisks: providerBudgetRisks,
             title: title, body: body)

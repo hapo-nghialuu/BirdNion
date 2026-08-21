@@ -47,6 +47,13 @@
 		GRK00001000000000000B01 /* GrokProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00002000000000000F01 /* GrokProvider.swift */; };
 		GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00004000000000000F01 /* GrokCostScanner.swift */; };
 		CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHS00002000000000000F01 /* CostHistoryStore.swift */; };
+		PCI00001000000000000B01 /* ProjectInsights.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCI00002000000000000F01 /* ProjectInsights.swift */; };
+		PCH00001000000000000B01 /* ProjectCostHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCH00002000000000000F01 /* ProjectCostHistoryStore.swift */; };
+		PIB00001000000000000B01 /* ProjectInsightsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = PIB00002000000000000F01 /* ProjectInsightsBuilder.swift */; };
+		PIT00001000000000000B01 /* ProjectInsightsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PIT00002000000000000F01 /* ProjectInsightsTests.swift */; };
+		INSP0001000000000000B001 /* InsightsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = INSP0002000000000000F001 /* InsightsPane.swift */; };
+		INSC0001000000000000B001 /* InsightsContentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = INSC0002000000000000F001 /* InsightsContentViews.swift */; };
+		INSH0001000000000000B001 /* InsightsHighlightCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = INSH0002000000000000F001 /* InsightsHighlightCard.swift */; };
 		SWO00001000000000000B01 /* SettingsWindowOpener.swift in Sources */ = {isa = PBXBuildFile; fileRef = SWO00002000000000000F01 /* SettingsWindowOpener.swift */; };
 		XAI0001000000000000B001 /* XAIBillingFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAI0002000000000000F001 /* XAIBillingFetcher.swift */; };
 		XAI0003000000000000B001 /* XAIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = XAI0004000000000000F001 /* XAIProvider.swift */; };
@@ -234,6 +241,13 @@
 		GRK00002000000000000F01 /* GrokProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokProvider.swift; sourceTree = "<group>"; };
 		GRK00004000000000000F01 /* GrokCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokCostScanner.swift; sourceTree = "<group>"; };
 		CHS00002000000000000F01 /* CostHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CostHistoryStore.swift; sourceTree = "<group>"; };
+		PCI00002000000000000F01 /* ProjectInsights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/ProjectInsights.swift; sourceTree = "<group>"; };
+		PCH00002000000000000F01 /* ProjectCostHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProjectCostHistoryStore.swift; sourceTree = "<group>"; };
+		PIB00002000000000000F01 /* ProjectInsightsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProjectInsightsBuilder.swift; sourceTree = "<group>"; };
+		PIT00002000000000000F01 /* ProjectInsightsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ProjectInsightsTests.swift; sourceTree = "<group>"; };
+		INSP0002000000000000F001 /* InsightsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/InsightsPane.swift; sourceTree = "<group>"; };
+		INSC0002000000000000F001 /* InsightsContentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/InsightsContentViews.swift; sourceTree = "<group>"; };
+		INSH0002000000000000F001 /* InsightsHighlightCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/InsightsHighlightCard.swift; sourceTree = "<group>"; };
 		SWO00002000000000000F01 /* SettingsWindowOpener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/SettingsWindowOpener.swift; sourceTree = "<group>"; };
 		OAI00002000000000000F01 /* OpenAIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenAIProvider.swift; sourceTree = "<group>"; };
 		XAI0002000000000000F001 /* XAIBillingFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XAIBillingFetcher.swift; sourceTree = "<group>"; };
@@ -384,6 +398,7 @@
 				CCTS0001000000000000B001 /* ClaudeCodeTests.swift in Sources */,
 				CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */,
 				PPST0001000000000000B001 /* PopoverPanelSizingTests.swift in Sources */,
+				PIT00001000000000000B01 /* ProjectInsightsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -706,6 +721,12 @@
 				GRK00001000000000000B01 /* GrokProvider.swift in Sources */,
 				GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
+				PCI00001000000000000B01 /* ProjectInsights.swift in Sources */,
+				PCH00001000000000000B01 /* ProjectCostHistoryStore.swift in Sources */,
+				PIB00001000000000000B01 /* ProjectInsightsBuilder.swift in Sources */,
+				INSP0001000000000000B001 /* InsightsPane.swift in Sources */,
+				INSC0001000000000000B001 /* InsightsContentViews.swift in Sources */,
+				INSH0001000000000000B001 /* InsightsHighlightCard.swift in Sources */,
 				SWO00001000000000000B01 /* SettingsWindowOpener.swift in Sources */,
 				OAI00001000000000000B01 /* OpenAIProvider.swift in Sources */,
 				XAI0001000000000000B001 /* XAIBillingFetcher.swift in Sources */,

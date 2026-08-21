@@ -497,7 +497,8 @@ final class NewProviderTests: XCTestCase {
     func testGrokCostScannerParseSignalsFixture() throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let session = base.appendingPathComponent("sessions/proj/sess-1")
+        let session = base.appendingPathComponent(
+            "sessions/-Users-alice-work-birdnion/sess-1")
         try fm.createDirectory(at: session, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: base) }
 
@@ -514,16 +515,83 @@ final class NewProviderTests: XCTestCase {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let summary = """
-        {"current_model_id":"grok-4.5","last_active_at":"\(iso.string(from: now))"}
+        {"current_model_id":"grok-4.5","last_active_at":"\(iso.string(from: now))",\
+        "git_root_dir":"/Users/alice/work/birdnion"}
         """
         try summary.write(to: session.appendingPathComponent("summary.json"),
                           atomically: true, encoding: .utf8)
 
-        let report = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+        let result = GrokCostScanner.scanFullWithProjects(
+            homeURL: base, now: now, windowDays: 90)
+        let report = result.report
         XCTAssertEqual(report.todayTokens, 1_000_000)
         XCTAssertEqual(report.todayUSD, 3.0, accuracy: 0.01) // 1M × $3 blended
         XCTAssertEqual(report.last30Tokens, 1_000_000)
         XCTAssertEqual(report.topModel, "grok-4.5")
+        XCTAssertEqual(result.projects.count, 1)
+        XCTAssertEqual(
+            result.projects.first?.projectKey,
+            "14831731d7a097d36f08d9c315a0c126f9d3b71f2c9ba621c6797916bd91c248")
+        XCTAssertEqual(result.projects.first?.displayName, "birdnion")
+        XCTAssertEqual(result.projects.first?.attribution, .derived)
+        XCTAssertEqual(result.projects.first?.daily.first?.tokens, report.last30Tokens)
+        XCTAssertFalse(result.projects.first?.displayName.contains("/Users/alice") == true)
+    }
+
+    func testGrokProjectFallbackKeepsAggregateAndHidesEncodedDirectory() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let encoded = "-Users-alice-Secret-Client"
+        let session = base.appendingPathComponent("sessions/\(encoded)/sess-1")
+        try fm.createDirectory(at: session, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        let summary = """
+        {"last_active_at":"\(iso.string(from: now))","git_root_dir":"relative/private"}
+        """
+        try summary.write(
+            to: session.appendingPathComponent("summary.json"),
+            atomically: true, encoding: .utf8)
+        try Data("""
+        {"contextTokensUsed":250000,"primaryModelId":"grok-4.5"}
+        """.utf8).write(to: session.appendingPathComponent("signals.json"))
+
+        let result = GrokCostScanner.scanFullWithProjects(
+            homeURL: base, now: now, windowDays: 30)
+
+        XCTAssertEqual(result.report.last30Tokens, 250_000)
+        XCTAssertEqual(result.projects.first?.daily.first?.tokens, 250_000)
+        XCTAssertTrue(result.projects.first?.displayName.hasPrefix("Grok Project ") == true)
+        XCTAssertFalse(result.projects.first?.displayName.contains("alice") == true)
+        XCTAssertFalse(result.projects.first?.projectKey.contains(encoded) == true)
+    }
+
+    func testGrokMalformedSessionShapesStayInUnknownResidual() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: base) }
+        let malformedSessions = [
+            base.appendingPathComponent("sessions/token/nested/session"),
+            base.appendingPathComponent("sessions/token\\private/session"),
+        ]
+        let now = Date()
+        let iso = ISO8601DateFormatter().string(from: now)
+        for (index, session) in malformedSessions.enumerated() {
+            try fm.createDirectory(at: session, withIntermediateDirectories: true)
+            try Data("""
+            {"contextTokensUsed":\((index + 1) * 100000),"primaryModelId":"grok-4.5"}
+            """.utf8).write(to: session.appendingPathComponent("signals.json"))
+            try Data("""
+            {"last_active_at":"\(iso)","git_root_dir":"/Users/alice/private"}
+            """.utf8).write(to: session.appendingPathComponent("summary.json"))
+        }
+
+        let result = GrokCostScanner.scanFullWithProjects(
+            homeURL: base, now: now, windowDays: 30)
+
+        XCTAssertEqual(result.report.last30Tokens, 300_000)
+        XCTAssertTrue(result.projects.isEmpty)
     }
 
     // MARK: - scanFullIfAvailable: missing root vs genuinely-empty (reviewer Finding 1)

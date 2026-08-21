@@ -20,10 +20,12 @@
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::project_cost_history::{ProjectContribution, ProjectModel, ProjectRetraction};
 use crate::usage::{DailyModel, DailyUsage, HourlyUsage, UsageReport};
 
 /// Trailing daily window for charts / heatmap (macOS CombinedUsageReport 120d).
@@ -194,11 +196,24 @@ impl CodexTotals {
 /// that point, the turn's own delta (`last`), and the session's cumulative
 /// counter at that point (`total`, when the line carries `total_token_usage`
 /// — real Codex CLI output always does, but older/malformed lines might not).
+#[derive(Clone)]
 struct CodexTokenEvent {
     ts: DateTime<Local>,
     model: String,
     last: CodexTotals,
     total: Option<CodexTotals>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ProjectIdentity {
+    key: String,
+    display_name: String,
+}
+
+pub struct CodexUsageScan {
+    pub usage: UsageReport,
+    pub projects: Vec<ProjectContribution>,
+    pub retractions: Vec<ProjectRetraction>,
 }
 
 /// One rollout file's parsed identity + event stream. `session_id` is this
@@ -210,6 +225,10 @@ struct CodexFileScan {
     session_id: Option<String>,
     forked_from_id: Option<String>,
     fork_ts: Option<DateTime<Local>>,
+    project: Option<ProjectIdentity>,
+    project_ambiguous: bool,
+    retraction_project: Option<ProjectIdentity>,
+    retraction_events: Vec<CodexTokenEvent>,
     events: Vec<CodexTokenEvent>,
 }
 
@@ -223,7 +242,9 @@ struct CodexFileScan {
 /// collapse every subagent belonging to the same root onto one index key,
 /// corrupting the fork-baseline lookup below (it would resolve to a random
 /// subagent transcript instead of the true parent).
-fn parse_codex_session_meta(obj: &Value) -> Option<(Option<String>, Option<String>, Option<String>)> {
+fn parse_codex_session_meta(
+    obj: &Value,
+) -> Option<(Option<String>, Option<String>, Option<String>, Option<String>)> {
     if obj.get("type").and_then(Value::as_str) != Some("session_meta") {
         return None;
     }
@@ -234,7 +255,106 @@ fn parse_codex_session_meta(obj: &Value) -> Option<(Option<String>, Option<Strin
     let id = field(payload, &["id", "session_id", "sessionId"]);
     let forked_from_id = field(payload, &["forked_from_id", "forkedFromId"]);
     let timestamp = field(payload, &["timestamp"]).or_else(|| field(obj, &["timestamp"]));
-    Some((id, forked_from_id, timestamp))
+    let cwd = field(payload, &["cwd"]);
+    Some((id, forked_from_id, timestamp, cwd))
+}
+
+fn normalized_absolute_path(raw: &str) -> Option<PathBuf> {
+    if raw.chars().any(char::is_control) {
+        return None;
+    }
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    Some(normalized)
+}
+
+fn safe_basename(path: &Path) -> Option<String> {
+    let raw = path.file_name()?.to_str()?;
+    let name: String = raw
+        .chars()
+        .filter(|char| !char.is_control() && *char != '/' && *char != '\\')
+        .take(80)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    (!name.is_empty() && name != "." && name != "..").then_some(name)
+}
+
+fn codex_project_identity(raw_cwd: &str) -> Option<ProjectIdentity> {
+    let normalized = normalized_absolute_path(raw_cwd)?;
+    let display_name = safe_basename(&normalized)?;
+    let identity = normalized.to_str()?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"codex:cwd-v1\0");
+    hasher.update(identity.as_bytes());
+    Some(ProjectIdentity {
+        key: hex::encode(hasher.finalize()),
+        display_name,
+    })
+}
+
+fn reconcile_project_identity(
+    current: Option<&ProjectIdentity>,
+    incoming: Option<ProjectIdentity>,
+    ambiguous: bool,
+) -> (Option<ProjectIdentity>, bool) {
+    if ambiguous {
+        return (None, true);
+    }
+    match (current, incoming) {
+        (None, None) => (None, false),
+        (Some(value), None) => (Some(value.clone()), false),
+        (None, Some(value)) => (Some(value), false),
+        (Some(current), Some(incoming)) if current.key == incoming.key => {
+            (Some(current.clone()), false)
+        }
+        (Some(_), Some(_)) => (None, true),
+    }
+}
+
+fn update_file_project(scan: &mut CodexFileScan, incoming: Option<ProjectIdentity>) {
+    let invalid = incoming.is_none();
+    let conflicts = match (scan.project.as_ref(), incoming.as_ref()) {
+        (Some(current), Some(next)) => current.key != next.key,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    if !scan.project_ambiguous && (invalid || conflicts) && scan.retraction_project.is_none() {
+        scan.retraction_project = scan.project.clone();
+        scan.retraction_events = scan.events.clone();
+    }
+    let (project, ambiguous) = reconcile_project_identity(
+        scan.project.as_ref(),
+        incoming,
+        scan.project_ambiguous || invalid,
+    );
+    scan.project = project;
+    scan.project_ambiguous = ambiguous;
+}
+
+fn codex_retraction_id(session_id: &str, project_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"codex:project-retraction-v1\0");
+    hasher.update(session_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(project_key.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 /// This file's direct parent's cumulative totals at-or-before the fork
@@ -261,26 +381,23 @@ fn resolve_codex_fork_baseline(
     baseline
 }
 
-/// Session roots under the active Codex account's home (system `~/.codex`/
-/// `$CODEX_HOME`, or a managed account's private home) — so cost tracking
-/// follows account switches the same way the quota provider does. Managed
-/// account homes don't have session logs (only `auth.json` is copied), so
-/// this naturally falls back to an empty/no-op scan for those; the system
-/// account keeps working exactly as before.
+/// Session roots under the system Codex home. Managed BirdNion account homes
+/// only contain copied auth state; the CLI keeps writing rollout logs to its
+/// system `$CODEX_HOME`/`~/.codex` home regardless of the selected account.
 pub fn default_roots() -> Vec<PathBuf> {
-    let home = crate::codex_accounts::active_auth_path()
+    let home = crate::codex_accounts::system_auth_path()
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex"));
     vec![home.join("sessions"), home.join("archived_sessions")]
 }
 
-pub fn usage_report() -> Option<UsageReport> {
-    scan(&default_roots(), Local::now())
+pub fn usage_scan() -> Option<CodexUsageScan> {
+    scan_with_projects(&default_roots(), Local::now())
 }
 
 /// Returns None only when no sessions root is readable.
-pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
+pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<CodexUsageScan> {
     let cutoff = now - Duration::days(HISTORY_DAYS);
     let last30_cutoff = now - Duration::days(30);
     let hour_cutoff = now - Duration::hours(24);
@@ -303,6 +420,17 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
     let mut month_usd = 0.0;
     let mut month_tokens: i64 = 0;
 
+    #[derive(Default)]
+    struct ProjectAcc {
+        display_name: String,
+        usd: f64,
+        tokens: i64,
+        models: HashMap<String, (f64, i64)>,
+    }
+    let mut project_buckets: HashMap<(String, NaiveDate), ProjectAcc> = HashMap::new();
+    let mut retraction_buckets: HashMap<(String, String, NaiveDate), ProjectAcc> =
+        HashMap::new();
+
     // Pass 1: read every file once, capturing its identity/fork lineage and
     // full event stream (not yet bucketed — a forked file's events need its
     // parent's baseline resolved first, and that parent may be discovered
@@ -315,7 +443,7 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
             continue;
         }
         any_root = true;
-        let files = WalkDir::new(root)
+        let mut files: Vec<PathBuf> = WalkDir::new(root)
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
@@ -331,7 +459,9 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
                     .and_then(|m| m.modified().ok())
                     .is_some_and(|m| DateTime::<Local>::from(m) >= cutoff)
             })
-            .map(|e| e.into_path());
+            .map(|e| e.into_path())
+            .collect();
+        files.sort();
 
         for file in files {
             let Ok(content) = std::fs::read_to_string(&file) else {
@@ -344,7 +474,7 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
                 let Ok(obj) = serde_json::from_str::<Value>(line) else {
                     continue;
                 };
-                if let Some((id, forked_from_id, ts_str)) = parse_codex_session_meta(&obj) {
+                if let Some((id, forked_from_id, ts_str, cwd)) = parse_codex_session_meta(&obj) {
                     if file_scan.session_id.is_none() {
                         file_scan.session_id = id;
                     }
@@ -354,6 +484,10 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
                             .as_deref()
                             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                             .map(|d| d.with_timezone(&Local));
+                    }
+                    if let Some(raw_cwd) = cwd {
+                        let incoming = codex_project_identity(&raw_cwd);
+                        update_file_project(&mut file_scan, incoming);
                     }
                     continue;
                 }
@@ -391,7 +525,45 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
                 }
             }
             if let Some(id) = file_scan.session_id.clone() {
-                id_index.entry(id).or_insert(scans.len());
+                if let Some(existing_index) = id_index.get(&id).copied() {
+                    let existing = &scans[existing_index];
+                    let invalid = existing.project_ambiguous || file_scan.project_ambiguous;
+                    let conflicts = match (existing.project.as_ref(), file_scan.project.as_ref()) {
+                        (Some(current), Some(next)) => current.key != next.key,
+                        _ => false,
+                    };
+                    let retraction_project = existing
+                        .retraction_project
+                        .clone()
+                        .or_else(|| (invalid || conflicts).then(|| existing.project.clone()).flatten())
+                        .or_else(|| file_scan.retraction_project.clone());
+                    let retraction_events = if existing.retraction_project.is_some() {
+                        existing.retraction_events.clone()
+                    } else if (invalid || conflicts) && existing.project.is_some() {
+                        existing.events.clone()
+                    } else {
+                        file_scan.retraction_events.clone()
+                    };
+                    let (project, ambiguous) = reconcile_project_identity(
+                        existing.project.as_ref(),
+                        file_scan.project.clone(),
+                        invalid,
+                    );
+                    if file_scan.events.len() > existing.events.len() {
+                        file_scan.project = project;
+                        file_scan.project_ambiguous = ambiguous;
+                        file_scan.retraction_project = retraction_project;
+                        file_scan.retraction_events = retraction_events;
+                        scans[existing_index] = file_scan;
+                    } else {
+                        scans[existing_index].project = project;
+                        scans[existing_index].project_ambiguous = ambiguous;
+                        scans[existing_index].retraction_project = retraction_project;
+                        scans[existing_index].retraction_events = retraction_events;
+                    }
+                    continue;
+                }
+                id_index.insert(id, scans.len());
             }
             scans.push(file_scan);
         }
@@ -412,6 +584,13 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
             });
 
         let mut previous_adjusted = CodexTotals::default();
+        let retraction = scans[scan_index]
+            .session_id
+            .as_deref()
+            .zip(scans[scan_index].retraction_project.as_ref())
+            .map(|(session_id, project)| {
+                (codex_retraction_id(session_id, &project.key), project)
+            });
         for ev in &scans[scan_index].events {
             // Unresolved baseline (parent outside the scan window, or no
             // fork at all) falls back to the turn's own delta — identical
@@ -443,6 +622,17 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
             m.0 += usd;
             m.1 += tokens;
 
+            if let Some(project) = &scans[scan_index].project {
+                let project_day = project_buckets
+                    .entry((project.key.clone(), day))
+                    .or_default();
+                project_day.display_name = project.display_name.clone();
+                project_day.usd += usd;
+                project_day.tokens += tokens;
+                let model = project_day.models.entry(ev.model.clone()).or_insert((0.0, 0));
+                model.0 += usd;
+                model.1 += tokens;
+            }
             if ev.ts >= last30_cutoff {
                 month_usd += usd;
                 month_tokens += tokens;
@@ -458,6 +648,44 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
                 let h = hour_buckets.entry((day, ev.ts.hour())).or_insert((0.0, 0));
                 h.0 += usd;
                 h.1 += tokens;
+            }
+        }
+
+        if let Some((retraction_id, project)) = retraction {
+            let mut previous_adjusted = CodexTotals::default();
+            for ev in &scans[scan_index].retraction_events {
+                let counted = match (baseline, ev.total) {
+                    (Some(base), Some(total)) => {
+                        let adjusted = total.saturating_sub(&base);
+                        let delta = adjusted.saturating_sub(&previous_adjusted);
+                        previous_adjusted = adjusted;
+                        delta
+                    }
+                    _ => ev.last,
+                };
+                if ev.ts < cutoff || ev.ts > now {
+                    continue;
+                }
+                let usd = cost_usd(
+                    &ev.model,
+                    counted.input,
+                    counted.cached,
+                    counted.output,
+                );
+                let tokens = counted.total;
+                if usd == 0.0 && tokens == 0 {
+                    continue;
+                }
+                let day = ev.ts.date_naive();
+                let project_day = retraction_buckets
+                    .entry((retraction_id.clone(), project.key.clone(), day))
+                    .or_default();
+                project_day.display_name = project.display_name.clone();
+                project_day.usd += usd;
+                project_day.tokens += tokens;
+                let model = project_day.models.entry(ev.model.clone()).or_insert((0.0, 0));
+                model.0 += usd;
+                model.1 += tokens;
             }
         }
     }
@@ -510,7 +738,7 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
         })
         .map(|(name, _)| name);
 
-    Some(UsageReport {
+    let usage = UsageReport {
         today_usd,
         today_tokens,
         last30_usd: month_usd,
@@ -522,6 +750,82 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
         // `cost_history::apply_and_report`, which owns the merge; this
         // intermediate "live" report is only ever consumed there.
         ..Default::default()
+    };
+    let mut projects: Vec<ProjectContribution> = project_buckets
+        .into_iter()
+        .filter(|(_, day)| day.usd > 0.0 || day.tokens > 0)
+        .map(|((project_key, date), day)| {
+            let mut models: Vec<ProjectModel> = day
+                .models
+                .into_iter()
+                .filter(|(_, (usd, tokens))| *usd > 0.0 || *tokens > 0)
+                .map(|(name, (usd, tokens))| ProjectModel { name, usd, tokens })
+                .collect();
+            models.sort_by(|a, b| {
+                b.usd
+                    .total_cmp(&a.usd)
+                    .then_with(|| b.tokens.cmp(&a.tokens))
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            models.truncate(5);
+            ProjectContribution {
+                project_key,
+                display_name: day.display_name,
+                capability: "exact".into(),
+                date: date.to_string(),
+                usd: day.usd,
+                tokens: day.tokens,
+                models,
+            }
+        })
+        .collect();
+    projects.sort_by(|a, b| {
+        a.date
+            .cmp(&b.date)
+            .then_with(|| a.project_key.cmp(&b.project_key))
+    });
+    let mut retractions_by_id: HashMap<(String, String), Vec<ProjectContribution>> =
+        HashMap::new();
+    for ((retraction_id, project_key, date), day) in retraction_buckets {
+        if day.usd <= 0.0 && day.tokens <= 0 {
+            continue;
+        }
+        let mut models: Vec<ProjectModel> = day
+            .models
+            .into_iter()
+            .filter(|(_, (usd, tokens))| *usd > 0.0 || *tokens > 0)
+            .map(|(name, (usd, tokens))| ProjectModel { name, usd, tokens })
+            .collect();
+        models.sort_by(|a, b| a.name.cmp(&b.name));
+        retractions_by_id
+            .entry((retraction_id, project_key.clone()))
+            .or_default()
+            .push(ProjectContribution {
+                project_key,
+                display_name: day.display_name,
+                capability: "exact".into(),
+                date: date.to_string(),
+                usd: day.usd,
+                tokens: day.tokens,
+                models,
+            });
+    }
+    let mut retractions: Vec<ProjectRetraction> = retractions_by_id
+        .into_iter()
+        .map(|((retraction_id, project_key), mut contributions)| {
+            contributions.sort_by(|a, b| a.date.cmp(&b.date));
+            ProjectRetraction {
+                retraction_id,
+                project_key,
+                contributions,
+            }
+        })
+        .collect();
+    retractions.sort_by(|a, b| a.retraction_id.cmp(&b.retraction_id));
+    Some(CodexUsageScan {
+        usage,
+        projects,
+        retractions,
     })
 }
 
@@ -530,6 +834,10 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
+        scan_with_projects(roots, now).map(|scan| scan.usage)
+    }
 
     fn temp_base(tag: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!(
@@ -556,11 +864,23 @@ mod tests {
     }
 
     fn session_meta(ts: &str, id: &str, forked_from_id: Option<&str>) -> String {
+        session_meta_with_cwd(ts, id, forked_from_id, None)
+    }
+
+    fn session_meta_with_cwd(
+        ts: &str,
+        id: &str,
+        forked_from_id: Option<&str>,
+        cwd: Option<&str>,
+    ) -> String {
         let fork_field = forked_from_id
             .map(|p| format!(r#","forked_from_id":"{p}""#))
             .unwrap_or_default();
+        let cwd_field = cwd
+            .map(|value| format!(r#","cwd":"{value}""#))
+            .unwrap_or_default();
         format!(
-            r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"{id}","timestamp":"{ts}"{fork_field}}}}}"#
+            r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"{id}","timestamp":"{ts}"{fork_field}{cwd_field}}}}}"#
         )
     }
 
@@ -652,6 +972,213 @@ mod tests {
     fn returns_none_without_any_root() {
         let missing = PathBuf::from("/nonexistent/birdnion-codex-root");
         assert!(scan(&[missing], Local::now()).is_none());
+    }
+
+    #[test]
+    fn default_roots_always_use_system_codex_home() {
+        let _guard = crate::config::TEST_ENV_LOCK.lock().unwrap();
+        let home = temp_base("system-home");
+        std::env::set_var("CODEX_HOME", &home);
+
+        let roots = default_roots();
+
+        std::env::remove_var("CODEX_HOME");
+        assert_eq!(
+            roots,
+            vec![home.join("sessions"), home.join("archived_sessions")]
+        );
+    }
+
+    #[test]
+    fn codex_project_key_is_domain_separated_normalized_and_private() {
+        let identity = codex_project_identity("/Users/alice/private/../repo/").unwrap();
+
+        assert_eq!(
+            identity.key,
+            "ad1f4957b96b2e55d2ae919d1d5d901cd9d763fe5beab90da12c5d361fb00f07"
+        );
+        assert_eq!(identity.display_name, "repo");
+        assert!(!identity.key.contains("alice"));
+        assert!(codex_project_identity("relative/repo").is_none());
+        assert!(codex_project_identity("/Users/alice/secret\nrepo").is_none());
+    }
+
+    #[test]
+    fn own_session_id_wins_over_root_session_id_for_subagents() {
+        let value = serde_json::json!({
+            "type": "session_meta",
+            "payload": { "id": "subagent-id", "session_id": "root-id" }
+        });
+
+        let parsed = parse_codex_session_meta(&value).unwrap();
+
+        assert_eq!(parsed.0.as_deref(), Some("subagent-id"));
+    }
+
+    #[test]
+    fn duplicate_session_is_counted_once_and_project_matches_aggregate() {
+        let base = temp_base("duplicate");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        let lines = [
+            session_meta_with_cwd(&ts, "same-id", None, Some("/Users/alice/repo")),
+            turn_context("gpt-5"),
+            token_count(&ts, 100_000, 0, 0, 100_000),
+        ];
+        write_lines(&base.join("sessions"), "rollout-live.jsonl", &lines);
+        write_lines(&base.join("archived_sessions"), "rollout-archived.jsonl", &lines);
+
+        let scan = scan_with_projects(
+            &[base.join("sessions"), base.join("archived_sessions")],
+            now,
+        )
+        .unwrap();
+
+        assert_eq!(scan.usage.today_tokens, 100_000);
+        assert_eq!(scan.projects.len(), 1);
+        assert_eq!(scan.projects[0].tokens, scan.usage.today_tokens);
+        assert_eq!(scan.projects[0].display_name, "repo");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn conflicting_duplicate_cwd_stays_in_unknown_residual() {
+        let base = temp_base("conflicting-cwd");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        write_lines(
+            &base.join("sessions"),
+            "rollout-live.jsonl",
+            &[
+                session_meta_with_cwd(&ts, "same-id", None, Some("/Users/alice/one")),
+                turn_context("gpt-5"),
+                token_count(&ts, 100_000, 0, 0, 100_000),
+            ],
+        );
+        write_lines(
+            &base.join("archived_sessions"),
+            "rollout-archived.jsonl",
+            &[
+                session_meta_with_cwd(&ts, "same-id", None, Some("/Users/alice/two")),
+                turn_context("gpt-5"),
+                token_count(&ts, 100_000, 0, 0, 100_000),
+            ],
+        );
+
+        let scan = scan_with_projects(
+            &[base.join("sessions"), base.join("archived_sessions")],
+            now,
+        )
+        .unwrap();
+
+        assert_eq!(scan.usage.today_tokens, 100_000);
+        assert!(scan.projects.is_empty());
+        assert_eq!(scan.retractions.len(), 1);
+        let retraction = &scan.retractions[0];
+        let old_project = codex_project_identity("/Users/alice/one").unwrap();
+        assert_eq!(retraction.project_key, old_project.key);
+        assert_eq!(retraction.retraction_id.len(), 64);
+        assert!(!retraction.retraction_id.contains("same-id"));
+        assert_eq!(retraction.contributions.len(), 1);
+        assert_eq!(retraction.contributions[0].tokens, 100_000);
+        assert_eq!(retraction.contributions[0].models[0].tokens, 100_000);
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn later_duplicate_ambiguity_emits_stable_exact_retraction() {
+        let base = temp_base("later-ambiguity");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        let session_lines = [
+            session_meta_with_cwd(&ts, "private-session-id", None, Some("/work/a")),
+            turn_context("gpt-5"),
+            token_count(&ts, 80_000, 20_000, 20_000, 100_000),
+        ];
+        write_lines(
+            &base.join("sessions"),
+            "rollout-live.jsonl",
+            &session_lines,
+        );
+
+        let first = scan_with_projects(&[base.join("sessions")], now).unwrap();
+        assert_eq!(first.projects.len(), 1);
+        assert!(first.retractions.is_empty());
+
+        let conflicting_lines = [
+            session_meta_with_cwd(&ts, "private-session-id", None, Some("/work/b")),
+            turn_context("gpt-5"),
+            token_count(&ts, 80_000, 20_000, 20_000, 100_000),
+            token_count(&ts, 20_000, 0, 0, 20_000),
+        ];
+        write_lines(
+            &base.join("archived_sessions"),
+            "rollout-archived.jsonl",
+            &conflicting_lines,
+        );
+        let roots = [base.join("sessions"), base.join("archived_sessions")];
+        let second = scan_with_projects(&roots, now).unwrap();
+        let repeated = scan_with_projects(&roots, now).unwrap();
+
+        assert!(second.projects.is_empty());
+        assert_eq!(second.usage.today_tokens, 120_000);
+        assert_eq!(second.retractions, repeated.retractions);
+        assert_eq!(second.retractions.len(), 1);
+        let retraction = &second.retractions[0];
+        assert_eq!(
+            retraction.retraction_id,
+            codex_retraction_id("private-session-id", &first.projects[0].project_key)
+        );
+        assert_eq!(retraction.project_key, first.projects[0].project_key);
+        assert_eq!(retraction.contributions[0].date, now.date_naive().to_string());
+        assert_eq!(retraction.contributions[0].tokens, 100_000);
+        assert_eq!(retraction.contributions[0].models[0].name, "gpt-5");
+        assert_eq!(retraction.contributions[0].models[0].tokens, 100_000);
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn usage_without_valid_cwd_remains_unattributed() {
+        let base = temp_base("missing-cwd");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        write_lines(
+            &base.join("sessions"),
+            "rollout-a.jsonl",
+            &[
+                session_meta_with_cwd(&ts, "relative-id", None, Some("relative/repo")),
+                turn_context("gpt-5"),
+                token_count(&ts, 100_000, 0, 0, 100_000),
+            ],
+        );
+        write_lines(
+            &base.join("sessions"),
+            "rollout-no-meta.jsonl",
+            &[
+                turn_context("gpt-5"),
+                token_count(&ts, 50_000, 0, 0, 50_000),
+            ],
+        );
+        write_lines(
+            &base.join("sessions"),
+            "rollout-control.jsonl",
+            &[
+                session_meta_with_cwd(
+                    &ts,
+                    "control-id",
+                    None,
+                    Some("/Users/alice/secret\\nrepo"),
+                ),
+                turn_context("gpt-5"),
+                token_count(&ts, 25_000, 0, 0, 25_000),
+            ],
+        );
+
+        let scan = scan_with_projects(&[base.join("sessions")], now).unwrap();
+
+        assert_eq!(scan.usage.today_tokens, 175_000);
+        assert!(scan.projects.is_empty());
+        fs::remove_dir_all(&base).ok();
     }
 
     /// Regression for the 561M-phantom-token bug (2026-07-23): forking/

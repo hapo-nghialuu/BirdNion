@@ -1,3 +1,8 @@
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 #if canImport(Musl)
 import Musl
@@ -274,6 +279,11 @@ extension CostUsageScanner {
         lastCodexTurnID: String? = nil,
         sessionId: String? = nil,
         forkedFromId: String? = nil,
+        projectKey: String? = nil,
+        projectName: String? = nil,
+        projectAttributionAmbiguous: Bool? = nil,
+        projectRetractionID: String? = nil,
+        projectRetractionKey: String? = nil,
         codexCostNanos: [String: [String: Int64]]? = nil,
         codexPrioritySurchargeNanos: [String: [String: Int64]]? = nil,
         codexStandardCostNanos: [String: [String: Int64]]? = nil,
@@ -297,6 +307,11 @@ extension CostUsageScanner {
             lastCodexTurnID: lastCodexTurnID,
             sessionId: sessionId,
             forkedFromId: forkedFromId,
+            projectKey: projectKey,
+            projectName: projectName,
+            projectAttributionAmbiguous: projectAttributionAmbiguous,
+            projectRetractionID: projectRetractionID,
+            projectRetractionKey: projectRetractionKey,
             codexCostNanos: codexCostNanos,
             codexPrioritySurchargeNanos: codexPrioritySurchargeNanos,
             codexStandardCostNanos: codexStandardCostNanos,
@@ -662,11 +677,57 @@ extension CostUsageScanner {
     {
         if let sessionId {
             state.seenSessionIds.insert(sessionId)
+            if state.sessionFilePaths[sessionId] == nil {
+                state.sessionFilePaths[sessionId] = metadata.path
+            }
             context.resources.fileIndex.remember(fileURL: fileURL, sessionId: sessionId)
         }
         if let fileId = metadata.fileId {
             state.seenFileIds.insert(fileId)
         }
+    }
+
+    static func reconcileDuplicateCodexProject(
+        sessionId: String,
+        projectKey: String?,
+        projectName: String?,
+        projectAttributionAmbiguous: Bool,
+        cache: inout CostUsageCache,
+        state: inout CodexScanState)
+    {
+        guard let retainedPath = state.sessionFilePaths[sessionId],
+              var retained = cache.files[retainedPath]
+        else { return }
+        let conflict = retained.projectKey != nil
+            && projectKey != nil
+            && retained.projectKey != projectKey
+        let ambiguous = state.ambiguousProjectSessionIds.contains(sessionId)
+            || retained.projectAttributionAmbiguous == true
+            || projectAttributionAmbiguous
+            || conflict
+        if ambiguous {
+            if let oldKey = retained.projectKey ?? retained.projectRetractionKey {
+                retained.projectRetractionKey = oldKey
+                retained.projectRetractionID = retained.projectRetractionID
+                    ?? Self.codexProjectRetractionID(sessionId: sessionId, projectKey: oldKey)
+            }
+            retained.projectKey = nil
+            retained.projectName = nil
+            retained.projectAttributionAmbiguous = true
+            state.ambiguousProjectSessionIds.insert(sessionId)
+        } else if retained.projectKey == nil, let projectKey {
+            retained.projectKey = projectKey
+            retained.projectName = projectName
+        }
+        cache.files[retainedPath] = retained
+    }
+
+    private static func codexProjectRetractionID(
+        sessionId: String,
+        projectKey: String) -> String
+    {
+        let value = "codex:project-retraction-v1\0\(sessionId)\0\(projectKey)"
+        return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     static func keepCachedCodexFileIfFresh(
@@ -741,6 +802,19 @@ extension CostUsageScanner {
         }
         let sessionId = delta.sessionId ?? cached.sessionId
         if let sessionId, state.seenSessionIds.contains(sessionId) {
+            let projectConflict = cached.projectKey != nil
+                && delta.projectKey != nil
+                && cached.projectKey != delta.projectKey
+            let projectAmbiguous = cached.projectAttributionAmbiguous == true
+                || delta.projectAttributionAmbiguous
+                || projectConflict
+            Self.reconcileDuplicateCodexProject(
+                sessionId: sessionId,
+                projectKey: projectAmbiguous ? nil : (delta.projectKey ?? cached.projectKey),
+                projectName: projectAmbiguous ? nil : (delta.projectName ?? cached.projectName),
+                projectAttributionAmbiguous: projectAmbiguous,
+                cache: &cache,
+                state: &state)
             Self.dropCachedCodexFile(path: input.metadata.path, cached: cached, cache: &cache)
             return true
         }
@@ -758,6 +832,18 @@ extension CostUsageScanner {
             priorityTurns: context.resources.priorityTurns,
             modelsDevCatalog: context.resources.modelsDevCatalog,
             modelsDevCacheRoot: context.resources.modelsDevCacheRoot)
+        let projectConflict = migratedCached.projectKey != nil
+            && delta.projectKey != nil
+            && migratedCached.projectKey != delta.projectKey
+        let projectAmbiguous = migratedCached.projectAttributionAmbiguous == true
+            || delta.projectAttributionAmbiguous
+            || projectConflict
+        let retractionKey = migratedCached.projectRetractionKey
+            ?? (projectAmbiguous ? migratedCached.projectKey : nil)
+        let retractionID = migratedCached.projectRetractionID
+            ?? retractionKey.flatMap { key in
+                sessionId.map { Self.codexProjectRetractionID(sessionId: $0, projectKey: key) }
+            }
         cache.files[input.metadata.path] = Self.makeFileUsage(
             mtimeUnixMs: input.metadata.mtimeUnixMs,
             size: input.metadata.size,
@@ -771,6 +857,11 @@ extension CostUsageScanner {
             lastCodexTurnID: delta.lastCodexTurnID,
             sessionId: sessionId,
             forkedFromId: delta.forkedFromId ?? migratedCached.forkedFromId,
+            projectKey: projectAmbiguous ? nil : (delta.projectKey ?? migratedCached.projectKey),
+            projectName: projectAmbiguous ? nil : (delta.projectName ?? migratedCached.projectName),
+            projectAttributionAmbiguous: projectAmbiguous,
+            projectRetractionID: retractionID,
+            projectRetractionKey: retractionKey,
             codexCostNanos: Self.codexMergedCostMap(
                 migratedCached.codexCostNanos,
                 deltaRows: delta.rows,
@@ -824,6 +915,13 @@ extension CostUsageScanner {
             checkCancellation: context.checkCancellation)
         let sessionId = parsed.sessionId ?? input.cached?.sessionId
         if let sessionId, state.seenSessionIds.contains(sessionId) {
+            Self.reconcileDuplicateCodexProject(
+                sessionId: sessionId,
+                projectKey: parsed.projectKey,
+                projectName: parsed.projectName,
+                projectAttributionAmbiguous: parsed.projectAttributionAmbiguous,
+                cache: &cache,
+                state: &state)
             cache.files.removeValue(forKey: input.metadata.path)
             return
         }
@@ -835,6 +933,16 @@ extension CostUsageScanner {
             modelsDevCatalog: context.resources.modelsDevCatalog,
             modelsDevCacheRoot: context.resources.modelsDevCacheRoot)
 
+        let projectConflict = migratedCached?.projectKey != nil
+            && parsed.projectKey != nil
+            && migratedCached?.projectKey != parsed.projectKey
+        let projectAmbiguous = parsed.projectAttributionAmbiguous || projectConflict
+        let retractionKey = migratedCached?.projectRetractionKey
+            ?? (projectAmbiguous ? migratedCached?.projectKey : nil)
+        let retractionID = migratedCached?.projectRetractionID
+            ?? retractionKey.flatMap { key in
+                sessionId.map { Self.codexProjectRetractionID(sessionId: $0, projectKey: key) }
+            }
         cache.files[input.metadata.path] = Self.makeFileUsage(
             mtimeUnixMs: input.metadata.mtimeUnixMs,
             size: input.metadata.size,
@@ -848,6 +956,11 @@ extension CostUsageScanner {
             lastCodexTurnID: parsed.lastCodexTurnID,
             sessionId: sessionId,
             forkedFromId: parsed.forkedFromId,
+            projectKey: projectAmbiguous ? nil : parsed.projectKey,
+            projectName: projectAmbiguous ? nil : parsed.projectName,
+            projectAttributionAmbiguous: projectAmbiguous,
+            projectRetractionID: retractionID,
+            projectRetractionKey: retractionKey,
             codexCostNanos: Self.mergeCostMaps(
                 context.dropDeferredCodexRows
                     ? nil
@@ -1137,7 +1250,154 @@ extension CostUsageScanner {
                 totalTokens: totalTokens,
                 totalCostUSD: costSeen ? totalCost : nil)
 
-        return CostUsageDailyReport(data: entries, summary: summary)
+        return CostUsageDailyReport(
+            data: entries,
+            summary: summary,
+            projectBreakdown: Self.codexProjectBreakdown(
+                cache: cache,
+                range: range,
+                modelsDevCatalog: modelsDevCatalog,
+                modelsDevCacheRoot: modelsDevCacheRoot),
+            projectRetractions: Self.codexProjectRetractions(
+                cache: cache,
+                range: range,
+                modelsDevCatalog: modelsDevCatalog,
+                modelsDevCacheRoot: modelsDevCacheRoot))
+    }
+
+    private struct CodexProjectModelTotal {
+        var costUSD: Double = 0
+        var tokens: Int = 0
+    }
+
+    private struct CodexProjectTotal {
+        var name: String
+        var days: [String: [String: CodexProjectModelTotal]] = [:]
+    }
+
+    private static func codexProjectBreakdown(
+        cache: CostUsageCache,
+        range: CostUsageDayRange,
+        modelsDevCatalog: ModelsDevCatalog?,
+        modelsDevCacheRoot: URL?) -> [CostUsageProjectBreakdown]?
+    {
+        var projects: [String: CodexProjectTotal] = [:]
+        for usage in cache.files.values {
+            guard let key = usage.projectKey,
+                  key.count == 64,
+                  key.allSatisfy({ ("0"..."9").contains($0) || ("a"..."f").contains($0) })
+            else { continue }
+            let name = Self.safeCodexProjectName(usage.projectName, key: key)
+            var project = projects[key] ?? CodexProjectTotal(name: name)
+            if name < project.name { project.name = name }
+
+            for (day, models) in usage.days where CostUsageDayRange.isInRange(
+                dayKey: day, since: range.sinceKey, until: range.untilKey)
+            {
+                var dayModels = project.days[day] ?? [:]
+                for (model, packed) in models {
+                    let input = packed[safe: 0] ?? 0
+                    let cached = packed[safe: 1] ?? 0
+                    let output = packed[safe: 2] ?? 0
+                    let tokens = input + output
+                    let splitCost = Self.costUSD(
+                        standardNanos: usage.codexStandardCostNanos?[day]?[model],
+                        priorityNanos: usage.codexPriorityCostNanos?[day]?[model])
+                    var cost = splitCost
+                        ?? usage.codexCostNanos?[day]?[model].map { Double($0) / Self.costScale }
+                        ?? CostUsagePricing.codexCostUSD(
+                            model: model,
+                            inputTokens: input,
+                            cachedInputTokens: cached,
+                            outputTokens: output,
+                            modelsDevCatalog: modelsDevCatalog,
+                            modelsDevCacheRoot: modelsDevCacheRoot)
+                        ?? 0
+                    if splitCost == nil,
+                       usage.codexCostNanos?[day]?[model] != nil,
+                       let surcharge = usage.codexPrioritySurchargeNanos?[day]?[model]
+                    {
+                        cost += Double(surcharge) / Self.costScale
+                    }
+                    var total = dayModels[model] ?? CodexProjectModelTotal()
+                    total.costUSD += cost
+                    total.tokens += tokens
+                    dayModels[model] = total
+                }
+                project.days[day] = dayModels
+            }
+            projects[key] = project
+        }
+
+        let result = projects.keys.sorted().compactMap { key -> CostUsageProjectBreakdown? in
+            guard let project = projects[key] else { return nil }
+            let daily = project.days.keys.sorted().compactMap { day -> CostUsageProjectBreakdown.Day? in
+                guard let models = project.days[day] else { return nil }
+                let rows = models.map {
+                    CostUsageProjectBreakdown.Model(
+                        name: $0.key, costUSD: $0.value.costUSD, totalTokens: $0.value.tokens)
+                }.filter { $0.costUSD > 0 || $0.totalTokens > 0 }
+                    .sorted {
+                        if $0.costUSD != $1.costUSD { return $0.costUSD > $1.costUSD }
+                        if $0.totalTokens != $1.totalTokens { return $0.totalTokens > $1.totalTokens }
+                        return $0.name < $1.name
+                    }
+                let cost = rows.reduce(0) { $0 + $1.costUSD }
+                let tokens = rows.reduce(0) { $0 + $1.totalTokens }
+                guard cost > 0 || tokens > 0 else { return nil }
+                return CostUsageProjectBreakdown.Day(
+                    date: day, costUSD: cost, totalTokens: tokens, models: rows)
+            }
+            guard !daily.isEmpty else { return nil }
+            return CostUsageProjectBreakdown(
+                projectKey: key, projectName: project.name, daily: daily)
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    private static func codexProjectRetractions(
+        cache: CostUsageCache,
+        range: CostUsageDayRange,
+        modelsDevCatalog: ModelsDevCatalog?,
+        modelsDevCacheRoot: URL?) -> [CostUsageProjectRetraction]?
+    {
+        var result: [String: CostUsageProjectRetraction] = [:]
+        for (path, usage) in cache.files {
+            guard let id = usage.projectRetractionID,
+                  let key = usage.projectRetractionKey,
+                  id.count == 64,
+                  key.count == 64
+            else { continue }
+            var attributed = usage
+            attributed.projectKey = key
+            attributed.projectName = "Retracted"
+            var isolated = CostUsageCache()
+            isolated.files[path] = attributed
+            guard let daily = Self.codexProjectBreakdown(
+                cache: isolated,
+                range: range,
+                modelsDevCatalog: modelsDevCatalog,
+                modelsDevCacheRoot: modelsDevCacheRoot)?.first?.daily,
+                !daily.isEmpty
+            else { continue }
+            result[id] = CostUsageProjectRetraction(
+                retractionID: id, projectKey: key, daily: daily)
+        }
+        let rows = result.keys.sorted().compactMap { result[$0] }
+        return rows.isEmpty ? nil : rows
+    }
+
+    private static func costUSD(standardNanos: Int64?, priorityNanos: Int64?) -> Double? {
+        guard standardNanos != nil || priorityNanos != nil else { return nil }
+        return Double((standardNanos ?? 0) + (priorityNanos ?? 0)) / Self.costScale
+    }
+
+    private static func safeCodexProjectName(_ raw: String?, key: String) -> String {
+        let candidate = raw?.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
+        let cleaned = String(candidate.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+        }).trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "Codex Project \(key.prefix(8))" : String(cleaned.prefix(48))
     }
 
     static func sortedModelBreakdowns(_ breakdowns: [CostUsageDailyReport.ModelBreakdown])

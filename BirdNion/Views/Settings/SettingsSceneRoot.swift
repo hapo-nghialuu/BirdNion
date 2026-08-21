@@ -46,9 +46,11 @@ struct SettingsSceneRoot: View {
     @EnvironmentObject var config: ConfigService
     @EnvironmentObject var quota: QuotaService
 
-    @State private var selected: SettingsTab =
-        UserDefaults.standard.string(forKey: "birdnion.settingsSection") == "providers"
-            ? .providers : .general
+    @State private var selected = SettingsTab.restored(
+        UserDefaults.standard.string(forKey: "birdnion.settingsSection"))
+    /// One Settings-wide search (nav + contextual roster). Owned here so
+    /// Providers/AI Coding don't mount a second search field.
+    @State private var sidebarSearch = ""
 
     /// One constant window size for all tabs — wide enough for the providers
     /// sidebar + detail, still fine for the single-column tabs. This MUST stay
@@ -65,8 +67,9 @@ struct SettingsSceneRoot: View {
             // Providers / AI Coding render the whole row themselves: their
             // roster list lives inside the sidebar column (below the nav),
             // so the pane owns both the embedded list state and the detail.
-            case .providers: ProvidersPane(tab: $selected)
-            case .aiCoding: AICodingPane(tab: $selected)
+            case .providers: ProvidersPane(tab: $selected, searchText: $sidebarSearch)
+            case .aiCoding: AICodingPane(tab: $selected, searchText: $sidebarSearch)
+            case .insights: navAndContent { InsightsPane() }
             case .general: navAndContent { GeneralPane() }
             case .advanced: navAndContent { AdvancedPane() }
             case .about: navAndContent { AboutPane() }
@@ -83,16 +86,22 @@ struct SettingsSceneRoot: View {
         .onReceive(NotificationCenter.default.publisher(for: .openProvidersTab)) { _ in
             selected = .providers
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openInsightsTab)) { _ in
+            selected = .insights
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openProviderSetup)) { _ in
             UserDefaults.standard.set("providers", forKey: "birdnion.settingsSection")
             selected = .providers
+        }
+        .onChange(of: selected) { _, value in
+            UserDefaults.standard.set(value.rawValue, forKey: "birdnion.settingsSection")
         }
     }
 
     /// Standard row for single-column tabs: nav-only sidebar + content pane.
     private func navAndContent<Pane: View>(@ViewBuilder _ pane: () -> Pane) -> some View {
         HStack(spacing: 0) {
-            SettingsSidebar(selected: $selected)
+            SettingsSidebar(selected: $selected, searchText: $sidebarSearch)
             pane()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -103,6 +112,15 @@ extension Notification.Name {
     /// Kept for existing quick-apply callers; the route now opens AI Coding.
     static let openClaudeCodeTab = Notification.Name("birdnion.openClaudeCodeTab")
     static let openProviderSetup = Notification.Name("birdnion.openProviderSetup")
+    static let openInsightsTab = Notification.Name("birdnion.openInsightsTab")
+}
+
+@MainActor
+func openInsightsSettings(segment: InsightsSegment = .overview) {
+    UserDefaults.standard.set(SettingsTab.insights.rawValue, forKey: "birdnion.settingsSection")
+    UserDefaults.standard.set(segment.rawValue, forKey: InsightsSegment.defaultsKey)
+    NotificationCenter.default.post(name: .openInsightsTab, object: nil)
+    NotificationCenter.default.post(name: .openSettings, object: nil)
 }
 
 @MainActor

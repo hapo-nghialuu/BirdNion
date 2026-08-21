@@ -15,11 +15,13 @@ mod hiyo_keys;
 mod freemodel_accounts;
 mod grok_scanner;
 mod providers;
+mod project_cost_history;
+mod project_insights;
 mod storage;
 mod updater;
 mod usage;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,35 +39,34 @@ const USAGE_REPORT_TTL: Duration = Duration::from_secs(300);
 static USAGE_REPORT_CACHE: LazyLock<Mutex<HashMap<&'static str, (Instant, usage::UsageReport)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Runs `scan` (full log walk) at most once per TTL per source, merging with
-/// the cost-history high-water mark on refresh (macOS CostHistoryStore
-/// parity). Always returns a report — history-backed when no live logs exist.
-fn cached_usage_report(
-    source: &'static str,
-    scan: fn() -> Option<usage::UsageReport>,
-) -> usage::UsageReport {
-    if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get(source) {
-        if at.elapsed() < USAGE_REPORT_TTL {
-            return report.clone();
-        }
-    }
-    let live = scan();
-    let merged = cost_history::apply_and_report(source, live.as_ref());
-    USAGE_REPORT_CACHE
-        .lock()
-        .unwrap()
-        .insert(source, (Instant::now(), merged.clone()));
-    merged
-}
-
 /// Claude Code CLI usage rolled up from local session logs. The scan runs on
 /// a blocking thread — sync commands execute on the GTK main loop and froze
 /// the webview's first paint for the whole log walk (macOS runs its scanners
 /// detached off-main for the same reason).
 #[tauri::command]
 async fn claude_usage_report() -> Option<usage::UsageReport> {
+    if !local_usage_source_enabled("claude") {
+        return None;
+    }
     tauri::async_runtime::spawn_blocking(|| {
-        cached_usage_report("claude", claude_scanner::usage_report)
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("claude") {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return report.clone();
+            }
+        }
+        let live = claude_scanner::usage_scan();
+        let merged =
+            cost_history::apply_and_report("claude", live.as_ref().map(|scan| &scan.usage));
+        if let Some(scan) = &live {
+            // Insights storage is optional. Its failure must never make the
+            // established aggregate usage command fail.
+            let _ = project_cost_history::apply("claude", &scan.projects, false);
+        }
+        USAGE_REPORT_CACHE
+            .lock()
+            .unwrap()
+            .insert("claude", (Instant::now(), merged.clone()));
+        merged
     })
     .await
     .ok()
@@ -75,8 +76,31 @@ async fn claude_usage_report() -> Option<usage::UsageReport> {
 /// see `claude_usage_report`).
 #[tauri::command]
 async fn codex_usage_report() -> Option<usage::UsageReport> {
+    if !local_usage_source_enabled("codex") {
+        return None;
+    }
     tauri::async_runtime::spawn_blocking(|| {
-        cached_usage_report("codex", codex_scanner::usage_report)
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("codex") {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return report.clone();
+            }
+        }
+        let live = codex_scanner::usage_scan();
+        let merged =
+            cost_history::apply_and_report("codex", live.as_ref().map(|scan| &scan.usage));
+        if let Some(scan) = &live {
+            let _ = project_cost_history::apply_with_retractions(
+                "codex",
+                &scan.projects,
+                &scan.retractions,
+                false,
+            );
+        }
+        USAGE_REPORT_CACHE
+            .lock()
+            .unwrap()
+            .insert("codex", (Instant::now(), merged.clone()));
+        merged
     })
     .await
     .ok()
@@ -86,11 +110,106 @@ async fn codex_usage_report() -> Option<usage::UsageReport> {
 /// thread + cache, see `claude_usage_report`).
 #[tauri::command]
 async fn grok_usage_report() -> Option<usage::UsageReport> {
+    if !local_usage_source_enabled("grok") {
+        return None;
+    }
     tauri::async_runtime::spawn_blocking(|| {
-        cached_usage_report("grok", grok_scanner::usage_report)
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("grok") {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return report.clone();
+            }
+        }
+        let live = grok_scanner::usage_scan();
+        let merged =
+            cost_history::apply_and_report("grok", live.as_ref().map(|scan| &scan.usage));
+        if let Some(scan) = &live {
+            let _ = project_cost_history::apply("grok", &scan.projects, false);
+        }
+        USAGE_REPORT_CACHE
+            .lock()
+            .unwrap()
+            .insert("grok", (Instant::now(), merged.clone()));
+        merged
     })
     .await
     .ok()
+}
+
+/// Read-only Insights projection. It reads the optional project store and
+/// existing aggregate history; it never starts a second scanner pass.
+#[tauri::command]
+async fn project_insights_report(
+    days: Option<u16>,
+    project_key: Option<String>,
+) -> Result<project_insights::Report, String> {
+    let days = match days {
+        Some(30) => 30,
+        Some(90) => 90,
+        _ => 7,
+    };
+    let project_key = project_key.filter(|key| {
+        key.len() <= 80
+            && key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    });
+    let enabled_sources = enabled_usage_sources();
+    tauri::async_runtime::spawn_blocking(move || {
+        let current = {
+            let cache = USAGE_REPORT_CACHE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut reports = fresh_cached_usage_reports(&cache, Instant::now());
+            reports.retain(|source, _| enabled_sources.contains(source));
+            reports
+        };
+        project_insights::build_report(
+            days, project_key.as_deref(), &current, &enabled_sources)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+fn enabled_usage_sources() -> HashSet<String> {
+    config::enabled_providers()
+        .into_iter()
+        .map(|provider| provider.id)
+        .filter(|id| matches!(id.as_str(), "claude" | "codex" | "grok"))
+        .collect()
+}
+
+fn local_usage_source_enabled(source: &str) -> bool {
+    enabled_usage_sources().contains(source)
+}
+
+fn fresh_cached_usage_reports(
+    cache: &HashMap<&'static str, (Instant, usage::UsageReport)>,
+    now: Instant,
+) -> HashMap<String, usage::UsageReport> {
+    cache
+        .iter()
+        .filter(|(_, (at, _))| now.saturating_duration_since(*at) < USAGE_REPORT_TTL)
+        .map(|(source, (_, report))| ((*source).to_string(), report.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod project_insights_cache_tests {
+    use super::*;
+
+    #[test]
+    fn stale_usage_cache_is_not_reported_as_live_insights() {
+        let now = Instant::now();
+        let cache = HashMap::from([
+            ("claude", (now - USAGE_REPORT_TTL - Duration::from_secs(1), usage::UsageReport::default())),
+            ("codex", (now - Duration::from_secs(1), usage::UsageReport::default())),
+        ]);
+
+        let fresh = fresh_cached_usage_reports(&cache, now);
+
+        assert!(!fresh.contains_key("claude"));
+        assert!(fresh.contains_key("codex"));
+    }
 }
 
 /// Quota status for providers enabled in settings.json, fetched concurrently.
@@ -995,8 +1114,8 @@ fn quit_app(app: tauri::AppHandle) {
 /// Open (or focus) the dedicated Settings window — macOS Settings scene parity
 /// (780×720, separate from the tray popover).
 #[tauri::command]
-fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
-    open_settings_window_impl(&app, None)
+fn open_settings_window(app: tauri::AppHandle, section: Option<String>) -> Result<(), String> {
+    open_settings_window_impl(&app, section.as_deref())
 }
 
 fn open_settings_window_impl(app: &tauri::AppHandle, section: Option<&str>) -> Result<(), String> {
@@ -1072,6 +1191,7 @@ pub fn run() {
             claude_usage_report,
             codex_usage_report,
             grok_usage_report,
+            project_insights_report,
             provider_statuses,
             classify_provider_error,
             is_transient_provider_error,

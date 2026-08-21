@@ -13,10 +13,12 @@
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::project_cost_history::{ProjectContribution, ProjectModel};
 use crate::usage::{DailyModel, DailyUsage, HourlyUsage, UsageReport};
 
 /// Trailing daily window for charts / heatmap (macOS CombinedUsageReport 120d).
@@ -119,6 +121,87 @@ struct Entry {
     model: String,
     /// `messageId` for cross-file / multi-block dedup; None → counted individually.
     key: Option<String>,
+    project: Option<ProjectIdentity>,
+    project_ambiguous: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ProjectIdentity {
+    key: String,
+    display_name: String,
+    capability: &'static str,
+}
+
+pub struct UsageScan {
+    pub usage: UsageReport,
+    pub projects: Vec<ProjectContribution>,
+}
+
+fn project_hash(namespace: &str, identity: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(namespace.as_bytes());
+    hasher.update([0]);
+    hasher.update(identity.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn safe_basename(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    let cleaned: String = name
+        .chars()
+        .filter(|char| !char.is_control() && *char != '/' && *char != '\\')
+        .take(80)
+        .collect();
+    (!cleaned.is_empty() && cleaned != "." && cleaned != "..").then_some(cleaned)
+}
+
+fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    Some(normalized)
+}
+
+/// A verified cwd improves the privacy-safe label only. The canonical key
+/// remains the session-directory digest so later log enrichment cannot split
+/// one observed project into two high-water history rows.
+fn project_display_name_from_cwd(raw: &str) -> Option<String> {
+    if raw.chars().any(char::is_control) {
+        return None;
+    }
+    let path = Path::new(raw);
+    let normalized = normalized_absolute_path(path)?;
+    safe_basename(&normalized)
+}
+
+/// Fallback to the first session-directory component below a configured
+/// Claude `projects/` root. Only its digest leaves the scanner.
+fn fallback_project_identity(root: &Path, file: &Path) -> Option<ProjectIdentity> {
+    let component = file.strip_prefix(root).ok()?.components().next()?;
+    let Component::Normal(name) = component else {
+        return None;
+    };
+    let identity = name.to_string_lossy();
+    let key = project_hash("claude-session-dir-v1", &identity);
+    Some(ProjectIdentity {
+        display_name: format!("Claude {}", &key[..8]),
+        key,
+        capability: "derivedPath",
+    })
 }
 
 /// Project roots to scan. `CLAUDE_CONFIG_DIR` wins (comma-separated, each
@@ -150,13 +233,20 @@ pub fn default_roots() -> Vec<PathBuf> {
     ]
 }
 
-pub fn usage_report() -> Option<UsageReport> {
-    scan(&default_roots(), Local::now())
+pub fn usage_scan() -> Option<UsageScan> {
+    scan_with_projects(&default_roots(), Local::now())
 }
 
 /// Walks every session jsonl once and produces the full report.
 /// Returns None only when no projects root is readable.
-pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
+#[cfg(test)]
+fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
+    scan_with_projects(roots, now).map(|scan| scan.usage)
+}
+
+/// Same single file pass as `scan`, with privacy-safe project contributions
+/// collected alongside the unchanged aggregate buckets.
+pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageScan> {
     let cutoff = now - Duration::days(HISTORY_DAYS);
     let last30_cutoff = now - Duration::days(30);
     let hour_cutoff = now - Duration::hours(24);
@@ -192,14 +282,45 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
             let Ok(content) = std::fs::read_to_string(&file) else {
                 continue;
             };
+            let mut identity = fallback_project_identity(root, &file);
+            let mut has_cwd_label = false;
+            let mut entries = Vec::new();
             for line in content.lines() {
-                if let Some(entry) = parse_line(line) {
-                    match &entry.key {
-                        Some(k) => {
-                            keyed.insert(k.clone(), entry);
+                let Ok(obj) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if !has_cwd_label {
+                    if let Some(label) = obj
+                        .get("cwd")
+                        .and_then(Value::as_str)
+                        .and_then(project_display_name_from_cwd)
+                    {
+                        if let Some(project) = &mut identity {
+                            project.display_name = label;
                         }
-                        None => unkeyed.push(entry),
+                        has_cwd_label = true;
                     }
+                }
+                if let Some(entry) = parse_value(&obj) {
+                    entries.push(entry);
+                }
+            }
+            for mut entry in entries {
+                entry.project = identity.clone();
+                match &entry.key {
+                    Some(k) => {
+                        if let Some(existing) = keyed.get(k) {
+                            let resolution = reconciled_project(
+                                existing.project.as_ref(),
+                                entry.project.as_ref(),
+                                existing.project_ambiguous,
+                            );
+                            entry.project = resolution.0;
+                            entry.project_ambiguous = resolution.1;
+                        }
+                        keyed.insert(k.clone(), entry);
+                    }
+                    None => unkeyed.push(entry),
                 }
             }
         }
@@ -223,6 +344,15 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
     let mut buckets: HashMap<NaiveDate, DayAcc> = HashMap::new();
     let mut hour_buckets: HashMap<(NaiveDate, u32), (f64, i64)> = HashMap::new();
     let mut model_votes: HashMap<String, i64> = HashMap::new();
+    #[derive(Default)]
+    struct ProjectAcc {
+        display_name: String,
+        capability: String,
+        usd: f64,
+        tokens: i64,
+        models: HashMap<String, (f64, i64)>,
+    }
+    let mut project_buckets: HashMap<(String, NaiveDate), ProjectAcc> = HashMap::new();
 
     for entry in keyed.into_values().chain(unkeyed) {
         // Local-midnight instant of the entry's day, for window comparisons
@@ -243,6 +373,22 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
         let m = acc.models.entry(entry.model.clone()).or_insert((0.0, 0));
         m.0 += entry.usd;
         m.1 += entry.tokens;
+
+        if let Some(project) = &entry.project {
+            let project_day = project_buckets
+                .entry((project.key.clone(), entry.day))
+                .or_default();
+            project_day.display_name = project.display_name.clone();
+            project_day.capability = project.capability.into();
+            project_day.usd += entry.usd;
+            project_day.tokens += entry.tokens;
+            let model = project_day
+                .models
+                .entry(entry.model.clone())
+                .or_insert((0.0, 0));
+            model.0 += entry.usd;
+            model.1 += entry.tokens;
+        }
 
         // Totals + top-model vote keep 30-day semantics even though the
         // bucket window is wider.
@@ -311,7 +457,7 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
         .max_by_key(|(_, tokens)| *tokens)
         .map(|(name, _)| name);
 
-    Some(UsageReport {
+    let usage = UsageReport {
         today_usd,
         today_tokens,
         last30_usd: month_usd,
@@ -323,14 +469,75 @@ pub fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
         // `cost_history::apply_and_report`, which owns the merge; this
         // intermediate "live" report is only ever consumed there.
         ..Default::default()
-    })
+    };
+    let mut projects: Vec<ProjectContribution> = project_buckets
+        .into_iter()
+        .filter(|(_, day)| day.usd > 0.0 || day.tokens > 0)
+        .map(|((project_key, date), day)| {
+            let mut models: Vec<ProjectModel> = day
+                .models
+                .into_iter()
+                .filter(|(_, (usd, tokens))| *usd > 0.0 || *tokens > 0)
+                .map(|(name, (usd, tokens))| ProjectModel { name, usd, tokens })
+                .collect();
+            models.sort_by(|a, b| {
+                b.tokens
+                    .cmp(&a.tokens)
+                    .then_with(|| b.usd.total_cmp(&a.usd))
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            models.truncate(5);
+            ProjectContribution {
+                project_key,
+                display_name: day.display_name,
+                capability: day.capability,
+                date: date.to_string(),
+                usd: day.usd,
+                tokens: day.tokens,
+                models,
+            }
+        })
+        .collect();
+    projects.sort_by(|a, b| {
+        a.date
+            .cmp(&b.date)
+            .then_with(|| a.project_key.cmp(&b.project_key))
+    });
+    Some(UsageScan { usage, projects })
+}
+
+/// Preserve aggregate keep-last dedup while refusing to assign a replayed
+/// message to an arbitrary project. Exact cwd wins over a fallback; two
+/// conflicting exact/fallback identities are left unattributed and later
+/// appear in the aggregate Unknown residual.
+fn reconciled_project(
+    current: Option<&ProjectIdentity>,
+    incoming: Option<&ProjectIdentity>,
+    already_ambiguous: bool,
+) -> (Option<ProjectIdentity>, bool) {
+    if already_ambiguous {
+        return (None, true);
+    }
+    match (current, incoming) {
+        (None, None) => (None, false),
+        (Some(value), None) | (None, Some(value)) => (Some(value.clone()), false),
+        (Some(current), Some(incoming)) if current.key == incoming.key => {
+            (Some(current.clone()), false)
+        }
+        (Some(current), Some(incoming)) if current.capability == "exact" && incoming.capability != "exact" => {
+            (Some(current.clone()), false)
+        }
+        (Some(current), Some(incoming)) if incoming.capability == "exact" && current.capability != "exact" => {
+            (Some(incoming.clone()), false)
+        }
+        (Some(_), Some(_)) => (None, true),
+    }
 }
 
 /// Parses one jsonl line into a priced entry. None for non-usage lines,
 /// Vertex AI lines (separately billed — "_vrtx_" ids or "model@version"),
 /// and lines whose timestamp is missing/unparseable (cannot attribute a day).
-fn parse_line(line: &str) -> Option<Entry> {
-    let obj: Value = serde_json::from_str(line).ok()?;
+fn parse_value(obj: &Value) -> Option<Entry> {
     let message = obj.get("message")?;
     let usage = message.get("usage")?;
 
@@ -387,6 +594,8 @@ fn parse_line(line: &str) -> Option<Entry> {
         tokens: input + cache_creation + cache_read + output,
         model: raw_model,
         key,
+        project: None,
+        project_ambiguous: false,
     })
 }
 
@@ -424,6 +633,116 @@ mod tests {
         )
     }
 
+    fn line_with_cwd(ts: &str, id: &str, cwd: &Path, input: i64, output: i64) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "timestamp": ts,
+            "cwd": cwd,
+            "message": {
+                "id": id,
+                "model": "claude-sonnet",
+                "usage": { "input_tokens": input, "output_tokens": output }
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn mixed_file_uses_one_verified_cwd_project_identity() {
+        let base = temp_base("project-cwd");
+        let root = base.join("claude/projects");
+        let cwd = base.join("work/acme");
+        fs::create_dir_all(&cwd).unwrap();
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        write_lines(
+            &root.join("-Users-private-work-acme"),
+            "one.jsonl",
+            &[
+                line_with_cwd(&ts, "m1", &cwd, 100, 10),
+                line(&ts, "m2", "claude-sonnet", 200, 20),
+            ],
+        );
+
+        let scan = scan_with_projects(&[root], now).unwrap();
+        assert_eq!(scan.usage.today_tokens, 330);
+        assert_eq!(scan.projects.len(), 1);
+        let project = &scan.projects[0];
+        assert_eq!(project.display_name, "acme");
+        assert_eq!(project.project_key.len(), 64);
+        assert!(project
+            .project_key
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!project.display_name.contains("private"));
+        assert!(!project
+            .project_key
+            .contains(&base.to_string_lossy().to_string()));
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn cwd_label_survives_after_directory_is_deleted() {
+        let base = temp_base("project-deleted-cwd");
+        let cwd = base.join("work/acme");
+        fs::create_dir_all(&cwd).unwrap();
+        let before = project_display_name_from_cwd(&cwd.to_string_lossy()).unwrap();
+        fs::remove_dir_all(&cwd).unwrap();
+        let after = project_display_name_from_cwd(&cwd.to_string_lossy()).unwrap();
+
+        assert_eq!(before, after);
+        assert_eq!(after, "acme");
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn session_directory_fallback_never_exposes_encoded_path() {
+        let base = temp_base("project-fallback");
+        let root = base.join("projects");
+        let now = Local::now();
+        write_lines(
+            &root.join("-Users-secret-client-project"),
+            "one.jsonl",
+            &[line(&now.to_rfc3339(), "m1", "claude-sonnet", 100, 10)],
+        );
+
+        let scan = scan_with_projects(&[root], now).unwrap();
+        let project = &scan.projects[0];
+        assert!(project.display_name.starts_with("Claude "));
+        assert!(!project.display_name.contains("secret"));
+        assert!(!project.project_key.contains("Users"));
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn later_cwd_label_does_not_change_session_project_key() {
+        let base = temp_base("project-key-stability");
+        let root = base.join("projects");
+        let session = root.join("-Users-private-work-acme");
+        let cwd = base.join("work/acme");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        write_lines(
+            &session,
+            "one.jsonl",
+            &[line(&ts, "m1", "claude-sonnet", 100, 10)],
+        );
+        let before = scan_with_projects(&[root.clone()], now).unwrap().projects[0].clone();
+
+        write_lines(
+            &session,
+            "one.jsonl",
+            &[line_with_cwd(&ts, "m1", &cwd, 100, 10)],
+        );
+        let after = scan_with_projects(&[root], now).unwrap().projects[0].clone();
+
+        assert_eq!(before.project_key, after.project_key);
+        assert_eq!(before.capability, "derivedPath");
+        assert_eq!(after.capability, "derivedPath");
+        assert_eq!(after.display_name, "acme");
+        fs::remove_dir_all(base).ok();
+    }
+
     #[test]
     fn dedups_same_message_across_roots() {
         let base = temp_base("dedup");
@@ -441,6 +760,38 @@ mod tests {
         assert_eq!(report.last30_tokens, 150); // 100+50 deduped, not 300
         assert_eq!(report.today_tokens, 150);
         fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn conflicting_duplicate_project_identity_stays_unattributed() {
+        let base = temp_base("dedup-project-conflict");
+        let root = base.join("projects");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        let cwd_a = base.join("work/a");
+        let cwd_b = base.join("work/b");
+        let cwd_c = base.join("work/c");
+        write_lines(
+            &root.join("encoded-a"),
+            "a.jsonl",
+            &[line_with_cwd(&ts, "same-message", &cwd_a, 100, 50)],
+        );
+        write_lines(
+            &root.join("encoded-b"),
+            "b.jsonl",
+            &[line_with_cwd(&ts, "same-message", &cwd_b, 100, 50)],
+        );
+        write_lines(
+            &root.join("encoded-c"),
+            "c.jsonl",
+            &[line_with_cwd(&ts, "same-message", &cwd_c, 100, 50)],
+        );
+
+        let scan = scan_with_projects(&[root], now).unwrap();
+
+        assert_eq!(scan.usage.today_tokens, 150);
+        assert!(scan.projects.is_empty());
+        fs::remove_dir_all(base).ok();
     }
 
     /// Multi-content-block assistant turns repeat the same usage on 3 lines

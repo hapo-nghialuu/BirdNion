@@ -52,7 +52,7 @@ enum CostHistoryStore {
     /// Per-source scan-confidence metadata for the All-tab compact badge —
     /// mirrors the Linux port's `included`/`live`/`scannedAt` `UsageReport`
     /// fields. Pure value type; produced by `confidence(source:liveScanSucceeded:)`.
-    struct UsageScanConfidence: Equatable {
+    struct UsageScanConfidence: Equatable, Sendable {
         /// `true` once this source has ever produced evidence — this cycle's
         /// live scan succeeded, or history already holds a real (non-zero)
         /// day for it. `false` means the source has no data on this machine

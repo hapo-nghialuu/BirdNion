@@ -18,6 +18,17 @@ extension CostUsageScanner {
         }
     }
 
+    static func containsJSONByteField(
+        _ field: [UInt8],
+        from bytes: UnsafeBufferPointer<UInt8>,
+        in range: Range<Int>,
+        atDepth targetDepth: Int) -> Bool
+    {
+        self.extractJSONByteField(
+            field, from: bytes, in: range, atDepth: targetDepth,
+            parseValue: { _ in true }) == true
+    }
+
     static func extractJSONByteObjectField(
         _ field: [UInt8],
         from bytes: UnsafeBufferPointer<UInt8>,

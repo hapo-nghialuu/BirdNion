@@ -24,6 +24,13 @@ public struct CostUsageFetcher: Sendable {
         self.scannerOptions = cacheRoot.map { CostUsageScanner.Options(cacheRoot: $0) }
     }
 
+    /// Removes obsolete Codex cache artifacts that could contain raw session paths.
+    /// This is intentionally independent of provider enablement and log scanning.
+    public static func performPrivacyMigrations(cacheRoot: URL? = nil) throws {
+        try CostUsageCacheIO.removeSensitiveObsoleteCaches(
+            provider: .codex, cacheRoot: cacheRoot)
+    }
+
     init(scannerOptions: CostUsageScanner.Options) {
         self.scannerOptions = scannerOptions
     }
@@ -308,6 +315,8 @@ public struct CostUsageFetcher: Sendable {
             last30DaysCostUSD: last30DaysCostUSD,
             historyDays: historyDays,
             daily: daily.data,
+            projectBreakdown: daily.projectBreakdown,
+            projectRetractions: daily.projectRetractions,
             updatedAt: now)
     }
 

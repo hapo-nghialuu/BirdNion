@@ -1,3 +1,4 @@
+import CodexBarCore
 import SwiftUI
 
 @main
@@ -9,6 +10,11 @@ struct BirdNionApp: App {
 
     init() {
         AppFonts.registerBundledFonts()
+        do {
+            try CostUsageFetcher.performPrivacyMigrations()
+        } catch {
+            NSLog("BirdNion privacy migration failed: %@", error.localizedDescription)
+        }
         let services = ServicesContainer()
         ServicesContainer.register(services: services)
         _settings = State(initialValue: services.settings)

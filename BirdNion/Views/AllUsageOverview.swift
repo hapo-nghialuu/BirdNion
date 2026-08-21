@@ -4,7 +4,7 @@ import SwiftUI
 
 /// One calendar day of combined Claude Code CLI + Codex + Grok usage. Kept
 /// per-source so the stacked chart and hover detail can split the bar by origin.
-struct CombinedDailyUsage: Equatable, Identifiable {
+struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
     let date: Date   // startOfDay in local tz
     let claudeUSD: Double
     let claudeTokens: Int
@@ -40,7 +40,7 @@ struct CombinedDailyUsage: Equatable, Identifiable {
 
 /// One model's summed cost across the combined window, tagged with its source
 /// so the row can carry the provider brand colour.
-struct CombinedModelCost: Equatable, Identifiable {
+struct CombinedModelCost: Equatable, Identifiable, Sendable {
     let name: String
     let usd: Double
     let tokens: Int
@@ -52,7 +52,7 @@ struct CombinedModelCost: Equatable, Identifiable {
 /// Cross-provider aggregation of the Claude Code CLI and Codex local usage
 /// reports. Pure value type + pure `build` so the merge/streak math is
 /// unit-testable without any file I/O.
-struct CombinedUsageReport: Equatable {
+struct CombinedUsageReport: Equatable, Sendable {
     /// Calendar-today totals, taken from the daily buckets — NOT from
     /// `CodexUsageReport.todayUSD`, which is the most recent *active* day.
     let todayUSD: Double
@@ -471,6 +471,14 @@ struct AllUsageOverview: View {
         claude != nil || codex != nil || grok != nil
     }
 
+    private var insightsSources: Set<ProjectUsageSource> {
+        Set([
+            claudeEnabled ? ProjectUsageSource.claude : nil,
+            codexEnabled ? ProjectUsageSource.codex : nil,
+            grokEnabled ? ProjectUsageSource.grok : nil,
+        ].compactMap { $0 })
+    }
+
     var body: some View {
         if !anyReportReady {
             // All enabled scans still in flight — same skeleton the provider card uses.
@@ -500,7 +508,7 @@ struct AllUsageOverview: View {
                 }
                 .popoverContentInset()
             }
-            // Design order: chart/share → confidence → budget → heatmap → models.
+            // Design order: chart/share → confidence → insights → budget → heatmap → models.
             // Confidence + budget stay visible even on a zero-spend month
             // (freshness describes the scan; budget card hides itself when
             // monthlyBudgetUSD is unset).
@@ -517,6 +525,7 @@ struct AllUsageOverview: View {
                 CombinedChartCard(report: report, claudeHourly: claude?.hourly ?? [])
             }
             SourceConfidenceBadgeRow(report: report)
+            InsightsHighlightCard(combined: report, enabledSources: insightsSources)
             BudgetForecastCard(report: report)
             if !report.isEmpty {
                 // Heatmap stays fixed 120d — not tied to chart period chips.
@@ -847,21 +856,26 @@ struct ProviderBudgetCard: View {
                         Text(statusLabel(status))
                             .plexEyebrow(size: 9, color: statusColor(status), tracking: 0.4)
                     }
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(AllUsageFormat.usd(forecast.monthToDateUSD))
                                 .font(.plexMono(24, weight: .bold))
                                 .foregroundStyle(VocabbyTheme.primary)
+                                .monospacedDigit()
                             Text("/ \(AllUsageFormat.usd(budget))")
                                 .font(.plexMono(14, weight: .medium))
                                 .foregroundStyle(VocabbyTheme.tertiary)
+                                .monospacedDigit()
                         }
-                        Spacer(minLength: 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         Text(L10n.f("budget.projectedAmount", language,
                                     AllUsageFormat.usd(forecast.projectedTotalUSD)))
                             .font(.plexMono(12, weight: .semibold))
                             .foregroundStyle(statusColor(status))
                             .multilineTextAlignment(.trailing)
+                            .lineLimit(2)
+                            .frame(minWidth: 110, alignment: .trailing)
+                            .monospacedDigit()
                     }
                     progressBar(forecast: forecast, status: status)
                     Text(remainingText(forecast: forecast, budgetUSD: budget))
@@ -869,6 +883,7 @@ struct ProviderBudgetCard: View {
                         .foregroundStyle(statusColor(status).opacity(0.9))
                         .textCase(.uppercase)
                         .tracking(0.3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

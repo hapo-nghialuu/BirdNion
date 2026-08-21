@@ -6,12 +6,16 @@ enum CostUsageCacheIO {
     /// totals are counted, so every earlier cache must be rebuilt.
     private static let compatibleCodexProducerKeys: Set<String> = []
 
+    /// v11 could contain raw Codex session paths. Remove that exact obsolete
+    /// artifact during migration so an upgrade cannot leave sensitive data at rest.
+    private static let sensitiveObsoleteCodexArtifactVersions = [11]
+
     /// Parsing and attribution changes rotate the Codex parser producer key.
     /// Increment this artifact version only when the stored schema or cache layout becomes incompatible.
     private static func artifactVersion(for provider: UsageProvider) -> Int {
         switch provider {
         case .codex:
-            11
+            12
         case .claude, .vertexai:
             6
         default:
@@ -38,6 +42,7 @@ enum CostUsageCacheIO {
         producerKey: String? = nil,
         calendar: Calendar? = nil) -> CostUsageCache
     {
+        try? self.removeSensitiveObsoleteCaches(provider: provider, cacheRoot: cacheRoot)
         let url = self.cacheFileURL(provider: provider, cacheRoot: cacheRoot)
         let expectedProducerKey = producerKey ?? self.currentProducerKey(provider: provider)
         let compatibleProducerKeys = producerKey == nil && provider == .codex
@@ -80,6 +85,7 @@ enum CostUsageCacheIO {
         producerKey: String? = nil,
         calendar: Calendar = .current)
     {
+        try? self.removeSensitiveObsoleteCaches(provider: provider, cacheRoot: cacheRoot)
         let url = self.cacheFileURL(provider: provider, cacheRoot: cacheRoot)
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -99,6 +105,22 @@ enum CostUsageCacheIO {
             }
         } catch {
             try? FileManager.default.removeItem(at: tmp)
+        }
+    }
+
+    static func removeSensitiveObsoleteCaches(
+        provider: UsageProvider,
+        cacheRoot: URL?)
+        throws
+    {
+        guard provider == .codex else { return }
+        let root = cacheRoot ?? self.defaultCacheRoot()
+        let directory = root.appendingPathComponent("cost-usage", isDirectory: true)
+        for version in self.sensitiveObsoleteCodexArtifactVersions {
+            let url = directory.appendingPathComponent("codex-v\(version).json", isDirectory: false)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
         }
     }
 
@@ -151,10 +173,14 @@ struct CostUsageFileUsage: Codable {
     var sessionId: String?
     var forkedFromId: String?
     var forkBaselineDependencyKey: String?
-    var projectPath: String?
-    var canonicalProjectPath: String?
+    /// Privacy-safe project attribution. Raw `session_meta.payload.cwd` is
+    /// normalized and hashed during parsing, then discarded before caching.
+    var projectKey: String?
+    var projectName: String?
+    var projectAttributionAmbiguous: Bool?
+    var projectRetractionID: String?
+    var projectRetractionKey: String?
     var codexCostCacheComplete: Bool?
-    var codexSession: CostUsageCodexSessionMetadata?
     var codexCostNanos: [String: [String: Int64]]?
     var codexPrioritySurchargeNanos: [String: [String: Int64]]?
     var codexStandardCostNanos: [String: [String: Int64]]?
@@ -168,52 +194,6 @@ struct CostUsageFileUsage: Codable {
     var codexScanFileId: String?
     var codexScanTargetSize: Int64?
     var codexScanComplete: Bool?
-}
-
-struct CostUsageCodexSessionMetadata: Codable, Equatable {
-    var sessionId: String?
-    var forkedFromId: String?
-    var cwd: String?
-    var title: String?
-    var startedAtUnixMs: Int64?
-    var latestActivityUnixMs: Int64?
-
-    var isEmpty: Bool {
-        self.sessionId == nil
-            && self.forkedFromId == nil
-            && self.cwd == nil
-            && self.title == nil
-            && self.startedAtUnixMs == nil
-            && self.latestActivityUnixMs == nil
-    }
-
-    func merging(_ newer: CostUsageCodexSessionMetadata) -> CostUsageCodexSessionMetadata {
-        CostUsageCodexSessionMetadata(
-            sessionId: newer.sessionId ?? self.sessionId,
-            forkedFromId: newer.forkedFromId ?? self.forkedFromId,
-            cwd: newer.cwd ?? self.cwd,
-            title: newer.title ?? self.title,
-            startedAtUnixMs: Self.earlier(self.startedAtUnixMs, newer.startedAtUnixMs),
-            latestActivityUnixMs: Self.later(self.latestActivityUnixMs, newer.latestActivityUnixMs))
-    }
-
-    private static func earlier(_ lhs: Int64?, _ rhs: Int64?) -> Int64? {
-        switch (lhs, rhs) {
-        case let (lhs?, rhs?): min(lhs, rhs)
-        case let (lhs?, nil): lhs
-        case let (nil, rhs?): rhs
-        case (nil, nil): nil
-        }
-    }
-
-    private static func later(_ lhs: Int64?, _ rhs: Int64?) -> Int64? {
-        switch (lhs, rhs) {
-        case let (lhs?, rhs?): max(lhs, rhs)
-        case let (lhs?, nil): lhs
-        case let (nil, rhs?): rhs
-        case (nil, nil): nil
-        }
-    }
 }
 
 struct CostUsageCodexTotals: Codable, Equatable {

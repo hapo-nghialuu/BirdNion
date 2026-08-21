@@ -81,6 +81,11 @@ struct ClaudeUsageReport: Equatable {
     }
 }
 
+struct ClaudeProjectScanResult: Equatable {
+    let report: ClaudeUsageReport
+    let projects: [ProjectUsageRecord]
+}
+
 /// Per-million-token prices (USD) for models recorded by Claude Code. Claude
 /// logs also carry Hapo's Anthropic-compatible model ids, so those supported
 /// Hapo families are priced here rather than falling through to $0.
@@ -211,6 +216,18 @@ enum ClaudeCostScanner {
         storedPricingRevision < pricingRevision ? historyDays : incrementalDays
     }
 
+    static func scanDaysForProjectHistory(
+        storedPricingRevision: Int,
+        incrementalDays: Int,
+        hasStoredClaudeProjects: Bool
+    ) -> Int {
+        hasStoredClaudeProjects
+            ? scanDaysForHistory(
+                storedPricingRevision: storedPricingRevision,
+                incrementalDays: incrementalDays)
+            : historyDays
+    }
+
     /// Actor-isolated cache so brief memoization is safe across tasks.
     private actor Cache {
         static let shared = Cache()
@@ -283,10 +300,14 @@ enum ClaudeCostScanner {
             // store supplies the older days.
             let incrementalDays = CostHistoryStore.scanBackDays(source: .claude, now: now)
             let storedPricingRevision = UserDefaults.standard.integer(forKey: pricingRevisionKey)
-            let scanDays = scanDaysForHistory(
+            let hasStoredClaudeProjects = ProjectCostHistoryStore.read()
+                .sources?[ProjectUsageSource.claude.rawValue]?.isEmpty == false
+            let scanDays = scanDaysForProjectHistory(
                 storedPricingRevision: storedPricingRevision,
-                incrementalDays: incrementalDays)
-            let live = scanFull(roots: roots, now: now, scanDays: scanDays)
+                incrementalDays: incrementalDays,
+                hasStoredClaudeProjects: hasStoredClaudeProjects)
+            let projectScan = scanFullWithProjects(roots: roots, now: now, scanDays: scanDays)
+            let live = projectScan?.report
             let liveDays = (live?.daily ?? []).map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
@@ -310,6 +331,11 @@ enum ClaudeCostScanner {
                 hourly: live?.hourly ?? [],
                 now: now,
                 confidence: confidence)
+            if let projectScan {
+                _ = ProjectCostHistoryStore.apply(
+                    source: .claude, liveProjects: projectScan.projects,
+                    now: now, replacingSource: replacing)
+            }
             if live != nil {
                 UserDefaults.standard.set(pricingRevision, forKey: pricingRevisionKey)
             }
@@ -349,6 +375,14 @@ enum ClaudeCostScanner {
     /// labels the UI uses.
     static func scanFull(roots: [URL], now: Date,
                          scanDays: Int = historyDays) -> ClaudeUsageReport? {
+        scanFullWithProjects(roots: roots, now: now, scanDays: scanDays)?.report
+    }
+
+    /// Same filesystem walk as `scanFull`, with a privacy-safe project split
+    /// emitted for the optional project history store.
+    static func scanFullWithProjects(
+        roots: [URL], now: Date, scanDays: Int = historyDays
+    ) -> ClaudeProjectScanResult? {
         let fm = FileManager.default
         let calendar = Calendar.current
         let startOfToday = calendar.startOfDay(for: now)
@@ -383,8 +417,21 @@ enum ClaudeCostScanner {
             }
             // Sorted so keep-last dedup is deterministic across runs.
             for url in files.sorted(by: { $0.path < $1.path }) {
-                for entry in scanFileWithDay(url, cutoff: cutoff, calendar: calendar) {
-                    if let key = entry.key { keyed[key] = entry } else { unkeyed.append(entry) }
+                for entry in scanFileWithDay(
+                    url, root: root, cutoff: cutoff, calendar: calendar) {
+                    if let key = entry.key {
+                        if let current = keyed[key] {
+                            let resolution = reconciledProject(
+                                current.project, entry.project,
+                                alreadyAmbiguous: current.projectAmbiguous)
+                            keyed[key] = entry.withProject(
+                                resolution.project, ambiguous: resolution.ambiguous)
+                        } else {
+                            keyed[key] = entry
+                        }
+                    } else {
+                        unkeyed.append(entry)
+                    }
                 }
             }
         }
@@ -399,6 +446,7 @@ enum ClaudeCostScanner {
         var hourBuckets: [Date: (usd: Double, tokens: Int)] = [:]
         // Model vote counts — most-used model across the 30-day window.
         var modelVotes: [String: Int] = [:]
+        var projectBuckets: [String: ProjectAccumulator] = [:]
 
         for entry in keyed.values + unkeyed {
             let entryDate = entry.date
@@ -411,6 +459,20 @@ enum ClaudeCostScanner {
             ma.tokens += entry.tokens
             existing.models[entry.model] = ma
             buckets[entryDate] = existing
+
+            if let identity = entry.project {
+                let project = projectBuckets[identity.key]
+                    ?? ProjectAccumulator(identity: identity)
+                let projectDay = project.days[entryDate] ?? DailyAccumulator(date: entryDate)
+                projectDay.usd += entry.usd
+                projectDay.tokens += entry.tokens
+                var projectModel = projectDay.models[entry.model] ?? ModelAccum()
+                projectModel.usd += entry.usd
+                projectModel.tokens += entry.tokens
+                projectDay.models[entry.model] = projectModel
+                project.days[entryDate] = projectDay
+                projectBuckets[identity.key] = project
+            }
 
             // Totals + top-model vote keep 30-day semantics even though the
             // bucket window is wider.
@@ -453,10 +515,25 @@ enum ClaudeCostScanner {
 
         // Top model = the one with the highest token count.
         let topModel = modelVotes.max { $0.value < $1.value }?.key
-        return ClaudeUsageReport(
+        let report = ClaudeUsageReport(
             todayUSD: todayUSD, todayTokens: todayTokens,
             last30USD: monthUSD, last30Tokens: monthTokens,
             daily: daily, hourly: hourly, topModel: topModel)
+        let projects = projectBuckets.values.map { project in
+            ProjectUsageRecord(
+                source: .claude, projectKey: project.identity.key,
+                displayName: project.identity.displayName,
+                attribution: project.identity.attribution,
+                daily: project.days.values.sorted { $0.date < $1.date }.map { day in
+                    ProjectDailyUsage(
+                        date: day.date, usd: day.usd, tokens: day.tokens,
+                        models: day.models.filter { $0.key != "<synthetic>" && $0.value.tokens > 0 }
+                            .map { ProjectModelUsage(
+                                name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens) }
+                            .sorted { $0.tokens > $1.tokens }.prefix(5).map { $0 })
+                })
+        }.sorted { $0.projectKey < $1.projectKey }
+        return ClaudeProjectScanResult(report: report, projects: projects)
     }
 
     /// One model's running totals within a day.
@@ -469,6 +546,12 @@ enum ClaudeCostScanner {
         var tokens: Int = 0
         var models: [String: ModelAccum] = [:]
         init(date: Date) { self.date = date }
+    }
+
+    private final class ProjectAccumulator {
+        let identity: ProjectIdentity
+        var days: [Date: DailyAccumulator] = [:]
+        init(identity: ProjectIdentity) { self.identity = identity }
     }
 
     /// Build a contiguous N-day bucket array (newest → oldest) so the chart
@@ -508,6 +591,7 @@ enum ClaudeCostScanner {
     /// Each entry already has its per-day bucket pre-computed so the caller
     /// can fold straight into a `[Date: DailyAccumulator]`.
     private static func scanFileWithDay(_ url: URL,
+                                        root: URL,
                                         cutoff: Date,
                                         calendar: Calendar) -> [DayEntry] {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else {
@@ -516,8 +600,13 @@ enum ClaudeCostScanner {
         var entries: [DayEntry] = []
         var lines: [String] = []
         content.enumerateLines { line, _ in lines.append(line) }
+        let cwd = lines.lazy.compactMap(topLevelCWD).first
+        let identity = ProjectIdentity.claude(
+            cwd: cwd,
+            fallbackDirectory: sessionDirectoryToken(fileURL: url, root: root))
         for line in lines {
             Self.parseLineIntoDay(line,
+                                  project: identity,
                                   calendar: calendar,
                                   into: &entries)
         }
@@ -530,6 +619,7 @@ enum ClaudeCostScanner {
     /// diagnostic with everything inline).
     private static func parseLineIntoDay(
         _ line: String,
+        project: ProjectIdentity,
         calendar: Calendar,
         into entries: inout [DayEntry]
     ) {
@@ -582,7 +672,8 @@ enum ClaudeCostScanner {
         // model win the "top model" vote. Mirrors CodexBar's token total.
         entries.append(DayEntry(date: day, timestamp: parsedDate, usd: usdLine,
                                 tokens: input + cacheCreation + cacheRead + output,
-                                model: rawModel, key: key))
+                                model: rawModel, key: key, project: project,
+                                projectAmbiguous: false))
     }
 
     /// One assistant turn worth of per-day accounting. Model is tracked so
@@ -597,6 +688,47 @@ enum ClaudeCostScanner {
         let model: String
         /// `messageId` for cross-file / multi-block dedup; nil when unavailable.
         let key: String?
+        let project: ProjectIdentity?
+        let projectAmbiguous: Bool
+
+        func withProject(_ project: ProjectIdentity?, ambiguous: Bool) -> DayEntry {
+            DayEntry(
+                date: date, timestamp: timestamp, usd: usd, tokens: tokens,
+                model: model, key: key, project: project,
+                projectAmbiguous: ambiguous)
+        }
+    }
+
+    /// Keep aggregate keep-last semantics while refusing ambiguous project
+    /// attribution. A direct cwd beats a session-directory fallback; two
+    /// conflicting identities become nil and flow into the Unknown residual.
+    private static func reconciledProject(
+        _ current: ProjectIdentity?, _ incoming: ProjectIdentity?, alreadyAmbiguous: Bool
+    ) -> (project: ProjectIdentity?, ambiguous: Bool) {
+        if alreadyAmbiguous { return (nil, true) }
+        guard let current else { return (incoming, false) }
+        guard let incoming else { return (current, false) }
+        if current.key == incoming.key { return (current, false) }
+        if current.attribution == .exact, incoming.attribution != .exact { return (current, false) }
+        if incoming.attribution == .exact, current.attribution != .exact { return (incoming, false) }
+        return (nil, true)
+    }
+
+    private static func topLevelCWD(_ line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return object["cwd"] as? String
+    }
+
+    private static func sessionDirectoryToken(fileURL: URL, root: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let filePath = fileURL.standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard filePath.hasPrefix(prefix) else { return fileURL.deletingLastPathComponent().lastPathComponent }
+        let relative = String(filePath.dropFirst(prefix.count))
+        return relative.split(separator: "/").first.map(String.init)
+            ?? fileURL.deletingLastPathComponent().lastPathComponent
     }
 
     private static func parseISODate(_ s: String?) -> Date? {

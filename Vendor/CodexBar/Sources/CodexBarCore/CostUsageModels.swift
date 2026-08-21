@@ -1,5 +1,59 @@
 import Foundation
 
+public struct CostUsageProjectBreakdown: Sendable, Decodable, Equatable {
+    public struct Model: Sendable, Decodable, Equatable {
+        public let name: String
+        public let costUSD: Double
+        public let totalTokens: Int
+
+        public init(name: String, costUSD: Double, totalTokens: Int) {
+            self.name = name
+            self.costUSD = costUSD
+            self.totalTokens = totalTokens
+        }
+    }
+
+    public struct Day: Sendable, Decodable, Equatable {
+        public let date: String
+        public let costUSD: Double
+        public let totalTokens: Int
+        public let models: [Model]
+
+        public init(date: String, costUSD: Double, totalTokens: Int, models: [Model]) {
+            self.date = date
+            self.costUSD = costUSD
+            self.totalTokens = totalTokens
+            self.models = models
+        }
+    }
+
+    public let projectKey: String
+    public let projectName: String
+    public let daily: [Day]
+
+    public init(projectKey: String, projectName: String, daily: [Day]) {
+        self.projectKey = projectKey
+        self.projectName = projectName
+        self.daily = daily
+    }
+}
+
+public struct CostUsageProjectRetraction: Sendable, Decodable, Equatable {
+    public let retractionID: String
+    public let projectKey: String
+    public let daily: [CostUsageProjectBreakdown.Day]
+
+    public init(
+        retractionID: String,
+        projectKey: String,
+        daily: [CostUsageProjectBreakdown.Day])
+    {
+        self.retractionID = retractionID
+        self.projectKey = projectKey
+        self.daily = daily
+    }
+}
+
 public struct CostUsageTokenSnapshot: Sendable, Equatable {
     public let sessionTokens: Int?
     public let sessionCostUSD: Double?
@@ -11,6 +65,8 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
     public let historyDays: Int
     public let historyLabel: String?
     public let daily: [CostUsageDailyReport.Entry]
+    public let projectBreakdown: [CostUsageProjectBreakdown]?
+    public let projectRetractions: [CostUsageProjectRetraction]?
     public let updatedAt: Date
 
     public init(
@@ -24,6 +80,8 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
         historyDays: Int = 30,
         historyLabel: String? = nil,
         daily: [CostUsageDailyReport.Entry],
+        projectBreakdown: [CostUsageProjectBreakdown]? = nil,
+        projectRetractions: [CostUsageProjectRetraction]? = nil,
         updatedAt: Date)
     {
         self.sessionTokens = sessionTokens
@@ -38,6 +96,8 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
         self.historyDays = historyDays
         self.historyLabel = historyLabel
         self.daily = daily
+        self.projectBreakdown = projectBreakdown
+        self.projectRetractions = projectRetractions
         self.updatedAt = updatedAt
     }
 }
@@ -252,6 +312,8 @@ public struct CostUsageDailyReport: Sendable, Decodable {
 
     public let data: [Entry]
     public let summary: Summary?
+    public let projectBreakdown: [CostUsageProjectBreakdown]?
+    public let projectRetractions: [CostUsageProjectRetraction]?
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -259,6 +321,8 @@ public struct CostUsageDailyReport: Sendable, Decodable {
         case summary
         case daily
         case totals
+        case projectBreakdown
+        case projectRetractions
     }
 
     public init(from decoder: Decoder) throws {
@@ -268,6 +332,10 @@ public struct CostUsageDailyReport: Sendable, Decodable {
             _ = try container.decode(String.self, forKey: .type)
             self.data = try container.decode([Entry].self, forKey: .data)
             self.summary = try container.decodeIfPresent(Summary.self, forKey: .summary)
+            self.projectBreakdown = try container.decodeIfPresent(
+                [CostUsageProjectBreakdown].self, forKey: .projectBreakdown)
+            self.projectRetractions = try container.decodeIfPresent(
+                [CostUsageProjectRetraction].self, forKey: .projectRetractions)
             return
         }
 
@@ -284,11 +352,22 @@ public struct CostUsageDailyReport: Sendable, Decodable {
         } else {
             self.summary = nil
         }
+        self.projectBreakdown = try container.decodeIfPresent(
+            [CostUsageProjectBreakdown].self, forKey: .projectBreakdown)
+        self.projectRetractions = try container.decodeIfPresent(
+            [CostUsageProjectRetraction].self, forKey: .projectRetractions)
     }
 
-    public init(data: [Entry], summary: Summary?) {
+    public init(
+        data: [Entry],
+        summary: Summary?,
+        projectBreakdown: [CostUsageProjectBreakdown]? = nil,
+        projectRetractions: [CostUsageProjectRetraction]? = nil)
+    {
         self.data = data
         self.summary = summary
+        self.projectBreakdown = projectBreakdown
+        self.projectRetractions = projectRetractions
     }
 }
 
@@ -448,7 +527,13 @@ extension CostUsageDailyReport {
     public static func merged(_ reports: [CostUsageDailyReport]) -> CostUsageDailyReport {
         let entries = self.mergedEntries(from: reports)
         guard !entries.isEmpty else { return CostUsageDailyReport(data: [], summary: nil) }
-        return CostUsageDailyReport(data: entries, summary: self.mergedSummary(from: entries))
+        let projects = reports.flatMap { $0.projectBreakdown ?? [] }
+        let retractions = reports.flatMap { $0.projectRetractions ?? [] }
+        return CostUsageDailyReport(
+            data: entries,
+            summary: self.mergedSummary(from: entries),
+            projectBreakdown: projects.isEmpty ? nil : projects,
+            projectRetractions: retractions.isEmpty ? nil : retractions)
     }
 
     private static func mergedEntries(from reports: [CostUsageDailyReport]) -> [Entry] {

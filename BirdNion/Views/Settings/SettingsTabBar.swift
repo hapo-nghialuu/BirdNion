@@ -10,16 +10,22 @@ struct SettingsSidebar<Extra: View>: View {
     @EnvironmentObject var config: ConfigService
 
     @Binding var selected: SettingsTab
+    /// Single top search shared with contextual lists (providers / AI Coding).
+    @Binding var searchText: String
     private let hasExtra: Bool
     private let extra: () -> Extra
 
-    init(selected: Binding<SettingsTab>, @ViewBuilder extra: @escaping () -> Extra) {
+    init(
+        selected: Binding<SettingsTab>,
+        searchText: Binding<String>,
+        @ViewBuilder extra: @escaping () -> Extra
+    ) {
         self._selected = selected
+        self._searchText = searchText
         self.extra = extra
         self.hasExtra = true
     }
 
-    @State private var searchText = ""
     @State private var providersWithKey = 0
     @State private var activeAgentCount = 0
     @State private var hovering: SettingsTab?
@@ -100,6 +106,17 @@ struct SettingsSidebar<Extra: View>: View {
             .textFieldStyle(.plain)
             .font(.plexSans(12))
             .foregroundStyle(SettingsTheme.primary)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(SettingsTheme.tertiary)
+                        .accessibilityLabel(L10n.t("provider.clearSearch", settings.appLanguage))
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+            }
         }
     }
 
@@ -231,8 +248,9 @@ struct SettingsSidebar<Extra: View>: View {
 
 extension SettingsSidebar where Extra == EmptyView {
     /// Nav-only sidebar (General / Advanced / About tabs).
-    init(selected: Binding<SettingsTab>) {
+    init(selected: Binding<SettingsTab>, searchText: Binding<String>) {
         self._selected = selected
+        self._searchText = searchText
         self.extra = { EmptyView() }
         self.hasExtra = false
     }

@@ -629,6 +629,14 @@ final class ClaudeNativeTests: XCTestCase {
             storedPricingRevision: 0, incrementalDays: 7), ClaudeCostScanner.historyDays)
         XCTAssertEqual(ClaudeCostScanner.scanDaysForHistory(
             storedPricingRevision: ClaudeCostScanner.pricingRevision, incrementalDays: 7), 7)
+        XCTAssertEqual(ClaudeCostScanner.scanDaysForProjectHistory(
+            storedPricingRevision: ClaudeCostScanner.pricingRevision,
+            incrementalDays: 7,
+            hasStoredClaudeProjects: false), ClaudeCostScanner.historyDays)
+        XCTAssertEqual(ClaudeCostScanner.scanDaysForProjectHistory(
+            storedPricingRevision: ClaudeCostScanner.pricingRevision,
+            incrementalDays: 7,
+            hasStoredClaudeProjects: true), 7)
     }
 
     /// Lines without a parseable timestamp must not fall into "today".

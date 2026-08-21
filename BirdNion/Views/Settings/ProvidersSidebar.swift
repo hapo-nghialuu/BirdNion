@@ -33,28 +33,25 @@ extension ProvidersPane {
 
     /// Provider roster — rendered inside the Settings sidebar column (below
     /// the nav block), so it fills the column width and scrolls on its own.
+    /// Provider roster under the shared Settings sidebar search (no second
+    /// search field — query comes from `SettingsSidebar` / `searchText`).
     var sidebar: some View {
-        VStack(spacing: 0) {
-            searchField
-            // Scrollable provider list — the roster can hold 20+ providers, so
-            // it must scroll independently (search field stays pinned above).
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(Array(visibleRows.enumerated()), id: \.element.id) { idx, row in
-                        sidebarRow(row, position: idx)
-                        if row.id != visibleRows.last?.id {
-                            Divider()
-                                .overlay(SettingsTheme.border.opacity(0.72))
-                                .padding(.leading, 44)
-                                .frame(height: 7)
-                                .contentShape(Rectangle())
-                                .onDrop(
-                                    of: [Self.providerDragType],
-                                    delegate: SidebarDropCompletionDelegate(
-                                        draggedProviderId: $draggedRowId,
-                                        dropTargetRowId: $dropTargetRowId,
-                                        finish: finishRowMove))
-                        }
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(Array(visibleRows.enumerated()), id: \.element.id) { idx, row in
+                    sidebarRow(row, position: idx)
+                    if row.id != visibleRows.last?.id {
+                        Divider()
+                            .overlay(SettingsTheme.border.opacity(0.72))
+                            .padding(.leading, 44)
+                            .frame(height: 7)
+                            .contentShape(Rectangle())
+                            .onDrop(
+                                of: [Self.providerDragType],
+                                delegate: SidebarDropCompletionDelegate(
+                                    draggedProviderId: $draggedRowId,
+                                    dropTargetRowId: $dropTargetRowId,
+                                    finish: finishRowMove))
                     }
                 }
             }
@@ -88,40 +85,6 @@ extension ProvidersPane {
         // AppDelegate; posting birdnionRefresh as well would fetch twice.
         NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
         dragStartRows = nil
-    }
-
-    /// Search box at the top of the sidebar. Magnifying glass icon + clear
-    /// button (×) appear only when there's text. Mirrors CodexBar's
-    /// `ProviderSidebarSearchField` layout but uses plain SwiftUI since
-    /// BirdNion doesn't have the same localization plumbing.
-    var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.plexMono(11))
-                .foregroundStyle(SettingsTheme.secondary)
-                .accessibilityHidden(true)
-            TextField(L10n.t("provider.search", language), text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.plexSans(11))
-                .foregroundStyle(SettingsTheme.primary)
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(SettingsTheme.secondary)
-                        .accessibilityLabel(L10n.t("provider.clearSearch", language))
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-            }
-        }
-        // Instrument redesign: flat row, no filled/rounded control box — a
-        // single hairline separates the search field from the roster below
-        // (mirrors `.pp-search` in the CSS reference).
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .overlay(VocabbyTheme.hairline.frame(height: 1), alignment: .bottom)
     }
 
     func sidebarRow(_ row: BirdNionConfigStore.Provider, position: Int) -> some View {

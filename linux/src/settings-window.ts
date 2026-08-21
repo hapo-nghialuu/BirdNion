@@ -25,11 +25,12 @@ import { claudeCodePane } from "./claude-code-pane";
 import { isClaudeCodeSupported } from "./claude-code";
 import { settingsIcon, type SettingsIconId } from "./settings-icons";
 import { getAppearance, setAppearance, type Appearance } from "./theme";
+import { insightsPane } from "./insights-pane";
 
 const TAB_KEY = "birdnion.settingsSection";
 
 type SettingsTabId =
-  | "general" | "providers" | "claudeCode" | "advanced" | "about"
+  | "general" | "providers" | "claudeCode" | "insights" | "advanced" | "about"
   // legacy ids still routed from tray / older localStorage
   | "display" | "debug";
 
@@ -40,11 +41,12 @@ type NavItem = {
   iconBg: string;
 };
 
-/** Five sidebar items — Display→General, Debug→Advanced (macOS P2). */
+/** Sidebar items — Display→General, Debug→Advanced (macOS P2). */
 const NAV: NavItem[] = [
   { id: "general", icon: "gearshape", titleKey: "settingsTabGeneral", iconBg: "#8C8C94" },
   { id: "providers", icon: "square.grid.2x2", titleKey: "settingsTabProviders", iconBg: "#2563EB" },
   { id: "claudeCode", icon: "terminal", titleKey: "settingsTabClaudeCode", iconBg: "#8C59D9" },
+  { id: "insights", icon: "chart.bar", titleKey: "settingsTabInsights", iconBg: "#D97706" },
   { id: "advanced", icon: "slider.horizontal.3", titleKey: "settingsTabAdvanced", iconBg: "#8C8C94" },
   { id: "about", icon: "info.circle", titleKey: "settingsTabAbout", iconBg: "#33A659" },
 ];
@@ -360,7 +362,7 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
   const content = el("div", "sw-content");
   content.append(el("div", "loading", "…"));
 
-  // Search filters nav titles only (KISS — plan unresolved Q#2).
+  // One top search: filters nav titles + Providers/AI Coding rosters.
   const searchWrap = el("div", "sw-sidebar-search");
   searchWrap.append(el("span", "sw-sidebar-search-icon", "⌕"));
   const searchInput = document.createElement("input");
@@ -370,9 +372,14 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
   searchInput.value = searchQuery;
   searchInput.addEventListener("input", () => {
     searchQuery = searchInput.value;
+    (window as { __birdnionSidebarSearch?: string }).__birdnionSidebarSearch = searchQuery;
     renderNav();
+    window.dispatchEvent(
+      new CustomEvent("birdnion-sidebar-search", { detail: searchQuery }),
+    );
   });
   searchWrap.append(searchInput);
+  (window as { __birdnionSidebarSearch?: string }).__birdnionSidebarSearch = searchQuery;
 
   const footer = el("div", "sw-sidebar-footer", "BirdNion");
   void getVersion().then((v) => {
@@ -454,6 +461,9 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
           break;
         case "claudeCode":
           pane = await claudeCodePane(onProvidersSaved);
+          break;
+        case "insights":
+          pane = await insightsPane();
           break;
         case "advanced":
         case "debug":
@@ -554,7 +564,6 @@ export async function mountSettingsWindow(onProvidersSaved: () => void = () => {
   const goSection = (sec: string) => {
     if (!sec) return;
     const normalized = normalizeTab(sec);
-    if (normalized === localStorage.getItem(TAB_KEY) && app.querySelector(".settings-window")) return;
     localStorage.setItem(TAB_KEY, normalized);
     settingsRemount?.();
   };

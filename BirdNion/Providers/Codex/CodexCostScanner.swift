@@ -152,6 +152,13 @@ enum CodexCostScanner {
              $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
         }
         let liveScanSucceeded = live != nil
+        if let snapshot {
+            _ = ProjectCostHistoryStore.apply(
+                source: .codex,
+                liveProjects: mapProjects(snapshot),
+                now: now,
+                retractions: mapRetractions(snapshot))
+        }
         let window = CostHistoryStore.apply(
             source: .codex,
             liveDays: liveDays,
@@ -242,6 +249,65 @@ enum CodexCostScanner {
             last30Tokens: last30.map(\.tokens).reduce(0, +),
             daily: daily,
             topModel: topModel.map(shortModelName))
+    }
+
+    static func mapProjects(
+        _ snapshot: CostUsageTokenSnapshot,
+        calendar: Calendar = .current
+    ) -> [ProjectUsageRecord] {
+        (snapshot.projectBreakdown ?? []).compactMap { project in
+            let key = ProjectIdentity.safeKey(project.projectKey)
+            guard key == project.projectKey else { return nil }
+            let daily = project.daily.compactMap { row -> ProjectDailyUsage? in
+                guard let parsed = parseDay(row.date) else { return nil }
+                return ProjectDailyUsage(
+                    date: calendar.startOfDay(for: parsed),
+                    usd: row.costUSD,
+                    tokens: row.totalTokens,
+                    models: row.models.map {
+                        ProjectModelUsage(
+                            name: ProjectIdentity.safeModelName($0.name),
+                            usd: $0.costUSD,
+                            tokens: $0.totalTokens)
+                    })
+            }
+            guard !daily.isEmpty else { return nil }
+            return ProjectUsageRecord(
+                source: .codex,
+                projectKey: key,
+                displayName: ProjectIdentity.safeDisplayName(project.projectName, key: key),
+                attribution: .exact,
+                daily: daily)
+        }
+    }
+
+    static func mapRetractions(
+        _ snapshot: CostUsageTokenSnapshot,
+        calendar: Calendar = .current
+    ) -> [ProjectCostHistoryStore.Retraction] {
+        (snapshot.projectRetractions ?? []).compactMap { retraction in
+            guard retraction.retractionID.count == 64,
+                  retraction.projectKey.count == 64
+            else { return nil }
+            let daily = retraction.daily.compactMap { row -> ProjectDailyUsage? in
+                guard let parsed = parseDay(row.date) else { return nil }
+                return ProjectDailyUsage(
+                    date: calendar.startOfDay(for: parsed),
+                    usd: row.costUSD,
+                    tokens: row.totalTokens,
+                    models: row.models.map {
+                        ProjectModelUsage(
+                            name: ProjectIdentity.safeModelName($0.name),
+                            usd: $0.costUSD,
+                            tokens: $0.totalTokens)
+                    })
+            }
+            guard !daily.isEmpty else { return nil }
+            return ProjectCostHistoryStore.Retraction(
+                id: retraction.retractionID,
+                projectKey: retraction.projectKey,
+                daily: daily)
+        }
     }
 
     /// In-place per-day accumulator (reference type so dictionary updates don't

@@ -205,11 +205,17 @@ extension ButtonStyle where Self == InstrumentButtonStyle {
 
 /// Square mono segmented control (Linux `.ccp-seg`) — replaces system
 /// `Picker(.segmented)` blue pills in Settings.
+///
+/// Segments share width equally so "Overview | Projects" and "7d | 30d | 90d"
+/// stay flush when stacked (system `Picker(.segmented)` sizes by label length).
 struct InstrumentSegmentedControl<Value: Hashable>: View {
     let options: [(value: Value, title: String)]
     @Binding var selection: Value
+    /// Total control width. Divided evenly across segments.
+    var width: CGFloat? = nil
 
     var body: some View {
+        let count = max(options.count, 1)
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                 if index > 0 {
@@ -223,22 +229,23 @@ struct InstrumentSegmentedControl<Value: Hashable>: View {
                         .tracking(0.35)
                         .textCase(.uppercase)
                         .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .minimumScaleFactor(0.85)
                         .foregroundStyle(selection == option.value
                                          ? VocabbyTheme.background
                                          : VocabbyTheme.primary)
-                        .padding(.horizontal, 16)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .frame(minWidth: 108, maxWidth: .infinity)
                         .background(selection == option.value
                                     ? VocabbyTheme.primary
                                     : Color.clear)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
             }
         }
-        .fixedSize(horizontal: true, vertical: false)
+        .frame(width: width ?? CGFloat(count) * 108)
         .overlay(
             RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                 .strokeBorder(VocabbyTheme.primary, lineWidth: 1)

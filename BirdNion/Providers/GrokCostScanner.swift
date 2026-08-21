@@ -176,11 +176,13 @@ enum GrokCostScanner {
             let incrementalDays = CostHistoryStore.scanBackDays(source: .grok, now: now)
             let storedRevision = UserDefaults.standard.integer(forKey: countingRevisionKey)
             let replacing = storedRevision < countingRevision
-            let scanDays = replacing ? chartWindowDays : incrementalDays
+            let needsProjectBootstrap = ProjectCostHistoryStore.read()
+                .sources?[ProjectUsageSource.grok.rawValue]?.isEmpty != false
+            let scanDays = (replacing || needsProjectBootstrap) ? chartWindowDays : incrementalDays
             // The root's existence was just confirmed, so the plain
             // (nonoptional) `scanFull` is safe to call directly here.
-            let live = scanFull(now: now, windowDays: scanDays)
-            let liveDays = live.daily.map {
+            let live = scanFullWithProjects(now: now, windowDays: scanDays)
+            let liveDays = live.report.daily.map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
             }
@@ -191,6 +193,11 @@ enum GrokCostScanner {
                 windowDays: chartWindowDays,
                 replacingSource: replacing,
                 liveScanSucceeded: true)
+            _ = ProjectCostHistoryStore.apply(
+                source: .grok,
+                liveProjects: live.projects,
+                now: now,
+                replacingSource: replacing)
             UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
             let confidence = CostHistoryStore.confidence(source: .grok, liveScanSucceeded: true)
             return CostHistoryStore.makeGrokReport(window: window, confidence: confidence)
@@ -223,11 +230,32 @@ enum GrokCostScanner {
         now: Date = Date(),
         windowDays: Int = chartWindowDays) -> GrokUsageReport
     {
+        scanFullWithProjects(
+            env: env, fileManager: fileManager, homeURL: homeURL,
+            now: now, windowDays: windowDays).report
+    }
+
+    struct ScanResult: Equatable {
+        let report: GrokUsageReport
+        let projects: [ProjectUsageRecord]
+    }
+
+    /// One filesystem walk yields both aggregate usage and privacy-safe
+    /// project contributions. `scanFull` remains the aggregate-only wrapper.
+    static func scanFullWithProjects(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        homeURL: URL? = nil,
+        now: Date = Date(),
+        windowDays: Int = chartWindowDays) -> ScanResult
+    {
         let root = (homeURL ?? GrokCredentialsStore.grokHomeURL(env: env, fileManager: fileManager))
             .appendingPathComponent("sessions", isDirectory: true)
         let sessions = loadSessions(
             root: root, fileManager: fileManager, now: now, windowDays: windowDays)
-        return buildReport(sessions: sessions, now: now, windowDays: windowDays)
+        return ScanResult(
+            report: buildReport(sessions: sessions, now: now, windowDays: windowDays),
+            projects: buildProjects(sessions: sessions, calendar: .current))
     }
 
     /// The sessions root, but only when it actually exists as a directory —
@@ -273,6 +301,8 @@ enum GrokCostScanner {
         let tokens: Int
         let usd: Double
         let model: String
+        var projectKey: String? = nil
+        var projectName: String? = nil
     }
 
     /// Walk session directories; one point per `signals.json` attributed to the
@@ -301,6 +331,7 @@ enum GrokCostScanner {
             guard url.lastPathComponent == "signals.json" else { continue }
             if let point = parseSession(
                 signalsURL: url,
+                sessionsRoot: root,
                 fileManager: fileManager,
                 calendar: calendar,
                 cutoff: cutoff)
@@ -316,6 +347,7 @@ enum GrokCostScanner {
     /// the full lifetime total (CodexBar `GrokLocalSessionScanner`).
     static func parseSession(
         signalsURL: URL,
+        sessionsRoot: URL,
         fileManager: FileManager = .default,
         calendar: Calendar = .current,
         cutoff: Date) -> SessionPoint?
@@ -327,6 +359,7 @@ enum GrokCostScanner {
         let summaryURL = sessionDir.appendingPathComponent("summary.json")
         var model = "grok-4.5"
         var activeAt = mtime
+        var gitRootDir: String?
 
         if let data = try? Data(contentsOf: summaryURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -341,6 +374,7 @@ enum GrokCostScanner {
             {
                 activeAt = parsed
             }
+            gitRootDir = json["git_root_dir"] as? String
         }
 
         guard let data = try? Data(contentsOf: signalsURL),
@@ -370,7 +404,15 @@ enum GrokCostScanner {
         guard day >= calendar.startOfDay(for: cutoff) else { return nil }
 
         let usd = GrokModelPrice.estimateUSD(tokens: lifetime, model: model)
-        return SessionPoint(day: day, tokens: lifetime, usd: usd, model: model)
+        let project = encodedDirectory(sessionsRoot: sessionsRoot, signalsURL: signalsURL)
+            .flatMap { ProjectIdentity.grok(encodedDirectory: $0, gitRootDir: gitRootDir) }
+        return SessionPoint(
+            day: day,
+            tokens: lifetime,
+            usd: usd,
+            model: model,
+            projectKey: project?.key,
+            projectName: project?.displayName)
     }
 
     // MARK: - Report build
@@ -453,6 +495,66 @@ enum GrokCostScanner {
             topModel: topModel)
     }
 
+    static func buildProjects(
+        sessions: [SessionPoint],
+        calendar: Calendar = .current
+    ) -> [ProjectUsageRecord] {
+        struct ModelTotal {
+            var usd: Double = 0
+            var tokens: Int = 0
+        }
+        struct ProjectTotal {
+            var name: String
+            var days: [Date: [String: ModelTotal]] = [:]
+        }
+
+        var projects: [String: ProjectTotal] = [:]
+        for session in sessions {
+            guard let key = session.projectKey, let rawName = session.projectName else { continue }
+            let safeKey = ProjectIdentity.safeKey(key)
+            guard safeKey == key else { continue }
+            let name = ProjectIdentity.safeDisplayName(rawName, key: key)
+            var project = projects[key] ?? ProjectTotal(name: name)
+            if name < project.name { project.name = name }
+            let day = calendar.startOfDay(for: session.day)
+            var models = project.days[day] ?? [:]
+            var model = models[session.model] ?? ModelTotal()
+            model.usd += session.usd
+            model.tokens += session.tokens
+            models[session.model] = model
+            project.days[day] = models
+            projects[key] = project
+        }
+
+        return projects.keys.sorted().compactMap { key -> ProjectUsageRecord? in
+            guard let project = projects[key] else { return nil }
+            let daily = project.days.keys.sorted().map { day in
+                let models = (project.days[day] ?? [:]).map {
+                    ProjectModelUsage(
+                        name: ProjectIdentity.safeModelName($0.key),
+                        usd: $0.value.usd,
+                        tokens: $0.value.tokens)
+                }.sorted {
+                    if $0.usd != $1.usd { return $0.usd > $1.usd }
+                    if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+                    return $0.name < $1.name
+                }
+                return ProjectDailyUsage(
+                    date: day,
+                    usd: models.reduce(0) { $0 + $1.usd },
+                    tokens: models.reduce(0) { $0 + $1.tokens },
+                    models: models)
+            }
+            guard !daily.isEmpty else { return nil }
+            return ProjectUsageRecord(
+                source: .grok,
+                projectKey: key,
+                displayName: project.name,
+                attribution: .derived,
+                daily: daily)
+        }
+    }
+
     // MARK: - Helpers
 
     private static func intValue(_ raw: Any?) -> Int {
@@ -463,6 +565,16 @@ enum GrokCostScanner {
         case let s as String: return Int(s) ?? 0
         default: return 0
         }
+    }
+
+    private static func encodedDirectory(sessionsRoot: URL, signalsURL: URL) -> String? {
+        let root = sessionsRoot.standardizedFileURL.pathComponents
+        let path = signalsURL.standardizedFileURL.pathComponents
+        guard path.count == root.count + 3,
+              Array(path.prefix(root.count)) == root,
+              path.last == "signals.json"
+        else { return nil }
+        return path[root.count]
     }
 
     private static func parseISO8601(_ raw: String) -> Date? {

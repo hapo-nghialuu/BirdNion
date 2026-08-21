@@ -57,6 +57,9 @@ enum CostUsageScanner {
         let lastCodexTurnID: String?
         let sessionId: String?
         let forkedFromId: String?
+        let projectKey: String?
+        let projectName: String?
+        let projectAttributionAmbiguous: Bool
         let rows: [CodexUsageRow]
     }
 
@@ -71,6 +74,8 @@ enum CostUsageScanner {
 
     struct CodexScanState {
         var seenSessionIds: Set<String> = []
+        var sessionFilePaths: [String: String] = [:]
+        var ambiguousProjectSessionIds: Set<String> = []
         var seenFileIds: Set<String> = []
     }
 
@@ -937,6 +942,9 @@ enum CostUsageScanner {
         let sessionId: String?
         let forkedFromId: String?
         let forkTimestamp: String?
+        let projectKey: String?
+        let projectName: String?
+        let projectAttributionAmbiguous: Bool
     }
 
     private struct CodexTokenCountRecord {
@@ -975,6 +983,26 @@ enum CostUsageScanner {
     private static let codexJSONFieldTurnId = Array("turn_id".utf8)
     private static let codexJSONFieldTurnIdCamel = Array("turnId".utf8)
     private static let codexJSONFieldType = Array("type".utf8)
+    private static let codexJSONFieldCwd = Array("cwd".utf8)
+
+    private static func codexProjectIdentity(cwd: String?) -> (key: String, name: String)? {
+        guard let cwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cwd.isEmpty,
+              (cwd as NSString).isAbsolutePath,
+              !cwd.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        else { return nil }
+        let path = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        let digest = SHA256.hash(data: Data("codex:cwd-v1\0\(path)".utf8))
+        let key = digest.map { String(format: "%02x", $0) }.joined()
+        let rawName = URL(fileURLWithPath: path).lastPathComponent
+        let basename = rawName.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last
+            .map(String.init) ?? ""
+        let cleaned = String(basename.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+        }).trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = cleaned.isEmpty ? "Codex Project \(key.prefix(8))" : String(cleaned.prefix(48))
+        return (key, name)
+    }
 
     private static func codexForkParentId(from payload: [String: Any]?) -> String? {
         guard let payload else { return nil }
@@ -1103,6 +1131,15 @@ enum CostUsageScanner {
                     from: rawBuffer,
                     in: objectRange,
                     atDepth: 1)
+                let cwd = payloadRange.flatMap {
+                    Self.extractJSONByteStringField(
+                        Self.codexJSONFieldCwd, from: rawBuffer, in: $0, atDepth: 1)
+                }
+                let project = Self.codexProjectIdentity(cwd: cwd)
+                let cwdPresent = payloadRange.map {
+                    Self.containsJSONByteField(
+                        Self.codexJSONFieldCwd, from: rawBuffer, in: $0, atDepth: 1)
+                } ?? false
                 return .sessionMeta(CodexSessionMetadata(
                     sessionId: Self.codexSessionId(from: rawBuffer, in: objectRange, payloadRange: payloadRange),
                     forkedFromId: payloadRange.flatMap { Self.codexForkParentId(from: rawBuffer, in: $0) },
@@ -1116,7 +1153,10 @@ enum CostUsageScanner {
                         Self.codexJSONFieldTimestamp,
                         from: rawBuffer,
                         in: objectRange,
-                        atDepth: 1)))
+                        atDepth: 1),
+                    projectKey: project?.key,
+                    projectName: project?.name,
+                    projectAttributionAmbiguous: cwdPresent && project == nil))
 
             case "turn_context":
                 guard let payloadRange = Self.extractJSONByteObjectField(
@@ -1265,6 +1305,8 @@ enum CostUsageScanner {
                 else { return nil }
                 guard obj["type"] as? String == "session_meta" else { return nil }
                 let payload = obj["payload"] as? [String: Any]
+                let project = Self.codexProjectIdentity(cwd: payload?["cwd"] as? String)
+                let cwdPresent = payload?.keys.contains("cwd") == true
                 return CodexSessionMetadata(
                     // `id` first: it's this file's own identity for every
                     // session_meta shape. `session_id` matches `id` for a
@@ -1280,7 +1322,10 @@ enum CostUsageScanner {
                         ?? obj["sessionId"] as? String,
                     forkedFromId: Self.codexForkParentId(from: payload),
                     forkTimestamp: payload?["timestamp"] as? String
-                        ?? obj["timestamp"] as? String)
+                        ?? obj["timestamp"] as? String,
+                    projectKey: project?.key,
+                    projectName: project?.name,
+                    projectAttributionAmbiguous: cwdPresent && project == nil)
             }
         }
 
@@ -1505,6 +1550,9 @@ enum CostUsageScanner {
             lastCodexTurnID: initialCodexTurnID,
             sessionId: nil,
             forkedFromId: nil,
+            projectKey: nil,
+            projectName: nil,
+            projectAttributionAmbiguous: false,
             rows: [])
     }
 
@@ -1525,6 +1573,9 @@ enum CostUsageScanner {
         var previousTotals = initialTotals
         var sessionId: String?
         var forkedFromId: String?
+        var projectKey: String?
+        var projectName: String?
+        var projectAttributionAmbiguous = false
         var inheritedTotals: CostUsageCodexTotals?
         var remainingInheritedTotals: CostUsageCodexTotals?
         var forkBaselineResolved = false
@@ -1566,12 +1617,35 @@ enum CostUsageScanner {
             }
         }
 
+        func handleProjectIdentity(key: String?, name: String?) {
+            guard !projectAttributionAmbiguous, let key else { return }
+            if let current = projectKey, current != key {
+                projectKey = nil
+                projectName = nil
+                projectAttributionAmbiguous = true
+            } else if projectKey == nil {
+                projectKey = key
+                projectName = name
+            }
+        }
+
+        func invalidateProjectIdentity() {
+            projectKey = nil
+            projectName = nil
+            projectAttributionAmbiguous = true
+        }
+
         func handleSessionMetadata(_ metadata: CodexSessionMetadata) throws {
             if sessionId == nil {
                 sessionId = metadata.sessionId
             }
             if forkedFromId == nil {
                 forkedFromId = metadata.forkedFromId
+            }
+            if metadata.projectAttributionAmbiguous {
+                invalidateProjectIdentity()
+            } else {
+                handleProjectIdentity(key: metadata.projectKey, name: metadata.projectName)
             }
             if let forkedFromId {
                 try resolveForkBaseline(parentSessionId: forkedFromId, forkedAt: metadata.forkTimestamp ?? "")
@@ -1792,6 +1866,11 @@ enum CostUsageScanner {
         {
             sessionId = metadata.sessionId
             forkedFromId = metadata.forkedFromId
+            if metadata.projectAttributionAmbiguous {
+                invalidateProjectIdentity()
+            } else {
+                handleProjectIdentity(key: metadata.projectKey, name: metadata.projectName)
+            }
             if let forkedFromId = metadata.forkedFromId,
                inheritedTotals == nil
             {
@@ -1859,6 +1938,12 @@ enum CostUsageScanner {
                             }
                             if forkedFromId == nil {
                                 forkedFromId = Self.codexForkParentId(from: payload)
+                            }
+                            let project = Self.codexProjectIdentity(cwd: payload?["cwd"] as? String)
+                            if let project {
+                                handleProjectIdentity(key: project.key, name: project.name)
+                            } else if payload?.keys.contains("cwd") == true {
+                                invalidateProjectIdentity()
                             }
                             if let forkedFromId {
                                 let forkedAt = payload?["timestamp"] as? String
@@ -2129,6 +2214,9 @@ enum CostUsageScanner {
             lastCodexTurnID: currentTurnID,
             sessionId: sessionId,
             forkedFromId: forkedFromId,
+            projectKey: projectKey,
+            projectName: projectName,
+            projectAttributionAmbiguous: projectAttributionAmbiguous,
             rows: rows)
     }
 
@@ -2157,6 +2245,13 @@ enum CostUsageScanner {
 
         let cached = cache.files[metadata.path]
         if let cachedSessionId = cached?.sessionId, state.seenSessionIds.contains(cachedSessionId) {
+            Self.reconcileDuplicateCodexProject(
+                sessionId: cachedSessionId,
+                projectKey: cached?.projectKey,
+                projectName: cached?.projectName,
+                projectAttributionAmbiguous: cached?.projectAttributionAmbiguous == true,
+                cache: &cache,
+                state: &state)
             Self.dropCachedCodexFile(path: metadata.path, cached: cached, cache: &cache)
             return
         }

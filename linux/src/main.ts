@@ -40,6 +40,9 @@ import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
 import { initTheme, setAppearance, resolveTheme } from "./theme";
 import { checkWeeklyDigest } from "./weekly-digest";
+import {
+  fetchProjectInsightsReport, insightsHighlightCard, type ProjectInsightsReport,
+} from "./insights-pane";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
 const POPOVER_WIDTH = 420;
@@ -73,6 +76,7 @@ type State = {
   grok: UsageReport | null;
   statuses: ProviderStatus[];
   claudeAdmin: ClaudeAdminSnapshot | null;
+  insights: ProjectInsightsReport | null;
   tab: string; // "all" | provider id
   refreshing: boolean;
   loadedOnce: boolean;
@@ -87,6 +91,7 @@ const state: State = {
   grok: null,
   statuses: [],
   claudeAdmin: null,
+  insights: null,
   tab: (() => {
     const t0 = localStorage.getItem(TAB_KEY) || "all";
     return t0 === "settings" ? "all" : t0;
@@ -122,7 +127,7 @@ function openSettings(section?: string, providerId?: string) {
   if (providerId) localStorage.setItem("birdnion.selectedProvider", providerId);
   // Opening Settings steals focus from main — don't immediately re-load main.
   suppressFocusRefreshUntil = Date.now() + 1500;
-  void invoke("open_settings_window").catch((err) => {
+  void invoke("open_settings_window", { section: section ?? null }).catch((err) => {
     console.error("open_settings_window", err);
   });
 }
@@ -641,10 +646,15 @@ function render() {
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
       const combined = combine(state.claude, state.codex, state.grok);
-      // Design order: chart/share → confidence → budget → heatmap → models.
+      // Design order: chart/share → confidence → insights → budget → heatmap → models.
       // Per-provider budgets live on each provider's own tab now, not here.
       body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(confidenceRow(state.claude, state.codex, state.grok, pending));
+      const insights = insightsHighlightCard(state.insights, () => {
+        localStorage.setItem("birdnion.insightsSegment", "overview");
+        openSettings("insights");
+      });
+      body.append(insights);
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
       if (budget) body.append(budget);
       body.append(heatmapCard(combined));
@@ -1430,10 +1440,19 @@ async function load(manual = false) {
           .then((fresh) => publishStatuses(fresh.map((status) => status.id), fresh))
     ).then(async () => updateTrayTooltip(state.statuses, await fetchTrayHidden()));
 
+    const enabledUsageSources = settings
+      ? (["claude", "codex", "grok"] as const).filter((id) => enabledIds.includes(id))
+      : [];
+    const usageDone = Promise.all(enabledUsageSources.map((id) => scanReport(id))).then(async () => {
+      for (const id of ["claude", "codex", "grok"] as const) {
+        if (!enabledUsageSources.includes(id)) state[id] = null;
+      }
+      const insights = await fetchProjectInsightsReport(7);
+      publish(() => { state.insights = insights; });
+    });
+
     await Promise.all([
-      scanReport("claude"),
-      scanReport("codex"),
-      scanReport("grok"),
+      usageDone,
       statusesDone,
       invoke<ClaudeAdminSnapshot | null>("claude_admin_usage")
         .catch(() => null)

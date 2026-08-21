@@ -32,12 +32,11 @@ struct ProvidersPane: View {
     /// (sidebar with embedded provider roster + detail), so it needs the
     /// shared tab binding for the nav block.
     @Binding var tab: SettingsTab
+    /// Shared with `SettingsSidebar` top search — filters the provider roster.
+    @Binding var searchText: String
 
     @State var rows: [BirdNionConfigStore.Provider] = []
     @State var selectedID: String?
-    /// Search filter for the provider sidebar. Matches display name + id
-    /// case-insensitively; empty string shows all rows.
-    @State var searchText: String = ""
     /// Codex token cost (today / 30d), scanned lazily when Codex is selected.
     @State var codexCost: CodexCostSummary?
     /// Claude token cost (today / 30d), scanned lazily when Claude is
@@ -79,7 +78,7 @@ struct ProvidersPane: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SettingsSidebar(selected: $tab) {
+            SettingsSidebar(selected: $tab, searchText: $searchText) {
                 sidebar
             }
 

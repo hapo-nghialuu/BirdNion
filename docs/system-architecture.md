@@ -144,6 +144,14 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 - Không gửi khi không có live source hoặc tổng USD/token bằng 0. Nếu một phần nguồn không live, notification ghi rõ nguồn dùng cached data.
 - Digest chỉ cảnh báo budget khi trạng thái là `forecast-over` hoặc `already-over` (không nhắc khi `on-track`), cho cả budget tổng và từng provider có cấu hình riêng. `forecast-over` dùng số dự phóng cuối tháng (`projectedTotalUSD`); `already-over` dùng số đã chi thực tế tháng này (`monthToDateUSD`).
 
+### 4.3 Usage Insights và cost theo project
+
+- All tab chỉ thêm một compact highlight sau Data Confidence và trước budget; click mở top-level Settings `Insights`, không mở thêm popover/modal chi tiết.
+- `Overview` tái sử dụng đúng rolling 7 ngày của Weekly Digest: current/prior, change, top source/model và confidence. Source đã bật nhưng chưa có report được giữ rõ là `unavailable`, không bị loại khỏi coverage. `Projects` có ranking/detail theo 7/30/90 ngày.
+- Claude lấy project identity trong cùng lượt quét JSONL: project key luôn là SHA-256 của session-directory token ổn định (`derived`); top-level `cwd` đã verify chỉ nâng display label thành basename an toàn, không đổi key. Store/UI/copy không nhận full path.
+- Codex đọc `session_meta.payload.cwd`; Grok dùng token thư mục `sessions/<encoded_cwd>/...` làm identity ổn định và chỉ dùng `summary.json.git_root_dir` để nâng basename hiển thị. Cả hai chỉ persist SHA-256 key + label đã sanitize; phần aggregate thiếu metadata mới được giữ ở residual `Unknown`.
+- `project-cost-history.json` là optional/versioned store riêng, high-water và giữ 400 ngày. Day key chỉ nhận canonical `yyyy-MM-dd`; missing/corrupt/write failure không làm hỏng `cost-history.json`, quota, budget hay digest. Projection luôn bị chặn bởi aggregate source/day để project cũ + mới không double-count; Codex conflict rõ ràng phát tombstone có ID SHA-256 và contribution chính xác, áp dụng idempotent để phần đó trở lại `Unknown` mà empty scan bình thường vẫn giữ high-water.
+
 ## 5. Lưu trữ & bảo mật
 
 | Dữ liệu | Vị trí | Quyền |
@@ -158,6 +166,7 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 | Total monthly budget | macOS `UserDefaults.monthlyBudgetUSD`; Linux local storage `birdnion.monthlyBudgetUSD` | local preference |
 | Per-provider budget (Claude/Codex/Grok) | macOS `UserDefaults.claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD`; Linux local storage `birdnion.claudeBudgetUSD`/`birdnion.codexBudgetUSD`/`birdnion.grokBudgetUSD` — không phải provider `settings.json` | local preference |
 | Weekly digest toggle/cadence | macOS `weeklyDigest*`; Linux local storage `birdnion.weeklyDigest*` | local preference, default OFF |
+| Project cost history | `~/.config/birdnion/project-cost-history.json` (sibling của settings/cost history) | SHA-256 keys + safe basename, hashed retraction IDs, atomic `0600`, high-water 400 ngày |
 | Local token scanner cache | in-memory (5 min TTL) | n/a |
 
 > As of the 2026-06-25 storage refactor, there is **no BirdNion-owned
@@ -224,6 +233,8 @@ BirdNion/
     MenuBarIcon.swift                # status bar bird/provider-percent renderer
     MenuBarVisibility.swift          # UserDefaults-backed show/hide
     Settings/
+      InsightsPane.swift               # Overview / Projects 7d, 30d, 90d
+      InsightsContentViews.swift       # weekly summary + project detail
       ProvidersPane.swift            # sidebar + detail
       GeneralPane.swift               # language, refresh interval
       DisplayPane.swift
@@ -232,6 +243,8 @@ BirdNion/
   Services/
     QuotaService.swift               # polling loop, @Published statuses
     SettingsStore.swift               # @AppStorage + UserDefaults
+    ProjectCostHistoryStore.swift     # isolated privacy-safe project history
+    ProjectInsightsBuilder.swift      # aggregate + Unknown residual policy
     ServicesContainer.swift          # DI, providers list, makeProviders()
     BirdNionConfigStore.swift         # single source of truth: ~/.config/birdnion/settings.json (tokens + enabled + metadata)
   Models/
@@ -288,6 +301,7 @@ Scripts/
 - [x] Per-provider budget (Claude/Codex/Grok) + trust-unavailable no false-green trên macOS/Linux
 - [x] Adaptive refresh 1×/2×/4×/8×, manual/forced bypass, không timer mới
 - [x] Weekly digest rolling 7 ngày, default OFF, trên macOS/Linux
+- [x] Usage Insights + Cost by Project trên macOS/Linux: compact All highlight, Settings Overview/Projects 7/30/90, Claude/Codex/Grok privacy key + residual `Unknown`
 - [x] macOS custom profile quick switch fail-closed; Linux Codex account quota/health snapshot
 - [x] Release pipeline (`Scripts/release.sh`) → tap → brew install
 
@@ -304,6 +318,8 @@ Scripts/
 | Total budget là local preference | Forecast minh bạch trên dữ liệu scanner; không giả là provider billing |
 | Per-provider budget lưu UserDefaults/localStorage, không ghi vào `settings.json` | Cùng convention "local UI preference" với budget tổng; tách khỏi token/config của provider |
 | Weekly digest default OFF | Tránh tự đưa số liệu chi phí ra ngoài popover khi user chưa opt in |
+| Project history tách khỏi aggregate history | Corrupt/missing project attribution không được ảnh hưởng quota, budget, digest hoặc `cost-history.json` |
+| Codex/Grok project attribution từ local logs | Codex hash validated `cwd`; Grok hash stable encoded session-directory token và chỉ dùng verified `git_root_dir` cho safe basename; aggregate thiếu metadata vẫn là `Unknown` |
 | Exact-snapshot activation guard | Delete/edit profile thắng async activation; stale continuation fail closed |
 | Menu-bar visibility toggle per provider | User loại provider không quan tâm khỏi chuỗi % trên menu bar |
 | Cask filename: `BirdNion-${version}.zip` (no v prefix) | GitHub release-asset upload cache trả 404 BlobNotFound với `v${version}.zip` |

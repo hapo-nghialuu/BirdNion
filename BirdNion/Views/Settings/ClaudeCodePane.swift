@@ -7,9 +7,10 @@ import AppKit
 /// per-agent records underneath stay mirrored by the config-store sync.
 struct AICodingPane: View {
     @Binding var tab: SettingsTab
+    @Binding var searchText: String
 
     var body: some View {
-        ClaudeCodePane(tab: $tab)
+        ClaudeCodePane(tab: $tab, searchText: $searchText)
     }
 }
 
@@ -25,6 +26,8 @@ struct ClaudeCodePane: View {
     /// Settings nav selection — the pane renders the whole window row
     /// (sidebar with embedded config list + detail).
     @Binding var tab: SettingsTab
+    /// Shared with `SettingsSidebar` top search — filters provider/profile lists.
+    @Binding var searchText: String
 
     var initialProfileID: String? = nil
 
@@ -94,7 +97,7 @@ struct ClaudeCodePane: View {
         // (below the nav block); the content column keeps a fixed header with
         // the (tall) config form scrolling underneath it.
         HStack(spacing: 0) {
-            SettingsSidebar(selected: $tab) {
+            SettingsSidebar(selected: $tab, searchText: $searchText) {
                 ScrollView {
                     providerList
                         .padding(.horizontal, 10)
@@ -259,32 +262,54 @@ struct ClaudeCodePane: View {
 
     // MARK: - Left column
 
+    private var searchQuery: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var filteredProviders: [BirdNionConfigStore.Provider] {
+        guard !searchQuery.isEmpty else { return providers }
+        return providers.filter {
+            $0.id.lowercased().contains(searchQuery)
+                || providerName($0).lowercased().contains(searchQuery)
+        }
+    }
+
+    private var filteredProfiles: [BirdNionConfigStore.ClaudeCodeProfile] {
+        guard !searchQuery.isEmpty else { return profiles }
+        return profiles.filter {
+            $0.id.lowercased().contains(searchQuery)
+                || $0.name.lowercased().contains(searchQuery)
+        }
+    }
+
     private var providerList: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let visibleProviders = filteredProviders
+        let visibleProfiles = filteredProfiles
+        return VStack(alignment: .leading, spacing: 8) {
             Text(L10n.t("claudeCode.selectProvider", lang))
                 .font(.plexSans(11))
                 .foregroundStyle(SettingsTheme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !providers.isEmpty {
+            if !visibleProviders.isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(Array(providers.enumerated()), id: \.element.id) { idx, p in
+                    ForEach(Array(visibleProviders.enumerated()), id: \.element.id) { idx, p in
                         providerRow(p)
-                        if idx < providers.count - 1 { SettingsRowDivider() }
+                        if idx < visibleProviders.count - 1 { SettingsRowDivider() }
                     }
                 }
             }
 
             // Custom user-defined backends. Add control lives under the card
             // (mockup accent link) — same `addProfile` action as before.
-            if !profiles.isEmpty || providers.isEmpty {
+            if !visibleProfiles.isEmpty || visibleProviders.isEmpty {
                 SettingsSectionHeader(title: L10n.t("ccx.custom", lang))
-                    .padding(.top, providers.isEmpty ? 0 : 4)
+                    .padding(.top, visibleProviders.isEmpty ? 0 : 4)
             }
-            if !profiles.isEmpty {
+            if !visibleProfiles.isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(Array(profiles.enumerated()), id: \.element.id) { idx, p in
+                    ForEach(Array(visibleProfiles.enumerated()), id: \.element.id) { idx, p in
                         profileRow(p)
-                        if idx < profiles.count - 1 { SettingsRowDivider() }
+                        if idx < visibleProfiles.count - 1 { SettingsRowDivider() }
                     }
                 }
             }

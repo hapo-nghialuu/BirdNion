@@ -6,6 +6,7 @@ export type SettingsIconId =
   | "gearshape"
   | "square.grid.2x2"
   | "terminal"
+  | "chart.bar"
   | "eye"
   | "eye.slash"
   | "slider.horizontal.3"
@@ -44,6 +45,10 @@ const PATHS: Record<SettingsIconId, string> = {
     <rect x="3.1" y="4.6" width="17.8" height="14.8" rx="2.5" ${O}/>
     <path ${O} d="M7.15 9.55l2.75 2.35-2.75 2.35"/>
     <path ${O} d="M12.15 14.25h4.7"/>`,
+
+  // SF `chart.bar` — Insights.
+  "chart.bar": `
+    <path ${O} d="M4.2 19.3V11h3.2v8.3M10.4 19.3V5.2h3.2v14.1M16.6 19.3v-9h3.2v9M3.2 19.3h17.6"/>`,
 
   // SF `eye`
   eye: `

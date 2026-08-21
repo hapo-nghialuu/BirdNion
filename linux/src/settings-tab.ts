@@ -82,7 +82,12 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     || orderedIds(settings).find((id) => byId.get(id)?.enabled === true)
     || orderedIds(settings)[0]
     || "claude";
-  let searchQuery = "";
+  // Shared with Settings window top search (`birdnion-sidebar-search`) —
+  // no second search field in the provider roster.
+  let searchQuery =
+    typeof (window as { __birdnionSidebarSearch?: string }).__birdnionSidebarSearch === "string"
+      ? (window as { __birdnionSidebarSearch?: string }).__birdnionSidebarSearch!
+      : "";
   let statuses: ProviderStatus[] = [];
   const detections = new Map<string, OnboardingDetection>();
   const onboardingTests = new Map<string, OnboardingTestState>();
@@ -91,6 +96,12 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
   const sidebar = el("div", "pp-sidebar");
   const detail = el("div", "pp-detail");
   root.append(sidebar, detail);
+
+  const onSharedSearch = ((ev: CustomEvent<string>) => {
+    searchQuery = ev.detail ?? "";
+    renderSidebar();
+  }) as EventListener;
+  window.addEventListener("birdnion-sidebar-search", onSharedSearch);
 
   const statusById = () => new Map(statuses.map((s) => [s.id, s]));
 
@@ -155,20 +166,6 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
 
   const renderSidebar = () => {
     sidebar.textContent = "";
-    // Search
-    const search = el("div", "pp-search");
-    const input = document.createElement("input");
-    input.type = "search";
-    input.className = "pp-search-input";
-    input.placeholder = t("settingsSearchProviders");
-    input.value = searchQuery;
-    input.addEventListener("input", () => {
-      searchQuery = input.value;
-      renderSidebar();
-    });
-    search.append(el("span", "pp-search-icon", "⌕"), input);
-    sidebar.append(search);
-
     const list = el("div", "pp-sidebar-list");
     for (const id of visibleIds()) {
       const cfg = byId.get(id)!;

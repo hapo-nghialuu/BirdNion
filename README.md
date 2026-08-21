@@ -19,7 +19,7 @@ The native macOS app uses SwiftUI/AppKit and a vendored, trimmed `CodexBarCore` 
 ## Why
 
 - **Plan around resets.** Per-provider 5-hour, weekly, monthly, credit, and budget windows with reset countdowns.
-- **See spend and cost.** Claude local JSONL scans, Claude Admin API charts, Codex credits, OpenRouter balances, Bedrock budgets, and provider-specific cost/credit summaries where available.
+- **See spend and cost.** Claude local JSONL scans, weekly usage insights, privacy-safe project rankings, Claude Admin API charts, Codex credits, OpenRouter balances, Bedrock budgets, and provider-specific cost/credit summaries where available.
 - **Configure agent sources.** Pick OAuth, CLI, browser cookies, API keys, AWS credentials, local app files, or provider apps from Settings per provider.
 - **Keep desktop chrome quiet.** macOS can rotate provider quota percents in the menu bar; Linux shows the same rotation in the tray tooltip.
 - **Privacy-first.** BirdNion reuses existing sessions and explicit config. It does not store passwords or perform unrestricted disk scans.
@@ -193,6 +193,7 @@ The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in m
 - Per-provider refresh intervals and menu-bar visibility.
 - Cookie-source picker with Auto, Manual, and Off modes for cookie-backed providers.
 - Claude, Codex, and Grok local cost charts with persistent high-water history. Stored bars seed the UI immediately while a narrower live scan refreshes recent days.
+- A compact All-tab Insights highlight opens Settings -> Insights for 7-day comparisons and 7/30/90-day project rankings. Claude, Codex, and Grok derive privacy-safe project identities from their local session metadata; only the residual usage that cannot be attributed stays explicitly `Unknown`.
 - Claude Admin API 30-day chart and Codex web dashboard extras where enabled.
 - Kiro custom display values: credits left, percent, used/total, and overage modes.
 - Quota and provider-failure notifications with configurable thresholds.
@@ -214,6 +215,7 @@ The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in m
 | Copilot OAuth accounts | `~/.config/birdnion/copilot-accounts.json` |
 | FreeModel managed accounts | macOS: `~/Library/Application Support/BirdNion/freemodel-accounts.json`; Linux: `~/.config/birdnion/freemodel-accounts.json` |
 | Daily cost history (All tab) | `~/.config/birdnion/cost-history.json` (sibling of settings; high-water merge so deleted Claude/Codex/Grok sessions keep past bars) |
+| Project cost history (Insights) | `~/.config/birdnion/project-cost-history.json` (separate optional store; SHA-256 project keys/retraction IDs, safe basenames, aggregate-bounded high-water merge, `0600`) |
 | macOS UI preferences | `UserDefaults` (`showPercentInMenuBar`, visibility, refresh, source, and display settings) |
 | Linux UI preferences | Tauri WebView `localStorage`; provider cookie/visibility/refresh fields remain in `settings.json` |
 
@@ -230,7 +232,7 @@ The config file is written atomically and set to permission `0600`.
 
 BirdNion does not perform an unrestricted filesystem crawl. It reads documented locations only when the related provider/source is enabled: provider config files, CLI auth files, browser cookie stores, local IDE databases, and Claude/Codex/Grok session logs. Provider tokens live in the BirdNion config file with restrictive permissions. OAuth, Keychain, and CLI session files remain owned by their original tools.
 
-No passwords are stored. Browser cookies are reused only when the user chooses a cookie-backed source.
+No passwords are stored. Browser cookies are reused only when the user chooses a cookie-backed source. Insights never persists a full project path: Claude hashes its stable session-directory token, Codex hashes a validated absolute `cwd`, and Grok hashes its encoded session-directory token. Verified paths may only improve the sanitized basename label; the UI and copy summary receive that safe label or an explicit residual `Unknown` bucket.
 
 ## Platform Notes
 
