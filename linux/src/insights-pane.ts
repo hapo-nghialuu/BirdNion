@@ -99,7 +99,7 @@ export function fetchProjectInsightsReport(
     .catch(() => null);
 }
 
-/** Exactly one compact All-tab card. The caller controls placement/routing. */
+/** Exactly one compact All-tab card. Layout mirrors budget card (title · hero · foot). */
 export function insightsHighlightCard(
   report: ProjectInsightsReport | null,
   onOpen: () => void,
@@ -111,17 +111,20 @@ export function insightsHighlightCard(
 
   const head = el("div", "insights-highlight-head");
   head.append(el("span", "summary-label", t("insightsTitle")));
-  head.append(el("span", "insights-delta", deltaLabel(report?.overview.changePct ?? null)));
+  const headMeta = el("span", "insights-highlight-head-meta");
+  headMeta.append(el("span", "insights-highlight-confidence",
+    report ? confidenceLabel(report.overview.confidence) : t("insightsConfidenceUnavailable")));
+  headMeta.append(el("span", "insights-highlight-chevron", "›"));
+  head.append(headMeta);
+
   const pulse = el("div", "insights-highlight-pulse");
   pulse.append(el("span", "insights-highlight-current",
     report ? usd(report.overview.current7Usd) : t("insightsUnavailable")));
-  pulse.append(el("span", "insights-highlight-prior",
-    report ? t("insightsVsPrevious", { amount: usd(report.overview.previous7Usd) }) : ""));
+  pulse.append(el("span", "insights-delta", deltaLabel(report?.overview.changePct ?? null)));
+
   const meta = el("div", "insights-highlight-meta");
   meta.append(el("span", "insights-highlight-project",
     t("insightsTopProject", { project: projectName(report?.overview.topProject ?? null) })));
-  meta.append(el("span", "insights-highlight-confidence",
-    report ? confidenceLabel(report.overview.confidence) : t("insightsConfidenceUnavailable")));
   button.append(head, pulse, meta);
   return button;
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Compact All-tab bridge into the full Settings insights workspace.
+/// Compact All-tab bridge into Settings Insights — same section language as
+/// `BudgetForecastCard` (eyebrow + hero + foot), click opens the full pane.
 struct InsightsHighlightCard: View {
     @EnvironmentObject private var settings: SettingsStore
     let combined: CombinedUsageReport
@@ -55,40 +56,47 @@ struct InsightsHighlightCard: View {
 
     var body: some View {
         Button { openInsightsSettings() } label: {
-            VStack(spacing: 5) {
-                HStack(spacing: 8) {
-                    Text("Insights").plexEyebrow(size: 9, color: VocabbyTheme.blue)
+            // Match BudgetForecastCard: title+meta · hero+delta · foot line.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(vi ? "Phân tích" : "Insights")
+                        .plexEyebrow(size: 9, color: VocabbyTheme.secondary, tracking: 0.3)
                     Spacer(minLength: 8)
+                    HStack(spacing: 6) {
+                        Text(confidenceLine)
+                            .plexEyebrow(size: 9, color: VocabbyTheme.tertiary, tracking: 0.4)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(currentValue)
-                        .font(.plexMono(12, weight: .semibold))
-                    Text(changeValue)
-                        .font(.plexMono(10, weight: .medium))
-                        .foregroundStyle(changeColor)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                }
-                .lineLimit(1)
-
-                HStack(spacing: 6) {
-                    Text(summaryLine)
-                        .font(.plexSans(10))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                        .lineLimit(1)
+                        .font(.plexMono(24, weight: .bold))
+                        .foregroundStyle(VocabbyTheme.primary)
+                        .monospacedDigit()
                     Spacer(minLength: 8)
-                    Text(confidenceLine)
-                        .font(.plexMono(9, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                        .lineLimit(1)
+                    Text(changeValue)
+                        .font(.plexMono(12, weight: .semibold))
+                        .foregroundStyle(changeColor)
+                        .monospacedDigit()
                 }
+                Text(summaryLine)
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.3)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
             .contentShape(Rectangle())
             .popoverContentInset()
-            .padding(.vertical, 10)
+            .padding(.vertical, 16)
         }
         .buttonStyle(.plain)
-        .popoverHairlineTop()
+        .pointingHandCursor()
+        .popoverHairlineTop(VocabbyTheme.inkRule)
+        .accessibilityLabel(accessibilityText)
         .accessibilityHint(vi ? "Mở Phân tích trong Cài đặt" : "Open Insights in Settings")
         .task(id: reloadKey) {
             let snapshot = combined
@@ -114,7 +122,9 @@ struct InsightsHighlightCard: View {
 
     private var changeColor: Color {
         guard let change = insights?.overview.changePercent else { return VocabbyTheme.tertiary }
-        return change > 0 ? VocabbyTheme.yellow : VocabbyTheme.success
+        if change > 0 { return VocabbyTheme.yellow }
+        if change < 0 { return VocabbyTheme.success }
+        return VocabbyTheme.tertiary
     }
 
     private var summaryLine: String {
@@ -128,6 +138,10 @@ struct InsightsHighlightCard: View {
     private var confidenceLine: String {
         guard let confidence = insights?.overview.confidence else { return "—" }
         return Self.confidenceLabel(confidence)
+    }
+
+    private var accessibilityText: String {
+        "\(currentValue), \(changeValue), \(summaryLine), \(confidenceLine)"
     }
 
     static func confidenceLabel(_ confidence: ProjectInsightsConfidence) -> String {

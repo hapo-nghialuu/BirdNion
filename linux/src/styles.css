@@ -2922,16 +2922,19 @@ body.settings-body-root {
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
-/* Usage Insights — one compact All highlight + one Settings surface. */
+/* Usage Insights All-tab highlight — same rhythm as `.budget-card`. */
 .insights-highlight {
   width: 100%;
-  min-height: 72px;
   display: grid;
-  gap: 3px;
+  gap: 8px;
+  padding-top: 16px;
+  padding-bottom: 16px;
   color: var(--text);
   text-align: left;
   cursor: pointer;
   font: inherit;
+  border-top: 1px solid var(--ink-rule, var(--hairline));
+  background: transparent;
 }
 .insights-highlight:hover { background: var(--selected-surface); }
 .insights-highlight:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2942,25 +2945,36 @@ body.settings-body-root {
 .insights-row,
 .insights-project-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
+.insights-highlight-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 .insights-delta {
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text3);
+  font-variant-numeric: tabular-nums;
 }
 .insights-highlight-current {
   font-family: var(--font-mono);
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
 }
-.insights-highlight-prior,
 .insights-highlight-meta {
+  font-family: var(--font-mono);
   font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
   color: var(--text3);
 }
 .insights-highlight-project {
@@ -2969,7 +2983,20 @@ body.settings-body-root {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.insights-highlight-confidence { flex-shrink: 0; font-family: var(--font-mono); }
+.insights-highlight-confidence {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+.insights-highlight-chevron {
+  color: var(--text3);
+  font-size: 12px;
+  line-height: 1;
+}
 
 .insights-page { gap: 16px; }
 .insights-toolbar {
