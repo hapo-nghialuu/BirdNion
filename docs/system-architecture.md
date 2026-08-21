@@ -1,18 +1,32 @@
 # BirdNion — System Architecture
 
-> AI spend + quota cockpit: menu-bar app macOS native và tray app Linux, cùng theo dõi quota/cost từ nhiều provider.
+> AI spend + quota cockpit: menu-bar app macOS native và tray app Linux; Windows Tauri đang phát triển nhưng chưa được support hoặc phát hành.
 
 ## 1. Mục tiêu
 
-BirdNion chạy trên thanh menu macOS hoặc system tray Linux, theo dõi quota và chi phí AI từ dữ liệu provider lẫn scanner cục bộ. Dự án phát triển từ `ai-statusbar` thành một cockpit đa provider, ưu tiên độ tin cậy dữ liệu và thao tác cấu hình.
+BirdNion chạy trên thanh menu macOS hoặc system tray Linux, theo dõi quota và chi phí AI từ dữ liệu provider lẫn scanner cục bộ. Dự án phát triển từ `ai-statusbar` thành một cockpit đa provider, ưu tiên độ tin cậy dữ liệu và thao tác cấu hình. Windows 10/11 x64/ARM64 là target đang phát triển từ codebase Tauri, chưa phải capability public.
 
 ## 2. Stack & phạm vi
 
 - **macOS**: Swift + SwiftUI, AppKit (`NSStatusBar` + custom `DropdownPanel`), Xcode 16/26
 - **Linux**: Tauri v2, Rust backend + TypeScript frontend
+- **Windows (development target)**: Tauri v2 dùng lại Rust backend + TypeScript frontend trong `linux/`; target NSIS x64/ARM64 chưa có native compile, runtime hoặc install receipt
 - **Local SPM**: [CodexBarCore](https://github.com/hapo-nghialuu/CodexBar) tại `~/Desktop/CodexBar` — cung cấp `ClaudeUsageFetcher`, `ClaudeStatusProbe`, `RateWindow`, `ProviderCostSnapshot`
 - **Triển khai**: cá nhân / share nội bộ qua [Homebrew tap](https://github.com/hapo-nghialuu/homebrew-tap)
-- **Out of scope hiện tại**: App Store, multi-user server và Windows production build
+- **Out of scope hiện tại**: App Store, multi-user server và public Windows support/release trước khi đủ evidence gates
+
+### 2.1 Windows platform seam — trạng thái tạm thời
+
+Code hiện có là implementation tĩnh, không phải bằng chứng Windows native:
+
+- `platform/paths.rs` centralize `%USERPROFILE%`, `%APPDATA%`, `%LOCALAPPDATA%`, provider homes và overrides; `platform/executable.rs` resolve `PATH`/`PATHEXT`, gồm `.exe`, `.cmd` và `.bat`.
+- `platform/atomic_file.rs` ghi temp cùng thư mục, flush/sync rồi replace bằng `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`. Temp file và config/auth directories dùng protected DACL chỉ cho owner và `SYSTEM`; ACL thực tế vẫn cần inspect trên Windows.
+- `platform/process.rs` giữ exact child handle; Windows gắn child vào Job Object `KILL_ON_JOB_CLOSE` và dùng TCP owner table để chỉ chấp nhận listener có PID khớp child. Không fallback kill process theo tên/PID/port, nhưng spawn-to-job race và native lifecycle vẫn chưa được chứng minh.
+- `tauri.windows.conf.json` tách Windows identity, NSIS current-user, WebView2 bootstrapper và icon. Single-instance callback cùng tray left-click branch đã wiring tĩnh; tray/window/DPI/autostart/notification runtime chưa verify.
+- Claude dùng ordered config roots, Gemini dùng `GEMINI_CLI_HOME`/`%USERPROFILE%`, Cursor dùng `%APPDATA%/.../state.vscdb` với SQLite read-only, bounded timeout và browser fallback. Browser/DPAPI, locked DB, multi-profile và real credential journeys vẫn chưa verify.
+- CLIProxyAPI sidecar có owned-process seam và resource/dev executable resolution, nhưng source/version/SHA, PE architecture x64/ARM64, bundle resources và Defender receipt chưa được khóa.
+
+Evidence bắt buộc tách bốn lane độc lập: Windows 10 x64, Windows 10 ARM64, Windows 11 x64 và Windows 11 ARM64. Test suite hiện được defer; trạng thái tổng thể là `FLASH_UNVERIFIED`. Không suy ra Windows support từ macOS-host `cargo check`, isolated Windows type-check hoặc static review.
 
 ## 3. Provider quota
 
@@ -313,6 +327,7 @@ Scripts/
 - [x] Usage Insights + Cost by Project trên macOS/Linux: compact All highlight, Settings Overview/Projects 7/30/90, Claude/Codex/Grok privacy key + residual `Unknown`
 - [x] macOS custom profile quick switch fail-closed; Linux Codex account quota/health snapshot
 - [x] Release pipeline (`Scripts/release.sh`) → tap → brew install
+- [ ] Windows 10/11 x64/ARM64 native compile, runtime, install, First Live và release integrity; hiện `FLASH_UNVERIFIED`, không public support claim
 
 ## 9. Decision register
 
@@ -332,6 +347,7 @@ Scripts/
 | Exact-snapshot activation guard | Delete/edit profile thắng async activation; stale continuation fail closed |
 | Menu-bar visibility toggle per provider | User loại provider không quan tâm khỏi chuỗi % trên menu bar |
 | Cask filename: `BirdNion-${version}.zip` (no v prefix) | GitHub release-asset upload cache trả 404 BlobNotFound với `v${version}.zip` |
+| Windows evidence tách 4 OS/architecture lanes | Cross-compile, static review hoặc một lane không chứng minh ba lane còn lại; chỉ public claim sau native runtime/install/release receipts |
 
 ## 10. Open questions / future
 
@@ -341,7 +357,8 @@ Scripts/
 - **Mac App Store** — nếu muốn mass distribution, cần review process
 - **Claude code API key** flow — hiện support Anthropic key, có thể extend cho setup token từ CLI
 - **Local memory** — track Anthropic Max weekly + Sonnet daily qua `~/.claude/projects/`
-- **Phase 8 còn lại** — CSV/JSON export, Linux custom-profile popover và Windows port
+- **Phase 8 còn lại** — CSV/JSON export, Linux custom-profile popover và hoàn tất native evidence/release gates cho Windows port
+- **Windows blockers** — native matrix, browser/DPAPI, sidecar artifact/SHA/PE/bundle, installer/upgrade/uninstall và First Live journeys chưa có receipt
 
 ## File liên quan
 

@@ -8,10 +8,12 @@
 
 ## Bản đồ build và release
 
-BirdNion có hai lane phân phối độc lập:
+BirdNion hiện có hai lane phân phối độc lập:
 
 - **macOS**: `Scripts/release.sh` chạy verification gate, bump version, build universal `.app`, tạo zip, tạo/cập nhật GitHub Release và cập nhật Homebrew cask.
 - **Linux**: `.github/workflows/linux-release.yml` hiện là workflow `workflow_dispatch` thủ công. Workflow không tự bump version và không tự tạo tag; nó nhận một tag release đã tồn tại, checkout ref được dispatch, rồi đính kèm `.deb`, `.rpm` và `.AppImage` vào release đó.
+
+Windows 10/11 x64/ARM64 là **development target**, chưa phải lane phân phối. `linux/src-tauri/tauri.windows.conf.json` mới mô tả NSIS current-user + WebView2 bootstrapper và hiện cố ý để `resources: []`; chưa có sidecar Windows được bundle hoặc workflow Windows nào được xác minh.
 
 Vì vậy, phải phân biệt hai khái niệm:
 
@@ -19,6 +21,27 @@ Vì vậy, phải phân biệt hai khái niệm:
 2. **Linux build commit**: commit của ref dùng khi dispatch `linux-release.yml` (thường là `main` mới nhất).
 
 Workflow Linux chỉ kiểm tra `inputs.tag` khớp `linux/src-tauri/tauri.conf.json.version`; nó không kiểm tra tag phải trỏ cùng commit với `main`. Khi release lại Linux cho một tag macOS đã tồn tại, cần ghi rõ Linux asset được build từ commit nào.
+
+### Windows build status — chưa phải runbook phát hành
+
+Target dự kiến gồm bốn evidence lanes độc lập: Windows 10 x64, Windows 10 ARM64, Windows 11 x64 và Windows 11 ARM64. Trạng thái hiện tại là `FLASH_UNVERIFIED` vì test suite đã defer và chưa có native Windows compile, runtime hoặc install receipt.
+
+Static implementation đã có:
+
+- platform paths cho `%USERPROFILE%`, `%APPDATA%`, `%LOCALAPPDATA%` và `PATH`/`PATHEXT`;
+- atomic private writes bằng same-directory temp + `MoveFileExW`, protected owner/SYSTEM DACL;
+- owned child + Windows Job Object, listener PID phải khớp child BirdNion;
+- NSIS/current-user/WebView2 config, single-instance callback và tray branch;
+- Claude/Gemini/Cursor source-path discovery, Cursor SQLite read-only + browser fallback.
+
+Chưa được phép dùng để build và phát hành public cho tới khi có đủ:
+
+- CLIProxyAPI sidecar source/version/SHA, PE architecture x64/ARM64 và Tauri bundle resource;
+- native browser/DPAPI, tray/window/single-instance, process cleanup và provider First Live journeys;
+- clean install, same-architecture upgrade, uninstall, SmartScreen/`Unknown publisher` guidance và downloaded-asset verification;
+- hai Windows CI và release lanes độc lập, exact tag/commit/version, installer SHA-256 và receipts trên đủ bốn OS/architecture lanes.
+
+Cross-compile hoặc static check trên macOS không thay native evidence. Cho đến khi các gate trên pass, README/release notes/download page không được claim Windows supported hoặc released.
 
 ## Mở project
 ```bash

@@ -3,8 +3,9 @@
 BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 - **macOS** (SwiftUI, `BirdNion/`) — bản gốc, đầy đủ tính năng nhất
 - **Linux** (Tauri v2 Rust+TS, `linux/`) — dùng chung schema `~/.config/birdnion/settings.json`
+- **Windows 10/11 x64/ARM64** — target đang phát triển từ codebase Tauri; chưa phải nền tảng được support hoặc phát hành
 
-**Chính sách nền tảng:** tính năng data-layer/UX mới land trên macOS trước, sync sang Linux trong cùng phase (mục "Linux sync" mỗi phase). Windows sẽ build từ codebase Tauri khi Phase 8.
+**Chính sách nền tảng:** tính năng data-layer/UX mới land trên macOS trước, sync sang Linux trong cùng phase (mục "Linux sync" mỗi phase). Windows phải có evidence độc lập cho bốn lane Windows 10 x64, Windows 10 ARM64, Windows 11 x64 và Windows 11 ARM64; compile hoặc receipt của một lane không thay lane khác.
 
 ## ✅ Phase 0 — Bootstrap
 - [x] Scout codebase + research CodexBar / MiniMax quota
@@ -121,7 +122,16 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 - [x] [both] Usage Insights + Cost by Project — All tab chỉ giữ compact highlight; Settings có tab Insights với Overview và Projects 7/30/90 ngày. Claude/Codex/Grok dùng project key SHA-256 + basename an toàn từ metadata local; chỉ residual không gán được mới vào `Unknown`; history riêng `project-cost-history.json` high-water/0600 — 2026-08-20
 - [x] [both] Guided Setup completion + Action Center v1 — lỗi sửa được mở đúng provider/control; save fail không chạy self-test; Live chỉ sau probe thật. Popover chỉ thêm badge gọn, chi tiết nằm trong Settings; chỉ current setup/connection-health, không history/quota/budget/release và không persist raw error — 2026-08-21
 - [ ] [both] Export CSV/JSON chi phí theo ngày/model — deferred, ngoài scope đợt 2026-08-15
-- [ ] [Windows] Port từ codebase Tauri `linux/`: tray Windows, đường dẫn `%APPDATA%`, cookie qua rookie (đã hỗ trợ Windows), CI msi/exe
+- [ ] [Windows] Port từ codebase Tauri `linux/` — **đang phát triển, `FLASH_UNVERIFIED`**:
+  - [x] Platform seam cho `%USERPROFILE%`/`%APPDATA%`/`%LOCALAPPDATA%`, `PATH`/`PATHEXT`, atomic private writes và owner/SYSTEM DACL
+  - [x] Static process ownership dùng owned child + Windows Job Object; listener chỉ được nhận khi PID khớp child BirdNion
+  - [x] Static app-shell work: Windows Tauri config cho NSIS/current-user/WebView2, single-instance callback và tray left-click branch
+  - [x] Static source discovery cho Claude, Gemini và Cursor qua platform paths; Cursor giữ SQLite read-only + browser fallback
+  - [ ] Native Windows compile, runtime và install receipts cho đủ bốn OS/architecture lanes
+  - [ ] CLIProxyAPI sidecar source/version/SHA, PE x64/ARM64, bundle resources và Defender receipt
+  - [ ] Native browser/DPAPI, tray/single-instance, First Live provider, upgrade/uninstall và unsigned Setup EXE journeys
+
+> Test suite đã được defer trong các lát cắt hiện tại. Chưa có Windows release workflow/artifact được xác minh và không được public claim Windows support từ các checkbox static ở trên.
 
 ## 🌐 Phase 9 — Audience expansion (LATER, 3–6 tháng)
 Chọn một hướng khi Phase 7–8 xong:
@@ -149,6 +159,7 @@ Chọn một hướng khi Phase 7–8 xong:
 
 | Date | Milestone |
 |---|---|
+| 2026-08-21 | Windows Tauri port bắt đầu các lát cắt I1–I5: platform paths, atomic/DACL, owned process + Job Object, shell static và Claude/Gemini/Cursor discovery. Toàn bộ native matrix Windows 10/11 × x64/ARM64 vẫn `FLASH_UNVERIFIED`; chưa support/release công khai |
 | 2026-08-21 | Guided Setup completion + Action Center v1 trên macOS/Linux: exact remediation target, save-first real self-test, current-issue header badge + Settings pane, không issue history/raw-error persistence |
 | 2026-08-20 | Usage Insights + Cost by Project (macOS + Linux): compact All highlight mở Settings Insights, weekly Overview, project ranking/detail 7/30/90 ngày, privacy-safe attribution cho Claude/Codex/Grok và residual `Unknown` |
 | 2026-08-16 | Budget per-provider Claude/Codex/Grok (macOS + Linux): UserDefaults/localStorage riêng biệt với budget tổng, card ngân sách trong tab provider tương ứng (budget >0) MTD/budget + linear forecast + remaining/over tôn trọng trust-unavailable, weekly digest chỉ cảnh báo forecast-over/already-over (forecast-over dùng số dự phóng) |
