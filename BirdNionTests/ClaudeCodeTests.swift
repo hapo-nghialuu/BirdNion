@@ -8,28 +8,6 @@ import XCTest
 /// settings.local.json writer (global + per-project).
 final class ClaudeCodeTests: XCTestCase {
 
-    private final class CompatibilityProfileRecorder {
-        var profile: BirdNionConfigStore.ClaudeCodeProfile?
-    }
-
-    private struct CompatibilityPickerHarness: View {
-        @State private var profile: BirdNionConfigStore.ClaudeCodeProfile
-        let recorder: CompatibilityProfileRecorder
-
-        init(profile: BirdNionConfigStore.ClaudeCodeProfile,
-             recorder: CompatibilityProfileRecorder) {
-            _profile = State(initialValue: profile)
-            self.recorder = recorder
-        }
-
-        var body: some View {
-            ClaudeCodeCustomProfileConnectionFields(profile: $profile, lang: "en")
-                .frame(width: 500)
-                .onAppear { recorder.profile = profile }
-                .onChange(of: profile) { recorder.profile = $0 }
-        }
-    }
-
     private func makeStubConfig() -> URLSessionConfiguration {
         let c = URLSessionConfiguration.ephemeral
         c.protocolClasses = [StubURLProtocol.self] + (c.protocolClasses ?? [])
@@ -836,61 +814,29 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertTrue(BirdNionConfigStore.claudeCodeProfiles(url: url).isEmpty)
     }
 
-    @MainActor
     func testNewCustomProfileCanSelectOpenAICompatibility() {
         var profile = freeModelProfile()
         profile.id = "new-profile"
         profile.compatibilityMode = nil
         profile.embeddedLocalProxy = false
-        let recorder = CompatibilityProfileRecorder()
+        XCTAssertEqual(ClaudeCodeProtocolSelection.value(for: profile), .anthropic)
 
-        let host = NSHostingView(rootView: CompatibilityPickerHarness(profile: profile, recorder: recorder))
-        host.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
-        let window = NSWindow(
-            contentRect: host.bounds,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentView = host
-        window.makeKeyAndOrderFront(nil)
-        defer { window.orderOut(nil) }
+        profile = ClaudeCodeProtocolSelection.applying(.chat, to: profile)
+        XCTAssertEqual(profile.compatibility, .openAI)
+        XCTAssertEqual(profile.compatibilityMode, "openai")
+        XCTAssertTrue(profile.usesEmbeddedCLIProxy)
+        XCTAssertNil(profile.openAIFormat)
+        XCTAssertEqual(ClaudeCodeProtocolSelection.value(for: profile), .chat)
 
-        host.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        profile = ClaudeCodeProtocolSelection.applying(.responses, to: profile)
+        XCTAssertEqual(profile.compatibility, .openAI)
+        XCTAssertEqual(profile.openAIFormat, "responses")
+        XCTAssertEqual(ClaudeCodeProtocolSelection.value(for: profile), .responses)
 
-        // The picker now exposes the three wire protocols directly:
-        // Anthropic / Chat (OpenAI Chat Completions) / Responses.
-        func protocolControl() -> NSSegmentedControl? {
-            allSubviews(of: host)
-                .compactMap { $0 as? NSSegmentedControl }
-                .first { $0.segmentCount == 3 && $0.label(forSegment: 0) == "Anthropic" }
-        }
-        let compatibilityControl = protocolControl()
-        XCTAssertNotNil(compatibilityControl)
-        XCTAssertEqual(compatibilityControl?.selectedSegment, 0)
-
-        compatibilityControl?.selectedSegment = 1   // OpenAI Chat
-        compatibilityControl?.sendAction(compatibilityControl?.action, to: compatibilityControl?.target)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-
-        XCTAssertEqual(recorder.profile?.compatibility, .openAI)
-        XCTAssertEqual(recorder.profile?.compatibilityMode, "openai")
-        XCTAssertEqual(recorder.profile?.embeddedLocalProxy, true)
-        XCTAssertNil(recorder.profile?.openAIFormat)
-
-        let refreshed = protocolControl()
-        refreshed?.selectedSegment = 2   // OpenAI Responses
-        refreshed?.sendAction(refreshed?.action, to: refreshed?.target)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-
-        XCTAssertEqual(recorder.profile?.compatibility, .openAI)
-        XCTAssertEqual(recorder.profile?.openAIFormat, "responses")
-    }
-
-    @MainActor
-    private func allSubviews(of view: NSView) -> [NSView] {
-        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+        profile = ClaudeCodeProtocolSelection.applying(.anthropic, to: profile)
+        XCTAssertEqual(profile.compatibility, .anthropic)
+        XCTAssertNil(profile.openAIFormat)
+        XCTAssertEqual(ClaudeCodeProtocolSelection.value(for: profile), .anthropic)
     }
 
     func testClaudeCodeTargetPersistsIndependently() throws {

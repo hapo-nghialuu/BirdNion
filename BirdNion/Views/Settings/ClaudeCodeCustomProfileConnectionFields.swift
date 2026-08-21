@@ -1,5 +1,43 @@
 import SwiftUI
 
+enum ClaudeCodeProtocolSelection: String {
+    case anthropic
+    case chat
+    case responses
+
+    static func value(for profile: BirdNionConfigStore.ClaudeCodeProfile) -> Self {
+        guard profile.isOpenAICompatible else { return .anthropic }
+        return profile.openAIProxyFormat == "responses" ? .responses : .chat
+    }
+
+    static func applying(
+        _ selection: Self,
+        to profile: BirdNionConfigStore.ClaudeCodeProfile
+    ) -> BirdNionConfigStore.ClaudeCodeProfile {
+        var updated = profile
+        if selection == .anthropic {
+            if updated.baseURL.isEmpty { updated.baseURL = updated.openAIBaseURL ?? "" }
+            if updated.token.isEmpty { updated.token = updated.openAIAPIKey ?? "" }
+            updated.openAIFormat = nil
+            updated.compatibilityMode =
+                BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
+        } else {
+            if updated.openAIBaseURL?.isEmpty ?? true { updated.openAIBaseURL = nonEmpty(updated.baseURL) }
+            if updated.openAIAPIKey?.isEmpty ?? true { updated.openAIAPIKey = nonEmpty(updated.token) }
+            updated.embeddedLocalProxy = true
+            updated.openAIFormat = selection == .responses ? "responses" : nil
+            updated.compatibilityMode =
+                BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.openAI.rawValue
+        }
+        return updated
+    }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 /// Connection fields are isolated from the profile form so the upstream stays
 /// concise while BirdNion manages its local conversion core internally.
 struct ClaudeCodeCustomProfileConnectionFields: View {
@@ -47,9 +85,9 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                 fieldRow(L10n.t("ccx.compatibility", lang)) {
                     InstrumentSegmentedControl(
                         options: [
-                            ("anthropic", L10n.t("codexConfig.protocol.anthropic", lang)),
-                            ("chat", L10n.t("codexConfig.protocol.openaiChat", lang)),
-                            ("responses", L10n.t("codexConfig.protocol.responses", lang)),
+                            (.anthropic, L10n.t("codexConfig.protocol.anthropic", lang)),
+                            (.chat, L10n.t("codexConfig.protocol.openaiChat", lang)),
+                            (.responses, L10n.t("codexConfig.protocol.responses", lang)),
                         ],
                         selection: protocolSelection
                     )
@@ -119,30 +157,10 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
     /// `openAIFormat` nil / "responses". Built as a single write — a second
     /// write derived from re-reading `profile` in the same update would see
     /// the stale value and clobber the first.
-    private var protocolSelection: Binding<String> {
+    private var protocolSelection: Binding<ClaudeCodeProtocolSelection> {
         Binding(
-            get: {
-                guard profile.isOpenAICompatible else { return "anthropic" }
-                return profile.openAIProxyFormat == "responses" ? "responses" : "chat"
-            },
-            set: { raw in
-                var updated = profile
-                if raw == "anthropic" {
-                    if updated.baseURL.isEmpty { updated.baseURL = updated.openAIBaseURL ?? "" }
-                    if updated.token.isEmpty { updated.token = updated.openAIAPIKey ?? "" }
-                    updated.openAIFormat = nil
-                    updated.compatibilityMode =
-                        BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.anthropic.rawValue
-                } else {
-                    if updated.openAIBaseURL?.isEmpty ?? true { updated.openAIBaseURL = nonEmpty(updated.baseURL) }
-                    if updated.openAIAPIKey?.isEmpty ?? true { updated.openAIAPIKey = nonEmpty(updated.token) }
-                    updated.embeddedLocalProxy = true
-                    updated.openAIFormat = raw == "responses" ? "responses" : nil
-                    updated.compatibilityMode =
-                        BirdNionConfigStore.ClaudeCodeProfile.CompatibilityMode.openAI.rawValue
-                }
-                profile = updated
-            }
+            get: { ClaudeCodeProtocolSelection.value(for: profile) },
+            set: { profile = ClaudeCodeProtocolSelection.applying($0, to: profile) }
         )
     }
 
@@ -212,11 +230,6 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
             get: { profile[keyPath: keyPath] ?? "" },
             set: { profile[keyPath: keyPath] = $0.isEmpty ? nil : $0 }
         )
-    }
-
-    private func nonEmpty(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func fieldRow<Content: View>(_ label: String,
