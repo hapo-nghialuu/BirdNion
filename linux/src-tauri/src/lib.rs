@@ -252,6 +252,14 @@ fn is_fixable_provider_error(raw: Option<String>) -> bool {
         .unwrap_or(false)
 }
 
+/// Maps a classified failure to the exact Settings remediation target shared
+/// with macOS. `None` is intentionally details/retry-only.
+#[tauri::command]
+fn provider_remediation_target(provider_id: String, raw: Option<String>) -> Option<String> {
+    let kind = providers::error_classifier::classify(raw.as_deref())?;
+    providers::error_classifier::remediation_target(&provider_id, kind).map(str::to_string)
+}
+
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderOnboardingDetection {
@@ -1196,6 +1204,7 @@ pub fn run() {
             classify_provider_error,
             is_transient_provider_error,
             is_fixable_provider_error,
+            provider_remediation_target,
             provider_onboarding_detection,
             test_provider,
             claude_admin_usage,

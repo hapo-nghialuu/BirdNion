@@ -117,6 +117,25 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertFalse(ProviderErrorKind.unknown.isFixable)
     }
 
+    func testRemediationTargetsAreExactAndFixableOnly() {
+        XCTAssertEqual(remediationTarget(providerID: "claude", kind: .notConfigured), .setupSource)
+        XCTAssertEqual(remediationTarget(providerID: "codex", kind: .tokenInvalidOrMissing), .setupSource)
+        XCTAssertEqual(remediationTarget(providerID: "grok", kind: .cookieExpiredOrMissing), .setupSource)
+        XCTAssertEqual(remediationTarget(providerID: "claude", kind: .cookieExpiredOrMissing), .cookieSource)
+        XCTAssertEqual(remediationTarget(providerID: "codex", kind: .cookieExpiredOrMissing), .cookieSource)
+        XCTAssertEqual(remediationTarget(providerID: "openrouter", kind: .tokenInvalidOrMissing), .credential)
+
+        for kind in [ProviderErrorKind.networkUnreachableOrTimeout, .rateLimited,
+                     .apiSchemaChanged, .unknown] {
+            XCTAssertNil(remediationTarget(providerID: "claude", kind: kind))
+        }
+    }
+
+    func testRemediationTargetRawValuesAreStableAndNonSecret() {
+        XCTAssertEqual(ProviderRemediationTarget.allCases.map(\.rawValue),
+                       ["setupSource", "credential", "cookieSource"])
+    }
+
     // MARK: - Localization resolution (R1.1–R1.3)
 
     /// Every kind's title + hint must resolve in BOTH languages — a lookup
@@ -137,9 +156,73 @@ final class ProviderErrorClassifierTests: XCTestCase {
     func testSelfTestAndNotificationKeysResolve() {
         for key in ["provider.selfTest", "provider.selfTest.running", "provider.selfTest.pass",
                     "provider.selfTest.fail", "provider.selfTest.disabled",
-                    "notification.providerFailing"] {
+                    "provider.guidedSetup.saveFailed", "notification.providerFailing"] {
             for lang in ["vi", "en"] {
                 XCTAssertNotEqual(L10n.t(key, lang), key, "\(key) missing in \(lang)")
+            }
+        }
+    }
+
+    func testActionCenterProjectsOnlyCurrentSetupAndConnectionIssues() {
+        let now = Date()
+        let statuses = [
+            ProviderStatus(id: "claude", displayName: "Claude", windows: [],
+                           lastUpdated: now, error: "Chưa cấu hình token"),
+            ProviderStatus(id: "groq", displayName: "Groq", windows: [],
+                           lastUpdated: now, error: "HTTP 429"),
+            ProviderStatus(id: "codex", displayName: "Codex",
+                           windows: [QuotaWindow(label: "Week", usedPct: 10, remainingPct: 90)],
+                           lastUpdated: now),
+            ProviderStatus(id: "grok", displayName: "Grok", windows: [],
+                           lastUpdated: now, error: "HTTP 429"),
+            ProviderStatus(id: "openai", displayName: "OpenAI", windows: [],
+                           lastUpdated: now, error: "HTTP 429"),
+        ]
+        let providers = ["claude", "groq", "codex", "grok", "openai"].map {
+            BirdNionConfigStore.Provider(id: $0, enabled: true)
+        }
+        let issues = ActionCenterIssue.current(
+            providers: providers,
+            statuses: statuses,
+            detectionReady: { _ in true },
+            staleWarning: { id in
+                id == "codex"
+                    ? StaleQuotaWarning(kind: .networkUnreachableOrTimeout, lastGoodUpdated: now)
+                    : nil
+            })
+
+        XCTAssertEqual(issues.map(\.providerID), ["claude", "codex", "grok"])
+        XCTAssertEqual(issues.map(\.kind), [.setup, .connection, .connection])
+        XCTAssertEqual(issues.first?.remediationTarget, .setupSource)
+        XCTAssertNil(issues[1].remediationTarget)
+        XCTAssertFalse(issues.contains { $0.providerID == "groq" || $0.providerID == "openai" })
+    }
+
+    func testActionCenterIncludesEnabledProviderWithNoDetectedSourceBeforeStatusArrives() {
+        let providers = [BirdNionConfigStore.Provider(id: "claude", enabled: true)]
+        let issues = ActionCenterIssue.current(
+            providers: providers,
+            statuses: [],
+            detectionReady: { _ in false },
+            staleWarning: { _ in nil })
+
+        XCTAssertEqual(issues, [ActionCenterIssue(
+            providerID: "claude", providerName: "Claude",
+            kind: .setup, remediationTarget: .setupSource)])
+    }
+
+    func testActionCenterCopyResolvesWithoutRawProviderError() {
+        let keys = [
+            "settings.tab.actionCenter", "actionCenter.title", "actionCenter.subtitle",
+            "actionCenter.current", "actionCenter.emptyTitle", "actionCenter.emptyBody",
+            "actionCenter.setupTitle", "actionCenter.setupHint",
+            "actionCenter.connectionTitle", "actionCenter.connectionHint",
+            "actionCenter.serviceTitle", "actionCenter.serviceHint",
+            "actionCenter.fix", "actionCenter.retry", "actionCenter.open",
+        ]
+        for key in keys {
+            for language in ["vi", "en"] {
+                XCTAssertNotEqual(L10n.t(key, language), key, "missing \(key) in \(language)")
             }
         }
     }

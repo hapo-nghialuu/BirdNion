@@ -370,6 +370,35 @@ final class QuotaServicePollingTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedSelfTestStatusStaysMemoryOnlyAndSuccessStillCaches() throws {
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        let provider = CountingProvider(id: "cachetest", displayName: "CacheTest")
+        let svc = QuotaService(providers: [provider], interval: 3_600, statusCacheURL: cacheURL)
+        let rawError = "HTTP 401 credential-detail-must-not-persist"
+        svc.applySelfTestStatus(ProviderStatus(
+            id: "cachetest", displayName: "CacheTest", windows: [],
+            lastUpdated: Date(), error: rawError))
+
+        XCTAssertEqual(svc.statuses.first?.error, rawError)
+        let failedData = try Data(contentsOf: cacheURL)
+        XCTAssertFalse(String(decoding: failedData, as: UTF8.self).contains(rawError))
+        XCTAssertTrue(try JSONDecoder().decode([ProviderStatus].self, from: failedData).isEmpty)
+
+        svc.applySelfTestStatus(ProviderStatus(
+            id: "cachetest", displayName: "CacheTest",
+            windows: [QuotaWindow(label: "Session", usedPct: 12, remainingPct: 88)],
+            lastUpdated: Date()))
+        let cached = try JSONDecoder().decode(
+            [ProviderStatus].self, from: Data(contentsOf: cacheURL))
+        XCTAssertEqual(cached.count, 1)
+        XCTAssertNil(cached.first?.error)
+        XCTAssertEqual(cached.first?.windows.first?.usedPct, 12)
+    }
+
+    @MainActor
     func testConcurrentRefreshCoalescesAndMergesLateForcedProviderIDs() async {
         let gate = GatedProvider(id: "slow", displayName: "Slow")
         let lateForced = CountingProvider(id: "late", displayName: "Late")

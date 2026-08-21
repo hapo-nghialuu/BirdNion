@@ -26,11 +26,12 @@ import { isClaudeCodeSupported } from "./claude-code";
 import { settingsIcon, type SettingsIconId } from "./settings-icons";
 import { getAppearance, setAppearance, type Appearance } from "./theme";
 import { insightsPane } from "./insights-pane";
+import { actionCenterPane } from "./action-center";
 
 const TAB_KEY = "birdnion.settingsSection";
 
 type SettingsTabId =
-  | "general" | "providers" | "claudeCode" | "insights" | "advanced" | "about"
+  | "general" | "actionCenter" | "providers" | "claudeCode" | "insights" | "advanced" | "about"
   // legacy ids still routed from tray / older localStorage
   | "display" | "debug";
 
@@ -44,6 +45,7 @@ type NavItem = {
 /** Sidebar items — Display→General, Debug→Advanced (macOS P2). */
 const NAV: NavItem[] = [
   { id: "general", icon: "gearshape", titleKey: "settingsTabGeneral", iconBg: "#8C8C94" },
+  { id: "actionCenter", icon: "exclamationmark.circle", titleKey: "settingsTabActionCenter", iconBg: "#DC514B" },
   { id: "providers", icon: "square.grid.2x2", titleKey: "settingsTabProviders", iconBg: "#2563EB" },
   { id: "claudeCode", icon: "terminal", titleKey: "settingsTabClaudeCode", iconBg: "#8C59D9" },
   { id: "insights", icon: "chart.bar", titleKey: "settingsTabInsights", iconBg: "#D97706" },
@@ -458,6 +460,13 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
           break;
         case "providers":
           pane = await providersPane(onProvidersSaved);
+          break;
+        case "actionCenter":
+          pane = await actionCenterPane((providerId, target) => {
+            localStorage.setItem("birdnion.selectedProvider", providerId);
+            localStorage.setItem("birdnion.providerRemediationTarget", target);
+            setActive("providers");
+          });
           break;
         case "claudeCode":
           pane = await claudeCodePane(onProvidersSaved);

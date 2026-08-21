@@ -49,6 +49,32 @@ impl ProviderErrorKind {
     }
 }
 
+/// Stable, non-secret destination carried by a Settings remediation route.
+/// `None` means the failure has details/retry only and must not show Fix.
+pub fn remediation_target(provider_id: &str, kind: ProviderErrorKind) -> Option<&'static str> {
+    match kind {
+        ProviderErrorKind::NotConfigured => Some("setupSource"),
+        ProviderErrorKind::TokenInvalidOrMissing => {
+            if matches!(provider_id, "claude" | "codex" | "grok") {
+                Some("setupSource")
+            } else {
+                Some("credential")
+            }
+        }
+        ProviderErrorKind::CookieExpiredOrMissing => {
+            if matches!(provider_id, "claude" | "codex") {
+                Some("cookieSource")
+            } else {
+                Some("setupSource")
+            }
+        }
+        ProviderErrorKind::ApiSchemaChanged
+        | ProviderErrorKind::NetworkUnreachableOrTimeout
+        | ProviderErrorKind::RateLimited
+        | ProviderErrorKind::Unknown => None,
+    }
+}
+
 /// Pure classifier: maps a raw provider error string to exactly one kind.
 /// Returns `None` when there is no error to classify (`None`/empty/whitespace).
 ///
@@ -258,6 +284,42 @@ mod tests {
         assert!(!ProviderErrorKind::NetworkUnreachableOrTimeout.is_fixable());
         assert!(!ProviderErrorKind::ApiSchemaChanged.is_fixable());
         assert!(!ProviderErrorKind::Unknown.is_fixable());
+    }
+
+    #[test]
+    fn remediation_target_matches_guided_setup_contract() {
+        assert_eq!(
+            remediation_target("claude", ProviderErrorKind::NotConfigured),
+            Some("setupSource")
+        );
+        assert_eq!(
+            remediation_target("codex", ProviderErrorKind::TokenInvalidOrMissing),
+            Some("setupSource")
+        );
+        assert_eq!(
+            remediation_target("openrouter", ProviderErrorKind::TokenInvalidOrMissing),
+            Some("credential")
+        );
+        assert_eq!(
+            remediation_target("claude", ProviderErrorKind::CookieExpiredOrMissing),
+            Some("cookieSource")
+        );
+        assert_eq!(
+            remediation_target("grok", ProviderErrorKind::CookieExpiredOrMissing),
+            Some("setupSource")
+        );
+        assert_eq!(
+            remediation_target("claude", ProviderErrorKind::NetworkUnreachableOrTimeout),
+            None
+        );
+        assert_eq!(
+            remediation_target("claude", ProviderErrorKind::ApiSchemaChanged),
+            None
+        );
+        assert_eq!(
+            remediation_target("claude", ProviderErrorKind::Unknown),
+            None
+        );
     }
 
     #[test]

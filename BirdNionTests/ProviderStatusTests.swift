@@ -306,5 +306,47 @@ final class ProviderStatusTests: XCTestCase {
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .pass, statusHasError: false,
             statusHasQuota: false, detectionReady: true), .live)
+
+        // Running is immediate UI state, then the latest runtime status wins
+        // over an older explicit pass/fail result.
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .running, statusHasError: true,
+            statusHasQuota: true, detectionReady: false), .testing)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .pass, statusHasError: true,
+            statusHasQuota: false, detectionReady: false), .failed)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .fail(kind: .rateLimited, raw: "HTTP 429"), statusHasError: false,
+            statusHasQuota: true, detectionReady: true), .live)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .idle, statusHasError: false,
+            statusHasQuota: true, detectionReady: false), .live)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .idle, statusHasError: true,
+            statusHasQuota: true, detectionReady: true), .failed)
+    }
+
+    func testSelfTestTaskGuardAndGenerationRejectOverlapAndStaleCompletion() {
+        XCTAssertTrue(ProvidersPane.canStartSelfTest(
+            providerID: "claude", activeProviderIDs: []))
+        XCTAssertFalse(ProvidersPane.canStartSelfTest(
+            providerID: "claude", activeProviderIDs: ["claude"]))
+        XCTAssertTrue(ProvidersPane.canStartSelfTest(
+            providerID: "codex", activeProviderIDs: ["claude"]))
+
+        XCTAssertEqual(ProvidersPane.nextSelfTestGeneration(after: nil), 1)
+        XCTAssertEqual(ProvidersPane.nextSelfTestGeneration(after: 7), 8)
+        XCTAssertTrue(ProvidersPane.shouldApplySelfTestCompletion(
+            providerID: "claude", generation: 8,
+            activeGeneration: 8, selectedProviderID: "claude", isProviderEnabled: true))
+        XCTAssertFalse(ProvidersPane.shouldApplySelfTestCompletion(
+            providerID: "claude", generation: 7,
+            activeGeneration: 8, selectedProviderID: "claude", isProviderEnabled: true))
+        XCTAssertFalse(ProvidersPane.shouldApplySelfTestCompletion(
+            providerID: "claude", generation: 8,
+            activeGeneration: 8, selectedProviderID: "codex", isProviderEnabled: true))
+        XCTAssertFalse(ProvidersPane.shouldApplySelfTestCompletion(
+            providerID: "claude", generation: 8,
+            activeGeneration: 8, selectedProviderID: "claude", isProviderEnabled: false))
     }
 }

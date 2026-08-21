@@ -55,6 +55,10 @@ private extension View {
 
 extension ProvidersPane {
     func onboardingDetection(for id: String) -> OnboardingDetection {
+        Self.detectOnboardingSource(for: id)
+    }
+
+    static func detectOnboardingSource(for id: String) -> OnboardingDetection {
         let env = ProcessInfo.processInfo.environment
         let fm = FileManager.default
         switch id {
@@ -107,16 +111,36 @@ extension ProvidersPane {
 
     func connectAndTest(_ idx: Int) {
         let id = rows[idx].id
-        if rows[idx].enabled != true {
-            rows[idx].enabled = true
-            saveAll()
-            // NotificationCenter delivers this synchronously; AppDelegate
-            // rebuilds QuotaService before runSelfTest resolves the provider.
-            NotificationCenter.default.post(
-                name: .birdnionProvidersChanged,
-                object: "onboardingSelfTest")
+        let wasEnabled = rows[idx].enabled == true
+        rows[idx].enabled = true
+        saveErrorProviderID = nil
+        guard saveAll() else {
+            rows[idx].enabled = wasEnabled
+            saveErrorProviderID = id
+            return
         }
+        // NotificationCenter delivers this synchronously; AppDelegate rebuilds
+        // QuotaService before runSelfTest resolves the provider.
+        NotificationCenter.default.post(
+            name: .birdnionProvidersChanged,
+            object: "onboardingSelfTest")
         runSelfTest(id: id)
+    }
+
+    func onboardingRemediationTarget(for row: BirdNionConfigStore.Provider) -> ProviderRemediationTarget? {
+        switch selfTestState[row.id] ?? .idle {
+        case .fail(let kind, _):
+            return remediationTarget(providerID: row.id, kind: kind)
+        case .running, .pass:
+            return nil
+        case .idle:
+            break
+        }
+        guard let rawError = status(for: row.id)?.error,
+              let kind = classify(rawError: rawError) else {
+            return onboardingDetection(for: row.id).isReady ? nil : .setupSource
+        }
+        return remediationTarget(providerID: row.id, kind: kind)
     }
 
     private func onboardingCopy(_ vi: String, _ en: String) -> String {
@@ -161,12 +185,18 @@ extension ProvidersPane {
                         .buttonStyle(.borderedProminent)
                         .disabled(phase == .testing)
 
-                        if phase == .needsSource || phase == .failed {
+                        if let target = onboardingRemediationTarget(for: row) {
                             Button(onboardingCopy("Sửa thiết lập", "Fix setup")) {
                                 selectedID = row.id
+                                pendingRemediationTarget = target
                             }
                             .buttonStyle(.bordered)
                         }
+                    }
+                    if saveErrorProviderID == row.id {
+                        Text(L10n.t("provider.guidedSetup.saveFailed", language))
+                            .font(.plexSans(11))
+                            .foregroundStyle(SettingsTheme.critical)
                     }
                 }
                 .padding(12)
@@ -182,9 +212,13 @@ extension ProvidersPane {
             selfTestState[id] = .fail(kind: .unknown, raw: L10n.t("provider.selfTest.disabled", language))
             return
         }
-        guard selfTestState[id] != .running else { return }
+        guard Self.canStartSelfTest(providerID: id, activeProviderIDs: Set(selfTestTasks.keys)) else {
+            return
+        }
+        let generation = Self.nextSelfTestGeneration(after: selfTestGenerations[id])
+        selfTestGenerations[id] = generation
         selfTestState[id] = .running
-        Task {
+        selfTestTasks[id] = Task {
             // Same shared deadline as the background refresh loop
             // (`QuotaProvider.fetchWithDeadline`) — a hung provider must not
             // leave the self-test button spinning forever. Runs as
@@ -193,6 +227,17 @@ extension ProvidersPane {
             // for a user-initiated fetch), so probing as `.background` reported
             // "not configured" for providers that were actually signed in.
             let status = await provider.fetchAsUserAction()
+            guard Self.shouldApplySelfTestCompletion(
+                providerID: id,
+                generation: generation,
+                activeGeneration: selfTestGenerations[id],
+                selectedProviderID: selectedID,
+                isProviderEnabled: rows.first(where: { $0.id == id })?.enabled == true
+            ) else {
+                selfTestTasks[id] = nil
+                if selectedID == id { selfTestState[id] = .idle }
+                return
+            }
             quota.applySelfTestStatus(status)
             if let err = status.error, !err.isEmpty {
                 selfTestState[id] = .fail(kind: classify(rawError: err) ?? .unknown, raw: err)
@@ -204,6 +249,38 @@ extension ProvidersPane {
             } else {
                 selfTestState[id] = .pass
             }
+            selfTestTasks[id] = nil
+        }
+    }
+
+    static func canStartSelfTest(providerID: String, activeProviderIDs: Set<String>) -> Bool {
+        !activeProviderIDs.contains(providerID)
+    }
+
+    static func nextSelfTestGeneration(after current: UInt?) -> UInt {
+        (current ?? 0) &+ 1
+    }
+
+    static func shouldApplySelfTestCompletion(
+        providerID: String,
+        generation: UInt,
+        activeGeneration: UInt?,
+        selectedProviderID: String?,
+        isProviderEnabled: Bool
+    ) -> Bool {
+        isProviderEnabled && activeGeneration == generation && selectedProviderID == providerID
+    }
+
+    func invalidateSelfTest(for providerID: String) {
+        selfTestGenerations[providerID] = Self.nextSelfTestGeneration(after: selfTestGenerations[providerID])
+        selfTestTasks[providerID]?.cancel()
+        selfTestState[providerID] = .idle
+    }
+
+    func invalidateSelfTests(except selectedProviderID: String?) {
+        for (id, task) in selfTestTasks where id != selectedProviderID {
+            selfTestGenerations[id] = Self.nextSelfTestGeneration(after: selfTestGenerations[id])
+            task.cancel()
         }
     }
 
@@ -261,39 +338,50 @@ extension ProvidersPane {
     @ViewBuilder
     var detail: some View {
         if let id = selectedID, let idx = rows.firstIndex(where: { $0.id == id }) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    detailHeader(idx)
-                    onboardingSection(idx)
-                    detailInfoGrid(rows[idx])
-                    usageSection(rows[idx])
-                    if rows[idx].id == "xai" {
-                        xaiCostSection(status(for: rows[idx].id))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        detailHeader(idx)
+                        onboardingSection(idx)
+                        detailInfoGrid(rows[idx])
+                        usageSection(rows[idx])
+                        if rows[idx].id == "xai" {
+                            xaiCostSection(status(for: rows[idx].id))
+                        }
+                        settingsSection(idx)
+                            .id(ProviderRemediationTarget.setupSource)
+                        menuBarDisplaySection(for: rows[idx].id)
+                        if rows[idx].id == "codex" {
+                            CodexAccountsCard()
+                            CodexAutoPrimeCard()
+                        }
+                        if rows[idx].id == "elevenlabs" {
+                            ElevenLabsKeysCard()
+                                .id(ProviderRemediationTarget.credential)
+                        }
+                        if rows[idx].id == "hiyo" {
+                            HiyoKeysCard()
+                                .id(ProviderRemediationTarget.credential)
+                        }
+                        if rows[idx].id == "antigravity" {
+                            antigravityOAuthAccountsSection()
+                        }
+                        if rows[idx].id == "copilot" {
+                            copilotOAuthAccountsSection(idx: idx)
+                        }
+                        QuotaWarningCard(providerID: rows[idx].id)
+                            .id(rows[idx].id)
+                        linksSection(rows[idx])
                     }
-                    settingsSection(idx)
-                    menuBarDisplaySection(for: rows[idx].id)
-                    if rows[idx].id == "codex" {
-                        CodexAccountsCard()
-                        CodexAutoPrimeCard()
-                    }
-                    if rows[idx].id == "elevenlabs" {
-                        ElevenLabsKeysCard()
-                    }
-                    if rows[idx].id == "hiyo" {
-                        HiyoKeysCard()
-                    }
-                    if rows[idx].id == "antigravity" {
-                        antigravityOAuthAccountsSection()
-                    }
-                    if rows[idx].id == "copilot" {
-                        copilotOAuthAccountsSection(idx: idx)
-                    }
-                    QuotaWarningCard(providerID: rows[idx].id)
-                        .id(rows[idx].id)
-                    linksSection(rows[idx])
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
+                .task(id: pendingRemediationTarget) {
+                    guard let target = pendingRemediationTarget else { return }
+                    await Task.yield()
+                    withAnimation { proxy.scrollTo(target, anchor: .center) }
+                    pendingRemediationTarget = nil
+                }
             }
             // Fill the window height so the ScrollView scrolls tall provider
             // details (e.g. Codex) instead of overflowing past the bottom edge.
@@ -612,6 +700,7 @@ extension ProvidersPane {
                         quota.refreshFromSettings(row.id)
                     }
                 )
+                .id(ProviderRemediationTarget.credential)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             }
@@ -629,16 +718,15 @@ extension ProvidersPane {
                             .font(.plexSans(13, weight: .semibold))
                             .foregroundStyle(SettingsTheme.primary)
                         Spacer(minLength: 8)
-                        Picker("", selection: Binding(
-                            get: { settings.codexUsageSource },
-                            set: { settings.codexUsageSource = $0; quota.refreshFromSettings("codex") }
-                        )) {
-                            ForEach(CodexUsageSource.allCases) { src in
-                                Text(codexUsageSourceName(src)).tag(src.rawValue)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
+                        InstrumentMenuSelect(
+                            options: CodexUsageSource.allCases.map {
+                                ($0.rawValue, codexUsageSourceName($0))
+                            },
+                            selection: Binding(
+                                get: { settings.codexUsageSource },
+                                set: { settings.codexUsageSource = $0; quota.refreshFromSettings("codex") }
+                            )
+                        )
                         .frame(width: 150)
                     }
                     Text(codexSourceSubtitle(for: settings.codexUsageSource))
@@ -661,16 +749,15 @@ extension ProvidersPane {
                         .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
-                    Picker("", selection: Binding(
-                        get: { settings.minimaxRegion },
-                        set: { settings.minimaxRegion = $0; quota.refreshFromSettings("minimax") }
-                    )) {
-                        ForEach(MiniMaxRegion.allCases) { r in
-                            Text(miniMaxRegionName(r)).tag(r.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    InstrumentMenuSelect(
+                        options: MiniMaxRegion.allCases.map {
+                            ($0.rawValue, miniMaxRegionName($0))
+                        },
+                        selection: Binding(
+                            get: { settings.minimaxRegion },
+                            set: { settings.minimaxRegion = $0; quota.refreshFromSettings("minimax") }
+                        )
+                    )
                     .frame(width: 150)
                 }
                 .padding(.horizontal, 14)
@@ -684,16 +771,15 @@ extension ProvidersPane {
                         .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
-                    Picker("", selection: Binding(
-                        get: { settings.zaiRegion },
-                        set: { settings.zaiRegion = $0; quota.refreshFromSettings("zai") }
-                    )) {
-                        ForEach(ZaiRegion.allCases) { r in
-                            Text(zaiRegionName(r)).tag(r.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    InstrumentMenuSelect(
+                        options: ZaiRegion.allCases.map {
+                            ($0.rawValue, zaiRegionName($0))
+                        },
+                        selection: Binding(
+                            get: { settings.zaiRegion },
+                            set: { settings.zaiRegion = $0; quota.refreshFromSettings("zai") }
+                        )
+                    )
                     .frame(width: 170)
                 }
                 .padding(.horizontal, 14)
@@ -707,16 +793,15 @@ extension ProvidersPane {
                         .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
-                    Picker("", selection: Binding(
-                        get: { settings.alibabaRegion },
-                        set: { settings.alibabaRegion = $0; quota.refreshFromSettings("alibaba") }
-                    )) {
-                        ForEach(AlibabaRegion.allCases) { r in
-                            Text(alibabaRegionName(r)).tag(r.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    InstrumentMenuSelect(
+                        options: AlibabaRegion.allCases.map {
+                            ($0.rawValue, alibabaRegionName($0))
+                        },
+                        selection: Binding(
+                            get: { settings.alibabaRegion },
+                            set: { settings.alibabaRegion = $0; quota.refreshFromSettings("alibaba") }
+                        )
+                    )
                     .frame(width: 170)
                 }
                 .padding(.horizontal, 14)
@@ -877,19 +962,18 @@ extension ProvidersPane {
                     .foregroundStyle(SettingsTheme.tertiary)
             }
             Spacer(minLength: 8)
-            Picker("", selection: Binding(
-                get: { Self.providerRefreshSeconds(row.id) },
-                set: { newValue in
-                    Self.setProviderRefreshSeconds(row.id, newValue)
-                    NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
-                }
-            )) {
-                ForEach(Self.providerRefreshOptions, id: \.self) { seconds in
-                    Text(providerRefreshLabel(seconds)).tag(seconds)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
+            InstrumentMenuSelect(
+                options: Self.providerRefreshOptions.map {
+                    ($0, providerRefreshLabel($0))
+                },
+                selection: Binding(
+                    get: { Self.providerRefreshSeconds(row.id) },
+                    set: { newValue in
+                        Self.setProviderRefreshSeconds(row.id, newValue)
+                        NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
+                    }
+                )
+            )
             .frame(width: 150)
         }
         .padding(.horizontal, 14)
@@ -1000,15 +1084,16 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { UserDefaults.standard.string(forKey: sourceKey) ?? "auto" },
-                    set: { UserDefaults.standard.set($0, forKey: sourceKey); quota.refreshFromSettings(id) }
-                )) {
-                    ForEach(ClaudeCookieSource.allCases) { s in
-                        Text(cookieSourceName(s)).tag(s.rawValue)
-                    }
-                }
-                .labelsHidden().pickerStyle(.menu).frame(width: 120)
+                InstrumentMenuSelect(
+                    options: ClaudeCookieSource.allCases.map {
+                        ($0.rawValue, cookieSourceName($0))
+                    },
+                    selection: Binding(
+                        get: { UserDefaults.standard.string(forKey: sourceKey) ?? "auto" },
+                        set: { UserDefaults.standard.set($0, forKey: sourceKey); quota.refreshFromSettings(id) }
+                    )
+                )
+                .frame(width: 120)
             }
             Text(vi
                  ? "Auto: tự đọc cookie từ trình duyệt (Brave/Chrome/Safari…). Manual: dán Cookie header bên dưới."
@@ -1029,6 +1114,7 @@ extension ProvidersPane {
                 .foregroundStyle(SettingsTheme.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .id(ProviderRemediationTarget.cookieSource)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
@@ -1048,20 +1134,19 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { settings.claudeUsageDataSource },
-                    // Forced: bypasses the per-provider throttle (Claude may
-                    // poll every 30m) and marks the fetch user-initiated so
-                    // rate-limit/Keychain gates don't suppress it.
-                    set: { settings.claudeUsageDataSource = $0
-                           quota.refreshFromSettings("claude") }
-                )) {
-                    ForEach(ClaudeUsageDataSource.allCases) { src in
-                        Text(claudeUsageSourceName(src)).tag(src.rawValue)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                InstrumentMenuSelect(
+                    options: ClaudeUsageDataSource.allCases.map {
+                        ($0.rawValue, claudeUsageSourceName($0))
+                    },
+                    selection: Binding(
+                        get: { settings.claudeUsageDataSource },
+                        // Forced: bypasses the per-provider throttle (Claude may
+                        // poll every 30m) and marks the fetch user-initiated so
+                        // rate-limit/Keychain gates don't suppress it.
+                        set: { settings.claudeUsageDataSource = $0
+                               quota.refreshFromSettings("claude") }
+                    )
+                )
                 .frame(width: 170)
             }
             Text(sourceSubtitle(for: settings.claudeUsageDataSource))
@@ -1154,16 +1239,15 @@ extension ProvidersPane {
                         .font(.plexSans(12))
                         .foregroundStyle(SettingsTheme.primary)
                     Spacer(minLength: 8)
-                    Picker("", selection: Binding(
-                        get: { settings.codexCookieSource },
-                        set: { settings.codexCookieSource = $0; quota.refreshFromSettings("codex") }
-                    )) {
-                        ForEach(ClaudeCookieSource.allCases) { src in
-                            Text(cookieSourceName(src)).tag(src.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    InstrumentMenuSelect(
+                        options: ClaudeCookieSource.allCases.map {
+                            ($0.rawValue, cookieSourceName($0))
+                        },
+                        selection: Binding(
+                            get: { settings.codexCookieSource },
+                            set: { settings.codexCookieSource = $0; quota.refreshFromSettings("codex") }
+                        )
+                    )
                     .frame(width: 110)
                 }
                 if settings.codexCookieSource == "manual" {
@@ -1176,6 +1260,7 @@ extension ProvidersPane {
                 }
             }
         }
+        .id(ProviderRemediationTarget.cookieSource)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
@@ -1189,19 +1274,19 @@ extension ProvidersPane {
                 .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Spacer(minLength: 8)
-            Picker("", selection: Binding(
-                get: { settings.claudeCookieSource },
-                set: { settings.claudeCookieSource = $0
-                       quota.refreshFromSettings("claude") }
-            )) {
-                ForEach(ClaudeCookieSource.allCases) { src in
-                    Text(cookieSourceName(src)).tag(src.rawValue)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
+            InstrumentMenuSelect(
+                options: ClaudeCookieSource.allCases.map {
+                    ($0.rawValue, cookieSourceName($0))
+                },
+                selection: Binding(
+                    get: { settings.claudeCookieSource },
+                    set: { settings.claudeCookieSource = $0
+                           quota.refreshFromSettings("claude") }
+                )
+            )
             .frame(width: 110)
         }
+        .id(ProviderRemediationTarget.cookieSource)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
@@ -1256,17 +1341,18 @@ extension ProvidersPane {
                 .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
             Spacer(minLength: 8)
-            Picker("", selection: Binding(
-                get: { settings.claudeOAuthKeychainPromptMode },
-                set: { settings.claudeOAuthKeychainPromptMode = $0
-                       quota.refreshFromSettings("claude") }
-            )) {
-                Text(L10n.t("prompt.never", language)).tag(ClaudeOAuthKeychainPromptMode.never.rawValue)
-                Text(L10n.t("prompt.onlyOnUserAction", language)).tag(ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue)
-                Text(L10n.t("prompt.always", language)).tag(ClaudeOAuthKeychainPromptMode.always.rawValue)
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
+            InstrumentMenuSelect(
+                options: [
+                    (ClaudeOAuthKeychainPromptMode.never.rawValue, L10n.t("prompt.never", language)),
+                    (ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue, L10n.t("prompt.onlyOnUserAction", language)),
+                    (ClaudeOAuthKeychainPromptMode.always.rawValue, L10n.t("prompt.always", language)),
+                ],
+                selection: Binding(
+                    get: { settings.claudeOAuthKeychainPromptMode },
+                    set: { settings.claudeOAuthKeychainPromptMode = $0
+                           quota.refreshFromSettings("claude") }
+                )
+            )
             .frame(width: 130)
         }
         .padding(.horizontal, 14)
@@ -1290,21 +1376,20 @@ extension ProvidersPane {
                             .font(.plexSans(13, weight: .semibold))
                             .foregroundStyle(SettingsTheme.primary)
                         Spacer(minLength: 8)
-                        Picker("", selection: Binding(
-                            get: { settings.codexMenuBarMetric },
-                            set: {
-                                settings.codexMenuBarMetric = $0
-                                // Re-fetch so the menu bar rebuilds its frames with
-                                // the newly selected window.
-                                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-                            }
-                        )) {
-                            ForEach(CodexMenuBarMetric.allCases) { m in
-                                Text(codexMenuBarMetricName(m)).tag(m.rawValue)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
+                        InstrumentMenuSelect(
+                            options: CodexMenuBarMetric.allCases.map {
+                                ($0.rawValue, codexMenuBarMetricName($0))
+                            },
+                            selection: Binding(
+                                get: { settings.codexMenuBarMetric },
+                                set: {
+                                    settings.codexMenuBarMetric = $0
+                                    // Re-fetch so the menu bar rebuilds its frames with
+                                    // the newly selected window.
+                                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                                }
+                            )
+                        )
                         .frame(width: 150)
                     }
                     .padding(.horizontal, 14)
@@ -1338,24 +1423,30 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { _ = menuBarMetricTick; return pref },
-                    set: {
-                        settings.setMetricPreference($0, for: id)
-                        menuBarMetricTick += 1
-                    }
-                )) {
-                    Text(vi ? "Tự động" : "Automatic").tag(MenuBarMetricPreference.automatic)
-                    if caps.hasPrimary { Text(vi ? "Chính" : "Primary").tag(MenuBarMetricPreference.primary) }
-                    if caps.hasSecondary { Text(vi ? "Phụ" : "Secondary").tag(MenuBarMetricPreference.secondary) }
-                    if caps.hasPrimary && caps.hasSecondary { Text(vi ? "Chính + Phụ" : "Primary + Secondary").tag(MenuBarMetricPreference.primaryAndSecondary) }
-                    if caps.hasTertiary { Text(vi ? "Thứ ba" : "Tertiary").tag(MenuBarMetricPreference.tertiary) }
-                    if caps.hasExtraUsage { Text(vi ? "Sử dụng thêm" : "Extra Usage").tag(MenuBarMetricPreference.extraUsage) }
-                    if caps.supportsAverage { Text(vi ? "Trung bình" : "Average").tag(MenuBarMetricPreference.average) }
-                    if caps.hasMonthlyPlan { Text(vi ? "Gói tháng" : "Monthly Plan").tag(MenuBarMetricPreference.monthlyPlan) }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                InstrumentMenuSelect(
+                    options: {
+                        var opts: [(MenuBarMetricPreference, String)] = [
+                            (.automatic, vi ? "Tự động" : "Automatic")
+                        ]
+                        if caps.hasPrimary { opts.append((.primary, vi ? "Chính" : "Primary")) }
+                        if caps.hasSecondary { opts.append((.secondary, vi ? "Phụ" : "Secondary")) }
+                        if caps.hasPrimary && caps.hasSecondary {
+                            opts.append((.primaryAndSecondary, vi ? "Chính + Phụ" : "Primary + Secondary"))
+                        }
+                        if caps.hasTertiary { opts.append((.tertiary, vi ? "Thứ ba" : "Tertiary")) }
+                        if caps.hasExtraUsage { opts.append((.extraUsage, vi ? "Sử dụng thêm" : "Extra Usage")) }
+                        if caps.supportsAverage { opts.append((.average, vi ? "Trung bình" : "Average")) }
+                        if caps.hasMonthlyPlan { opts.append((.monthlyPlan, vi ? "Gói tháng" : "Monthly Plan")) }
+                        return opts
+                    }(),
+                    selection: Binding(
+                        get: { _ = menuBarMetricTick; return pref },
+                        set: {
+                            settings.setMetricPreference($0, for: id)
+                            menuBarMetricTick += 1
+                        }
+                    )
+                )
                 .frame(width: 170)
             }
             Text(vi ? "Chọn window nào lái % trên menu bar."
@@ -1391,19 +1482,18 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { settings.kiroMenuBarDisplayMode },
-                    set: {
-                        settings.kiroMenuBarDisplayMode = $0
-                        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-                    }
-                )) {
-                    ForEach(KiroMenuBarDisplayMode.allCases) { m in
-                        Text(kiroMenuBarValueName(m)).tag(m.rawValue)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                InstrumentMenuSelect(
+                    options: KiroMenuBarDisplayMode.allCases.map {
+                        ($0.rawValue, kiroMenuBarValueName($0))
+                    },
+                    selection: Binding(
+                        get: { settings.kiroMenuBarDisplayMode },
+                        set: {
+                            settings.kiroMenuBarDisplayMode = $0
+                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                        }
+                    )
+                )
                 .frame(width: 200)
             }
             Text(vi ? "Hiện credits, phần trăm, hoặc cả hai cạnh icon menu bar."
@@ -1591,19 +1681,20 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { rows[idx].awsAuthMode ?? "keys" },
-                    set: {
-                        rows[idx].awsAuthMode = $0
-                        saveAll()
-                        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-                    }
-                )) {
-                    Text(vi ? "Khóa truy cập" : "Access keys").tag("keys")
-                    Text("AWS profile").tag("profile")
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                InstrumentMenuSelect(
+                    options: [
+                        ("keys", vi ? "Khóa truy cập" : "Access keys"),
+                        ("profile", "AWS profile"),
+                    ],
+                    selection: Binding(
+                        get: { rows[idx].awsAuthMode ?? "keys" },
+                        set: {
+                            rows[idx].awsAuthMode = $0
+                            saveAll()
+                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                        }
+                    )
+                )
                 .frame(width: 150)
             }
             if mode == "profile" {

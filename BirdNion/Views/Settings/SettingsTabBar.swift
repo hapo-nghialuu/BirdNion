@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsSidebar<Extra: View>: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
+    @EnvironmentObject var quota: QuotaService
 
     @Binding var selected: SettingsTab
     /// Single top search shared with contextual lists (providers / AI Coding).
@@ -187,6 +188,11 @@ struct SettingsSidebar<Extra: View>: View {
 
     private func badgeText(for tab: SettingsTab) -> String? {
         switch tab {
+        case .actionCenter:
+            let count = ActionCenterIssue.current(
+                statuses: quota.displayStatuses,
+                staleWarning: { quota.staleWarning(for: $0) }).count
+            return count > 0 ? "\(count)" : nil
         case .providers:
             return providersWithKey > 0 ? "\(providersWithKey)" : nil
         case .aiCoding:

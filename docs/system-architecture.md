@@ -152,6 +152,15 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 - Codex đọc `session_meta.payload.cwd`; Grok dùng token thư mục `sessions/<encoded_cwd>/...` làm identity ổn định và chỉ dùng `summary.json.git_root_dir` để nâng basename hiển thị. Cả hai chỉ persist SHA-256 key + label đã sanitize; phần aggregate thiếu metadata mới được giữ ở residual `Unknown`.
 - `project-cost-history.json` là optional/versioned store riêng, high-water và giữ 400 ngày. Day key chỉ nhận canonical `yyyy-MM-dd`; missing/corrupt/write failure không làm hỏng `cost-history.json`, quota, budget hay digest. Projection luôn bị chặn bởi aggregate source/day để project cũ + mới không double-count; Codex conflict rõ ràng phát tombstone có ID SHA-256 và contribution chính xác, áp dụng idempotent để phần đó trở lại `Unknown` mà empty scan bình thường vẫn giữ high-water.
 
+### 4.4 Guided Setup và Action Center
+
+- Classifier chỉ map ba nhóm user-fixable sang target ổn định `setupSource`, `credential`, `cookieSource`; network/rate-limit/schema/unknown chỉ có Retry.
+- Guided Setup luôn lưu cấu hình trước. Save fail rollback UI và dừng probe; save thành công mới chạy fetch user-initiated thật. Trạng thái Live cần response không lỗi và có quota window.
+- macOS giữ registry task/generation per provider để không cho self-test chồng nhau hoặc completion cũ ghi đè. Error status chỉ ở memory; disk cache chỉ nhận renderable non-error snapshots.
+- Action Center v1 chỉ project Claude/Codex/Grok đang bật từ cùng detection + current status + stale-warning memory của Guided Setup. Một provider có tối đa một issue; thứ tự `needsSource` → lỗi sửa được → lỗi transient cần Retry, tối đa ba issue.
+- Popover chỉ hiện badge count gọn; tab All không thêm card. Chi tiết và CTA nằm trong Settings `Action Center`. Issue tự biến mất khi status thành công/stale được xóa.
+- Không có issue database/history, polling loop riêng, raw-error persistence, quota/budget/release item. Trên Linux, main WebView giữ projection và fetch owner; Settings nhận snapshot sanitized qua Tauri event, còn Retry quay về existing per-provider in-flight guard thay vì tạo pipeline mới.
+
 ## 5. Lưu trữ & bảo mật
 
 | Dữ liệu | Vị trí | Quyền |

@@ -6,7 +6,7 @@ import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { combine, UsageReport, UsageSourceId } from "./usage";
 import {
   chartCard, heatmapCard, topModelsCard, confidenceRow, budgetForecastCard, providerBudgetCard,
@@ -19,6 +19,7 @@ import {
   serviceStatusStrip,
   ProviderStatus,
   StaleQuotaWarning,
+  type ProviderRemediationTarget,
 } from "./provider-tab";
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
@@ -38,6 +39,16 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { logoMark, logoUrl, providerTintCss } from "./logos";
 import { mountSettingsWindow } from "./settings-window";
 import { settingsIcon } from "./settings-icons";
+import {
+  ACTION_CENTER_RETRY_EVENT,
+  ACTION_CENTER_SNAPSHOT_REQUEST_EVENT,
+  ACTION_CENTER_UPDATED_EVENT,
+  GUIDED_SETUP_STATUS_EVENT,
+  collectActionCenterIssues,
+  type ActionCenterIssue,
+  type ActionCenterSnapshot,
+  type GuidedSetupProviderInput,
+} from "./action-center";
 import { initTheme, setAppearance, resolveTheme } from "./theme";
 import { checkWeeklyDigest } from "./weekly-digest";
 import {
@@ -101,6 +112,14 @@ const state: State = {
   scanning: new Set<ScanSource>(),
 };
 
+let currentActionCenterIssues: ActionCenterIssue[] = [];
+let actionCenterProjectionSeq = 0;
+let actionCenterSnapshotReady = false;
+let actionCenterSnapshotError = false;
+let actionCenterSourceError = false;
+let actionCenterProviders: GuidedSetupProviderInput[] = [];
+let actionCenterInputSeq = 0;
+
 declare global {
   interface Window {
     __BIRDNION_MODE__?: string;
@@ -122,9 +141,20 @@ let loadInFlight = false;
 /** Ignore focus-triggered refresh for a short window after opening Settings. */
 let suppressFocusRefreshUntil = 0;
 
-function openSettings(section?: string, providerId?: string) {
+function openSettings(
+  section?: string,
+  providerId?: string,
+  remediationTarget?: ProviderRemediationTarget,
+) {
   if (section) localStorage.setItem("birdnion.settingsSection", section);
-  if (providerId) localStorage.setItem("birdnion.selectedProvider", providerId);
+  if (providerId) {
+    localStorage.setItem("birdnion.selectedProvider", providerId);
+  }
+  if (remediationTarget) {
+    localStorage.setItem("birdnion.providerRemediationTarget", remediationTarget);
+  } else {
+    localStorage.removeItem("birdnion.providerRemediationTarget");
+  }
   // Opening Settings steals focus from main — don't immediately re-load main.
   suppressFocusRefreshUntil = Date.now() + 1500;
   void invoke("open_settings_window", { section: section ?? null }).catch((err) => {
@@ -296,6 +326,7 @@ function appHeader(): HTMLElement {
   brand.append(pill);
 
   const actions = el("div", "header-actions");
+  const actionCenter = actionCenterHeaderButton();
   const refresh = document.createElement("button");
   refresh.type = "button";
   refresh.className = `header-refresh${refreshing ? " spinning" : ""}`;
@@ -320,9 +351,91 @@ function appHeader(): HTMLElement {
     render();
   });
 
+  if (actionCenter) actions.append(actionCenter);
   actions.append(refresh, themeBtn);
   head.append(brand, actions);
   return head;
+}
+
+function actionCenterHeaderButton(): HTMLButtonElement | null {
+  if (currentActionCenterIssues.length === 0) return null;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "header-refresh header-action-center";
+  button.title = t("actionCenterOpen");
+  button.setAttribute("aria-label", t("actionCenterOpen"));
+  button.append(settingsIcon("exclamationmark.circle", "header-refresh-icon"));
+  button.append(el("span", "header-action-count", String(currentActionCenterIssues.length)));
+  button.addEventListener("click", () => openSettings("actionCenter"));
+  return button;
+}
+
+function updateActionCenterHeaderBadge() {
+  const actions = document.querySelector<HTMLElement>(".header-actions");
+  if (!actions) return;
+  actions.querySelector(".header-action-center")?.remove();
+  const button = actionCenterHeaderButton();
+  if (button) actions.prepend(button);
+}
+
+async function refreshActionCenterIssues() {
+  const seq = ++actionCenterProjectionSeq;
+  let issues: ActionCenterIssue[];
+  try {
+    issues = await collectActionCenterIssues(
+      state.statuses,
+      staleWarningFor,
+      actionCenterProviders,
+    );
+  } catch {
+    actionCenterSnapshotError = true;
+    const snapshot: ActionCenterSnapshot = {
+      issues: currentActionCenterIssues,
+      ready: false,
+      error: true,
+    };
+    await emit(ACTION_CENTER_UPDATED_EVENT, snapshot).catch(() => {});
+    return;
+  }
+  if (seq !== actionCenterProjectionSeq) return;
+  currentActionCenterIssues = issues;
+  actionCenterSnapshotError = actionCenterSourceError;
+  actionCenterSnapshotReady = state.loadedOnce
+    && actionCenterProviders.every((provider) => provider.detectionReady !== undefined)
+    && !state.statuses.some((status) => status.pending
+      && ["claude", "codex", "grok"].includes(status.id));
+  updateActionCenterHeaderBadge();
+  const snapshot: ActionCenterSnapshot = {
+    issues,
+    ready: actionCenterSnapshotReady,
+    error: actionCenterSnapshotError,
+  };
+  await emit(ACTION_CENTER_UPDATED_EVENT, snapshot).catch(() => {});
+}
+
+async function rebuildActionCenterInputs(settings: Settings | null) {
+  const seq = ++actionCenterInputSeq;
+  const ids = settings?.providers
+    .filter((provider) => provider.enabled === true
+      && ["claude", "codex", "grok"].includes(provider.id))
+    .map((provider) => provider.id) ?? [];
+  const inputs: GuidedSetupProviderInput[] = ids.map((id) => ({
+    id,
+    name: NAME_BY_ID.get(id) ?? id,
+    enabled: true,
+  }));
+  actionCenterProviders = inputs;
+  let detectionFailed = false;
+  await Promise.all(inputs.map(async (provider) => {
+    const detection = await invoke<{ isReady: boolean }>("provider_onboarding_detection", {
+      id: provider.id,
+    }).catch(() => null);
+    if (detection) provider.detectionReady = detection.isReady;
+    else detectionFailed = true;
+  }));
+  if (seq !== actionCenterInputSeq) return;
+  actionCenterSourceError = settings === null || detectionFailed;
+  await refreshActionCenterIssues();
 }
 
 /**
@@ -667,7 +780,7 @@ function render() {
       body.append(providerCard(
         status,
         () => { void refetchProvider(status.id); },
-        () => openSettings("providers", status.id),
+        (target) => openSettings("providers", status.id, target),
         staleWarningFor(status.id),
       ));
       void claudeCodeQuickApplyCard(status, () => openSettings("claudeCode"))
@@ -1343,8 +1456,12 @@ function seedPlaceholderStatuses(settings: Settings | null) {
 async function rebuildProviderOrderFromSettings() {
   if (isSettingsWindow()) return;
   const settings = await invoke<Settings>("get_settings").catch(() => null);
-  if (!settings) return;
+  if (!settings) {
+    await rebuildActionCenterInputs(null);
+    return;
+  }
   seedPlaceholderStatuses(settings);
+  await rebuildActionCenterInputs(settings);
   // Drop lastFetched for providers no longer enabled so a re-enable refetches.
   const keep = new Set(state.statuses.map((s) => s.id));
   for (const id of [...lastFetched.keys()]) {
@@ -1360,6 +1477,7 @@ async function rebuildProviderOrderFromSettings() {
     state.tab = state.statuses[0]?.id ?? "all";
     localStorage.setItem(TAB_KEY, state.tab);
   }
+  await refreshActionCenterIssues();
   render();
   void updateTrayTooltip(state.statuses, await fetchTrayHidden()).catch(() => {});
 }
@@ -1416,6 +1534,7 @@ async function load(manual = false) {
       const prevIds = state.statuses.map((s) => s.id).join(",");
       recordFetchOutcomes(requestedIds, fresh, manual);
       state.statuses = state.statuses.length > 0 ? await mergeStatuses(state.statuses, fresh) : fresh;
+      await refreshActionCenterIssues();
       checkQuotaWarnings(fresh);
       evaluateFailureEpisodes(fresh);
       // Same gating as tick(): statuses don't feed the All-tab charts, so
@@ -1424,6 +1543,7 @@ async function load(manual = false) {
       if (state.tab !== "all" || prevIds !== nextIds) render();
     };
     const enabledIds = settings?.providers.filter((p) => p.enabled === true).map((p) => p.id) ?? [];
+    const detectionDone = rebuildActionCenterInputs(settings);
     const statusesDone = (enabledIds.length > 0
       // Per-id guard: skips a provider `refetchProvider()` or `tick()` is
       // already fetching instead of firing a duplicate request for it.
@@ -1454,6 +1574,7 @@ async function load(manual = false) {
     await Promise.all([
       usageDone,
       statusesDone,
+      detectionDone,
       invoke<ClaudeAdminSnapshot | null>("claude_admin_usage")
         .catch(() => null)
         .then((snap) => publish(() => { state.claudeAdmin = snap; })),
@@ -1466,6 +1587,7 @@ async function load(manual = false) {
     // Any placeholder whose fetch never returned (IPC failure) must not
     // spin forever — degrade to the regular "no quota data" card.
     for (const s of state.statuses) delete s.pending;
+    await refreshActionCenterIssues();
     render();
   }
 }
@@ -1482,6 +1604,7 @@ async function refetchProvider(id: string) {
     recordFetchOutcomes([id], fresh, true);
     if (fresh.length === 0) return;
     state.statuses = await mergeStatuses(state.statuses, fresh);
+    await refreshActionCenterIssues();
     checkQuotaWarnings(fresh);
     await updateTrayTooltip(state.statuses, await fetchTrayHidden());
     render();
@@ -1508,6 +1631,7 @@ async function tick() {
     const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
     recordFetchOutcomes(ids, fresh, false);
     state.statuses = await mergeStatuses(state.statuses, fresh);
+    await refreshActionCenterIssues();
     checkQuotaWarnings(state.statuses);
     evaluateFailureEpisodes(fresh);
     await updateTrayTooltip(state.statuses, await fetchTrayHidden());
@@ -1619,6 +1743,37 @@ window.addEventListener("DOMContentLoaded", () => {
   // here, and the rotation timer would keep repainting the percent frame.
   void listen(TRAY_DISPLAY_CHANGED_EVENT, () => {
     onTrayDisplayPrefChanged();
+  });
+  void listen(ACTION_CENTER_SNAPSHOT_REQUEST_EVENT, () => {
+    if (actionCenterSnapshotError) {
+      void rebuildProviderOrderFromSettings().catch(() => {});
+      return;
+    }
+    const snapshot: ActionCenterSnapshot = {
+      issues: currentActionCenterIssues,
+      ready: actionCenterSnapshotReady,
+      error: actionCenterSnapshotError,
+    };
+    void emit(ACTION_CENTER_UPDATED_EVENT, snapshot).catch(() => {});
+  });
+  void listen<{ providerId?: string }>(ACTION_CENTER_RETRY_EVENT, (event) => {
+    const providerId = event.payload?.providerId;
+    if (!providerId || !currentActionCenterIssues.some((issue) => issue.providerId === providerId)) return;
+    void refetchProvider(providerId)
+      .finally(() => emit(ACTION_CENTER_UPDATED_EVENT, {
+        issues: currentActionCenterIssues,
+        ready: actionCenterSnapshotReady,
+        error: actionCenterSnapshotError,
+      } satisfies ActionCenterSnapshot).catch(() => {}));
+  });
+  void listen<ProviderStatus>(GUIDED_SETUP_STATUS_EVENT, (event) => {
+    const status = event.payload;
+    if (!["claude", "codex", "grok"].includes(status.id)) return;
+    void (async () => {
+      state.statuses = await mergeStatuses(state.statuses, [status]);
+      await refreshActionCenterIssues();
+      render();
+    })();
   });
   load().catch((err) => {
     document.querySelector("#app")!.textContent = `${t("loadError")}: ${err}`;

@@ -119,6 +119,7 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 - [ ] [Linux] Custom Claude/Codex profile quick switch trong popover — deferred/accepted gap cho tới khi UX macOS ổn định
 - [x] [both] Budget **per-provider** Claude/Codex/Grok — UserDefaults (macOS) / localStorage (Linux), độc lập với budget tổng; card ngân sách nằm trong tab provider tương ứng (không phải All tab), chỉ hiện khi budget > 0: MTD/budget + linear forecast + remaining/over, tôn trọng trust-unavailable (không tính khi thiếu dữ liệu, không false-green); weekly digest chỉ cảnh báo forecast-over/already-over, forecast-over dùng số dự phóng cuối tháng
 - [x] [both] Usage Insights + Cost by Project — All tab chỉ giữ compact highlight; Settings có tab Insights với Overview và Projects 7/30/90 ngày. Claude/Codex/Grok dùng project key SHA-256 + basename an toàn từ metadata local; chỉ residual không gán được mới vào `Unknown`; history riêng `project-cost-history.json` high-water/0600 — 2026-08-20
+- [x] [both] Guided Setup completion + Action Center v1 — lỗi sửa được mở đúng provider/control; save fail không chạy self-test; Live chỉ sau probe thật. Popover chỉ thêm badge gọn, chi tiết nằm trong Settings; chỉ current setup/connection-health, không history/quota/budget/release và không persist raw error — 2026-08-21
 - [ ] [both] Export CSV/JSON chi phí theo ngày/model — deferred, ngoài scope đợt 2026-08-15
 - [ ] [Windows] Port từ codebase Tauri `linux/`: tray Windows, đường dẫn `%APPDATA%`, cookie qua rookie (đã hỗ trợ Windows), CI msi/exe
 
@@ -148,6 +149,7 @@ Chọn một hướng khi Phase 7–8 xong:
 
 | Date | Milestone |
 |---|---|
+| 2026-08-21 | Guided Setup completion + Action Center v1 trên macOS/Linux: exact remediation target, save-first real self-test, current-issue header badge + Settings pane, không issue history/raw-error persistence |
 | 2026-08-20 | Usage Insights + Cost by Project (macOS + Linux): compact All highlight mở Settings Insights, weekly Overview, project ranking/detail 7/30/90 ngày, privacy-safe attribution cho Claude/Codex/Grok và residual `Unknown` |
 | 2026-08-16 | Budget per-provider Claude/Codex/Grok (macOS + Linux): UserDefaults/localStorage riêng biệt với budget tổng, card ngân sách trong tab provider tương ứng (budget >0) MTD/budget + linear forecast + remaining/over tôn trọng trust-unavailable, weekly digest chỉ cảnh báo forecast-over/already-over (forecast-over dùng số dự phóng) |
 | 2026-08-16 | Reliability + Error UX hardening: config fail-closed/lossless (macOS + Linux), provider fetch hard deadline, sửa last-good chỉ giữ lỗi transient thật, thêm `notConfigured` + Retry/Fix đúng ngữ cảnh, macOS minimum 14.0, release verification gate trong `Scripts/release.sh` |

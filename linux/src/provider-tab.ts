@@ -67,6 +67,9 @@ export type ProviderStatus = {
  * `QuotaService.StaleQuotaWarning` this mirrors. */
 export type StaleQuotaWarning = { kind: string; lastGoodUpdated: number };
 
+/** Stable Settings destinations shared with macOS Guided Setup. */
+export type ProviderRemediationTarget = "setupSource" | "credential" | "cookieSource";
+
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   node.className = className;
@@ -453,7 +456,7 @@ function staleQuotaBanner(warning: StaleQuotaWarning, onRetry?: () => void): HTM
 function providerBodyCard(
   status: ProviderStatus,
   onRetry?: () => void,
-  onFix?: () => void,
+  onFix?: (target: ProviderRemediationTarget) => void,
   staleWarning?: StaleQuotaWarning,
 ): HTMLElement {
   const card = el("section", "card provider-body-card");
@@ -480,16 +483,18 @@ function providerBodyCard(
     actions.append(retry);
     card.append(actions);
 
-    void invoke<string | null>("classify_provider_error", { raw: status.error })
-      .then((suffix) => {
-        if (!suffix) return;
-        errorBox.textContent = t(`providerError.${suffix}.hint`);
-        return invoke<boolean>("is_fixable_provider_error", { raw: status.error });
-      })
-      .then((fixable) => {
-        if (!fixable) return;
+    void Promise.all([
+      invoke<string | null>("classify_provider_error", { raw: status.error }),
+      invoke<ProviderRemediationTarget | null>("provider_remediation_target", {
+        providerId: status.id,
+        raw: status.error,
+      }),
+    ])
+      .then(([suffix, target]) => {
+        if (suffix) errorBox.textContent = t(`providerError.${suffix}.hint`);
+        if (!target) return;
         const fix = el("button", "sw-pill-btn", currentLang() === "vi" ? "Sửa" : "Fix");
-        fix.addEventListener("click", () => onFix?.());
+        fix.addEventListener("click", () => onFix?.(target));
         actions.append(fix);
       })
       .catch(() => {});
@@ -540,7 +545,7 @@ function providerBodyCard(
 export function providerCard(
   status: ProviderStatus,
   onRetry?: () => void,
-  onFix?: () => void,
+  onFix?: (target: ProviderRemediationTarget) => void,
   staleWarning?: StaleQuotaWarning,
 ): HTMLElement {
   const stack = el("div", "provider-stack");

@@ -7,12 +7,17 @@ import { emit } from "@tauri-apps/api/event";
 import { t, currentLang } from "./i18n";
 import { reorderControls } from "./settings-provider-row";
 import { logoMark } from "./logos";
-import { lowestWindow, type ProviderStatus } from "./provider-tab";
+import {
+  lowestWindow,
+  type ProviderRemediationTarget,
+  type ProviderStatus,
+} from "./provider-tab";
 import {
   detailInfoGrid, usageSection, setupSection, quotaWarningCard, linksSection,
   codexAccountsCard, freemodelAccountsCard, elevenlabsKeysCard, hiyoKeysCard, relativeUpdated, displayError,
   type ProviderCfg, type Settings,
 } from "./settings-provider-detail";
+import { GUIDED_SETUP_STATUS_EVENT } from "./action-center";
 
 /** Fired after settings.json provider list/order/enabled changes so the main
  * popover can rebuild tab strip order (macOS `.birdnionProvidersChanged`). */
@@ -20,7 +25,23 @@ export const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 
 type OnboardingDetection = { isReady: boolean; source: string };
 type OnboardingTestState = "idle" | "testing" | "live" | "failed";
+type GuidedSetupResult = {
+  state: OnboardingTestState;
+  remediationTarget?: ProviderRemediationTarget;
+  feedbackKey?: string;
+};
 const ONBOARDING_IDS = new Set(["claude", "codex", "grok"]);
+const REMEDIATION_TARGETS = new Set<ProviderRemediationTarget>([
+  "setupSource", "credential", "cookieSource",
+]);
+
+function storedRemediationTarget(): ProviderRemediationTarget | null {
+  const value = localStorage.getItem("birdnion.providerRemediationTarget");
+  localStorage.removeItem("birdnion.providerRemediationTarget");
+  return REMEDIATION_TARGETS.has(value as ProviderRemediationTarget)
+    ? value as ProviderRemediationTarget
+    : null;
+}
 
 async function persistProvidersAndNotify(settings: Settings): Promise<void> {
   await invoke("save_settings", { settings });
@@ -90,12 +111,44 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
       : "";
   let statuses: ProviderStatus[] = [];
   const detections = new Map<string, OnboardingDetection>();
-  const onboardingTests = new Map<string, OnboardingTestState>();
+  const onboardingTests = new Map<string, GuidedSetupResult>();
+  const onboardingTestGenerations = new Map<string, number>();
+  const remediationTargets = new Map<string, ProviderRemediationTarget>();
+  let pendingRemediationTarget = storedRemediationTarget();
+
+  const invalidateOnboardingTest = (providerId: string) => {
+    onboardingTestGenerations.set(
+      providerId,
+      (onboardingTestGenerations.get(providerId) ?? 0) + 1,
+    );
+    // Keep the `.testing` entry as the in-flight registry until the old IPC
+    // promise settles. Tauri invoke is not cancellable; deleting it here
+    // would allow disable -> re-enable -> second overlapping probe.
+  };
 
   const root = el("div", "pp-root");
   const sidebar = el("div", "pp-sidebar");
   const detail = el("div", "pp-detail");
   root.append(sidebar, detail);
+
+  const focusRemediation = (target: ProviderRemediationTarget) => {
+    pendingRemediationTarget = null;
+    requestAnimationFrame(() => {
+      const exactControl = detail.querySelector<HTMLElement>(
+        `input[data-remediation-target="${target}"], select[data-remediation-target="${target}"], button[data-remediation-target="${target}"]`,
+      );
+      const destination = exactControl
+        ?? detail.querySelector<HTMLElement>(`[data-remediation-target="${target}"]`)
+        ?? detail.querySelector<HTMLElement>(`[data-remediation-targets~="${target}"]`);
+      if (!destination) return;
+      destination.scrollIntoView({ behavior: "smooth", block: "center" });
+      destination.focus({ preventScroll: true });
+      destination.classList.add("guided-remediation-focus");
+      destination.addEventListener("animationend", () => {
+        destination.classList.remove("guided-remediation-focus");
+      }, { once: true });
+    });
+  };
 
   const onSharedSearch = ((ev: CustomEvent<string>) => {
     searchQuery = ev.detail ?? "";
@@ -180,6 +233,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
       check.addEventListener("click", (ev) => ev.stopPropagation());
       check.addEventListener("change", () => {
         cfg.enabled = check.checked;
+        if (!check.checked) invalidateOnboardingTest(id);
         renderSidebar();
         renderDetail();
       });
@@ -241,60 +295,104 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     const scroll = el("div", "pp-detail-scroll");
 
     const runConnectionTest = async () => {
-      if (onboardingTests.get(selectedId) === "testing") return;
-      onboardingTests.set(selectedId, "testing");
+      const providerId = selectedId;
+      if (onboardingTests.get(providerId)?.state === "testing") return;
+      const generation = (onboardingTestGenerations.get(providerId) ?? 0) + 1;
+      onboardingTestGenerations.set(providerId, generation);
+      const isCurrentEnabledTest = () =>
+        onboardingTestGenerations.get(providerId) === generation
+        && byId.get(providerId)?.enabled === true;
+      const rejectStaleCompletion = () => {
+        if (isCurrentEnabledTest()) return false;
+        if (onboardingTestGenerations.get(providerId) !== generation
+          && onboardingTests.get(providerId)?.state === "testing") {
+          onboardingTests.delete(providerId);
+        }
+        if (selectedId === providerId) renderDetail();
+        return true;
+      };
+      onboardingTests.set(providerId, { state: "testing" });
       renderDetail();
+      const wasEnabled = cfg.enabled;
+      cfg.enabled = true;
       try {
-        cfg.enabled = true;
         await persistProvidersAndNotify(settings);
-        const result = await invoke<ProviderStatus>("test_provider", { id: selectedId });
-        const index = statuses.findIndex((item) => item.id === selectedId);
+      } catch {
+        if (rejectStaleCompletion()) return;
+        cfg.enabled = wasEnabled;
+        onboardingTests.set(providerId, {
+          state: "failed",
+          feedbackKey: "guidedSetupSaveFailed",
+        });
+        renderSidebar();
+        if (selectedId === providerId) renderDetail();
+        return;
+      }
+      try {
+        const result = await invoke<ProviderStatus>("test_provider", { id: providerId });
+        if (rejectStaleCompletion()) return;
+        const index = statuses.findIndex((item) => item.id === providerId);
         if (index >= 0) statuses[index] = result;
         else statuses.push(result);
-        onboardingTests.set(selectedId, result.error || result.windows.length === 0 ? "failed" : "live");
+        const target = result.error
+          ? await invoke<ProviderRemediationTarget | null>("provider_remediation_target", {
+            providerId,
+            raw: result.error,
+          }).catch(() => null)
+          : null;
+        if (rejectStaleCompletion()) return;
+        await emit(GUIDED_SETUP_STATUS_EVENT, result).catch(() => {});
+        if (rejectStaleCompletion()) return;
+        onboardingTests.set(providerId, result.error || result.windows.length === 0
+          ? { state: "failed", remediationTarget: target ?? undefined }
+          : { state: "live" });
         renderSidebar();
         onSaved();
       } catch {
-        onboardingTests.set(selectedId, "failed");
+        if (rejectStaleCompletion()) return;
+        onboardingTests.set(providerId, {
+          state: "failed",
+          feedbackKey: "guidedSetupTestFailed",
+        });
       }
-      renderDetail();
+      if (selectedId === providerId) renderDetail();
     };
 
     const onboardingCard = (): HTMLElement | null => {
       if (!ONBOARDING_IDS.has(selectedId)) return null;
       const detection = detections.get(selectedId) ?? { isReady: false, source: "" };
-      const explicit = onboardingTests.get(selectedId) ?? "idle";
+      const explicit = onboardingTests.get(selectedId) ?? { state: "idle" as const };
       const phase: OnboardingTestState | "needsSource" | "readyToTest" =
-        explicit !== "idle" ? explicit
+        explicit.state === "testing" ? "testing"
           : st?.error ? "failed"
           : st && st.windows.length > 0 ? "live"
+          : explicit.state === "failed" ? "failed"
+          : explicit.state === "live" ? "live"
           : detection.isReady ? "readyToTest" : "needsSource";
-      const labels: Record<string, string> = {
-        needsSource: vi ? "Chưa phát hiện nguồn đăng nhập" : "No sign-in source detected",
-        readyToTest: vi ? `Đã phát hiện ${detection.source}` : `Detected ${detection.source}`,
-        testing: vi ? "Đang kiểm tra kết nối thật…" : "Testing the real connection…",
-        live: vi ? "Quota đang live" : "Quota is live",
-        failed: vi ? "Kết nối cần được sửa" : "Connection needs attention",
-      };
+      const label = phase === "readyToTest"
+        ? t("guidedSetupDetected", { source: detection.source })
+        : t(`guidedSetup.${phase}`);
+      const target = phase === "needsSource"
+        ? "setupSource"
+        : phase === "failed"
+          ? remediationTargets.get(selectedId)
+            ?? (explicit.state === "failed" ? explicit.remediationTarget : undefined)
+          : undefined;
       const group = el("div", "sw-group pp-onboarding");
-      group.append(el("div", "sw-section-header", vi ? "KẾT NỐI PROVIDER" : "CONNECT PROVIDER"));
+      group.append(el("div", "sw-section-header", t("guidedSetupHeader")));
       const card = el("div", "sw-card pp-onboarding-card");
-      const status = el("div", `pp-onboarding-status ${phase}`, labels[phase]);
-      const note = el("div", "pp-field-hint",
-        vi
-          ? "BirdNion chỉ đánh dấu Live sau khi provider trả quota thật. Không sao chép hoặc hiển thị token."
-          : "BirdNion marks Live only after the provider returns real quota. Tokens are never copied or displayed.");
+      const status = el("div", `pp-onboarding-status ${phase}`, label);
+      const note = el("div", "pp-field-hint", t("guidedSetupPrivacyNote"));
+      if (explicit.feedbackKey) note.textContent = t(explicit.feedbackKey);
       const actions = el("div", "pp-onboarding-actions");
       const connect = el("button", "save-button",
-        phase === "failed" ? (vi ? "Thử lại" : "Retry") : (vi ? "Kết nối & kiểm tra" : "Connect & test"));
+        phase === "failed" ? t("guidedSetupRetry") : t("guidedSetupConnect"));
       connect.toggleAttribute("disabled", phase === "testing");
       connect.addEventListener("click", () => { void runConnectionTest(); });
       actions.append(connect);
-      if (phase === "needsSource" || phase === "failed") {
-        const fix = el("button", "sw-pill-btn", vi ? "Sửa thiết lập" : "Fix setup");
-        fix.addEventListener("click", () => {
-          scroll.querySelector(".pp-setup-wrap")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        });
+      if (target) {
+        const fix = el("button", "sw-pill-btn", t("guidedSetupFix"));
+        fix.addEventListener("click", () => focusRemediation(target));
         actions.append(fix);
       }
       card.append(status, note, actions);
@@ -353,6 +451,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     enable.checked = enabled;
     enable.addEventListener("change", () => {
       cfg.enabled = enable.checked;
+      if (!enable.checked) invalidateOnboardingTest(selectedId);
       renderSidebar();
       renderDetail();
     });
@@ -373,8 +472,18 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     scroll.append(setupSection(cfg, vi));
     if (selectedId === "codex") scroll.append(codexAccountsCard());
     if (selectedId === "freemodel") scroll.append(freemodelAccountsCard());
-    if (selectedId === "elevenlabs") scroll.append(elevenlabsKeysCard());
-    if (selectedId === "hiyo") scroll.append(hiyoKeysCard());
+    if (selectedId === "elevenlabs") {
+      const keys = elevenlabsKeysCard();
+      keys.dataset.remediationTarget = "credential";
+      keys.tabIndex = -1;
+      scroll.append(keys);
+    }
+    if (selectedId === "hiyo") {
+      const keys = hiyoKeysCard();
+      keys.dataset.remediationTarget = "credential";
+      keys.tabIndex = -1;
+      scroll.append(keys);
+    }
     scroll.append(quotaWarningCard(selectedId));
     const links = linksSection(selectedId);
     if (links) scroll.append(links);
@@ -397,6 +506,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     scroll.append(saveRow);
 
     detail.append(scroll);
+    if (pendingRemediationTarget) focusRemediation(pendingRemediationTarget);
   };
 
   async function refreshStatuses() {
@@ -408,6 +518,15 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
         return;
       }
       statuses = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
+      remediationTargets.clear();
+      await Promise.all(statuses.map(async (status) => {
+        if (!status.error) return;
+        const target = await invoke<ProviderRemediationTarget | null>("provider_remediation_target", {
+          providerId: status.id,
+          raw: status.error,
+        }).catch(() => null);
+        if (target) remediationTargets.set(status.id, target);
+      }));
     } catch {
       statuses = [];
     }

@@ -1,6 +1,6 @@
 # Linux ↔ macOS parity matrix
 
-Baseline updated 2026-08-20: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest, per-provider budget và Usage Insights.
+Baseline updated 2026-08-21: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest, per-provider budget, Usage Insights, Guided Setup và Action Center v1.
 
 | Area | macOS | Linux target | Status |
 |---|---|---|---|
@@ -11,6 +11,7 @@ Baseline updated 2026-08-20: macOS + Linux after Data Confidence, budget/forecas
 | Grok cost scanner | GrokCostScanner.swift | `grok_scanner.rs` | **done** |
 | Cost history | CostHistoryStore.swift | `cost_history.rs` (high-water merge) | **done** |
 | Usage Insights + project cost | compact All highlight; Settings `Insights` Overview/Projects; `ProjectCostHistoryStore` | compact All highlight; Settings `Insights`; `project_cost_history.rs` + `project_insights.rs` | **done** — Claude/Codex/Grok SHA-256 identity + safe basename; only unattributed residual stays `Unknown` |
+| Guided Setup + Action Center v1 | exact remediation flow; save-first real self-test; header badge + Settings current issues | cùng remediation flow; header badge + Settings current issues | **done** — không All card, issue history, quota/budget/release item hoặc raw-error persistence |
 | Data confidence | `UsageScanConfidence` (`included` / `live` / `scannedAt`) + freshness badges | `UsageReport` cùng metadata + freshness badges | **done** |
 | Last-good provider status | giữ `serviceStatus`/level khi refresh mới thiếu status | giữ `serviceStatus`/level từ cached status | **done** |
 | All tab 3 sources | AllUsageOverview | `usage.ts` + `all-tab.ts` (Claude/Codex/Grok) | **done** |

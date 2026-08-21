@@ -41,6 +41,27 @@ enum ProviderErrorKind: String, CaseIterable, Equatable, Sendable {
     }
 }
 
+/// Stable, non-secret destination carried by a Settings remediation route.
+enum ProviderRemediationTarget: String, CaseIterable, Equatable, Hashable, Sendable {
+    case setupSource
+    case credential
+    case cookieSource
+}
+
+/// Maps only user-fixable failures to a concrete Settings control.
+func remediationTarget(providerID: String, kind: ProviderErrorKind) -> ProviderRemediationTarget? {
+    switch kind {
+    case .notConfigured:
+        return .setupSource
+    case .tokenInvalidOrMissing:
+        return ["claude", "codex", "grok"].contains(providerID) ? .setupSource : .credential
+    case .cookieExpiredOrMissing:
+        return ["claude", "codex"].contains(providerID) ? .cookieSource : .setupSource
+    case .apiSchemaChanged, .networkUnreachableOrTimeout, .rateLimited, .unknown:
+        return nil
+    }
+}
+
 /// Pure classifier: maps a raw provider error string to exactly one kind.
 /// Returns nil when there is no error to classify (nil/empty input).
 /// PRECEDENCE (fixed invariant — order of checks matters):

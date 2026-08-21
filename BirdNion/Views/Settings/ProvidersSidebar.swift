@@ -219,6 +219,9 @@ extension ProvidersPane {
     func setProviderEnabled(id: String, enabled: Bool) {
         guard let idx = rows.firstIndex(where: { $0.id == id }) else { return }
         rows[idx].enabled = enabled
+        if !enabled {
+            invalidateSelfTest(for: id)
+        }
         saveAll()
         // Rebuild providers via ServicesContainer so the menu-bar popover +
         // percent rotation pick up the new state, then force-fetch once through

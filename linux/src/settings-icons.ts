@@ -11,6 +11,7 @@ export type SettingsIconId =
   | "eye.slash"
   | "slider.horizontal.3"
   | "info.circle"
+  | "exclamationmark.circle"
   | "power"
   | "arrow.clockwise"
   | "person"
@@ -76,6 +77,11 @@ const PATHS: Record<SettingsIconId, string> = {
     <circle cx="12" cy="12" r="8.15" ${O}/>
     <path ${O} d="M12 10.9v5"/>
     <circle cx="12" cy="8" r="0.9" fill="currentColor" stroke="none"/>`,
+
+  "exclamationmark.circle": `
+    <circle cx="12" cy="12" r="8.15" ${O}/>
+    <path ${O} d="M12 7.4v5.7"/>
+    <circle cx="12" cy="16.2" r="0.9" fill="currentColor" stroke="none"/>`,
 
   // SF `power` (Claude Code / power button)
   power: `

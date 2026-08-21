@@ -53,7 +53,11 @@ struct QuotaOverview: View {
                     EmptyProvidersState()
                         .frame(maxWidth: .infinity)
                 } else {
-                    BirdNionHeader(isRefreshing: quota.isRefreshing)
+                    BirdNionHeader(
+                        isRefreshing: quota.isRefreshing,
+                        actionCount: ActionCenterIssue.current(
+                            statuses: quota.displayStatuses,
+                            staleWarning: { quota.staleWarning(for: $0) }).count)
                     let selected = effectiveSelectedId()
                     ProviderTabs(
                         providers: quota.displayStatuses,
@@ -400,6 +404,7 @@ struct BirdNionHeader: View {
     @EnvironmentObject var settings: SettingsStore
 
     let isRefreshing: Bool
+    let actionCount: Int
 
     private var statusTone: Color {
         isRefreshing ? VocabbyTheme.yellow : VocabbyTheme.success
@@ -436,6 +441,27 @@ struct BirdNionHeader: View {
             Spacer(minLength: 8)
 
             HStack(spacing: 6) {
+                if actionCount > 0 {
+                    Button {
+                        openActionCenterSettings()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                            Text("\(actionCount)")
+                                .font(.plexMono(10, weight: .semibold))
+                        }
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .frame(height: 26)
+                        .padding(.horizontal, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                                .fill(VocabbyTheme.criticalSurface))
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.t("actionCenter.open", settings.appLanguage))
+                    .accessibilityLabel(L10n.t("actionCenter.open", settings.appLanguage))
+                }
+
                 headerIconButton(
                     systemName: isRefreshing ? nil : "arrow.clockwise",
                     spinning: isRefreshing,
@@ -1096,9 +1122,9 @@ struct ProviderCard: View {
                             Task { await quota.refresh(forceProviderIDs: [status.id]) }
                         }
                         .controlSize(.small)
-                        if kind.isFixable {
+                        if let target = remediationTarget(providerID: status.id, kind: kind) {
                             Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Sửa" : "Fix") {
-                                openProviderSettings(status.id)
+                                openProviderSettings(status.id, target: target)
                             }
                             .controlSize(.small)
                         }

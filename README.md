@@ -187,6 +187,8 @@ The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in m
 
 - Optional rotating provider values in the macOS menu bar or Linux tray tooltip, with provider toggles and drag-to-reorder Settings.
 - Provider-specific usage meters with reset countdowns.
+- Guided Setup routes fixable provider errors to the exact Settings control, saves first, then marks the provider Live only after a real self-test succeeds.
+- A compact popover-header Action Center badge opens Settings for current setup/connection issues; resolved items disappear automatically, with no issue-history store.
 - Progressive refresh: each provider publishes as soon as its fetch completes.
 - Last-known data stays visible while refreshes are in flight.
 - Provider source selectors for OAuth, CLI, web cookies, Admin API, local app state, and static keys.

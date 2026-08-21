@@ -115,15 +115,29 @@ struct ProvidersPane: View {
                 let routed = UserDefaults.standard.string(forKey: "birdnion.selectedProvider")
                 selectedID = rows.contains(where: { $0.id == routed }) ? routed : rows.first?.id
             }
+            if let rawTarget = UserDefaults.standard.string(forKey: "birdnion.providerRemediationTarget") {
+                pendingRemediationTarget = ProviderRemediationTarget(rawValue: rawTarget)
+                UserDefaults.standard.removeObject(forKey: "birdnion.providerRemediationTarget")
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProviderSetup)) { note in
-            guard let id = note.object as? String,
-                  rows.contains(where: { $0.id == id }) else { return }
+            let route = note.object as? ProviderSettingsRoute
+            let id = route?.providerID ?? note.object as? String
+            guard let id, rows.contains(where: { $0.id == id }) else { return }
             selectedID = id
+            pendingRemediationTarget = route?.target
+            UserDefaults.standard.removeObject(forKey: "birdnion.providerRemediationTarget")
         }
         .task(id: selectedID) {
-            // Stale self-test results don't carry across provider switches.
+            // UI state is reset on provider switches, while the independent
+            // task/generation registry cancels and invalidates old work. Keep
+            // its task entry until the fetch actually exits so a provider that
+            // ignores cancellation cannot overlap with a second self-test.
+            invalidateSelfTests(except: selectedID)
             selfTestState = [:]
+            if let selectedID, selfTestTasks[selectedID] != nil {
+                selfTestState[selectedID] = .running
+            }
             // Scan local sessions for token cost only while the provider is
             // selected. Mirrors CodexCostScanner's behavior — cached 5 min
             // so the panel doesn't re-walk the project tree on every refresh.
@@ -223,20 +237,28 @@ struct ProvidersPane: View {
         statusHasQuota: Bool,
         detectionReady: Bool
     ) -> OnboardingPhase {
-        switch testState {
-        case .running: return .testing
-        case .pass: return .live
-        case .fail: return .failed
-        case .idle: break
-        }
+        if testState == .running { return .testing }
+        // Runtime status is canonical once a probe/background refresh has
+        // published it. Explicit results are only a fallback while no newer
+        // status exists, preventing stale pass/fail UI from disagreeing with
+        // Action Center.
         if statusHasError { return .failed }
         if statusHasQuota { return .live }
+        switch testState {
+        case .pass: return .live
+        case .fail: return .failed
+        case .idle, .running: break
+        }
         return detectionReady ? .readyToTest : .needsSource
     }
 
     static let onboardingProviderIDs: Set<String> = ["claude", "codex", "grok"]
 
     @State var selfTestState: [String: SelfTestState] = [:]
+    @State var selfTestTasks: [String: Task<Void, Never>] = [:]
+    @State var selfTestGenerations: [String: UInt] = [:]
+    @State var pendingRemediationTarget: ProviderRemediationTarget?
+    @State var saveErrorProviderID: String?
 
     /// Pre-defined options for the per-provider refresh picker. `seconds = 0`
     /// means "use global"; the other values are absolute.
@@ -256,6 +278,9 @@ extension ProvidersPane {
             get: { rows[idx].enabled == true },
             set: {
                 rows[idx].enabled = $0
+                if !$0 {
+                    invalidateSelfTest(for: rows[idx].id)
+                }
                 saveAll()
                 // Rebuild QuotaService providers so the menu-bar popover picks
                 // up the enable/disable immediately. The sidebar checkbox already
@@ -388,7 +413,8 @@ extension ProvidersPane {
         return L10n.languageCode(language) == "vi" ? "Đã đăng nhập" : "Signed in"
     }
 
-    func saveAll() {
+    @discardableResult
+    func saveAll() -> Bool {
         // Persist the whole row array back to BirdNionConfigStore. Single-row
         // upsert preserves the old on-disk order, but drag-reorder needs the
         // current array order written as-is.
@@ -411,11 +437,13 @@ extension ProvidersPane {
         }
         do {
             try BirdNionConfigStore.saveProviders(persistedRows)
+            saveErrorProviderID = nil
             for row in persistedRows where row.enabled != true {
                 quota.remove(id: row.id)
             }
+            return true
         } catch {
-            // Non-fatal: surfaced indirectly through the live status.
+            return false
         }
     }
 }

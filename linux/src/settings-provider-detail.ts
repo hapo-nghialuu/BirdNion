@@ -567,8 +567,11 @@ function textInput(
  * cookie-provider auth block. */
 function cookieControls(cfg: ProviderCfg): HTMLElement {
   const wrap = el("div", "pp-field-stack");
+  wrap.dataset.remediationTarget = "cookieSource";
+  wrap.tabIndex = -1;
   const select = document.createElement("select");
   select.className = "settings-input pp-select";
+  select.dataset.remediationTarget = "cookieSource";
   for (const opt of ["auto", "manual", "off"]) {
     const o = document.createElement("option");
     o.value = opt;
@@ -595,6 +598,8 @@ function cookieControls(cfg: ProviderCfg): HTMLElement {
 /** Bedrock auth block — macOS bedrockAuthSection (keys/profile + region + budget). */
 function bedrockAuthSection(cfg: ProviderCfg): HTMLElement {
   const wrap = el("div", "pp-field-stack");
+  wrap.dataset.remediationTarget = "credential";
+  wrap.tabIndex = -1;
   const mode = document.createElement("select");
   mode.className = "settings-input pp-select";
   for (const opt of ["keys", "profile"]) {
@@ -669,9 +674,15 @@ export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
   const wrap = el("div", "pp-setup-wrap");
 
   const group = el("div", "sw-group");
+  group.dataset.remediationTarget = "setupSource";
+  group.tabIndex = -1;
   group.append(el("div", "sw-section-header", t("settingsSectionSetup")));
   const card = el("div", "sw-card");
   const body = el("div", "sw-card-body pp-setup-body");
+  // Providers backed by CLI/OAuth files may not expose a pasted secret field;
+  // their exact stable fallback is still this setup/source section.
+  body.dataset.remediationTargets = "cookieSource";
+  body.tabIndex = -1;
 
   // 1. Account label (every provider).
   body.append(fieldRow(
@@ -685,10 +696,14 @@ export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
   } else if (KEYED.has(id) && id !== "grok" && id !== "elevenlabs" && id !== "hiyo") {
     // ElevenLabs / Hiyo use multi-key cards instead of a single TokenField —
     // keys live in elevenlabs-keys.json / hiyo-keys.json.
-    body.append(fieldRow(
-      t("settingsApiKey"),
-      textInput(cfg.apiKey, id === "openai" ? "OPENAI_ADMIN_KEY / API key" : t("settingsApiKey"), (v) => { cfg.apiKey = v; }, true),
-    ));
+    const credential = textInput(
+      cfg.apiKey,
+      id === "openai" ? "OPENAI_ADMIN_KEY / API key" : t("settingsApiKey"),
+      (v) => { cfg.apiKey = v; },
+      true,
+    );
+    credential.dataset.remediationTarget = "credential";
+    body.append(fieldRow(t("settingsApiKey"), credential));
   }
   if (id === "openai" || id === "deepgram") {
     body.append(fieldRow(
@@ -701,7 +716,10 @@ export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
       t("settingsAdminApiKey"),
       textInput(cfg.adminApiKey, t("settingsAdminApiKey"), (v) => { cfg.adminApiKey = v; }, true),
     ));
-    body.append(claudeSourceSelect(cfg));
+    const source = claudeSourceSelect(cfg);
+    source.dataset.remediationTarget = "setupSource";
+    source.querySelector("select")?.setAttribute("data-remediation-target", "setupSource");
+    body.append(source);
     body.append(cookieControls(cfg));
   }
   if (COOKIED.has(id)) body.append(cookieControls(cfg));
@@ -714,7 +732,10 @@ export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
       t("settingsGheHost"),
       textInput(cfg.baseUrl, "github.com", (v) => { cfg.baseUrl = v; }),
     ));
-    body.append(copilotDeviceLoginRow(vi, (label) => { cfg.accountLabel = label; }));
+    const login = copilotDeviceLoginRow(vi, (label) => { cfg.accountLabel = label; });
+    login.dataset.remediationTarget = "credential";
+    login.tabIndex = -1;
+    body.append(login);
   }
 
   // 3. Shared extras (refresh cadence stays in SETUP).

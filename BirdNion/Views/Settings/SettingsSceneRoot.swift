@@ -69,6 +69,7 @@ struct SettingsSceneRoot: View {
             // so the pane owns both the embedded list state and the detail.
             case .providers: ProvidersPane(tab: $selected, searchText: $sidebarSearch)
             case .aiCoding: AICodingPane(tab: $selected, searchText: $sidebarSearch)
+            case .actionCenter: navAndContent { ActionCenterPane() }
             case .insights: navAndContent { InsightsPane() }
             case .general: navAndContent { GeneralPane() }
             case .advanced: navAndContent { AdvancedPane() }
@@ -88,6 +89,9 @@ struct SettingsSceneRoot: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openInsightsTab)) { _ in
             selected = .insights
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openActionCenterTab)) { _ in
+            selected = .actionCenter
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProviderSetup)) { _ in
             UserDefaults.standard.set("providers", forKey: "birdnion.settingsSection")
@@ -113,6 +117,12 @@ extension Notification.Name {
     static let openClaudeCodeTab = Notification.Name("birdnion.openClaudeCodeTab")
     static let openProviderSetup = Notification.Name("birdnion.openProviderSetup")
     static let openInsightsTab = Notification.Name("birdnion.openInsightsTab")
+    static let openActionCenterTab = Notification.Name("birdnion.openActionCenterTab")
+}
+
+struct ProviderSettingsRoute: Equatable, Sendable {
+    let providerID: String
+    let target: ProviderRemediationTarget?
 }
 
 @MainActor
@@ -124,10 +134,24 @@ func openInsightsSettings(segment: InsightsSegment = .overview) {
 }
 
 @MainActor
-func openProviderSettings(_ id: String) {
+func openActionCenterSettings() {
+    UserDefaults.standard.set(SettingsTab.actionCenter.rawValue, forKey: "birdnion.settingsSection")
+    NotificationCenter.default.post(name: .openActionCenterTab, object: nil)
+    NotificationCenter.default.post(name: .openSettings, object: nil)
+}
+
+@MainActor
+func openProviderSettings(_ id: String, target: ProviderRemediationTarget? = nil) {
     UserDefaults.standard.set("providers", forKey: "birdnion.settingsSection")
     UserDefaults.standard.set(id, forKey: "birdnion.selectedProvider")
-    NotificationCenter.default.post(name: .openProviderSetup, object: id)
+    if let target {
+        UserDefaults.standard.set(target.rawValue, forKey: "birdnion.providerRemediationTarget")
+    } else {
+        UserDefaults.standard.removeObject(forKey: "birdnion.providerRemediationTarget")
+    }
+    NotificationCenter.default.post(
+        name: .openProviderSetup,
+        object: ProviderSettingsRoute(providerID: id, target: target))
     NotificationCenter.default.post(name: .openSettings, object: nil)
 }
 

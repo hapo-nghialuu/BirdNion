@@ -637,7 +637,7 @@ final class QuotaService: ObservableObject {
                    isTransientForLastGood(rawError: status.error) || suppressedAsFirstFlake {
                     let kind = classify(rawError: status.error) ?? .unknown
                     staleWarnings[id] = StaleQuotaWarning(kind: kind, lastGoodUpdated: previous.lastUpdated)
-                    log.warning("preserve stale status for \(id, privacy: .public) after refresh error: \(status.error ?? "", privacy: .public)")
+                    log.warning("preserve stale status for \(id, privacy: .public) after classified refresh error: \(kind.rawValue, privacy: .public)")
                 } else {
                     staleWarnings.removeValue(forKey: id)
                     pending[id] = Self.preservingLastGoodServiceStatus(status, previous: previous)
@@ -1034,7 +1034,10 @@ enum ProviderStatusCache {
     }
 
     static func write(_ statuses: [ProviderStatus], url: URL = cacheURL()) {
-        guard let data = try? JSONEncoder().encode(statuses) else { return }
+        // Error statuses may contain provider-returned details. They are useful
+        // for the current in-memory UI, but must never cross the disk boundary.
+        let snapshots = statuses.filter(\.isRenderableSnapshot)
+        guard let data = try? JSONEncoder().encode(snapshots) else { return }
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: [.atomic])
