@@ -5,7 +5,7 @@ import SwiftUI
 /// command, and copyright. Layout follows the remake mockup; UpdateChecker
 /// behaviour is unchanged.
 struct AboutPane: View {
-    static let brewUpgradeCommand = "brew update && brew upgrade birdnion"
+    static var brewUpgradeCommand: String { UpdateChecker.brewUpgradeCommand }
 
     @EnvironmentObject var settings: SettingsStore
     @ObservedObject private var checker = UpdateChecker.shared
@@ -134,12 +134,13 @@ struct AboutPane: View {
                     title: L10n.t("about.channel.title", settings.appLanguage),
                     subtitle: nil
                 ) {
-                    Picker("", selection: $settings.updateChannel) {
-                        Text(L10n.t("about.channel.stable", settings.appLanguage)).tag("stable")
-                        Text(L10n.t("about.channel.beta", settings.appLanguage)).tag("beta")
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    InstrumentMenuSelect(
+                        options: [
+                            ("stable", L10n.t("about.channel.stable", settings.appLanguage)),
+                            ("beta", L10n.t("about.channel.beta", settings.appLanguage)),
+                        ],
+                        selection: $settings.updateChannel
+                    )
                     .frame(width: 110)
                     .onChange(of: settings.updateChannel) { _ in
                         Task { await checker.check() }
@@ -177,7 +178,6 @@ struct AboutPane: View {
                 Text(L10n.t("settings.about.copyCommand", settings.appLanguage))
             }
             .buttonStyle(.instrumentAccent)
-            .controlSize(.small)
             .pointingHandCursor()
             .help(L10n.t("settings.about.copyCommand", settings.appLanguage))
             .accessibilityLabel(L10n.t("settings.about.copyCommand", settings.appLanguage))
@@ -213,13 +213,15 @@ struct AboutPane: View {
                 // the formula can replace bits without a running app lock.
                 // No Sparkle / Developer ID needed.
                 Button(L10n.t("about.updateNow", settings.appLanguage)) {
-                    runBrewUpgradeAndQuit()
+                    checker.applyAvailableUpdate()
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentAccent)
+                .pointingHandCursor()
                 Button(L10n.t("about.openRelease", settings.appLanguage)) {
                     NSWorkspace.shared.open(url)
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentOutline)
+                .pointingHandCursor()
             }
         case .failed:
             Text(L10n.t("about.checkFailed", settings.appLanguage))
@@ -237,30 +239,6 @@ struct AboutPane: View {
             .aspectRatio(contentMode: .fit)
             .padding(6)
             .accessibilityHidden(true)
-    }
-
-    /// Opens Terminal with `brew update && brew upgrade birdnion`, waits until
-    /// Terminal has been handed the script, then quits BirdNion so the upgrade
-    /// is not blocked by a running app. macOS-only path (About pane).
-    private func runBrewUpgradeAndQuit() {
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(Self.brewUpgradeCommand)"
-        end tell
-        """
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        // Wait for osascript to finish launching Terminal before we exit;
-        // otherwise the child can die with the app and the tab never opens.
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            // Still quit below so the user is not stuck mid-update flow.
-        }
-        NSApplication.shared.terminate(nil)
     }
 
     private func openProjectHome() {

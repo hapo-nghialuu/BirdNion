@@ -155,6 +155,122 @@ func openProviderSettings(_ id: String, target: ProviderRemediationTarget? = nil
     NotificationCenter.default.post(name: .openSettings, object: nil)
 }
 
+@MainActor
+func openAICodingSettings(providerID: String? = nil, profileID: String? = nil) {
+    UserDefaults.standard.set(SettingsTab.aiCoding.rawValue, forKey: "birdnion.settingsSection")
+    if let providerID, !providerID.isEmpty {
+        UserDefaults.standard.set(providerID, forKey: "birdnion.selectedAICodingProvider")
+        UserDefaults.standard.removeObject(forKey: "birdnion.selectedAICodingProfile")
+    } else if let profileID, !profileID.isEmpty {
+        UserDefaults.standard.set(profileID, forKey: "birdnion.selectedAICodingProfile")
+        UserDefaults.standard.removeObject(forKey: "birdnion.selectedAICodingProvider")
+    }
+    NotificationCenter.default.post(name: .openClaudeCodeTab, object: nil)
+    NotificationCenter.default.post(name: .openSettings, object: nil)
+}
+
+/// Shared Settings sidebar search matching (provider aliases + page keywords).
+enum SettingsSearchIndex {
+    static func providerTitle(id: String, fallback: String?) -> String {
+        switch id {
+        case "codex": return "Codex"
+        case "minimax": return "MiniMax"
+        case "hapo": return fallback ?? "Hapo Hub"
+        case "claude": return "Claude"
+        case "openrouter": return "OpenRouter"
+        case "tryapi": return "TryAPI"
+        case "deepseek": return "DeepSeek"
+        case "zai": return "z.ai"
+        case "elevenlabs": return "ElevenLabs"
+        case "deepgram": return "Deepgram"
+        case "groq": return "Groq"
+        case "grok": return "Grok"
+        case "xai": return "xAI"
+        case "openai": return "OpenAI"
+        case "ollama": return "Ollama"
+        case "copilot": return "Copilot"
+        case "kilo": return "Kilo"
+        case "commandcode": return "Command Code"
+        case "mimo": return "Xiaomi MiMo"
+        case "alibaba": return "Alibaba / Qwen"
+        case "cursor": return "Cursor"
+        case "gemini": return "Gemini"
+        case "kiro": return "Kiro"
+        case "opencode": return "OpenCode"
+        case "opencodego": return "OpenCode Go"
+        case "antigravity": return "Antigravity"
+        case "bedrock": return "AWS Bedrock"
+        case "freemodel": return "FreeModel"
+        case "hiyo": return "Hiyo"
+        default: return fallback ?? id
+        }
+    }
+
+    static func providerAliases(id: String) -> [String] {
+        switch id {
+        case "claude": return ["claude", "anthropic", "fable", "sessionkey", "oauth", "keychain"]
+        case "codex": return ["codex", "openai", "chatgpt", "spark", "chatgpt"]
+        case "grok", "xai": return ["grok", "xai", "x.ai"]
+        case "gemini": return ["gemini", "google"]
+        case "copilot": return ["copilot", "github"]
+        case "antigravity": return ["antigravity", "google", "oauth"]
+        case "bedrock": return ["bedrock", "aws", "amazon"]
+        case "alibaba": return ["alibaba", "qwen", "dashscope"]
+        case "zai": return ["zai", "z.ai", "bigmodel", "glm"]
+        case "minimax": return ["minimax", "abab"]
+        case "kiro": return ["kiro", "aws"]
+        case "cursor": return ["cursor"]
+        case "openrouter": return ["openrouter"]
+        case "deepseek": return ["deepseek"]
+        case "elevenlabs": return ["elevenlabs", "eleven"]
+        case "hiyo": return ["hiyo"]
+        case "kilo": return ["kilo"]
+        default: return [id]
+        }
+    }
+
+    static func providerMatches(id: String, title: String, query: String) -> Bool {
+        let q = query.lowercased()
+        guard !q.isEmpty else { return true }
+        if title.lowercased().contains(q) || id.lowercased().contains(q) { return true }
+        return providerAliases(id: id).contains { $0.contains(q) || q.contains($0) }
+    }
+
+    static func pageKeywords(_ tab: SettingsTab, language: String?) -> [String] {
+        let vi = L10n.languageCode(language) == "vi"
+        switch tab {
+        case .general:
+            return vi
+                ? ["giao diện", "ngôn ngữ", "ngân sách", "làm mới", "thông báo", "hotkey", "khởi động"]
+                : ["appearance", "language", "budget", "refresh", "notification", "hotkey", "login"]
+        case .actionCenter:
+            return vi
+                ? ["lỗi", "sửa", "kết nối", "thiết lập", "remediation"]
+                : ["error", "fix", "connection", "setup", "remediation"]
+        case .providers:
+            return vi
+                ? ["token", "api key", "quota", "cookie", "oauth", "region", "nhà cung cấp"]
+                : ["token", "api key", "quota", "cookie", "oauth", "region", "provider"]
+        case .aiCoding:
+            return vi
+                ? ["claude code", "codex", "proxy", "model", "profile", "backend", "cli"]
+                : ["claude code", "codex", "proxy", "model", "profile", "backend", "cli"]
+        case .insights:
+            return vi
+                ? ["phân tích", "usage", "project", "chi tiêu", "overview"]
+                : ["insights", "usage", "project", "spend", "overview"]
+        case .advanced:
+            return vi
+                ? ["debug", "cấu hình", "finder", "storage"]
+                : ["debug", "config", "finder", "storage"]
+        case .about:
+            return vi
+                ? ["phiên bản", "cập nhật", "brew", "giới thiệu"]
+                : ["version", "update", "brew", "about"]
+        }
+    }
+}
+
 private struct SettingsWindowAppearanceView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
@@ -275,32 +391,45 @@ struct SettingsSectionHeader: View {
     }
 }
 
+/// Shared trailing-column width so menus, toggles, and fields share one edge.
+enum SettingsControlMetrics {
+    static let trailingWidth: CGFloat = 160
+    static let rowMinHeight: CGFloat = 52
+    static let verticalPadding: CGFloat = 12
+}
+
 /// Title + optional subtitle + trailing control. Top hairline replaces the
 /// old card-internal divider (Linux `.sw-row { border-top: hairline }`).
+/// Trailing controls sit in a fixed-width column so pickers/toggles/fields
+/// align top-to-bottom on the trailing edge.
 struct SettingsLabeledRow<Content: View>: View {
     let title: String
     var subtitle: String? = nil
     @ViewBuilder let trailing: () -> Content
 
     var body: some View {
-        HStack(alignment: .center, spacing: 20) {
+        HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.plexSans(14, weight: .medium))
                     .foregroundStyle(SettingsTheme.primary)
+                    .lineLimit(1)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.plexSans(12))
                         .foregroundStyle(SettingsTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
                 }
             }
-            Spacer(minLength: 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             trailing()
                 .font(.plexSans(12))
+                .frame(width: SettingsControlMetrics.trailingWidth, alignment: .trailing)
         }
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, SettingsControlMetrics.verticalPadding)
+        .frame(maxWidth: .infinity, minHeight: SettingsControlMetrics.rowMinHeight, alignment: .center)
         .contentShape(Rectangle())
         .hairlineTop(SettingsTheme.hairline)
     }

@@ -129,12 +129,14 @@ struct ActionCenterPane: View {
             Button(L10n.t("actionCenter.fix", settings.appLanguage)) {
                 openProviderSettings(issue.providerID, target: target)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.instrumentPrimary)
+            .pointingHandCursor()
         } else {
             Button(L10n.t("actionCenter.retry", settings.appLanguage)) {
                 Task { await quota.refresh(forceProviderIDs: [issue.providerID]) }
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.instrumentOutline)
+            .pointingHandCursor()
             .disabled(quota.isRefreshing)
         }
     }

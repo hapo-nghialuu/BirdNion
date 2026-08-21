@@ -39,15 +39,8 @@ private extension View {
     /// corners, `VocabbyTheme.border` outline). Visual only — bindings/validation
     /// on the wrapped `TextField`/`SecureField` are untouched.
     func instrumentFieldStyle() -> some View {
-        self
-            .textFieldStyle(.plain)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(VocabbyTheme.background)
-            .overlay(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
-            )
+        // Shared 28pt Instrument field chrome (same as instrumentControlFieldStyle).
+        instrumentControlFieldStyle()
     }
 }
 
@@ -182,7 +175,8 @@ extension ProvidersPane {
                         Button(phase == .failed ? onboardingCopy("Thử lại", "Retry") : onboardingCopy("Kết nối & kiểm tra", "Connect & test")) {
                             connectAndTest(idx)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.instrumentPrimary)
+                        .pointingHandCursor()
                         .disabled(phase == .testing)
 
                         if let target = onboardingRemediationTarget(for: row) {
@@ -190,7 +184,8 @@ extension ProvidersPane {
                                 selectedID = row.id
                                 pendingRemediationTarget = target
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.instrumentOutline)
+                            .pointingHandCursor()
                         }
                     }
                     if saveErrorProviderID == row.id {
@@ -335,57 +330,46 @@ extension ProvidersPane {
 
     // MARK: - Detail
 
+    /// Provider detail body only — the Providers pane ScrollView owns scrolling
+    /// so `SettingsPaneHeader` and this content move together.
     @ViewBuilder
     var detail: some View {
         if let id = selectedID, let idx = rows.firstIndex(where: { $0.id == id }) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        detailHeader(idx)
-                        onboardingSection(idx)
-                        detailInfoGrid(rows[idx])
-                        usageSection(rows[idx])
-                        if rows[idx].id == "xai" {
-                            xaiCostSection(status(for: rows[idx].id))
-                        }
-                        settingsSection(idx)
-                            .id(ProviderRemediationTarget.setupSource)
-                        menuBarDisplaySection(for: rows[idx].id)
-                        if rows[idx].id == "codex" {
-                            CodexAccountsCard()
-                            CodexAutoPrimeCard()
-                        }
-                        if rows[idx].id == "elevenlabs" {
-                            ElevenLabsKeysCard()
-                                .id(ProviderRemediationTarget.credential)
-                        }
-                        if rows[idx].id == "hiyo" {
-                            HiyoKeysCard()
-                                .id(ProviderRemediationTarget.credential)
-                        }
-                        if rows[idx].id == "antigravity" {
-                            antigravityOAuthAccountsSection()
-                        }
-                        if rows[idx].id == "copilot" {
-                            copilotOAuthAccountsSection(idx: idx)
-                        }
-                        QuotaWarningCard(providerID: rows[idx].id)
-                            .id(rows[idx].id)
-                        linksSection(rows[idx])
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 16) {
+                detailHeader(idx)
+                onboardingSection(idx)
+                detailInfoGrid(rows[idx])
+                usageSection(rows[idx])
+                if rows[idx].id == "xai" {
+                    xaiCostSection(status(for: rows[idx].id))
                 }
-                .task(id: pendingRemediationTarget) {
-                    guard let target = pendingRemediationTarget else { return }
-                    await Task.yield()
-                    withAnimation { proxy.scrollTo(target, anchor: .center) }
-                    pendingRemediationTarget = nil
+                settingsSection(idx)
+                    .id(ProviderRemediationTarget.setupSource)
+                menuBarDisplaySection(for: rows[idx].id)
+                if rows[idx].id == "codex" {
+                    CodexAccountsCard()
+                    CodexAutoPrimeCard()
                 }
+                if rows[idx].id == "elevenlabs" {
+                    ElevenLabsKeysCard()
+                        .id(ProviderRemediationTarget.credential)
+                }
+                if rows[idx].id == "hiyo" {
+                    HiyoKeysCard()
+                        .id(ProviderRemediationTarget.credential)
+                }
+                if rows[idx].id == "antigravity" {
+                    antigravityOAuthAccountsSection()
+                }
+                if rows[idx].id == "copilot" {
+                    copilotOAuthAccountsSection(idx: idx)
+                }
+                QuotaWarningCard(providerID: rows[idx].id)
+                    .id(rows[idx].id)
+                linksSection(rows[idx])
             }
-            // Fill the window height so the ScrollView scrolls tall provider
-            // details (e.g. Codex) instead of overflowing past the bottom edge.
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
         } else {
             InstrumentSection {
                 Text(L10n.t("provider.choose", language))
@@ -394,7 +378,7 @@ extension ProvidersPane {
                     .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
                     .padding(20)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
     }
 
@@ -419,7 +403,7 @@ extension ProvidersPane {
                 Button(L10n.t("provider.selfTest", language)) {
                     runSelfTest(id: row.id)
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentOutline)
                 .disabled(selfTestState[row.id] == .running)
                 .pointingHandCursor(enabled: selfTestState[row.id] != .running)
                 Button {
@@ -444,8 +428,9 @@ extension ProvidersPane {
                             Image(systemName: "arrow.clockwise")
                         }
                     }
+                    .frame(minWidth: 28, minHeight: 28)
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentOutline)
                 .disabled(quota.isRefreshing)
                 .pointingHandCursor(enabled: !quota.isRefreshing)
                 .help(L10n.t("provider.reloadHelp", language))
@@ -453,7 +438,6 @@ extension ProvidersPane {
                 Toggle("", isOn: enabledBinding(idx))
                     .labelsHidden()
                     .toggleStyle(.instrument)
-                    .controlSize(.small)
                 }
                 if selfTestState[row.id] != nil, selfTestState[row.id] != .idle {
                     selfTestResult(for: row.id)

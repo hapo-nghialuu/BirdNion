@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Instrument redesign — shared shape & type primitives
@@ -198,6 +199,338 @@ extension ButtonStyle where Self == InstrumentButtonStyle {
     /// Destructive outline (quit).
     static var instrumentCritical: InstrumentButtonStyle {
         InstrumentButtonStyle(textColor: VocabbyTheme.critical, borderColor: VocabbyTheme.critical)
+    }
+}
+
+/// Inline Add / Save / Refresh in provider account rows — 28pt tall to sit
+/// flush with `instrumentControlFieldStyle` and `InstrumentMenuSelect`.
+struct InstrumentInlineButtonStyle: ButtonStyle {
+    var prominent: Bool = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let tint = prominent ? VocabbyTheme.background : VocabbyTheme.blue
+        configuration.label
+            .font(.plexMono(11, weight: .medium))
+            .tracking(0.6)
+            .textCase(.uppercase)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 28)
+            .background(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .fill(prominent ? VocabbyTheme.blue : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(prominent ? Color.clear : VocabbyTheme.blue, lineWidth: 1)
+            )
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
+    }
+}
+
+extension ButtonStyle where Self == InstrumentInlineButtonStyle {
+    static var instrumentInline: InstrumentInlineButtonStyle { InstrumentInlineButtonStyle() }
+}
+
+extension View {
+    /// Square hairline field for Settings provider rows — matches
+    /// `InstrumentMenuSelect` height (28pt) and 4pt radius. Replaces
+    /// `.textFieldStyle(.roundedBorder)`.
+    func instrumentControlFieldStyle() -> some View {
+        self
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 8)
+            .frame(minHeight: 28)
+            .background(VocabbyTheme.background)
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(VocabbyTheme.border, lineWidth: 1)
+            )
+    }
+}
+
+// MARK: - Menu select
+
+/// Option list hosted inside the borderless AppKit menu panel.
+private struct InstrumentMenuPanelContent<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    let selection: Value
+    let width: CGFloat
+    let onPick: (Value) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+                if index > 0 {
+                    VocabbyTheme.hairline.frame(height: 1)
+                }
+                Button {
+                    onPick(option.value)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(option.title)
+                            .font(.plexSans(12))
+                            .foregroundStyle(VocabbyTheme.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if option.value == selection {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(VocabbyTheme.blue)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(option.value == selection
+                                ? VocabbyTheme.selectedSurface
+                                : Color.clear)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(width: width, alignment: .leading)
+        .background(VocabbyTheme.background)
+        .overlay(
+            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                .strokeBorder(VocabbyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+    }
+}
+
+/// Presents the option list in a borderless child `NSPanel` so sibling SwiftUI
+/// rows (e.g. Accounts) cannot paint over it. No NSPopover arrow / system
+/// corner chrome — Instrument 4pt only.
+private struct InstrumentMenuPanelBridge<Value: Hashable>: NSViewRepresentable {
+    @Binding var isOpen: Bool
+    @Binding var selection: Value
+    var options: [(value: Value, title: String)]
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isOpen: $isOpen, selection: $selection, options: options)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.anchorView = view
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.anchorView = nsView
+        context.coordinator.isOpen = $isOpen
+        context.coordinator.selection = $selection
+        context.coordinator.options = options
+        if isOpen {
+            context.coordinator.showOrUpdate()
+        } else {
+            context.coordinator.hide()
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.hide()
+    }
+
+    final class Coordinator {
+        var isOpen: Binding<Bool>
+        var selection: Binding<Value>
+        var options: [(value: Value, title: String)]
+        weak var anchorView: NSView?
+        private var panel: NSPanel?
+        private var hosting: NSHostingView<InstrumentMenuPanelContent<Value>>?
+        private var monitor: Any?
+        private var openGeneration = 0
+
+        init(isOpen: Binding<Bool>,
+             selection: Binding<Value>,
+             options: [(value: Value, title: String)]) {
+            self.isOpen = isOpen
+            self.selection = selection
+            self.options = options
+        }
+
+        func showOrUpdate() {
+            guard let anchor = anchorView, anchor.window != nil else { return }
+            if panel == nil {
+                present(from: anchor)
+            } else {
+                refreshContent(anchorWidth: anchor.bounds.width)
+                reposition(from: anchor)
+            }
+        }
+
+        func hide() {
+            removeMonitor()
+            if let panel {
+                panel.parent?.removeChildWindow(panel)
+                panel.orderOut(nil)
+            }
+            panel = nil
+            hosting = nil
+        }
+
+        private func present(from anchor: NSView) {
+            guard let parentWindow = anchor.window else { return }
+            let width = max(anchor.bounds.width, 180)
+            let root = makeContent(width: width)
+            let host = NSHostingView(rootView: root)
+            host.appearance = NSApp.effectiveAppearance
+            let fitting = host.fittingSize
+            let size = NSSize(
+                width: width,
+                height: max(fitting.height, CGFloat(options.count) * 32 + 8))
+            host.frame = NSRect(origin: .zero, size: size)
+
+            let newPanel = NSPanel(
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false)
+            newPanel.isOpaque = true
+            newPanel.hasShadow = true
+            newPanel.level = .popUpMenu
+            newPanel.isFloatingPanel = true
+            newPanel.hidesOnDeactivate = true
+            newPanel.becomesKeyOnlyIfNeeded = true
+            newPanel.appearance = NSApp.effectiveAppearance
+            newPanel.backgroundColor = .clear
+            newPanel.contentView = host
+            newPanel.isReleasedWhenClosed = false
+
+            hosting = host
+            panel = newPanel
+            reposition(from: anchor)
+            parentWindow.addChildWindow(newPanel, ordered: .above)
+            newPanel.orderFront(nil)
+
+            openGeneration += 1
+            let generation = openGeneration
+            // Skip the mouse-down that opened the menu.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.openGeneration == generation else { return }
+                self.installMonitor()
+            }
+        }
+
+        private func refreshContent(anchorWidth: CGFloat) {
+            let width = max(anchorWidth, 180)
+            hosting?.rootView = makeContent(width: width)
+            guard let hosting, let panel else { return }
+            let fitting = hosting.fittingSize
+            let size = NSSize(
+                width: width,
+                height: max(fitting.height, CGFloat(options.count) * 32 + 8))
+            hosting.frame = NSRect(origin: .zero, size: size)
+            var frame = panel.frame
+            frame.size = size
+            panel.setFrame(frame, display: true)
+        }
+
+        private func makeContent(width: CGFloat) -> InstrumentMenuPanelContent<Value> {
+            InstrumentMenuPanelContent(
+                options: options,
+                selection: selection.wrappedValue,
+                width: width,
+                onPick: { [weak self] value in
+                    guard let self else { return }
+                    self.selection.wrappedValue = value
+                    self.isOpen.wrappedValue = false
+                    self.hide()
+                })
+        }
+
+        private func reposition(from anchor: NSView) {
+            guard let panel, let parentWindow = anchor.window else { return }
+            let rectInWindow = anchor.convert(anchor.bounds, to: nil)
+            let screenRect = parentWindow.convertToScreen(rectInWindow)
+            let size = panel.frame.size
+            let origin = NSPoint(
+                x: screenRect.minX,
+                y: screenRect.minY - 4 - size.height)
+            panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        }
+
+        private func installMonitor() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self, self.isOpen.wrappedValue else { return event }
+                if let panel = self.panel, event.window === panel {
+                    return event
+                }
+                DispatchQueue.main.async {
+                    self.isOpen.wrappedValue = false
+                    self.hide()
+                }
+                return event
+            }
+        }
+
+        private func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+    }
+}
+
+/// Settings select — trigger chrome matches `instrumentFieldStyle` / Linux
+/// `.sw-select`. Options open in a borderless AppKit panel (Instrument 4pt,
+/// no arrow) above all Settings siblings. Not SwiftUI `.popover` /
+/// `Picker(.menu)`.
+struct InstrumentMenuSelect<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    @Binding var selection: Value
+    @State private var isOpen = false
+
+    private var selectedTitle: String {
+        options.first(where: { $0.value == selection })?.title ?? "—"
+    }
+
+    var body: some View {
+        Button {
+            isOpen.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Text(selectedTitle)
+                    .font(.plexSans(12))
+                    .foregroundStyle(VocabbyTheme.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .background(VocabbyTheme.background)
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(isOpen ? VocabbyTheme.primary : VocabbyTheme.border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .background {
+            InstrumentMenuPanelBridge(
+                isOpen: $isOpen,
+                selection: $selection,
+                options: options)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+        }
     }
 }
 

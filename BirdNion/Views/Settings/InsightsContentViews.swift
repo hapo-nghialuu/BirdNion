@@ -45,7 +45,8 @@ struct InsightsOverviewContent: View {
                 Label(vi ? "Sao chép tóm tắt đã ẩn đường dẫn" : "Copy redacted summary",
                       systemImage: "doc.on.doc")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.instrumentOutline)
+            .pointingHandCursor()
             .padding(.top, 16)
         }
     }

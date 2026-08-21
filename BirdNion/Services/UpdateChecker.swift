@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// GitHub-releases update check — BirdNion ships ad-hoc signed via a brew
@@ -113,5 +114,34 @@ final class UpdateChecker: ObservableObject {
             .filter { !$0.draft && (channel == "beta" || !$0.prerelease) }
             .filter { SemVer.isNewer($0.tagName, than: currentVersion) }
             .max { SemVer.isNewer($1.tagName, than: $0.tagName) }
+    }
+
+    /// Opens Terminal with `brew update && brew upgrade birdnion`, then quits
+    /// so the formula can replace bits without a running-app lock.
+    static let brewUpgradeCommand = "brew update && brew upgrade birdnion"
+
+    static func runBrewUpgradeAndQuit() {
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "\(brewUpgradeCommand)"
+        end tell
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // Still quit so the user is not stuck mid-update flow.
+        }
+        NSApplication.shared.terminate(nil)
+    }
+
+    /// Apply the available update via Homebrew (Terminal) then quit.
+    func applyAvailableUpdate() {
+        guard case .available = state else { return }
+        Self.runBrewUpgradeAndQuit()
     }
 }

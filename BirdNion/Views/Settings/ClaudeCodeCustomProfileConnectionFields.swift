@@ -30,12 +30,8 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                     if let onPasteJSON {
                         Button(action: onPasteJSON) {
                             Label(L10n.t("ccx.pasteJSON", lang), systemImage: "doc.on.clipboard")
-                                .font(.plexMono(11, weight: .semibold))
-                                .textCase(.uppercase)
                         }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-                        .controlSize(.small)
+                        .buttonStyle(.instrumentOutline)
                         .pointingHandCursor()
                     }
                 }
@@ -49,15 +45,15 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                         .instrumentInputStyle()
                 }
                 fieldRow(L10n.t("ccx.compatibility", lang)) {
-                    Picker("", selection: protocolSelection) {
-                        Text(L10n.t("codexConfig.protocol.anthropic", lang)).tag("anthropic")
-                        Text(L10n.t("codexConfig.protocol.openaiChat", lang)).tag("chat")
-                        Text(L10n.t("codexConfig.protocol.responses", lang)).tag("responses")
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    // SegmentedControl caches its previous selection in AppKit.
-                    // Recreate it when moving between custom profiles.
+                    InstrumentSegmentedControl(
+                        options: [
+                            ("anthropic", L10n.t("codexConfig.protocol.anthropic", lang)),
+                            ("chat", L10n.t("codexConfig.protocol.openaiChat", lang)),
+                            ("responses", L10n.t("codexConfig.protocol.responses", lang)),
+                        ],
+                        selection: protocolSelection
+                    )
+                    // Recreate when moving between custom profiles.
                     .id(profile.id)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .help(L10n.t("ccx.compatibility.hint", lang))
@@ -98,11 +94,10 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
     @ViewBuilder
     private var tokenEnvironmentRow: some View {
         fieldRow(L10n.t("ccx.tokenEnvKey", lang)) {
-            Picker("", selection: $profile.tokenEnvKey) {
-                ForEach(tokenEnvKeys, id: \.self) { Text($0).tag($0) }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
+            InstrumentMenuSelect(
+                options: tokenEnvKeys.map { ($0, $0) },
+                selection: $profile.tokenEnvKey
+            )
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
@@ -153,12 +148,13 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
 
     private var connectionModeRow: some View {
         fieldRow(L10n.t("ccx.connection", lang)) {
-            Picker("", selection: connectionModeBinding) {
-                Text(L10n.t("ccx.connection.direct", lang)).tag(ConnectionMode.direct)
-                Text(L10n.t("ccx.connection.proxy", lang)).tag(ConnectionMode.localProxy)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
+            InstrumentSegmentedControl(
+                options: [
+                    (.direct, L10n.t("ccx.connection.direct", lang)),
+                    (.localProxy, L10n.t("ccx.connection.proxy", lang)),
+                ],
+                selection: connectionModeBinding
+            )
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityLabel(L10n.t("ccx.connection", lang))
         }
@@ -243,14 +239,6 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
 /// `.textFieldStyle(.roundedBorder)` call sites in this file.
 private extension View {
     func instrumentInputStyle() -> some View {
-        self
-            .textFieldStyle(.plain)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(VocabbyTheme.background)
-            .overlay(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
-            )
+        instrumentControlFieldStyle()
     }
 }

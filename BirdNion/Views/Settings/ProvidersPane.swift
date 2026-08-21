@@ -82,17 +82,30 @@ struct ProvidersPane: View {
                 sidebar
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                SettingsPaneHeader(
-                    title: L10n.t("settings.tab.providers", language),
-                    subtitle: L10n.t("settings.providers.subtitle", language)
-                )
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // Page header + provider detail scroll together; only sidebar
+            // search stays pinned.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SettingsPaneHeader(
+                            title: L10n.t("settings.tab.providers", language),
+                            subtitle: L10n.t("settings.providers.subtitle", language)
+                        )
+                        detail
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(SettingsTheme.background)
+                .task(id: pendingRemediationTarget) {
+                    guard let target = pendingRemediationTarget else { return }
+                    await Task.yield()
+                    withAnimation { proxy.scrollTo(target, anchor: .center) }
+                    pendingRemediationTarget = nil
+                }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(SettingsTheme.background)
         }
         // Catch-all: a reorder drag released anywhere in the pane that isn't
         // a row or divider (search field, detail panel, padding) still
@@ -111,9 +124,11 @@ struct ProvidersPane: View {
             // falls back to the canonical 7-provider list, but we still
             // want a fresh read so toggles from another pane propagate.
             rows = BirdNionConfigStore.allProviders()
-            if selectedID == nil {
-                let routed = UserDefaults.standard.string(forKey: "birdnion.selectedProvider")
-                selectedID = rows.contains(where: { $0.id == routed }) ? routed : rows.first?.id
+            if let routed = UserDefaults.standard.string(forKey: "birdnion.selectedProvider"),
+               rows.contains(where: { $0.id == routed }) {
+                selectedID = routed
+            } else if selectedID == nil {
+                selectedID = rows.first?.id
             }
             if let rawTarget = UserDefaults.standard.string(forKey: "birdnion.providerRemediationTarget") {
                 pendingRemediationTarget = ProviderRemediationTarget(rawValue: rawTarget)
@@ -567,10 +582,10 @@ struct TokenField: View {
             Text(L10n.t("provider.token", settings.appLanguage))
                 .font(.plexSans(13, weight: .semibold))
                 .foregroundStyle(SettingsTheme.primary)
-            HStack(spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 SecureField(L10n.t("provider.tokenPlaceholder", settings.appLanguage), text: $token)
-                    .textFieldStyle(.roundedBorder)
                     .font(.plexMono(12))
+                    .instrumentControlFieldStyle()
                 Button(L10n.t("provider.save", settings.appLanguage)) {
                     guard !token.isEmpty else { return }
                     do {
@@ -594,7 +609,8 @@ struct TokenField: View {
                         banner = L10n.f("provider.saveError", settings.appLanguage, error.localizedDescription)
                     }
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(token.isEmpty)
             }
             if let banner {
@@ -803,16 +819,19 @@ struct ElevenLabsKeysCard: View {
                 Button(L10n.t("elevenlabs.switchKey", settings.appLanguage)) {
                     switchTo(key)
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(busy)
             }
 
-            Button(role: .destructive) {
+            Button {
                 removeKey(key)
             } label: {
                 Image(systemName: "trash")
+                    .foregroundStyle(SettingsTheme.critical)
             }
-            .controlSize(.small)
+            .buttonStyle(.plain)
+            .pointingHandCursor()
             .disabled(busy)
         }
         .padding(.horizontal, 14)
@@ -822,16 +841,17 @@ struct ElevenLabsKeysCard: View {
     var addRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             SecureField(L10n.t("elevenlabs.keyPlaceholder", settings.appLanguage), text: $newKey)
-                .textFieldStyle(.roundedBorder)
                 .font(.plexMono(12))
-            HStack(spacing: 8) {
+                .instrumentControlFieldStyle()
+            HStack(alignment: .center, spacing: 8) {
                 TextField(L10n.t("elevenlabs.labelPlaceholder", settings.appLanguage), text: $newLabel)
-                    .textFieldStyle(.roundedBorder)
                     .font(.plexSans(12))
+                    .instrumentControlFieldStyle()
                 Button(L10n.t("elevenlabs.addKey", settings.appLanguage)) {
                     addKey()
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(busy || newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -960,16 +980,19 @@ struct HiyoKeysCard: View {
                 Button(L10n.t("hiyo.switchKey", settings.appLanguage)) {
                     switchTo(key)
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(busy)
             }
 
-            Button(role: .destructive) {
+            Button {
                 removeKey(key)
             } label: {
                 Image(systemName: "trash")
+                    .foregroundStyle(SettingsTheme.critical)
             }
-            .controlSize(.small)
+            .buttonStyle(.plain)
+            .pointingHandCursor()
             .disabled(busy)
         }
         .padding(.horizontal, 14)
@@ -979,16 +1002,17 @@ struct HiyoKeysCard: View {
     var addRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             SecureField(L10n.t("hiyo.keyPlaceholder", settings.appLanguage), text: $newKey)
-                .textFieldStyle(.roundedBorder)
                 .font(.plexMono(12))
-            HStack(spacing: 8) {
+                .instrumentControlFieldStyle()
+            HStack(alignment: .center, spacing: 8) {
                 TextField(L10n.t("hiyo.labelPlaceholder", settings.appLanguage), text: $newLabel)
-                    .textFieldStyle(.roundedBorder)
                     .font(.plexSans(12))
+                    .instrumentControlFieldStyle()
                 Button(L10n.t("hiyo.addKey", settings.appLanguage)) {
                     addKey()
                 }
-                .controlSize(.small)
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(busy || newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -1102,24 +1126,28 @@ struct CodexAccountsCard: View {
             Spacer(minLength: 6)
 
             Button(L10n.t("provider.reauth", settings.appLanguage)) { Task { await reauth(account.id) } }
-                .controlSize(.small)
+                .buttonStyle(.instrumentInline)
+                .pointingHandCursor()
                 .disabled(busy)
 
             if account.isSystem {
                 // Copy the current ~/.codex login into a managed account so it
                 // survives a later system re-login.
                 Button(L10n.t("provider.saveManaged", settings.appLanguage)) { promote() }
-                    .controlSize(.small)
+                    .buttonStyle(.instrumentInline)
+                    .pointingHandCursor()
                     .disabled(busy || account.email == nil)
             }
 
             if canRemove(account) {
-                Button(role: .destructive) {
+                Button {
                     confirmRemove(account)
                 } label: {
                     Image(systemName: "trash")
+                        .foregroundStyle(SettingsTheme.critical)
                 }
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .pointingHandCursor()
                 .disabled(busy)
             }
         }
@@ -1135,7 +1163,7 @@ struct CodexAccountsCard: View {
                     Text(L10n.t("provider.addAccount", settings.appLanguage))
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.instrumentInline)
             .pointingHandCursor(enabled: !busy)
             .disabled(busy)
 

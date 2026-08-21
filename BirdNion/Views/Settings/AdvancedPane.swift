@@ -27,7 +27,9 @@ struct AdvancedPane: View {
                     title: L10n.t("settings.hidePersonalInfo.title", settings.appLanguage),
                     subtitle: L10n.t("settings.hidePersonalInfo.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.hidePersonalInfo).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.hidePersonalInfo)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
             }
 
@@ -41,14 +43,18 @@ struct AdvancedPane: View {
                     title: L10n.t("settings.disableKeychain.title", settings.appLanguage),
                     subtitle: L10n.t("settings.disableKeychain.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.debugDisableKeychainAccess).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.debugDisableKeychainAccess)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
 
                 SettingsLabeledRow(
                     title: L10n.t("settings.storageFootprint.title", settings.appLanguage),
                     subtitle: L10n.t("settings.storageFootprint.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.providerStorageFootprintsEnabled).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.providerStorageFootprintsEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
 
                 Text(LocalizedStringKey(L10n.t("settings.developer.footer", settings.appLanguage)))
@@ -68,7 +74,9 @@ struct AdvancedPane: View {
                     title: L10n.t("settings.tab.debug", settings.appLanguage),
                     subtitle: L10n.t("settings.debug.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.debugMenuEnabled).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.debugMenuEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
 
                 if settings.debugMenuEnabled {
@@ -85,7 +93,7 @@ struct AdvancedPane: View {
                                 withIntermediateDirectories: true)
                             NSWorkspace.shared.activateFileViewerSelecting([url])
                         }
-                        .controlSize(.small)
+                        .buttonStyle(.instrumentOutline)
                         .pointingHandCursor()
                     }
 

@@ -16,8 +16,8 @@ extension ProvidersPane {
             .lowercased()
         let filtered = rows.filter { row in
             guard !query.isEmpty else { return true }
-            return displayName(for: row).lowercased().contains(query)
-                || row.id.lowercased().contains(query)
+            let title = displayName(for: row)
+            return SettingsSearchIndex.providerMatches(id: row.id, title: title, query: query)
         }
         // Active: preserve relative order in `rows` (drag-reorder writes that array).
         let active = filtered.filter { $0.enabled == true }
@@ -35,24 +35,24 @@ extension ProvidersPane {
     /// the nav block), so it fills the column width and scrolls on its own.
     /// Provider roster under the shared Settings sidebar search (no second
     /// search field — query comes from `SettingsSidebar` / `searchText`).
+    /// Provider roster rows only — parent `SettingsSidebar` owns the ScrollView
+    /// so nav + roster scroll as one column under the pinned search field.
     var sidebar: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ForEach(Array(visibleRows.enumerated()), id: \.element.id) { idx, row in
-                    sidebarRow(row, position: idx)
-                    if row.id != visibleRows.last?.id {
-                        Divider()
-                            .overlay(SettingsTheme.border.opacity(0.72))
-                            .padding(.leading, 44)
-                            .frame(height: 7)
-                            .contentShape(Rectangle())
-                            .onDrop(
-                                of: [Self.providerDragType],
-                                delegate: SidebarDropCompletionDelegate(
-                                    draggedProviderId: $draggedRowId,
-                                    dropTargetRowId: $dropTargetRowId,
-                                    finish: finishRowMove))
-                    }
+        VStack(spacing: 0) {
+            ForEach(Array(visibleRows.enumerated()), id: \.element.id) { idx, row in
+                sidebarRow(row, position: idx)
+                if row.id != visibleRows.last?.id {
+                    Divider()
+                        .overlay(SettingsTheme.border.opacity(0.72))
+                        .padding(.leading, 44)
+                        .frame(height: 7)
+                        .contentShape(Rectangle())
+                        .onDrop(
+                            of: [Self.providerDragType],
+                            delegate: SidebarDropCompletionDelegate(
+                                draggedProviderId: $draggedRowId,
+                                dropTargetRowId: $dropTargetRowId,
+                                finish: finishRowMove))
                 }
             }
         }
@@ -114,9 +114,16 @@ extension ProvidersPane {
                 .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 1) {
+                // Wrap at word boundaries (e.g. "Command" / "Code") — no "…".
+                // Long single tokens shrink slightly before mid-word break.
                 Text(displayName(for: row))
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(row.enabled == true ? SettingsTheme.primary : SettingsTheme.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(displayName(for: row))
                 // Secondary line: remaining quota % tinted by level when available
                 // (mockup P4); errors stay critical; no quota → existing status text.
                 Text(statusSubtitle(for: row))
@@ -126,10 +133,11 @@ extension ProvidersPane {
                     .truncationMode(.tail)
                     .help(statusSubtitleDetail(for: row) ?? "")
             }
-
-            Spacer(minLength: 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
 
             statusDot(for: row)
+                .fixedSize()
         }
         // Instrument redesign: flush square row (no rounded highlight box) —
         // selection/drop-target reads as a subtle fill + a 2pt left accent

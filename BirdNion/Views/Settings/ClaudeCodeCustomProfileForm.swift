@@ -83,12 +83,8 @@ struct ClaudeCodeCustomProfileForm: View {
                          ? L10n.t("claudeCode.loadModels", lang)
                          : L10n.t("claudeCode.reloadModels", lang))
                 }
-                .font(.plexMono(11, weight: .semibold))
-                .textCase(.uppercase)
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-            .controlSize(.small)
+            .buttonStyle(.instrumentOutline)
             .disabled(loadingModels || !canFetchModels)
             .pointingHandCursor()
         }
@@ -259,14 +255,6 @@ struct ClaudeCodeCustomProfileForm: View {
 /// `.textFieldStyle(.roundedBorder)` call sites in this file.
 private extension View {
     func instrumentInputStyle() -> some View {
-        self
-            .textFieldStyle(.plain)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(VocabbyTheme.background)
-            .overlay(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
-            )
+        instrumentControlFieldStyle()
     }
 }

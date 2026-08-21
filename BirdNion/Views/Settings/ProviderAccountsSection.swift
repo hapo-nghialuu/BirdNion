@@ -1,40 +1,5 @@
 import SwiftUI
 
-// MARK: - Instrument redesign — inline action button chrome
-//
-// Outlined, square-cornered mono-uppercase button used for inline account
-// actions (Add / Refresh / Login / Reload) — replaces the native rounded
-// bordered button so these match `.sw-pill-btn` / `.save-button` in the CSS
-// reference (border: 1px solid currentColor, 4pt radius, mono 11pt caps).
-private struct InstrumentInlineButtonStyle: ButtonStyle {
-    var prominent: Bool = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        let tint = prominent ? VocabbyTheme.background : SettingsTheme.accent
-        configuration.label
-            .font(.plexMono(11, weight: .medium))
-            .tracking(0.6)
-            .textCase(.uppercase)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .fill(prominent ? SettingsTheme.accent : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .strokeBorder(prominent ? Color.clear : SettingsTheme.accent, lineWidth: 1)
-            )
-            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
-    }
-}
-
-private extension ButtonStyle where Self == InstrumentInlineButtonStyle {
-    static var instrumentInline: InstrumentInlineButtonStyle { InstrumentInlineButtonStyle() }
-}
-
 // MARK: - Provider multi-account sections (P4 module split)
 
 extension ProvidersPane {
@@ -82,18 +47,25 @@ extension ProvidersPane {
                 if idx < claudeAccounts.accounts.count - 1 { SettingsRowDivider() }
             }
 
-            // Add-account form.
-            HStack(spacing: 6) {
-                Picker("", selection: $newAccountKind) {
-                    Text("Web").tag(ClaudeTokenAccount.Kind.web)
-                    Text("Admin").tag(ClaudeTokenAccount.Kind.admin)
-                }
-                .labelsHidden().pickerStyle(.menu).frame(width: 90)
+            // Add-account form — shared 28pt Instrument chrome so select /
+            // fields / Add sit on one baseline (no native .roundedBorder).
+            HStack(alignment: .center, spacing: 6) {
+                InstrumentMenuSelect(
+                    options: [
+                        (ClaudeTokenAccount.Kind.web, "Web"),
+                        (ClaudeTokenAccount.Kind.admin, "Admin"),
+                    ],
+                    selection: $newAccountKind
+                )
+                .frame(width: 90, height: 28)
                 TextField(L10n.languageCode(language) == "vi" ? "Nhãn" : "Label", text: $newAccountLabel)
-                    .textFieldStyle(.roundedBorder).font(.plexSans(11)).frame(width: 90)
+                    .font(.plexSans(11))
+                    .instrumentControlFieldStyle()
+                    .frame(width: 90)
                 SecureField(newAccountKind == .admin ? "sk-ant-admin..." : "sessionKey sk-ant-...",
                             text: $newAccountToken)
-                    .textFieldStyle(.roundedBorder).font(.plexSans(11))
+                    .font(.plexSans(11))
+                    .instrumentControlFieldStyle()
                 Button(L10n.languageCode(language) == "vi" ? "Thêm" : "Add") {
                     let token = newAccountToken.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !token.isEmpty else { return }
@@ -145,16 +117,15 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { settings.kiloUsageDataSource },
-                    set: { settings.kiloUsageDataSource = $0; quota.refreshFromSettings("kilo") }
-                )) {
-                    ForEach(KiloUsageSource.allCases) { src in
-                        Text(kiloUsageSourceName(src)).tag(src.rawValue)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                InstrumentMenuSelect(
+                    options: KiloUsageSource.allCases.map {
+                        ($0.rawValue, kiloUsageSourceName($0))
+                    },
+                    selection: Binding(
+                        get: { settings.kiloUsageDataSource },
+                        set: { settings.kiloUsageDataSource = $0; quota.refreshFromSettings("kilo") }
+                    )
+                )
                 .frame(width: 170)
             }
             Text(kiloSourceSubtitle(for: settings.kiloUsageDataSource))
@@ -194,21 +165,21 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { settings.kiloOrgID },
-                    set: { newID in
-                        settings.kiloOrgID = newID
-                        settings.kiloOrgName = kiloKnownOrgs.first(where: { $0.id == newID })?.name ?? ""
-                        quota.refreshFromSettings("kilo")
-                    }
-                )) {
-                    Text(vi ? "Cá nhân" : "Personal").tag("")
-                    ForEach(kiloScopeOrgs) { org in
-                        Text(org.name).tag(org.id)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                InstrumentMenuSelect(
+                    options: {
+                        var opts: [(String, String)] = [("", vi ? "Cá nhân" : "Personal")]
+                        opts.append(contentsOf: kiloScopeOrgs.map { ($0.id, $0.name) })
+                        return opts
+                    }(),
+                    selection: Binding(
+                        get: { settings.kiloOrgID },
+                        set: { newID in
+                            settings.kiloOrgID = newID
+                            settings.kiloOrgName = kiloKnownOrgs.first(where: { $0.id == newID })?.name ?? ""
+                            quota.refreshFromSettings("kilo")
+                        }
+                    )
+                )
                 .frame(width: 180)
             }
             .padding(.vertical, 10)
@@ -286,16 +257,15 @@ extension ProvidersPane {
                     .font(.plexSans(13, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
                 Spacer(minLength: 8)
-                Picker("", selection: Binding(
-                    get: { settings.antigravityUsageSource },
-                    set: { settings.antigravityUsageSource = $0; quota.refreshFromSettings("antigravity") }
-                )) {
-                    ForEach(AntigravityUsageSource.allCases) { src in
-                        Text(antigravityUsageSourceName(src)).tag(src.rawValue)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                InstrumentMenuSelect(
+                    options: AntigravityUsageSource.allCases.map {
+                        ($0.rawValue, antigravityUsageSourceName($0))
+                    },
+                    selection: Binding(
+                        get: { settings.antigravityUsageSource },
+                        set: { settings.antigravityUsageSource = $0; quota.refreshFromSettings("antigravity") }
+                    )
+                )
                 .frame(width: 180)
             }
         }
@@ -384,14 +354,14 @@ extension ProvidersPane {
                 Text(vi ? "Thêm tài khoản" : "Add account")
                     .font(.plexSans(12, weight: .semibold))
                     .foregroundStyle(SettingsTheme.primary)
-                HStack(spacing: 6) {
+                HStack(alignment: .center, spacing: 6) {
                     TextField(vi ? "Nhãn" : "Label", text: $antigravityNewLabel)
-                        .textFieldStyle(.roundedBorder)
                         .font(.plexSans(11))
+                        .instrumentControlFieldStyle()
                         .frame(width: 100)
                     SecureField(vi ? "OAuth credentials JSON" : "OAuth credentials JSON", text: $antigravityNewJSON)
-                        .textFieldStyle(.roundedBorder)
                         .font(.plexSans(11))
+                        .instrumentControlFieldStyle()
                     Button(vi ? "Thêm" : "Add") {
                         antigravityAddFromJSON()
                     }

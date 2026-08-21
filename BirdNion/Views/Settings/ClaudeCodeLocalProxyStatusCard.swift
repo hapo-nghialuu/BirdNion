@@ -62,9 +62,7 @@ struct ClaudeCodeLocalProxyStatusCard: View {
                             .font(.system(size: 12, weight: .semibold))
                             .frame(width: 28, height: 28)
                     }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-                    .controlSize(.small)
+                    .buttonStyle(.instrumentOutline)
                     .disabled(busy || runtimeState == .starting)
                     .pointingHandCursor(enabled: !busy && runtimeState != .starting)
                     .help(L10n.t("ccx.proxy.refresh", lang))
@@ -93,9 +91,7 @@ struct ClaudeCodeLocalProxyStatusCard: View {
                             .font(.system(size: 12, weight: .semibold))
                             .frame(width: 28, height: 28)
                     }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-                    .controlSize(.small)
+                    .buttonStyle(.instrumentOutline)
                     .pointingHandCursor()
                     .help(L10n.t("ccx.proxy.copyEndpoint", lang))
                     .accessibilityLabel(L10n.t("ccx.proxy.copyEndpoint", lang))
@@ -127,24 +123,15 @@ struct ClaudeCodeLocalProxyStatusCard: View {
         case .stop:
             Button(action: onStop) {
                 Label(L10n.t("ccx.proxy.stop", lang), systemImage: "stop.fill")
-                    .font(.plexMono(11, weight: .semibold))
-                    .textCase(.uppercase)
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-            .controlSize(.small)
-            .tint(VocabbyTheme.critical)
+            .buttonStyle(.instrumentCritical)
             .disabled(busy)
             .pointingHandCursor(enabled: !busy)
         case .start, .update, .retry:
             Button(action: onStart) {
                 Label(actionLabel, systemImage: actionIcon)
-                    .font(.plexMono(11, weight: .semibold))
-                    .textCase(.uppercase)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.roundedRectangle(radius: InstrumentShape.controlRadius))
-            .controlSize(.small)
+            .buttonStyle(.instrumentPrimary)
             .disabled(busy || !hasUpstreamConfiguration)
             .pointingHandCursor(enabled: !busy && hasUpstreamConfiguration)
         }

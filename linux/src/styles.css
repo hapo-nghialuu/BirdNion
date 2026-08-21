@@ -2203,8 +2203,8 @@ body.settings-body-root {
   font-size: 12px;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface2);
+  border-radius: 4px; /* InstrumentShape.controlRadius — match macOS InstrumentMenuSelect */
+  background: var(--bg);
   color: var(--text);
   min-width: 120px;
   max-width: 180px;
@@ -4594,12 +4594,42 @@ body.settings-body-root {
 }
 .sw-nav-row.active .sw-nav-badge { background: none; color: var(--bg); }
 .sw-sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  border: 0;
+  background: transparent;
   font-family: var(--font-mono);
   font-size: 9px;
   letter-spacing: 0.6px;
   text-transform: uppercase;
-  text-align: left;
+  text-align: center;
   border-top: 1px solid var(--hairline);
+  color: var(--text3);
+  cursor: default;
+}
+.sw-sidebar-footer.update-available {
+  cursor: pointer;
+  color: var(--accent);
+}
+.sw-sidebar-footer.update-available:hover {
+  background: var(--selected-surface);
+}
+.sw-sidebar-footer-update {
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 10px;
+}
+.sw-sidebar-footer-action {
+  font-weight: 500;
+  color: var(--text2);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 9px;
 }
 .sw-sidebar-extra.visible { border-top: 1px solid var(--hairline); margin-top: 6px; padding-top: 0; }
 

@@ -19,38 +19,32 @@ struct GeneralPane: View {
                 footer: LocalizedStringKey(L10n.t("settings.display.footer", settings.appLanguage))
             ) {
                 SettingsLabeledRow(
-                    title: L10n.t("settings.language.title", settings.appLanguage),
-                    subtitle: L10n.t("settings.language.subtitle", settings.appLanguage)
+                    title: L10n.t("settings.appearance.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.appearance.subtitle", settings.appLanguage)
                 ) {
-                    Picker("", selection: $settings.appLanguage) {
-                        ForEach(SettingsStore.Language.allCases) { lang in
-                            Text(lang.displayName(language: settings.appLanguage)).tag(lang.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 160)
-                    .onChange(of: settings.appLanguage) { _ in
-                        settings.applyLanguage()
+                    InstrumentMenuSelect(
+                        options: AppAppearance.allCases.map {
+                            ($0.rawValue, $0.title(language: settings.appLanguage))
+                        },
+                        selection: $settings.appAppearance)
+                    .onChange(of: settings.appAppearance) { _ in
+                        settings.applyAppearance()
                     }
                 }
 
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
-                    title: L10n.t("settings.appearance.title", settings.appLanguage),
-                    subtitle: L10n.t("settings.appearance.subtitle", settings.appLanguage)
+                    title: L10n.t("settings.language.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.language.subtitle", settings.appLanguage)
                 ) {
-                    Picker("", selection: $settings.appAppearance) {
-                        ForEach(AppAppearance.allCases) { mode in
-                            Text(mode.title(language: settings.appLanguage)).tag(mode.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 220)
-                    .onChange(of: settings.appAppearance) { _ in
-                        settings.applyAppearance()
+                    InstrumentMenuSelect(
+                        options: SettingsStore.Language.allCases.map {
+                            ($0.rawValue, $0.displayName(language: settings.appLanguage))
+                        },
+                        selection: $settings.appLanguage)
+                    .onChange(of: settings.appLanguage) { _ in
+                        settings.applyLanguage()
                     }
                 }
 
@@ -62,7 +56,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: settings.showPercentInMenuBarBinding)
                         .labelsHidden()
-                        .toggleStyle(.instrument)
+                        .toggleStyle(.instrumentSwitch)
                         .accessibilityLabel(L10n.t("settings.showPercentInMenuBar.title", settings.appLanguage))
                 }
 
@@ -74,7 +68,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.launchAtLogin)
                         .labelsHidden()
-                        .toggleStyle(.instrument)
+                        .toggleStyle(.instrumentSwitch)
                         .onChange(of: settings.launchAtLogin) { _ in
                             settings.applyLaunchAtLogin()
                         }
@@ -91,14 +85,11 @@ struct GeneralPane: View {
                     title: L10n.t("settings.refreshFrequency.title", settings.appLanguage),
                     subtitle: L10n.t("settings.refreshFrequency.subtitle", settings.appLanguage)
                 ) {
-                    Picker("", selection: $settings.refreshIntervalSeconds) {
-                        ForEach(SettingsStore.RefreshFrequency.allCases) { f in
-                            Text(f.displayName(language: settings.appLanguage)).tag(f.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 120)
+                    InstrumentMenuSelect(
+                        options: SettingsStore.RefreshFrequency.allCases.map {
+                            ($0.rawValue, $0.displayName(language: settings.appLanguage))
+                        },
+                        selection: $settings.refreshIntervalSeconds)
                     .onChange(of: settings.refreshIntervalSeconds) { _ in
                         settings.pushRefreshInterval()
                     }
@@ -110,7 +101,9 @@ struct GeneralPane: View {
                     title: L10n.t("settings.refreshOnOpen.title", settings.appLanguage),
                     subtitle: L10n.t("settings.refreshOnOpen.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.refreshOnMenuOpen).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.refreshOnMenuOpen)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
             }
 
@@ -143,7 +136,7 @@ struct GeneralPane: View {
                         }
                     ))
                     .multilineTextAlignment(.trailing)
-                    .frame(width: 90)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
 
@@ -169,7 +162,9 @@ struct GeneralPane: View {
                     title: L10n.t("settings.statusChecks.title", settings.appLanguage),
                     subtitle: L10n.t("settings.statusChecks.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.statusChecksEnabled).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.statusChecksEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
 
                 SettingsRowDivider()
@@ -178,7 +173,9 @@ struct GeneralPane: View {
                     title: L10n.t("settings.sessionNotifications.title", settings.appLanguage),
                     subtitle: L10n.t("settings.sessionNotifications.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.sessionQuotaNotificationsEnabled).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.sessionQuotaNotificationsEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
 
                 SettingsRowDivider()
@@ -189,7 +186,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.providerFailureNotificationsEnabled)
                         .labelsHidden()
-                        .toggleStyle(.instrument)
+                        .toggleStyle(.instrumentSwitch)
                 }
 
                 SettingsRowDivider()
@@ -198,7 +195,9 @@ struct GeneralPane: View {
                     title: L10n.t("settings.quotaWarningNotifications.title", settings.appLanguage),
                     subtitle: L10n.t("settings.quotaWarningNotifications.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.quotaWarningNotificationsEnabled).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.quotaWarningNotificationsEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
                 }
 
                 if settings.quotaWarningNotificationsEnabled {
@@ -234,7 +233,9 @@ struct GeneralPane: View {
                         title: L10n.t("settings.warningSound.title", settings.appLanguage),
                         subtitle: L10n.t("settings.warningSound.subtitle", settings.appLanguage)
                     ) {
-                        Toggle("", isOn: $settings.quotaWarningSoundEnabled).labelsHidden().toggleStyle(.instrument)
+                        Toggle("", isOn: $settings.quotaWarningSoundEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
                     }
 
                     SettingsRowDivider()
@@ -243,7 +244,9 @@ struct GeneralPane: View {
                         title: L10n.t("settings.warningAlert.title", settings.appLanguage),
                         subtitle: L10n.t("settings.warningAlert.subtitle", settings.appLanguage)
                     ) {
-                        Toggle("", isOn: $settings.quotaWarningOnScreenAlertEnabled).labelsHidden().toggleStyle(.instrument)
+                        Toggle("", isOn: $settings.quotaWarningOnScreenAlertEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
                     }
                 }
 
@@ -255,7 +258,7 @@ struct GeneralPane: View {
                 ) {
                     Toggle("", isOn: $settings.weeklyDigestEnabled)
                         .labelsHidden()
-                        .toggleStyle(.instrument)
+                        .toggleStyle(.instrumentSwitch)
                         .onChange(of: settings.weeklyDigestEnabled) { enabled in
                             if enabled { WeeklyDigest.lastEvaluatedAt = nil }
                         }
@@ -268,7 +271,7 @@ struct GeneralPane: View {
                     subtitle: L10n.t("settings.hotkey.subtitle", settings.appLanguage)
                 ) {
                     OpenPopoverShortcutRecorder()
-                        .frame(width: 160)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
 
@@ -301,7 +304,7 @@ struct GeneralPane: View {
                 }
             ))
             .multilineTextAlignment(.trailing)
-            .frame(width: 90)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 }

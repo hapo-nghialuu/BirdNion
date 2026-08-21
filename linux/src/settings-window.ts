@@ -4,6 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { t, currentLang, setLang, type Lang } from "./i18n";
 import {
   getPollSeconds, setPollSeconds, isManualRefresh, isRefreshOnOpenEnabled,
@@ -383,9 +384,49 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
   searchWrap.append(searchInput);
   (window as { __birdnionSidebarSearch?: string }).__birdnionSidebarSearch = searchQuery;
 
-  const footer = el("div", "sw-sidebar-footer", "BirdNion");
-  void getVersion().then((v) => {
-    footer.textContent = v ? `BirdNion ${v}` : "BirdNion";
+  const footer = el("button", "sw-sidebar-footer");
+  footer.setAttribute("type", "button");
+  let installedVersion = "";
+  let updateInfo: { version: string; url: string } | null = null;
+  const paintFooter = () => {
+    footer.replaceChildren();
+    footer.classList.toggle("update-available", !!updateInfo);
+    if (updateInfo) {
+      footer.append(el("span", "sw-sidebar-footer-update",
+        `${t("settingsUpdateAvailable")} ${updateInfo.version}`));
+      footer.append(el("span", "sw-sidebar-footer-action", t("aboutUpdateNow")));
+      footer.title = t("aboutUpdateNow");
+    } else {
+      footer.textContent = installedVersion ? `BirdNion ${installedVersion}` : "BirdNion";
+      footer.removeAttribute("title");
+    }
+  };
+  footer.addEventListener("click", () => {
+    if (!updateInfo) return;
+    // Linux: open release page then quit so the package can be replaced.
+    void openUrl(updateInfo.url)
+      .catch(() => {})
+      .finally(() => {
+        void invoke("quit_app").catch(() => { window.close(); });
+      });
+  });
+  paintFooter();
+  void getVersion().then(async (v) => {
+    installedVersion = v ?? "";
+    paintFooter();
+    try {
+      const info = await invokeTimeout<{ version: string; url: string } | null>(
+        "check_update",
+        { channel: "stable", currentVersion: installedVersion || "0" },
+        8000,
+      );
+      if (info?.version && info?.url) {
+        updateInfo = info;
+        paintFooter();
+      }
+    } catch {
+      // Keep version label; About pane still exposes manual check.
+    }
   }).catch(() => {});
 
   // Contextual roster slot below the nav (macOS c993e80a): Providers /

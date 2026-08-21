@@ -93,32 +93,30 @@ struct ClaudeCodePane: View {
     }
 
     var body: some View {
-        // The provider/config list lives inside the Settings sidebar column
-        // (below the nav block); the content column keeps a fixed header with
-        // the (tall) config form scrolling underneath it.
+        // Sidebar: only search is pinned; nav + config roster scroll together.
+        // Content: page header + detail scroll together.
         HStack(spacing: 0) {
             SettingsSidebar(selected: $tab, searchText: $searchText) {
-                ScrollView {
-                    providerList
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 10)
-                }
+                providerList
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
             }
 
-            VStack(alignment: .leading, spacing: 0) {
-                SettingsPaneHeader(
-                    title: L10n.t("settings.tab.aiCoding", lang),
-                    subtitle: L10n.t("settings.aiCoding.subtitle", lang)
-                )
-                .padding(.horizontal, 26)
-                .padding(.top, 22)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsPaneHeader(
+                        title: L10n.t("settings.tab.aiCoding", lang),
+                        subtitle: L10n.t("settings.aiCoding.subtitle", lang)
+                    )
+                    .padding(.bottom, 12)
 
-                ScrollView {
                     detail
-                        .padding(.horizontal, 26)
-                        .padding(.bottom, 30)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
+                .padding(.horizontal, 26)
+                .padding(.top, 22)
+                .padding(.bottom, 30)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -127,6 +125,7 @@ struct ClaudeCodePane: View {
             migrateStandaloneCodexProfiles()
             reloadProviders()
             reloadProfiles()
+            applyPendingAICodingSelection()
             if let initialProfileID,
                profiles.contains(where: { $0.id == initialProfileID }) {
                 selectedID = nil
@@ -134,6 +133,10 @@ struct ClaudeCodePane: View {
             }
             loadSelection()
             Task { await localProxy.refreshRuntimeStatus() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openClaudeCodeTab)) { _ in
+            applyPendingAICodingSelection()
+            loadSelection()
         }
         .onReceive(NotificationCenter.default.publisher(for: .birdnionProvidersChanged)) { _ in
             reloadProviders()
@@ -269,16 +272,20 @@ struct ClaudeCodePane: View {
     private var filteredProviders: [BirdNionConfigStore.Provider] {
         guard !searchQuery.isEmpty else { return providers }
         return providers.filter {
-            $0.id.lowercased().contains(searchQuery)
-                || providerName($0).lowercased().contains(searchQuery)
+            SettingsSearchIndex.providerMatches(
+                id: $0.id,
+                title: providerName($0),
+                query: searchQuery)
         }
     }
 
     private var filteredProfiles: [BirdNionConfigStore.ClaudeCodeProfile] {
         guard !searchQuery.isEmpty else { return profiles }
         return profiles.filter {
-            $0.id.lowercased().contains(searchQuery)
-                || $0.name.lowercased().contains(searchQuery)
+            let name = $0.name.lowercased()
+            let id = $0.id.lowercased()
+            let hay = "\(name) \(id) claude code codex custom profile config"
+            return hay.contains(searchQuery)
         }
     }
 
@@ -331,16 +338,15 @@ struct ClaudeCodePane: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    /// Status mark: filled square when activated, outline otherwise (instrument).
+    /// Status mark only when activated — inactive outline read as a stray
+    /// faint square on the right of every sidebar row.
+    @ViewBuilder
     private func listStatusDot(activated: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 0, style: .continuous)
-            .fill(activated ? SettingsTheme.success : Color.clear)
-            .frame(width: 7, height: 7)
-            .overlay(
-                RoundedRectangle(cornerRadius: 0, style: .continuous)
-                    .strokeBorder(activated ? SettingsTheme.success : SettingsTheme.border,
-                                  lineWidth: 1)
-            )
+        if activated {
+            RoundedRectangle(cornerRadius: 0, style: .continuous)
+                .fill(SettingsTheme.success)
+                .frame(width: 7, height: 7)
+        }
     }
 
     private func profileRow(_ p: BirdNionConfigStore.ClaudeCodeProfile) -> some View {
@@ -1226,16 +1232,16 @@ struct ClaudeCodePane: View {
                     } label: {
                         Label(L10n.t("ccx.add", lang), systemImage: "plus.circle.fill")
                     }
-                    .controlSize(.regular)
-                    .buttonStyle(.borderedProminent)
-                    .tint(SettingsTheme.accent)
+                    .buttonStyle(.instrumentPrimary)
+                    .pointingHandCursor()
 
                     Button {
                         NotificationCenter.default.post(name: .openProvidersTab, object: nil)
                     } label: {
                         Label(L10n.t("claudeCode.empty.openProviders", lang), systemImage: "point.3.connected.trianglepath.dotted")
                     }
-                    .controlSize(.regular)
+                    .buttonStyle(.instrumentOutline)
+                    .pointingHandCursor()
                 }
                 .padding(.top, 4)
                 .padding(.bottom, 8)
@@ -1734,6 +1740,25 @@ struct ClaudeCodePane: View {
         }
         if selectedID == nil || !providers.contains(where: { $0.id == selectedID }) {
             selectedID = providers.first?.id
+        }
+    }
+
+    /// Apply sidebar search navigation into this pane (provider or custom profile).
+    private func applyPendingAICodingSelection() {
+        if let profileID = UserDefaults.standard.string(forKey: "birdnion.selectedAICodingProfile"),
+           profiles.contains(where: { $0.id == profileID }) {
+            selectedID = nil
+            selectedProfileID = profileID
+            UserDefaults.standard.removeObject(forKey: "birdnion.selectedAICodingProfile")
+            UserDefaults.standard.removeObject(forKey: "birdnion.selectedAICodingProvider")
+            return
+        }
+        if let providerID = UserDefaults.standard.string(forKey: "birdnion.selectedAICodingProvider"),
+           providers.contains(where: { $0.id == providerID }) {
+            selectedProfileID = nil
+            selectedID = providerID
+            UserDefaults.standard.removeObject(forKey: "birdnion.selectedAICodingProvider")
+            UserDefaults.standard.removeObject(forKey: "birdnion.selectedAICodingProfile")
         }
     }
 

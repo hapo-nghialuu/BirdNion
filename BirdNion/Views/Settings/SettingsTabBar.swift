@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// Vertical settings sidebar: search filters nav titles, colored icon tiles,
-/// optional badges, and version footer. The five nav items form one contiguous
-/// block; `extra` renders a contextual list (provider roster / AI-coding
-/// configs) below them, separated by a divider, while the owning pane keeps
-/// that list's state. (Remake P2; file name kept for pbxproj stability.)
+/// Vertical settings sidebar: pinned search + always-visible page nav, optional
+/// contextual roster (or unified search hits), pinned version footer.
 struct SettingsSidebar<Extra: View>: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
@@ -27,13 +24,16 @@ struct SettingsSidebar<Extra: View>: View {
         self.hasExtra = true
     }
 
+    @ObservedObject private var updater = UpdateChecker.shared
     @State private var providersWithKey = 0
     @State private var activeAgentCount = 0
     @State private var hovering: SettingsTab?
 
-    private var filteredTabs: [SettingsTab] {
-        filter(SettingsTab.allSidebar)
+    private var searchQuery: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    private var isSearching: Bool { !searchQuery.isEmpty }
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
@@ -41,6 +41,7 @@ struct SettingsSidebar<Extra: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Pinned search.
             searchField
                 .padding(.horizontal, 14)
                 .padding(.vertical, 14)
@@ -48,37 +49,37 @@ struct SettingsSidebar<Extra: View>: View {
                     SettingsTheme.hairline.frame(height: 1)
                 }
 
-            // Five fixed rows — no scroll needed; the contextual list below
-            // owns the remaining height instead.
-            VStack(spacing: 2) {
-                ForEach(filteredTabs) { tab in
-                    navRow(tab)
-                }
-            }
-            .padding(.horizontal, 8)
-
-            if hasExtra {
-                Divider()
-                    .overlay(SettingsTheme.hairline)
-                    .padding(.vertical, 6)
+            // Page nav always stays visible; below it either search hits or
+            // the contextual Providers / AI Coding roster.
+            ScrollView {
+                VStack(spacing: 0) {
+                    VStack(spacing: 2) {
+                        ForEach(SettingsTab.allSidebar) { tab in
+                            navRow(tab)
+                        }
+                    }
                     .padding(.horizontal, 8)
+                    .padding(.top, 2)
 
-                extra()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            }
+                    Divider()
+                        .overlay(SettingsTheme.hairline)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
 
-            Spacer(minLength: 0)
-
-            Text("BirdNion \(appVersion)")
-                .font(.plexMono(10))
-                .tracking(0.6)
-                .foregroundStyle(SettingsTheme.tertiary)
-                .textCase(.uppercase)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .overlay(alignment: .top) {
-                    SettingsTheme.hairline.frame(height: 1)
+                    if isSearching {
+                        searchResults
+                            .padding(.horizontal, 8)
+                    } else if hasExtra {
+                        extra()
+                            .frame(maxWidth: .infinity, alignment: .top)
+                    }
                 }
+                .padding(.bottom, 10)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            // Pinned footer — does not scroll with nav / results.
+            versionFooter
         }
         .frame(width: 210)
         .background(SettingsTheme.toolbar)
@@ -90,6 +91,49 @@ struct SettingsSidebar<Extra: View>: View {
         .onAppear { refreshBadges() }
         .onReceive(NotificationCenter.default.publisher(for: .birdnionProvidersChanged)) { _ in
             refreshBadges()
+        }
+    }
+
+    // MARK: - Version / update footer
+
+    /// Default: `BirdNion 0.x.y`. When an update is available, show a
+    /// clickable prompt that runs brew upgrade (macOS) / opens the release.
+    @ViewBuilder
+    private var versionFooter: some View {
+        Group {
+            if case .available(let version, _) = updater.state {
+                Button {
+                    updater.applyAvailableUpdate()
+                } label: {
+                    VStack(spacing: 2) {
+                        Text(L10n.f("about.updateAvailable", settings.appLanguage, version))
+                            .font(.plexMono(10, weight: .semibold))
+                            .foregroundStyle(SettingsTheme.accent)
+                            .multilineTextAlignment(.center)
+                        Text(L10n.t("about.updateNow", settings.appLanguage))
+                            .font(.plexMono(9, weight: .medium))
+                            .foregroundStyle(SettingsTheme.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help(L10n.t("about.updateNow", settings.appLanguage))
+                .accessibilityLabel(L10n.f("about.updateAvailable", settings.appLanguage, version))
+            } else {
+                Text("BirdNion \(appVersion)")
+                    .font(.plexMono(10))
+                    .tracking(0.6)
+                    .foregroundStyle(SettingsTheme.tertiary)
+                    .textCase(.uppercase)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 8)
+        .overlay(alignment: .top) {
+            SettingsTheme.hairline.frame(height: 1)
         }
     }
 
@@ -175,16 +219,176 @@ struct SettingsSidebar<Extra: View>: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    // MARK: - Filter / badges
+    // MARK: - Unified search results (sidebar)
 
-    private func filter(_ tabs: [SettingsTab]) -> [SettingsTab] {
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return tabs }
-        return tabs.filter {
-            $0.title(language: settings.appLanguage)
-                .range(of: q, options: .caseInsensitive) != nil
+    private struct ProviderHit: Identifiable {
+        let id: String
+        let title: String
+    }
+
+    private struct ProfileHit: Identifiable {
+        let id: String
+        let title: String
+    }
+
+    private struct PageHit: Identifiable {
+        let id: String
+        let tab: SettingsTab
+        let title: String
+        let subtitle: String
+    }
+
+    private var providerHits: [ProviderHit] {
+        let q = searchQuery.lowercased()
+        return BirdNionConfigStore.allProviders().compactMap { row in
+            let title = SettingsSearchIndex.providerTitle(id: row.id, fallback: row.displayName)
+            guard SettingsSearchIndex.providerMatches(id: row.id, title: title, query: q) else { return nil }
+            return ProviderHit(id: row.id, title: title)
+        }
+        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    private var profileHits: [ProfileHit] {
+        let q = searchQuery.lowercased()
+        return BirdNionConfigStore.claudeCodeProfiles().compactMap { profile in
+            let title = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let label = title.isEmpty ? profile.id : title
+            let hay = "\(label) \(profile.id) claude code codex custom profile config".lowercased()
+            guard hay.contains(q) else { return nil }
+            return ProfileHit(id: profile.id, title: label)
         }
     }
+
+    private var pageHits: [PageHit] {
+        let q = searchQuery.lowercased()
+        let lang = settings.appLanguage
+        return SettingsTab.allSidebar.compactMap { tab in
+            let title = tab.title(language: lang)
+            let keywords = SettingsSearchIndex.pageKeywords(tab, language: lang)
+            let hay = ([title] + keywords).joined(separator: " ").lowercased()
+            guard hay.contains(q) else { return nil }
+            return PageHit(
+                id: tab.rawValue,
+                tab: tab,
+                title: title,
+                subtitle: L10n.t("settings.sidebar.search.page", lang))
+        }
+    }
+
+    private var hasSearchHits: Bool {
+        !providerHits.isEmpty || !profileHits.isEmpty || !pageHits.isEmpty
+    }
+
+    @ViewBuilder
+    private var searchResults: some View {
+        let lang = settings.appLanguage
+        VStack(alignment: .leading, spacing: 10) {
+            if !hasSearchHits {
+                Text(L10n.t("settings.sidebar.search.empty", lang))
+                    .font(.plexSans(11))
+                    .foregroundStyle(SettingsTheme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+            }
+
+            if !providerHits.isEmpty {
+                searchSection(title: L10n.t("settings.tab.providers", lang)) {
+                    ForEach(providerHits) { hit in
+                        searchHitRow(
+                            title: hit.title,
+                            subtitle: L10n.t("settings.sidebar.search.provider", lang),
+                            systemImage: "square.grid.2x2") {
+                                searchText = ""
+                                openProviderSettings(hit.id)
+                            }
+                    }
+                }
+            }
+
+            if !profileHits.isEmpty {
+                searchSection(title: L10n.t("settings.tab.aiCoding", lang)) {
+                    ForEach(profileHits) { hit in
+                        searchHitRow(
+                            title: hit.title,
+                            subtitle: L10n.t("settings.sidebar.search.profile", lang),
+                            systemImage: "terminal") {
+                                searchText = ""
+                                openAICodingSettings(profileID: hit.id)
+                            }
+                    }
+                }
+            }
+
+            if !pageHits.isEmpty {
+                searchSection(title: L10n.t("settings.sidebar.search.pages", lang)) {
+                    ForEach(pageHits) { hit in
+                        searchHitRow(
+                            title: hit.title,
+                            subtitle: hit.subtitle,
+                            systemImage: hit.tab.icon) {
+                                searchText = ""
+                                selected = hit.tab
+                            }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func searchSection<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.plexMono(10, weight: .medium))
+                .tracking(0.6)
+                .foregroundStyle(SettingsTheme.tertiary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 4)
+            VStack(spacing: 2) {
+                content()
+            }
+        }
+    }
+
+    private func searchHitRow(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.secondary)
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.plexSans(12, weight: .medium))
+                        .foregroundStyle(SettingsTheme.primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.plexSans(10))
+                        .foregroundStyle(SettingsTheme.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // No always-on fill — a permanent hoverSurface card read as a
+            // faint square beside each hit. Match nav rows: plain until hover.
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
+    // MARK: - Badges
 
     private func badgeText(for tab: SettingsTab) -> String? {
         switch tab {
