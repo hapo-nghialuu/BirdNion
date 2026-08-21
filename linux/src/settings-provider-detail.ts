@@ -229,7 +229,10 @@ export function detailInfoGrid(id: string, enabled: boolean, st: ProviderStatus 
           ? await invoke<string>("format_storage_bytes", { bytes })
           : t("provider.storageNone");
       })
-      .catch(() => {});
+      .catch(() => {
+        const value = row.querySelector(".pp-info-value");
+        if (value) value.textContent = "—";
+      });
   }
 
   card.append(body);

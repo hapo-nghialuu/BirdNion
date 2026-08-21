@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::providers::browser_cookies;
@@ -137,23 +137,20 @@ struct StoredBalances {
     accounts: HashMap<String, PersistedBalance>,
 }
 
-fn balance_cache_path() -> PathBuf {
-    crate::config::config_path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(BALANCE_CACHE_FILENAME)
+fn balance_cache_path() -> Option<PathBuf> {
+    crate::config::support_dir().map(|path| path.join(BALANCE_CACHE_FILENAME))
 }
 
 fn load_stored_balances() -> StoredBalances {
-    std::fs::read_to_string(balance_cache_path())
-        .ok()
+    balance_cache_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
 fn persist_balance_window(window: &QuotaWindow, saved_at: i64) -> Result<(), String> {
-    let path = balance_cache_path();
+    let path = balance_cache_path()
+        .ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }

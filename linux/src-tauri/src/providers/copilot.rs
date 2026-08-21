@@ -1,6 +1,6 @@
 //! GitHub Copilot quota provider — port of `CopilotProvider.swift`.
 //!
-//! Token resolution: `~/.config/birdnion/copilot-accounts.json` (same file
+//! Token resolution: BirdNion's platform config `copilot-accounts.json` (same file
 //! macOS's Device Flow login writes; that flow is out of scope on Linux, so
 //! this reads an existing file only) → `cfg.api_key` manual token fallback.
 //!
@@ -102,8 +102,7 @@ struct AccountStore {
 }
 
 fn copilot_accounts_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(std::path::PathBuf::from(home).join(".config/birdnion/copilot-accounts.json"))
+    crate::config::support_dir().map(|path| path.join("copilot-accounts.json"))
 }
 
 fn load_active_account() -> Option<CopilotAccount> {

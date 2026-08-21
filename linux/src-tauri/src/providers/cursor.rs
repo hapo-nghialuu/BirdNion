@@ -5,6 +5,7 @@
 //!      `ItemTable`), read-only. Linux path mirrors macOS's Electron layout:
 //!      macOS:  ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
 //!      Linux:  ~/.config/Cursor/User/globalStorage/state.vscdb
+//!      Windows: %APPDATA%\Cursor\User\globalStorage\state.vscdb
 //!   2. Browser cookies for cursor.com (`WorkosCursorSessionToken`).
 //!
 //! Endpoints (base `https://cursor.com`):
@@ -39,13 +40,13 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let usage_summary_text = match usage_summary_resp {
         Ok(resp) if resp.status().is_success() => match resp.text().await {
             Ok(t) => t,
-            Err(e) => return ProviderStatus::failure(&id, &name, format!("Lỗi mạng Cursor: {e}")),
+            Err(_) => return ProviderStatus::failure(&id, &name, "Không đọc được phản hồi Cursor"),
         },
         Ok(resp) if resp.status().as_u16() == 401 || resp.status().as_u16() == 403 => {
             return ProviderStatus::failure(&id, &name, "Chưa đăng nhập Cursor (mở app Cursor hoặc đăng nhập cursor.com)")
         }
         Ok(resp) => return ProviderStatus::failure(&id, &name, format!("Lỗi mạng Cursor: HTTP {}", resp.status().as_u16())),
-        Err(e) => return ProviderStatus::failure(&id, &name, format!("Lỗi mạng Cursor: {e}")),
+        Err(_) => return ProviderStatus::failure(&id, &name, "Không kết nối được Cursor"),
     };
 
     // Best-effort /auth/me for sub (drives the legacy /api/usage call).
@@ -68,7 +69,7 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
 
     match parse_status(&id, &name, &usage_summary_text, request_usage_text.as_deref()) {
         Ok(status) => status,
-        Err(e) => ProviderStatus::failure(&id, &name, format!("Lỗi phân tích dữ liệu Cursor: {e}")),
+        Err(_) => ProviderStatus::failure(&id, &name, "Dữ liệu Cursor không hợp lệ"),
     }
 }
 
@@ -83,13 +84,9 @@ fn resolve_cookie_header(cfg: &crate::config::Provider) -> Result<String, String
 }
 
 fn cursor_state_db_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let path = std::path::PathBuf::from(home).join(".config/Cursor/User/globalStorage/state.vscdb");
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
+    crate::platform::paths::cursor_state_db_candidates()
+        .into_iter()
+        .find(|path| path.is_file())
 }
 
 fn read_token_from_sqlite() -> Option<String> {

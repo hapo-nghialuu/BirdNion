@@ -1,6 +1,6 @@
 //! Gemini (Google) quota provider — port of `GeminiProvider.swift`.
 //!
-//! Reads OAuth creds from `~/.gemini/oauth_creds.json` (access_token,
+//! Reads OAuth creds from the platform user home `.gemini/oauth_creds.json` (access_token,
 //! refresh_token, expiry_date ms epoch, id_token). Refreshes in-memory via
 //! `POST https://oauth2.googleapis.com/token` when absent/expired — never
 //! persisted back to disk. Fetches quota via
@@ -25,11 +25,6 @@ fn oauth_client_secret() -> String {
     format!("{}{}", OAUTH_CLIENT_SECRET_PARTS.0, OAUTH_CLIENT_SECRET_PARTS.1)
 }
 
-fn credentials_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    std::path::PathBuf::from(home).join(".gemini/oauth_creds.json")
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct OAuthCredentials {
     access_token: Option<String>,
@@ -39,7 +34,7 @@ struct OAuthCredentials {
     expiry: Option<i64>,
 }
 
-/// Pure parse of `~/.gemini/oauth_creds.json` contents (unit-tested).
+/// Pure parse of Gemini CLI `oauth_creds.json` contents (unit-tested).
 /// `expiry_date` (or legacy `expiry`) arrives in epoch milliseconds.
 fn parse_credentials(contents: &str) -> Result<OAuthCredentials, String> {
     let json: Value = serde_json::from_str(contents).map_err(|e| format!("JSON: {e}"))?;
@@ -93,9 +88,9 @@ async fn refresh_access_token(client: &reqwest::Client, refresh_token: &str) -> 
         .body(body)
         .send()
         .await
-        .map_err(|e| format!("Network: {e}"))?;
+        .map_err(|_| "Không kết nối được Gemini OAuth".to_string())?;
     if resp.status().as_u16() != 200 {
-        return Err("Chưa đăng nhập Gemini CLI (~/.gemini/oauth_creds.json)".to_string());
+        return Err("Chưa đăng nhập Gemini CLI".to_string());
     }
     let json: Value = resp.json().await.map_err(|_| "Không parse được token refresh response".to_string())?;
     json.get("access_token")
@@ -182,9 +177,12 @@ async fn load_plan_name(client: &reqwest::Client, token: &str, id_token: Option<
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
-    let contents = match std::fs::read_to_string(credentials_path()) {
+    let Some(credentials_path) = crate::platform::paths::gemini_credentials_path() else {
+        return ProviderStatus::failure(&cfg.id, &name, "Không xác định được thư mục Gemini CLI");
+    };
+    let contents = match std::fs::read_to_string(credentials_path) {
         Ok(c) => c,
-        Err(_) => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI (~/.gemini/oauth_creds.json)"),
+        Err(_) => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI"),
     };
     let creds = match parse_credentials(&contents) {
         Ok(c) => c,
@@ -196,7 +194,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let needs_refresh = creds.access_token.is_none() || creds.expiry.is_some_and(|e| e < now);
     let access_token = if needs_refresh {
         let Some(refresh_token) = creds.refresh_token.as_deref().filter(|t| !t.is_empty()) else {
-            return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI (~/.gemini/oauth_creds.json)");
+            return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI");
         };
         match refresh_access_token(&client, refresh_token).await {
             Ok(t) => t,
@@ -205,7 +203,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     } else {
         match creds.access_token.clone() {
             Some(t) if !t.is_empty() => t,
-            _ => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI (~/.gemini/oauth_creds.json)"),
+            _ => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI"),
         }
     };
 
@@ -225,16 +223,16 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         .await
     {
         Ok(r) => r,
-        Err(e) => return ProviderStatus::failure(&cfg.id, &name, format!("Lỗi mạng: {e}")),
+        Err(_) => return ProviderStatus::failure(&cfg.id, &name, "Không kết nối được Gemini"),
     };
     match resp.status().as_u16() {
         200 => {}
-        401 => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI (~/.gemini/oauth_creds.json)"),
+        401 => return ProviderStatus::failure(&cfg.id, &name, "Chưa đăng nhập Gemini CLI"),
         code => return ProviderStatus::failure(&cfg.id, &name, format!("Lỗi API Gemini: HTTP {code}")),
     }
     let quota_json: Value = match resp.json().await {
         Ok(j) => j,
-        Err(e) => return ProviderStatus::failure(&cfg.id, &name, format!("Parse thất bại: {e}")),
+        Err(_) => return ProviderStatus::failure(&cfg.id, &name, "Phản hồi Gemini không hợp lệ"),
     };
 
     let buckets = match parse_quota_buckets(&quota_json) {

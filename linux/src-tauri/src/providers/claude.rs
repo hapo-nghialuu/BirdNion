@@ -1,7 +1,7 @@
 //! Claude (Anthropic) quota provider — port of `ClaudeUsageOrchestrator.swift`.
 //! `cfg.source` selects the data source (mirrors macOS `ClaudeUsageDataSource`
 //! / `UserDefaults` key `claudeUsageDataSource`), default `"auto"`:
-//!   - `"oauth"` — `ClaudeOAuth.swift` port: `~/.claude/.credentials.json`
+//!   - `"oauth"` — `ClaudeOAuth.swift` port: platform Claude config roots
 //!     (or env token), refreshed against `platform.claude.com`, usage from
 //!     `api.anthropic.com/api/oauth/usage`.
 //!   - `"web"` — `ClaudeWebAPIFetcher.swift` port (portable subset): browser
@@ -91,14 +91,13 @@ fn load_from_env() -> Option<Credentials> {
     None
 }
 
-fn credentials_file_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    std::path::PathBuf::from(home).join(".claude/.credentials.json")
-}
-
 fn load_from_file() -> Option<Credentials> {
-    let contents = std::fs::read_to_string(credentials_file_path()).ok()?;
-    parse_oauth_credentials(&contents)
+    crate::platform::paths::claude_config_dirs()
+        .into_iter()
+        .find_map(|directory| {
+            let contents = std::fs::read_to_string(directory.join(".credentials.json")).ok()?;
+            parse_oauth_credentials(&contents)
+        })
 }
 
 fn load_credentials() -> Option<Credentials> {
@@ -121,7 +120,7 @@ async fn refresh(refresh_token: &str) -> Result<(String, Option<String>, i64), S
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("client: {e}"))?;
+        .map_err(|_| "Không tạo được HTTP client Claude".to_string())?;
     let form = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
@@ -133,7 +132,7 @@ async fn refresh(refresh_token: &str) -> Result<(String, Option<String>, i64), S
         .form(&form)
         .send()
         .await
-        .map_err(|e| format!("Network: {e}"))?;
+        .map_err(|_| "Không kết nối được Claude".to_string())?;
     let status = resp.status().as_u16();
     if status != 200 {
         return Err(format!(
@@ -173,7 +172,7 @@ async fn fetch_usage(access_token: &str) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("client: {e}"))?;
+        .map_err(|_| "Không tạo được HTTP client Claude".to_string())?;
     let resp = client
         .get(USAGE_URL)
         .bearer_auth(access_token)
@@ -183,9 +182,12 @@ async fn fetch_usage(access_token: &str) -> Result<Value, String> {
         .header("User-Agent", "claude-code/1.0.0")
         .send()
         .await
-        .map_err(|e| format!("Network: {e}"))?;
+        .map_err(|_| "Không kết nối được Claude".to_string())?;
     match resp.status().as_u16() {
-        200..=299 => resp.json::<Value>().await.map_err(|e| format!("JSON: {e}")),
+        200..=299 => resp
+            .json::<Value>()
+            .await
+            .map_err(|_| "Phản hồi Claude không hợp lệ".to_string()),
         401 | 403 => Err("Token Claude hết hạn — đăng nhập lại bằng Claude Code".to_string()),
         code => Err(format!("HTTP {code}")),
     }
@@ -202,7 +204,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     match resolved_source(cfg) {
         "web" => fetch_web(cfg, &name).await,
         "api" => fetch_admin_api(cfg, &name).await,
-        "cli" => ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trên Linux"),
+        "cli" => ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trong bản này"),
         "auto" => {
             let status = fetch_oauth(cfg, &name).await;
             if status.error.is_some() {
@@ -345,9 +347,12 @@ async fn fetch_web_json(client: &reqwest::Client, url: &str, cookie: &str) -> Re
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| format!("Network: {e}"))?;
+        .map_err(|_| "Không kết nối được Claude Web".to_string())?;
     match resp.status().as_u16() {
-        200..=299 => resp.json::<Value>().await.map_err(|e| format!("JSON: {e}")),
+        200..=299 => resp
+            .json::<Value>()
+            .await
+            .map_err(|_| "Phản hồi Claude Web không hợp lệ".to_string()),
         401 | 403 => Err("Phiên đăng nhập hết hạn — vui lòng đăng nhập lại claude.ai.".to_string()),
         code => Err(format!("Claude API lỗi HTTP {code}.")),
     }

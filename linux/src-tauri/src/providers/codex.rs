@@ -59,7 +59,7 @@ impl Credentials {
 
 /// Resolves through the active Codex account (system `~/.codex`/`$CODEX_HOME`,
 /// or a managed account's private home) — mirrors `activeAuthURL()`.
-fn auth_file_path() -> PathBuf {
+fn auth_file_path() -> Option<PathBuf> {
     codex_accounts::active_auth_path()
 }
 
@@ -161,11 +161,12 @@ fn decode_base64url(s: &str) -> Option<Vec<u8>> {
 /// Writes refreshed tokens back to auth.json, preserving other keys. Mirrors
 /// `CodexAuthStore.save` (0600 perms via a staged file + atomic rename).
 fn save_auth_json(path: &std::path::Path, creds: &Credentials) -> std::io::Result<()> {
-    let mut json: serde_json::Map<String, Value> = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
+    let existing = std::fs::read_to_string(path)?;
+    let value: Value = serde_json::from_str(&existing)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let mut json = value.as_object().cloned().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "auth.json is not an object")
+    })?;
 
     let mut tokens = json.get("tokens").and_then(Value::as_object).cloned().unwrap_or_default();
     tokens.insert("access_token".into(), Value::String(creds.access_token.clone()));
@@ -179,24 +180,8 @@ fn save_auth_json(path: &std::path::Path, creds: &Credentials) -> std::io::Resul
     json.insert("tokens".into(), Value::Object(tokens));
     json.insert("last_refresh".into(), Value::String(chrono::Utc::now().to_rfc3339()));
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let data = serde_json::to_vec_pretty(&Value::Object(json))?;
-    let staged = path.with_extension(format!("birdnion-{}.tmp", std::process::id()));
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&staged)?;
-        f.write_all(&data)?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&staged, path)
+    crate::platform::atomic_file::write_private_json_atomic::<Value>(path, &data)
 }
 
 async fn refresh_token(refresh_token: &str) -> Result<(String, Option<String>, Option<String>), String> {
@@ -296,7 +281,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 
 async fn fetch_uncached(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
-    let path = auth_file_path();
+    let Some(path) = auth_file_path() else {
+        return fetch_cookie_fallback(cfg, &name).await;
+    };
 
     let contents = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -314,7 +301,13 @@ async fn fetch_uncached(cfg: &config::Provider) -> ProviderStatus {
             creds.refresh_token = refresh.unwrap_or(creds.refresh_token);
             creds.id_token = id_token.or(creds.id_token);
             creds.last_refresh = Some(now);
-            let _ = save_auth_json(&path, &creds);
+            if save_auth_json(&path, &creds).is_err() {
+                return ProviderStatus::failure(
+                    &cfg.id,
+                    &name,
+                    "Không lưu được auth.json sau khi làm mới token",
+                );
+            }
         }
     }
 
@@ -339,7 +332,13 @@ async fn fetch_uncached(cfg: &config::Provider) -> ProviderStatus {
                     creds.refresh_token = refresh.unwrap_or(creds.refresh_token);
                     creds.id_token = id_token.or(creds.id_token);
                     creds.last_refresh = Some(now);
-                    let _ = save_auth_json(&path, &creds);
+                    if save_auth_json(&path, &creds).is_err() {
+                        return ProviderStatus::failure(
+                            &cfg.id,
+                            &name,
+                            "Không lưu được auth.json sau khi làm mới token",
+                        );
+                    }
                     if let Ok(body) = fetch_usage(&client, &creds.access_token, creds.account_id.as_deref()).await {
                         let mut status = build_success(&cfg.id, &name, &body, &creds, fetch_cookie_enrichment(cfg).await.as_ref(), &side).await;
                         status.menu_bar_metric = cfg.menu_bar_metric.clone();

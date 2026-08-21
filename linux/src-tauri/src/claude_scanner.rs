@@ -208,29 +208,17 @@ fn fallback_project_identity(root: &Path, file: &Path) -> Option<ProjectIdentity
 /// entry's `projects/` subdir); otherwise both XDG and legacy homes are
 /// scanned — identical to the Swift scanner.
 pub fn default_roots() -> Vec<PathBuf> {
-    if let Ok(raw) = std::env::var("CLAUDE_CONFIG_DIR") {
-        let roots: Vec<PathBuf> = raw
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|p| {
-                let path = PathBuf::from(p);
-                if path.file_name().is_some_and(|n| n == "projects") {
-                    path
-                } else {
-                    path.join("projects")
-                }
-            })
-            .collect();
-        if !roots.is_empty() {
-            return roots;
-        }
-    }
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    vec![
-        home.join(".config/claude/projects"),
-        home.join(".claude/projects"),
-    ]
+    let platform = crate::platform::paths::Platform::current();
+    crate::platform::paths::claude_config_dirs()
+        .into_iter()
+        .map(|path| {
+            if crate::platform::paths::is_projects_dir(&path, platform) {
+                path
+            } else {
+                path.join("projects")
+            }
+        })
+        .collect()
 }
 
 pub fn usage_scan() -> Option<UsageScan> {

@@ -1,4 +1,4 @@
-//! BirdNion for Linux — Tauri shell: tray icon + single window + the
+//! BirdNion desktop Tauri shell: tray icon + single window + the
 //! usage-report commands the web UI calls. The window hides on close so the
 //! app lives in the tray, mirroring the macOS menu-bar behavior.
 
@@ -14,6 +14,7 @@ mod elevenlabs_keys;
 mod hiyo_keys;
 mod freemodel_accounts;
 mod grok_scanner;
+mod platform;
 mod providers;
 mod project_cost_history;
 mod project_insights;
@@ -284,34 +285,32 @@ fn onboarding_detection_from_flags(
 /// executable existence; it never opens or parses a credential file.
 #[tauri::command]
 fn provider_onboarding_detection(id: String) -> ProviderOnboardingDetection {
-    use std::path::PathBuf;
-
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let executable_exists = |name: &str| {
-        std::env::var_os("PATH")
-            .map(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
-            .unwrap_or(false)
-    };
     match id.as_str() {
         "claude" => {
-            let has_file = home.join(".claude").join(".credentials.json").is_file();
-            let has_cli = executable_exists("claude");
+            let current_platform = platform::paths::Platform::current();
+            let has_file = platform::paths::claude_config_dirs()
+                .into_iter()
+                .map(|path| {
+                    if platform::paths::is_projects_dir(&path, current_platform) {
+                        path.parent().map(std::path::Path::to_path_buf).unwrap_or(path)
+                    } else {
+                        path
+                    }
+                })
+                .any(|path| path.join(".credentials.json").is_file());
+            let has_cli = platform::executable::resolve_executable("claude").is_some();
             onboarding_detection_from_flags(has_file, "Claude Code", has_cli, "Claude CLI", "Claude Code / CLI")
         }
         "codex" => {
-            let root = std::env::var_os("CODEX_HOME").map(PathBuf::from)
-                .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or_else(|| home.join(".codex"));
-            let has_file = root.join("auth.json").is_file();
-            let has_cli = executable_exists("codex");
+            let has_file = platform::paths::codex_home()
+                .is_some_and(|path| path.join("auth.json").is_file());
+            let has_cli = platform::executable::resolve_executable("codex").is_some();
             onboarding_detection_from_flags(has_file, "Codex login", has_cli, "Codex CLI", "Codex login / CLI")
         }
         "grok" => {
-            let root = std::env::var_os("GROK_HOME").map(PathBuf::from)
-                .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or_else(|| home.join(".grok"));
-            let has_auth = root.join("auth.json").is_file();
-            let has_sessions = root.join("sessions").is_dir();
+            let root = platform::paths::grok_home();
+            let has_auth = root.as_ref().is_some_and(|path| path.join("auth.json").is_file());
+            let has_sessions = root.is_some_and(|path| path.join("sessions").is_dir());
             onboarding_detection_from_flags(has_auth, "Grok login", has_sessions, "Grok sessions", "Grok login / sessions")
         }
         _ => onboarding_detection_from_flags(false, "", false, "", ""),
@@ -852,95 +851,98 @@ async fn codex_delete(
 /// Ensure a custom Claude profile has a linked Codex counterpart (create if needed).
 #[tauri::command]
 fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexProfile, String> {
-    let mut settings = config::load();
-    let claude = settings
-        .claude_code_profiles
-        .iter()
-        .find(|p| p.id == claude_profile_id)
-        .cloned()
-        .ok_or_else(|| "Không tìm thấy config Claude".to_string())?;
+    config::update(|settings| {
+        let claude = settings
+            .claude_code_profiles
+            .iter()
+            .find(|p| p.id == claude_profile_id)
+            .cloned()
+            .ok_or_else(|| "Không tìm thấy config Claude".to_string())?;
 
-    if let Some(cid) = claude.codex_profile_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(existing) = settings.codex_profiles.iter().find(|c| c.id == cid) {
-            return Ok(existing.clone());
+        if let Some(cid) = claude
+            .codex_profile_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(existing) = settings.codex_profiles.iter().find(|c| c.id == cid) {
+                return Ok(existing.clone());
+            }
         }
-    }
 
-    let created = config::make_codex_profile_from_claude(&claude, uuid_v4());
-    let created_id = created.id.clone();
-    settings.codex_profiles.push(created.clone());
-    if let Some(c) = settings
-        .claude_code_profiles
-        .iter_mut()
-        .find(|p| p.id == claude_profile_id)
-    {
-        c.codex_profile_id = Some(created_id);
-    }
-    config::save(&settings)?;
-    Ok(created)
+        let created = config::make_codex_profile_from_claude(&claude, uuid_v4());
+        let created_id = created.id.clone();
+        settings.codex_profiles.push(created.clone());
+        if let Some(claude) = settings
+            .claude_code_profiles
+            .iter_mut()
+            .find(|profile| profile.id == claude_profile_id)
+        {
+            claude.codex_profile_id = Some(created_id);
+        }
+        Ok(created)
+    })
 }
 
 /// Ensure a preset provider has a derived Codex profile (Anthropic + local proxy).
 #[tauri::command]
 fn codex_ensure_preset(provider_id: String) -> Result<config::CodexProfile, String> {
-    let mut settings = config::load();
-    let provider = settings
-        .providers
-        .iter()
-        .find(|p| p.id == provider_id)
-        .cloned()
-        .ok_or_else(|| "Không tìm thấy provider".to_string())?;
-    let base = claude_code::base_url_for_provider(&provider_id, &provider)
-        .ok_or_else(|| "Thiếu Base URL, API key hoặc model cho Codex".to_string())?;
-    let key = provider
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "Thiếu Base URL, API key hoặc model cho Codex".to_string())?
-        .to_string();
+    config::update(|settings| {
+        let provider = settings
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .cloned()
+            .ok_or_else(|| "Không tìm thấy provider".to_string())?;
+        let base = claude_code::base_url_for_provider(&provider_id, &provider)
+            .ok_or_else(|| "Thiếu Base URL, API key hoặc model cho Codex".to_string())?;
+        let key = provider
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "Thiếu Base URL, API key hoặc model cho Codex".to_string())?
+            .to_string();
 
-    if let Some(cid) = provider
-        .codex_profile_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        if let Some(idx) = settings.codex_profiles.iter().position(|c| c.id == cid) {
-            let mut existing = settings.codex_profiles[idx].clone();
-            if existing.base_url != base || existing.api_key != key {
-                existing.base_url = base;
-                existing.api_key = key;
-                existing.cli_proxy_applied_signature = None;
-                settings.codex_profiles[idx] = existing.clone();
-                config::save(&settings)?;
+        if let Some(cid) = provider
+            .codex_profile_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(idx) = settings.codex_profiles.iter().position(|c| c.id == cid) {
+                let existing = &mut settings.codex_profiles[idx];
+                if existing.base_url != base || existing.api_key != key {
+                    existing.base_url = base;
+                    existing.api_key = key;
+                    existing.cli_proxy_applied_signature = None;
+                }
+                return Ok(existing.clone());
             }
-            return Ok(existing);
         }
-    }
 
-    let name = provider
-        .display_name
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| provider_id.clone());
-    let created = config::CodexProfile {
-        id: uuid_v4(),
-        name,
-        base_url: base,
-        api_key: key,
-        model: String::new(),
-        upstream_protocol_raw: Some(config::CodexProfile::PROTOCOL_ANTHROPIC.into()),
-        connection_mode_raw: Some(config::CodexProfile::MODE_LOCAL_PROXY.into()),
-        ..Default::default()
-    };
-    let created_id = created.id.clone();
-    settings.codex_profiles.push(created.clone());
-    if let Some(p) = settings.providers.iter_mut().find(|p| p.id == provider_id) {
-        p.codex_profile_id = Some(created_id);
-    }
-    config::save(&settings)?;
-    Ok(created)
+        let name = provider
+            .display_name
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| provider_id.clone());
+        let created = config::CodexProfile {
+            id: uuid_v4(),
+            name,
+            base_url: base,
+            api_key: key,
+            model: String::new(),
+            upstream_protocol_raw: Some(config::CodexProfile::PROTOCOL_ANTHROPIC.into()),
+            connection_mode_raw: Some(config::CodexProfile::MODE_LOCAL_PROXY.into()),
+            ..Default::default()
+        };
+        let created_id = created.id.clone();
+        settings.codex_profiles.push(created.clone());
+        if let Some(p) = settings.providers.iter_mut().find(|p| p.id == provider_id) {
+            p.codex_profile_id = Some(created_id);
+        }
+        Ok(created)
+    })
 }
 
 /// Minimal UUID v4 (no extra crate) — same approach as codex_accounts.
@@ -1168,6 +1170,7 @@ fn open_settings_window_impl(app: &tauri::AppHandle, section: Option<&str>) -> R
 fn show_main_window(app: &tauri::AppHandle) {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -1188,6 +1191,9 @@ fn toggle_main_window(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1281,7 +1287,7 @@ pub fn run() {
                 .menu(&menu)
                 // macOS: left-click → popover; right-click → menu (matches NSStatusItem).
                 // Linux: menu on click is the only reliable path (no tray click events).
-                .show_menu_on_left_click(cfg!(not(target_os = "macos")))
+                .show_menu_on_left_click(cfg!(target_os = "linux"))
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
                     "settings" => {

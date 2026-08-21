@@ -451,23 +451,7 @@ fn write_string(contents: &str, path: &Path) -> Result<(), String> {
 }
 
 fn write_data(data: &[u8], path: &Path) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, data).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
+    crate::platform::atomic_file::write_private_atomic(path, data).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -742,37 +726,36 @@ pub fn delete_profile(
     }
     remove_profile_file(profile_id, None);
 
-    let mut settings = config::load();
-    settings.codex_profiles.retain(|p| p.id != profile_id);
+    config::update(|settings| {
+        settings.codex_profiles.retain(|p| p.id != profile_id);
 
-    if delete_linked_claude {
-        if let Some(ref p) = profile {
-            if let Some(claude_id) = cleaned_opt(p.claude_code_profile_id.as_deref()) {
-                settings
-                    .claude_code_profiles
-                    .retain(|c| c.id != claude_id);
+        if delete_linked_claude {
+            if let Some(ref p) = profile {
+                if let Some(claude_id) = cleaned_opt(p.claude_code_profile_id.as_deref()) {
+                    settings
+                        .claude_code_profiles
+                        .retain(|c| c.id != claude_id);
+                }
+            }
+            for claude in &mut settings.claude_code_profiles {
+                if cleaned_opt(claude.codex_profile_id.as_deref()).as_deref() == Some(profile_id) {
+                    claude.codex_profile_id = None;
+                }
+            }
+        } else {
+            for claude in &mut settings.claude_code_profiles {
+                if cleaned_opt(claude.codex_profile_id.as_deref()).as_deref() == Some(profile_id) {
+                    claude.codex_profile_id = None;
+                }
+            }
+            for provider in &mut settings.providers {
+                if cleaned_opt(provider.codex_profile_id.as_deref()).as_deref() == Some(profile_id) {
+                    provider.codex_profile_id = None;
+                }
             }
         }
-        // Also clear reverse links from any remaining Claude rows.
-        for c in &mut settings.claude_code_profiles {
-            if cleaned_opt(c.codex_profile_id.as_deref()).as_deref() == Some(profile_id) {
-                c.codex_profile_id = None;
-            }
-        }
-    } else {
-        // Preset: keep Claude/providers; only clear codexProfileID links.
-        for c in &mut settings.claude_code_profiles {
-            if cleaned_opt(c.codex_profile_id.as_deref()).as_deref() == Some(profile_id) {
-                c.codex_profile_id = None;
-            }
-        }
-        for p in &mut settings.providers {
-            if cleaned_opt(p.codex_profile_id.as_deref()).as_deref() == Some(profile_id) {
-                p.codex_profile_id = None;
-            }
-        }
-    }
-    config::save(&settings)
+        Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,8 @@ use crate::config;
 use crate::providers::{self, ProviderStatus};
 
 pub const SYSTEM_ID: &str = "system";
+static ACCOUNT_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static SNAPSHOT_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -66,32 +68,29 @@ pub struct AccountQuotaSnapshot {
     pub error_kind: Option<String>,
 }
 
-fn support_dir() -> PathBuf {
+fn support_dir() -> Option<PathBuf> {
     // Sibling of settings.json (same directory config::config_path() resolves
     // its parent to), keeping every BirdNion app-state file under one root.
-    config::config_path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+    config::support_dir()
 }
 
-fn accounts_root_dir() -> PathBuf {
-    support_dir().join("codex-accounts")
+fn accounts_root_dir() -> Option<PathBuf> {
+    support_dir().map(|path| path.join("codex-accounts"))
 }
 
-fn metadata_path() -> PathBuf {
-    support_dir().join("codex-accounts.json")
+fn metadata_path() -> Option<PathBuf> {
+    support_dir().map(|path| path.join("codex-accounts.json"))
 }
 
-fn snapshots_path() -> PathBuf {
-    support_dir().join("codex-account-snapshots.json")
+fn snapshots_path() -> Option<PathBuf> {
+    support_dir().map(|path| path.join("codex-account-snapshots.json"))
 }
 
 /// Missing or corrupt snapshots are non-fatal: this file is only a popover
 /// cache, never an authentication or routing source of truth.
 pub fn quota_snapshots() -> HashMap<String, AccountQuotaSnapshot> {
-    std::fs::read_to_string(snapshots_path())
-        .ok()
+    snapshots_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default()
 }
@@ -99,15 +98,19 @@ pub fn quota_snapshots() -> HashMap<String, AccountQuotaSnapshot> {
 fn persist_snapshots(
     snapshots: &HashMap<String, AccountQuotaSnapshot>,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(support_dir()).map_err(|e| e.to_string())?;
+    let path = snapshots_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let json = serde_json::to_string_pretty(snapshots).map_err(|e| e.to_string())?;
-    std::fs::write(snapshots_path(), json).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_json_atomic::<
+        HashMap<String, AccountQuotaSnapshot>,
+    >(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// Persist the result of an already-completed Codex provider fetch. No new
 /// request is initiated here. A failure keeps the last-good quota but records
 /// the current actionable error classification.
 pub fn save_snapshot(account_id: &str, status: &ProviderStatus) -> Result<(), String> {
+    let _guard = SNAPSHOT_STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut snapshots = quota_snapshots();
     let previous = snapshots.get(account_id).cloned().unwrap_or_default();
     let lowest = status.windows.iter().min_by_key(|window| window.remaining_pct);
@@ -140,24 +143,19 @@ pub fn save_snapshot(account_id: &str, status: &ProviderStatus) -> Result<(), St
 }
 
 fn prune_snapshot(account_id: &str) {
+    let _guard = SNAPSHOT_STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut snapshots = quota_snapshots();
     if snapshots.remove(account_id).is_some() {
         let _ = persist_snapshots(&snapshots);
     }
 }
 
-pub fn home_dir_for_account(id: &str) -> PathBuf {
-    accounts_root_dir().join(id)
+pub fn home_dir_for_account(id: &str) -> Option<PathBuf> {
+    accounts_root_dir().map(|path| path.join(id))
 }
 
-pub fn system_auth_path() -> PathBuf {
-    let codex_home = std::env::var("CODEX_HOME").ok().filter(|s| !s.trim().is_empty());
-    match codex_home {
-        Some(h) => PathBuf::from(h).join("auth.json"),
-        None => PathBuf::from(std::env::var("HOME").unwrap_or_default())
-            .join(".codex")
-            .join("auth.json"),
-    }
+pub fn system_auth_path() -> Option<PathBuf> {
+    crate::platform::paths::codex_home().map(|home| home.join("auth.json"))
 }
 
 /// Active account id, persisted in settings.json. Defaults to `"system"`.
@@ -166,41 +164,51 @@ pub fn active_id() -> String {
 }
 
 pub fn set_active(id: &str) -> Result<(), String> {
-    let mut settings = config::load();
-    settings.active_codex_account = Some(id.to_string());
-    config::save(&settings)
+    config::update(|settings| {
+        settings.active_codex_account = Some(id.to_string());
+        Ok(())
+    })
 }
 
 /// The auth.json path the Codex provider should read for the active account —
 /// mirrors `activeAuthURL()`: falls back to the system login when the active
 /// managed account no longer exists.
-pub fn active_auth_path() -> PathBuf {
+pub fn active_auth_path() -> Option<PathBuf> {
     let id = active_id();
     if id == SYSTEM_ID {
         return system_auth_path();
     }
     match managed_accounts().into_iter().find(|a| a.id == id) {
-        Some(account) => match account.home_path {
-            Some(home) => PathBuf::from(home).join("auth.json"),
-            None => system_auth_path(),
-        },
+        Some(_) => managed_home_for_id(&id).map(|home| home.join("auth.json")),
         None => system_auth_path(),
     }
 }
 
+fn managed_home_for_id(id: &str) -> Option<PathBuf> {
+    let mut components = std::path::Path::new(id).components();
+    let is_single_normal = matches!(components.next(), Some(std::path::Component::Normal(value)) if value == id)
+        && components.next().is_none()
+        && id != "."
+        && id != "..";
+    if !is_single_normal {
+        return None;
+    }
+    accounts_root_dir().map(|root| root.join(id))
+}
+
 fn load_stored() -> Stored {
-    std::fs::read_to_string(metadata_path())
-        .ok()
+    metadata_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
 fn persist(entries: &[Entry]) -> Result<(), String> {
-    let dir = support_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = metadata_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let stored = Stored { accounts: entries.to_vec() };
     let json = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
-    std::fs::write(metadata_path(), json).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_json_atomic::<Stored>(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// Best-effort email lookup from an account's `auth.json` (JWT `id_token`
@@ -262,7 +270,7 @@ pub fn all_accounts() -> Vec<CodexAccount> {
     let system_path = system_auth_path();
     let system = CodexAccount {
         id: SYSTEM_ID.to_string(),
-        email: email_of(&system_path),
+        email: system_path.as_deref().and_then(email_of),
         is_system: true,
         home_path: None,
     };
@@ -274,15 +282,20 @@ pub fn all_accounts() -> Vec<CodexAccount> {
 /// `promoteSystem()`. Errors with the same Vietnamese message as Swift when
 /// there is no system login yet.
 pub fn promote_system() -> Result<CodexAccount, String> {
-    let system_path = system_auth_path();
+    let _guard = ACCOUNT_STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let system_path = system_auth_path()
+        .ok_or_else(|| "Không xác định được thư mục Codex hệ thống".to_string())?;
     if !system_path.is_file() {
         return Err("Chưa có đăng nhập hệ thống (~/.codex) để chuyển thành managed.".to_string());
     }
     let id = uuid_v4();
-    let home = home_dir_for_account(&id);
+    let home = home_dir_for_account(&id)
+        .ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     let dest = home.join("auth.json");
-    std::fs::copy(&system_path, &dest).map_err(|e| e.to_string())?;
+    let auth = std::fs::read(&system_path).map_err(|e| e.to_string())?;
+    crate::platform::atomic_file::write_private_json_atomic::<serde_json::Value>(&dest, &auth)
+        .map_err(|e| e.to_string())?;
 
     let account = CodexAccount {
         id: id.clone(),
@@ -303,18 +316,63 @@ pub fn remove(id: &str) -> Result<(), String> {
     if id == SYSTEM_ID {
         return Ok(());
     }
-    if let Some(account) = managed_accounts().into_iter().find(|a| a.id == id) {
-        if let Some(home) = account.home_path {
-            let _ = std::fs::remove_dir_all(home);
-        }
+    let _guard = ACCOUNT_STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let entries = load_stored().accounts;
+    if entries.iter().any(|entry| entry.id == id) {
+        let home = managed_home_for_id(id)
+            .ok_or_else(|| "Codex account id không an toàn".to_string())?;
+        remove_managed_home(&home)?;
     }
-    let entries: Vec<Entry> = load_stored().accounts.into_iter().filter(|e| e.id != id).collect();
+    let entries: Vec<Entry> = entries.into_iter().filter(|e| e.id != id).collect();
     persist(&entries)?;
     if active_id() == id {
         set_active(SYSTEM_ID)?;
     }
     prune_snapshot(id);
     Ok(())
+}
+
+fn remove_managed_home(home: &Path) -> Result<(), String> {
+    let root = accounts_root_dir()
+        .ok_or_else(|| "Không xác định được thư mục account Codex".to_string())?;
+    let root_metadata = std::fs::symlink_metadata(&root).map_err(|e| e.to_string())?;
+    if metadata_is_link_like(&root_metadata) {
+        return Err("Từ chối xóa qua thư mục account symlink/reparse point".to_string());
+    }
+    let metadata = match std::fs::symlink_metadata(home) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata_is_link_like(&metadata) {
+        return Err("Từ chối xóa Codex account qua symlink/reparse point".to_string());
+    }
+    let canonical_root = std::fs::canonicalize(&root).map_err(|e| e.to_string())?;
+    let canonical_home = std::fs::canonicalize(home).map_err(|e| e.to_string())?;
+    if canonical_home == canonical_root || !canonical_home.starts_with(&canonical_root) {
+        return Err("Codex account path nằm ngoài thư mục được quản lý".to_string());
+    }
+    for entry in walkdir::WalkDir::new(&canonical_home).follow_links(false) {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        if metadata_is_link_like(&metadata) {
+            return Err("Từ chối xóa Codex account chứa symlink/reparse point".to_string());
+        }
+    }
+    std::fs::remove_dir_all(canonical_home).map_err(|e| e.to_string())
+}
+
+fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        return metadata.file_attributes() & 0x400 != 0;
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 /// Minimal UUID v4 generator (no extra crate dependency) — format matches
@@ -502,7 +560,10 @@ mod tests {
         // Switch active -> the promoted account's auth.json resolves.
         set_active(&promoted.id).unwrap();
         assert_eq!(active_id(), promoted.id);
-        assert_eq!(active_auth_path(), PathBuf::from(promoted.home_path.as_ref().unwrap()).join("auth.json"));
+        assert_eq!(
+            active_auth_path(),
+            Some(PathBuf::from(promoted.home_path.as_ref().unwrap()).join("auth.json"))
+        );
 
         // Remove -> falls back to system automatically.
         remove(&promoted.id).unwrap();

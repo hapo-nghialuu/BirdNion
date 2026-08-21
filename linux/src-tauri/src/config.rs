@@ -1,10 +1,13 @@
 //! Reader for the shared BirdNion config file — the SAME schema and path
 //! resolution as the macOS `BirdNionConfigStore`, so one settings.json works
-//! on both OSes: `$BIRDNION_CONFIG` → `$XDG_CONFIG_HOME/birdnion/settings.json`
-//! → `~/.config/birdnion/settings.json` → legacy `~/.birdnion/settings.json`.
+//! across supported OSes. Resolution starts with `$BIRDNION_CONFIG`, then uses
+//! `%APPDATA%\\birdnion\\settings.json` on Windows or the XDG config path on
+//! Unix, followed by the legacy user-home location.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+static SETTINGS_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct Settings {
@@ -30,11 +33,19 @@ pub struct Settings {
     pub active_hiyo_key: Option<String>,
     /// Custom Claude Code backends (Settings → Claude Code → "TUỲ CHỈNH") —
     /// same schema and top-level key as macOS `BirdNionConfigStore`.
-    #[serde(default, rename = "claudeCodeProfiles", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "claudeCodeProfiles",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub claude_code_profiles: Vec<ClaudeCodeProfile>,
     /// Third-party Codex CLI backends — macOS `BirdNionConfigStore.codexProfiles`.
     /// Linked 1:1 with Claude Code profiles via `codexProfileID` ⇄ `claudeCodeProfileID`.
-    #[serde(default, rename = "codexProfiles", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "codexProfiles",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub codex_profiles: Vec<CodexProfile>,
     /// App appearance: "light" | "dark" | "auto". Linux equivalent of macOS
     /// UserDefaults `appAppearance` (Settings → General → Giao diện).
@@ -81,33 +92,61 @@ pub struct ClaudeCodeProfile {
     pub compatibility_mode: Option<String>,
     /// OpenAI-compatible upstream base — sent only to CLIProxyAPI, never to
     /// Claude Code settings. JSON key matches macOS: `openAIBaseURL`.
-    #[serde(default, rename = "openAIBaseURL", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "openAIBaseURL",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub open_ai_base_url: Option<String>,
     /// OpenAI-compatible upstream API key. JSON key: `openAIAPIKey`.
-    #[serde(default, rename = "openAIAPIKey", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "openAIAPIKey",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub open_ai_api_key: Option<String>,
     /// `"responses"` for OpenAI Responses; nil retains Chat Completions.
     /// JSON key: `openAIFormat`.
-    #[serde(default, rename = "openAIFormat", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "openAIFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub open_ai_format: Option<String>,
     /// Explicit local-proxy mode (macOS `embeddedLocalProxy`). Nil keeps older
     /// Anthropic profiles on the direct path; OpenAI profiles default to proxy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedded_local_proxy: Option<bool>,
     /// Loopback CLIProxyAPI base (typically `http://127.0.0.1:24323`).
-    #[serde(default, rename = "cliProxyBaseURL", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "cliProxyBaseURL",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cli_proxy_base_url: Option<String>,
     /// Loopback API key written into Claude Code settings (not the upstream secret).
-    #[serde(default, rename = "cliProxyAPIKey", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "cliProxyAPIKey",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cli_proxy_api_key: Option<String>,
     /// Management secret for CLIProxyAPI remote-management (stays in BirdNion config).
-    #[serde(default, rename = "cliProxyManagementKey", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "cliProxyManagementKey",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cli_proxy_management_key: Option<String>,
     /// SHA-256 of the last successful CLIProxyAPI registration material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli_proxy_applied_signature: Option<String>,
     /// Optional link to the Codex configuration created from this upstream.
-    #[serde(default, rename = "codexProfileID", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "codexProfileID",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub codex_profile_id: Option<String>,
 }
 
@@ -133,16 +172,32 @@ pub struct CodexProfile {
     /// `"direct"` | `"local-proxy"`. Non-Responses always resolve to local-proxy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_mode_raw: Option<String>,
-    #[serde(default, rename = "cliProxyBaseURL", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "cliProxyBaseURL",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cli_proxy_base_url: Option<String>,
-    #[serde(default, rename = "cliProxyAPIKey", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "cliProxyAPIKey",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cli_proxy_api_key: Option<String>,
-    #[serde(default, rename = "cliProxyManagementKey", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "cliProxyManagementKey",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cli_proxy_management_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli_proxy_applied_signature: Option<String>,
     /// Optional reverse link to the Claude Code profile sharing this upstream.
-    #[serde(default, rename = "claudeCodeProfileID", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "claudeCodeProfileID",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub claude_code_profile_id: Option<String>,
 }
 
@@ -154,7 +209,12 @@ impl CodexProfile {
     pub const MODE_LOCAL_PROXY: &'static str = "local-proxy";
 
     pub fn upstream_protocol(&self) -> &str {
-        match self.upstream_protocol_raw.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match self
+            .upstream_protocol_raw
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(Self::PROTOCOL_OPENAI_CHAT) => Self::PROTOCOL_OPENAI_CHAT,
             Some(Self::PROTOCOL_ANTHROPIC) => Self::PROTOCOL_ANTHROPIC,
             _ => Self::PROTOCOL_RESPONSES,
@@ -298,11 +358,19 @@ pub struct Provider {
     #[serde(default)]
     pub claude_code_project_path: Option<String>,
     /// Derived Codex record for this preset (Anthropic → local proxy).
-    #[serde(default, rename = "codexProfileID", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "codexProfileID",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub codex_profile_id: Option<String>,
     /// Menu bar metric preference: "automatic" | "primary" | "secondary" | "primaryAndSecondary" | "tertiary" | "extraUsage" | "average" | "monthlyPlan"
     /// Mirrors macOS `MenuBarMetricPreference` enum stored in UserDefaults `menuBarMetric.<provider>`.
-    #[serde(default, rename = "menuBarMetric", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "menuBarMetric",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub menu_bar_metric: Option<String>,
     /// Any per-provider keys this build doesn't model yet (e.g. written by a
     /// newer macOS version) must survive a Linux round-trip save.
@@ -393,7 +461,10 @@ pub fn make_codex_profile_from_claude(claude: &ClaudeCodeProfile, id: String) ->
 
 /// Pure upstream sync Claude → linked Codex. Never touches `model` (per-agent).
 /// Returns the updated profile and whether any upstream field changed.
-pub fn synced_codex_profile(claude: &ClaudeCodeProfile, codex: &CodexProfile) -> (CodexProfile, bool) {
+pub fn synced_codex_profile(
+    claude: &ClaudeCodeProfile,
+    codex: &CodexProfile,
+) -> (CodexProfile, bool) {
     let mut updated = codex.clone();
     let new_base = claude_upstream_base_url(claude).unwrap_or_default();
     let new_key = claude_upstream_api_key(claude).unwrap_or_default();
@@ -439,7 +510,11 @@ pub fn mirror_claude_to_codex(settings: &mut Settings) {
         let Some(codex_id) = cleaned_opt(claude.codex_profile_id.as_deref()) else {
             continue;
         };
-        if let Some(idx) = settings.codex_profiles.iter().position(|c| c.id == codex_id) {
+        if let Some(idx) = settings
+            .codex_profiles
+            .iter()
+            .position(|c| c.id == codex_id)
+        {
             let (synced, changed) = synced_codex_profile(&claude, &settings.codex_profiles[idx]);
             if changed {
                 settings.codex_profiles[idx] = synced;
@@ -466,11 +541,9 @@ pub fn migrate_standalone_codex_profiles(settings: &mut Settings) -> bool {
             continue;
         }
         // If some Claude already points at this codex, restore reverse link.
-        if let Some(claude) = settings
-            .claude_code_profiles
-            .iter()
-            .find(|c| cleaned_opt(c.codex_profile_id.as_deref()).as_deref() == Some(codex.id.as_str()))
-        {
+        if let Some(claude) = settings.claude_code_profiles.iter().find(|c| {
+            cleaned_opt(c.codex_profile_id.as_deref()).as_deref() == Some(codex.id.as_str())
+        }) {
             codex.claude_code_profile_id = Some(claude.id.clone());
             changed = true;
             continue;
@@ -488,21 +561,27 @@ pub fn find_codex_profile(id: &str) -> Option<CodexProfile> {
 
 /// Upsert one Codex profile (does NOT mirror back to Claude).
 pub fn save_codex_profile(profile: CodexProfile) -> Result<(), String> {
-    let mut settings = load();
-    if let Some(idx) = settings.codex_profiles.iter().position(|p| p.id == profile.id) {
-        settings.codex_profiles[idx] = profile;
-    } else {
-        settings.codex_profiles.push(profile);
-    }
-    save(&settings)
+    update(|settings| {
+        if let Some(idx) = settings
+            .codex_profiles
+            .iter()
+            .position(|p| p.id == profile.id)
+        {
+            settings.codex_profiles[idx] = profile;
+        } else {
+            settings.codex_profiles.push(profile);
+        }
+        Ok(())
+    })
 }
 
 /// Remove one Codex profile by id.
 #[allow(dead_code)]
 pub fn remove_codex_profile(id: &str) -> Result<(), String> {
-    let mut settings = load();
-    settings.codex_profiles.retain(|p| p.id != id);
-    save(&settings)
+    update(|settings| {
+        settings.codex_profiles.retain(|p| p.id != id);
+        Ok(())
+    })
 }
 
 /// Persist settings atomically with owner-only permissions (0600), matching
@@ -515,54 +594,63 @@ pub fn remove_codex_profile(id: &str) -> Result<(), String> {
 /// had there. So if a file already exists on disk, it must still parse as
 /// valid `Settings` JSON or this call refuses to overwrite it.
 pub fn save(settings: &Settings) -> Result<(), String> {
-    let path = config_path();
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        if serde_json::from_str::<Settings>(&existing).is_err() {
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    save_unlocked(settings)
+}
+
+pub fn update<R>(mutate: impl FnOnce(&mut Settings) -> Result<R, String>) -> Result<R, String> {
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut settings = load();
+    let result = mutate(&mut settings)?;
+    save_unlocked(&settings)?;
+    Ok(result)
+}
+
+fn save_unlocked(settings: &Settings) -> Result<(), String> {
+    let path = config_path().ok_or_else(config_path_error)?;
+    match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            if serde_json::from_str::<Settings>(&existing).is_err() {
+                return Err(format!(
+                    "refusing to overwrite unreadable config at {}: existing file is not valid JSON",
+                    path.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
             return Err(format!(
-                "refusing to overwrite unreadable config at {}: existing file is not valid JSON",
+                "refusing to overwrite unreadable config at {}: {error}",
                 path.display()
             ));
         }
     }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_json_atomic::<Settings>(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
-pub fn config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("BIRDNION_CONFIG") {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    let xdg = std::env::var("XDG_CONFIG_HOME")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"));
-    let primary = xdg.join("birdnion/settings.json");
-    if primary.exists() {
-        return primary;
-    }
-    let legacy = home.join(".birdnion/settings.json");
-    if legacy.exists() {
-        return legacy;
-    }
-    primary
+pub fn config_path() -> Option<PathBuf> {
+    crate::platform::paths::birdnion_config_path()
+}
+
+pub fn support_dir() -> Option<PathBuf> {
+    config_path()?.parent().map(std::path::Path::to_path_buf)
+}
+
+fn config_path_error() -> String {
+    "BirdNion config path unavailable: no platform config or user-home root".to_string()
 }
 
 pub fn load() -> Settings {
-    std::fs::read_to_string(config_path())
+    let Some(path) = config_path() else {
+        return Settings::default();
+    };
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
@@ -584,9 +672,11 @@ pub fn find_provider(id: &str) -> Provider {
         .providers
         .into_iter()
         .find(|p| p.id == id)
-        .unwrap_or_else(|| Provider { id: id.to_string(), ..Default::default() })
+        .unwrap_or_else(|| Provider {
+            id: id.to_string(),
+            ..Default::default()
+        })
 }
-
 
 /// API key resolution: env override first (same variable names as macOS),
 /// then the config file.
@@ -691,7 +781,10 @@ mod codex_sync_tests {
         claude_chat.open_ai_format = None; // chat
         let (synced, changed) = synced_codex_profile(&claude_chat, &codex);
         assert!(changed);
-        assert_eq!(synced.upstream_protocol(), CodexProfile::PROTOCOL_OPENAI_CHAT);
+        assert_eq!(
+            synced.upstream_protocol(),
+            CodexProfile::PROTOCOL_OPENAI_CHAT
+        );
         assert_eq!(synced.connection_mode(), CodexProfile::MODE_LOCAL_PROXY);
     }
 
@@ -773,7 +866,8 @@ mod fail_closed_and_lossless_tests {
     use super::*;
 
     fn temp_config(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("birdnion-config-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("birdnion-config-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -787,10 +881,16 @@ mod fail_closed_and_lossless_tests {
         std::fs::write(&path, "{ this is not valid json").unwrap();
         std::env::set_var("BIRDNION_CONFIG", &path);
 
-        let result = save(&Settings { version: 1, ..Default::default() });
+        let result = save(&Settings {
+            version: 1,
+            ..Default::default()
+        });
         assert!(result.is_err());
         // The file on disk must be byte-for-byte untouched.
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ this is not valid json");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{ this is not valid json"
+        );
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = std::fs::remove_dir_all(&base);
@@ -811,13 +911,59 @@ mod fail_closed_and_lossless_tests {
     }
 
     #[test]
+    fn save_refuses_to_overwrite_non_utf8_existing_file() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("non-utf8");
+        let path = base.join("settings.json");
+        let original = [0xff, 0xfe, 0xfd];
+        std::fs::write(&path, original).unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        assert!(save(&Settings::default()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_fails_closed_when_no_config_root_is_available() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let keys = ["BIRDNION_CONFIG", "XDG_CONFIG_HOME", "HOME"];
+        let previous: Vec<_> = keys
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+        for key in keys {
+            std::env::set_var(key, "");
+        }
+
+        assert!(config_path().is_none());
+        assert!(support_dir().is_none());
+        let result = save(&Settings::default());
+
+        for (key, value) in previous {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn save_allows_first_write_when_file_absent() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let base = temp_config("absent");
         let path = base.join("settings.json");
         std::env::set_var("BIRDNION_CONFIG", &path);
 
-        assert!(save(&Settings { version: 1, ..Default::default() }).is_ok());
+        assert!(save(&Settings {
+            version: 1,
+            ..Default::default()
+        })
+        .is_ok());
         assert!(path.exists());
 
         std::env::remove_var("BIRDNION_CONFIG");
@@ -829,7 +975,11 @@ mod fail_closed_and_lossless_tests {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let base = temp_config("top-level");
         let path = base.join("settings.json");
-        std::fs::write(&path, r#"{"version":1,"providers":[],"futureFeatureFlag":true}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"version":1,"providers":[],"futureFeatureFlag":true}"#,
+        )
+        .unwrap();
         std::env::set_var("BIRDNION_CONFIG", &path);
 
         let mut settings = load();
@@ -838,7 +988,10 @@ mod fail_closed_and_lossless_tests {
 
         let raw: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(raw.get("futureFeatureFlag"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            raw.get("futureFeatureFlag"),
+            Some(&serde_json::Value::Bool(true))
+        );
         assert_eq!(raw.get("version"), Some(&serde_json::Value::from(2)));
 
         std::env::remove_var("BIRDNION_CONFIG");

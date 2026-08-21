@@ -364,7 +364,7 @@ mod tests {
 pub fn shared_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .user_agent("BirdNion-Linux")
+        .user_agent(concat!("BirdNion/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("reqwest client")
 }
@@ -376,7 +376,7 @@ pub fn shared_client() -> reqwest::Client {
 pub async fn fetch_service_status(url: &str) -> Option<(String, String)> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
-        .user_agent("BirdNion-Linux")
+        .user_agent(concat!("BirdNion/", env!("CARGO_PKG_VERSION")))
         .build()
         .ok()?;
     let json: serde_json::Value = client.get(url).send().await.ok()?.json().await.ok()?;
@@ -395,8 +395,33 @@ pub fn cli_version_blocking(
 ) -> Option<String> {
     cache
         .get_or_init(|| {
-            std::process::Command::new(binary)
-                .arg("--version")
+            let executable = crate::platform::executable::resolve_executable(binary)?;
+            let mut command = if cfg!(windows)
+                && executable
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+                })
+            {
+                let script = executable.to_str()?;
+                if script.contains(['"', '&', '|', '<', '>', '^', '%', '!', '(', ')']) {
+                    return None;
+                }
+                let shell = std::env::var_os("COMSPEC")
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "cmd.exe".into());
+                let mut command = std::process::Command::new(shell);
+                command
+                    .args(["/D", "/E:ON", "/V:OFF", "/S", "/C"])
+                    .arg(format!("\"\"{script}\" --version\""));
+                command
+            } else {
+                let mut command = std::process::Command::new(executable);
+                command.arg("--version");
+                command
+            };
+            command
                 .output()
                 .ok()
                 .filter(|out| out.status.success())

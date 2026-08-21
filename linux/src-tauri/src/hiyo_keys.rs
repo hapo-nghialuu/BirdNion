@@ -7,10 +7,12 @@
 //! multi-key store is empty.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::codex_accounts::uuid_v4;
 use crate::config;
+
+static STORE_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// UI-facing key descriptor — the raw API key is NEVER sent to the frontend.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -35,38 +37,25 @@ struct Stored {
     accounts: Vec<Entry>,
 }
 
-fn metadata_path() -> PathBuf {
-    config::config_path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("hiyo-keys.json")
+fn metadata_path() -> Option<PathBuf> {
+    config::support_dir().map(|path| path.join("hiyo-keys.json"))
 }
 
 fn load_stored() -> Stored {
-    std::fs::read_to_string(metadata_path())
-        .ok()
+    metadata_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
 fn persist(entries: &[Entry]) -> Result<(), String> {
-    let path = metadata_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
+    let path = metadata_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let json = serde_json::to_string_pretty(&Stored {
         accounts: entries.to_vec(),
     })
     .map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_json_atomic::<Stored>(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 fn preview_of(key: &str) -> String {
@@ -85,7 +74,8 @@ fn to_key(e: &Entry) -> HiyoKey {
 /// file has never been created. An empty list after the user deleted every
 /// key is left empty (no re-import loop).
 pub fn ensure_legacy_import() {
-    if metadata_path().exists() {
+    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if metadata_path().is_some_and(|path| path.exists()) {
         return;
     }
     let settings = config::load();
@@ -123,9 +113,10 @@ pub fn active_id() -> Option<String> {
 }
 
 pub fn set_active(id: &str) -> Result<(), String> {
-    let mut settings = config::load();
-    settings.active_hiyo_key = Some(id.to_string());
-    config::save(&settings)
+    config::update(|settings| {
+        settings.active_hiyo_key = Some(id.to_string());
+        Ok(())
+    })
 }
 
 /// Full API key for the active entry — `None` when the store is empty.
@@ -157,6 +148,7 @@ pub fn all_keys() -> Vec<HiyoKey> {
 
 /// Stores a new managed API key. Sets active when this is the first key.
 pub fn add(api_key: &str, label: Option<&str>) -> Result<HiyoKey, String> {
+    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let api_key = api_key.trim();
     if api_key.is_empty() {
         return Err("API key trống".to_string());
@@ -171,7 +163,7 @@ pub fn add(api_key: &str, label: Option<&str>) -> Result<HiyoKey, String> {
     let is_first = entries.is_empty();
     entries.push(entry);
     persist(&entries)?;
-    if is_first || active_id().is_none() {
+    if is_first || config::load().active_hiyo_key.is_none() {
         set_active(&key.id)?;
     }
     Ok(key)
@@ -179,7 +171,8 @@ pub fn add(api_key: &str, label: Option<&str>) -> Result<HiyoKey, String> {
 
 /// Removes a managed key; falls active back to the first remaining key.
 pub fn remove(id: &str) -> Result<(), String> {
-    let previous = active_id();
+    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = config::load().active_hiyo_key;
     let remaining: Vec<Entry> = load_stored()
         .accounts
         .into_iter()
@@ -190,9 +183,10 @@ pub fn remove(id: &str) -> Result<(), String> {
         if let Some(first) = remaining.first() {
             set_active(&first.id)?;
         } else {
-            let mut settings = config::load();
-            settings.active_hiyo_key = None;
-            config::save(&settings)?;
+            config::update(|settings| {
+                settings.active_hiyo_key = None;
+                Ok(())
+            })?;
         }
     }
     Ok(())

@@ -43,15 +43,14 @@ pub struct Document {
     pub scanned_at: HashMap<String, i64>,
 }
 
-pub fn history_path() -> PathBuf {
-    config::config_path()
-        .parent()
-        .map(|p| p.join("cost-history.json"))
-        .unwrap_or_else(|| PathBuf::from("cost-history.json"))
+pub fn history_path() -> Option<PathBuf> {
+    config::support_dir().map(|path| path.join("cost-history.json"))
 }
 
 pub fn read() -> Document {
-    let path = history_path();
+    let Some(path) = history_path() else {
+        return Document::default();
+    };
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -59,21 +58,12 @@ pub fn read() -> Document {
 }
 
 pub fn write(doc: &Document) -> Result<(), String> {
-    let path = history_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
+    let path = history_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let mut out = doc.clone();
     out.version = 1;
     let json = serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_json_atomic::<Document>(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 pub fn prefer_higher(a: &HistoryDay, b: &HistoryDay) -> HistoryDay {
@@ -106,7 +96,8 @@ pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport
     let _guard = HISTORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let now = Local::now();
     let today = now.date_naive();
-    let mut doc = read();
+    let previous = read();
+    let mut doc = previous.clone();
     {
         let by_day = doc.sources.entry(source.to_string()).or_default();
 
@@ -155,7 +146,12 @@ pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport
             .insert(source.to_string(), now.timestamp_millis());
     }
 
-    let _ = write(&doc);
+    let persisted_live = if write(&doc).is_ok() {
+        live.is_some()
+    } else {
+        doc = previous;
+        false
+    };
     let by_day = doc.sources.get(source).cloned().unwrap_or_default();
     let history_has_data = by_day.values().any(|d| d.tokens > 0 || d.usd > 0.0);
     let scanned_at = doc.scanned_at.get(source).copied();
@@ -204,10 +200,13 @@ pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport
         last30_usd,
         last30_tokens,
         daily,
-        hourly: live.map(|l| l.hourly.clone()).unwrap_or_default(),
+        hourly: live
+            .filter(|_| persisted_live)
+            .map(|report| report.hourly.clone())
+            .unwrap_or_default(),
         top_model: top,
-        included: is_included(live.is_some(), history_has_data),
-        live: live.is_some(),
+        included: is_included(persisted_live, history_has_data),
+        live: persisted_live,
         scanned_at,
     }
 }

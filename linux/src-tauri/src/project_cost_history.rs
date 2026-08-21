@@ -5,7 +5,6 @@
 use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
 
 use crate::config;
@@ -170,16 +169,13 @@ fn sanitize(doc: &mut Document) {
     doc.sources.retain(|_, projects| !projects.is_empty());
 }
 
-pub fn history_path() -> PathBuf {
-    config::config_path()
-        .parent()
-        .map(|p| p.join("project-cost-history.json"))
-        .unwrap_or_else(|| PathBuf::from("project-cost-history.json"))
+pub fn history_path() -> Option<PathBuf> {
+    config::support_dir().map(|path| path.join("project-cost-history.json"))
 }
 
 pub fn read() -> Document {
-    let mut document = std::fs::read_to_string(history_path())
-        .ok()
+    let mut document = history_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();
     sanitize(&mut document);
@@ -187,35 +183,12 @@ pub fn read() -> Document {
 }
 
 fn write(doc: &Document) -> Result<(), String> {
-    let path = history_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
+    let path = history_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let mut output = doc.clone();
     output.version = 2;
     let json = serde_json::to_string_pretty(&output).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    let write_result = (|| -> Result<(), String> {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&tmp).map_err(|error| error.to_string())?;
-        file.write_all(json.as_bytes()).map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())
-    })();
-    if let Err(error) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error);
-    }
-    if let Err(error) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error.to_string());
-    }
-    Ok(())
+    crate::platform::atomic_file::write_private_json_atomic::<Document>(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 fn prefer_higher(existing: &ProjectDay, incoming: &ProjectDay) -> ProjectDay {
@@ -423,7 +396,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                fs::metadata(history_path()).unwrap().permissions().mode() & 0o777,
+                fs::metadata(history_path().unwrap()).unwrap().permissions().mode() & 0o777,
                 0o600
             );
         }
@@ -458,16 +431,15 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_input_is_replaced_without_error() {
+    fn corrupt_input_is_preserved_and_rejected() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let base = temp_config("corrupt");
         std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
-        fs::write(history_path(), "{not-json").unwrap();
+        fs::write(history_path().unwrap(), "{not-json").unwrap();
         let today = Local::now().date_naive().to_string();
 
-        apply("claude", &[contribution(today, 20, 0.2)], false).unwrap();
-        assert_eq!(read().version, 2);
-        assert_eq!(read().sources["claude"].len(), 1);
+        assert!(apply("claude", &[contribution(today, 20, 0.2)], false).is_err());
+        assert_eq!(fs::read_to_string(history_path().unwrap()).unwrap(), "{not-json");
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = fs::remove_dir_all(base);
@@ -593,7 +565,7 @@ mod tests {
         let unsafe_day = format!("{today} /Users/private/secret");
         raw["sources"]["claude"][valid_key.as_str()]["days"][unsafe_day.as_str()] =
             serde_json::json!({ "usd": 99.0, "tokens": 99, "models": [] });
-        fs::write(history_path(), serde_json::to_string(&raw).unwrap()).unwrap();
+        fs::write(history_path().unwrap(), serde_json::to_string(&raw).unwrap()).unwrap();
 
         apply("claude", &[], false).unwrap();
         let doc = read();
@@ -605,7 +577,7 @@ mod tests {
             "client-model"
         );
         assert_eq!(doc.sources["claude"][&valid_key].days.len(), 1);
-        assert!(!fs::read_to_string(history_path()).unwrap().contains("/Users/private"));
+        assert!(!fs::read_to_string(history_path().unwrap()).unwrap().contains("/Users/private"));
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = fs::remove_dir_all(base);
@@ -635,7 +607,7 @@ mod tests {
         assert_eq!(stored.days[&today].models[0].name, "grok-code-fast");
         assert_eq!(stored.days.len(), 1);
         assert!(doc.sources.contains_key("codex"));
-        assert!(!fs::read_to_string(history_path()).unwrap().contains("/Users/alice"));
+        assert!(!fs::read_to_string(history_path().unwrap()).unwrap().contains("/Users/alice"));
         assert!(apply("unsupported", &[], false).is_err());
 
         std::env::remove_var("BIRDNION_CONFIG");
@@ -667,7 +639,7 @@ mod tests {
                 "days": {today.clone(): {"usd": 1.0, "tokens": -100, "models": models}}
             }}}
         });
-        fs::write(history_path(), serde_json::to_vec(&raw).unwrap()).unwrap();
+        fs::write(history_path().unwrap(), serde_json::to_vec(&raw).unwrap()).unwrap();
 
         apply("codex", &[], false).unwrap();
         let doc = read();

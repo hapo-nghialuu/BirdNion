@@ -532,7 +532,9 @@ function providerBodyCard(
       .then((bytes) => invoke<string>("format_storage_bytes", { bytes }).then((formatted) => {
         if (bytes > 0) storageRow.textContent = `${t("providerStorageLabel")}: ${formatted}`;
       }))
-      .catch(() => {});
+      .catch(() => {
+        storageRow.textContent = "";
+      });
   }
 
   return card;

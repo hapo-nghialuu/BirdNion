@@ -9,7 +9,7 @@
 //! (`active_freemodel_account`).
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::codex_accounts::uuid_v4;
 use crate::config;
@@ -19,6 +19,7 @@ pub const BROWSER_ID: &str = "browser";
 /// — different browsers signed in to different FreeModel accounts each show
 /// up as their own selectable entry.
 pub const BROWSER_PREFIX: &str = "browser:";
+static STORE_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Human label for a `browser:<name>` id ("Chrome", "Brave"…).
 pub fn browser_label(browser: &str) -> String {
@@ -59,36 +60,23 @@ struct Stored {
     accounts: Vec<Entry>,
 }
 
-fn metadata_path() -> PathBuf {
-    config::config_path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("freemodel-accounts.json")
+fn metadata_path() -> Option<PathBuf> {
+    config::support_dir().map(|path| path.join("freemodel-accounts.json"))
 }
 
 fn load_stored() -> Stored {
-    std::fs::read_to_string(metadata_path())
-        .ok()
+    metadata_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
 fn persist(entries: &[Entry]) -> Result<(), String> {
-    let path = metadata_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
+    let path = metadata_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let json = serde_json::to_string_pretty(&Stored { accounts: entries.to_vec() })
         .map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_json_atomic::<Stored>(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// Active account id, persisted in settings.json. Defaults to `"browser"`.
@@ -97,9 +85,10 @@ pub fn active_id() -> String {
 }
 
 pub fn set_active(id: &str) -> Result<(), String> {
-    let mut settings = config::load();
-    settings.active_freemodel_account = Some(id.to_string());
-    config::save(&settings)
+    config::update(|settings| {
+        settings.active_freemodel_account = Some(id.to_string());
+        Ok(())
+    })
 }
 
 fn to_account(e: &Entry) -> FreemodelAccount {
@@ -136,6 +125,7 @@ pub fn active_browser() -> Option<String> {
 
 /// Stores a validated cookie as a new managed account.
 pub fn add(cookie: &str, label: Option<&str>, email: Option<&str>) -> Result<FreemodelAccount, String> {
+    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let cookie = cookie.trim();
     if cookie.is_empty() {
         return Err("Cookie trống".to_string());
@@ -159,6 +149,7 @@ pub fn remove(id: &str) -> Result<(), String> {
     if id == BROWSER_ID || id.starts_with(BROWSER_PREFIX) {
         return Ok(());
     }
+    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let entries: Vec<Entry> = load_stored().accounts.into_iter().filter(|e| e.id != id).collect();
     persist(&entries)?;
     if active_id() == id {

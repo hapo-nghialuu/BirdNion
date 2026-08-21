@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BirdNion",
+  "identifier": "com.local.birdnion.windows",
+  "bundle": {
+    "targets": "nsis",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "shortDescription": "AI provider usage and cost tracker",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

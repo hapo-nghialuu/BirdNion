@@ -154,13 +154,19 @@ fn resolve_binary() -> Option<String> {
 }
 
 fn is_usable_cli(path: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(_) => return false,
     };
-    if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
+    if !meta.is_file() {
         return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
     }
     // Skip VS Code-style IDE shim under Kiro.app.
     if let Ok(resolved) = std::fs::canonicalize(path) {

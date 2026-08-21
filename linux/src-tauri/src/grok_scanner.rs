@@ -100,17 +100,8 @@ fn grok_project_identity(root: &Path, signals_path: &Path) -> Option<ProjectIden
     })
 }
 
-fn grok_home() -> PathBuf {
-    if let Ok(h) = std::env::var("GROK_HOME") {
-        let h = h.trim();
-        if !h.is_empty() {
-            return PathBuf::from(h);
-        }
-    }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join(".grok")
+fn grok_home() -> Option<PathBuf> {
+    crate::platform::paths::grok_home()
 }
 
 fn blended_usd(tokens: i64, model: &str) -> f64 {
@@ -141,7 +132,7 @@ pub fn usage_scan() -> Option<GrokUsageScan> {
 }
 
 pub fn scan_with_projects(now: DateTime<Local>) -> Option<GrokUsageScan> {
-    let root = grok_home().join("sessions");
+    let root = grok_home()?.join("sessions");
     // Missing/not-a-dir root means Grok was never scanned on this machine —
     // return None (not a fabricated all-zero report) so the Data Confidence
     // Pass can tell "never scanned" apart from "scanned, found nothing". An

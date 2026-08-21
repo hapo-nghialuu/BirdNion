@@ -1,7 +1,7 @@
 [package]
 name = "birdnion"
 version = "0.10.23"
-description = "BirdNion for Linux — AI provider usage & cost tracker (tray app)"
+description = "BirdNion desktop — AI provider usage & cost tracker (tray app)"
 authors = ["hapo-nghialuu"]
 edition = "2021"
 
@@ -18,6 +18,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -55,4 +56,16 @@ tauri-plugin-dialog = "2"
 # "rt" additionally lets tests build a throwaway runtime via
 # `Runtime::new().block_on(...)` for the provider fetch-deadline race,
 # without pulling in the `#[tokio::test]` macro's "macros" feature.
-tokio = { version = "1", features = ["time", "rt"] }
+tokio = { version = "1", features = ["time", "rt", "sync"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }

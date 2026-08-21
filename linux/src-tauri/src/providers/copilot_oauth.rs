@@ -1,6 +1,6 @@
 //! GitHub Copilot Device Flow login — port of `CopilotOAuth.swift`'s
 //! `CopilotDeviceFlow` + `CopilotAccountStore`. Writes the resulting account
-//! into `~/.config/birdnion/copilot-accounts.json` in the exact JSON shape
+//! into BirdNion's platform config directory in the exact JSON shape
 //! macOS's Device Flow login writes (read back by `providers::copilot`).
 //!
 //! Flow: POST `login/device/code` → {user_code, verification_uri, device_code,
@@ -174,33 +174,27 @@ struct AccountStore {
     accounts: Vec<AccountEntry>,
 }
 
-fn copilot_accounts_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    std::path::PathBuf::from(home).join(".config/birdnion/copilot-accounts.json")
+static ACCOUNT_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn copilot_accounts_path() -> Option<std::path::PathBuf> {
+    crate::config::support_dir().map(|path| path.join("copilot-accounts.json"))
 }
 
 /// Adds/updates the account by label and persists (0600), same shape as the
 /// Swift `CopilotAccountStore.addAccount` + `save`.
 fn save_account(label: &str, login: Option<&str>, token: &str) -> Result<(), String> {
-    let path = copilot_accounts_path();
+    let _guard = ACCOUNT_STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = copilot_accounts_path()
+        .ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let mut store: AccountStore = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     merge_account(&mut store, label, login, token);
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let json = serde_json::to_string_pretty(&store).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_json_atomic::<AccountStore>(&path, json.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// Pure store mutation (unit-tested): add-or-update by label, default the

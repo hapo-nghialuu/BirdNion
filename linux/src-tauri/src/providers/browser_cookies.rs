@@ -81,7 +81,7 @@ fn auto_cookie_header(domains: &[&str], required_cookie: Option<&str>) -> Result
     }
 
     match last_error {
-        Some(e) => Err(format!("Không đọc được cookie trình duyệt: {e}")),
+        Some(_) => Err("Không đọc được cookie trình duyệt".to_string()),
         None => Err("Không tìm thấy cookie đăng nhập trong trình duyệt".to_string()),
     }
 }
@@ -136,5 +136,5 @@ fn read_browser(browser: &str, domains: Vec<String>) -> Result<Vec<rookie::enums
         "firefox" => rookie::firefox(domains),
         other => return Err(format!("Trình duyệt không hỗ trợ: {other}")),
     };
-    result.map_err(|e| e.to_string())
+    result.map_err(|_| "cookie store unavailable".to_string())
 }

@@ -385,11 +385,9 @@ fn resolve_codex_fork_baseline(
 /// only contain copied auth state; the CLI keeps writing rollout logs to its
 /// system `$CODEX_HOME`/`~/.codex` home regardless of the selected account.
 pub fn default_roots() -> Vec<PathBuf> {
-    let home = crate::codex_accounts::system_auth_path()
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex"));
-    vec![home.join("sessions"), home.join("archived_sessions")]
+    crate::platform::paths::codex_home()
+        .map(|home| vec![home.join("sessions"), home.join("archived_sessions")])
+        .unwrap_or_default()
 }
 
 pub fn usage_scan() -> Option<CodexUsageScan> {
