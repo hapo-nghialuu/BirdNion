@@ -92,7 +92,7 @@ fn load_from_env() -> Option<Credentials> {
 }
 
 fn load_from_file() -> Option<Credentials> {
-    crate::platform::paths::claude_config_dirs()
+    crate::platform::paths::claude_credential_dirs()
         .into_iter()
         .find_map(|directory| {
             let contents = std::fs::read_to_string(directory.join(".credentials.json")).ok()?;

@@ -173,6 +173,21 @@ mod path_contract_tests {
                 PathBuf::from("/home/me/.claude"),
             ]
         );
+        assert_eq!(
+            claude_credential_dirs_from(&unix, Platform::Unix),
+            vec![
+                PathBuf::from("/home/me/.claude"),
+                PathBuf::from("/home/me/.config/claude"),
+            ]
+        );
+        assert_eq!(
+            claude_credential_dirs_from(&values, Platform::Windows),
+            vec![
+                PathBuf::from("/first"),
+                PathBuf::from("/second path"),
+                PathBuf::from("/配置"),
+            ]
+        );
         let windows = env(&[("USERPROFILE", r"C:\Users\me")]);
         assert_eq!(
             claude_config_dirs_from(&windows, Platform::Windows),

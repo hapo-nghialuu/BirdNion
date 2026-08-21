@@ -101,6 +101,28 @@ if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
   exit 1
 fi
 
+# Preflight the Homebrew tap before building or publishing anything. A dirty,
+# divergent, or wrong-branch tap must not leave a partial GitHub release behind.
+TAP_DIR=$(brew --repository "$TAP_REPO" 2>/dev/null || echo "")
+if [[ -z "$TAP_DIR" ]] || [[ ! -d "$TAP_DIR" ]]; then
+  TAP_DIR="$REPO_ROOT/.homebrew-tap"
+  if [[ "$DRY_RUN" -eq 0 && ! -d "$TAP_DIR" ]]; then
+    git clone "https://github.com/${TAP_REPO}.git" "$TAP_DIR"
+  fi
+fi
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if [[ -n "$(git -C "$TAP_DIR" status --porcelain)" ]]; then
+    echo "Homebrew tap working tree is not clean: $TAP_DIR" >&2
+    exit 1
+  fi
+  TAP_BRANCH=$(git -C "$TAP_DIR" branch --show-current)
+  if [[ "$TAP_BRANCH" != "main" ]]; then
+    echo "Homebrew tap must be on main, current branch: ${TAP_BRANCH:-detached HEAD}" >&2
+    exit 1
+  fi
+  git -C "$TAP_DIR" pull --ff-only
+fi
+
 # 2. Release verification gate — must pass before any version mutation or
 # publish action below. Runs the same checks a reviewer would: full macOS
 # build+test, the Linux TS build, and the Linux Rust test suite. Every
@@ -309,15 +331,6 @@ fi
 
 # 10. Also update homebrew-tap so `brew tap hapo-nghialuu/tap` picks up the new version
 echo "==> Updating homebrew-tap cask"
-TAP_DIR=$(brew --repository "$TAP_REPO" 2>/dev/null || echo "")
-if [[ -z "$TAP_DIR" ]] || [[ ! -d "$TAP_DIR" ]]; then
-  TAP_DIR="$REPO_ROOT/.homebrew-tap"
-  if [[ ! -d "$TAP_DIR" ]]; then
-    run git clone "https://github.com/${TAP_REPO}.git" "$TAP_DIR"
-  fi
-  run git -C "$TAP_DIR" pull --ff-only
-fi
-
 CASK_TAP="$TAP_DIR/Casks/birdnion.rb"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   python3 - "$CASK_TAP" "$VERSION" "$ZIP_SHA" <<'PY'
@@ -332,7 +345,7 @@ with open(path, 'w') as f:
 PY
   git -C "$TAP_DIR" add Casks/birdnion.rb
   git -C "$TAP_DIR" commit -m "chore: bump birdnion to ${VERSION}"
-  git -C "$TAP_DIR" push --force-with-lease origin main
+  git -C "$TAP_DIR" push origin main
 fi
 
 cat <<EOF

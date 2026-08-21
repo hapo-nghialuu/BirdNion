@@ -1936,7 +1936,22 @@ final class NewProviderTests: XCTestCase {
         XCTAssertTrue(windows.isEmpty)
     }
 
-    func testAntigravityLiveFetch() async throws {
+    func testAntigravityProcessListKeepsAllCandidates() {
+        let output = """
+        101 /opt/antigravity/language_server --csrf_token=stale --app_data_dir=/tmp/a
+        202 agy serve
+        """
+        XCTAssertEqual(AntigravityProvider._processIDsForTesting(output), [101, 202])
+        XCTAssertTrue(AntigravityProvider._shouldContinueAfterCandidateForTesting(
+            error: "Account không khớp: old"
+        ))
+        XCTAssertFalse(AntigravityProvider._shouldContinueAfterCandidateForTesting(error: nil))
+    }
+
+    func testAntigravityLiveFetchWhenEnabled() async throws {
+        guard ProcessInfo.processInfo.environment["BIRDNION_RUN_LIVE_TESTS"] == "1" else {
+            throw XCTSkip("Set BIRDNION_RUN_LIVE_TESTS=1 to run the Antigravity live smoke test")
+        }
         let provider = AntigravityProvider()
         let status = try await provider.fetch()
         XCTAssertNil(status.error, "Antigravity fetch should not fail: \(status.error ?? "")")

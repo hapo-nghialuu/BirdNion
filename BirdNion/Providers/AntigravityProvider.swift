@@ -199,7 +199,7 @@ private enum AgProcessDetector {
 
     // MARK: Private
 
-    private static func parseProcessList(_ output: String) -> [AgProcessInfo] {
+    fileprivate static func parseProcessList(_ output: String) -> [AgProcessInfo] {
         var results: [AgProcessInfo] = []
         for rawLine in output.components(separatedBy: "\n") {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
@@ -313,7 +313,13 @@ private enum AgProcessDetector {
                 // Respect timeout by terminating the process
                 let deadline = DispatchTime.now() + timeout
                 DispatchQueue.global().asyncAfter(deadline: deadline) {
-                    if process.isRunning { process.terminate() }
+                    guard process.isRunning else { return }
+                    process.terminate()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) {
+                        if process.isRunning {
+                            _ = kill(process.processIdentifier, SIGKILL)
+                        }
+                    }
                 }
                 process.waitUntilExit()
                 readers.wait()
@@ -473,10 +479,35 @@ private enum AgCLIWarmSession {
 
         func terminate() {
             lock.lock()
-            defer { lock.unlock() }
-            guard !isTerminated else { return }
+            guard !isTerminated else {
+                lock.unlock()
+                return
+            }
             isTerminated = true
-            kill(pid, SIGTERM)
+            lock.unlock()
+
+            // `posix_spawn` creates a dedicated process group. Terminate the
+            // entire group, then reap the direct child so repeated refreshes
+            // cannot leak descendants or zombies.
+            if kill(-pid, SIGTERM) != 0 {
+                _ = kill(pid, SIGTERM)
+            }
+            var status: Int32 = 0
+            let deadline = Date().addingTimeInterval(0.5)
+            var waitResult = waitpid(pid, &status, WNOHANG)
+            while waitResult == 0, Date() < deadline {
+                usleep(20_000)
+                waitResult = waitpid(pid, &status, WNOHANG)
+            }
+            let groupStillExists = kill(-pid, 0) == 0 || errno == EPERM
+            if waitResult == 0 || groupStillExists {
+                if kill(-pid, SIGKILL) != 0 {
+                    _ = kill(pid, SIGKILL)
+                }
+            }
+            if waitResult == 0 {
+                _ = waitpid(pid, &status, 0)
+            }
             close(primaryFD)
         }
 
@@ -560,12 +591,18 @@ private enum AgCLIWarmSession {
         lsofTimeout: TimeInterval = 2.0
     ) async throws -> [Int] {
         while Date() < deadline {
-            if let ports = try? await AgProcessDetector.listeningPorts(pid: pid, timeout: lsofTimeout),
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            if let ports = try? await AgProcessDetector.listeningPorts(
+                pid: pid,
+                timeout: min(lsofTimeout, remaining)
+            ),
                !ports.isEmpty {
                 return ports
             }
-            // Ngủ poll interval
-            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+            let sleepInterval = min(pollInterval, max(0, deadline.timeIntervalSinceNow))
+            guard sleepInterval > 0 else { break }
+            try await Task.sleep(nanoseconds: UInt64(sleepInterval * 1_000_000_000))
         }
         throw AntigravityProviderError.timedOut
     }
@@ -916,47 +953,72 @@ final class AntigravityProvider: QuotaProvider {
 
     /// Probe against an already-running language_server or agy found via `ps`.
     private func fetchFromRunningProcess() async -> ProviderStatus? {
+        let deadline = Date().addingTimeInterval(timeout)
         let processes: [AgProcessInfo]
         do {
-            processes = try await AgProcessDetector.detectAll(timeout: timeout)
+            processes = try await AgProcessDetector.detectAll(timeout: min(timeout, 2.0))
         } catch {
             return nil
         }
-        for process in processes {
+        var accountMismatch: ProviderStatus?
+        for (index, process) in processes.enumerated() {
+            let candidatesLeft = processes.count - index
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return nil }
+            let processDeadline = Date().addingTimeInterval(remaining / Double(candidatesLeft))
             let ports: [Int]
             do {
-                ports = try await AgProcessDetector.listeningPorts(pid: process.pid, timeout: min(timeout, 2.0))
+                ports = try await AgProcessDetector.listeningPorts(
+                    pid: process.pid,
+                    timeout: min(processDeadline.timeIntervalSinceNow, 2.0)
+                )
             } catch {
                 continue
             }
-            if let status = await probeEndpoints(process: process, ports: ports) {
+            if let status = await probeEndpoints(
+                process: process,
+                ports: ports,
+                deadline: processDeadline
+            ) {
+                if Self._shouldContinueAfterCandidateForTesting(error: status.error) {
+                    accountMismatch = status
+                    continue
+                }
                 return status
             }
         }
-        return nil
+        return accountMismatch
     }
 
     /// Spawn `agy` CLI, wait for its server port and API readiness, then probe.
     /// Returns nil (not an error) if agy binary is missing or port never opens.
     private func fetchViaCLIWarmSession() async -> ProviderStatus? {
+        let deadline = Date().addingTimeInterval(timeout)
         let result: (process: AgProcessInfo, ports: [Int], spawnedProcess: AgCLIWarmSession.AgSpawnedProcess?)
         do {
-            result = try await AgCLIWarmSession.warmAndProbe(overallTimeout: timeout)
+            result = try await AgCLIWarmSession.warmAndProbe(overallTimeout: deadline.timeIntervalSinceNow)
         } catch {
             // Binary not found or port never opened — silently skip
             return nil
         }
-        let deadline = Date().addingTimeInterval(min(timeout, 6.0))
         var currentPorts = result.ports
         var status: ProviderStatus?
 
         while Date() < deadline {
-            if !currentPorts.isEmpty, let s = await probeEndpoints(process: result.process, ports: currentPorts) {
+            if !currentPorts.isEmpty,
+               let s = await probeEndpoints(process: result.process, ports: currentPorts, deadline: deadline) {
                 status = s
                 break
             }
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            if let freshPorts = try? await AgProcessDetector.listeningPorts(pid: result.process.pid, timeout: 1.0),
+            let sleepInterval = min(0.4, max(0, deadline.timeIntervalSinceNow))
+            guard sleepInterval > 0 else { break }
+            try? await Task.sleep(nanoseconds: UInt64(sleepInterval * 1_000_000_000))
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            if let freshPorts = try? await AgProcessDetector.listeningPorts(
+                pid: result.process.pid,
+                timeout: min(1.0, remaining)
+            ),
                !freshPorts.isEmpty {
                 currentPorts = freshPorts
             }
@@ -968,14 +1030,30 @@ final class AntigravityProvider: QuotaProvider {
     }
 
     /// Try all ports with quota-summary first, then user-status.
-    private func probeEndpoints(process: AgProcessInfo, ports: [Int]) async -> ProviderStatus? {
+    private func probeEndpoints(
+        process: AgProcessInfo,
+        ports: [Int],
+        deadline: Date
+    ) async -> ProviderStatus? {
         let schemes = ["http", "https"]
         for port in ports {
             for scheme in schemes {
-                if let status = await trySummaryEndpoint(scheme: scheme, port: port, process: process) {
+                guard deadline.timeIntervalSinceNow > 0 else { return nil }
+                if let status = await trySummaryEndpoint(
+                    scheme: scheme,
+                    port: port,
+                    process: process,
+                    deadline: deadline
+                ) {
                     return status
                 }
-                if let status = await tryUserStatusEndpoint(scheme: scheme, port: port, process: process) {
+                guard deadline.timeIntervalSinceNow > 0 else { return nil }
+                if let status = await tryUserStatusEndpoint(
+                    scheme: scheme,
+                    port: port,
+                    process: process,
+                    deadline: deadline
+                ) {
                     return status
                 }
             }
@@ -988,23 +1066,31 @@ final class AntigravityProvider: QuotaProvider {
     private func trySummaryEndpoint(
         scheme: String,
         port: Int,
-        process: AgProcessInfo
+        process: AgProcessInfo,
+        deadline: Date
     ) async -> ProviderStatus? {
         do {
+            let requestTimeout = deadline.timeIntervalSinceNow
+            guard requestTimeout > 0 else { return nil }
             let data = try await AntigravityHTTP.post(
                 scheme: scheme,
                 port: port,
                 path: AntigravityHTTP.quotaSummaryPath,
                 csrfToken: process.csrfToken,
                 body: ["forceRefresh": true],
-                timeout: timeout
+                timeout: min(timeout, requestTimeout)
             )
             let (groups, _, _) = try AgResponseParser.parseQuotaSummary(data)
             let windows = quotaWindowsFromSummary(groups)
             guard !windows.isEmpty else { return nil }
 
             // Best-effort: also fetch identity from user-status (non-fatal if fails)
-            let (email, plan) = await fetchIdentity(scheme: scheme, port: port, process: process)
+            let (email, plan) = await fetchIdentity(
+                scheme: scheme,
+                port: port,
+                process: process,
+                deadline: deadline
+            )
 
             // Account-match guard: nếu config chứa email, chỉ chấp nhận snapshot khớp
             if let mismatch = accountMismatchError(responseEmail: email) {
@@ -1030,16 +1116,19 @@ final class AntigravityProvider: QuotaProvider {
     private func tryUserStatusEndpoint(
         scheme: String,
         port: Int,
-        process: AgProcessInfo
+        process: AgProcessInfo,
+        deadline: Date
     ) async -> ProviderStatus? {
         do {
+            let requestTimeout = deadline.timeIntervalSinceNow
+            guard requestTimeout > 0 else { return nil }
             let data = try await AntigravityHTTP.post(
                 scheme: scheme,
                 port: port,
                 path: AntigravityHTTP.getUserStatusPath,
                 csrfToken: process.csrfToken,
                 body: AntigravityHTTP.defaultRequestBody(),
-                timeout: timeout
+                timeout: min(timeout, requestTimeout)
             )
             let (quotas, email, plan) = try AgResponseParser.parseUserStatus(data)
             let windows = quotaWindows(from: quotas)
@@ -1087,15 +1176,18 @@ final class AntigravityProvider: QuotaProvider {
     private func fetchIdentity(
         scheme: String,
         port: Int,
-        process: AgProcessInfo
+        process: AgProcessInfo,
+        deadline: Date
     ) async -> (email: String?, plan: String?) {
+        let requestTimeout = deadline.timeIntervalSinceNow
+        guard requestTimeout > 0 else { return (nil, nil) }
         guard let data = try? await AntigravityHTTP.post(
             scheme: scheme,
             port: port,
             path: AntigravityHTTP.getUserStatusPath,
             csrfToken: process.csrfToken,
             body: AntigravityHTTP.defaultRequestBody(),
-            timeout: min(timeout, 1.5)
+            timeout: min(min(timeout, requestTimeout), 1.5)
         ),
         let (_, email, plan) = try? AgResponseParser.parseUserStatus(data)
         else { return (nil, nil) }
@@ -1110,5 +1202,14 @@ final class AntigravityProvider: QuotaProvider {
     func _parseQuotaSummaryForTesting(_ data: Data) throws -> [QuotaWindow] {
         let (groups, _, _) = try AgResponseParser.parseQuotaSummary(data)
         return quotaWindowsFromSummary(groups)
+    }
+
+    /// Test-only: expose deterministic process-list selection without running `ps`.
+    static func _processIDsForTesting(_ output: String) -> [Int] {
+        AgProcessDetector.parseProcessList(output).map(\.pid)
+    }
+
+    static func _shouldContinueAfterCandidateForTesting(error: String?) -> Bool {
+        error?.hasPrefix("Account không khớp:") == true
     }
 }

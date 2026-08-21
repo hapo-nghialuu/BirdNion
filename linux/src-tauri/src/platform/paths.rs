@@ -139,13 +139,25 @@ pub fn claude_config_dirs_from(env: &EnvMap, platform: Platform) -> Vec<PathBuf>
         return Vec::new();
     };
     match platform {
-        Platform::Unix => vec![home.join(".claude"), home.join(".config/claude")],
+        Platform::Unix => vec![home.join(".config/claude"), home.join(".claude")],
         Platform::Windows => vec![home.join(".claude")],
     }
 }
 
 pub fn claude_config_dirs() -> Vec<PathBuf> {
     claude_config_dirs_from(&current_env(), Platform::current())
+}
+
+pub fn claude_credential_dirs_from(env: &EnvMap, platform: Platform) -> Vec<PathBuf> {
+    let mut directories = claude_config_dirs_from(env, platform);
+    if claude_config_dir_from(env, platform).is_none() && platform == Platform::Unix {
+        directories.reverse();
+    }
+    directories
+}
+
+pub fn claude_credential_dirs() -> Vec<PathBuf> {
+    claude_credential_dirs_from(&current_env(), Platform::current())
 }
 
 pub fn is_projects_dir(path: &Path, platform: Platform) -> bool {

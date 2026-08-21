@@ -58,6 +58,10 @@ tauri-plugin-dialog = "2"
 # without pulling in the `#[tokio::test]` macro's "macros" feature.
 tokio = { version = "1", features = ["time", "rt", "sync"] }
 
+[target.'cfg(unix)'.dependencies]
+# antigravity.rs: attach the warm `agy` child to a PTY and manage its process group.
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",

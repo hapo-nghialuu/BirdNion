@@ -20,8 +20,19 @@
 //! macOS-only step of scanning an installed `Antigravity.app` bundle for the
 //! embedded OAuth client has no Linux equivalent and is intentionally skipped.
 
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::io;
+use std::io::Read;
+#[cfg(unix)]
+use std::os::fd::{FromRawFd, RawFd};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::process::Child;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -61,55 +72,138 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 /// Returns `None` (not an error) when nothing is running, so callers can fall
 /// through to the next best-effort path.
 async fn fetch_from_running_process(cfg: &config::Provider, name: &str) -> Option<ProviderStatus> {
+    let deadline = Instant::now() + PROBE_TIMEOUT;
     // ps/lsof are blocking subprocess calls; run them off the async executor.
-    let process = tauri::async_runtime::spawn_blocking(detect_process).await.ok()?.ok()?;
-    let pid = process.pid;
-    let ports = tauri::async_runtime::spawn_blocking(move || listening_ports(pid)).await.ok()?.ok()?;
-    if ports.is_empty() {
-        return None;
+    let processes = tauri::async_runtime::spawn_blocking(move || detect_processes(deadline)).await.ok()?.ok()?;
+    let process_count = processes.len();
+    let mut account_mismatch = None;
+    for (index, process) in processes.into_iter().enumerate() {
+        // Reserve a fair share for every later match so an unresponsive stale
+        // process cannot consume the entire overall deadline.
+        let process_deadline = fair_deadline(deadline, process_count - index)?;
+        let timeout = remaining_time(process_deadline)?;
+        let pid = process.pid;
+        let ports = tauri::async_runtime::spawn_blocking(move || listening_ports(pid, timeout)).await.ok()?.ok();
+        let Some(ports) = ports else { continue };
+        if let Some(status) = probe_endpoints(cfg, name, &process, &ports, process_deadline).await {
+            if is_account_mismatch_status(&status) {
+                account_mismatch = Some(status);
+                continue;
+            }
+            return Some(status);
+        }
     }
-    probe_endpoints(cfg, name, &process, &ports).await
+    account_mismatch
+}
+
+fn is_account_mismatch_status(status: &ProviderStatus) -> bool {
+    status.error.as_deref().is_some_and(|error| error.starts_with("Account không khớp:"))
 }
 
 /// Spawn the `agy` CLI so its embedded localhost server opens a port, then
 /// probe it the same way as a live IDE process. Silently skipped (returns
 /// `None`) when the binary is missing or never opens a port — never a hard
 /// error, matching Swift's `fetchViaCLIWarmSession`.
+#[cfg(unix)]
 async fn fetch_via_cli_warm_session(cfg: &config::Provider, name: &str) -> Option<ProviderStatus> {
+    let deadline = Instant::now() + WARM_SPAWN_TIMEOUT;
     let binary = tauri::async_runtime::spawn_blocking(resolve_agy_binary).await.ok()?;
     let binary = binary?;
 
-    let mut child = Command::new(&binary)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let pid = child.id() as i32;
+    let session = spawn_agy_in_pty(&binary).ok()?;
+    let pid = session.pid;
 
-    let deadline = std::time::Instant::now() + WARM_SPAWN_TIMEOUT;
     let mut ports: Vec<u16> = Vec::new();
-    while std::time::Instant::now() < deadline {
-        match tauri::async_runtime::spawn_blocking(move || listening_ports(pid)).await {
+    while let Some(timeout) = remaining_time(deadline) {
+        match tauri::async_runtime::spawn_blocking(move || listening_ports(pid, timeout)).await {
             Ok(Ok(p)) if !p.is_empty() => {
                 ports = p;
                 break;
             }
-            _ => tokio::time::sleep(Duration::from_millis(400)).await,
+            _ => {
+                let Some(remaining) = remaining_time(deadline) else { break };
+                tokio::time::sleep(remaining.min(Duration::from_millis(400))).await;
+            }
         }
     }
 
-    let result = if ports.is_empty() {
+    if ports.is_empty() {
         None
     } else {
         let process = ProcessInfo { pid, csrf_token: String::new() };
-        probe_endpoints(cfg, name, &process, &ports).await
-    };
+        probe_endpoints(cfg, name, &process, &ports, deadline).await
+    }
+}
 
-    // Never leave the spawned agy process lingering after we're done with it.
-    let _ = child.kill();
-    let _ = child.wait();
-    result
+#[cfg(not(unix))]
+async fn fetch_via_cli_warm_session(_cfg: &config::Provider, _name: &str) -> Option<ProviderStatus> {
+    None
+}
+
+/// Owns the PTY master and the spawned session. Drop is synchronous and
+/// bounded so cancellation cannot leak `agy` descendants.
+#[cfg(unix)]
+struct PtySession {
+    child: Child,
+    pid: i32,
+    _master: File,
+}
+
+#[cfg(unix)]
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        unsafe { libc::kill(-self.pid, libc::SIGTERM); }
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let mut reaped = false;
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) { reaped = true; }
+            if !process_group_exists(self.pid) { break; }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        if process_group_exists(self.pid) {
+            unsafe { libc::kill(-self.pid, libc::SIGKILL); }
+        }
+        if !reaped { let _ = self.child.wait(); }
+    }
+}
+
+#[cfg(unix)]
+fn process_group_exists(pid: i32) -> bool {
+    let result = unsafe { libc::kill(-pid, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Spawn `agy` with all standard streams attached to a pseudo-terminal and a
+/// dedicated session/process group for complete cleanup.
+#[cfg(unix)]
+fn spawn_agy_in_pty(binary: &str) -> io::Result<PtySession> {
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
+    let mut size = libc::winsize { ws_row: 24, ws_col: 120, ws_xpixel: 0, ws_ypixel: 0 };
+    if unsafe { libc::openpty(&mut master_fd, &mut slave_fd, std::ptr::null_mut(), std::ptr::null_mut(), &mut size) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    let mut command = Command::new(binary);
+    command
+        .stdin(Stdio::from(slave.try_clone()?))
+        .stdout(Stdio::from(slave.try_clone()?))
+        .stderr(Stdio::from(slave));
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 { return Err(io::Error::last_os_error()); }
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = command.spawn()?;
+    let pid = i32::try_from(child.id()).map_err(|_| io::Error::other("agy PID vượt quá i32"))?;
+    Ok(PtySession { child, pid, _master: master })
 }
 
 /// Resolves the `agy` binary: `PATH` lookup, then well-known install paths
@@ -140,29 +234,48 @@ fn is_executable(path: &std::path::Path) -> bool {
     }
 }
 
-async fn probe_endpoints(cfg: &config::Provider, name: &str, process: &ProcessInfo, ports: &[u16]) -> Option<ProviderStatus> {
+async fn probe_endpoints(
+    cfg: &config::Provider,
+    name: &str,
+    process: &ProcessInfo,
+    ports: &[u16],
+    deadline: Instant,
+) -> Option<ProviderStatus> {
     for &port in ports {
-        if let Some(status) = try_summary_endpoint(cfg, name, process, port).await {
+        if let Some(status) = try_summary_endpoint(cfg, name, process, port, deadline).await {
             return Some(status);
         }
-        if let Some(status) = try_user_status_endpoint(cfg, name, process, port).await {
+        if let Some(status) = try_user_status_endpoint(cfg, name, process, port, deadline).await {
             return Some(status);
         }
     }
     None
 }
 
-fn detect_process() -> Result<ProcessInfo, String> {
-    let output = run_command("/bin/ps", &["-ax", "-o", "pid=,command="], PROBE_TIMEOUT)?;
-    parse_process_list(&output).ok_or_else(|| "notRunning".to_string())
+fn remaining_time(deadline: Instant) -> Option<Duration> {
+    deadline.checked_duration_since(Instant::now()).filter(|duration| !duration.is_zero())
 }
 
-/// Pure: parse `ps -ax -o pid=,command=` output for a language_server/agy process.
-fn parse_process_list(output: &str) -> Option<ProcessInfo> {
+fn fair_deadline(overall_deadline: Instant, remaining_processes: usize) -> Option<Instant> {
+    let remaining = remaining_time(overall_deadline)?;
+    let divisor = u32::try_from(remaining_processes).ok()?.max(1);
+    Some(Instant::now() + remaining / divisor)
+}
+
+fn detect_processes(deadline: Instant) -> Result<Vec<ProcessInfo>, String> {
+    let timeout = remaining_time(deadline).ok_or_else(|| "probe deadline exceeded".to_string())?;
+    let output = run_command("/bin/ps", &["-ax", "-o", "pid=,command="], timeout)?;
+    let processes = parse_process_list(&output);
+    (!processes.is_empty()).then_some(processes).ok_or_else(|| "notRunning".to_string())
+}
+
+/// Pure: parse every matching `language_server`/`agy` process in `ps` order.
+fn parse_process_list(output: &str) -> Vec<ProcessInfo> {
+    let mut processes = Vec::new();
     for raw_line in output.lines() {
         let trimmed = raw_line.trim();
         let mut parts = trimmed.splitn(2, ' ');
-        let pid: i32 = parts.next()?.parse().ok()?;
+        let Some(pid) = parts.next().and_then(|value| value.parse::<i32>().ok()) else { continue };
         let command = parts.next().unwrap_or("").trim();
         if command.is_empty() {
             continue;
@@ -171,14 +284,10 @@ fn parse_process_list(output: &str) -> Option<ProcessInfo> {
         if !is_antigravity_process(&lower) {
             continue;
         }
-        if let Some(token) = extract_flag("--csrf_token", command) {
-            return Some(ProcessInfo { pid, csrf_token: token });
-        }
-        if is_cli_process(&lower) {
-            return Some(ProcessInfo { pid, csrf_token: String::new() });
-        }
+        let csrf_token = extract_flag("--csrf_token", command).unwrap_or_default();
+        processes.push(ProcessInfo { pid, csrf_token });
     }
-    None
+    processes
 }
 
 fn is_antigravity_process(lower: &str) -> bool {
@@ -210,13 +319,13 @@ fn extract_flag(flag: &str, command: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn listening_ports(pid: i32) -> Result<Vec<u16>, String> {
+fn listening_ports(pid: i32, timeout: Duration) -> Result<Vec<u16>, String> {
     let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
         .into_iter()
         .find(|p| std::path::Path::new(p).exists())
         .ok_or_else(|| "lsof không có sẵn".to_string())?;
     let pid_str = pid.to_string();
-    let output = run_command(lsof, &["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid_str], PROBE_TIMEOUT)?;
+    let output = run_command(lsof, &["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid_str], timeout)?;
     let ports = parse_listening_ports(&output);
     if ports.is_empty() {
         return Err("Không tìm thấy port đang listen".to_string());
@@ -252,6 +361,11 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration) -> Result<String,
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Không chạy được {binary}: {e}"))?;
+    let mut stdout = child.stdout.take().ok_or_else(|| format!("{binary} không có stdout pipe"))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
 
     let start = std::time::Instant::now();
     loop {
@@ -261,21 +375,30 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration) -> Result<String,
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = stdout_reader.join();
                     return Err(format!("{binary} timeout"));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(format!("{binary} lỗi: {e}")),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                return Err(format!("{binary} lỗi: {e}"));
+            }
         }
     }
 
-    let output = child.wait_with_output().map_err(|e| format!("{binary} lỗi: {e}"))?;
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let _ = child.wait();
+    let output = stdout_reader
+        .join()
+        .map_err(|_| format!("{binary} stdout reader panic"))?
+        .map_err(|e| format!("{binary} stdout lỗi: {e}"))?;
+    Ok(String::from_utf8_lossy(&output).to_string())
 }
 
-async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value) -> Result<Value, String> {
+async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value, deadline: Instant) -> Result<Value, String> {
     let client = reqwest::Client::builder()
-        .timeout(PROBE_TIMEOUT)
         .danger_accept_invalid_certs(true)
         .build()
         .map_err(|e| format!("Client error: {e}"))?;
@@ -284,19 +407,24 @@ async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value)
     let mut last_err = String::new();
 
     for scheme in schemes {
+        let timeout = remaining_time(deadline).ok_or_else(|| "probe deadline exceeded".to_string())?;
         let url = format!("{scheme}://127.0.0.1:{port}{path}");
-        let mut req = client.post(&url).header("Content-Type", "application/json").header("Connect-Protocol-Version", "1").json(&body);
+        let mut req = client.post(&url).timeout(timeout).header("Content-Type", "application/json").header("Connect-Protocol-Version", "1").json(&body);
         if !csrf_token.is_empty() {
             req = req.header("X-Codeium-Csrf-Token", csrf_token);
         }
-        match req.send().await {
-            Ok(resp) if resp.status().as_u16() == 200 => {
-                return resp.json::<Value>().await.map_err(|e| format!("Invalid JSON: {e}"));
+        match tokio::time::timeout(timeout, req.send()).await {
+            Err(_) => last_err = "probe deadline exceeded".to_string(),
+            Ok(Ok(resp)) if resp.status().as_u16() == 200 => {
+                let timeout = remaining_time(deadline).ok_or_else(|| "probe deadline exceeded".to_string())?;
+                return tokio::time::timeout(timeout, resp.json::<Value>()).await
+                    .map_err(|_| "probe deadline exceeded".to_string())?
+                    .map_err(|e| format!("Invalid JSON: {e}"));
             }
-            Ok(resp) => {
+            Ok(Ok(resp)) => {
                 last_err = format!("HTTP {}", resp.status().as_u16());
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 last_err = format!("Network: {e}");
             }
         }
@@ -305,21 +433,21 @@ async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value)
     Err(last_err)
 }
 
-async fn try_summary_endpoint(cfg: &config::Provider, name: &str, process: &ProcessInfo, port: u16) -> Option<ProviderStatus> {
+async fn try_summary_endpoint(cfg: &config::Provider, name: &str, process: &ProcessInfo, port: u16, deadline: Instant) -> Option<ProviderStatus> {
     let body = serde_json::json!({"forceRefresh": true});
-    let data = post_connect_json(port, QUOTA_SUMMARY_PATH, &process.csrf_token, body).await.ok()?;
+    let data = post_connect_json(port, QUOTA_SUMMARY_PATH, &process.csrf_token, body, deadline).await.ok()?;
     let groups = parse_quota_summary(&data)?;
     let windows = map_summary_windows(&groups);
     if windows.is_empty() {
         return None;
     }
-    let email = fetch_identity_email(process, port).await;
+    let email = fetch_identity_email(process, port, deadline).await;
     Some(build_status(cfg, name, windows, email))
 }
 
-async fn try_user_status_endpoint(cfg: &config::Provider, name: &str, process: &ProcessInfo, port: u16) -> Option<ProviderStatus> {
+async fn try_user_status_endpoint(cfg: &config::Provider, name: &str, process: &ProcessInfo, port: u16, deadline: Instant) -> Option<ProviderStatus> {
     let body = default_request_body();
-    let data = post_connect_json(port, USER_STATUS_PATH, &process.csrf_token, body).await.ok()?;
+    let data = post_connect_json(port, USER_STATUS_PATH, &process.csrf_token, body, deadline).await.ok()?;
     let (quotas, email) = parse_user_status(&data)?;
     let windows = map_model_windows(&quotas);
     if windows.is_empty() {
@@ -328,8 +456,8 @@ async fn try_user_status_endpoint(cfg: &config::Provider, name: &str, process: &
     Some(build_status(cfg, name, windows, email))
 }
 
-async fn fetch_identity_email(process: &ProcessInfo, port: u16) -> Option<String> {
-    let data = post_connect_json(port, USER_STATUS_PATH, &process.csrf_token, default_request_body()).await.ok()?;
+async fn fetch_identity_email(process: &ProcessInfo, port: u16, deadline: Instant) -> Option<String> {
+    let data = post_connect_json(port, USER_STATUS_PATH, &process.csrf_token, default_request_body(), deadline).await.ok()?;
     parse_user_status(&data)?.1
 }
 
@@ -345,6 +473,9 @@ fn default_request_body() -> Value {
 }
 
 fn build_status(cfg: &config::Provider, name: &str, windows: Vec<QuotaWindow>, email: Option<String>) -> ProviderStatus {
+    if let Some(error) = account_mismatch_error(cfg.account_label.as_deref(), email.as_deref()) {
+        return ProviderStatus::failure(&cfg.id, name, error);
+    }
     let account_label = cfg.account_label.clone().or(email).unwrap_or_else(|| "Antigravity".to_string());
     ProviderStatus {
         id: cfg.id.clone(),
@@ -355,6 +486,21 @@ fn build_status(cfg: &config::Provider, name: &str, windows: Vec<QuotaWindow>, e
         menu_bar_metric: cfg.menu_bar_metric.clone(),
         ..Default::default()
     }
+}
+
+fn account_mismatch_error(config_label: Option<&str>, response_email: Option<&str>) -> Option<String> {
+    let expected = config_label?.trim();
+    if !expected.contains('@') {
+        return None;
+    }
+    let found = response_email.map(str::trim).filter(|value| !value.is_empty());
+    if found.is_some_and(|value| value.eq_ignore_ascii_case(expected)) {
+        return None;
+    }
+    Some(format!(
+        "Account không khớp: cấu hình \"{expected}\" nhưng đang đăng nhập \"{}\"",
+        found.unwrap_or("(không xác định)")
+    ))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -825,7 +971,8 @@ mod tests {
     #[test]
     fn parses_language_server_process_with_csrf_token() {
         let output = "  1234 /opt/antigravity/language_server --csrf_token=abc123 --app_data_dir=/x\n";
-        let info = parse_process_list(output).unwrap();
+        let processes = parse_process_list(output);
+        let info = &processes[0];
         assert_eq!(info.pid, 1234);
         assert_eq!(info.csrf_token, "abc123");
     }
@@ -833,15 +980,28 @@ mod tests {
     #[test]
     fn parses_agy_cli_process_without_token() {
         let output = "5678 agy serve\n";
-        let info = parse_process_list(output).unwrap();
+        let processes = parse_process_list(output);
+        let info = &processes[0];
         assert_eq!(info.pid, 5678);
         assert_eq!(info.csrf_token, "");
     }
 
     #[test]
+    fn parses_stale_first_and_valid_second_process_in_probe_order() {
+        let output = "1001 /opt/antigravity/language_server --csrf_token=stale --app_data_dir=/old\n\
+                      2002 /opt/antigravity/language_server --csrf_token=valid --app_data_dir=/current\n";
+        let processes = parse_process_list(output);
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[0].pid, 1001);
+        assert_eq!(processes[0].csrf_token, "stale");
+        assert_eq!(processes[1].pid, 2002);
+        assert_eq!(processes[1].csrf_token, "valid");
+    }
+
+    #[test]
     fn no_antigravity_process_returns_none() {
         let output = "111 /usr/bin/zsh\n222 some-other-language-server --app_data_dir=/y\n";
-        assert!(parse_process_list(output).is_none());
+        assert!(parse_process_list(output).is_empty());
     }
 
     #[test]
@@ -856,6 +1016,42 @@ mod tests {
     #[test]
     fn empty_lsof_output_has_no_ports() {
         assert!(parse_listening_ports("").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_command_drains_stdout_larger_than_pipe_capacity() {
+        let script = "i=0; while [ $i -lt 20000 ]; do printf 0123456789abcdef0123456789abcdef; i=$((i + 1)); done";
+        let output = run_command("/bin/sh", &["-c", script], Duration::from_secs(5)).unwrap();
+        assert_eq!(output.len(), 640_000);
+        assert!(output.starts_with("0123456789abcdef"));
+        assert!(output.ends_with("0123456789abcdef"));
+    }
+
+    #[test]
+    fn configured_email_matches_response_case_insensitively() {
+        assert_eq!(account_mismatch_error(Some("User@Example.com"), Some("user@example.com")), None);
+    }
+
+    #[test]
+    fn configured_email_rejects_different_response_account() {
+        let error = account_mismatch_error(Some("expected@example.com"), Some("other@example.com")).unwrap();
+        assert!(error.contains("expected@example.com"));
+        assert!(error.contains("other@example.com"));
+    }
+
+    #[test]
+    fn configured_email_rejects_missing_response_account() {
+        let error = account_mismatch_error(Some("expected@example.com"), None).unwrap();
+        assert!(error.contains("(không xác định)"));
+    }
+
+    #[test]
+    fn account_mismatch_candidate_is_non_terminal() {
+        let mismatch = ProviderStatus::failure("antigravity", "Antigravity", "Account không khớp: old");
+        let success = ProviderStatus { id: "antigravity".into(), ..Default::default() };
+        assert!(is_account_mismatch_status(&mismatch));
+        assert!(!is_account_mismatch_status(&success));
     }
 
     #[test]
