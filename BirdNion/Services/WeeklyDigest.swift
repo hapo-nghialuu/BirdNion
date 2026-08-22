@@ -91,13 +91,15 @@ enum WeeklyDigest {
     // MARK: - Pure model
 
     enum SourceID: String, CaseIterable, Equatable, Sendable {
-        case claude, codex, grok
+        case claude, codex, grok, omp, pi
 
         var displayName: String {
             switch self {
             case .claude: return "Claude"
             case .codex: return "Codex"
             case .grok: return "Grok"
+            case .omp: return "Oh My Pi"
+            case .pi: return "Pi"
             }
         }
     }

@@ -7,8 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::cost_history;
 use crate::project_cost_history::{self, ProjectDay, ProjectModel};
 use crate::usage::UsageReport;
-
-const SOURCES: [&str; 3] = ["claude", "codex", "grok"];
+const SOURCES: [&str; 5] = ["claude", "codex", "grok", "omp", "pi"];
 const PROJECT_RANKING_LIMIT: usize = 100;
 
 #[derive(Serialize, Clone, Debug)]

@@ -499,10 +499,15 @@ struct ClaudeCodePane: View {
                     header: L10n.t("aiCoding.step.agent", lang)
                 ) { switchDetailAgent(to: $0) }
 
-                if detailAgent == .codex {
-                    codexAgentSections()
-                } else {
+                switch detailAgent {
+                case .claudeCode:
                     presetClaudeSections(p)
+                case .codex:
+                    codexAgentSections()
+                case .omp:
+                    OMPPane()
+                case .pi:
+                    PiPane()
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -592,6 +597,10 @@ struct ClaudeCodePane: View {
                     claudeAgentSections(binding)
                 case .codex:
                     codexAgentSections()
+                case .omp:
+                    OMPPane()
+                case .pi:
+                    PiPane()
                 }
 
                 HStack {
@@ -617,6 +626,7 @@ struct ClaudeCodePane: View {
             switch detailAgent {
             case .claudeCode: return profile.usesEmbeddedCLIProxy
             case .codex: return workingCodexProfile?.usesEmbeddedCLIProxy ?? profile.usesEmbeddedCLIProxy
+            case .omp, .pi: return false
             }
         }()
         let upstreamDone = profile.hasUpstreamConfiguration
@@ -630,6 +640,8 @@ struct ClaudeCodePane: View {
                     || cleaned(profile.opusModel) != nil
             case .codex:
                 return cleaned(workingCodexProfile?.model) != nil
+            case .omp, .pi:
+                return true
             }
         }()
         let proxyDone: Bool = {
@@ -638,8 +650,10 @@ struct ClaudeCodePane: View {
             case .claudeCode:
                 return localProxy.runtimeState == .running && profile.isCLIProxyConfigurationCurrent
             case .codex:
-                guard let codex = workingCodexProfile else { return false }
-                return localProxy.runtimeState == .running && codex.isCLIProxyConfigurationCurrent
+                return localProxy.runtimeState == .running
+                    && (workingCodexProfile?.isCLIProxyConfigurationCurrent ?? false)
+            case .omp, .pi:
+                return false
             }
         }()
         let activateDone: Bool = {
@@ -653,6 +667,8 @@ struct ClaudeCodePane: View {
                         applied: CodexConfigWriter.isApplied(codex),
                         usesEmbeddedProxy: codex.usesEmbeddedCLIProxy,
                         proxyIsRunning: EmbeddedCLIProxyService.isProfileRunning(codex, runtimeState: localProxy.runtimeState))
+            case .omp, .pi:
+                return true
             }
         }()
 

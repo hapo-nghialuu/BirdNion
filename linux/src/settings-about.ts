@@ -212,6 +212,8 @@ export const PROVIDER_BUDGET_STORAGE_KEYS: Record<UsageSourceId, string> = {
   claude: "birdnion.claudeBudgetUSD",
   codex: "birdnion.codexBudgetUSD",
   grok: "birdnion.grokBudgetUSD",
+  omp: "birdnion.ompBudgetUSD",
+  pi: "birdnion.piBudgetUSD",
 };
 /** Same-window event — mirrors `MONTHLY_BUDGET_CHANGED_EVENT` — since
  * `storage` only fires in OTHER windows. */

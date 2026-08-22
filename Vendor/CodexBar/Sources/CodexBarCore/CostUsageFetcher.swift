@@ -105,6 +105,7 @@ public struct CostUsageFetcher: Sendable {
         codexHomePath: String? = nil,
         historyDays: Int = 30,
         refreshPricingInBackground: Bool = true,
+        includePiSessions: Bool = false,
         scannerOptions overrideScannerOptions: CostUsageScanner.Options? = nil,
         piScannerOptions overridePiScannerOptions: PiSessionCostScanner
             .Options? = nil) async throws -> CostUsageTokenSnapshot
@@ -195,7 +196,7 @@ public struct CostUsageFetcher: Sendable {
                 try checkCancellation()
             }
 
-            if provider == .codex || provider == .claude {
+            if includePiSessions && (provider == .codex || provider == .claude) {
                 let piReport = try PiSessionCostScanner.loadDailyReportCancellable(
                     provider: provider,
                     since: since,
@@ -216,6 +217,7 @@ public struct CostUsageFetcher: Sendable {
         now: Date = Date(),
         codexHomePath: String? = nil,
         historyDays: Int = 30,
+        includePiSessions: Bool = false,
         scannerOptions overrideScannerOptions: CostUsageScanner.Options? = nil) async -> CostUsageTokenSnapshot?
     {
         if let codexHomePath = codexHomePath?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -248,7 +250,8 @@ public struct CostUsageFetcher: Sendable {
                 }
             }
 
-            if let piDaily = PiSessionCostScanner.loadCachedDailyReport(
+            if includePiSessions,
+               let piDaily = PiSessionCostScanner.loadCachedDailyReport(
                 provider: .codex,
                 since: since,
                 until: until,

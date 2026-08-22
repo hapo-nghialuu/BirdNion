@@ -49,13 +49,17 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 enum AICodingAgent: String, CaseIterable, Identifiable {
     case claudeCode
     case codex
+    case omp
+    case pi
 
     var id: String { rawValue }
 
     func title(language: String? = nil) -> String {
         switch self {
-        case .claudeCode: L10n.t("aiCoding.agent.claudeCode", language)
-        case .codex: L10n.t("aiCoding.agent.codex", language)
+        case .claudeCode: return "Claude Code"
+        case .codex: return "Codex CLI"
+        case .omp: return "Oh My Pi"
+        case .pi: return "Pi Agent"
         }
     }
 }

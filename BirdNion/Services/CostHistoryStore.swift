@@ -19,7 +19,7 @@ enum CostHistoryStore {
     private static let ioLock = NSLock()
 
     enum Source: String, CaseIterable {
-        case claude, codex, grok, kiro
+        case claude, codex, grok, kiro, omp, pi
     }
 
     // MARK: - Schema
@@ -452,5 +452,77 @@ enum CostHistoryStore {
                     })
             },
             topModel: top)
+    }
+
+    static func makeOMPReport(
+        window: [DayBucket],
+        confidence: UsageScanConfidence = .unavailable) -> OMPUsageReport
+    {
+        let last30 = window.suffix(30)
+        let today = window.last
+        var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
+        for d in last30 {
+            for m in d.models {
+                var t = modelTotals[m.name] ?? (0, 0)
+                t.usd += m.usd
+                t.tokens += m.tokens
+                modelTotals[m.name] = t
+            }
+        }
+        let top = modelTotals.max {
+            $0.value.usd == $1.value.usd
+                ? $0.value.tokens < $1.value.tokens
+                : $0.value.usd < $1.value.usd
+        }?.key
+        return OMPUsageReport(
+            todayUSD: today?.usd ?? 0,
+            todayTokens: today?.tokens ?? 0,
+            last30USD: last30.map(\.usd).reduce(0, +),
+            last30Tokens: last30.map(\.tokens).reduce(0, +),
+            daily: window.map {
+                OMPDailyUsage(
+                    date: $0.date, usd: $0.usd, tokens: $0.tokens,
+                    models: $0.models.map {
+                        OMPDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
+                    })
+            },
+            topModel: top,
+            scanConfidence: confidence)
+    }
+
+    static func makePiReport(
+        window: [DayBucket],
+        confidence: UsageScanConfidence = .unavailable) -> PiUsageReport
+    {
+        let last30 = window.suffix(30)
+        let today = window.last
+        var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
+        for d in last30 {
+            for m in d.models {
+                var t = modelTotals[m.name] ?? (0, 0)
+                t.usd += m.usd
+                t.tokens += m.tokens
+                modelTotals[m.name] = t
+            }
+        }
+        let top = modelTotals.max {
+            $0.value.usd == $1.value.usd
+                ? $0.value.tokens < $1.value.tokens
+                : $0.value.usd < $1.value.usd
+        }?.key
+        return PiUsageReport(
+            todayUSD: today?.usd ?? 0,
+            todayTokens: today?.tokens ?? 0,
+            last30USD: last30.map(\.usd).reduce(0, +),
+            last30Tokens: last30.map(\.tokens).reduce(0, +),
+            daily: window.map {
+                PiDailyUsage(
+                    date: $0.date, usd: $0.usd, tokens: $0.tokens,
+                    models: $0.models.map {
+                        PiDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
+                    })
+            },
+            topModel: top,
+            scanConfidence: confidence)
     }
 }

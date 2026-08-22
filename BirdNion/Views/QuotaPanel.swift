@@ -32,8 +32,11 @@ struct QuotaOverview: View {
     /// Lazy-scanned Kiro usage report from local kiro-cli SQLite sessions.
     @State private var kiroReport: KiroUsageReport?
     @State private var kiroReportTaskId: String?
+    @State private var ompReport: OMPUsageReport?
+    @State private var ompReportTaskId: String?
+    @State private var piReport: PiUsageReport?
+    @State private var piReportTaskId: String?
     @State private var claudeCodeTargetRevision = 0
-
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
@@ -78,7 +81,8 @@ struct QuotaOverview: View {
                                 UserDefaults.standard.set($0, forKey: Self.selectedTabKey)
                             }
                         ),
-                        showAllTab: hasLocalCostSources
+                        showAllTab: hasLocalCostSources,
+                        showAgentsTab: hasAgentCostSources
                     )
                     if selected == "all" {
                         // Combined Claude CLI + Codex + Grok overview (no real
@@ -90,132 +94,12 @@ struct QuotaOverview: View {
                             claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
                             codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
                             grokEnabled: quota.displayStatuses.contains { $0.id == "grok" })
+                    } else if selected == "agents" {
+                        // Coding agents overview: Oh My Pi + Pi spend only.
+                        AgentsUsageOverview(omp: ompReport, pi: piReport)
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
-                        // Design provider stack: header → lowest hero → windows
-                        // (+ credits) → optional charts / accounts. Spacing
-                        // owned by each section's padding/rules (body pad 16).
-                        VStack(alignment: .leading, spacing: 0) {
-                            ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
-                            if s.error == nil, !s.windows.isEmpty {
-                                QuotaSummaryStrip(status: s)
-                            }
-                            ProviderCard(status: s)
-                            if s.id == "xai", let cost = s.cost {
-                                XAISpendCard(cost: cost)
-                            }
-                            // Claude Code backend: round quick-apply / setup button,
-                            // shown only for providers with a key that can back Claude Code.
-                            if ClaudeCodeQuickApplyButton.shouldShow(providerID: s.id) {
-                                ClaudeCodeQuickApplyButton(providerID: s.id)
-                                    .id("\(s.id)-\(claudeCodeTargetRevision)")
-                            }
-                            if s.id == "claude" {
-                                ClaudeCodeProfileSwitchSection()
-                            }
-                            // Claude-specific: 30-day chart + top-model line.
-                            // Only rendered for the Claude tab so other providers
-                            // don't pull in the local session scan.
-                            if s.id == "claude", let report = claudeReport,
-                               !report.isEmpty {
-                                ClaudeUsageChartCard(report: report)
-                            }
-                            // Claude Admin API org dashboard (source = .api).
-                            if s.id == "claude", let admin = s.claudeAdminUsage,
-                               !admin.daily.isEmpty {
-                                ClaudeAdminUsageChartCard(snapshot: admin)
-                            }
-                            // Claude-specific: own monthly budget vs. spend —
-                            // only when a Claude budget is configured; renders
-                            // even before the scan lands (confidence nil →
-                            // "no cost data" row, never a fake status).
-                            if s.id == "claude", settings.claudeMonthlyBudgetUSD.isFinite,
-                               settings.claudeMonthlyBudgetUSD > 0 {
-                                let claudeBudgetCombined = claudeReport.map {
-                                    CombinedUsageReport.build(
-                                        claude: $0, codex: nil, grok: nil,
-                                        includeClaude: true, includeCodex: false, includeGrok: false)
-                                }
-                                ProviderBudgetCard(
-                                    providerId: "claude", providerName: "Claude",
-                                    color: VocabbyTheme.chartClaude,
-                                    budgetUSD: settings.claudeMonthlyBudgetUSD,
-                                    confidence: claudeBudgetCombined?.claudeConfidence,
-                                    daily: claudeBudgetCombined?.daily ?? [],
-                                    source: .claude)
-                            }
-                            // Codex-specific: 30-day cost chart + top-model line,
-                            // scanned only when the Codex tab is open.
-                            if s.id == "codex", let report = codexReport,
-                               !report.isEmpty {
-                                CodexUsageChartCard(report: report)
-                            }
-                            // Codex-specific: own monthly budget vs. spend —
-                            // same gating/trust rule as the Claude card above.
-                            if s.id == "codex", settings.codexMonthlyBudgetUSD.isFinite,
-                               settings.codexMonthlyBudgetUSD > 0 {
-                                let codexBudgetCombined = codexReport.map {
-                                    CombinedUsageReport.build(
-                                        claude: nil, codex: $0, grok: nil,
-                                        includeClaude: false, includeCodex: true, includeGrok: false)
-                                }
-                                ProviderBudgetCard(
-                                    providerId: "codex", providerName: "Codex",
-                                    color: VocabbyTheme.chartCodex,
-                                    budgetUSD: settings.codexMonthlyBudgetUSD,
-                                    confidence: codexBudgetCombined?.codexConfidence,
-                                    daily: codexBudgetCombined?.daily ?? [],
-                                    source: .codex)
-                            }
-                            // Codex-specific: account list (click to reveal) +
-                            // CLI switch. Below the chart per user preference.
-                            if s.id == "codex" {
-                                CodexProfileSwitchSection()
-                                CodexAccountsPopoverSection()
-                            }
-                            // FreeModel: account switcher (per-browser sessions
-                            // + pasted cookies), same collapsed-card pattern.
-                            if s.id == "freemodel" {
-                                FreemodelAccountsPopoverSection()
-                            }
-                            // ElevenLabs: multi API-key switcher (same card pattern).
-                            if s.id == "elevenlabs" {
-                                ElevenLabsKeysPopoverSection()
-                            }
-                            // Grok Build: 30-day cost chart from local
-                            // ~/.grok/sessions/**/signals.json (parity with Codex).
-                            if s.id == "grok", let report = grokReport,
-                               !report.isEmpty {
-                                GrokUsageChartCard(report: report)
-                            }
-                            // Grok-specific: own monthly budget vs. spend —
-                            // same gating/trust rule as the Claude/Codex cards.
-                            if s.id == "grok", settings.grokMonthlyBudgetUSD.isFinite,
-                               settings.grokMonthlyBudgetUSD > 0 {
-                                let grokBudgetCombined = grokReport.map {
-                                    CombinedUsageReport.build(
-                                        claude: nil, codex: nil, grok: $0,
-                                        includeClaude: false, includeCodex: false, includeGrok: true)
-                                }
-                                ProviderBudgetCard(
-                                    providerId: "grok", providerName: "Grok",
-                                    color: VocabbyTheme.chartGrok,
-                                    budgetUSD: settings.grokMonthlyBudgetUSD,
-                                    confidence: grokBudgetCombined?.grokConfidence,
-                                    daily: grokBudgetCombined?.daily ?? [],
-                                    source: .grok)
-                            }
-                            // Kiro: 30-day usage chart from local kiro-cli
-                            // sessions (~/.kiro/sessions sidecars with real
-                            // metered credits + legacy SQLite/archives).
-                            if s.id == "kiro", let report = kiroReport,
-                               !report.isEmpty {
-                                KiroUsageChartCard(report: report)
-                            }
-                            // Status page at the bottom of the provider stack
-                            // (flat row, same instrument language as credits/meta).
-                            ServiceStatusStrip(status: s)
-                        }
+                        providerDetailStack(s)
                     }
                 }
                 // No expanding Spacer: the panel height hugs content via
@@ -266,12 +150,151 @@ struct QuotaOverview: View {
         }
     }
 
+    /// The selected-provider detail stack (header → lowest hero → windows
+    /// + credits → optional charts / accounts). Split out of `body` because
+    /// the combined expression (this stack inline inside the outer
+    /// ZStack/VStack/if-chain) made the type-checker time out ("unable to
+    /// type-check this expression in reasonable time") once enough
+    /// conditional branches piled up — same fix the compiler itself
+    /// suggests: break the expression into distinct sub-expressions.
+    @ViewBuilder
+    private func providerDetailStack(_ s: ProviderStatus) -> some View {
+        // Design provider stack: header → lowest hero → windows
+        // (+ credits) → optional charts / accounts. Spacing
+        // owned by each section's padding/rules (body pad 16).
+        VStack(alignment: .leading, spacing: 0) {
+            ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
+            if s.error == nil, !s.windows.isEmpty {
+                QuotaSummaryStrip(status: s)
+            }
+            ProviderCard(status: s)
+            if s.id == "xai", let cost = s.cost {
+                XAISpendCard(cost: cost)
+            }
+            // Claude Code backend: round quick-apply / setup button,
+            // shown only for providers with a key that can back Claude Code.
+            if ClaudeCodeQuickApplyButton.shouldShow(providerID: s.id) {
+                ClaudeCodeQuickApplyButton(providerID: s.id)
+                    .id("\(s.id)-\(claudeCodeTargetRevision)")
+            }
+            if s.id == "claude" {
+                ClaudeCodeProfileSwitchSection()
+            }
+            // Claude-specific: 30-day chart + top-model line.
+            // Only rendered for the Claude tab so other providers
+            // don't pull in the local session scan.
+            if s.id == "claude", let report = claudeReport,
+               !report.isEmpty {
+                ClaudeUsageChartCard(report: report)
+            }
+            // Claude Admin API org dashboard (source = .api).
+            if s.id == "claude", let admin = s.claudeAdminUsage,
+               !admin.daily.isEmpty {
+                ClaudeAdminUsageChartCard(snapshot: admin)
+            }
+            // Claude-specific: own monthly budget vs. spend —
+            // only when a Claude budget is configured; renders
+            // even before the scan lands (confidence nil →
+            // "no cost data" row, never a fake status).
+            if s.id == "claude", settings.claudeMonthlyBudgetUSD.isFinite,
+               settings.claudeMonthlyBudgetUSD > 0 {
+                let claudeBudgetCombined = claudeReport.map {
+                    CombinedUsageReport.build(
+                        claude: $0, codex: nil, grok: nil,
+                        includeClaude: true, includeCodex: false, includeGrok: false)
+                }
+                ProviderBudgetCard(
+                    providerId: "claude", providerName: "Claude",
+                    color: VocabbyTheme.chartClaude,
+                    budgetUSD: settings.claudeMonthlyBudgetUSD,
+                    confidence: claudeBudgetCombined?.claudeConfidence,
+                    daily: claudeBudgetCombined?.daily ?? [],
+                    source: .claude)
+            }
+            // Codex-specific: 30-day cost chart + top-model line,
+            // scanned only when the Codex tab is open.
+            if s.id == "codex", let report = codexReport,
+               !report.isEmpty {
+                CodexUsageChartCard(report: report)
+            }
+            // Codex-specific: own monthly budget vs. spend —
+            // same gating/trust rule as the Claude card above.
+            if s.id == "codex", settings.codexMonthlyBudgetUSD.isFinite,
+               settings.codexMonthlyBudgetUSD > 0 {
+                let codexBudgetCombined = codexReport.map {
+                    CombinedUsageReport.build(
+                        claude: nil, codex: $0, grok: nil,
+                        includeClaude: false, includeCodex: true, includeGrok: false)
+                }
+                ProviderBudgetCard(
+                    providerId: "codex", providerName: "Codex",
+                    color: VocabbyTheme.chartCodex,
+                    budgetUSD: settings.codexMonthlyBudgetUSD,
+                    confidence: codexBudgetCombined?.codexConfidence,
+                    daily: codexBudgetCombined?.daily ?? [],
+                    source: .codex)
+            }
+            // Codex-specific: account list (click to reveal) +
+            // CLI switch. Below the chart per user preference.
+            if s.id == "codex" {
+                CodexProfileSwitchSection()
+                CodexAccountsPopoverSection()
+            }
+            // FreeModel: account switcher (per-browser sessions
+            // + pasted cookies), same collapsed-card pattern.
+            if s.id == "freemodel" {
+                FreemodelAccountsPopoverSection()
+            }
+            // ElevenLabs: multi API-key switcher (same card pattern).
+            if s.id == "elevenlabs" {
+                ElevenLabsKeysPopoverSection()
+            }
+            // Grok Build: 30-day cost chart from local
+            // ~/.grok/sessions/**/signals.json (parity with Codex).
+            if s.id == "grok", let report = grokReport,
+               !report.isEmpty {
+                GrokUsageChartCard(report: report)
+            }
+            // Grok-specific: own monthly budget vs. spend —
+            // same gating/trust rule as the Claude/Codex cards.
+            if s.id == "grok", settings.grokMonthlyBudgetUSD.isFinite,
+               settings.grokMonthlyBudgetUSD > 0 {
+                let grokBudgetCombined = grokReport.map {
+                    CombinedUsageReport.build(
+                        claude: nil, codex: nil, grok: $0,
+                        includeClaude: false, includeCodex: false, includeGrok: true)
+                }
+                ProviderBudgetCard(
+                    providerId: "grok", providerName: "Grok",
+                    color: VocabbyTheme.chartGrok,
+                    budgetUSD: settings.grokMonthlyBudgetUSD,
+                    confidence: grokBudgetCombined?.grokConfidence,
+                    daily: grokBudgetCombined?.daily ?? [],
+                    source: .grok)
+            }
+            // Kiro: 30-day usage chart from local kiro-cli
+            // sessions (~/.kiro/sessions sidecars with real
+            // metered credits + legacy SQLite/archives).
+            if s.id == "kiro", let report = kiroReport,
+               !report.isEmpty {
+                KiroUsageChartCard(report: report)
+            }
+            // Status page at the bottom of the provider stack
+            // (flat row, same instrument language as credits/meta).
+            ServiceStatusStrip(status: s)
+        }
+    }
+
     /// Kick off whichever provider-specific 30-day scan matches the open tab.
     private func triggerReportsIfNeeded(providerId: String) {
         triggerClaudeReportIfNeeded(providerId: providerId)
         triggerCodexReportIfNeeded(providerId: providerId)
         triggerGrokReportIfNeeded(providerId: providerId)
         triggerKiroReportIfNeeded(providerId: providerId)
+        if providerId == "all" || providerId == "agents" {
+            triggerOMPReportIfNeeded(providerId: providerId)
+            triggerPiReportIfNeeded(providerId: providerId)
+        }
     }
 
     /// Trigger the Claude 30-day scan only when the user actually views the
@@ -382,10 +405,44 @@ struct QuotaOverview: View {
         }
     }
 
-    /// The All tab only exists when at least one local-cost source (Claude
-    /// Code CLI or Codex) is enabled.
+    private func triggerOMPReportIfNeeded(providerId: String) {
+        guard providerId == "all" || providerId == "agents" else { return }
+        let taskId = UUID().uuidString
+        ompReportTaskId = taskId
+        Task {
+            let report = await OMPCostScanner.loadReport()
+            await MainActor.run {
+                guard ompReportTaskId == taskId else { return }
+                ompReport = report
+            }
+        }
+    }
+
+    /// The Agents tab exists when Oh My Pi or Pi session roots are present —
+    /// independent of the provider roster so a fresh install with only
+    /// coding-agent logs still gets an entry point.
+    private var hasAgentCostSources: Bool {
+        !OMPPaths.allSessionDirectories().isEmpty
+            || FileManager.default.fileExists(atPath: PiCostScanner.defaultSessionsDirectory.path)
+    }
+
+    /// The All tab only exists when at least one local provider cost source
+    /// (Claude / Codex / Grok) is enabled.
     private var hasLocalCostSources: Bool {
         quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" || $0.id == "grok" }
+    }
+
+    private func triggerPiReportIfNeeded(providerId: String) {
+        guard providerId == "all" || providerId == "agents" else { return }
+        let taskId = UUID().uuidString
+        piReportTaskId = taskId
+        Task {
+            let report = await PiCostScanner.loadReport()
+            await MainActor.run {
+                guard piReportTaskId == taskId else { return }
+                piReport = report
+            }
+        }
     }
 
     private func effectiveSelectedId() -> String {
@@ -559,6 +616,10 @@ struct ProviderTabs: View {
     @Binding var selectedId: String
     /// Renders the combined "All" pseudo-tab ahead of the provider chips.
     var showAllTab: Bool = false
+    /// Renders the "Agents" pseudo-tab (Oh My Pi / Pi coding agents overview)
+    /// right after the All chip. Independent of showAllTab so agents remain
+    /// reachable even when no local provider quota source is enabled.
+    var showAgentsTab: Bool = false
 
     var body: some View {
         // Logo-only unselected chips keep a typical roster on one row, so the
@@ -578,6 +639,9 @@ struct ProviderTabs: View {
             HStack(spacing: 6) {
                 if showAllTab {
                     allChip
+                }
+                if showAgentsTab {
+                    agentsChip
                 }
                 ForEach(providers) { provider in
                     chip(for: provider)
@@ -620,6 +684,33 @@ struct ProviderTabs: View {
         .accessibilityAddTraits(active ? .isSelected : [])
     }
 
+    /// Coding-agents pseudo-tab — design mirrors allChip but with the
+    /// "cpu" glyph so it reads as "harnesses" rather than "everything".
+    private var agentsChip: some View {
+        let active = selectedId == "agents"
+        let label = L10n.t("popover.agentsTab", settings.appLanguage)
+        return Button {
+            selectedId = "agents"
+        } label: {
+            Image(systemName: "cpu")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(active ? VocabbyTheme.primary : VocabbyTheme.background)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
     @ViewBuilder
     private func chip(for p: ProviderStatus) -> some View {
         let active = p.id == selectedId
@@ -814,6 +905,12 @@ struct ProviderHeaderCard: View {
         }
         if let source = status.sourceLabel, !source.isEmpty {
             parts.append(L10n.providerText(source, preference: settings.appLanguage))
+        }
+        // Codex manual-reset credits — only when at least one is available
+        // (see `provider.resetCredits` in Settings' Info block for the
+        // full detail; this is the compact "there's one waiting" signal).
+        if status.id == "codex", let n = status.resetCreditsAvailable, n > 0 {
+            parts.append(L10n.f("provider.resetBadge", settings.appLanguage, n))
         }
         // Fall back to account only when plan/source are both empty (rare).
         if parts.isEmpty,

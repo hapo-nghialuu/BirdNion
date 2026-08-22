@@ -105,7 +105,8 @@ enum VocabbyTheme {
     static let chartCodex  = dyn(0x3C7FB5, 0x62A5DE)  // --codex
     static let chartClaude = dyn(0xB5643F, 0xD98A63)  // --claude
     static let chartGrok   = dyn(0x4A4A4A, 0xC8CCD6)  // --grok
-
+    static let chartOMP    = dyn(0x8B5CF6, 0xA78BFA)  // --omp (Purple)
+    static let chartPi     = dyn(0x06B6D4, 0x22D3EE)  // --pi (Cyan)
     // Per-provider brand tints for the monochrome template logos.
     // Values mirror CodexBar's ProviderBranding.color exactly (see
     // docs/provider-parity). Near-black brands (Grok, CommandCode) flip to a
@@ -141,7 +142,8 @@ enum VocabbyTheme {
     static let googleGreen = fixed(0x34A853)
     static let bedrock    = fixed(0xFF9900)    // AWS
     static let hiyo       = fixed(0x00A8E8)
-
+    static let omp        = dyn(0x8B5CF6, 0xA78BFA)
+    static let pi         = dyn(0x06B6D4, 0x22D3EE)
     /// Brand tint for a provider id; nil → caller falls back to default styling.
     static func providerTint(_ id: String) -> Color? {
         switch id {
@@ -172,6 +174,8 @@ enum VocabbyTheme {
         case "antigravity": return antigravity
         case "bedrock": return bedrock
         case "hiyo": return hiyo
+        case "omp": return omp
+        case "pi": return pi
         default: return nil
         }
     }

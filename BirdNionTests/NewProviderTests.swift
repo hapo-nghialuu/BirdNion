@@ -1957,4 +1957,64 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNil(status.error, "Antigravity fetch should not fail: \(status.error ?? "")")
         XCTAssertFalse(status.windows.isEmpty, "Antigravity should return quota windows")
     }
+
+    // MARK: - OMP & Pi Coding Agents Tests
+
+    func testOMPCostScannerDeduplicationAndExtraction() async throws {
+        let fixtureDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/CodingAgents/OMP", isDirectory: true)
+        
+        let result = await OMPCostScanner.scanSessions(
+            roots: [fixtureDir],
+            scanDays: 30,
+            now: ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z") ?? Date())
+
+        let totalTokens = result.dailyBuckets.reduce(0) { $0 + $1.tokens }
+        let totalUSD = result.dailyBuckets.reduce(0.0) { $0 + $1.usd }
+
+        // turn-2 (1500) + turn-4 (2500) = 4000 tokens (duplicate turn-2 ignored)
+        XCTAssertEqual(totalTokens, 4000)
+        XCTAssertEqual(totalUSD, 0.05, accuracy: 0.001)
+        XCTAssertEqual(result.projectRecords.first?.displayName, "alpha")
+    }
+
+    func testPiCostScannerDeduplicationAndExtraction() async throws {
+        let fixtureDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/CodingAgents/Pi", isDirectory: true)
+
+        let result = await PiCostScanner.scanSessions(
+            root: fixtureDir,
+            scanDays: 30,
+            now: ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z") ?? Date())
+
+        let totalTokens = result.dailyBuckets.reduce(0) { $0 + $1.tokens }
+        let totalUSD = result.dailyBuckets.reduce(0.0) { $0 + $1.usd }
+
+        // pi-turn-2 (800) + pi-turn-3 (1200) = 2000 tokens (duplicate turn-2 ignored)
+        XCTAssertEqual(totalTokens, 2000)
+        XCTAssertEqual(totalUSD, 0.010, accuracy: 0.001)
+        XCTAssertEqual(result.projectRecords.first?.displayName, "beta")
+    }
+
+    func testOMPAgentConfigStoreParseAndSerialize() {
+        let sampleYAML = """
+        setupVersion: 2
+        modelRoles:
+          default: google-antigravity/gemini-3.7-flash:high
+          plan: claude-opus-4-6:auto
+          slow: gpt-5.6-sol:max
+          smol: gpt-5.2-mini
+        prewalk:
+          enabled: true
+          into: smol
+        """
+        let parsed = OMPAgentConfigStore.parse(content: sampleYAML)
+        XCTAssertEqual(parsed.modelRoles.defaultRole, "google-antigravity/gemini-3.7-flash:high")
+        XCTAssertEqual(parsed.modelRoles.plan, "claude-opus-4-6:auto")
+        XCTAssertEqual(parsed.modelRoles.slow, "gpt-5.6-sol:max")
+        XCTAssertEqual(parsed.modelRoles.smol, "gpt-5.2-mini")
+        XCTAssertTrue(parsed.prewalkEnabled)
+    }
 }

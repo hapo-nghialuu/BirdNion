@@ -31,6 +31,8 @@ const CONFIDENCE_SOURCES: readonly [UsageSourceId, string][] = [
   ["claude", "Claude"],
   ["codex", "Codex"],
   ["grok", "Grok"],
+  ["omp", "Oh My Pi"],
+  ["pi", "Pi"],
 ];
 
 /** Compact "included / live / history-only" + freshness badge per cost
@@ -48,9 +50,11 @@ export function confidenceRow(
   claude: UsageReport | null,
   codex: UsageReport | null,
   grok: UsageReport | null,
+  omp: UsageReport | null = null,
+  pi: UsageReport | null = null,
   pending: readonly UsageSourceId[] = [],
 ): HTMLElement {
-  const reports: Record<UsageSourceId, UsageReport | null> = { claude, codex, grok };
+  const reports: Record<UsageSourceId, UsageReport | null> = { claude, codex, grok, omp, pi };
   const row = el("div", "confidence-row");
   for (const [id, label] of CONFIDENCE_SOURCES) {
     const report = reports[id];
@@ -217,19 +221,23 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const wClaudeTokens = windowDaily.reduce((s, d) => s + d.claudeTokens, 0);
     const wCodexTokens = windowDaily.reduce((s, d) => s + d.codexTokens, 0);
     const wGrokTokens = windowDaily.reduce((s, d) => s + d.grokTokens, 0);
+    const wOmpTokens = windowDaily.reduce((s, d) => s + d.ompTokens, 0);
+    const wPiTokens = windowDaily.reduce((s, d) => s + d.piTokens, 0);
     const wClaudeUsd = windowDaily.reduce((s, d) => s + d.claudeUsd, 0);
     const wCodexUsd = windowDaily.reduce((s, d) => s + d.codexUsd, 0);
     const wGrokUsd = windowDaily.reduce((s, d) => s + d.grokUsd, 0);
+    const wOmpUsd = windowDaily.reduce((s, d) => s + d.ompUsd, 0);
+    const wPiUsd = windowDaily.reduce((s, d) => s + d.piUsd, 0);
     const is24h = period === 1;
     const claude24Usd = claudeHourly.reduce((s, h) => s + h.usd, 0);
     const claude24Tokens = claudeHourly.reduce((s, h) => s + h.tokens, 0);
     const today = combined.daily[combined.daily.length - 1];
 
     const periodUsd = is24h
-      ? claude24Usd + (today?.codexUsd ?? 0) + (today?.grokUsd ?? 0)
+      ? claude24Usd + (today?.codexUsd ?? 0) + (today?.grokUsd ?? 0) + (today?.ompUsd ?? 0) + (today?.piUsd ?? 0)
       : wUsd;
     const periodTokens = is24h
-      ? claude24Tokens + (today?.codexTokens ?? 0) + (today?.grokTokens ?? 0)
+      ? claude24Tokens + (today?.codexTokens ?? 0) + (today?.grokTokens ?? 0) + (today?.ompTokens ?? 0) + (today?.piTokens ?? 0)
       : wTokens;
 
     // Total-cost hero: eyebrow + square period chips on one row (top-right),
@@ -284,6 +292,8 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
         { name: "Claude", usd: claude24Usd, tokens: claude24Tokens, css: "claude" },
         { name: "Codex", usd: today?.codexUsd ?? 0, tokens: today?.codexTokens ?? 0, css: "codex" },
         { name: "Grok", usd: today?.grokUsd ?? 0, tokens: today?.grokTokens ?? 0, css: "grok" },
+        { name: "Oh My Pi", usd: today?.ompUsd ?? 0, tokens: today?.ompTokens ?? 0, css: "omp" },
+        { name: "Pi", usd: today?.piUsd ?? 0, tokens: today?.piTokens ?? 0, css: "pi" },
       ]));
       card.append(detail);
       card.append(el("div", "footnote", t("hourBarsNote")));
@@ -305,6 +315,8 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
         { name: "Claude", usd: wClaudeUsd, tokens: wClaudeTokens, css: "claude" },
         { name: "Codex", usd: wCodexUsd, tokens: wCodexTokens, css: "codex" },
         { name: "Grok", usd: wGrokUsd, tokens: wGrokTokens, css: "grok" },
+        { name: "Oh My Pi", usd: wOmpUsd, tokens: wOmpTokens, css: "omp" },
+        { name: "Pi", usd: wPiUsd, tokens: wPiTokens, css: "pi" },
       ]));
       card.append(detail);
     }
@@ -356,6 +368,12 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
     }
     if (day.grokUsd > 0 || day.grokTokens > 0) {
       detail.append(compactModelRow("grok", "Grok", day.grokTokens, day.grokUsd));
+    }
+    if (day.ompUsd > 0 || day.ompTokens > 0) {
+      detail.append(compactModelRow("omp", "Oh My Pi", day.ompTokens, day.ompUsd));
+    }
+    if (day.piUsd > 0 || day.piTokens > 0) {
+      detail.append(compactModelRow("pi", "Pi", day.piTokens, day.piUsd));
     }
     return;
   }
@@ -429,7 +447,11 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
       codex.style.flexGrow = String(Math.max(day.codexTokens, 0.0001));
       const grok = el("div", "bar-seg grok");
       grok.style.flexGrow = String(Math.max(day.grokTokens, 0.0001));
-      stack.append(claude, codex, grok);
+      const omp = el("div", "bar-seg omp");
+      omp.style.flexGrow = String(Math.max(day.ompTokens, 0.0001));
+      const pi = el("div", "bar-seg pi");
+      pi.style.flexGrow = String(Math.max(day.piTokens, 0.0001));
+      stack.append(claude, codex, grok, omp, pi);
       col.append(stack);
     } else {
       col.append(el("div", "bar-idle"));
@@ -527,6 +549,8 @@ function heatmapWindow(daily: CombinedDay[], weekCount: number): CombinedDay[] {
         claudeUsd: 0, claudeTokens: 0,
         codexUsd: 0, codexTokens: 0,
         grokUsd: 0, grokTokens: 0,
+        ompUsd: 0, ompTokens: 0,
+        piUsd: 0, piTokens: 0,
         usd: 0, tokens: 0, active: false, models: [],
       });
     }
@@ -589,6 +613,8 @@ function trailingDays(daily: CombinedDay[], n: number): CombinedDay[] {
         claudeUsd: 0, claudeTokens: 0,
         codexUsd: 0, codexTokens: 0,
         grokUsd: 0, grokTokens: 0,
+        ompUsd: 0, ompTokens: 0,
+        piUsd: 0, piTokens: 0,
         usd: 0, tokens: 0, active: false, models: [],
       });
     }
@@ -713,25 +739,22 @@ export function topModelsCard(combined: Combined): HTMLElement {
     for (const d of windowDays) {
       for (const m of d.models) {
         const k = `${m.source}:${m.name}`;
-        const e = modelMap.get(k);
-        if (e) { e.usd += m.usd; e.tokens += m.tokens; }
-        else modelMap.set(k, { name: m.name, usd: m.usd, tokens: m.tokens, source: m.source });
+        const cur = modelMap.get(k) ?? { name: m.name, usd: 0, tokens: 0, source: m.source };
+        cur.usd += m.usd;
+        cur.tokens += m.tokens;
+        modelMap.set(k, cur);
       }
     }
     const top = [...modelMap.values()]
       .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd))
       .slice(0, 6);
-    if (top.length === 0) {
-      card.style.display = "none";
-      return;
-    }
-    card.style.display = "";
-    const title =
-      p <= 1
-        ? (currentLang() === "vi" ? "Model dùng nhiều (24h)" : "Top models (24h)")
-        : (currentLang() === "vi"
-          ? `Model dùng nhiều (${p} ngày)`
-          : `Top models (${p} days)`);
+    if (top.length === 0) return;
+
+    const title = p === 1
+      ? (currentLang() === "vi" ? "Model dùng nhiều (24h)" : "Top models (24h)")
+      : (currentLang() === "vi"
+        ? `Model dùng nhiều (${p} ngày)`
+        : `Top models (${p} days)`);
     card.append(el("div", "summary-label", title));
     const windowTokens = Math.max(
       windowDays.reduce((s, d) => s + d.tokens, 0),
@@ -759,6 +782,7 @@ export function topModelsCard(combined: Combined): HTMLElement {
   window.addEventListener(PERIOD_CHANGE_EVENT, render);
   return card;
 }
+
 
 /** Compact model label for dense rows (macOS AllUsageFormat.shortName parity). */
 function shortModelName(name: string): string {

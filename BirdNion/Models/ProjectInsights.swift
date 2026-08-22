@@ -2,9 +2,17 @@ import CryptoKit
 import Foundation
 
 enum ProjectUsageSource: String, Codable, CaseIterable, Sendable {
-    case claude, codex, grok
+    case claude, codex, grok, omp, pi
 
-    var displayName: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .grok: return "Grok"
+        case .omp: return "Oh My Pi"
+        case .pi: return "Pi"
+        }
+    }
 }
 
 enum ProjectAttribution: String, Codable, Sendable {
@@ -61,6 +69,24 @@ struct ProjectIdentity: Equatable, Sendable {
         } ?? "Grok Project \(key.prefix(8))"
         return ProjectIdentity(
             key: key, displayName: displayName, attribution: .derived)
+    }
+
+    static func omp(cwd: String?) -> ProjectIdentity? {
+        guard let path = verifiedAbsolutePath(cwd) else { return nil }
+        let key = hash("omp:cwd-v1\0\(path)")
+        return ProjectIdentity(
+            key: key,
+            displayName: safeDisplayName(URL(fileURLWithPath: path).lastPathComponent, key: key),
+            attribution: .exact)
+    }
+
+    static func pi(cwd: String?) -> ProjectIdentity? {
+        guard let path = verifiedAbsolutePath(cwd) else { return nil }
+        let key = hash("pi:cwd-v1\0\(path)")
+        return ProjectIdentity(
+            key: key,
+            displayName: safeDisplayName(URL(fileURLWithPath: path).lastPathComponent, key: key),
+            attribution: .exact)
     }
 
     static func safeKey(_ raw: String) -> String {

@@ -46,6 +46,13 @@
 		GEM00001000000000000B01 /* GeminiProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GEM00002000000000000F01 /* GeminiProvider.swift */; };
 		GRK00001000000000000B01 /* GrokProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00002000000000000F01 /* GrokProvider.swift */; };
 		GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRK00004000000000000F01 /* GrokCostScanner.swift */; };
+		OMP00001000000000000B01 /* OMPPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00002000000000000F01 /* OMPPaths.swift */; };
+		OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00004000000000000F01 /* OMPCostScanner.swift */; };
+		PI000001000000000000B01 /* PiCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000002000000000000F01 /* PiCostScanner.swift */; };
+		OMP00005000000000000B01 /* OMPAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00006000000000000F01 /* OMPAgentConfigStore.swift */; };
+		PI000003000000000000B01 /* PiAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000004000000000000F01 /* PiAgentConfigStore.swift */; };
+		OMPP0001000000000000B001 /* OMPPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMPP0002000000000000F001 /* OMPPane.swift */; };
+		PIP00001000000000000B001 /* PiPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = PIP00002000000000000F001 /* PiPane.swift */; };
 		CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHS00002000000000000F01 /* CostHistoryStore.swift */; };
 		PCI00001000000000000B01 /* ProjectInsights.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCI00002000000000000F01 /* ProjectInsights.swift */; };
 		PCH00001000000000000B01 /* ProjectCostHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCH00002000000000000F01 /* ProjectCostHistoryStore.swift */; };
@@ -241,6 +248,13 @@
 		GEM00002000000000000F01 /* GeminiProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GeminiProvider.swift; sourceTree = "<group>"; };
 		GRK00002000000000000F01 /* GrokProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokProvider.swift; sourceTree = "<group>"; };
 		GRK00004000000000000F01 /* GrokCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GrokCostScanner.swift; sourceTree = "<group>"; };
+		OMP00002000000000000F01 /* OMPPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPPaths.swift; sourceTree = "<group>"; };
+		OMP00004000000000000F01 /* OMPCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPCostScanner.swift; sourceTree = "<group>"; };
+		PI000002000000000000F01 /* PiCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiCostScanner.swift; sourceTree = "<group>"; };
+		OMP00006000000000000F01 /* OMPAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPAgentConfigStore.swift; sourceTree = "<group>"; };
+		PI000004000000000000F01 /* PiAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiAgentConfigStore.swift; sourceTree = "<group>"; };
+		OMPP0002000000000000F001 /* OMPPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/OMPPane.swift; sourceTree = "<group>"; };
+		PIP00002000000000000F001 /* PiPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/PiPane.swift; sourceTree = "<group>"; };
 		CHS00002000000000000F01 /* CostHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CostHistoryStore.swift; sourceTree = "<group>"; };
 		PCI00002000000000000F01 /* ProjectInsights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/ProjectInsights.swift; sourceTree = "<group>"; };
 		PCH00002000000000000F01 /* ProjectCostHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProjectCostHistoryStore.swift; sourceTree = "<group>"; };
@@ -722,9 +736,16 @@
 				GEM00001000000000000B01 /* GeminiProvider.swift in Sources */,
 				GRK00001000000000000B01 /* GrokProvider.swift in Sources */,
 				GRK00003000000000000B01 /* GrokCostScanner.swift in Sources */,
+				OMP00001000000000000B01 /* OMPPaths.swift in Sources */,
+				OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */,
+				PI000001000000000000B01 /* PiCostScanner.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
 				PCI00001000000000000B01 /* ProjectInsights.swift in Sources */,
 				PCH00001000000000000B01 /* ProjectCostHistoryStore.swift in Sources */,
+				OMP00005000000000000B01 /* OMPAgentConfigStore.swift in Sources */,
+				PI000003000000000000B01 /* PiAgentConfigStore.swift in Sources */,
+				OMPP0001000000000000B001 /* OMPPane.swift in Sources */,
+				PIP00001000000000000B001 /* PiPane.swift in Sources */,
 				PIB00001000000000000B01 /* ProjectInsightsBuilder.swift in Sources */,
 				INSP0001000000000000B001 /* InsightsPane.swift in Sources */,
 				INSC0001000000000000B001 /* InsightsContentViews.swift in Sources */,

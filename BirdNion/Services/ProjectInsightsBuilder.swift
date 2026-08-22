@@ -90,7 +90,7 @@ enum ProjectInsightsBuilder {
         includedSources: Set<ProjectUsageSource>,
         calendar: Calendar
     ) {
-        let sources: [ProjectUsageSource] = [.claude, .codex, .grok]
+        let sources: [ProjectUsageSource] = [.claude, .codex, .grok, .omp, .pi]
         for source in sources where includedSources.contains(source) {
             let knownByDay = knownDailyTotals(
                 projects.filter { $0.source == source }, calendar: calendar)
@@ -316,9 +316,11 @@ enum ProjectInsightsBuilder {
         _ source: ProjectUsageSource, day: CombinedDailyUsage
     ) -> (usd: Double, tokens: Int) {
         switch source {
-        case .claude: (day.claudeUSD, day.claudeTokens)
-        case .codex: (day.codexUSD, day.codexTokens)
-        case .grok: (day.grokUSD, day.grokTokens)
+        case .claude: return (day.claudeUSD, day.claudeTokens)
+        case .codex: return (day.codexUSD, day.codexTokens)
+        case .grok: return (day.grokUSD, day.grokTokens)
+        case .omp: return (day.ompUSD, day.ompTokens)
+        case .pi: return (day.piUSD, day.piTokens)
         }
     }
 
@@ -328,7 +330,8 @@ enum ProjectInsightsBuilder {
     ) -> ProjectInsightsConfidence {
         let entries: [(ProjectUsageSource, CostHistoryStore.UsageScanConfidence?)] = [
             (.claude, combined.claudeConfidence), (.codex, combined.codexConfidence),
-            (.grok, combined.grokConfidence),
+            (.grok, combined.grokConfidence), (.omp, combined.ompConfidence),
+            (.pi, combined.piConfidence),
         ].filter { enabledSources.contains($0.0) }
         return ProjectInsightsConfidence(
             live: entries.compactMap { $0.1?.live == true ? $0.0 : nil },

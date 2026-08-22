@@ -1,0 +1,5 @@
+{"type":"session","version":1,"id":"pi-sess-001","timestamp":"2026-08-20T11:00:00.000Z","cwd":"/Users/test/projects/beta"}
+{"type":"message","id":"pi-turn-1","message":{"role":"user","content":"Hello Pi"}}
+{"type":"message","id":"pi-turn-2","timestamp":"2026-08-20T11:00:15.000Z","message":{"id":"pi-turn-2","role":"assistant","model":"MiniMax-M3","timestamp":"2026-08-20T11:00:15.000Z","content":"Hello! How can I help?","usage":{"totalTokens":800,"cost":{"total":0.004}}}}
+{"type":"message","id":"pi-turn-3","timestamp":"2026-08-20T11:05:00.000Z","message":{"id":"pi-turn-3","role":"assistant","model":"MiniMax-M3","timestamp":"2026-08-20T11:05:00.000Z","content":"Done.","usage":{"totalTokens":1200,"cost_usd":0.006}}}
+{"type":"message","id":"pi-turn-2","timestamp":"2026-08-20T11:00:15.000Z","message":{"id":"pi-turn-2","role":"assistant","model":"MiniMax-M3","timestamp":"2026-08-20T11:00:15.000Z","content":"Duplicate turn from fork","usage":{"totalTokens":800,"cost":{"total":0.004}}}}

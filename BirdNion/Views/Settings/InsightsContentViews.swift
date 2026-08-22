@@ -225,7 +225,13 @@ struct InsightsProjectsContent: View {
         if force || !ranking.contains(where: { $0.id == selectedID }) { selectedID = ranking.first?.id }
     }
     private func sourceColor(_ source: ProjectUsageSource) -> Color {
-        switch source { case .claude: VocabbyTheme.chartClaude; case .codex: VocabbyTheme.chartCodex; case .grok: VocabbyTheme.chartGrok }
+        switch source {
+        case .claude: return VocabbyTheme.chartClaude
+        case .codex: return VocabbyTheme.chartCodex
+        case .grok: return VocabbyTheme.chartGrok
+        case .omp: return VocabbyTheme.chartOMP
+        case .pi: return VocabbyTheme.chartPi
+        }
     }
     private static let dateFormatter: DateFormatter = {
         let value = DateFormatter(); value.locale = Locale(identifier: "en_US_POSIX"); value.dateFormat = "yyyy-MM-dd"; return value

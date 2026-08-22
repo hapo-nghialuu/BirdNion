@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"omp-sess-001","timestamp":"2026-08-20T10:00:00.000Z","cwd":"/Users/test/projects/alpha"}
+{"type":"model_change","id":"mc-1","timestamp":"2026-08-20T10:00:01.000Z","model":"google-antigravity/gemini-3.7-flash"}
+{"type":"message","id":"turn-1","message":{"role":"user","content":"Implement auth module"}}
+{"type":"message","id":"turn-2","timestamp":"2026-08-20T10:00:10.000Z","message":{"id":"turn-2","role":"assistant","model":"google-antigravity/gemini-3.7-flash","timestamp":"2026-08-20T10:00:10.000Z","content":"Here is the auth module implementation.","usage":{"totalTokens":1500,"cost":{"total":0.015}}}}
+{"type":"message","id":"turn-3","message":{"role":"user","content":"Add unit tests"}}
+{"type":"message","id":"turn-4","timestamp":"2026-08-20T10:02:00.000Z","message":{"id":"turn-4","role":"assistant","model":"claude-fable-5","timestamp":"2026-08-20T10:02:00.000Z","content":"Here are the tests.","usage":{"totalTokens":2500,"costUSD":0.035}}}
+{"type":"message","id":"turn-2","timestamp":"2026-08-20T10:00:10.000Z","message":{"id":"turn-2","role":"assistant","model":"google-antigravity/gemini-3.7-flash","timestamp":"2026-08-20T10:00:10.000Z","content":"Duplicate turn from fork","usage":{"totalTokens":1500,"cost":{"total":0.015}}}}

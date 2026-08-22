@@ -12,13 +12,17 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
     let codexTokens: Int
     let grokUSD: Double
     let grokTokens: Int
+    let ompUSD: Double
+    let ompTokens: Int
+    let piUSD: Double
+    let piTokens: Int
     /// Per-model split for this day (all sources, token-sorted). Feeds the
     /// chart hover / heatmap pinned-day breakdown so "Claude" isn't a single
     /// opaque line. Defaulted so call sites without model data still compile.
     var models: [CombinedModelCost] = []
 
-    var usd: Double { claudeUSD + codexUSD + grokUSD }
-    var tokens: Int { claudeTokens + codexTokens + grokTokens }
+    var usd: Double { claudeUSD + codexUSD + grokUSD + ompUSD + piUSD }
+    var tokens: Int { claudeTokens + codexTokens + grokTokens + ompTokens + piTokens }
     var isActive: Bool { usd > 0 || tokens > 0 }
     var id: Date { date }
 
@@ -26,6 +30,8 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
          claudeUSD: Double, claudeTokens: Int,
          codexUSD: Double, codexTokens: Int,
          grokUSD: Double = 0, grokTokens: Int = 0,
+         ompUSD: Double = 0, ompTokens: Int = 0,
+         piUSD: Double = 0, piTokens: Int = 0,
          models: [CombinedModelCost] = []) {
         self.date = date
         self.claudeUSD = claudeUSD
@@ -34,6 +40,10 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
         self.codexTokens = codexTokens
         self.grokUSD = grokUSD
         self.grokTokens = grokTokens
+        self.ompUSD = ompUSD
+        self.ompTokens = ompTokens
+        self.piUSD = piUSD
+        self.piTokens = piTokens
         self.models = models
     }
 }
@@ -86,15 +96,59 @@ struct CombinedUsageReport: Equatable, Sendable {
     let claudeConfidence: CostHistoryStore.UsageScanConfidence?
     let codexConfidence: CostHistoryStore.UsageScanConfidence?
     let grokConfidence: CostHistoryStore.UsageScanConfidence?
-
+    let ompConfidence: CostHistoryStore.UsageScanConfidence?
+    let piConfidence: CostHistoryStore.UsageScanConfidence?
     var isEmpty: Bool { activeDays == 0 }
 
+    init(
+        todayUSD: Double,
+        todayTokens: Int,
+        last30USD: Double,
+        last30Tokens: Int,
+        totalUSD: Double,
+        totalTokens: Int,
+        daily: [CombinedDailyUsage],
+        topModels: [CombinedModelCost],
+        peakDayUSD: Double,
+        peakDayDate: Date?,
+        avgPerActiveDayUSD: Double,
+        activeDays: Int,
+        streakDays: Int,
+        claudeConfidence: CostHistoryStore.UsageScanConfidence? = nil,
+        codexConfidence: CostHistoryStore.UsageScanConfidence? = nil,
+        grokConfidence: CostHistoryStore.UsageScanConfidence? = nil,
+        ompConfidence: CostHistoryStore.UsageScanConfidence? = nil,
+        piConfidence: CostHistoryStore.UsageScanConfidence? = nil
+    ) {
+        self.todayUSD = todayUSD
+        self.todayTokens = todayTokens
+        self.last30USD = last30USD
+        self.last30Tokens = last30Tokens
+        self.totalUSD = totalUSD
+        self.totalTokens = totalTokens
+        self.daily = daily
+        self.topModels = topModels
+        self.peakDayUSD = peakDayUSD
+        self.peakDayDate = peakDayDate
+        self.avgPerActiveDayUSD = avgPerActiveDayUSD
+        self.activeDays = activeDays
+        self.streakDays = streakDays
+        self.claudeConfidence = claudeConfidence
+        self.codexConfidence = codexConfidence
+        self.grokConfidence = grokConfidence
+        self.ompConfidence = ompConfidence
+        self.piConfidence = piConfidence
+    }
     static func build(claude: ClaudeUsageReport?,
                       codex: CodexUsageReport?,
                       grok: GrokUsageReport? = nil,
+                      omp: OMPUsageReport? = nil,
+                      pi: PiUsageReport? = nil,
                       includeClaude: Bool = true,
                       includeCodex: Bool = true,
                       includeGrok: Bool = true,
+                      includeOMP: Bool = true,
+                      includePi: Bool = true,
                       calendar: Calendar = .current,
                       now: Date = Date(),
                       windowDays: Int = 120) -> CombinedUsageReport {
@@ -102,7 +156,8 @@ struct CombinedUsageReport: Equatable, Sendable {
         let includedClaude = includeClaude ? claude : nil
         let includedCodex = includeCodex ? codex : nil
         let includedGrok = includeGrok ? grok : nil
-
+        let includedOMP = includeOMP ? omp : nil
+        let includedPi = includePi ? pi : nil
         // Re-normalize sources onto startOfDay keys before merging —
         // Claude's older buckets were built with -86 400 s steps, which can
         // drift one hour off across a DST transition. Per-day model splits
@@ -116,6 +171,12 @@ struct CombinedUsageReport: Equatable, Sendable {
         let grokDays = dayTotals(from: includedGrok?.daily.map {
             ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
         } ?? [], calendar: calendar)
+        let ompDays = dayTotals(from: includedOMP?.daily.map {
+            ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
+        } ?? [], calendar: calendar)
+        let piDays = dayTotals(from: includedPi?.daily.map {
+            ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
+        } ?? [], calendar: calendar)
 
         var daily: [CombinedDailyUsage] = []
         daily.reserveCapacity(windowDays)
@@ -124,15 +185,21 @@ struct CombinedUsageReport: Equatable, Sendable {
             let c = claudeDays.totals[day] ?? (0, 0)
             let x = codexDays.totals[day] ?? (0, 0)
             let g = grokDays.totals[day] ?? (0, 0)
+            let o = ompDays.totals[day] ?? (0, 0)
+            let p = piDays.totals[day] ?? (0, 0)
             daily.append(CombinedDailyUsage(
                 date: day,
                 claudeUSD: c.usd, claudeTokens: c.tokens,
                 codexUSD: x.usd, codexTokens: x.tokens,
                 grokUSD: g.usd, grokTokens: g.tokens,
+                ompUSD: o.usd, ompTokens: o.tokens,
+                piUSD: p.usd, piTokens: p.tokens,
                 models: mergedModelCosts(
                     claude: claudeDays.models[day] ?? [:],
                     codex: codexDays.models[day] ?? [:],
-                    grok: grokDays.models[day] ?? [:])))
+                    grok: grokDays.models[day] ?? [:],
+                    omp: ompDays.models[day] ?? [:],
+                    pi: piDays.models[day] ?? [:])))
         }
 
         let today = daily.last
@@ -158,17 +225,29 @@ struct CombinedUsageReport: Equatable, Sendable {
             mergedModelCosts(
                 claude: foldModels(claudeDays.models),
                 codex: foldModels(codexDays.models),
-                grok: foldModels(grokDays.models)).prefix(6))
+                grok: foldModels(grokDays.models),
+                omp: foldModels(ompDays.models),
+                pi: foldModels(piDays.models)).prefix(6))
+
+        let cUSD = includedClaude?.last30USD ?? 0
+        let xUSD = includedCodex?.last30USD ?? 0
+        let gUSD = includedGrok?.last30USD ?? 0
+        let oUSD = includedOMP?.last30USD ?? 0
+        let pUSD = includedPi?.last30USD ?? 0
+        let last30USD = cUSD + xUSD + gUSD + oUSD + pUSD
+
+        let cTokens = includedClaude?.last30Tokens ?? 0
+        let xTokens = includedCodex?.last30Tokens ?? 0
+        let gTokens = includedGrok?.last30Tokens ?? 0
+        let oTokens = includedOMP?.last30Tokens ?? 0
+        let pTokens = includedPi?.last30Tokens ?? 0
+        let last30Tokens = cTokens + xTokens + gTokens + oTokens + pTokens
 
         return CombinedUsageReport(
             todayUSD: today?.usd ?? 0,
             todayTokens: today?.tokens ?? 0,
-            last30USD: (includedClaude?.last30USD ?? 0)
-                + (includedCodex?.last30USD ?? 0)
-                + (includedGrok?.last30USD ?? 0),
-            last30Tokens: (includedClaude?.last30Tokens ?? 0)
-                + (includedCodex?.last30Tokens ?? 0)
-                + (includedGrok?.last30Tokens ?? 0),
+            last30USD: last30USD,
+            last30Tokens: last30Tokens,
             totalUSD: totalUSD,
             totalTokens: totalTokens,
             daily: daily,
@@ -180,7 +259,9 @@ struct CombinedUsageReport: Equatable, Sendable {
             streakDays: streak,
             claudeConfidence: includedClaude?.scanConfidence,
             codexConfidence: includedCodex?.scanConfidence,
-            grokConfidence: includedGrok?.scanConfidence)
+            grokConfidence: includedGrok?.scanConfidence,
+            ompConfidence: includedOMP?.scanConfidence,
+            piConfidence: includedPi?.scanConfidence)
     }
 
     private struct DayIndex {
@@ -199,16 +280,31 @@ struct CombinedUsageReport: Equatable, Sendable {
             v.usd += row.usd
             v.tokens += row.tokens
             index.totals[day] = v
+
             var byModel = index.models[day] ?? [:]
-            for m in row.models {
-                var mv = byModel[m.0] ?? (0, 0)
-                mv.usd += m.1
-                mv.tokens += m.2
-                byModel[m.0] = mv
+            for (name, usd, tokens) in row.models {
+                var m = byModel[name] ?? (0, 0)
+                m.usd += usd
+                m.tokens += tokens
+                byModel[name] = m
             }
             index.models[day] = byModel
         }
         return index
+    }
+
+    private static func mergedModelCosts(claude: [String: (usd: Double, tokens: Int)],
+                                         codex: [String: (usd: Double, tokens: Int)],
+                                         grok: [String: (usd: Double, tokens: Int)] = [:],
+                                         omp: [String: (usd: Double, tokens: Int)] = [:],
+                                         pi: [String: (usd: Double, tokens: Int)] = [:]) -> [CombinedModelCost] {
+        var items: [CombinedModelCost] = []
+        items.append(contentsOf: claude.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "claude") })
+        items.append(contentsOf: codex.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "codex") })
+        items.append(contentsOf: grok.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "grok") })
+        items.append(contentsOf: omp.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "omp") })
+        items.append(contentsOf: pi.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "pi") })
+        return items.sorted { $0.usd == $1.usd ? $0.tokens > $1.tokens : $0.usd > $1.usd }
     }
 
     private static func foldModels(
@@ -261,6 +357,10 @@ struct CombinedWindowTotals: Equatable {
     let codexTokens: Int
     let grokUSD: Double
     let grokTokens: Int
+    let ompUSD: Double
+    let ompTokens: Int
+    let piUSD: Double
+    let piTokens: Int
 }
 
 extension CombinedUsageReport {
@@ -277,7 +377,11 @@ extension CombinedUsageReport {
             codexUSD: window.reduce(0) { $0 + $1.codexUSD },
             codexTokens: window.reduce(0) { $0 + $1.codexTokens },
             grokUSD: window.reduce(0) { $0 + $1.grokUSD },
-            grokTokens: window.reduce(0) { $0 + $1.grokTokens })
+            grokTokens: window.reduce(0) { $0 + $1.grokTokens },
+            ompUSD: window.reduce(0) { $0 + $1.ompUSD },
+            ompTokens: window.reduce(0) { $0 + $1.ompTokens },
+            piUSD: window.reduce(0) { $0 + $1.piUSD },
+            piTokens: window.reduce(0) { $0 + $1.piTokens })
     }
 
     /// Top models over the chart period (`1` = calendar today only).
@@ -337,7 +441,7 @@ enum MonthlyForecastStatus: Equatable {
 /// daily USD so a per-provider budget never mixes in the other sources'
 /// spend.
 enum CombinedUsageSource: Equatable {
-    case total, claude, codex, grok
+    case total, claude, codex, grok, omp, pi
 }
 
 /// Linear week-to-date spend projection for the All-tab and per-provider
@@ -435,6 +539,8 @@ struct MonthlyForecast: Equatable {
         case .claude: return day.claudeUSD
         case .codex: return day.codexUSD
         case .grok: return day.grokUSD
+        case .omp: return day.ompUSD
+        case .pi: return day.piUSD
         }
     }
 }
@@ -537,8 +643,132 @@ struct AllUsageOverview: View {
     }
 }
 
-// MARK: - Data Confidence badges (per-source)
+// MARK: - Coding Agents tab root
 
+/// Body of the "Agents" pseudo-provider tab: Oh My Pi + Pi spend overview —
+/// per-agent summary rows (30-day totals + top model) plus a combined
+/// agents-only chart. Kept separate from the All tab so the combined
+/// Claude/Codex/Grok cockpit stays untouched.
+struct AgentsUsageOverview: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    var omp: OMPUsageReport? = nil
+    var pi: PiUsageReport? = nil
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
+    private var pendingSources: [String] {
+        var pending: [String] = []
+        if omp == nil { pending.append("Oh My Pi") }
+        if pi == nil { pending.append("Pi") }
+        return pending
+    }
+
+    private var anyReportReady: Bool { omp != nil || pi != nil }
+
+    var body: some View {
+        if !anyReportReady {
+            VStack(alignment: .leading, spacing: 9) { LoadingQuotaSkeleton() }
+                .popoverContentInset()
+                .padding(.vertical, 16)
+        } else {
+            let report = CombinedUsageReport.build(
+                claude: nil, codex: nil, grok: nil,
+                omp: omp, pi: pi,
+                includeClaude: false, includeCodex: false, includeGrok: false,
+                includeOMP: true, includePi: true)
+            if !pendingSources.isEmpty {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(VocabbyTheme.blue)
+                        .frame(width: 10, height: 10)
+                    Text((vi ? "Đang quét " : "Scanning ")
+                         + pendingSources.joined(separator: ", ") + "…")
+                        .font(.plexSans(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+                .popoverContentInset()
+            }
+            agentCards
+            if report.isEmpty {
+                Text(vi ? "Chưa có dữ liệu sử dụng agent trong 120 ngày qua."
+                        : "No agent usage recorded in the last 120 days.")
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .popoverContentInset()
+                    .padding(.vertical, 16)
+            } else {
+                CombinedChartCard(report: report, claudeHourly: [])
+                SourceConfidenceBadgeRow(report: report)
+                CombinedTopModelsCard(report: report)
+            }
+        }
+    }
+
+    /// Per-agent summary rows: brand bar · name + top model · 30-day totals.
+    @ViewBuilder
+    private var agentCards: some View {
+        VStack(spacing: 0) {
+            if let omp {
+                agentRow(name: "Oh My Pi", color: VocabbyTheme.chartOMP, snapshot: AgentReportSnapshot(omp))
+            }
+            if omp != nil && pi != nil { PopoverInsetHairline() }
+            if let pi {
+                agentRow(name: "Pi Agent", color: VocabbyTheme.chartPi, snapshot: AgentReportSnapshot(pi))
+            }
+        }
+        .popoverContentInset()
+        .padding(.vertical, 4)
+    }
+
+    private func agentRow(name: String, color: Color, snapshot: AgentReportSnapshot) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Rectangle().fill(color)
+                .frame(width: 4, height: 26)
+                .cornerRadius(2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.plexSans(13, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(snapshot.topModel ?? (vi ? "Chưa có model" : "No models yet"))
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(AllUsageFormat.usd(snapshot.last30USD))
+                    .font(.plexMono(12, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(AllUsageFormat.tokensShort(snapshot.last30Tokens))
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+/// Minimal per-agent snapshot so the agents rows share one rendering path.
+private struct AgentReportSnapshot {
+    let last30USD: Double
+    let last30Tokens: Int
+    let topModel: String?
+
+    init(_ report: OMPUsageReport) {
+        last30USD = report.last30USD
+        last30Tokens = report.last30Tokens
+        topModel = report.topModel
+    }
+
+    init(_ report: PiUsageReport) {
+        last30USD = report.last30USD
+        last30Tokens = report.last30Tokens
+        topModel = report.topModel
+    }
+}
 /// Classified confidence state for the All-tab per-source badge — pure,
 /// derived from `CostHistoryStore.UsageScanConfidence` with no SwiftUI
 /// dependency so it's directly unit-testable.
@@ -621,6 +851,8 @@ struct SourceConfidenceBadgeRow: View {
             ("claude", "Claude", VocabbyTheme.chartClaude, report.claudeConfidence),
             ("codex", "Codex", VocabbyTheme.chartCodex, report.codexConfidence),
             ("grok", "Grok", VocabbyTheme.chartGrok, report.grokConfidence),
+            ("omp", "Oh My Pi", VocabbyTheme.chartOMP, report.ompConfidence),
+            ("pi", "Pi", VocabbyTheme.chartPi, report.piConfidence),
         ].compactMap { id, name, color, confidence in
             confidence.map { (id, name, color, $0) }
         }
@@ -997,6 +1229,10 @@ struct CombinedChartCard: View {
     private var codexTodayTokens: Int { report.daily.last?.codexTokens ?? 0 }
     private var grokTodayUSD: Double { report.daily.last?.grokUSD ?? 0 }
     private var grokTodayTokens: Int { report.daily.last?.grokTokens ?? 0 }
+    private var ompTodayUSD: Double { report.daily.last?.ompUSD ?? 0 }
+    private var ompTodayTokens: Int { report.daily.last?.ompTokens ?? 0 }
+    private var piTodayUSD: Double { report.daily.last?.piUSD ?? 0 }
+    private var piTodayTokens: Int { report.daily.last?.piTokens ?? 0 }
     private var maxBarHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
 
     /// Breakdown under the chart — only the click-pinned day. No latest-day
@@ -1021,13 +1257,13 @@ struct CombinedChartCard: View {
 
     private var periodTotalUSD: Double {
         is24h
-            ? claude24USD + codexTodayUSD + grokTodayUSD
+            ? claude24USD + codexTodayUSD + grokTodayUSD + ompTodayUSD + piTodayUSD
             : windowTotals.usd
     }
 
     private var periodTotalTokens: Int {
         is24h
-            ? claude24Tokens + codexTodayTokens + grokTodayTokens
+            ? claude24Tokens + codexTodayTokens + grokTodayTokens + ompTodayTokens + piTodayTokens
             : windowTotals.tokens
     }
 
@@ -1145,12 +1381,16 @@ struct CombinedChartCard: View {
                 ("Claude", claude24USD, claude24Tokens, VocabbyTheme.chartClaude),
                 ("Codex", codexTodayUSD, codexTodayTokens, VocabbyTheme.chartCodex),
                 ("Grok", grokTodayUSD, grokTodayTokens, VocabbyTheme.chartGrok),
+                ("Oh My Pi", ompTodayUSD, ompTodayTokens, VocabbyTheme.chartOMP),
+                ("Pi", piTodayUSD, piTodayTokens, VocabbyTheme.chartPi),
             ]
         } else {
             raw = [
                 ("Claude", windowTotals.claudeUSD, windowTotals.claudeTokens, VocabbyTheme.chartClaude),
                 ("Codex", windowTotals.codexUSD, windowTotals.codexTokens, VocabbyTheme.chartCodex),
                 ("Grok", windowTotals.grokUSD, windowTotals.grokTokens, VocabbyTheme.chartGrok),
+                ("Oh My Pi", windowTotals.ompUSD, windowTotals.ompTokens, VocabbyTheme.chartOMP),
+                ("Pi", windowTotals.piUSD, windowTotals.piTokens, VocabbyTheme.chartPi),
             ]
         }
         return raw
@@ -1246,12 +1486,16 @@ struct CombinedChartCard: View {
                         Spacer(minLength: 0)
                         VStack(spacing: 0) {
                             if hasTokens {
-                                Rectangle().fill(VocabbyTheme.chartClaude)
-                                    .frame(height: claudeHeight)
-                                Rectangle().fill(VocabbyTheme.chartCodex)
-                                    .frame(height: codexHeight)
-                                Rectangle().fill(VocabbyTheme.chartGrok)
-                                    .frame(height: grokHeight)
+                                let claudeHeight = barHeight * CGFloat(Double(day.claudeTokens) / Double(day.tokens))
+                                let codexHeight = barHeight * CGFloat(Double(day.codexTokens) / Double(day.tokens))
+                                let grokHeight = barHeight * CGFloat(Double(day.grokTokens) / Double(day.tokens))
+                                let ompHeight = barHeight * CGFloat(Double(day.ompTokens) / Double(day.tokens))
+                                let piHeight = max(0, barHeight - claudeHeight - codexHeight - grokHeight - ompHeight)
+                                Rectangle().fill(VocabbyTheme.chartClaude).frame(height: claudeHeight)
+                                Rectangle().fill(VocabbyTheme.chartCodex).frame(height: codexHeight)
+                                Rectangle().fill(VocabbyTheme.chartGrok).frame(height: grokHeight)
+                                Rectangle().fill(VocabbyTheme.chartOMP).frame(height: ompHeight)
+                                Rectangle().fill(VocabbyTheme.chartPi).frame(height: piHeight)
                             } else {
                                 Rectangle()
                                     .fill(VocabbyTheme.selectedSurface.opacity(0.76))
@@ -1386,16 +1630,19 @@ private struct DaySourceModelRows: View {
     @ViewBuilder
     private var sourceFallbackRows: some View {
         if day.claudeUSD > 0 || day.claudeTokens > 0 {
-            row(color: VocabbyTheme.chartClaude, label: "Claude",
-                tokens: day.claudeTokens, usd: day.claudeUSD)
+            row(color: VocabbyTheme.chartClaude, label: "Claude", tokens: day.claudeTokens, usd: day.claudeUSD)
         }
         if day.codexUSD > 0 || day.codexTokens > 0 {
-            row(color: VocabbyTheme.chartCodex, label: "Codex",
-                tokens: day.codexTokens, usd: day.codexUSD)
+            row(color: VocabbyTheme.chartCodex, label: "Codex", tokens: day.codexTokens, usd: day.codexUSD)
         }
         if day.grokUSD > 0 || day.grokTokens > 0 {
-            row(color: VocabbyTheme.chartGrok, label: "Grok",
-                tokens: day.grokTokens, usd: day.grokUSD)
+            row(color: VocabbyTheme.chartGrok, label: "Grok", tokens: day.grokTokens, usd: day.grokUSD)
+        }
+        if day.ompUSD > 0 || day.ompTokens > 0 {
+            row(color: VocabbyTheme.chartOMP, label: "Oh My Pi", tokens: day.ompTokens, usd: day.ompUSD)
+        }
+        if day.piUSD > 0 || day.piTokens > 0 {
+            row(color: VocabbyTheme.chartPi, label: "Pi", tokens: day.piTokens, usd: day.piUSD)
         }
     }
 
@@ -1403,7 +1650,10 @@ private struct DaySourceModelRows: View {
         switch source {
         case "claude": return VocabbyTheme.chartClaude
         case "codex": return VocabbyTheme.chartCodex
-        default: return VocabbyTheme.chartGrok
+        case "grok": return VocabbyTheme.chartGrok
+        case "omp": return VocabbyTheme.chartOMP
+        case "pi": return VocabbyTheme.chartPi
+        default: return VocabbyTheme.chartCodex
         }
     }
 
@@ -1783,6 +2033,8 @@ struct CombinedTopModelsCard: View {
         switch model.source {
         case "claude": return VocabbyTheme.chartClaude
         case "grok": return VocabbyTheme.chartGrok
+        case "omp": return VocabbyTheme.chartOMP
+        case "pi": return VocabbyTheme.chartPi
         default: return VocabbyTheme.chartCodex
         }
     }

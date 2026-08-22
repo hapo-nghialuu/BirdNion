@@ -13,14 +13,16 @@ mod cost_history;
 mod elevenlabs_keys;
 mod hiyo_keys;
 mod freemodel_accounts;
-mod grok_scanner;
-mod platform;
-mod providers;
-mod project_cost_history;
-mod project_insights;
-mod storage;
-mod updater;
-mod usage;
+ mod grok_scanner;
+mod omp_scanner;
+mod pi_scanner;
+ mod platform;
+ mod providers;
+ mod project_cost_history;
+ mod project_insights;
+ mod storage;
+ mod updater;
+ mod usage;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
@@ -134,8 +136,59 @@ async fn grok_usage_report() -> Option<usage::UsageReport> {
     })
     .await
     .ok()
+ }
+
+/// Oh My Pi (`omp`) local session cost + history merge.
+#[tauri::command]
+async fn omp_usage_report() -> Option<usage::UsageReport> {
+    if !local_usage_source_enabled("omp") {
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("omp") {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return report.clone();
+            }
+        }
+        let now = chrono::Local::now();
+        let scan = omp_scanner::scan_omp_usage(now);
+        let merged = cost_history::apply_and_report("omp", Some(&scan.usage));
+        let _ = project_cost_history::apply("omp", &scan.projects, false);
+        USAGE_REPORT_CACHE
+            .lock()
+            .unwrap()
+            .insert("omp", (Instant::now(), merged.clone()));
+        merged
+    })
+    .await
+    .ok()
 }
 
+/// Pi Agent local session cost + history merge.
+#[tauri::command]
+async fn pi_usage_report() -> Option<usage::UsageReport> {
+    if !local_usage_source_enabled("pi") {
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("pi") {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return report.clone();
+            }
+        }
+        let now = chrono::Local::now();
+        let scan = pi_scanner::scan_pi_usage(now);
+        let merged = cost_history::apply_and_report("pi", Some(&scan.usage));
+        let _ = project_cost_history::apply("pi", &scan.projects, false);
+        USAGE_REPORT_CACHE
+            .lock()
+            .unwrap()
+            .insert("pi", (Instant::now(), merged.clone()));
+        merged
+    })
+    .await
+    .ok()
+}
 /// Read-only Insights projection. It reads the optional project store and
 /// existing aggregate history; it never starts a second scanner pass.
 #[tauri::command]
@@ -171,13 +224,13 @@ async fn project_insights_report(
     .map_err(|error| error.to_string())
 }
 
-fn enabled_usage_sources() -> HashSet<String> {
-    config::enabled_providers()
-        .into_iter()
-        .map(|provider| provider.id)
-        .filter(|id| matches!(id.as_str(), "claude" | "codex" | "grok"))
-        .collect()
-}
+ fn enabled_usage_sources() -> HashSet<String> {
+     config::enabled_providers()
+         .into_iter()
+         .map(|provider| provider.id)
+        .filter(|id| matches!(id.as_str(), "claude" | "codex" | "grok" | "omp" | "pi"))
+         .collect()
+ }
 
 fn local_usage_source_enabled(source: &str) -> bool {
     enabled_usage_sources().contains(source)
@@ -376,17 +429,20 @@ fn claude_code_state_for(provider_id: &str) -> ClaudeCodeState {
     let provider = config::find_provider(provider_id);
     let scope = claude_code::current_scope(&provider);
     let configured = scope.is_some() && claude_code::is_fully_configured(provider_id, &provider);
-    let (sync, target) = match (&scope, configured) {
+    let target = scope.as_ref().and_then(claude_code::target_path);
+    if scope.is_some() && target.is_none() {
+        return ClaudeCodeState { state: "unavailable", target_path: None };
+    }
+    let sync = match (&scope, configured) {
         (Some(sc), true) => {
             let spec = claude_code::spec_for_provider(provider_id, &provider);
             let sync = spec
                 .as_ref()
                 .map(|s| claude_code::sync_state(s, sc))
                 .unwrap_or(claude_code::SyncState::Off);
-            (sync, Some(claude_code::target_path(sc).to_string_lossy().to_string()))
+            sync
         }
-        (Some(sc), false) => (claude_code::SyncState::Off, Some(claude_code::target_path(sc).to_string_lossy().to_string())),
-        (None, _) => (claude_code::SyncState::Off, None),
+        _ => claude_code::SyncState::Off,
     };
     let power = claude_code::power_state(configured, sync);
     let state = match power {
@@ -395,7 +451,10 @@ fn claude_code_state_for(provider_id: &str) -> ClaudeCodeState {
         claude_code::PowerState::Stale => "stale",
         claude_code::PowerState::NeedsSetup => "needsSetup",
     };
-    ClaudeCodeState { state, target_path: target }
+    ClaudeCodeState {
+        state,
+        target_path: target.map(|path| path.to_string_lossy().to_string()),
+    }
 }
 
 /// Claude Code quick-apply state for a provider (on/off/stale/needsSetup) +
@@ -487,16 +546,15 @@ fn claude_code_profile_state_for(profile_id: &str) -> ClaudeCodeState {
     };
     let scope = claude_code::profile_scope(&profile);
     let configured = scope.is_some() && claude_code::profile_ready(&profile);
-    let (sync, target) = match (&scope, configured) {
+    let target = scope.as_ref().and_then(claude_code::target_path);
+    if scope.is_some() && target.is_none() {
+        return ClaudeCodeState { state: "unavailable", target_path: None };
+    }
+    let sync = match (&scope, configured) {
         (Some(sc), true) => {
-            let sync = claude_code::sync_state_for_profile(&profile, sc);
-            (sync, Some(claude_code::target_path(sc).to_string_lossy().to_string()))
+            claude_code::sync_state_for_profile(&profile, sc)
         }
-        (Some(sc), false) => (
-            claude_code::SyncState::Off,
-            Some(claude_code::target_path(sc).to_string_lossy().to_string()),
-        ),
-        (None, _) => (claude_code::SyncState::Off, None),
+        _ => claude_code::SyncState::Off,
     };
     let state = match claude_code::power_state(configured, sync) {
         claude_code::PowerState::On => "on",
@@ -504,7 +562,10 @@ fn claude_code_profile_state_for(profile_id: &str) -> ClaudeCodeState {
         claude_code::PowerState::Stale => "stale",
         claude_code::PowerState::NeedsSetup => "needsSetup",
     };
-    ClaudeCodeState { state, target_path: target }
+    ClaudeCodeState {
+        state,
+        target_path: target.map(|path| path.to_string_lossy().to_string()),
+    }
 }
 
 #[tauri::command]
@@ -795,6 +856,8 @@ fn codex_active_id() -> Option<String> {
 
 #[tauri::command]
 async fn codex_apply(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
+    let target = codex_config::target_config_path()
+        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
     let mut profile =
         config::find_codex_profile(&id).ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
     if !profile.has_upstream_configuration() {
@@ -809,22 +872,24 @@ async fn codex_apply(app: tauri::AppHandle, id: String) -> Result<codex_config::
         // Reload after prepare stamped loopback keys + signature.
         profile = config::find_codex_profile(&id)
             .ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
-        codex_config::apply(&profile, None)?;
+        codex_config::apply(&profile, Some(&target))?;
     } else {
         profile.cli_proxy_applied_signature = None;
         config::save_codex_profile(profile.clone())?;
-        codex_config::apply(&profile, None)?;
+        codex_config::apply(&profile, Some(&target))?;
         let _ = cli_proxy::deactivate_codex_proxy_profiles(&app).await;
     }
 
     // Per-project overlay — same content as global apply.
-    let _ = codex_config::write_profile_file(&profile, None);
+    codex_config::write_profile_file(&profile, Some(&target))?;
     Ok(codex_config::profile_state(&id))
 }
 
 #[tauri::command]
 async fn codex_deactivate(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
-    let _ = codex_config::deactivate(None)?;
+    let target = codex_config::target_config_path()
+        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
+    let _ = codex_config::deactivate(Some(&target))?;
     if let Some(mut profile) = config::find_codex_profile(&id) {
         profile.cli_proxy_applied_signature = None;
         config::save_codex_profile(profile)?;
@@ -839,18 +904,22 @@ async fn codex_delete(
     id: String,
     delete_linked_claude: bool,
 ) -> Result<(), String> {
+    let target = codex_config::target_config_path()
+        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
     // Best-effort: if this was the active proxy codex profile, drop it from helper.
     if let Some(p) = config::find_codex_profile(&id) {
         if p.uses_embedded_cli_proxy() {
             let _ = cli_proxy::deactivate_codex_proxy_profiles(&app).await;
         }
     }
-    codex_config::delete_profile(&id, delete_linked_claude)
+    codex_config::delete_profile(&id, delete_linked_claude, Some(&target))
 }
 
 /// Ensure a custom Claude profile has a linked Codex counterpart (create if needed).
 #[tauri::command]
 fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexProfile, String> {
+    codex_config::target_config_path()
+        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
     config::update(|settings| {
         let claude = settings
             .claude_code_profiles
@@ -887,6 +956,8 @@ fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexPr
 /// Ensure a preset provider has a derived Codex profile (Anthropic + local proxy).
 #[tauri::command]
 fn codex_ensure_preset(provider_id: String) -> Result<config::CodexProfile, String> {
+    codex_config::target_config_path()
+        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
     config::update(|settings| {
         let provider = settings
             .providers
@@ -1204,8 +1275,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             claude_usage_report,
             codex_usage_report,
-            grok_usage_report,
-            project_insights_report,
+             grok_usage_report,
+            omp_usage_report,
+            pi_usage_report,
+             project_insights_report,
             provider_statuses,
             classify_provider_error,
             is_transient_provider_error,

@@ -23,9 +23,8 @@ export type UsageReport = {
   scannedAt?: number | null;
 };
 
-/** One of the three All-tab cost sources, for confidence badges. */
-export type UsageSourceId = "claude" | "codex" | "grok";
-
+/** Cost sources for confidence badges and spend attribution. */
+export type UsageSourceId = "claude" | "codex" | "grok" | "omp" | "pi";
 export type ScanConfidence = "live" | "history" | "unavailable";
 
 /** Data Confidence Pass: classify a source's report into the compact
@@ -62,7 +61,7 @@ export type CombinedModel = {
   name: string;
   usd: number;
   tokens: number;
-  source: "claude" | "codex" | "grok";
+  source: UsageSourceId;
 };
 
 export type CombinedDay = {
@@ -73,6 +72,10 @@ export type CombinedDay = {
   codexTokens: number;
   grokUsd: number;
   grokTokens: number;
+  ompUsd: number;
+  ompTokens: number;
+  piUsd: number;
+  piTokens: number;
   usd: number;
   tokens: number;
   active: boolean;
@@ -95,14 +98,16 @@ export type Combined = {
   topModels: CombinedModel[];
 };
 
-/** Merge scanners' daily arrays by calendar-day string (Claude + Codex + Grok). */
+/** Merge scanners' daily arrays by calendar-day string. */
 export function combine(
   claude: UsageReport | null,
   codex: UsageReport | null,
   grok: UsageReport | null = null,
+  omp: UsageReport | null = null,
+  pi: UsageReport | null = null,
 ): Combined {
   const byDate = new Map<string, CombinedDay>();
-  const seed = (r: UsageReport | null, source: "claude" | "codex" | "grok") => {
+  const seed = (r: UsageReport | null, source: UsageSourceId) => {
     for (const d of r?.daily ?? []) {
       let day = byDate.get(d.date);
       if (!day) {
@@ -111,15 +116,19 @@ export function combine(
           claudeUsd: 0, claudeTokens: 0,
           codexUsd: 0, codexTokens: 0,
           grokUsd: 0, grokTokens: 0,
+          ompUsd: 0, ompTokens: 0,
+          piUsd: 0, piTokens: 0,
           usd: 0, tokens: 0, active: false, models: [],
         };
         byDate.set(d.date, day);
       }
       if (source === "claude") { day.claudeUsd += d.usd; day.claudeTokens += d.tokens; }
       else if (source === "codex") { day.codexUsd += d.usd; day.codexTokens += d.tokens; }
-      else { day.grokUsd += d.usd; day.grokTokens += d.tokens; }
-      day.usd = day.claudeUsd + day.codexUsd + day.grokUsd;
-      day.tokens = day.claudeTokens + day.codexTokens + day.grokTokens;
+      else if (source === "grok") { day.grokUsd += d.usd; day.grokTokens += d.tokens; }
+      else if (source === "omp") { day.ompUsd += d.usd; day.ompTokens += d.tokens; }
+      else if (source === "pi") { day.piUsd += d.usd; day.piTokens += d.tokens; }
+      day.usd = day.claudeUsd + day.codexUsd + day.grokUsd + day.ompUsd + day.piUsd;
+      day.tokens = day.claudeTokens + day.codexTokens + day.grokTokens + day.ompTokens + day.piTokens;
       day.active = day.usd > 0 || day.tokens > 0;
       for (const m of d.models) {
         const existing = day.models.find((x) => x.source === source && x.name === m.name);
@@ -131,10 +140,11 @@ export function combine(
   seed(claude, "claude");
   seed(codex, "codex");
   seed(grok, "grok");
+  seed(omp, "omp");
+  seed(pi, "pi");
   const daily = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   // Token-first ranking (matches macOS All chart + top-models list).
   for (const d of daily) d.models.sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
-
   const today = daily[daily.length - 1];
   const totalUsd = daily.reduce((s, d) => s + d.usd, 0);
   const totalTokens = daily.reduce((s, d) => s + d.tokens, 0);
@@ -148,8 +158,8 @@ export function combine(
   while (i >= 0 && daily[i].active) { streak++; i--; }
 
   const last30 = daily.slice(-30);
-  const last30Usd = (claude?.last30Usd ?? 0) + (codex?.last30Usd ?? 0) + (grok?.last30Usd ?? 0);
-  const last30Tokens = (claude?.last30Tokens ?? 0) + (codex?.last30Tokens ?? 0) + (grok?.last30Tokens ?? 0);
+  const last30Usd = (claude?.last30Usd ?? 0) + (codex?.last30Usd ?? 0) + (grok?.last30Usd ?? 0) + (omp?.last30Usd ?? 0) + (pi?.last30Usd ?? 0);
+  const last30Tokens = (claude?.last30Tokens ?? 0) + (codex?.last30Tokens ?? 0) + (grok?.last30Tokens ?? 0) + (omp?.last30Tokens ?? 0) + (pi?.last30Tokens ?? 0);
 
   // Top models across window
   const modelMap = new Map<string, CombinedModel>();
@@ -214,6 +224,8 @@ export function digestWindowStats(
     claude: { usd: 0, tokens: 0 },
     codex: { usd: 0, tokens: 0 },
     grok: { usd: 0, tokens: 0 },
+    omp: { usd: 0, tokens: 0 },
+    pi: { usd: 0, tokens: 0 },
   };
   const modelMap = new Map<string, CombinedModel>();
   for (const d of daily) {
@@ -221,6 +233,8 @@ export function digestWindowStats(
     if (enabledSources.has("claude")) { bySource.claude.usd += d.claudeUsd; bySource.claude.tokens += d.claudeTokens; }
     if (enabledSources.has("codex")) { bySource.codex.usd += d.codexUsd; bySource.codex.tokens += d.codexTokens; }
     if (enabledSources.has("grok")) { bySource.grok.usd += d.grokUsd; bySource.grok.tokens += d.grokTokens; }
+    if (enabledSources.has("omp")) { bySource.omp.usd += d.ompUsd; bySource.omp.tokens += d.ompTokens; }
+    if (enabledSources.has("pi")) { bySource.pi.usd += d.piUsd; bySource.pi.tokens += d.piTokens; }
     for (const m of d.models) {
       if (!enabledSources.has(m.source)) continue;
       const key = `${m.source}:${m.name}`;
@@ -231,7 +245,7 @@ export function digestWindowStats(
   }
 
   let topSource: UsageSourceId | null = null;
-  for (const s of ["claude", "codex", "grok"] as const) {
+  for (const s of ["claude", "codex", "grok", "omp", "pi"] as const) {
     if (!enabledSources.has(s)) continue;
     const cand = bySource[s];
     if (cand.usd === 0 && cand.tokens === 0) continue;
@@ -239,7 +253,6 @@ export function digestWindowStats(
     const best = bySource[topSource];
     if (cand.tokens !== best.tokens) { if (cand.tokens > best.tokens) topSource = s; continue; }
     if (cand.usd !== best.usd && cand.usd > best.usd) topSource = s;
-    // Equal tokens and usd: keep the earlier (alphabetically first) source.
   }
 
   const topModel = [...modelMap.values()].sort((a, b) =>
@@ -248,8 +261,8 @@ export function digestWindowStats(
   )[0] ?? null;
 
   return {
-    usd: bySource.claude.usd + bySource.codex.usd + bySource.grok.usd,
-    tokens: bySource.claude.tokens + bySource.codex.tokens + bySource.grok.tokens,
+    usd: (bySource.claude?.usd ?? 0) + (bySource.codex?.usd ?? 0) + (bySource.grok?.usd ?? 0) + (bySource.omp?.usd ?? 0) + (bySource.pi?.usd ?? 0),
+    tokens: (bySource.claude?.tokens ?? 0) + (bySource.codex?.tokens ?? 0) + (bySource.grok?.tokens ?? 0) + (bySource.omp?.tokens ?? 0) + (bySource.pi?.tokens ?? 0),
     bySource,
     topSource,
     topModel,
@@ -285,18 +298,22 @@ export type MonthlyForecast = {
 /** Which `CombinedDay` field `monthlyForecast` sums per day. `"total"` (the
  * default) preserves the pre-existing combined-budget behavior; the
  * per-source variants isolate one provider's own daily USD so a
- * per-provider budget never mixes in the other sources' spend. */
-export type MonthlyForecastSource = "total" | "claude" | "codex" | "grok";
+/** Which `CombinedDay` field `monthlyForecast` sums per day.
+ * `.total` (the default) preserves the combined-budget behavior that
+ * predates this case; `.claude`/`.codex`/`.grok`/`.omp`/`.pi` isolate one provider's own
+ * daily USD so a per-provider budget never mixes in the other sources' spend. */
+export type MonthlyForecastSource = "total" | UsageSourceId;
 
 function monthlyForecastDayUsd(d: CombinedDay, source: MonthlyForecastSource): number {
   switch (source) {
     case "claude": return d.claudeUsd;
     case "codex": return d.codexUsd;
     case "grok": return d.grokUsd;
+    case "omp": return d.ompUsd;
+    case "pi": return d.piUsd;
     default: return d.usd;
   }
 }
-
 /** Local calendar-week start (Sunday, matching JS `Date#getDay()` = 0). */
 function startOfLocalWeek(now: Date): Date {
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());

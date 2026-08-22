@@ -40,8 +40,9 @@
   --claude: #B5643F;
   --codex: #3C7FB5;
   --grok: #4A4A4A;
+  --omp: #8B5CF6;
+  --pi: #06B6D4;
   --commandcode: #16150F;
-  --heat-0: #EFEDE6;
   --heat-1: #D5DDF3;
   --heat-2: #A9BCE8;
   --heat-3: #6E8DDB;
@@ -96,8 +97,9 @@
   --card-shadow: none;
 
   --grok: #C8CCD6;
+  --omp: #A78BFA;
+  --pi: #22D3EE;
   --commandcode: #F2F0E8;
-  --heat-0: #23231C;
 
   --background: var(--bg);
   --card: var(--surface);
@@ -451,9 +453,9 @@ html.popover-capped .app-body {
 .share-seg { min-width: 3px; height: 100%; }
 .share-seg.claude { background: var(--claude); }
 .share-seg.codex { background: var(--codex); }
-.share-seg.grok { background: var(--grok); }
-
-.share-list { display: flex; flex-direction: column; }
+  .share-seg.grok { background: var(--grok); }
+  .share-seg.omp { background: var(--omp); }
+  .share-seg.pi { background: var(--pi); }
 
 .share-row {
   display: flex;
@@ -1392,9 +1394,9 @@ html.popover-capped .app-body {
 .bar-seg { width: 100%; }
 .bar-seg.claude { background: var(--claude); }
 .bar-seg.codex { background: var(--codex); }
-.bar-seg.grok { background: var(--grok); }
-.bar-seg.solo { border-radius: 2px; }
-.bar-seg.mono { background: var(--chart-bar); opacity: 0.72; }
+  .bar-seg.grok { background: var(--grok); }
+  .bar-seg.omp { background: var(--omp); }
+  .bar-seg.pi { background: var(--pi); }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
 
 .legend { display: flex; gap: 12px; margin-bottom: 6px; }
@@ -1405,13 +1407,14 @@ html.popover-capped .app-body {
 .dot.claude { background: var(--claude); }
 .dot.codex { background: var(--codex); }
 .dot.grok { background: var(--grok); }
+.dot.omp { background: var(--omp); }
+.dot.pi { background: var(--pi); }
 
 .legend-label {
   font-size: 9px;
   color: var(--tertiary);
   font-variant-numeric: tabular-nums;
 }
-
 /* Data Confidence Pass — compact per-source (Claude/Codex/Grok) scan
  * metadata row on the All tab: included/live/history-only + freshness. */
 .confidence-row { display: flex; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
@@ -1889,9 +1892,9 @@ html.popover-capped .app-body {
 .model-fill { height: 100%; border-radius: 0; }
 .model-fill.claude { background: var(--claude); }
 .model-fill.codex { background: var(--codex); }
-.model-fill.grok { background: var(--grok); }
-
-/* --- Settings window (macOS SettingsSceneRoot 920×620, vertical sidebar) --- */
+  .model-fill.grok { background: var(--grok); }
+  .model-fill.omp { background: var(--omp); }
+  .model-fill.pi { background: var(--pi); }
 
 body.settings-body-root {
   background: var(--bg);
@@ -4256,11 +4259,14 @@ body.settings-body-root {
 }
 .confidence-logo-claude { background-color: var(--claude); }
 .confidence-logo-codex { background-color: var(--codex); }
-.confidence-logo-grok { background-color: var(--grok); }
-.confidence-name.claude { color: var(--claude); }
-.confidence-name.codex { color: var(--codex); }
-.confidence-name.grok { color: var(--grok); }
-.confidence-sep { color: var(--text3); font-weight: 500; }
+  .confidence-logo-grok { background-color: var(--grok); }
+  .confidence-logo-omp { background-color: var(--omp); }
+  .confidence-logo-pi { background-color: var(--pi); }
+  .confidence-name.claude { color: var(--claude); }
+  .confidence-name.codex { color: var(--codex); }
+  .confidence-name.grok { color: var(--grok); }
+  .confidence-name.omp { color: var(--omp); }
+  .confidence-name.pi { color: var(--pi); }
 .confidence-state.live,
 .confidence-fresh.live { color: var(--success); }
 .confidence-state.history,
@@ -4379,6 +4385,9 @@ body.settings-body-root {
 .share-tick.claude { background: var(--claude); }
 .share-tick.codex { background: var(--codex); }
 .share-tick.grok { background: var(--grok); }
+.share-tick.omp { background: var(--omp); }
+.share-tick.pi { background: var(--pi); }
+
 .share-name {
   font-size: 13px;
   font-weight: 500;
@@ -4386,7 +4395,6 @@ body.settings-body-root {
   min-width: 0;
 }
 .share-mid {
-  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text3);

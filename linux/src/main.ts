@@ -77,14 +77,16 @@ type ProviderCfg = {
 };
 type Settings = { version: number; providers: ProviderCfg[] };
 
-/** Local usage-report sources scanned from disk (Claude → Codex → Grok). */
-const SCAN_SOURCES = ["claude", "codex", "grok"] as const;
+/** Local usage-report sources scanned from disk (Claude → Codex → Grok → OMP → Pi). */
+const SCAN_SOURCES = ["claude", "codex", "grok", "omp", "pi"] as const;
 type ScanSource = (typeof SCAN_SOURCES)[number];
 
 type State = {
   claude: UsageReport | null;
   codex: UsageReport | null;
   grok: UsageReport | null;
+  omp: UsageReport | null;
+  pi: UsageReport | null;
   statuses: ProviderStatus[];
   claudeAdmin: ClaudeAdminSnapshot | null;
   insights: ProjectInsightsReport | null;
@@ -100,6 +102,8 @@ const state: State = {
   claude: null,
   codex: null,
   grok: null,
+  omp: null,
+  pi: null,
   statuses: [],
   claudeAdmin: null,
   insights: null,
@@ -746,7 +750,7 @@ function render() {
 
   if (state.tab === "all") {
     const pending = pendingScanSources();
-    if (!state.claude && !state.codex && !state.grok) {
+    if (!state.claude && !state.codex && !state.grok && !state.omp && !state.pi) {
       // No data yet: skeleton card while scans are in flight (macOS
       // AllUsageOverview), "no logs" only once every scan came back empty.
       if (pending.length > 0) {
@@ -758,11 +762,11 @@ function render() {
       }
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
-      const combined = combine(state.claude, state.codex, state.grok);
+      const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi);
       // Design order: chart/share → confidence → insights → budget → heatmap → models.
       // Per-provider budgets live on each provider's own tab now, not here.
       body.append(chartCard(combined, state.claude?.hourly ?? []));
-      body.append(confidenceRow(state.claude, state.codex, state.grok, pending));
+      body.append(confidenceRow(state.claude, state.codex, state.grok, state.omp, state.pi, pending));
       const insights = insightsHighlightCard(state.insights, () => {
         localStorage.setItem("birdnion.insightsSegment", "overview");
         openSettings("insights");

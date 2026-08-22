@@ -98,24 +98,26 @@ struct InsightsPane: View {
         let includeClaude = enabledIDs.contains("claude")
         let includeCodex = enabledIDs.contains("codex")
         let includeGrok = enabledIDs.contains("grok")
+        let includeOMP = true
+        let includePi = true
         let enabledSources = Set([
             includeClaude ? ProjectUsageSource.claude : nil,
             includeCodex ? ProjectUsageSource.codex : nil,
             includeGrok ? ProjectUsageSource.grok : nil,
+            includeOMP ? ProjectUsageSource.omp : nil,
+            includePi ? ProjectUsageSource.pi : nil,
         ].compactMap { $0 })
-        guard includeClaude || includeCodex || includeGrok else {
-            report = nil
-            loading = false
-            return
-        }
 
         let seededClaude = includeClaude ? await ClaudeCostScanner.seededReport() : nil
         let seededCodex = includeCodex ? await CodexCostScanner.seededReport() : nil
         let seededGrok = includeGrok ? await GrokCostScanner.seededReport() : nil
+        let ompReport = await OMPCostScanner.loadReport()
+        let piReport = await PiCostScanner.loadReport()
         guard !Task.isCancelled, loadGeneration == generation else { return }
         let seeded = await buildReport(
-            claude: seededClaude, codex: seededCodex, grok: seededGrok,
+            claude: seededClaude, codex: seededCodex, grok: seededGrok, omp: ompReport, pi: piReport,
             includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            includeOMP: includeOMP, includePi: includePi,
             enabledSources: enabledSources)
         guard !Task.isCancelled, loadGeneration == generation else { return }
         if let seeded { report = seeded }
@@ -126,8 +128,9 @@ struct InsightsPane: View {
         guard !Task.isCancelled, loadGeneration == generation else { return }
         let live = await buildReport(
             claude: liveClaude ?? seededClaude, codex: liveCodex ?? seededCodex,
-            grok: liveGrok ?? seededGrok, includeClaude: includeClaude,
-            includeCodex: includeCodex, includeGrok: includeGrok,
+            grok: liveGrok ?? seededGrok, omp: ompReport, pi: piReport,
+            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            includeOMP: includeOMP, includePi: includePi,
             enabledSources: enabledSources)
         guard !Task.isCancelled, loadGeneration == generation else { return }
         if let live { report = live }
@@ -136,13 +139,16 @@ struct InsightsPane: View {
 
     private func buildReport(
         claude: ClaudeUsageReport?, codex: CodexUsageReport?, grok: GrokUsageReport?,
+        omp: OMPUsageReport? = nil, pi: PiUsageReport? = nil,
         includeClaude: Bool, includeCodex: Bool, includeGrok: Bool,
+        includeOMP: Bool = true, includePi: Bool = true,
         enabledSources: Set<ProjectUsageSource>
     ) async -> ProjectInsightsReport? {
-        guard claude != nil || codex != nil || grok != nil else { return nil }
+        guard claude != nil || codex != nil || grok != nil || omp != nil || pi != nil else { return nil }
         let combined = CombinedUsageReport.build(
-            claude: claude, codex: codex, grok: grok,
-            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok)
+            claude: claude, codex: codex, grok: grok, omp: omp, pi: pi,
+            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            includeOMP: includeOMP, includePi: includePi)
         return await Task.detached(priority: .utility) {
             ProjectInsightsBuilder.build(
                 combined: combined, history: ProjectCostHistoryStore.read(),
