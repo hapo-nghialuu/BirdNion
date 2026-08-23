@@ -15,9 +15,10 @@ final class ServicesContainer: ObservableObject {
     let configService: ConfigService
     let quotaService: QuotaService
     let settings: SettingsStore
+    let installedAgents = InstalledAgentCatalog()
+    let agentVisibility = InstalledAgentVisibilityStore.shared
     /// Refreshes when the system `~/.codex` login changes (terminal `codex login`).
     let codexAccountObserver = CodexSystemAccountObserver()
-
     /// Process-wide instance. Set by `BirdNionApp.init` so the Settings
     /// scene can use the same services as AppDelegate. Reading before
     /// registration is a programmer error.
@@ -146,10 +147,12 @@ final class ServicesContainer: ObservableObject {
     func start() {
         quotaService.start()
         codexAccountObserver.start()
+        installedAgents.start()
     }
 
     func stop() {
         quotaService.stop()
         codexAccountObserver.stop()
+        installedAgents.stop()
     }
 }
