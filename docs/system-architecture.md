@@ -113,6 +113,7 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
 ### 3.6 Agent Catalog, Popover Capability Blocks và 52-week Activity Ledger (2026-08-23)
 
 - **Installed Agent Catalog**: Quét có giới hạn (bounded allowlist) bằng `InstalledAgentDetectors` kiểm tra file thực thi thật (`isExecutableFile`) và config/session marker paths trên máy; lưu preferences visibility/pinning trong namespace `birdnion.agentVisibility.v1.*`.
+- Visibility/pinning chỉ điều khiển trình bày roster. Ẩn agent không tắt scanner, không sửa provider/config, không làm mất capability evidence và không loại cost khỏi aggregate.
 - **Popover All 4 Khối**:
   1. *Tổng chi phí*: 6 nguồn cost (`claude`, `codex`, `grok`, `kiro`, `omp`, `pi`), period chips `[24h, 7d, 30d, 90d, 120d]`, dòng stats mở nhanh panel Hoạt động.
   2. *Quota*: lọc provider có quota window thực tế, cắt 3 dòng + dòng gộp "+N".
@@ -120,7 +121,10 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
   4. *Đã cấu hình*: danh sách agent chỉ có config (ẩn khi rỗng).
   5. *Ngân sách*: hỗ trợ cài đặt kỳ linh hoạt Tuần / Tháng (`BudgetPeriod` trong `SettingsStore`), tính toán dự phóng qua `BudgetForecast`.
 - **Agent Detail Child Panel**: NSPanel 340px độc lập neo bên phải popover chính, hiển thị 3 tab `Quota`, `Chi phí`, `Config` lấy đường dẫn và model từ dữ liệu quét thật.
-- **52-week Activity Ledger**: Tổng hợp lịch sử chi phí/token 52 tuần từ 400 ngày trong `CostHistoryStore`, tính toán streak và active days thực tế.
+- Quota row dùng window chính đang active qua `ProviderStatusSummary.lowestWindow`; supplementary/inactive window không được thay quota chính. Detail chỉ hiện số cost khi có evidence thực, và chỉ nói quota/upstream/health khi snapshot có bridge/status tương ứng. Request mở child panel có generation guard để intent cũ không ghi đè click mới.
+- OMP/Pi stream JSONL theo chunk 64 KiB với read cursor tuyến tính và file cap 64 MiB; chỉ compact prefix đã consume. Malformed complete line, missing root, enumeration/read error, cancellation hoặc entry-limit truncation đều làm scan incomplete. Partial result không được merge vào high-water history hoặc cache/stamp như live; malformed unterminated tail đang được writer append mới được bỏ qua. Dedup chỉ claim key sau khi record có timestamp/usage hợp lệ, nên duplicate rỗng không chặn record usage hợp lệ phía sau. Kiro trả typed scan completion theo từng archive/SQLite/CLI source; JSON đúng cú pháp nhưng sai schema vẫn là failure, còn clean zero-usage khác I/O/parse failure và partial source không được stamp live.
+- `CostHistoryStore.applyWithReceipt` chỉ công bố merged window/freshness sau durable atomic write. Mutation read chỉ tạo document mới khi file thật sự chưa tồn tại; file hiện hữu unreadable/malformed làm receipt fail-closed và không bị ghi đè. Persist failure trả lại persisted window cũ; Claude/Codex/Grok/Kiro/OMP/Pi không phát `live` hoặc advance pricing/counting revision từ state chỉ tồn tại trong memory. Claude cũng không publish/cache hourly live khi daily history chưa persist.
+- **52-week Activity Ledger**: Tổng hợp daily token evidence thật từ 400 ngày trong `CostHistoryStore` thành đúng 52 tuần; future/out-of-window evidence bị loại, zero-day có evidence khác missing-day, streak/current/longest tính theo ngày liên tiếp.
 ## 4. Luồng quota
 
 ```
@@ -158,16 +162,16 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 - Tab All chỉ cộng nguồn `included`; badge hiển thị trạng thái + freshness. Heatmap dùng token count, không dùng USD làm activity giả.
 - Provider refresh thiếu tạm thời `serviceStatus`/`serviceStatusLevel` sẽ kế thừa last-good pair thay vì làm trống UI.
 
-### 4.2 Monthly budget, forecast và weekly digest
+### 4.2 Budget tuần/tháng, forecast và weekly digest
 
-- `MonthlyForecast` cộng chi phí local Claude + Codex + Grok từ đầu tháng đến hiện tại rồi linear-project tới cuối tháng. Budget tổng là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API.
+- Trên macOS, budget tổng trong All dùng `BudgetForecast` và kỳ `SettingsStore.budgetPeriod` (`week`/`month`), cộng sáu nguồn local Claude/Codex/Grok/Kiro/OMP/Pi có confidence `included`, rồi linear-project tới cuối kỳ. Không có nguồn included thì hiện “chưa có dữ liệu chi phí”, không tạo trạng thái on-track giả. Budget là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API. Linux hiện vẫn dùng `MonthlyForecast` cho Claude/Codex/Grok.
 - **Budget per-provider** (Claude/Codex/Grok riêng biệt, độc lập với budget tổng): cùng công thức `MonthlyForecast.build(source:)` nhưng chỉ cộng daily USD của đúng 1 source. Lưu ở UserDefaults `claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD` (macOS) và `localStorage` `birdnion.claudeBudgetUSD`/`birdnion.codexBudgetUSD`/`birdnion.grokBudgetUSD` (Linux) — **không** ghi vào provider `settings.json`.
   - Tab provider tương ứng (`ProviderBudgetCard` macOS / `providerBudgetCard` Linux, không phải All tab — All tab chỉ hiển thị budget tổng) hiển thị mỗi provider có budget > 0: MTD/budget, linear projection, remaining hoặc over, status on-track/forecast-over/already-over.
   - Trust rule: provider có `confidence == .unavailable` (không live lẫn không lịch sử) hiện "chưa có dữ liệu chi phí" thay vì tính forecast — không bao giờ hiện on-track (xanh) giả khi thiếu bằng chứng. History-only vẫn tính bình thường.
 - Weekly digest mặc định OFF. Cửa sổ hiện tại là hôm nay + 6 ngày trước; cửa sổ so sánh là 7 ngày liền trước đó.
 - Digest đi nhờ refresh/tick sẵn có. `lastEvaluatedAt` giới hạn cadence và vẫn được ghi khi suppress/error; `lastSentAt` chỉ ghi sau khi notification thành công.
 - Không gửi khi không có live source hoặc tổng USD/token bằng 0. Nếu một phần nguồn không live, notification ghi rõ nguồn dùng cached data.
-- Digest chỉ cảnh báo budget khi trạng thái là `forecast-over` hoặc `already-over` (không nhắc khi `on-track`), cho cả budget tổng và từng provider có cấu hình riêng. `forecast-over` dùng số dự phóng cuối tháng (`projectedTotalUSD`); `already-over` dùng số đã chi thực tế tháng này (`monthToDateUSD`).
+- Digest macOS dùng cùng kỳ week/month và sáu nguồn local; chỉ cảnh báo budget khi trạng thái là `forecast-over` hoặc `already-over` (không nhắc khi `on-track`), cho cả budget tổng và từng provider có cấu hình riêng. `forecast-over` dùng số dự phóng cuối kỳ; `already-over` dùng số đã chi thực tế trong kỳ.
 
 ### 4.3 Usage Insights và cost theo project
 
@@ -198,6 +202,8 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 | Per-provider refresh override | `UserDefaults.refreshInterval.<id>` | standard |
 | Per-provider menu-bar visibility | `UserDefaults.menuBarVisibility.<id>` | standard |
 | Total monthly budget | macOS `UserDefaults.monthlyBudgetUSD`; Linux local storage `birdnion.monthlyBudgetUSD` | local preference |
+| Kỳ budget tổng macOS | `UserDefaults.birdnion.budgetPeriod` (`week`/`month`) | local preference, mặc định `month` |
+| Agent visibility/pinning | `UserDefaults.birdnion.agentVisibility.v1.*` | local presentation preference; không mutate provider/config |
 | Per-provider budget (Claude/Codex/Grok) | macOS `UserDefaults.claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD`; Linux local storage `birdnion.claudeBudgetUSD`/`birdnion.codexBudgetUSD`/`birdnion.grokBudgetUSD` — không phải provider `settings.json` | local preference |
 | Weekly digest toggle/cadence | macOS `weeklyDigest*`; Linux local storage `birdnion.weeklyDigest*` | local preference, default OFF |
 | Project cost history | `~/.config/birdnion/project-cost-history.json` (sibling của settings/cost history) | SHA-256 keys + safe basename, hashed retraction IDs, atomic `0600`, high-water 400 ngày |
