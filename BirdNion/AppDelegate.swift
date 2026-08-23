@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var settingsMenuItem: NSMenuItem?
     private var panel: DropdownPanel!
     private var hostingController: NSHostingController<AnyView>!
+    private let agentDetailCoordinator = AgentDetailPanelCoordinator()
     private var cancellables = Set<AnyCancellable>()
     private var pendingPanelResizeTask: Task<Void, Never>?
     private var localClickMonitor: Any?
@@ -156,6 +157,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(services.quotaService)
                     .environmentObject(services.configService)
                     .environmentObject(services.settings)
+                    .environmentObject(services.installedAgents)
+                    .environmentObject(services.agentVisibility)
             )
         )
         // Deliberately NO `.preferredContentSize` sizing option: with it,
@@ -215,7 +218,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in self?.preExpandPanelForTallTab() }
             .store(in: &cancellables)
 
-        // Re-render the menu bar title whenever QuotaService publishes.
+        NotificationCenter.default.publisher(for: .birdnionOpenAgentDetail)
+            .sink { [weak self] note in
+                guard let self,
+                      let snapshot = note.userInfo?["snapshot"] as? AgentDetailSnapshot,
+                      let parent = self.panel else { return }
+                self.agentDetailCoordinator.show(snapshot: snapshot, beside: parent)
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .birdnionCloseAgentDetail)
+            .sink { [weak self] _ in
+                self?.agentDetailCoordinator.close()
+            }
+            .store(in: &cancellables)
         services.quotaService.$displayStatuses
             .receive(on: RunLoop.main)
             .sink { [weak self] statuses in self?.updateFrames(from: statuses) }
@@ -323,6 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingPanelResizeTask = nil
         panel.orderOut(nil)
         panelTopY = nil
+        agentDetailCoordinator.close()
     }
 
     /// Height to use for every tab given the content's own `fittingHeight`,
@@ -342,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !Task.isCancelled, let self else { return }
             self.pendingPanelResizeTask = nil
             self.resizePanelToContent()
+            self.agentDetailCoordinator.repositionIfNeeded()
         }
     }
 
@@ -442,10 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func closePanelIfClickOutside(event: NSEvent) {
         guard panel.isVisible else { return }
-        // A click inside the panel's own window is delivered to that window;
-        // only dismiss when the event targets a different window.
-        if event.window == panel { return }
-        // Clicking the status item button toggles the panel itself.
+        if event.window == panel || agentDetailCoordinator.contains(window: event.window) { return }
         if let button = statusItem.button, event.window == button.window { return }
         hidePanel()
     }
