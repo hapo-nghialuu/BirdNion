@@ -112,22 +112,29 @@ struct GeneralPane: View {
                 footer: LocalizedStringKey(L10n.t("settings.monthlyBudget.subtitle", settings.appLanguage))
             ) {
                 SettingsLabeledRow(
+                    title: L10n.languageCode(settings.appLanguage) == "vi" ? "Kỳ ngân sách" : "Budget period"
+                ) {
+                    Picker("", selection: $settings.budgetPeriod) {
+                        ForEach(BudgetPeriod.allCases) { period in
+                            Text(period.label(vi: L10n.languageCode(settings.appLanguage) == "vi"))
+                                .tag(period)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 140)
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
                     title: L10n.t("settings.monthlyBudget.title", settings.appLanguage)
                 ) {
                     TextField("∞", text: Binding(
                         get: {
-                            // Plain `String(_:)` (mirrors the Bedrock budget
-                            // field below) instead of a fixed-decimal format —
-                            // reformatting on every keystroke fights the
-                            // user's typing and jumps the cursor.
                             settings.monthlyBudgetUSD > 0 ? String(settings.monthlyBudgetUSD) : ""
                         },
                         set: { raw in
                             let trimmed = raw.trimmingCharacters(in: .whitespaces)
-                            // Blank, unparsable, non-finite (NaN/Infinity —
-                            // `Double("inf")`/`Double("nan")` both parse
-                            // successfully), or non-positive all normalize to
-                            // 0 ("not configured") — never persisted as-is.
                             guard let parsed = Double(trimmed), parsed.isFinite, parsed > 0 else {
                                 settings.monthlyBudgetUSD = 0
                                 return

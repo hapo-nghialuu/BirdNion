@@ -107,7 +107,7 @@ enum VocabbyTheme {
     static let chartGrok   = dyn(0x4A4A4A, 0xC8CCD6)  // --grok
     static let chartOMP    = dyn(0x8B5CF6, 0xA78BFA)  // --omp (Purple)
     static let chartPi     = dyn(0x06B6D4, 0x22D3EE)  // --pi (Cyan)
-    // Per-provider brand tints for the monochrome template logos.
+    static let chartKiro   = dyn(0x8B47F9, 0xA766FF)  // --kiro (Violet)
     // Values mirror CodexBar's ProviderBranding.color exactly (see
     // docs/provider-parity). Near-black brands (Grok, CommandCode) flip to a
     // light neutral in dark mode; ElevenLabs keeps following `primary`.

@@ -45,11 +45,13 @@ struct KiroUsageReport: Equatable {
     /// Contiguous `chartWindowDays` daily buckets, oldest → newest.
     let daily: [KiroDailyUsage]
     let topModel: String?
+    var scanConfidence: CostHistoryStore.UsageScanConfidence? {
+        CostHistoryStore.confidence(source: .kiro, liveScanSucceeded: !isEmpty)
+    }
 
     var isEmpty: Bool {
         last30Tokens == 0 && last30USD <= 0 && todayTokens == 0 && todayUSD <= 0
     }
-
     var asSummary: KiroCostSummary {
         KiroCostSummary(todayUSD: todayUSD, todayTokens: todayTokens,
                         last30USD: last30USD, last30Tokens: last30Tokens)

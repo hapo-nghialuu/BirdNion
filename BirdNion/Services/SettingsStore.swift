@@ -1,6 +1,18 @@
 import SwiftUI
 import ServiceManagement
 
+enum BudgetPeriod: String, CaseIterable, Identifiable, Codable, Sendable {
+    case week, month
+    var id: String { rawValue }
+
+    func label(vi: Bool) -> String {
+        switch self {
+        case .week: vi ? "Tuần" : "Week"
+        case .month: vi ? "Tháng" : "Month"
+        }
+    }
+}
+
 enum MenuBarPercentDisplay {
     static let defaultsKey = "showPercentInMenuBar"
 
@@ -87,11 +99,16 @@ final class SettingsStore: ObservableObject {
     /// on-screen overlay. `QuotaWarnConfig` reads the same keys.
     @AppStorage(QuotaWarnConfig.soundKey) var quotaWarningSoundEnabled: Bool = true
     @AppStorage(QuotaWarnConfig.alertKey) var quotaWarningOnScreenAlertEnabled: Bool = false
-    /// All-tab monthly budget (USD) for the local estimated Claude+Codex+Grok
+    /// All-tab budget period (week vs month). Default is month (preserving legacy behavior).
+    @AppStorage("birdnion.budgetPeriod") var budgetPeriodRaw: String = BudgetPeriod.month.rawValue
+
+    var budgetPeriod: BudgetPeriod {
+        get { BudgetPeriod(rawValue: budgetPeriodRaw) ?? .month }
+        set { budgetPeriodRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    /// All-tab budget (USD) for the local estimated Claude+Codex+Grok+Kiro+OMP+Pi
     /// cost — 0 means "not configured" (the budget card stays hidden).
-    /// UserDefaults only; deliberately NOT `BirdNionConfigStore.Provider.budget`
-    /// (that field is Bedrock's own per-provider AWS Cost Explorer budget, a
-    /// different scope/data source) and not a new `settings.json` key.
     @AppStorage("monthlyBudgetUSD") var monthlyBudgetUSD: Double = 0
     /// Per-provider monthly budgets (USD) — independent of `monthlyBudgetUSD`
     /// above. Each 0 means "not configured" for that provider (its budget
