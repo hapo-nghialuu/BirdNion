@@ -81,8 +81,7 @@ struct QuotaOverview: View {
                                 UserDefaults.standard.set($0, forKey: Self.selectedTabKey)
                             }
                         ),
-                        showAllTab: hasLocalCostSources,
-                        showAgentsTab: hasAgentCostSources
+                        showAllTab: hasLocalCostSources
                     )
                     if selected == "all" {
                         // Combined Claude CLI + Codex + Grok overview (no real
@@ -94,9 +93,6 @@ struct QuotaOverview: View {
                             claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
                             codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
                             grokEnabled: quota.displayStatuses.contains { $0.id == "grok" })
-                    } else if selected == "agents" {
-                        // Coding agents overview: Oh My Pi + Pi spend only.
-                        AgentsUsageOverview(omp: ompReport, pi: piReport)
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
                         providerDetailStack(s)
@@ -616,10 +612,6 @@ struct ProviderTabs: View {
     @Binding var selectedId: String
     /// Renders the combined "All" pseudo-tab ahead of the provider chips.
     var showAllTab: Bool = false
-    /// Renders the "Agents" pseudo-tab (Oh My Pi / Pi coding agents overview)
-    /// right after the All chip. Independent of showAllTab so agents remain
-    /// reachable even when no local provider quota source is enabled.
-    var showAgentsTab: Bool = false
 
     var body: some View {
         // Logo-only unselected chips keep a typical roster on one row, so the
@@ -640,9 +632,7 @@ struct ProviderTabs: View {
                 if showAllTab {
                     allChip
                 }
-                if showAgentsTab {
-                    agentsChip
-                }
+
                 ForEach(providers) { provider in
                     chip(for: provider)
                 }
@@ -665,34 +655,6 @@ struct ProviderTabs: View {
             selectedId = "all"
         } label: {
             Image(systemName: "square.grid.2x2.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
-                .frame(width: 32, height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .fill(active ? VocabbyTheme.primary : VocabbyTheme.background)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 1)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .help(label)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(active ? .isSelected : [])
-    }
-
-    /// Coding-agents pseudo-tab — design mirrors allChip but with the
-    /// "cpu" glyph so it reads as "harnesses" rather than "everything".
-    private var agentsChip: some View {
-        let active = selectedId == "agents"
-        let label = L10n.t("popover.agentsTab", settings.appLanguage)
-        return Button {
-            selectedId = "agents"
-        } label: {
-            Image(systemName: "cpu")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
                 .frame(width: 32, height: 32)
