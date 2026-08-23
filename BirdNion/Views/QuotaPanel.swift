@@ -11,11 +11,14 @@ import AppKit
 struct QuotaOverview: View {
     @EnvironmentObject var quota: QuotaService
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var installedAgents: InstalledAgentCatalog
+    @EnvironmentObject var agentVisibility: InstalledAgentVisibilityStore
     /// Persisted so re-opening the popover lands on the tab the user last
     /// chose — either the "all" pseudo-tab or a provider id.
     private static let selectedTabKey = "popover.selectedTab"
     @State private var selectedProviderId: String? =
         UserDefaults.standard.string(forKey: QuotaOverview.selectedTabKey)
+    @State private var panelRequestTaskId: String?
     /// Lazy-scanned Claude usage report (per-day buckets + top model) for
     /// the 30-day chart in the popover. Only re-scanned when the user
     /// opens Claude's tab; cached 5 min by `ClaudeCostScanner` itself.
@@ -43,7 +46,7 @@ struct QuotaOverview: View {
             // spacing 0: section hairlines own separation (no double rules
             // from VStack gap + section top hairline).
             VStack(alignment: .leading, spacing: 0) {
-                if quota.displayStatuses.isEmpty {
+                if quota.displayStatuses.isEmpty && !hasLocalCostSources {
                     // First-run / opt-in state. The bird logo + title + body
                     // + prominent Settings button are all contained in
                     // `EmptyProvidersState` (single fixed-size subview) so
@@ -84,15 +87,25 @@ struct QuotaOverview: View {
                         showAllTab: hasLocalCostSources
                     )
                     if selected == "all" {
-                        // Combined Claude CLI + Codex + Grok overview (no real
-                        // ProviderStatus behind it — reports only).
+                        // No second agent strip here — the header ProviderTabs is
+                        // the only roster; agent detail opens from the All-tab
+                        // rows (quota / cost breakdown / configured) instead.
                         AllUsageOverview(
                             claude: claudeReport,
                             codex: codexReport,
                             grok: grokReport,
+                            kiro: kiroReport,
+                            omp: ompReport,
+                            pi: piReport,
+                            visibleAgentRecords: visibleAgentRecords,
+                            allAgentRecords: projectedAgentRecords,
+                            providerStatuses: quota.displayStatuses,
+                            onOpenAgentDetail: openAgentDetail,
+                            onOpenActivity: openActivity,
                             claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
                             codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
-                            grokEnabled: quota.displayStatuses.contains { $0.id == "grok" })
+                            grokEnabled: quota.displayStatuses.contains { $0.id == "grok" },
+                            kiroEnabled: quota.displayStatuses.contains { $0.id == "kiro" })
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
                         providerDetailStack(s)
@@ -109,9 +122,8 @@ struct QuotaOverview: View {
             .padding(.vertical, 0)
         }
         .onAppear {
-            if selectedProviderId == nil,
-               let first = quota.displayStatuses.first {
-                selectedProviderId = first.id
+            if selectedProviderId == nil {
+                selectedProviderId = hasLocalCostSources ? "all" : quota.displayStatuses.first?.id
             }
         }
         .onChange(of: selectedProviderId) { id in
@@ -123,7 +135,7 @@ struct QuotaOverview: View {
             let selectionValid: Bool
             switch selectedProviderId {
             case "all":
-                selectionValid = ids.contains("claude") || ids.contains("codex") || ids.contains("grok")
+                selectionValid = hasLocalCostSources
             case let sel?: selectionValid = ids.contains(sel)
             case nil: selectionValid = false
             }
@@ -143,6 +155,9 @@ struct QuotaOverview: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .claudeCodeTargetChanged)) { _ in
             claudeCodeTargetRevision += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionInvalidateAgentPanelRequests)) { _ in
+            panelRequestTaskId = UUID().uuidString
         }
     }
 
@@ -287,7 +302,7 @@ struct QuotaOverview: View {
         triggerCodexReportIfNeeded(providerId: providerId)
         triggerGrokReportIfNeeded(providerId: providerId)
         triggerKiroReportIfNeeded(providerId: providerId)
-        if providerId == "all" || providerId == "agents" {
+        if providerId == "all" {
             triggerOMPReportIfNeeded(providerId: providerId)
             triggerPiReportIfNeeded(providerId: providerId)
         }
@@ -382,7 +397,13 @@ struct QuotaOverview: View {
     /// Trigger the Kiro CLI session scan when the user views the Kiro tab.
     /// Cached 5 min by `KiroCostScanner`.
     private func triggerKiroReportIfNeeded(providerId: String) {
-        guard providerId == "kiro" else { return }
+        // Same rule as Claude/Codex/Grok: the All tab only scans sources whose
+        // provider is enabled. Detection evidence alone (a stale ~/.kiro dir)
+        // must not start scans or show the scanning banner.
+        let wantsKiro = providerId == "kiro"
+            || (providerId == "all"
+                && quota.displayStatuses.contains(where: { $0.id == "kiro" }))
+        guard wantsKiro else { return }
         let taskId = UUID().uuidString
         kiroReportTaskId = taskId
         let needsSeed = kiroReport == nil
@@ -402,7 +423,7 @@ struct QuotaOverview: View {
     }
 
     private func triggerOMPReportIfNeeded(providerId: String) {
-        guard providerId == "all" || providerId == "agents" else { return }
+        guard providerId == "all" else { return }
         let taskId = UUID().uuidString
         ompReportTaskId = taskId
         Task {
@@ -414,22 +435,37 @@ struct QuotaOverview: View {
         }
     }
 
-    /// The Agents tab exists when Oh My Pi or Pi session roots are present —
-    /// independent of the provider roster so a fresh install with only
-    /// coding-agent logs still gets an entry point.
-    private var hasAgentCostSources: Bool {
-        !OMPPaths.allSessionDirectories().isEmpty
-            || FileManager.default.fileExists(atPath: PiCostScanner.defaultSessionsDirectory.path)
+    private var projectedAgentRecords: [InstalledAgentRecord] {
+        installedAgents.records.map {
+            $0.projected(
+                providerStatuses: quota.displayStatuses,
+                availableCostSources: availableCostSources)
+        }
     }
 
-    /// The All tab only exists when at least one local provider cost source
-    /// (Claude / Codex / Grok) is enabled.
+    private var availableCostSources: Set<CostHistoryStore.Source> {
+        var sources: Set<CostHistoryStore.Source> = []
+        if claudeReport?.scanConfidence.included == true { sources.insert(.claude) }
+        if codexReport?.scanConfidence.included == true { sources.insert(.codex) }
+        if grokReport?.scanConfidence.included == true { sources.insert(.grok) }
+        if kiroReport?.scanConfidence.included == true { sources.insert(.kiro) }
+        if ompReport?.scanConfidence.included == true { sources.insert(.omp) }
+        if piReport?.scanConfidence.included == true { sources.insert(.pi) }
+        return sources
+    }
+
+    private var visibleAgentRecords: [InstalledAgentRecord] {
+        agentVisibility.visibleRecords(from: projectedAgentRecords)
+    }
+
+    /// The All tab exists for enabled local providers or detected local-cost agents.
     private var hasLocalCostSources: Bool {
         quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" || $0.id == "grok" }
+            || projectedAgentRecords.contains { $0.capabilities.contains(.localCost) }
     }
 
     private func triggerPiReportIfNeeded(providerId: String) {
-        guard providerId == "all" || providerId == "agents" else { return }
+        guard providerId == "all" else { return }
         let taskId = UUID().uuidString
         piReportTaskId = taskId
         Task {
@@ -448,6 +484,76 @@ struct QuotaOverview: View {
             return sel
         }
         return quota.displayStatuses.first?.id ?? ""
+    }
+
+    private func combinedReport() -> CombinedUsageReport {
+        CombinedUsageReport.build(
+            claude: claudeReport,
+            codex: codexReport,
+            grok: grokReport,
+            kiro: kiroReport,
+            omp: ompReport,
+            pi: piReport,
+            includeClaude: quota.displayStatuses.contains { $0.id == "claude" },
+            includeCodex: quota.displayStatuses.contains { $0.id == "codex" },
+            includeGrok: quota.displayStatuses.contains { $0.id == "grok" },
+            includeKiro: quota.displayStatuses.contains { $0.id == "kiro" }
+                || projectedAgentRecords.contains { $0.id == .kiro },
+            includeOMP: projectedAgentRecords.contains { $0.id == .omp },
+            includePi: projectedAgentRecords.contains { $0.id == .pi })
+    }
+
+    private func openAgentDetail(_ record: InstalledAgentRecord) {
+        let statuses = quota.displayStatuses
+        let combined = combinedReport()
+        let taskId = UUID().uuidString
+        panelRequestTaskId = taskId
+        Task {
+            let sourceName = await Task.detached(priority: .utility) {
+                switch record.id {
+                case .omp:
+                    return OMPAgentConfigStore.load().modelRoles.defaultRole
+                case .pi:
+                    return PiAgentConfigStore.load().defaultProvider
+                default:
+                    return ""
+                }
+            }.value
+            let snapshot = AgentDetailSnapshot.build(
+                record: record,
+                providerStatuses: statuses,
+                combined: combined,
+                sourceName: sourceName)
+            await MainActor.run {
+                guard panelRequestTaskId == taskId else { return }
+                NotificationCenter.default.post(
+                    name: .birdnionOpenAgentDetail,
+                    object: nil,
+                    userInfo: ["snapshot": snapshot])
+            }
+        }
+    }
+
+    private func openActivity() {
+        let ids = projectedAgentRecords.compactMap { record in
+            record.capabilities.contains(.localCost) ? record.id : nil
+        }
+        let taskId = UUID().uuidString
+        panelRequestTaskId = taskId
+        Task {
+            let snapshot = await Task.detached(priority: .utility) {
+                WeeklyActivityBucketBuilder.buildSnapshot(
+                    document: CostHistoryStore.read(),
+                    agentIDs: ids)
+            }.value
+            await MainActor.run {
+                guard panelRequestTaskId == taskId else { return }
+                NotificationCenter.default.post(
+                    name: .birdnionOpenAgentActivity,
+                    object: nil,
+                    userInfo: ["snapshot": snapshot])
+            }
+        }
     }
 }
 

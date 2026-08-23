@@ -6,6 +6,7 @@ struct AllAgentsOverview: View {
     let report: CombinedUsageReport
     let pendingSources: [String]
     let visibleRecords: [InstalledAgentRecord]
+    let aggregateAgentCount: Int
     let quotaRows: [AgentQuotaRow]
     let costRows: [AgentCostRow]
     let configuredRows: [AgentConfiguredRow]
@@ -28,13 +29,16 @@ struct AllAgentsOverview: View {
             .padding(.top, 12)
         }
 
-        // Khối 1: Tổng chi phí
+        // Khối 1: Tổng chi phí — confidence badges nằm ngay dưới chart
+        // (vị trí gốc trước remake) vì chúng chú thích độ tươi của chính
+        // số liệu chart này, đọc liền mạch từ trên xuống.
         CombinedChartCard(
             report: report,
             claudeHourly: [],
-            summaryAgentCount: visibleRecords.count,
+            summaryAgentCount: aggregateAgentCount,
             onOpenActivity: onOpenActivity
         )
+        SourceConfidenceBadgeRow(report: report)
 
         // Khối 2: Quota
         AllAgentsQuotaSection(
@@ -58,10 +62,9 @@ struct AllAgentsOverview: View {
         // Khối 5: Ngân sách (theo setting tuần/tháng)
         BudgetForecastCard(report: report)
 
-        // Phụ: Confidence badges + Insights highlight card + 120d Heatmap
-        SourceConfidenceBadgeRow(report: report)
-        InsightsHighlightCard(combined: report, enabledSources: insightsSources)
-        CombinedHeatmapCard(report: report)
+        // Heatmap 120d và InsightsHighlightCard cố tình KHÔNG nằm ở All —
+        // nhịp hoạt động xem qua panel Hoạt động (stats row ›), insights xem
+        // trong Settings. (Insights card tạm ẩn theo yêu cầu 2026-08-23.)
     }
 }
 

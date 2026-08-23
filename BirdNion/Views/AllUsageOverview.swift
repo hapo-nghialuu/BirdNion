@@ -85,6 +85,18 @@ struct CombinedUsageReport: Equatable, Sendable {
     let ompConfidence: CostHistoryStore.UsageScanConfidence?
     let piConfidence: CostHistoryStore.UsageScanConfidence?
     var isEmpty: Bool { activeDays == 0 }
+    var hasIncludedCostSource: Bool {
+        [claudeConfidence, codexConfidence, grokConfidence,
+         kiroConfidence, ompConfidence, piConfidence]
+            .contains { $0?.included == true }
+    }
+    /// Sources actually contributing to this report (seeded history counts too).
+    /// Drives the "· N agent" hero subtitle so it never reads 0 while cost shows.
+    var includedSourceCount: Int {
+        [claudeConfidence, codexConfidence, grokConfidence,
+         kiroConfidence, ompConfidence, piConfidence]
+            .filter { $0?.included == true }.count
+    }
 
     init(
         todayUSD: Double,
@@ -448,6 +460,11 @@ struct BudgetForecast: Equatable {
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> BudgetForecast {
+        var calendar = calendar
+        if period == .week {
+            calendar.firstWeekday = 2
+            calendar.minimumDaysInFirstWeek = 4
+        }
         let startOfToday = calendar.startOfDay(for: now)
         let periodStart: Date
         let daysInPeriod: Int
@@ -619,6 +636,7 @@ struct AllUsageOverview: View {
                 report: report,
                 pendingSources: pendingSources,
                 visibleRecords: visibleAgentRecords,
+                aggregateAgentCount: report.includedSourceCount,
                 quotaRows: quotaRows,
                 costRows: costRows,
                 configuredRows: configuredRows,
@@ -632,11 +650,10 @@ struct AllUsageOverview: View {
     }
 
     private var quotaRows: [AgentQuotaRow] {
-        let records = visibleAgentRecords.isEmpty ? allAgentRecords : visibleAgentRecords
-        return records.compactMap { record -> AgentQuotaRow? in
+        visibleAgentRecords.compactMap { record -> AgentQuotaRow? in
             guard record.capabilities.contains(.quota) else { return nil }
             guard let status = providerStatus(for: record),
-                  let window = status.windows.min(by: { $0.remainingPct < $1.remainingPct })
+                  let window = ProviderStatusSummary.lowestWindow(status)
             else { return nil }
             return AgentQuotaRow(
                 record: record,
@@ -647,8 +664,8 @@ struct AllUsageOverview: View {
     }
 
     private var costRows: [AgentCostRow] {
-        let records = visibleAgentRecords.isEmpty ? allAgentRecords : visibleAgentRecords
-        return records.compactMap { record in
+        visibleAgentRecords.compactMap { record in
+            guard record.capabilities.contains(.localCost) else { return nil }
             switch record.id {
             case .claude:
                 guard let claude else { return nil }
@@ -675,10 +692,9 @@ struct AllUsageOverview: View {
     }
 
     private var configuredRows: [AgentConfiguredRow] {
-        let records = visibleAgentRecords.isEmpty ? allAgentRecords : visibleAgentRecords
         let costIDs = Set(costRows.map(\.id))
         let quotaIDs = Set(quotaRows.map(\.id))
-        return records.filter { record in
+        return visibleAgentRecords.filter { record in
             record.capabilities.contains(.nativeConfig) && !costIDs.contains(record.id) && !quotaIDs.contains(record.id)
         }.map { record in
             AgentConfiguredRow(
@@ -758,39 +774,84 @@ struct SourceConfidenceBadgeRow: View {
     @EnvironmentObject var settings: SettingsStore
     let report: CombinedUsageReport
 
-    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+    private var language: String? { settings.appLanguage }
+    private var vi: Bool { L10n.languageCode(language) == "vi" }
+
+    /// Chỉ các nguồn có quota (provider) như UI gốc — OMP/Pi là agent thuần
+    /// cost-log, cố tình không nằm trong hàng badge này.
+    private var entries: [(id: String, name: String, color: Color, confidence: CostHistoryStore.UsageScanConfidence)] {
+        [
+            ("claude", "Claude", VocabbyTheme.chartClaude, report.claudeConfidence),
+            ("codex", "Codex", VocabbyTheme.chartCodex, report.codexConfidence),
+            ("grok", "Grok", VocabbyTheme.chartGrok, report.grokConfidence),
+            ("kiro", "Kiro", VocabbyTheme.chartKiro, report.kiroConfidence),
+        ].compactMap { id, name, color, confidence in
+            confidence.map { (id, name, color, $0) }
+        }
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            badge(for: "claude", name: "Claude", confidence: report.claudeConfidence)
-            badge(for: "codex", name: "Codex", confidence: report.codexConfidence)
-            badge(for: "grok", name: "Grok", confidence: report.grokConfidence)
-            badge(for: "kiro", name: "Kiro", confidence: report.kiroConfidence)
-            badge(for: "omp", name: "OMP", confidence: report.ompConfidence)
-            badge(for: "pi", name: "Pi", confidence: report.piConfidence)
+        if !entries.isEmpty {
+            // No top hairline; tight gap under the chart card.
+            HStack(spacing: 8) { badges }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .popoverContentInset()
+                .padding(.top, 2)
+                .padding(.bottom, 6)
         }
-        .popoverContentInset()
-        .padding(.vertical, 8)
     }
 
     @ViewBuilder
-    private func badge(for id: String, name: String, confidence: CostHistoryStore.UsageScanConfidence?) -> some View {
-        if let confidence, confidence.included {
-            HStack(spacing: 4) {
-                ProviderLogoMark(id: id).frame(width: 12, height: 12)
-                Text(name)
+    private var badges: some View {
+        ForEach(entries, id: \.id) { entry in
+            badge(id: entry.id, name: entry.name, color: entry.color, confidence: entry.confidence)
+        }
+    }
+
+    private func badge(id: String,
+                       name: String,
+                       color: Color,
+                       confidence: CostHistoryStore.UsageScanConfidence) -> some View {
+        let state = SourceConfidenceState.classify(confidence)
+        let tag = state == .live ? "LIVE" : (vi ? "LỊCH SỬ" : "HISTORY")
+        let fullFreshness = SourceConfidenceFormat.freshnessLabel(
+            scannedAt: confidence.scannedAt, preference: language)
+        let badgeFresh = SourceConfidenceFormat.compactFreshnessLabel(
+            scannedAt: confidence.scannedAt)
+        let help = fullFreshness.map { L10n.f("confidence.badgeHelp", language, name, tag, $0) }
+            ?? L10n.f("confidence.badgeHelpNoFreshness", language, name, tag)
+        // Compact badge như bản gốc: logo tint + LIVE/LỊCH SỬ + freshness ngắn —
+        // KHÔNG có tên chữ trong label, logo tự nhận diện nguồn; tên nằm ở tooltip.
+        return HStack(spacing: 4) {
+            ProviderLogoMark(id: id, tint: color)
+                .frame(width: 12, height: 12)
+                .accessibilityHidden(true)
+            Text(tag)
+                .font(.plexMono(9, weight: .semibold))
+                .foregroundStyle(stateColor(state))
+                .tracking(0.4)
+            if let badgeFresh {
+                Text("·")
+                    .font(.plexMono(9))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                Text(badgeFresh.uppercased())
                     .font(.plexMono(9, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                Text(confidence.live ? (vi ? "LIVE" : "LIVE") : (vi ? "LỊCH SỬ" : "HISTORY"))
-                    .font(.plexMono(8, weight: .semibold))
-                    .foregroundStyle(confidence.live ? VocabbyTheme.success : VocabbyTheme.tertiary)
+                    .foregroundStyle(stateColor(state).opacity(0.85))
+                    .tracking(0.3)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
-                    .stroke(VocabbyTheme.border, lineWidth: 1)
-            )
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .help(help)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(help)
+    }
+
+    private func stateColor(_ state: SourceConfidenceState) -> Color {
+        switch state {
+        case .live: return VocabbyTheme.success
+        case .historyOnly: return VocabbyTheme.warningFill
+        case .unavailable: return VocabbyTheme.disabled
         }
     }
 }
@@ -812,7 +873,9 @@ struct BudgetForecastCard: View {
     }
 
     var body: some View {
-        if let budgetUSD = forecast.budgetUSD, let status = forecast.status {
+        if settings.monthlyBudgetUSD > 0, !report.hasIncludedCostSource {
+            unavailableState
+        } else if let budgetUSD = forecast.budgetUSD, let status = forecast.status {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text((settings.budgetPeriod == .week ? (vi ? "NGÂN SÁCH TUẦN" : "WEEKLY BUDGET") : (vi ? "NGÂN SÁCH THÁNG" : "MONTHLY BUDGET")).uppercased())
@@ -854,6 +917,27 @@ struct BudgetForecastCard: View {
             .padding(.vertical, 14)
             .overlay(alignment: .bottom) { PopoverInsetHairline() }
         }
+        // Chưa đặt ngân sách → không render gì (yêu cầu 2026-08-23);
+        // thiết lập budget nằm trong Settings → Cài chung.
+    }
+
+    private var unavailableState: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text((settings.budgetPeriod == .week
+                      ? (vi ? "NGÂN SÁCH TUẦN" : "WEEKLY BUDGET")
+                      : (vi ? "NGÂN SÁCH THÁNG" : "MONTHLY BUDGET")).uppercased())
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                Text(L10n.t("budget.perProvider.noData", language))
+                    .font(.plexSans(12, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            }
+            Spacer(minLength: 8)
+        }
+        .popoverContentInset()
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) { PopoverInsetHairline() }
     }
 
     private func progressBar(status: BudgetForecastStatus) -> some View {
@@ -926,7 +1010,24 @@ struct ProviderBudgetCard: View {
     }
 
     var body: some View {
-        if let status = forecast.status {
+        // Chưa đặt ngân sách → card ẩn hoàn toàn. Nhánh "noData" chỉ dành cho
+        // trường hợp ĐÃ đặt budget nhưng nguồn chi phí không có dữ liệu
+        // (trust rule — không hiện on-track giả).
+        if budgetUSD > 0, SourceConfidenceState.classify(confidence) == .unavailable {
+            VStack(alignment: .leading, spacing: 4) {
+                Text((settings.budgetPeriod == .week
+                      ? (vi ? "NGÂN SÁCH TUẦN" : "WEEKLY BUDGET")
+                      : (vi ? "NGÂN SÁCH THÁNG" : "MONTHLY BUDGET")).uppercased())
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                Text(L10n.t("budget.perProvider.noData", language))
+                    .font(.plexSans(12, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            }
+            .popoverContentInset()
+            .padding(.vertical, 12)
+            .overlay(alignment: .bottom) { PopoverInsetHairline() }
+        } else if let status = forecast.status {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text((settings.budgetPeriod == .week ? (vi ? "NGÂN SÁCH TUẦN" : "WEEKLY BUDGET") : (vi ? "NGÂN SÁCH THÁNG" : "MONTHLY BUDGET")).uppercased())
@@ -1246,42 +1347,49 @@ struct CombinedChartCard: View {
             streak += 1
             index -= 1
         }
+        // Four equal columns with hairline dividers (same pattern as the
+        // Activity panel footer) — inline label+value pairs wrapped mid-number
+        // at 420px, so each stat gets its own column with lineLimit(1).
         return Button {
             onOpenActivity?()
         } label: {
             HStack(spacing: 0) {
-                compactStat(vi ? "Cao nhất" : "Peak", AllUsageFormat.usd(peak))
-                compactDot
-                compactStat(vi ? "TB/ngày" : "Avg/day", AllUsageFormat.usd(average))
-                compactDot
-                compactStat("Streak", "\(streak) \(vi ? "ngày" : "days")")
-                Spacer(minLength: 6)
-                Text("\(active.count)/\(windowDaily.count) \(vi ? "NGÀY ACTIVE" : "ACTIVE DAYS")  ›")
-                    .font(.plexMono(9, weight: .medium))
+                statColumn(vi ? "CAO NHẤT" : "PEAK", AllUsageFormat.usdWhole(peak))
+                statDivider
+                statColumn(vi ? "TB/NGÀY" : "AVG/DAY", AllUsageFormat.usdWhole(average))
+                statDivider
+                statColumn("STREAK", "\(streak) " + (vi ? "ngày" : "days"))
+                statDivider
+                statColumn(vi ? "NGÀY ACTIVE" : "ACTIVE DAYS", "\(active.count)/\(windowDaily.count)")
+                Text("›")
+                    .font(.plexMono(12))
                     .foregroundStyle(VocabbyTheme.tertiary)
-                    .lineLimit(1)
+                    .padding(.leading, 4)
             }
             .contentShape(Rectangle())
-            .padding(.top, 4)
+            .padding(.top, 10)
         }
         .buttonStyle(.plain)
     }
 
-    private func compactStat(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 4) {
-            Text(label.uppercased())
+    private func statColumn(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
                 .font(.plexMono(9, weight: .medium))
                 .foregroundStyle(VocabbyTheme.tertiary)
             Text(value)
-                .font(.plexMono(11, weight: .semibold))
+                .font(.plexMono(13, weight: .semibold))
                 .foregroundStyle(VocabbyTheme.primary)
         }
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var compactDot: some View {
-        Text("  ·  ")
-            .font(.plexMono(10))
-            .foregroundStyle(VocabbyTheme.tertiary)
+    private var statDivider: some View {
+        VocabbyTheme.hairline
+            .frame(width: 1)
+            .padding(.vertical, 3)
+            .padding(.trailing, 10)
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -1349,7 +1457,7 @@ struct CombinedTopModelsCard: View {
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
     var body: some View {
-        let (models, windowTokens) = report.topModels(lastDays: periodDays)
+        let (models, _) = report.topModels(lastDays: periodDays)
         if !models.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text(vi ? "MODEL HÀNG ĐẦU" : "TOP MODELS")
@@ -1412,6 +1520,18 @@ enum AllUsageFormat {
             formatter.minimumFractionDigits = 2
         }
         return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
+    }
+
+    /// Whole-dollar variant for tight stat strips ("$425", "$1,208") where
+    /// cents would force mid-number wrapping.
+    static func usdWhole(_ amount: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencySymbol = "$"
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.maximumFractionDigits = 0
+        formatter.minimumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.0f", amount)
     }
 
     static func tokens(_ count: Int) -> String {
