@@ -23,6 +23,7 @@ enum ProjectAttribution: String, Codable, Sendable {
 
 enum InsightsSegment: String, CaseIterable, Identifiable, Sendable {
     case overview
+    case activity
     case projects
 
     static let defaultsKey = "birdnion.insightsSegment"

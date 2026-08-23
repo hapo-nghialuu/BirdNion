@@ -4,6 +4,7 @@ struct AgentsPane: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var installedAgents: InstalledAgentCatalog
     @EnvironmentObject var agentVisibility: InstalledAgentVisibilityStore
+    @EnvironmentObject var quota: QuotaService
 
     @Binding var tab: SettingsTab
     @Binding var searchText: String
@@ -16,6 +17,7 @@ struct AgentsPane: View {
     @State private var selectedAgentID: InstalledAgentID?
     @State private var localSearchText: String = ""
     @State private var historyDocument: CostHistoryStore.Document? = nil
+    @State private var localSourceLabels: [InstalledAgentID: String] = [:]
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
     private var query: String {
@@ -24,7 +26,18 @@ struct AgentsPane: View {
     }
 
     private var allRecords: [InstalledAgentRecord] {
-        installedAgents.records
+        installedAgents.records.map {
+            $0.projected(
+                providerStatuses: quota.displayStatuses,
+                availableCostSources: historyCostSources)
+        }
+    }
+
+    private var historyCostSources: Set<CostHistoryStore.Source> {
+        let sources = historyDocument?.sources ?? [:]
+        return Set(CostHistoryStore.Source.allCases.filter { source in
+            sources[source.rawValue]?.values.contains { $0.usd > 0 || $0.tokens > 0 } == true
+        })
     }
 
     private var quotaCount: Int {
@@ -117,7 +130,7 @@ struct AgentsPane: View {
 
                     // Table Header
                     HStack(spacing: 12) {
-                        Text(vi ? "BẬT" : "ENABLE")
+                        Text(vi ? "HIỆN" : "SHOW")
                             .frame(width: 40, alignment: .leading)
                         Text("AGENT")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -152,6 +165,8 @@ struct AgentsPane: View {
                                 isVisible: agentVisibility.isVisible(record.id),
                                 isSelected: selectedAgentID == record.id,
                                 cost90dUSD: real90dCost(for: record.id),
+                                sourceLabel: sourceLabel(for: record),
+                                detailSnapshot: detailSnapshot(for: record),
                                 language: settings.appLanguage,
                                 onSelect: { selectedAgentID = record.id },
                                 onVisibilityChange: { agentVisibility.setVisible($0, for: record.id) }
@@ -205,23 +220,87 @@ struct AgentsPane: View {
     }
 
     private func real90dCost(for id: InstalledAgentID) -> Double? {
+        real90dTotals(for: id)?.usd
+    }
+
+    private func real90dTotals(for id: InstalledAgentID) -> (usd: Double, tokens: Int)? {
         guard let source = id.costHistorySource else { return nil }
         guard let doc = historyDocument, let days = doc.sources?[source.rawValue], !days.isEmpty else {
             return nil
         }
-        let total = days.values.reduce(0.0) { $0 + $1.usd }
-        return total > 0 ? total : nil
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let cutoff = calendar.date(byAdding: .day, value: -89, to: today) ?? today
+        let total = days.reduce(into: (usd: 0.0, tokens: 0)) { partial, entry in
+            guard let date = CostHistoryStore.parseDayKey(entry.key, calendar: calendar),
+                  date >= cutoff,
+                  date <= today
+            else { return }
+            partial.usd += entry.value.usd
+            partial.tokens += entry.value.tokens
+        }
+        return total.usd > 0 || total.tokens > 0 ? total : nil
+    }
+
+    private func detailSnapshot(for record: InstalledAgentRecord) -> AgentDetailSnapshot {
+        let status = quota.displayStatuses.first { status in
+            record.providerIDs.contains(status.id) || status.id == record.id.rawValue
+        }
+        let totals = real90dTotals(for: record.id)
+        let summary = totals.map {
+            AgentDetailSnapshot.CostSummary(
+                todayUSD: 0,
+                todayTokens: 0,
+                periodUSD: $0.usd,
+                periodTokens: $0.tokens,
+                periodDays: 90,
+                topModel: nil,
+                confidence: .init(included: true, live: false, scannedAt: nil))
+        }
+        let label = sourceLabel(for: record)
+        let unset = vi ? "Chưa đặt" : "Unset"
+        return AgentDetailSnapshot(
+            record: record,
+            providerStatus: status,
+            configuredProviders: [],
+            costSummary: summary,
+            sourceName: label == unset ? "" : label,
+            sourceType: status == nil ? "Local evidence" : "Provider status",
+            logPath: record.evidence.first { $0.kind == .applicationState }?.token,
+            configPath: record.evidence.first { $0.kind == .configuration }?.token,
+            subtitle: record.displayName)
     }
 
     private func loadHistory() {
         Task {
-            let doc = await Task.detached(priority: .utility) {
-                CostHistoryStore.read()
+            let loaded = await Task.detached(priority: .utility) {
+                let omp = OMPAgentConfigStore.load().modelRoles.defaultRole
+                let pi = PiAgentConfigStore.load().defaultProvider
+                return (
+                    document: CostHistoryStore.read(),
+                    labels: [
+                        InstalledAgentID.omp: omp,
+                        InstalledAgentID.pi: pi,
+                    ].filter { !$0.value.isEmpty })
             }.value
             await MainActor.run {
-                self.historyDocument = doc
+                self.historyDocument = loaded.document
+                self.localSourceLabels = loaded.labels
             }
         }
+    }
+
+    private func sourceLabel(for record: InstalledAgentRecord) -> String {
+        if let local = localSourceLabels[record.id], !local.isEmpty {
+            return local
+        }
+        if let status = quota.displayStatuses.first(where: { status in
+            record.providerIDs.contains(status.id) || status.id == record.id.rawValue
+        }) {
+            if let label = status.sourceLabel, !label.isEmpty { return label }
+            return status.displayName
+        }
+        return vi ? "Chưa đặt" : "Unset"
     }
 
     private func applyPendingSelection() {

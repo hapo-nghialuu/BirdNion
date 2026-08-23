@@ -317,7 +317,7 @@ enum ClaudeCostScanner {
             // revision unset so the next run can still rescan.
             let replacing = storedPricingRevision < pricingRevision && live != nil
             let liveScanSucceeded = live != nil
-            let window = CostHistoryStore.apply(
+            let receipt = CostHistoryStore.applyWithReceipt(
                 source: .claude,
                 liveDays: liveDays,
                 now: now,
@@ -325,10 +325,11 @@ enum ClaudeCostScanner {
                 replacingSource: replacing,
                 liveScanSucceeded: liveScanSucceeded)
             let confidence = CostHistoryStore.confidence(
-                source: .claude, liveScanSucceeded: liveScanSucceeded)
+                source: .claude,
+                liveScanSucceeded: liveScanSucceeded && receipt.persisted)
             let report = CostHistoryStore.makeClaudeReport(
-                window: window,
-                hourly: live?.hourly ?? [],
+                window: receipt.window,
+                hourly: receipt.persisted ? (live?.hourly ?? []) : [],
                 now: now,
                 confidence: confidence)
             if let projectScan {
@@ -336,13 +337,15 @@ enum ClaudeCostScanner {
                     source: .claude, liveProjects: projectScan.projects,
                     now: now, replacingSource: replacing)
             }
-            if live != nil {
+            if live != nil, receipt.persisted {
                 UserDefaults.standard.set(pricingRevision, forKey: pricingRevisionKey)
             }
             // Nil only when history + live are both empty (first run, no logs).
             return report.isEmpty && live == nil ? nil : report
         }.value
-        if let value { await Cache.shared.storeFull(value, at: now) }
+        if let value, value.scanConfidence.live {
+            await Cache.shared.storeFull(value, at: now)
+        }
         return value
     }
 

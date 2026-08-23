@@ -186,7 +186,7 @@ enum GrokCostScanner {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
             }
-            let window = CostHistoryStore.apply(
+            let receipt = CostHistoryStore.applyWithReceipt(
                 source: .grok,
                 liveDays: liveDays,
                 now: now,
@@ -198,9 +198,13 @@ enum GrokCostScanner {
                 liveProjects: live.projects,
                 now: now,
                 replacingSource: replacing)
-            UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
-            let confidence = CostHistoryStore.confidence(source: .grok, liveScanSucceeded: true)
-            return CostHistoryStore.makeGrokReport(window: window, confidence: confidence)
+            if receipt.persisted {
+                UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
+            }
+            let confidence = CostHistoryStore.confidence(
+                source: .grok,
+                liveScanSucceeded: receipt.persisted)
+            return CostHistoryStore.makeGrokReport(window: receipt.window, confidence: confidence)
         }.value
         await Cache.shared.storeReport(value, at: now)
         return value

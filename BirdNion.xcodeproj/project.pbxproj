@@ -152,6 +152,9 @@
 		AGIR0001000000000000B001 /* agent-inventory-row.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGIR0002000000000000F001 /* agent-inventory-row.swift */; };
 		AGCB0001000000000000B001 /* agent-capability-badges.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCB0002000000000000F001 /* agent-capability-badges.swift */; };
 		AGAC0001000000000000B001 /* agent-activity-content.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGAC0002000000000000F001 /* agent-activity-content.swift */; };
+		ACTP0001000000000000B001 /* activity-panel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACTP0002000000000000F001 /* activity-panel.swift */; };
+		OMPFIX01000000000000B001 /* omp_session_sample.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = OMPFIX02000000000000F001 /* omp_session_sample.jsonl */; };
+		PIFIX001000000000000B001 /* pi_session_sample.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = PIFIX002000000000000F001 /* pi_session_sample.jsonl */; };
 
 		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
 		SET0005000000000000B003 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0006000000000000F003 /* SettingsTab.swift */; };
@@ -362,6 +365,9 @@
 		AGIR0002000000000000F001 /* agent-inventory-row.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-inventory-row.swift; sourceTree = "<group>"; };
 		AGCB0002000000000000F001 /* agent-capability-badges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-capability-badges.swift; sourceTree = "<group>"; };
 		AGAC0002000000000000F001 /* agent-activity-content.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-activity-content.swift; sourceTree = "<group>"; };
+		ACTP0002000000000000F001 /* activity-panel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/activity-panel.swift; sourceTree = "<group>"; };
+		OMPFIX02000000000000F001 /* omp_session_sample.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = BirdNionTests/Fixtures/CodingAgents/OMP/omp_session_sample.jsonl; sourceTree = "<group>"; };
+		PIFIX002000000000000F001 /* pi_session_sample.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = BirdNionTests/Fixtures/CodingAgents/Pi/pi_session_sample.jsonl; sourceTree = "<group>"; };
 
 		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
 		SET0006000000000000F003 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsTab.swift; sourceTree = "<group>"; };
@@ -467,6 +473,15 @@
 
 
 /* Begin PBXResourcesBuildPhase section */
+		TRES0001000000000000BR01 /* Test Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				OMPFIX01000000000000B001 /* omp_session_sample.jsonl in Resources */,
+				PIFIX001000000000000B001 /* pi_session_sample.jsonl in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		EEEE0005000000000000BR01 /* Resources */ = {
 		isa = PBXResourcesBuildPhase;
 		buildActionMask = 2147483647;
@@ -621,6 +636,7 @@
 			buildConfigurationList = CCCC0018000000000000CL003 /* Build configuration list for PBXNativeTarget "BirdNionTests" */;
 			buildPhases = (
 				CCCC0012000000000000BF01 /* Frameworks */,
+				TRES0001000000000000BR01 /* Test Resources */,
 				CCCC0014000000000000BS01 /* Sources */,
 			);
 			buildRules = (
@@ -853,6 +869,7 @@
 				AGIR0001000000000000B001 /* agent-inventory-row.swift in Sources */,
 				AGCB0001000000000000B001 /* agent-capability-badges.swift in Sources */,
 				AGAC0001000000000000B001 /* agent-activity-content.swift in Sources */,
+				ACTP0001000000000000B001 /* activity-panel.swift in Sources */,
 
 				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,
 				SET0005000000000000B003 /* SettingsTab.swift in Sources */,

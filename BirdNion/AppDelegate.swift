@@ -83,7 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var frameIndex: Int = 0
     private var rotationTimer: Timer?
 
+    private var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !isRunningUnitTests else { return }
         services.start()
         // Restore the user's appearance choice before any window shows.
         services.settings.applyAppearance()
@@ -222,13 +228,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] note in
                 guard let self,
                       let snapshot = note.userInfo?["snapshot"] as? AgentDetailSnapshot,
-                      let parent = self.panel else { return }
-                self.agentDetailCoordinator.show(snapshot: snapshot, beside: parent)
+                      let parent = self.panel,
+                      parent.isVisible else { return }
+                self.agentDetailCoordinator.show(
+                    snapshot: snapshot,
+                    settings: self.services.settings,
+                    beside: parent)
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .birdnionUpdateAgentDetail)
+            .sink { [weak self] note in
+                guard let snapshot = note.userInfo?["snapshot"] as? AgentDetailSnapshot else { return }
+                self?.agentDetailCoordinator.update(snapshot: snapshot)
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .birdnionOpenAgentActivity)
+            .sink { [weak self] note in
+                guard let self,
+                      let snapshot = note.userInfo?["snapshot"] as? AgentActivitySnapshot,
+                      let parent = self.panel,
+                      parent.isVisible else { return }
+                self.agentDetailCoordinator.showActivity(
+                    snapshot: snapshot,
+                    settings: self.services.settings,
+                    beside: parent)
             }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: .birdnionCloseAgentDetail)
             .sink { [weak self] _ in
+                NotificationCenter.default.post(
+                    name: .birdnionInvalidateAgentPanelRequests,
+                    object: nil)
                 self?.agentDetailCoordinator.close()
             }
             .store(in: &cancellables)
@@ -337,6 +370,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         pendingPanelResizeTask?.cancel()
         pendingPanelResizeTask = nil
+        NotificationCenter.default.post(
+            name: .birdnionInvalidateAgentPanelRequests,
+            object: nil)
         panel.orderOut(nil)
         panelTopY = nil
         agentDetailCoordinator.close()

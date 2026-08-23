@@ -12,7 +12,7 @@ import SQLite3
 ///   - `~/.kiro_sessions/*.json` archives (optional).
 /// USD is real (credits × Kiro's $0.04 add-on price) for the sessions
 /// source; SQLite-era numbers stay estimates (chars÷4 + price table).
-struct KiroCostSummary: Equatable {
+struct KiroCostSummary: Equatable, Sendable {
     let todayUSD: Double
     let todayTokens: Int
     let last30USD: Double
@@ -21,14 +21,14 @@ struct KiroCostSummary: Equatable {
     var isEmpty: Bool { todayTokens == 0 && last30Tokens == 0 }
 }
 
-struct KiroDailyModel: Equatable, Identifiable {
+struct KiroDailyModel: Equatable, Identifiable, Sendable {
     let name: String
     let usd: Double
     let tokens: Int
     var id: String { name }
 }
 
-struct KiroDailyUsage: Equatable, Identifiable {
+struct KiroDailyUsage: Equatable, Identifiable, Sendable {
     let date: Date
     let usd: Double
     let tokens: Int
@@ -37,7 +37,7 @@ struct KiroDailyUsage: Equatable, Identifiable {
 }
 
 /// Full report for the Kiro tab chart. Shape mirrors `GrokUsageReport`.
-struct KiroUsageReport: Equatable {
+struct KiroUsageReport: Equatable, Sendable {
     let todayUSD: Double
     let todayTokens: Int
     let last30USD: Double
@@ -45,9 +45,7 @@ struct KiroUsageReport: Equatable {
     /// Contiguous `chartWindowDays` daily buckets, oldest → newest.
     let daily: [KiroDailyUsage]
     let topModel: String?
-    var scanConfidence: CostHistoryStore.UsageScanConfidence? {
-        CostHistoryStore.confidence(source: .kiro, liveScanSucceeded: !isEmpty)
-    }
+    var scanConfidence: CostHistoryStore.UsageScanConfidence = .unavailable
 
     var isEmpty: Bool {
         last30Tokens == 0 && last30USD <= 0 && todayTokens == 0 && todayUSD <= 0
@@ -62,7 +60,7 @@ struct KiroUsageReport: Equatable {
 
 /// Cache-aware Anthropic-style rates ($/MTok) for models Kiro commonly hosts.
 /// Write / read / output — 5-minute cache write pricing.
-struct KiroModelPrice {
+struct KiroModelPrice: Sendable {
     let writePerM: Double
     let readPerM: Double
     let outputPerM: Double
@@ -118,26 +116,72 @@ enum KiroCostScanner {
         func storeReport(_ value: KiroUsageReport, at: Date) { reportEntry = (at, value) }
     }
 
+    struct ScanResult: Sendable {
+        let report: KiroUsageReport
+        let completed: Bool
+        let availableSources: [String]
+        let failures: [String]
+    }
+
+    private struct SourceLoad<Value> {
+        let values: [Value]
+        let available: Bool
+        let completed: Bool
+    }
+
     /// Cached full report. Merges with `CostHistoryStore` so cleared sessions
     /// do not wipe past bars.
     static func usageReport(now: Date = Date()) async -> KiroUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
-        let value = await Task.detached(priority: .utility) {
+        let scan = await Task.detached(priority: .utility) {
             let scanDays = CostHistoryStore.scanBackDays(source: .kiro, now: now)
-            let live = scanFull(now: now, windowDays: scanDays)
+            return scanFullResult(now: now, windowDays: scanDays)
+        }.value
+        let value = mergeLiveReport(
+            scan.report,
+            now: now,
+            liveScanSucceeded: scan.completed)
+        if value.scanConfidence.live {
+            await Cache.shared.storeReport(value, at: now)
+        }
+        return value
+    }
+
+    static func mergeLiveReport(
+        _ live: KiroUsageReport,
+        now: Date,
+        historyURL: URL = CostHistoryStore.historyURL(),
+        liveScanSucceeded: Bool = true
+    ) -> KiroUsageReport {
+        let receipt: CostHistoryStore.ApplyReceipt?
+        let window: [CostHistoryStore.DayBucket]
+        if liveScanSucceeded {
             let liveDays = live.daily.map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
             }
-            let window = CostHistoryStore.apply(
+            let applied = CostHistoryStore.applyWithReceipt(
                 source: .kiro,
                 liveDays: liveDays,
                 now: now,
-                windowDays: chartWindowDays)
-            return CostHistoryStore.makeKiroReport(window: window)
-        }.value
-        await Cache.shared.storeReport(value, at: now)
-        return value
+                windowDays: chartWindowDays,
+                url: historyURL,
+                liveScanSucceeded: true)
+            receipt = applied
+            window = applied.window
+        } else {
+            receipt = nil
+            window = CostHistoryStore.window(
+                source: .kiro,
+                now: now,
+                windowDays: chartWindowDays,
+                url: historyURL)
+        }
+        let confidence = CostHistoryStore.confidence(
+            source: .kiro,
+            liveScanSucceeded: receipt?.persisted == true,
+            url: historyURL)
+        return CostHistoryStore.makeKiroReport(window: window, confidence: confidence)
     }
 
     /// Instant seed from persisted history — no SQLite scan.
@@ -147,7 +191,11 @@ enum KiroCostScanner {
             let window = CostHistoryStore.window(
                 source: .kiro, now: now, windowDays: chartWindowDays, url: url)
             guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
-            return CostHistoryStore.makeKiroReport(window: window)
+            let confidence = CostHistoryStore.confidence(
+                source: .kiro,
+                liveScanSucceeded: false,
+                url: url)
+            return CostHistoryStore.makeKiroReport(window: window, confidence: confidence)
         }.value
     }
 
@@ -174,7 +222,7 @@ enum KiroCostScanner {
 
     // MARK: - Session points
 
-    struct SessionPoint: Equatable {
+    struct SessionPoint: Equatable, Sendable {
         let day: Date
         let tokens: Int
         let usd: Double
@@ -191,11 +239,30 @@ enum KiroCostScanner {
         windowDays: Int = chartWindowDays,
         calendar: Calendar = .current) -> KiroUsageReport
     {
+        scanFullResult(
+            cliDBURL: cliDBURL,
+            archiveURL: archiveURL,
+            sessionsURL: sessionsURL,
+            fileManager: fileManager,
+            now: now,
+            windowDays: windowDays,
+            calendar: calendar).report
+    }
+
+    static func scanFullResult(
+        cliDBURL: URL? = nil,
+        archiveURL: URL? = nil,
+        sessionsURL: URL? = nil,
+        fileManager: FileManager = .default,
+        now: Date = Date(),
+        windowDays: Int = chartWindowDays,
+        calendar: Calendar = .current) -> ScanResult
+    {
         let home = fileManager.homeDirectoryForCurrentUser
         let db = cliDBURL ?? defaultCLIDatabaseURL(home: home)
         let archive = archiveURL ?? defaultArchiveURL(home: home)
         let sessions = sessionsURL ?? defaultSessionsURL(home: home)
-        let points = loadPoints(
+        let loaded = loadPointsResult(
             cliDBURL: db,
             archiveURL: archive,
             sessionsURL: sessions,
@@ -203,7 +270,15 @@ enum KiroCostScanner {
             now: now,
             windowDays: windowDays,
             calendar: calendar)
-        return buildReport(sessions: points, now: now, windowDays: windowDays, calendar: calendar)
+        return ScanResult(
+            report: buildReport(
+                sessions: loaded.points,
+                now: now,
+                windowDays: windowDays,
+                calendar: calendar),
+            completed: !loaded.availableSources.isEmpty && loaded.failures.isEmpty,
+            availableSources: loaded.availableSources,
+            failures: loaded.failures)
     }
 
     static func loadPoints(
@@ -215,6 +290,25 @@ enum KiroCostScanner {
         windowDays: Int = chartWindowDays,
         calendar: Calendar = .current) -> [SessionPoint]
     {
+        loadPointsResult(
+            cliDBURL: cliDBURL,
+            archiveURL: archiveURL,
+            sessionsURL: sessionsURL,
+            fileManager: fileManager,
+            now: now,
+            windowDays: windowDays,
+            calendar: calendar).points
+    }
+
+    private static func loadPointsResult(
+        cliDBURL: URL,
+        archiveURL: URL,
+        sessionsURL: URL,
+        fileManager: FileManager,
+        now: Date,
+        windowDays: Int,
+        calendar: Calendar
+    ) -> (points: [SessionPoint], availableSources: [String], failures: [String]) {
         let startOfToday = calendar.startOfDay(for: now)
         let cutoff = calendar.date(byAdding: .day, value: -(windowDays - 1), to: startOfToday)
             ?? startOfToday.addingTimeInterval(-Double(windowDays) * 86_400)
@@ -222,8 +316,13 @@ enum KiroCostScanner {
 
         // Deduplicate by conversation/session id (prefer newer updated_at).
         var byID: [String: (updated: Int64, points: [SessionPoint])] = [:]
+        var availableSources: [String] = []
+        var failures: [String] = []
 
-        for snap in loadArchived(archiveURL: archiveURL, fileManager: fileManager) {
+        let archived = loadArchived(archiveURL: archiveURL, fileManager: fileManager)
+        if archived.available { availableSources.append("archive") }
+        if archived.available, !archived.completed { failures.append("archive") }
+        for snap in archived.values {
             guard let cid = snap.conversationID, !cid.isEmpty else { continue }
             guard snap.updatedAtMs >= cutoffMs else { continue }
             let points = parseConversation(
@@ -236,7 +335,10 @@ enum KiroCostScanner {
             byID[cid] = (snap.updatedAtMs, points)
         }
 
-        for snap in loadFromSQLite(dbURL: cliDBURL, cutoffMs: cutoffMs) {
+        let sqlite = loadFromSQLite(dbURL: cliDBURL, cutoffMs: cutoffMs)
+        if sqlite.available { availableSources.append("sqlite") }
+        if sqlite.available, !sqlite.completed { failures.append("sqlite") }
+        for snap in sqlite.values {
             guard let cid = snap.conversationID, !cid.isEmpty else { continue }
             let points = parseConversation(
                 data: snap.value,
@@ -249,15 +351,17 @@ enum KiroCostScanner {
         }
 
         // Current TUI kiro-cli: ~/.kiro/sessions/cli/<id>.json sidecars.
-        for snap in loadCLISessions(
+        let cli = loadCLISessions(
             sessionsURL: sessionsURL, fileManager: fileManager,
             cutoff: cutoff, cutoffMs: cutoffMs, calendar: calendar)
-        {
+        if cli.available { availableSources.append("cli") }
+        if cli.available, !cli.completed { failures.append("cli") }
+        for snap in cli.values {
             if let existing = byID[snap.id], existing.updated >= snap.updatedMs { continue }
             byID[snap.id] = (snap.updatedMs, snap.points)
         }
 
-        return byID.values.flatMap(\.points)
+        return (byID.values.flatMap(\.points), availableSources, failures)
     }
 
     // MARK: - Sources
@@ -269,19 +373,38 @@ enum KiroCostScanner {
         let value: [String: Any]
     }
 
-    private static func loadArchived(archiveURL: URL,
-                                     fileManager: FileManager) -> [ConversationSnapshot] {
-        guard fileManager.fileExists(atPath: archiveURL.path),
-              let files = try? fileManager.contentsOfDirectory(
+    private static func loadArchived(
+        archiveURL: URL,
+        fileManager: FileManager
+    ) -> SourceLoad<ConversationSnapshot> {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: archiveURL.path, isDirectory: &isDirectory)
+        else { return SourceLoad(values: [], available: false, completed: true) }
+        guard isDirectory.boolValue else {
+            return SourceLoad(values: [], available: true, completed: false)
+        }
+        let files: [URL]
+        do {
+            files = try fileManager.contentsOfDirectory(
                 at: archiveURL,
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles])
-        else { return [] }
+        } catch {
+            return SourceLoad(values: [], available: true, completed: false)
+        }
         var out: [ConversationSnapshot] = []
+        var completed = true
         for url in files where url.pathExtension == "json" {
+            guard !Task.isCancelled else {
+                completed = false
+                break
+            }
             guard let data = try? Data(contentsOf: url),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
+            else {
+                completed = false
+                continue
+            }
             let cid = json["conversation_id"] as? String
             let created = int64Value(json["created_at"])
             let updated = int64Value(json["updated_at"])
@@ -291,17 +414,29 @@ enum KiroCostScanner {
             } else {
                 value = json
             }
+            let resolvedID = cid ?? (value["conversation_id"] as? String)
+            guard let resolvedID,
+                  !resolvedID.isEmpty,
+                  hasConversationSchema(value)
+            else {
+                completed = false
+                continue
+            }
             out.append(ConversationSnapshot(
-                conversationID: cid ?? (value["conversation_id"] as? String),
+                conversationID: resolvedID,
                 createdAtMs: created,
                 updatedAtMs: updated,
                 value: value))
         }
-        return out
+        return SourceLoad(values: out, available: true, completed: completed)
     }
 
-    private static func loadFromSQLite(dbURL: URL, cutoffMs: Int64) -> [ConversationSnapshot] {
-        guard FileManager.default.fileExists(atPath: dbURL.path) else { return [] }
+    private static func loadFromSQLite(
+        dbURL: URL,
+        cutoffMs: Int64
+    ) -> SourceLoad<ConversationSnapshot> {
+        guard FileManager.default.fileExists(atPath: dbURL.path)
+        else { return SourceLoad(values: [], available: false, completed: true) }
         var db: OpaquePointer?
         // immutable=1 so a live kiro-cli write doesn't block us.
         let uri = "file:\(dbURL.path)?mode=ro&immutable=1"
@@ -309,63 +444,93 @@ enum KiroCostScanner {
               let db
         else {
             if db != nil { sqlite3_close(db) }
-            return []
+            return SourceLoad(values: [], available: true, completed: false)
         }
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 200)
 
-        var snaps: [ConversationSnapshot] = []
-
         // conversations_v2 (older kiro-cli)
-        snaps += queryConversationsV2(db: db, cutoffMs: cutoffMs)
+        let v2 = queryConversationsV2(db: db, cutoffMs: cutoffMs)
         // conversations (kiro-cli 2.0.1+)
-        snaps += queryConversationsV1(db: db, cutoffMs: cutoffMs)
-        return snaps
+        let v1 = queryConversationsV1(db: db, cutoffMs: cutoffMs)
+        let recognizedSchema = v2.available || v1.available
+        return SourceLoad(
+            values: v2.values + v1.values,
+            available: true,
+            completed: recognizedSchema && v2.completed && v1.completed)
     }
 
     private static func queryConversationsV2(db: OpaquePointer,
-                                             cutoffMs: Int64) -> [ConversationSnapshot] {
+                                             cutoffMs: Int64) -> SourceLoad<ConversationSnapshot> {
         let sql = """
         SELECT conversation_id, created_at, updated_at, value
         FROM conversations_v2
         WHERE updated_at >= ?
         """
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return [] }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt
+        else { return SourceLoad(values: [], available: false, completed: true) }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, cutoffMs)
         var out: [ConversationSnapshot] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var completed = true
+        var step = sqlite3_step(stmt)
+        while step == SQLITE_ROW {
             let cid = stringColumn(stmt, 0)
             let created = sqlite3_column_int64(stmt, 1)
             let updated = sqlite3_column_int64(stmt, 2)
             guard let raw = stringColumn(stmt, 3),
                   let data = raw.data(using: .utf8),
-                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let cid,
+                  !cid.isEmpty,
+                  hasConversationSchema(value)
+            else {
+                completed = false
+                step = sqlite3_step(stmt)
+                continue
+            }
             out.append(ConversationSnapshot(
                 conversationID: cid,
                 createdAtMs: created,
                 updatedAtMs: updated,
                 value: value))
+            step = sqlite3_step(stmt)
         }
-        return out
+        completed = completed && step == SQLITE_DONE
+        return SourceLoad(values: out, available: true, completed: completed)
     }
 
     private static func queryConversationsV1(db: OpaquePointer,
-                                             cutoffMs: Int64) -> [ConversationSnapshot] {
+                                             cutoffMs: Int64) -> SourceLoad<ConversationSnapshot> {
         let sql = "SELECT value FROM conversations"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else { return [] }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt
+        else { return SourceLoad(values: [], available: false, completed: true) }
         defer { sqlite3_finalize(stmt) }
         var out: [ConversationSnapshot] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        var completed = true
+        while true {
+            let step = sqlite3_step(stmt)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW else {
+                completed = false
+                break
+            }
             guard let raw = stringColumn(stmt, 0),
                   let data = raw.data(using: .utf8),
                   let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
+            else {
+                completed = false
+                continue
+            }
             let cid = value["conversation_id"] as? String
-            let history = value["history"] as? [[String: Any]] ?? []
+            guard let cid, !cid.isEmpty, hasConversationSchema(value),
+                  let history = value["history"] as? [[String: Any]]
+            else {
+                completed = false
+                continue
+            }
             guard !history.isEmpty else { continue }
             let first = (history.first?["request_metadata"] as? [String: Any])
                 .flatMap { int64Value($0["request_start_timestamp_ms"]) } ?? 0
@@ -378,7 +543,7 @@ enum KiroCostScanner {
                 updatedAtMs: last,
                 value: value))
         }
-        return out
+        return SourceLoad(values: out, available: true, completed: completed)
     }
 
     // MARK: - TUI kiro-cli sessions (~/.kiro/sessions/cli)
@@ -391,19 +556,42 @@ enum KiroCostScanner {
         fileManager: FileManager,
         cutoff: Date,
         cutoffMs: Int64,
-        calendar: Calendar) -> [(id: String, updatedMs: Int64, points: [SessionPoint])]
+        calendar: Calendar
+    ) -> SourceLoad<(id: String, updatedMs: Int64, points: [SessionPoint])>
     {
         let cliDir = sessionsURL.appendingPathComponent("cli", isDirectory: true)
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: cliDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        else { return [] }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: cliDir.path, isDirectory: &isDirectory)
+        else { return SourceLoad(values: [], available: false, completed: true) }
+        guard isDirectory.boolValue else {
+            return SourceLoad(values: [], available: true, completed: false)
+        }
+        let files: [URL]
+        do {
+            files = try fileManager.contentsOfDirectory(
+                at: cliDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        } catch {
+            return SourceLoad(values: [], available: true, completed: false)
+        }
         var out: [(id: String, updatedMs: Int64, points: [SessionPoint])] = []
+        var completed = true
         for url in files where url.pathExtension == "json" {
+            guard !Task.isCancelled else {
+                completed = false
+                break
+            }
             guard let data = try? Data(contentsOf: url),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { continue }
+            else {
+                completed = false
+                continue
+            }
             let sid = (json["session_id"] as? String)
                 ?? url.deletingPathExtension().lastPathComponent
+            guard !sid.isEmpty, json["session_state"] is [String: Any] else {
+                completed = false
+                continue
+            }
             let updatedMs = parseISODate(json["updated_at"] as? String)
                 .map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
             if updatedMs > 0, updatedMs < cutoffMs { continue }
@@ -411,7 +599,12 @@ enum KiroCostScanner {
             guard !points.isEmpty else { continue }
             out.append((sid, updatedMs, points))
         }
-        return out
+        return SourceLoad(values: out, available: true, completed: completed)
+    }
+
+    private static func hasConversationSchema(_ value: [String: Any]) -> Bool {
+        guard let history = value["history"] as? [Any] else { return false }
+        return history.allSatisfy { $0 is [String: Any] }
     }
 
     /// One sidecar → per-day SessionPoints. USD is REAL (per-turn

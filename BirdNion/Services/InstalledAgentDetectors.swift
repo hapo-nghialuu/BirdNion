@@ -17,7 +17,6 @@ enum InstalledAgentDetectors {
         let id: InstalledAgentID
         let binaries: [String]
         let markers: [(relativePath: String, kind: InstalledAgentEvidenceKind)]
-        let capabilities: Set<InstalledAgentCapability>
         let providerIDs: [String]
     }
 
@@ -44,7 +43,9 @@ enum InstalledAgentDetectors {
             return InstalledAgentRecord(
                 id: descriptor.id,
                 evidence: evidence,
-                capabilities: descriptor.capabilities,
+                capabilities: InstalledAgentRecord.detectedCapabilities(
+                    id: descriptor.id,
+                    evidence: evidence),
                 providerIDs: descriptor.providerIDs
             )
         }
@@ -86,7 +87,6 @@ enum InstalledAgentDetectors {
                 (".claude.json", .configuration),
                 (".claude/projects", .applicationState)
             ],
-            capabilities: [.quota, .localCost, .nativeConfig, .sessionInventory, .activityDetail],
             providerIDs: ["claude"]
         ),
         .init(
@@ -96,7 +96,6 @@ enum InstalledAgentDetectors {
                 (".codex", .configuration),
                 (".codex/sessions", .applicationState)
             ],
-            capabilities: [.quota, .localCost, .nativeConfig, .sessionInventory, .activityDetail],
             providerIDs: ["codex"]
         ),
         .init(
@@ -106,7 +105,6 @@ enum InstalledAgentDetectors {
                 (".gemini/settings.json", .configuration),
                 (".gemini/oauth_creds.json", .configuration)
             ],
-            capabilities: [.quota, .nativeConfig, .sessionInventory],
             providerIDs: ["gemini"]
         ),
         .init(
@@ -116,7 +114,6 @@ enum InstalledAgentDetectors {
                 (".grok/auth.json", .configuration),
                 (".grok/sessions", .applicationState)
             ],
-            capabilities: [.quota, .localCost, .nativeConfig, .sessionInventory, .activityDetail],
             providerIDs: ["grok"]
         ),
         .init(
@@ -126,7 +123,6 @@ enum InstalledAgentDetectors {
                 (".config/opencode", .configuration),
                 (".local/share/opencode", .applicationState)
             ],
-            capabilities: [.quota, .nativeConfig, .sessionInventory],
             providerIDs: ["opencode", "opencodego"]
         ),
         .init(
@@ -137,7 +133,6 @@ enum InstalledAgentDetectors {
                 (".omp/agent/sessions", .applicationState),
                 (".omp/agent", .configuration)
             ],
-            capabilities: [.localCost, .nativeConfig, .sessionInventory, .activityDetail],
             providerIDs: []
         ),
         .init(
@@ -148,7 +143,6 @@ enum InstalledAgentDetectors {
                 (".pi/agent/sessions", .applicationState),
                 (".pi/agent", .configuration)
             ],
-            capabilities: [.localCost, .nativeConfig, .sessionInventory, .activityDetail],
             providerIDs: []
         ),
         .init(
@@ -158,7 +152,6 @@ enum InstalledAgentDetectors {
                 (".kiro", .configuration),
                 ("Library/Application Support/Kiro", .applicationState)
             ],
-            capabilities: [.quota, .localCost, .sessionInventory, .activityDetail],
             providerIDs: ["kiro"]
         ),
         .init(
@@ -168,7 +161,6 @@ enum InstalledAgentDetectors {
                 ("Library/Application Support/Antigravity", .applicationState),
                 (".gemini/antigravity", .configuration)
             ],
-            capabilities: [.quota, .nativeConfig, .sessionInventory],
             providerIDs: ["antigravity"]
         ),
         .init(
@@ -177,7 +169,6 @@ enum InstalledAgentDetectors {
             markers: [
                 (".copilot/config.json", .configuration)
             ],
-            capabilities: [.quota, .nativeConfig],
             providerIDs: ["copilot"]
         ),
         .init(
@@ -186,7 +177,6 @@ enum InstalledAgentDetectors {
             markers: [
                 (".augment", .configuration)
             ],
-            capabilities: [.nativeConfig],
             providerIDs: []
         ),
         .init(
@@ -195,7 +185,6 @@ enum InstalledAgentDetectors {
             markers: [
                 (".config/amp/settings.json", .configuration)
             ],
-            capabilities: [.nativeConfig],
             providerIDs: []
         ),
         .init(
@@ -205,7 +194,6 @@ enum InstalledAgentDetectors {
                 (".cursor", .configuration),
                 ("Library/Application Support/Cursor", .applicationState)
             ],
-            capabilities: [.quota, .nativeConfig, .sessionInventory],
             providerIDs: ["cursor"]
         ),
         .init(
@@ -215,7 +203,6 @@ enum InstalledAgentDetectors {
                 (".aider", .configuration),
                 (".aider/analytics.jsonl", .applicationState)
             ],
-            capabilities: [.nativeConfig],
             providerIDs: []
         ),
         .init(
@@ -224,7 +211,6 @@ enum InstalledAgentDetectors {
             markers: [
                 (".qwen", .configuration)
             ],
-            capabilities: [.nativeConfig],
             providerIDs: []
         ),
         .init(
@@ -233,7 +219,6 @@ enum InstalledAgentDetectors {
             markers: [
                 (".config/goose", .configuration)
             ],
-            capabilities: [.nativeConfig],
             providerIDs: []
         )
     ]

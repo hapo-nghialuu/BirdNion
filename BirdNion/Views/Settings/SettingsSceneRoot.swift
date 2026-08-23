@@ -97,6 +97,9 @@ struct SettingsSceneRoot: View {
         .onReceive(NotificationCenter.default.publisher(for: .openActionCenterTab)) { _ in
             selected = .actionCenter
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openGeneralTab)) { _ in
+            selected = .general
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openProviderSetup)) { _ in
             UserDefaults.standard.set("providers", forKey: "birdnion.settingsSection")
             selected = .providers
@@ -123,6 +126,7 @@ extension Notification.Name {
     static let openProviderSetup = Notification.Name("birdnion.openProviderSetup")
     static let openInsightsTab = Notification.Name("birdnion.openInsightsTab")
     static let openActionCenterTab = Notification.Name("birdnion.openActionCenterTab")
+    static let openGeneralTab = Notification.Name("birdnion.openGeneralTab")
 }
 
 struct ProviderSettingsRoute: Equatable, Sendable {
@@ -135,6 +139,14 @@ func openInsightsSettings(segment: InsightsSegment = .overview) {
     UserDefaults.standard.set(SettingsTab.insights.rawValue, forKey: "birdnion.settingsSection")
     UserDefaults.standard.set(segment.rawValue, forKey: InsightsSegment.defaultsKey)
     NotificationCenter.default.post(name: .openInsightsTab, object: nil)
+    NotificationCenter.default.post(name: .openSettings, object: nil)
+}
+
+@MainActor
+func openAgentSettings(id: InstalledAgentID) {
+    UserDefaults.standard.set(SettingsTab.agents.rawValue, forKey: "birdnion.settingsSection")
+    UserDefaults.standard.set(id.rawValue, forKey: "settings.selectedAgentID")
+    NotificationCenter.default.post(name: .openAgentsTab, object: nil)
     NotificationCenter.default.post(name: .openSettings, object: nil)
 }
 

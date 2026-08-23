@@ -7,12 +7,32 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     private let defaultHeight: CGFloat = 480
     private var panel: NSPanel?
     private weak var parentWindow: NSWindow?
+    private var settings: SettingsStore?
 
-    func show(snapshot: AgentDetailSnapshot, beside parent: NSWindow) {
+    func show(snapshot: AgentDetailSnapshot, settings: SettingsStore, beside parent: NSWindow) {
         let detailPanel = panel ?? makePanel()
         parentWindow = parent
+        self.settings = settings
         detailPanel.contentViewController = NSHostingController(
             rootView: AgentDetailPanelRoot(snapshot: snapshot)
+                .environmentObject(settings)
+        )
+        position(detailPanel, beside: parent)
+        detailPanel.makeKeyAndOrderFront(nil)
+        panel = detailPanel
+    }
+
+    func showActivity(
+        snapshot: AgentActivitySnapshot,
+        settings: SettingsStore,
+        beside parent: NSWindow
+    ) {
+        let detailPanel = panel ?? makePanel()
+        parentWindow = parent
+        self.settings = settings
+        detailPanel.contentViewController = NSHostingController(
+            rootView: ActivityPanelRoot(window: snapshot.overall)
+                .environmentObject(settings)
         )
         position(detailPanel, beside: parent)
         detailPanel.makeKeyAndOrderFront(nil)
@@ -24,9 +44,10 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     }
 
     func update(snapshot: AgentDetailSnapshot) {
-        guard let panel else { return }
+        guard let panel, let settings else { return }
         panel.contentViewController = NSHostingController(
             rootView: AgentDetailPanelRoot(snapshot: snapshot)
+                .environmentObject(settings)
         )
     }
 
@@ -42,6 +63,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         if let current = notification.object as? NSWindow, current === panel {
+            NotificationCenter.default.post(name: .birdnionInvalidateAgentPanelRequests, object: nil)
             panel = nil
         }
     }
@@ -89,4 +111,7 @@ extension Notification.Name {
     static let birdnionOpenAgentDetail = Notification.Name("com.local.birdnion.openAgentDetail")
     static let birdnionUpdateAgentDetail = Notification.Name("com.local.birdnion.updateAgentDetail")
     static let birdnionCloseAgentDetail = Notification.Name("com.local.birdnion.closeAgentDetail")
+    static let birdnionOpenAgentActivity = Notification.Name("com.local.birdnion.openAgentActivity")
+    static let birdnionInvalidateAgentPanelRequests = Notification.Name(
+        "com.local.birdnion.invalidateAgentPanelRequests")
 }

@@ -103,4 +103,45 @@ struct InstalledAgentRecord: Identifiable, Equatable, Codable, Sendable {
     var displayName: String { id.displayName }
     var iconName: String { id.iconName }
     var costHistorySource: CostHistoryStore.Source? { id.costHistorySource }
+
+    static func detectedCapabilities(
+        id: InstalledAgentID,
+        evidence: [InstalledAgentEvidence]
+    ) -> Set<InstalledAgentCapability> {
+        var capabilities: Set<InstalledAgentCapability> = []
+        if evidence.contains(where: { $0.kind == .configuration }) {
+            capabilities.insert(.nativeConfig)
+        }
+        let hasApplicationState = evidence.contains { $0.kind == .applicationState }
+        if hasApplicationState {
+            capabilities.insert(.sessionInventory)
+        }
+        if hasApplicationState, id.costHistorySource != nil {
+            capabilities.formUnion([.localCost, .activityDetail])
+        }
+        return capabilities
+    }
+
+    func projected(
+        providerStatuses: [ProviderStatus],
+        availableCostSources: Set<CostHistoryStore.Source> = []
+    ) -> InstalledAgentRecord {
+        var projected = Self.detectedCapabilities(id: id, evidence: evidence)
+        if let source = costHistorySource, availableCostSources.contains(source) {
+            projected.formUnion([.localCost, .activityDetail])
+        }
+        let hasRealQuotaWindow = providerStatuses.contains { status in
+            (providerIDs.contains(status.id) || status.id == id.rawValue)
+                && status.error == nil
+                && status.windows.contains { !$0.isInactive && !$0.isSupplementary }
+        }
+        if hasRealQuotaWindow {
+            projected.insert(.quota)
+        }
+        return InstalledAgentRecord(
+            id: id,
+            evidence: evidence,
+            capabilities: projected,
+            providerIDs: providerIDs)
+    }
 }

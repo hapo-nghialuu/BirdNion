@@ -5,6 +5,8 @@ struct AgentInventoryRow: View {
     let isVisible: Bool
     let isSelected: Bool
     let cost90dUSD: Double?
+    let sourceLabel: String
+    let detailSnapshot: AgentDetailSnapshot?
     let language: String
     let onSelect: () -> Void
     let onVisibilityChange: (Bool) -> Void
@@ -13,7 +15,8 @@ struct AgentInventoryRow: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
                 // Toggle (40px)
                 Toggle("", isOn: Binding(
                     get: { isVisible },
@@ -22,6 +25,9 @@ struct AgentInventoryRow: View {
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .frame(width: 40, alignment: .leading)
+                .help(vi
+                      ? "Chỉ ẩn hoặc hiện agent trong popover; không tắt provider hay scanner."
+                      : "Only hides or shows this agent in the popover; providers and scanners keep running.")
 
                 // Agent Icon + Name + Subtitle (flex: 1)
                 HStack(spacing: 9) {
@@ -43,22 +49,22 @@ struct AgentInventoryRow: View {
                 // Source (110px)
                 Text(sourceLabel)
                     .font(.plexMono(11))
-                    .foregroundStyle(isVisible ? SettingsTheme.primary : SettingsTheme.tertiary)
+                    .foregroundStyle(SettingsTheme.primary)
                     .frame(width: 110, alignment: .leading)
                     .lineLimit(1)
 
                 // Data Capability Badges (148px)
                 HStack(spacing: 4) {
-                    badge(title: "Quota", active: record.capabilities.contains(.quota) && isVisible)
-                    badge(title: vi ? "Chi phí" : "Cost", active: record.capabilities.contains(.localCost) && isVisible)
-                    badge(title: "Config", active: (record.capabilities.contains(.nativeConfig) || isConfigAgent) && isVisible)
+                    badge(title: "Quota", active: record.capabilities.contains(.quota))
+                    badge(title: vi ? "Chi phí" : "Cost", active: record.capabilities.contains(.localCost))
+                    badge(title: "Config", active: record.capabilities.contains(.nativeConfig) || isConfigAgent)
                 }
                 .frame(width: 148, alignment: .leading)
 
                 // 90 days cost (92px)
                 Text(cost90dUSD.map { AllUsageFormat.usd($0) } ?? "—")
                     .font(.plexMono(12, weight: .semibold))
-                    .foregroundStyle(cost90dUSD != nil && isVisible ? SettingsTheme.primary : SettingsTheme.tertiary)
+                    .foregroundStyle(cost90dUSD != nil ? SettingsTheme.primary : SettingsTheme.tertiary)
                     .frame(width: 92, alignment: .trailing)
 
                 // Chevron (14px)
@@ -66,6 +72,10 @@ struct AgentInventoryRow: View {
                     .font(.plexSans(12))
                     .foregroundStyle(isSelected ? SettingsTheme.primary : SettingsTheme.tertiary)
                     .frame(width: 14, alignment: .center)
+                }
+                if isSelected, let detailSnapshot {
+                    inlineDetail(detailSnapshot)
+                }
             }
             .padding(.vertical, 10)
             .padding(.horizontal, 8)
@@ -110,31 +120,33 @@ struct AgentInventoryRow: View {
     }
 
     private var agentTypeSubtitle: String {
-        if !isVisible { return (vi ? "Config · đã tắt" : "Config · disabled") }
         switch record.id {
         case .kiro, .cursor: return "IDE"
-        case .pi, .omp: return "Config"
-        default: return "CLI"
+        default:
+            return record.evidence.contains { $0.kind == .executable } ? "CLI" : "Config"
         }
     }
 
-    private var sourceLabel: String {
-        switch record.id {
-        case .claude, .aider: return "Claude · OAuth"
-        case .codex: return "Codex · OAuth"
-        case .kiro: return "Kiro · OAuth"
-        case .opencode, .pi: return "OpenRouter · key"
-        case .grok: return "Zero-config"
-        case .omp: return isVisible ? "Custom" : (vi ? "Chưa đặt" : "Unset")
-        case .cursor: return "Cursor · OAuth"
-        case .gemini: return "Gemini · OAuth"
-        case .antigravity: return "Antigravity · OAuth"
-        case .copilot: return "Copilot · OAuth"
-        case .auggie: return "Auggie · Config"
-        case .amp: return "Amp · Config"
-        case .qwen: return "Qwen · Config"
-        case .goose: return "Goose · Config"
+    private func inlineDetail(_ snapshot: AgentDetailSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                if let status = snapshot.providerStatus,
+                   let window = ProviderStatusSummary.lowestWindow(status) {
+                    Text("QUOTA · \(window.label) \(window.remainingPct)%")
+                }
+                if let cost = snapshot.costSummary {
+                    Text("90D · \(AllUsageFormat.usd(cost.periodUSD)) · \(AllUsageFormat.tokens(cost.periodTokens))")
+                }
+                Text("\(vi ? "NGUỒN" : "SOURCE") · \(snapshot.sourceName.isEmpty ? sourceLabel : snapshot.sourceName)")
+            }
+            .font(.plexMono(9, weight: .semibold))
+            Text(snapshot.evidence.map(\.token).joined(separator: " · "))
+                .font(.plexMono(9))
+                .lineLimit(2)
         }
+        .foregroundStyle(SettingsTheme.tertiary)
+        .padding(.top, 8)
+        .padding(.leading, 52)
     }
 
     private var isConfigAgent: Bool {

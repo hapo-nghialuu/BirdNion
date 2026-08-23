@@ -82,18 +82,31 @@ struct AgentActivityContent: View {
     }
 
     private var monthLabelsRow: some View {
-        let months = vi
-            ? ["T8", "T9", "T10", "T11", "T12", "T1", "T2", "T3", "T4", "T5", "T6", "T7"]
-            : ["Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"]
-
         return HStack(spacing: 0) {
-            ForEach(months, id: \.self) { m in
-                Text(m)
-                    .font(.plexMono(9))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            ForEach(Array(snapshot.overall.weeks.enumerated()), id: \.element.id) { index, week in
+                Color.clear
+                    .frame(width: 12, height: 12)
+                    .overlay(alignment: .leading) {
+                        Text(monthLabel(for: week.startDate, at: index))
+                            .font(.plexMono(9))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
             }
         }
+    }
+
+    private func monthLabel(for date: Date, at index: Int) -> String {
+        let calendar = Calendar.current
+        if index > 0 {
+            let previous = snapshot.overall.weeks[index - 1].startDate
+            guard calendar.component(.month, from: previous) != calendar.component(.month, from: date)
+            else { return "" }
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
+        formatter.dateFormat = vi ? "'T'M" : "MMM"
+        return formatter.string(from: date)
     }
 
     private var weekdayLabelsColumn: some View {
@@ -113,14 +126,14 @@ struct AgentActivityContent: View {
 
     private func heatmapColumns(cellSize: CGFloat, cellGap: CGFloat) -> some View {
         let weeks = snapshot.overall.weeks
-        let maxTokens = max(weeks.map(\.tokens).max() ?? 1, 1)
+        let maxTokens = max(snapshot.overall.days.map(\.tokens).max() ?? 1, 1)
 
         return HStack(spacing: cellGap) {
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
                 VStack(spacing: cellGap) {
-                    ForEach(0..<7) { dayIndex in
-                        let fraction = week.hasEvidence && week.tokens > 0
-                            ? Double(week.tokens) / Double(maxTokens) * (dayIndex < 5 ? 1.0 : 0.4)
+                    ForEach(week.days) { day in
+                        let fraction = day.hasEvidence && day.tokens > 0
+                            ? Double(day.tokens) / Double(maxTokens)
                             : 0
                         Rectangle()
                             .fill(colorForFraction(fraction))
@@ -134,8 +147,8 @@ struct AgentActivityContent: View {
     // MARK: - Section 2: Key Metric Cards
 
     private var keyMetricsSection: some View {
-        let peakUSD = snapshot.overall.weeks.map(\.usd).max() ?? 0
-        let activeWeeks = snapshot.overall.weeks.filter { $0.usd > 0 || $0.tokens > 0 }
+        let peakUSD = snapshot.overall.peakDay?.usd ?? 0
+        let peakDay = snapshot.overall.peakDay
         let avgPerActiveDay = snapshot.overall.activeDays > 0
             ? snapshot.overall.totalUSD / Double(snapshot.overall.activeDays)
             : 0
@@ -155,14 +168,16 @@ struct AgentActivityContent: View {
             divider
             metricCard(
                 title: vi ? "STREAK HIỆN TẠI" : "CURRENT STREAK",
-                value: "\(snapshot.overall.activeDays) \(vi ? "ngày" : "days")",
-                sub: vi ? "active" : "active"
+                value: "\(snapshot.overall.currentStreak) \(vi ? "ngày" : "days")",
+                sub: vi
+                    ? "Dài nhất \(snapshot.overall.longestStreak) ngày"
+                    : "Longest \(snapshot.overall.longestStreak) days"
             )
             divider
             metricCard(
-                title: vi ? "TUẦN ACTIVE" : "ACTIVE WEEKS",
-                value: "\(activeWeeks.count) / 52",
-                sub: vi ? "tuần có log" : "recorded weeks"
+                title: vi ? "NGÀY BẬN NHẤT" : "BUSIEST DAY",
+                value: peakDay.map { shortDate($0.date) } ?? "—",
+                sub: peakDay.map { AllUsageFormat.tokens($0.tokens) } ?? "—"
             )
         }
         .padding(.vertical, 14)
@@ -252,7 +267,14 @@ struct AgentActivityContent: View {
     }
 
     private var visibleCostAgents: [InstalledAgentRecord] {
-        records.filter { $0.capabilities.contains(.localCost) || snapshot.byAgent[$0.id] != nil }
+        records.filter { snapshot.byAgent[$0.id] != nil }
+    }
+
+    private func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
+        formatter.setLocalizedDateFormatFromTemplate("ddMMM")
+        return formatter.string(from: date)
     }
 
     @ViewBuilder
@@ -273,14 +295,14 @@ struct AgentActivityContent: View {
 
     private func microHeatmap(for window: AgentActivityWindow?) -> some View {
         let weeks = window?.weeks ?? snapshot.overall.weeks
-        let maxTokens = max(weeks.map(\.tokens).max() ?? 1, 1)
+        let maxTokens = max(weeks.flatMap(\.days).map(\.tokens).max() ?? 1, 1)
 
         return HStack(spacing: 1) {
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
                 VStack(spacing: 1) {
-                    ForEach(0..<7) { dayIndex in
-                        let fraction = week.hasEvidence && week.tokens > 0
-                            ? Double(week.tokens) / Double(maxTokens) * (dayIndex < 5 ? 1.0 : 0.4)
+                    ForEach(week.days) { day in
+                        let fraction = day.hasEvidence && day.tokens > 0
+                            ? Double(day.tokens) / Double(maxTokens)
                             : 0
                         Rectangle()
                             .fill(colorForFraction(fraction))

@@ -13,9 +13,11 @@ enum InsightsSegmentBar {
 struct InsightsPane: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var quota: QuotaService
+    @EnvironmentObject private var installedAgents: InstalledAgentCatalog
     @AppStorage(InsightsSegment.defaultsKey) private var segmentRaw = InsightsSegment.overview.rawValue
     @AppStorage(InsightsSegmentBar.daysDefaultsKey) private var days = 7
     @State private var report: ProjectInsightsReport?
+    @State private var activity: AgentActivitySnapshot?
     @State private var loading = false
     @State private var loadGeneration = UUID()
 
@@ -30,7 +32,19 @@ struct InsightsPane: View {
             set: { days = InsightsSegmentBar.allowedDays.contains($0) ? $0 : 7 })
     }
     private var enabledIDs: Set<String> { Set(quota.displayStatuses.map(\.id)) }
-    private var reloadKey: String { enabledIDs.sorted().joined(separator: ",") }
+    private var agentRecords: [InstalledAgentRecord] {
+        let sources = Set((activity?.byAgent ?? [:]).compactMap { id, window in
+            window.hasData ? id.costHistorySource : nil
+        })
+        return installedAgents.records.map {
+            $0.projected(
+                providerStatuses: quota.displayStatuses,
+                availableCostSources: sources)
+        }
+    }
+    private var reloadKey: String {
+        (enabledIDs.union(agentRecords.map { $0.id.rawValue })).sorted().joined(separator: ",")
+    }
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
     var body: some View {
@@ -50,6 +64,7 @@ struct InsightsPane: View {
                     InstrumentSegmentedControl(
                         options: [
                             (.overview, vi ? "Tổng quan" : "Overview"),
+                            (.activity, vi ? "Hoạt động" : "Activity"),
                             (.projects, vi ? "Dự án" : "Projects"),
                         ],
                         selection: segment,
@@ -69,10 +84,12 @@ struct InsightsPane: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let report {
+                if segment.wrappedValue == .activity, let activity {
+                    AgentActivityContent(records: agentRecords, snapshot: activity)
+                } else if let report {
                     if segment.wrappedValue == .overview {
                         InsightsOverviewContent(report: report)
-                    } else {
+                    } else if segment.wrappedValue == .projects {
                         InsightsProjectsContent(report: report, days: periodDays)
                     }
                 } else if loading {
@@ -95,6 +112,16 @@ struct InsightsPane: View {
         let generation = UUID()
         loadGeneration = generation
         loading = true
+        let activityIDs = agentRecords.compactMap { record in
+            record.capabilities.contains(.localCost) ? record.id : nil
+        }
+        let activitySnapshot = await Task.detached(priority: .utility) {
+            WeeklyActivityBucketBuilder.buildSnapshot(
+                document: CostHistoryStore.read(),
+                agentIDs: activityIDs)
+        }.value
+        guard !Task.isCancelled, loadGeneration == generation else { return }
+        activity = activitySnapshot
         let includeClaude = enabledIDs.contains("claude")
         let includeCodex = enabledIDs.contains("codex")
         let includeGrok = enabledIDs.contains("grok")
@@ -104,9 +131,7 @@ struct InsightsPane: View {
             includeClaude ? ProjectUsageSource.claude : nil,
             includeCodex ? ProjectUsageSource.codex : nil,
             includeGrok ? ProjectUsageSource.grok : nil,
-            includeOMP ? ProjectUsageSource.omp : nil,
-            includePi ? ProjectUsageSource.pi : nil,
-        ].compactMap { $0 })
+        ].compactMap { $0 } + [.omp, .pi])
 
         let seededClaude = includeClaude ? await ClaudeCostScanner.seededReport() : nil
         let seededCodex = includeCodex ? await CodexCostScanner.seededReport() : nil

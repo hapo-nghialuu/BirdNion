@@ -687,19 +687,29 @@ final class QuotaService: ObservableObject {
         let includeClaude = enabledIDs.contains("claude")
         let includeCodex = enabledIDs.contains("codex")
         let includeGrok = enabledIDs.contains("grok")
-        guard includeClaude || includeCodex || includeGrok else {
-            WeeklyDigest.lastEvaluatedAt = now
-            return
-        }
 
         let claudeReport = includeClaude ? await ClaudeCostScanner.usageReport(now: now) : nil
         let codexReport = includeCodex ? await CodexCostScanner.usageReport(now: now) : nil
         let grokReport = includeGrok ? await GrokCostScanner.usageReport(now: now) : nil
+        let kiroReport = await KiroCostScanner.usageReport(now: now)
+        let ompReport = await OMPCostScanner.loadReport(now: now)
+        let piReport = await PiCostScanner.loadReport(now: now)
+        let includeKiro = kiroReport?.scanConfidence.included == true
+        let includeOMP = ompReport.scanConfidence.included
+        let includePi = piReport.scanConfidence.included
+        guard includeClaude || includeCodex || includeGrok || includeKiro || includeOMP || includePi else {
+            WeeklyDigest.lastEvaluatedAt = now
+            return
+        }
 
         let evaluation = WeeklyDigest.evaluate(
             claude: claudeReport, codex: codexReport, grok: grokReport,
+            kiro: kiroReport, omp: ompReport, pi: piReport,
             includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
-            budgetUSD: WeeklyDigest.budgetUSD, now: now)
+            includeKiro: includeKiro, includeOMP: includeOMP, includePi: includePi,
+            budgetUSD: WeeklyDigest.budgetUSD,
+            budgetPeriod: WeeklyDigest.budgetPeriod,
+            now: now)
 
         // Stamp the evaluation cadence regardless of outcome — a suppressed
         // week (no live source, or zero activity) must not rescan on every

@@ -33,34 +33,36 @@ enum WeeklyActivityBucketBuilder {
     ) -> AgentActivityWindow {
         guard weekCount > 0 else { return AgentActivityWindow(weeks: []) }
 
-        let currentWeek = startOfWeek(containing: now, calendar: calendar)
+        let calendar = normalized(calendar)
+        let today = calendar.startOfDay(for: now)
+        let currentWeek = startOfWeek(containing: today, calendar: calendar)
         let firstWeek = calendar.date(
             byAdding: .weekOfYear,
             value: -(weekCount - 1),
             to: currentWeek
         ) ?? currentWeek
 
-        struct Accumulator {
+        struct DayAccumulator {
             var usd = 0.0
             var tokens = 0
-            var activeDays = Set<Date>()
             var hasEvidence = false
         }
 
-        var totals: [Date: Accumulator] = [:]
+        var dailyTotals: [Date: DayAccumulator] = [:]
         for source in sources {
             for (dayKey, day) in document.sources?[source.rawValue] ?? [:] {
                 guard let date = CostHistoryStore.parseDayKey(dayKey, calendar: calendar) else { continue }
-                let week = startOfWeek(containing: date, calendar: calendar)
-                guard week >= firstWeek, week <= currentWeek else { continue }
-                var value = totals[week] ?? Accumulator()
+                let normalizedDate = calendar.startOfDay(for: date)
+                let week = startOfWeek(containing: normalizedDate, calendar: calendar)
+                guard normalizedDate <= today,
+                      week >= firstWeek,
+                      week <= currentWeek
+                else { continue }
+                var value = dailyTotals[normalizedDate] ?? DayAccumulator()
                 value.usd += day.usd
                 value.tokens += day.tokens
                 value.hasEvidence = true
-                if day.usd > 0 || day.tokens > 0 {
-                    value.activeDays.insert(calendar.startOfDay(for: date))
-                }
-                totals[week] = value
+                dailyTotals[normalizedDate] = value
             }
         }
 
@@ -70,24 +72,70 @@ enum WeeklyActivityBucketBuilder {
                 value: offset,
                 to: firstWeek
             ) else { return nil }
-            let value = totals[start] ?? Accumulator()
-            return AgentActivityWeek(
-                startDate: start,
-                usd: value.usd,
-                tokens: value.tokens,
-                activeDays: value.activeDays.count,
-                hasEvidence: value.hasEvidence
-            )
+            let days = (0..<7).compactMap { dayOffset -> AgentActivityDay? in
+                guard let date = calendar.date(byAdding: .day, value: dayOffset, to: start) else { return nil }
+                let value = dailyTotals[date] ?? DayAccumulator()
+                return AgentActivityDay(
+                    date: date,
+                    usd: value.usd,
+                    tokens: value.tokens,
+                    hasEvidence: value.hasEvidence)
+            }
+            return AgentActivityWeek(startDate: start, days: days)
         }
-        return AgentActivityWindow(weeks: weeks)
+        let metrics = streakMetrics(
+            days: weeks.flatMap(\.days).filter { $0.date <= today },
+            today: today,
+            calendar: calendar)
+        return AgentActivityWindow(
+            weeks: weeks,
+            currentStreak: metrics.current,
+            longestStreak: metrics.longest)
     }
 
     private static func startOfWeek(containing date: Date, calendar: Calendar) -> Date {
-        var cal = calendar
-        cal.firstWeekday = 2 // Monday
-        if let interval = cal.dateInterval(of: .weekOfYear, for: date) {
-            return cal.startOfDay(for: interval.start)
+        if let interval = calendar.dateInterval(of: .weekOfYear, for: date) {
+            return calendar.startOfDay(for: interval.start)
         }
-        return cal.startOfDay(for: date)
+        return calendar.startOfDay(for: date)
+    }
+
+    private static func normalized(_ source: Calendar) -> Calendar {
+        var calendar = source
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        return calendar
+    }
+
+    private static func streakMetrics(
+        days: [AgentActivityDay],
+        today: Date,
+        calendar: Calendar
+    ) -> (current: Int, longest: Int) {
+        let ordered = days.sorted { $0.date < $1.date }
+        var longest = 0
+        var run = 0
+        for day in ordered {
+            if day.isActive {
+                run += 1
+                longest = max(longest, run)
+            } else {
+                run = 0
+            }
+        }
+
+        let byDate = Dictionary(uniqueKeysWithValues: ordered.map { ($0.date, $0) })
+        let todayEntry = byDate[today]
+        var cursor = today
+        if todayEntry?.isActive != true {
+            cursor = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        }
+        var current = 0
+        while byDate[cursor]?.isActive == true {
+            current += 1
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = previous
+        }
+        return (current, longest)
     }
 }

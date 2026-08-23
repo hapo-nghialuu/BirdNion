@@ -159,15 +159,19 @@ enum CodexCostScanner {
                 now: now,
                 retractions: mapRetractions(snapshot))
         }
-        let window = CostHistoryStore.apply(
+        let receipt = CostHistoryStore.applyWithReceipt(
             source: .codex,
             liveDays: liveDays,
             now: now,
             windowDays: chartWindowDays,
             liveScanSucceeded: liveScanSucceeded)
         let confidence = CostHistoryStore.confidence(
-            source: .codex, liveScanSucceeded: liveScanSucceeded)
-        let value = CostHistoryStore.makeCodexReport(window: window, now: now, confidence: confidence)
+            source: .codex,
+            liveScanSucceeded: liveScanSucceeded && receipt.persisted)
+        let value = CostHistoryStore.makeCodexReport(
+            window: receipt.window,
+            now: now,
+            confidence: confidence)
         // Persist high-water days even when the live snapshot fails / is empty
         // (e.g. user deleted ~/.codex/sessions after a prior successful scan).
         if value.isEmpty && live == nil {

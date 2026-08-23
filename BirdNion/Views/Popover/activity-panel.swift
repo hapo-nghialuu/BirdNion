@@ -104,7 +104,7 @@ struct ActivityPanelRoot: View {
     }
 
     private var weeksGrid: some View {
-        let maxTokens = max(window.weeks.map(\.tokens).max() ?? 1, 1)
+        let maxTokens = max(window.days.map(\.tokens).max() ?? 1, 1)
 
         return VStack(spacing: 3) {
             ForEach(Array(window.weeks.enumerated()), id: \.offset) { index, week in
@@ -114,9 +114,9 @@ struct ActivityPanelRoot: View {
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .frame(width: 26, alignment: .leading)
 
-                    ForEach(0..<7) { dayIndex in
-                        let fraction = week.hasEvidence && week.tokens > 0
-                            ? Double(week.tokens) / Double(maxTokens) * (dayIndex < 5 ? 1.0 : 0.4)
+                    ForEach(week.days) { day in
+                        let fraction = day.hasEvidence && day.tokens > 0
+                            ? Double(day.tokens) / Double(maxTokens)
                             : 0
                         Rectangle()
                             .fill(colorForFraction(fraction))
@@ -162,9 +162,8 @@ struct ActivityPanelRoot: View {
     }
 
     private var footerStats: some View {
-        let active = window.weeks.filter { $0.usd > 0 || $0.tokens > 0 }
-        let peak = window.weeks.map(\.usd).max() ?? 0
-        let avg = active.isEmpty ? 0 : window.totalUSD / Double(max(window.activeDays, 1))
+        let peak = window.peakDay?.usd ?? 0
+        let avg = window.activeDays == 0 ? 0 : window.totalUSD / Double(window.activeDays)
 
         return HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
@@ -196,7 +195,7 @@ struct ActivityPanelRoot: View {
                 Text("STREAK")
                     .font(.plexMono(9, weight: .medium))
                     .foregroundStyle(VocabbyTheme.tertiary)
-                Text("\(window.activeDays) " + (vi ? "ngày" : "days"))
+                Text("\(window.currentStreak) " + (vi ? "ngày" : "days"))
                     .font(.plexMono(13, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
             }

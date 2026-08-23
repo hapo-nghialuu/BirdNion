@@ -7,6 +7,9 @@ struct AgentRosterTabs: View {
     let overflowRecords: [InstalledAgentRecord]
     let providerOnlyStatuses: [ProviderStatus]
     let providerStatuses: [ProviderStatus]
+    var showsAllChip = true
+    var isPinned: (InstalledAgentID) -> Bool = { _ in false }
+    var onTogglePin: (InstalledAgentID) -> Void = { _ in }
     @Binding var selectedID: String
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
@@ -14,7 +17,9 @@ struct AgentRosterTabs: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                allChip
+                if showsAllChip {
+                    allChip
+                }
                 ForEach(pinnedRecords) { record in
                     chip(for: record)
                 }
@@ -80,6 +85,13 @@ struct AgentRosterTabs: View {
         .help(helpText)
         .accessibilityLabel(helpText)
         .accessibilityAddTraits(active ? .isSelected : [])
+        .contextMenu {
+            Button(isPinned(record.id)
+                   ? (vi ? "Bỏ ghim" : "Unpin")
+                   : (vi ? "Ghim agent" : "Pin agent")) {
+                onTogglePin(record.id)
+            }
+        }
     }
 
     @ViewBuilder
@@ -99,6 +111,11 @@ struct AgentRosterTabs: View {
             ForEach(overflowRecords) { record in
                 Button(record.displayName) {
                     selectedID = record.id.rawValue
+                }
+                Button(isPinned(record.id)
+                       ? (vi ? "Bỏ ghim \(record.displayName)" : "Unpin \(record.displayName)")
+                       : (vi ? "Ghim \(record.displayName)" : "Pin \(record.displayName)")) {
+                    onTogglePin(record.id)
                 }
             }
         } label: {

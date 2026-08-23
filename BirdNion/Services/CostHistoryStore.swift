@@ -126,6 +126,17 @@ enum CostHistoryStore {
         return doc
     }
 
+    /// Mutation reads are strict: only a genuinely missing file starts a new
+    /// document. An unreadable or malformed existing file must never be
+    /// replaced with an empty document because that would erase other sources.
+    private static func readForMutation(url: URL) throws -> Document {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return Document(version: version, sources: [:])
+        }
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode(Document.self, from: data)
+    }
+
     static func write(_ doc: Document, url: URL = historyURL()) throws {
         var out = doc
         out.version = version
@@ -237,6 +248,11 @@ enum CostHistoryStore {
         let models: [Model]
     }
 
+    struct ApplyReceipt: Equatable {
+        let window: [DayBucket]
+        let persisted: Bool
+    }
+
     /// Apply live days for a source: merge into disk and return the window.
     /// Pass `replacingSource: true` to atomically replace that source's days
     /// with the live set (no high-water against prior disk state).
@@ -256,10 +272,39 @@ enum CostHistoryStore {
         replacingSource: Bool = false,
         liveScanSucceeded: Bool = false) -> [DayBucket]
     {
+        applyWithReceipt(
+            source: source,
+            liveDays: liveDays,
+            now: now,
+            calendar: calendar,
+            windowDays: windowDays,
+            url: url,
+            replacingSource: replacingSource,
+            liveScanSucceeded: liveScanSucceeded).window
+    }
+
+    /// Same merge as `apply`, with a durable-write receipt. On write failure,
+    /// return the previously persisted window so callers never publish values
+    /// or freshness that exist only in memory.
+    static func applyWithReceipt(
+        source: Source,
+        liveDays: [(date: Date, usd: Double, tokens: Int, models: [(name: String, usd: Double, tokens: Int)])],
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        windowDays: Int = 90,
+        url: URL = historyURL(),
+        replacingSource: Bool = false,
+        liveScanSucceeded: Bool = false) -> ApplyReceipt
+    {
         ioLock.lock()
         defer { ioLock.unlock() }
 
-        let doc = read(url: url)
+        let doc: Document
+        do {
+            doc = try readForMutation(url: url)
+        } catch {
+            return ApplyReceipt(window: [], persisted: false)
+        }
         var (updated, window) = merge(
             document: doc,
             source: source,
@@ -273,8 +318,19 @@ enum CostHistoryStore {
             scannedAt[source.rawValue] = now.timeIntervalSince1970 * 1000
             updated.scannedAt = scannedAt
         }
-        try? write(updated, url: url)
-        return window
+        do {
+            try write(updated, url: url)
+            return ApplyReceipt(window: window, persisted: true)
+        } catch {
+            let previous = doc.sources?[source.rawValue] ?? [:]
+            return ApplyReceipt(
+                window: buildWindow(
+                    byDay: previous,
+                    now: now,
+                    calendar: calendar,
+                    windowDays: windowDays),
+                persisted: false)
+        }
     }
 
     // MARK: - Read-only views
@@ -422,7 +478,10 @@ enum CostHistoryStore {
             scanConfidence: confidence)
     }
 
-    static func makeKiroReport(window: [DayBucket]) -> KiroUsageReport {
+    static func makeKiroReport(
+        window: [DayBucket],
+        confidence: UsageScanConfidence = .unavailable
+    ) -> KiroUsageReport {
         let last30 = window.suffix(30)
         let today = window.last
         var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
@@ -451,7 +510,8 @@ enum CostHistoryStore {
                         KiroDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
-            topModel: top)
+            topModel: top,
+            scanConfidence: confidence)
     }
 
     static func makeOMPReport(

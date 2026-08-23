@@ -39,6 +39,8 @@ enum PiCostScanner {
     static let chartWindowDays = 120
     static let incrementalDays = 3
     private static let cacheTTL: TimeInterval = 300 // 5 minutes
+    private static let sessionReadChunkBytes = 64 * 1024
+    private static let maxSessionFileBytes = 64 * 1024 * 1024
 
     private actor Cache {
         static let shared = Cache()
@@ -106,21 +108,37 @@ enum PiCostScanner {
             now: now,
             calendar: calendar)
 
-        let liveDays = result.dailyBuckets.map {
-            ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
+        let receipt: CostHistoryStore.ApplyReceipt?
+        let window: [CostHistoryStore.DayBucket]
+        if result.completed {
+            let liveDays = result.dailyBuckets.map {
+                ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
+            }
+            let applied = CostHistoryStore.applyWithReceipt(
+                source: .pi,
+                liveDays: liveDays,
+                now: now,
+                calendar: calendar,
+                windowDays: chartWindowDays,
+                liveScanSucceeded: true)
+            receipt = applied
+            window = applied.window
+        } else {
+            receipt = nil
+            window = CostHistoryStore.window(
+                source: .pi,
+                now: now,
+                calendar: calendar,
+                windowDays: chartWindowDays)
         }
-
-        let window = CostHistoryStore.apply(
+        let confidence = CostHistoryStore.confidence(
             source: .pi,
-            liveDays: liveDays,
-            now: now,
-            calendar: calendar,
-            windowDays: chartWindowDays,
-            liveScanSucceeded: true)
-        let confidence = CostHistoryStore.confidence(source: .pi, liveScanSucceeded: true)
+            liveScanSucceeded: receipt?.persisted == true)
         let report = CostHistoryStore.makePiReport(window: window, confidence: confidence)
 
-        await Cache.shared.storeReport(report, at: now)
+        if receipt?.persisted == true {
+            await Cache.shared.storeReport(report, at: now)
+        }
         return report
     }
 
@@ -129,6 +147,20 @@ enum PiCostScanner {
     struct ScanResult: Sendable {
         let dailyBuckets: [CostHistoryStore.DayBucket]
         let projectRecords: [ProjectUsageRecord]
+        let completed: Bool
+        let wasTruncated: Bool
+
+        init(
+            dailyBuckets: [CostHistoryStore.DayBucket],
+            projectRecords: [ProjectUsageRecord],
+            completed: Bool = true,
+            wasTruncated: Bool = false
+        ) {
+            self.dailyBuckets = dailyBuckets
+            self.projectRecords = projectRecords
+            self.completed = completed
+            self.wasTruncated = wasTruncated
+        }
     }
 
     private struct TurnKey: Hashable {
@@ -149,40 +181,91 @@ enum PiCostScanner {
         scanDays: Int,
         now: Date = Date(),
         calendar: Calendar = .current,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        maxEntries: Int = 20_000
     ) async -> ScanResult {
         let cutoff = calendar.date(byAdding: .day, value: -scanDays, to: calendar.startOfDay(for: now)) ?? now
 
-        return await Task.detached(priority: .utility) {
+        let scanTask = Task.detached(priority: .utility) {
             var turns: [TurnRecord] = []
             var seenTurns: Set<TurnKey> = []
+            var visitedEntries = 0
+            var completed = true
+            var wasTruncated = false
+
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else {
+                return ScanResult(
+                    dailyBuckets: [],
+                    projectRecords: [],
+                    completed: false)
+            }
 
             guard let enumerator = fileManager.enumerator(
                 at: root,
                 includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles])
+                options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                errorHandler: { _, _ in
+                    completed = false
+                    return false
+                })
             else {
-                return ScanResult(dailyBuckets: [], projectRecords: [])
+                return ScanResult(
+                    dailyBuckets: [],
+                    projectRecords: [],
+                    completed: false)
             }
 
             while let nextObj = enumerator.nextObject() {
+                guard !Task.isCancelled else {
+                    completed = false
+                    enumerator.skipDescendants()
+                    break
+                }
+                guard visitedEntries < maxEntries else {
+                    completed = false
+                    wasTruncated = true
+                    enumerator.skipDescendants()
+                    break
+                }
+                visitedEntries += 1
                 guard let fileURL = nextObj as? URL else { continue }
                 guard fileURL.pathExtension.lowercased() == "jsonl" else { continue }
-                guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
+                else {
+                    completed = false
+                    continue
+                }
+                guard
                       attrs.isRegularFile == true,
                       let mtime = attrs.contentModificationDate,
                       mtime >= cutoff
                 else { continue }
 
-                parseSessionFile(
+                if !parseSessionFile(
                     fileURL: fileURL,
                     cutoff: cutoff,
                     seenTurns: &seenTurns,
                     turns: &turns)
+                {
+                    completed = false
+                }
             }
 
-            return aggregateTurns(turns: turns, now: now, calendar: calendar)
-        }.value
+            let aggregated = aggregateTurns(turns: turns, now: now, calendar: calendar)
+            return ScanResult(
+                dailyBuckets: aggregated.dailyBuckets,
+                projectRecords: aggregated.projectRecords,
+                completed: completed && !Task.isCancelled && !wasTruncated,
+                wasTruncated: wasTruncated)
+        }
+        return await withTaskCancellationHandler {
+            await scanTask.value
+        } onCancel: {
+            scanTask.cancel()
+        }
     }
 
     private static func parseSessionFile(
@@ -190,34 +273,97 @@ enum PiCostScanner {
         cutoff: Date,
         seenTurns: inout Set<TurnKey>,
         turns: inout [TurnRecord]
-    ) {
-        guard let data = try? Data(contentsOf: fileURL) else { return }
-        guard let content = String(data: data, encoding: .utf8) else { return }
-
+    ) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
+        defer { try? handle.close() }
+        var buffer = Data()
+        var totalBytes = 0
+        var lineStartOffset = 0
+        var searchOffset = 0
         var sessionCWD: String?
 
-        for line in content.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { continue }
-            guard let lineData = trimmed.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
-            else { continue }
+        while true {
+            guard !Task.isCancelled else { return false }
+            let chunk: Data
+            do {
+                guard let next = try handle.read(upToCount: sessionReadChunkBytes), !next.isEmpty
+                else { break }
+                chunk = next
+            } catch {
+                return false
+            }
+            totalBytes += chunk.count
+            guard totalBytes <= maxSessionFileBytes else { return false }
+            buffer.append(chunk)
 
-            if let type = json["type"] as? String {
-                if type == "session" {
-                    if let cwd = json["cwd"] as? String, !cwd.isEmpty {
-                        sessionCWD = cwd
-                    }
-                } else if type == "message" {
-                    parseMessageEntry(
-                        json: json,
-                        sessionCWD: sessionCWD,
-                        cutoff: cutoff,
-                        seenTurns: &seenTurns,
-                        turns: &turns)
+            while searchOffset < buffer.count {
+                guard !Task.isCancelled else { return false }
+                let searchStart = buffer.index(buffer.startIndex, offsetBy: searchOffset)
+                guard let newline = buffer[searchStart...].firstIndex(of: 0x0A) else {
+                    searchOffset = buffer.count
+                    break
                 }
+                let lineStart = buffer.index(buffer.startIndex, offsetBy: lineStartOffset)
+                let line = Data(buffer[lineStart..<newline])
+                let nextLine = buffer.index(after: newline)
+                lineStartOffset = buffer.distance(from: buffer.startIndex, to: nextLine)
+                searchOffset = lineStartOffset
+                guard parseSessionLine(
+                    line,
+                    cutoff: cutoff,
+                    sessionCWD: &sessionCWD,
+                    seenTurns: &seenTurns,
+                    turns: &turns)
+                else { return false }
+            }
+
+            if lineStartOffset >= sessionReadChunkBytes * 16 || lineStartOffset == buffer.count {
+                buffer.removeSubrange(buffer.startIndex..<buffer.index(
+                    buffer.startIndex, offsetBy: lineStartOffset))
+                searchOffset -= lineStartOffset
+                lineStartOffset = 0
             }
         }
+
+        if lineStartOffset < buffer.count {
+            let lineStart = buffer.index(buffer.startIndex, offsetBy: lineStartOffset)
+            _ = parseSessionLine(
+                Data(buffer[lineStart...]),
+                cutoff: cutoff,
+                sessionCWD: &sessionCWD,
+                seenTurns: &seenTurns,
+                turns: &turns)
+        }
+        return true
+    }
+
+    private static func parseSessionLine(
+        _ lineData: Data,
+        cutoff: Date,
+        sessionCWD: inout String?,
+        seenTurns: inout Set<TurnKey>,
+        turns: inout [TurnRecord]
+    ) -> Bool {
+        guard let line = String(data: lineData, encoding: .utf8) else { return false }
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        guard let data = trimmed.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+
+        if let type = json["type"] as? String {
+            if type == "session", let cwd = json["cwd"] as? String, !cwd.isEmpty {
+                sessionCWD = cwd
+            } else if type == "message" {
+                parseMessageEntry(
+                    json: json,
+                    sessionCWD: sessionCWD,
+                    cutoff: cutoff,
+                    seenTurns: &seenTurns,
+                    turns: &turns)
+            }
+        }
+        return true
     }
 
     private static func parseMessageEntry(
@@ -234,8 +380,6 @@ enum PiCostScanner {
         let entryID = (json["id"] as? String) ?? (message["id"] as? String) ?? UUID().uuidString
         let timestampStr = (message["timestamp"] as? String) ?? (json["timestamp"] as? String) ?? ""
         let turnKey = TurnKey(id: entryID, timestamp: timestampStr)
-        guard !seenTurns.contains(turnKey) else { return }
-        seenTurns.insert(turnKey)
 
         guard let date = parseISO8601(timestampStr), date >= cutoff else { return }
 
@@ -249,6 +393,8 @@ enum PiCostScanner {
         } else if let totalCost = usage["costUSD"] as? Double ?? usage["cost_usd"] as? Double {
             costUSD = max(0, totalCost)
         }
+        guard totalTokens > 0 || costUSD > 0 else { return }
+        guard seenTurns.insert(turnKey).inserted else { return }
 
         turns.append(TurnRecord(
             date: date,

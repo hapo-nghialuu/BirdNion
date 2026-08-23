@@ -101,8 +101,8 @@ struct AgentDetailPanelRoot: View {
     private var effectiveSubtitle: String {
         if !snapshot.subtitle.isEmpty { return snapshot.subtitle }
         let type = snapshot.id == .kiro || snapshot.id == .cursor ? "IDE" : (snapshot.hasLocalCost ? "CLI" : "Config")
-        let src = snapshot.sourceName.isEmpty ? "Claude" : snapshot.sourceName
-        return "\(type) · \(vi ? "chạy trên" : "runs on") \(src)"
+        guard !snapshot.sourceName.isEmpty else { return type }
+        return "\(type) · \(vi ? "chạy trên" : "runs on") \(snapshot.sourceName)"
     }
 
     // MARK: - Tab Bar
@@ -174,40 +174,55 @@ struct AgentDetailPanelRoot: View {
         }
     }
 
+    @ViewBuilder
     private var costHeroSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(vi ? "CHI PHÍ 90 NGÀY" : "90-DAY COST")
+        if let summary = snapshot.costSummary {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 6) {
+                    Text(vi
+                         ? "CHI PHÍ \(summary.periodDays) NGÀY"
+                         : "\(summary.periodDays)-DAY COST")
                         .font(.plexMono(10, weight: .medium))
                         .foregroundStyle(VocabbyTheme.tertiary)
-                    Text(AllUsageFormat.usd(snapshot.costSummary?.last30USD ?? 0))
+                    Text(AllUsageFormat.usd(summary.periodUSD))
                         .font(.plexMono(26, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                         .tracking(-0.8)
-                    Text(AllUsageFormat.tokens(snapshot.costSummary?.last30Tokens ?? 0))
+                    Text(AllUsageFormat.tokens(summary.periodTokens))
                         .font(.plexMono(11))
                         .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Text(vi ? "HÔM NAY" : "TODAY")
+                            .font(.plexMono(10, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                        Text(AllUsageFormat.usd(summary.todayUSD))
+                            .font(.plexMono(14, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.primary)
+                    }
                 }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text(vi ? "HÔM NAY" : "TODAY")
-                        .font(.plexMono(10, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                    Text(AllUsageFormat.usd(snapshot.costSummary?.todayUSD ?? 0))
-                        .font(.plexMono(14, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                }
-            }
 
-            miniAgentChart
-                .frame(height: 44)
-                .padding(.top, 4)
-                .overlay(alignment: .bottom) {
-                    VocabbyTheme.primary.frame(height: 1)
-                }
+                miniAgentChart
+                    .frame(height: 44)
+                    .padding(.top, 4)
+                    .overlay(alignment: .bottom) {
+                        VocabbyTheme.primary.frame(height: 1)
+                    }
+            }
+            .padding(.vertical, 14)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(vi ? "CHI PHÍ CỤC BỘ" : "LOCAL COST")
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                Text(L10n.t("budget.perProvider.noData", settings.appLanguage))
+                    .font(.plexSans(13, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            }
+            .padding(.vertical, 16)
         }
-        .padding(.vertical, 14)
     }
 
     private var miniAgentChart: some View {
@@ -286,13 +301,15 @@ struct AgentDetailPanelRoot: View {
             }
             .padding(.vertical, 4)
 
-            Text(vi
-                 ? "Quota của agent này tính vào quota \(effectiveSourceName) — xem ở tab \(effectiveSourceName)."
-                 : "Quota for this agent counts toward \(effectiveSourceName) — view under the \(effectiveSourceName) tab.")
-                .font(.plexMono(10))
-                .foregroundStyle(VocabbyTheme.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 2)
+            if snapshot.hasQuota, let bridge = snapshot.providerStatus {
+                Text(vi
+                     ? "Quota của agent này tính vào quota \(bridge.displayName) — xem ở tab \(bridge.displayName)."
+                     : "Quota for this agent counts toward \(bridge.displayName) — view under the \(bridge.displayName) tab.")
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
         }
         .padding(.vertical, 14)
         .overlay(alignment: .top) { VocabbyTheme.hairline.frame(height: 1) }
@@ -322,8 +339,8 @@ struct AgentDetailPanelRoot: View {
                         .font(.plexSans(15, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                     Text(vi
-                         ? "BirdNion đọc được cấu hình và kiểm tra kết nối, nhưng không có số liệu chi phí hay quota để hiển thị. Chi phí thực tế nằm ở tài khoản nguồn bên dưới."
-                         : "BirdNion detects configuration and tests connection health, but has no local cost logs or quota to display. Actual usage resides on the upstream account.")
+                         ? "BirdNion chỉ phát hiện cấu hình cục bộ; agent này chưa có số liệu chi phí hoặc quota để hiển thị."
+                         : "BirdNion only detects local configuration; this agent has no cost or quota evidence to display yet.")
                         .font(.plexSans(12))
                         .foregroundStyle(VocabbyTheme.secondary)
                         .lineSpacing(2)
@@ -400,8 +417,7 @@ struct AgentDetailPanelRoot: View {
                 .foregroundStyle(VocabbyTheme.tertiary)
             Spacer()
             Button {
-                NotificationCenter.default.post(name: .openAgentsTab, object: nil)
-                NotificationCenter.default.post(name: .openSettings, object: nil)
+                openAgentSettings(id: snapshot.id)
             } label: {
                 Text(vi ? "CẤU HÌNH" : "CONFIGURE")
                     .font(.plexMono(10, weight: .medium))
@@ -424,36 +440,18 @@ struct AgentDetailPanelRoot: View {
     // MARK: - Helpers
 
     private var effectiveSourceID: String {
-        switch snapshot.id {
-        case .claude, .aider: return "claude"
-        case .codex: return "codex"
-        case .grok: return "grok"
-        case .kiro: return "kiro"
-        case .opencode, .pi: return "openrouter"
-        default: return snapshot.record.providerIDs.first ?? "openrouter"
-        }
+        snapshot.providerStatus?.id
+            ?? snapshot.record.providerIDs.first
+            ?? snapshot.id.rawValue
     }
 
     private var effectiveSourceName: String {
-        switch snapshot.id {
-        case .claude, .aider: return "Claude"
-        case .codex: return "Codex"
-        case .grok: return "Grok"
-        case .kiro: return "Kiro"
-        case .opencode, .pi: return "OpenRouter"
-        default: return snapshot.sourceName.isEmpty ? "Claude" : snapshot.sourceName
-        }
+        if !snapshot.sourceName.isEmpty { return snapshot.sourceName }
+        return snapshot.providerStatus?.displayName ?? (vi ? "Chưa đặt" : "Unset")
     }
 
     private var effectiveSourceType: String {
-        switch snapshot.id {
-        case .claude, .aider: return "OAuth · Max 20x"
-        case .codex: return "OAuth"
-        case .grok: return "Zero-config"
-        case .kiro: return "OAuth"
-        case .opencode, .pi: return "API key"
-        default: return "API key"
-        }
+        snapshot.sourceType.isEmpty ? (vi ? "Bằng chứng cục bộ" : "Local evidence") : snapshot.sourceType
     }
 
     private var effectiveLogPath: String? {
