@@ -110,6 +110,17 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
 - Linux giữ quick switch Codex account hiện có, bổ sung last-good quota + health snapshot thụ động; không tạo polling loop riêng. Custom Claude/Codex profile switcher trong popover Linux vẫn là accepted gap.
 - Mỗi activation macOS kiểm tra **exact profile snapshot** trước và sau mọi `await`. Profile bị sửa hoặc xóa trong lúc activation chạy sẽ ném `profileChangedDuringActivation`, không upsert/apply/ghi overlay từ snapshot cũ; proxy reconcile đọc lại store hiện tại.
 
+### 3.6 Agent Catalog, Popover Capability Blocks và 52-week Activity Ledger (2026-08-23)
+
+- **Installed Agent Catalog**: Quét có giới hạn (bounded allowlist) bằng `InstalledAgentDetectors` kiểm tra file thực thi thật (`isExecutableFile`) và config/session marker paths trên máy; lưu preferences visibility/pinning trong namespace `birdnion.agentVisibility.v1.*`.
+- **Popover All 4 Khối**:
+  1. *Tổng chi phí*: 6 nguồn cost (`claude`, `codex`, `grok`, `kiro`, `omp`, `pi`), period chips `[24h, 7d, 30d, 90d, 120d]`, dòng stats mở nhanh panel Hoạt động.
+  2. *Quota*: lọc provider có quota window thực tế, cắt 3 dòng + dòng gộp "+N".
+  3. *Chi phí theo*: toggle Agent / Model, thanh phân bố màu liên tục.
+  4. *Đã cấu hình*: danh sách agent chỉ có config (ẩn khi rỗng).
+  5. *Ngân sách*: hỗ trợ cài đặt kỳ linh hoạt Tuần / Tháng (`BudgetPeriod` trong `SettingsStore`), tính toán dự phóng qua `BudgetForecast`.
+- **Agent Detail Child Panel**: NSPanel 340px độc lập neo bên phải popover chính, hiển thị 3 tab `Quota`, `Chi phí`, `Config` lấy đường dẫn và model từ dữ liệu quét thật.
+- **52-week Activity Ledger**: Tổng hợp lịch sử chi phí/token 52 tuần từ 400 ngày trong `CostHistoryStore`, tính toán streak và active days thực tế.
 ## 4. Luồng quota
 
 ```

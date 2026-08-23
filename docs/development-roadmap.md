@@ -159,6 +159,7 @@ Chọn một hướng khi Phase 7–8 xong:
 
 | Date | Milestone |
 |---|---|
+| 2026-08-23 | Agent-Centric UI Remake v2 (macOS): detector quét agent tools thật trên máy (`InstalledAgentDetectors`), popover All 4 khối capability-driven + ngân sách tuần/tháng chọn được (`BudgetForecast`), child panel 340px chi tiết agent (`AgentDetailPanelRoot`), Settings tab Agent bảng phẳng + filter pills, và sổ cái hoạt động 52 tuần (`ActivityPanelRoot` + Insights Hoạt động) |
 | 2026-08-21 | Windows Tauri port bắt đầu các lát cắt I1–I5: platform paths, atomic/DACL, owned process + Job Object, shell static và Claude/Gemini/Cursor discovery. Toàn bộ native matrix Windows 10/11 × x64/ARM64 vẫn `FLASH_UNVERIFIED`; chưa support/release công khai |
 | 2026-08-21 | Guided Setup completion + Action Center v1 trên macOS/Linux: exact remediation target, save-first real self-test, current-issue header badge + Settings pane, không issue history/raw-error persistence |
 | 2026-08-20 | Usage Insights + Cost by Project (macOS + Linux): compact All highlight mở Settings Insights, weekly Overview, project ranking/detail 7/30/90 ngày, privacy-safe attribution cho Claude/Codex/Grok và residual `Unknown` |
