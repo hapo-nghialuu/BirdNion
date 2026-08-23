@@ -6,7 +6,7 @@ struct SettingsSidebar<Extra: View>: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var config: ConfigService
     @EnvironmentObject var quota: QuotaService
-
+    @EnvironmentObject var installedAgents: InstalledAgentCatalog
     @Binding var selected: SettingsTab
     /// Single top search shared with contextual lists (providers / AI Coding).
     @Binding var searchText: String
@@ -399,6 +399,9 @@ struct SettingsSidebar<Extra: View>: View {
             return count > 0 ? "\(count)" : nil
         case .providers:
             return providersWithKey > 0 ? "\(providersWithKey)" : nil
+        case .agents:
+            let count = installedAgents.records.count
+            return count > 0 ? "\(count)" : nil
         case .aiCoding:
             return activeAgentCount > 0 ? "\(activeAgentCount) ON" : nil
         default:

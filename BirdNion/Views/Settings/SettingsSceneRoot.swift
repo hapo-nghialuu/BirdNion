@@ -68,6 +68,7 @@ struct SettingsSceneRoot: View {
             // roster list lives inside the sidebar column (below the nav),
             // so the pane owns both the embedded list state and the detail.
             case .providers: ProvidersPane(tab: $selected, searchText: $sidebarSearch)
+            case .agents: AgentsPane(tab: $selected, searchText: $sidebarSearch)
             case .aiCoding: AICodingPane(tab: $selected, searchText: $sidebarSearch)
             case .actionCenter: navAndContent { ActionCenterPane() }
             case .insights: navAndContent { InsightsPane() }
@@ -83,6 +84,9 @@ struct SettingsSceneRoot: View {
         .tint(SettingsTheme.accent)
         .onReceive(NotificationCenter.default.publisher(for: .openClaudeCodeTab)) { _ in
             selected = .aiCoding
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openAgentsTab)) { _ in
+            selected = .agents
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProvidersTab)) { _ in
             selected = .providers
@@ -115,6 +119,7 @@ struct SettingsSceneRoot: View {
 extension Notification.Name {
     /// Kept for existing quick-apply callers; the route now opens AI Coding.
     static let openClaudeCodeTab = Notification.Name("birdnion.openClaudeCodeTab")
+    static let openAgentsTab = Notification.Name("birdnion.openAgentsTab")
     static let openProviderSetup = Notification.Name("birdnion.openProviderSetup")
     static let openInsightsTab = Notification.Name("birdnion.openInsightsTab")
     static let openActionCenterTab = Notification.Name("birdnion.openActionCenterTab")
@@ -171,6 +176,13 @@ func openAICodingSettings(providerID: String? = nil, profileID: String? = nil) {
 
 /// Shared Settings sidebar search matching (provider aliases + page keywords).
 enum SettingsSearchIndex {
+    static func installedAgentMatches(_ record: InstalledAgentRecord, query: String) -> Bool {
+        let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty { return true }
+        let hay = "\(record.displayName) \(record.id.rawValue) \(record.providerIDs.joined(separator: " "))".lowercased()
+        return hay.contains(q)
+    }
+
     static func providerTitle(id: String, fallback: String?) -> String {
         switch id {
         case "codex": return "Codex"
@@ -251,14 +263,18 @@ enum SettingsSearchIndex {
             return vi
                 ? ["token", "api key", "quota", "cookie", "oauth", "region", "nhà cung cấp"]
                 : ["token", "api key", "quota", "cookie", "oauth", "region", "provider"]
+        case .agents:
+            return vi
+                ? ["agent", "agents", "công cụ", "cli", "ide", "danh mục", "catalog"]
+                : ["agent", "agents", "tool", "cli", "ide", "catalog"]
         case .aiCoding:
             return vi
                 ? ["claude code", "codex", "proxy", "model", "profile", "backend", "cli"]
                 : ["claude code", "codex", "proxy", "model", "profile", "backend", "cli"]
         case .insights:
             return vi
-                ? ["phân tích", "usage", "project", "chi tiêu", "overview"]
-                : ["insights", "usage", "project", "spend", "overview"]
+                ? ["phân tích", "usage", "project", "chi tiêu", "overview", "hoạt động"]
+                : ["insights", "usage", "project", "spend", "overview", "activity"]
         case .advanced:
             return vi
                 ? ["debug", "cấu hình", "finder", "storage"]
