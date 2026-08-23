@@ -162,6 +162,46 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(CostHistoryStore.preferHigher(high, low).tokens, 20)
     }
 
+    func testCostHistoryApplyReceiptFailsClosedWhenPersistenceFails() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-write-failure-\(UUID().uuidString)")
+        try Data("not-a-directory".utf8).write(to: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .omp,
+            liveDays: [(now, 9.0, 900, [("model", 9.0, 900)])],
+            now: now,
+            windowDays: 7,
+            url: root.appendingPathComponent("cost-history.json"),
+            liveScanSucceeded: true)
+
+        XCTAssertFalse(receipt.persisted)
+        XCTAssertEqual(receipt.window.reduce(0) { $0 + $1.tokens }, 0)
+        XCTAssertEqual(receipt.window.reduce(0.0) { $0 + $1.usd }, 0, accuracy: 0.001)
+    }
+
+    func testCostHistoryApplyReceiptDoesNotOverwriteMalformedHistory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-malformed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let malformed = Data(#"{"version":1,"sources":{"claude":BROKEN}}"#.utf8)
+        try malformed.write(to: url)
+
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .omp,
+            liveDays: [(Date(), 9.0, 900, [("model", 9.0, 900)])],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+
+        XCTAssertFalse(receipt.persisted)
+        XCTAssertTrue(receipt.window.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: url), malformed)
+    }
+
     // MARK: - Data Confidence Pass
 
     /// Legacy `cost-history.json` files (written before the Data Confidence
@@ -859,6 +899,133 @@ final class NewProviderTests: XCTestCase {
         let y = report.daily[report.daily.count - 2]
         XCTAssertEqual(y.tokens, 200_000)
         XCTAssertEqual(y.usd, 0.60, accuracy: 0.001)
+    }
+
+    func testKiroLiveMergePersistsFreshnessTimestamp() throws {
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let live = KiroCostScanner.buildReport(
+            sessions: [.init(day: today, tokens: 1_000, usd: 0.04, model: "kiro/model")],
+            now: now,
+            windowDays: 90,
+            calendar: cal)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-confidence-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let historyURL = root.appendingPathComponent("cost-history.json")
+
+        let merged = KiroCostScanner.mergeLiveReport(live, now: now, historyURL: historyURL)
+
+        XCTAssertTrue(merged.scanConfidence.included)
+        XCTAssertTrue(merged.scanConfidence.live)
+        XCTAssertEqual(try XCTUnwrap(merged.scanConfidence.scannedAt).timeIntervalSince1970,
+                       now.timeIntervalSince1970,
+                       accuracy: 0.001)
+    }
+
+    func testKiroScanCompletionIsIndependentOfUsageAmount() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-empty-\(UUID().uuidString)", isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: Date())
+
+        XCTAssertTrue(result.report.isEmpty)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.availableSources, ["archive"])
+        XCTAssertTrue(result.failures.isEmpty)
+    }
+
+    func testKiroMalformedAvailableSourceDowngradesCompletion() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-malformed-\(UUID().uuidString)", isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(to: archive.appendingPathComponent("bad.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: Date())
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.failures, ["archive"])
+    }
+
+    func testKiroSchemaInvalidArchiveDowngradesCompletion() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-schema-invalid-\(UUID().uuidString)", isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: archive.appendingPathComponent("bad.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: Date())
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.failures, ["archive"])
+    }
+
+    func testKiroSchemaInvalidCLISidecarDowngradesCompletion() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-cli-schema-invalid-\(UUID().uuidString)", isDirectory: true)
+        let cli = root.appendingPathComponent("sessions/cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: cli, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: cli.appendingPathComponent("bad.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: Date())
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.failures, ["cli"])
+    }
+
+    func testKiroIncompleteScanDoesNotMergePartialUsage() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-partial-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let historyURL = root.appendingPathComponent("cost-history.json")
+        let now = Date()
+        let today = Calendar.current.startOfDay(for: now)
+        _ = CostHistoryStore.apply(
+            source: .kiro,
+            liveDays: [(today, 1.0, 100, [("known", 1.0, 100)])],
+            now: now,
+            windowDays: 90,
+            url: historyURL)
+        let partial = KiroCostScanner.buildReport(
+            sessions: [.init(day: today, tokens: 9_000, usd: 90, model: "partial")],
+            now: now,
+            windowDays: 90)
+
+        let merged = KiroCostScanner.mergeLiveReport(
+            partial,
+            now: now,
+            historyURL: historyURL,
+            liveScanSucceeded: false)
+
+        XCTAssertEqual(merged.todayTokens, 100)
+        XCTAssertEqual(merged.todayUSD, 1.0, accuracy: 0.001)
+        XCTAssertFalse(merged.scanConfidence.live)
     }
 
     /// Parse a conversation history fixture into daily session points.
@@ -1961,9 +2128,17 @@ final class NewProviderTests: XCTestCase {
     // MARK: - OMP & Pi Coding Agents Tests
 
     func testOMPCostScannerDeduplicationAndExtraction() async throws {
-        let fixtureDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/CodingAgents/OMP", isDirectory: true)
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "omp_session_sample",
+                withExtension: "jsonl"))
+        let fixtureDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-omp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: sourceFixture,
+            to: fixtureDir.appendingPathComponent(sourceFixture.lastPathComponent))
+        defer { try? FileManager.default.removeItem(at: fixtureDir) }
         
         let result = await OMPCostScanner.scanSessions(
             roots: [fixtureDir],
@@ -1977,12 +2152,22 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(totalTokens, 4000)
         XCTAssertEqual(totalUSD, 0.05, accuracy: 0.001)
         XCTAssertEqual(result.projectRecords.first?.displayName, "alpha")
+        XCTAssertTrue(result.completed)
+        XCTAssertFalse(result.wasTruncated)
     }
 
     func testPiCostScannerDeduplicationAndExtraction() async throws {
-        let fixtureDir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/CodingAgents/Pi", isDirectory: true)
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "pi_session_sample",
+                withExtension: "jsonl"))
+        let fixtureDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-pi-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: sourceFixture,
+            to: fixtureDir.appendingPathComponent(sourceFixture.lastPathComponent))
+        defer { try? FileManager.default.removeItem(at: fixtureDir) }
 
         let result = await PiCostScanner.scanSessions(
             root: fixtureDir,
@@ -1996,6 +2181,123 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(totalTokens, 2000)
         XCTAssertEqual(totalUSD, 0.010, accuracy: 0.001)
         XCTAssertEqual(result.projectRecords.first?.displayName, "beta")
+        XCTAssertTrue(result.completed)
+        XCTAssertFalse(result.wasTruncated)
+    }
+
+    func testOMPScannerHonorsEntryLimit() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-omp-limit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("{}\n".utf8).write(to: root.appendingPathComponent("a.jsonl"))
+        try Data("{}\n".utf8).write(to: root.appendingPathComponent("b.jsonl"))
+
+        let result = await OMPCostScanner.scanSessions(
+            roots: [root],
+            scanDays: 30,
+            maxEntries: 1)
+
+        XCTAssertTrue(result.dailyBuckets.isEmpty)
+        XCTAssertTrue(result.projectRecords.isEmpty)
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.wasTruncated)
+    }
+
+    func testPiScannerHonorsEntryLimitWithoutClaimingLiveCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-pi-limit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("{}\n".utf8).write(to: root.appendingPathComponent("a.jsonl"))
+        try Data("{}\n".utf8).write(to: root.appendingPathComponent("b.jsonl"))
+
+        let result = await PiCostScanner.scanSessions(
+            root: root,
+            scanDays: 30,
+            maxEntries: 1)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.wasTruncated)
+    }
+
+    func testOMPPiScannerUnreadableRootDoesNotClaimCompletion() async {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-missing-\(UUID().uuidString)", isDirectory: true)
+
+        let omp = await OMPCostScanner.scanSessions(roots: [missing], scanDays: 30)
+        let pi = await PiCostScanner.scanSessions(root: missing, scanDays: 30)
+
+        XCTAssertFalse(omp.completed)
+        XCTAssertFalse(pi.completed)
+        XCTAssertFalse(omp.wasTruncated)
+        XCTAssertFalse(pi.wasTruncated)
+    }
+
+    func testOMPPiMalformedCompleteLineDowngradesCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-malformed-jsonl-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("not-json\n".utf8).write(to: root.appendingPathComponent("bad.jsonl"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let omp = await OMPCostScanner.scanSessions(roots: [root], scanDays: 30)
+        let pi = await PiCostScanner.scanSessions(root: root, scanDays: 30)
+
+        XCTAssertFalse(omp.completed)
+        XCTAssertFalse(pi.completed)
+    }
+
+    func testOMPPiMalformedUnterminatedTailIsTolerated() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-jsonl-tail-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(to: root.appendingPathComponent("tail.jsonl"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let omp = await OMPCostScanner.scanSessions(roots: [root], scanDays: 30)
+        let pi = await PiCostScanner.scanSessions(root: root, scanDays: 30)
+
+        XCTAssertTrue(omp.completed)
+        XCTAssertTrue(pi.completed)
+    }
+
+    func testOMPPiLargeSingleLineUsesStreamingCursor() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-jsonl-large-line-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var data = Data(repeating: 0x20, count: 2 * 1_024 * 1_024)
+        data.append(0x0A)
+        try data.write(to: root.appendingPathComponent("large.jsonl"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let omp = await OMPCostScanner.scanSessions(roots: [root], scanDays: 30)
+        let pi = await PiCostScanner.scanSessions(root: root, scanDays: 30)
+
+        XCTAssertTrue(omp.completed)
+        XCTAssertTrue(pi.completed)
+    }
+
+    func testOMPPiInvalidDuplicateDoesNotBlockValidUsage() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-jsonl-duplicate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let contents = """
+        {"type":"message","id":"same","message":{"role":"assistant","timestamp":"\(timestamp)","usage":{}}}
+        {"type":"message","id":"same","message":{"role":"assistant","timestamp":"\(timestamp)","usage":{"totalTokens":100}}}
+
+        """
+        try Data(contents.utf8).write(to: root.appendingPathComponent("duplicate.jsonl"))
+
+        let omp = await OMPCostScanner.scanSessions(roots: [root], scanDays: 30)
+        let pi = await PiCostScanner.scanSessions(root: root, scanDays: 30)
+
+        XCTAssertEqual(omp.dailyBuckets.reduce(0) { $0 + $1.tokens }, 100)
+        XCTAssertEqual(pi.dailyBuckets.reduce(0) { $0 + $1.tokens }, 100)
+        XCTAssertTrue(omp.completed)
+        XCTAssertTrue(pi.completed)
     }
 
     func testOMPAgentConfigStoreParseAndSerialize() {

@@ -461,6 +461,37 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(r.codexConfidence.map(SourceConfidenceState.classify), .unavailable)
     }
 
+    func testBudgetDataAvailabilityRequiresIncludedCostEvidence() {
+        let unavailable = CombinedUsageReport.build(
+            claude: claudeReport(daily: [], confidence: .unavailable),
+            codex: nil,
+            calendar: calendar,
+            now: now)
+        XCTAssertFalse(unavailable.hasIncludedCostSource)
+
+        let historyOnly = CostHistoryStore.UsageScanConfidence(
+            included: true,
+            live: false,
+            scannedAt: now)
+        let historical = CombinedUsageReport.build(
+            claude: claudeReport(daily: [], confidence: historyOnly),
+            codex: nil,
+            calendar: calendar,
+            now: now)
+        XCTAssertTrue(historical.hasIncludedCostSource)
+
+        let live = CostHistoryStore.UsageScanConfidence(
+            included: true,
+            live: true,
+            scannedAt: now)
+        let current = CombinedUsageReport.build(
+            claude: claudeReport(daily: [], confidence: live),
+            codex: nil,
+            calendar: calendar,
+            now: now)
+        XCTAssertTrue(current.hasIncludedCostSource)
+    }
+
     // MARK: - Phase 2: Weekly budget forecast (pure)
 
     /// Gregorian / Monday-first calendar so week boundaries are deterministic
@@ -630,5 +661,34 @@ final class CombinedUsageReportTests: XCTestCase {
         let codexForecast = MonthlyForecast.build(daily: daily, budgetUSD: 200, source: .codex, now: now, calendar: forecastCalendar)
         XCTAssertEqual(claudeForecast.status, .onTrack)
         XCTAssertEqual(codexForecast.status, .alreadyOver)
+    }
+
+    // MARK: - includedSourceCount ("· N agent" hero subtitle)
+
+    func testIncludedSourceCountCountsSeededHistoryNotJustLive() {
+        let seeded = CostHistoryStore.UsageScanConfidence(included: true, live: false, scannedAt: nil)
+        let claude = claudeReport(daily: [claudeDay(0, usd: 5, tokens: 100)], confidence: seeded)
+        let codex = codexReport(daily: [codexDay(0, usd: 3, tokens: 50)], confidence: seeded)
+
+        let one = CombinedUsageReport.build(claude: claude, codex: nil)
+        XCTAssertEqual(one.includedSourceCount, 1)
+
+        let two = CombinedUsageReport.build(claude: claude, codex: codex)
+        XCTAssertEqual(two.includedSourceCount, 2)
+
+        // Unavailable confidence never counts as a contributing agent.
+        let none = CombinedUsageReport.build(
+            claude: claudeReport(daily: [claudeDay(0, usd: 5, tokens: 100)]), codex: nil)
+        XCTAssertEqual(none.includedSourceCount, 0)
+    }
+
+    func testIncludedSourceCountRespectsIncludeFlags() {
+        let seeded = CostHistoryStore.UsageScanConfidence(included: true, live: false, scannedAt: nil)
+        let claude = claudeReport(daily: [claudeDay(0, usd: 5, tokens: 100)], confidence: seeded)
+        // Disabled source (includeClaude: false) drops out of the count even
+        // when its report carries included confidence — mirrors the All tab
+        // rule that only enabled sources are scanned and counted.
+        let r = CombinedUsageReport.build(claude: claude, codex: nil, includeClaude: false)
+        XCTAssertEqual(r.includedSourceCount, 0)
     }
 }

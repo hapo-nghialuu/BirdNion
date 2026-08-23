@@ -68,6 +68,81 @@ final class WeeklyDigestTests: XCTestCase {
         return calendar.date(from: comp)!
     }
 
+    func testDigestForecastUsesConfiguredBudgetPeriod() {
+        var fixedCalendar = Calendar(identifier: .gregorian)
+        fixedCalendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        func fixedDate(_ day: Int) -> Date {
+            fixedCalendar.date(from: DateComponents(year: 2026, month: 3, day: day))!
+        }
+        let fixedNow = fixedDate(11)
+        let report = ClaudeUsageReport(
+            todayUSD: 0,
+            todayTokens: 0,
+            last30USD: 20,
+            last30Tokens: 100,
+            daily: [
+                ClaudeDailyUsage(
+                    date: fixedDate(9),
+                    usd: 20,
+                    tokens: 100,
+                    models: []),
+            ],
+            topModel: nil,
+            scanConfidence: CostHistoryStore.UsageScanConfidence(
+                included: true,
+                live: true,
+                scannedAt: fixedNow))
+
+        let weekly = WeeklyDigest.evaluate(
+            claude: report, codex: nil, grok: nil,
+            includeClaude: true, includeCodex: false, includeGrok: false,
+            budgetUSD: 100,
+            budgetPeriod: .week,
+            now: fixedNow,
+            calendar: fixedCalendar)
+        let monthly = WeeklyDigest.evaluate(
+            claude: report, codex: nil, grok: nil,
+            includeClaude: true, includeCodex: false, includeGrok: false,
+            budgetUSD: 100,
+            budgetPeriod: .month,
+            now: fixedNow,
+            calendar: fixedCalendar)
+
+        XCTAssertEqual(weekly.forecast.period, .week)
+        XCTAssertEqual(weekly.forecast.daysElapsed, 3)
+        XCTAssertEqual(monthly.forecast.period, .month)
+        XCTAssertEqual(monthly.forecast.daysElapsed, 11)
+    }
+
+    func testDigestIncludesLocalCodingAgentSources() {
+        let omp = OMPUsageReport(
+            todayUSD: 3,
+            todayTokens: 3_000,
+            last30USD: 3,
+            last30Tokens: 3_000,
+            daily: [OMPDailyUsage(
+                date: startOfToday,
+                usd: 3,
+                tokens: 3_000,
+                models: [OMPDailyModel(name: "provider/model", usd: 3, tokens: 3_000)])],
+            topModel: "provider/model",
+            scanConfidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: nil, codex: nil, grok: nil,
+            omp: omp,
+            includeClaude: false, includeCodex: false, includeGrok: false,
+            includeOMP: true,
+            budgetUSD: nil,
+            now: now,
+            calendar: calendar)
+
+        XCTAssertTrue(evaluation.shouldSend)
+        XCTAssertEqual(evaluation.topSource, .omp)
+        XCTAssertEqual(evaluation.currentUSD, 3, accuracy: 0.001)
+        XCTAssertEqual(evaluation.currentTokens, 3_000)
+    }
+
     // MARK: - Suppression (contract #3 / #4)
 
     func testSuppressesWhenNoSourceIsLive() {
