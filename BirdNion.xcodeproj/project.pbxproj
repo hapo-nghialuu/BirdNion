@@ -131,6 +131,27 @@
 		CDXA0001000000000000B001 /* CodexProfileActivationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */; };
 		CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */; };
 		PPST0001000000000000B001 /* PopoverPanelSizingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPST0002000000000000F001 /* PopoverPanelSizingTests.swift */; };
+		IAGN0001000000000000B001 /* InstalledAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = IAGN0002000000000000F001 /* InstalledAgent.swift */; };
+		IAGD0001000000000000B001 /* InstalledAgentDetectors.swift in Sources */ = {isa = PBXBuildFile; fileRef = IAGD0002000000000000F001 /* InstalledAgentDetectors.swift */; };
+		IAGC0001000000000000B001 /* InstalledAgentCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = IAGC0002000000000000F001 /* InstalledAgentCatalog.swift */; };
+		IAGV0001000000000000B001 /* InstalledAgentVisibilityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = IAGV0002000000000000F001 /* InstalledAgentVisibilityStore.swift */; };
+		AGVT0001000000000000B001 /* AgentVisibilityStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGVT0002000000000000F001 /* AgentVisibilityStoreTests.swift */; };
+		AGCT0001000000000000B001 /* InstalledAgentCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCT0002000000000000F001 /* InstalledAgentCatalogTests.swift */; };
+		AGDS0001000000000000B001 /* AgentDetailSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGDS0002000000000000F001 /* AgentDetailSnapshot.swift */; };
+		AGDC0001000000000000B001 /* AgentDetailPanelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGDC0002000000000000F001 /* AgentDetailPanelCoordinator.swift */; };
+		AGAW0001000000000000B001 /* AgentActivityWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGAW0002000000000000F001 /* AgentActivityWindow.swift */; };
+		WABB0001000000000000B001 /* WeeklyActivityBucketBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = WABB0002000000000000F001 /* WeeklyActivityBucketBuilder.swift */; };
+		WABT0001000000000000B001 /* WeeklyActivityBucketBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WABT0002000000000000F001 /* WeeklyActivityBucketBuilderTests.swift */; };
+		AGRT0001000000000000B001 /* agent-roster-tabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGRT0002000000000000F001 /* agent-roster-tabs.swift */; };
+		AAQ00001000000000000B001 /* all-agents-section-quota.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAQ00002000000000000F001 /* all-agents-section-quota.swift */; };
+		AAC00001000000000000B001 /* all-agents-section-cost-breakdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAC00002000000000000F001 /* all-agents-section-cost-breakdown.swift */; };
+		AACF0001000000000000B001 /* all-agents-section-configured.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACF0002000000000000F001 /* all-agents-section-configured.swift */; };
+		AAO00001000000000000B001 /* all-agents-overview.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAO00002000000000000F001 /* all-agents-overview.swift */; };
+		AGDR0001000000000000B001 /* agent-detail-panel-root.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGDR0002000000000000F001 /* agent-detail-panel-root.swift */; };
+		AGPN0001000000000000B001 /* AgentsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGPN0002000000000000F001 /* AgentsPane.swift */; };
+		AGIR0001000000000000B001 /* agent-inventory-row.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGIR0002000000000000F001 /* agent-inventory-row.swift */; };
+		AGCB0001000000000000B001 /* agent-capability-badges.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCB0002000000000000F001 /* agent-capability-badges.swift */; };
+		AGAC0001000000000000B001 /* agent-activity-content.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGAC0002000000000000F001 /* agent-activity-content.swift */; };
 
 		SET0003000000000000B002 /* HiddenWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0004000000000000F002 /* HiddenWindowView.swift */; };
 		SET0005000000000000B003 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET0006000000000000F003 /* SettingsTab.swift */; };
@@ -320,6 +341,27 @@
 		CDXA0002000000000000F001 /* CodexProfileActivationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/CodexProfileActivationCard.swift; sourceTree = "<group>"; };
 		CDXT0002000000000000F001 /* CodexConfigWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexConfigWriterTests.swift; sourceTree = "<group>"; };
 		PPST0002000000000000F001 /* PopoverPanelSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/PopoverPanelSizingTests.swift; sourceTree = "<group>"; };
+		IAGN0002000000000000F001 /* InstalledAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/InstalledAgent.swift; sourceTree = "<group>"; };
+		IAGD0002000000000000F001 /* InstalledAgentDetectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/InstalledAgentDetectors.swift; sourceTree = "<group>"; };
+		IAGC0002000000000000F001 /* InstalledAgentCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/InstalledAgentCatalog.swift; sourceTree = "<group>"; };
+		IAGV0002000000000000F001 /* InstalledAgentVisibilityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/InstalledAgentVisibilityStore.swift; sourceTree = "<group>"; };
+		AGVT0002000000000000F001 /* AgentVisibilityStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/AgentVisibilityStoreTests.swift; sourceTree = "<group>"; };
+		AGCT0002000000000000F001 /* InstalledAgentCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/InstalledAgentCatalogTests.swift; sourceTree = "<group>"; };
+		AGDS0002000000000000F001 /* AgentDetailSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/AgentDetailSnapshot.swift; sourceTree = "<group>"; };
+		AGDC0002000000000000F001 /* AgentDetailPanelCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/AgentDetailPanelCoordinator.swift; sourceTree = "<group>"; };
+		AGAW0002000000000000F001 /* AgentActivityWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/AgentActivityWindow.swift; sourceTree = "<group>"; };
+		WABB0002000000000000F001 /* WeeklyActivityBucketBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/WeeklyActivityBucketBuilder.swift; sourceTree = "<group>"; };
+		WABT0002000000000000F001 /* WeeklyActivityBucketBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WeeklyActivityBucketBuilderTests.swift; sourceTree = "<group>"; };
+		AGRT0002000000000000F001 /* agent-roster-tabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/agent-roster-tabs.swift; sourceTree = "<group>"; };
+		AAQ00002000000000000F001 /* all-agents-section-quota.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-section-quota.swift; sourceTree = "<group>"; };
+		AAC00002000000000000F001 /* all-agents-section-cost-breakdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-section-cost-breakdown.swift; sourceTree = "<group>"; };
+		AACF0002000000000000F001 /* all-agents-section-configured.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-section-configured.swift; sourceTree = "<group>"; };
+		AAO00002000000000000F001 /* all-agents-overview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-overview.swift; sourceTree = "<group>"; };
+		AGDR0002000000000000F001 /* agent-detail-panel-root.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/agent-detail-panel-root.swift; sourceTree = "<group>"; };
+		AGPN0002000000000000F001 /* AgentsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/AgentsPane.swift; sourceTree = "<group>"; };
+		AGIR0002000000000000F001 /* agent-inventory-row.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-inventory-row.swift; sourceTree = "<group>"; };
+		AGCB0002000000000000F001 /* agent-capability-badges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-capability-badges.swift; sourceTree = "<group>"; };
+		AGAC0002000000000000F001 /* agent-activity-content.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-activity-content.swift; sourceTree = "<group>"; };
 
 		SET0004000000000000F002 /* HiddenWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/HiddenWindowView.swift; sourceTree = "<group>"; };
 		SET0006000000000000F003 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsTab.swift; sourceTree = "<group>"; };
@@ -415,6 +457,9 @@
 				CDXT0001000000000000B001 /* CodexConfigWriterTests.swift in Sources */,
 				PPST0001000000000000B001 /* PopoverPanelSizingTests.swift in Sources */,
 				PIT00001000000000000B01 /* ProjectInsightsTests.swift in Sources */,
+				AGVT0001000000000000B001 /* AgentVisibilityStoreTests.swift in Sources */,
+				AGCT0001000000000000B001 /* InstalledAgentCatalogTests.swift in Sources */,
+				WABT0001000000000000B001 /* WeeklyActivityBucketBuilderTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -790,6 +835,24 @@
 				CDXW0001000000000000B001 /* CodexConfigWriter.swift in Sources */,
 				CDXD0001000000000000B001 /* CodexConfigDocument.swift in Sources */,
 				CDXA0001000000000000B001 /* CodexProfileActivationCard.swift in Sources */,
+				IAGN0001000000000000B001 /* InstalledAgent.swift in Sources */,
+				IAGD0001000000000000B001 /* InstalledAgentDetectors.swift in Sources */,
+				IAGC0001000000000000B001 /* InstalledAgentCatalog.swift in Sources */,
+				IAGV0001000000000000B001 /* InstalledAgentVisibilityStore.swift in Sources */,
+				AGDS0001000000000000B001 /* AgentDetailSnapshot.swift in Sources */,
+				AGDC0001000000000000B001 /* AgentDetailPanelCoordinator.swift in Sources */,
+				AGAW0001000000000000B001 /* AgentActivityWindow.swift in Sources */,
+				WABB0001000000000000B001 /* WeeklyActivityBucketBuilder.swift in Sources */,
+				AGRT0001000000000000B001 /* agent-roster-tabs.swift in Sources */,
+				AAQ00001000000000000B001 /* all-agents-section-quota.swift in Sources */,
+				AAC00001000000000000B001 /* all-agents-section-cost-breakdown.swift in Sources */,
+				AACF0001000000000000B001 /* all-agents-section-configured.swift in Sources */,
+				AAO00001000000000000B001 /* all-agents-overview.swift in Sources */,
+				AGDR0001000000000000B001 /* agent-detail-panel-root.swift in Sources */,
+				AGPN0001000000000000B001 /* AgentsPane.swift in Sources */,
+				AGIR0001000000000000B001 /* agent-inventory-row.swift in Sources */,
+				AGCB0001000000000000B001 /* agent-capability-badges.swift in Sources */,
+				AGAC0001000000000000B001 /* agent-activity-content.swift in Sources */,
 
 				SET0003000000000000B002 /* HiddenWindowView.swift in Sources */,
 				SET0005000000000000B003 /* SettingsTab.swift in Sources */,
