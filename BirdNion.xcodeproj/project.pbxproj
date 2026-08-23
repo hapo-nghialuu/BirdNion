@@ -142,7 +142,6 @@
 		AGAW0001000000000000B001 /* AgentActivityWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGAW0002000000000000F001 /* AgentActivityWindow.swift */; };
 		WABB0001000000000000B001 /* WeeklyActivityBucketBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = WABB0002000000000000F001 /* WeeklyActivityBucketBuilder.swift */; };
 		WABT0001000000000000B001 /* WeeklyActivityBucketBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WABT0002000000000000F001 /* WeeklyActivityBucketBuilderTests.swift */; };
-		AGRT0001000000000000B001 /* agent-roster-tabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGRT0002000000000000F001 /* agent-roster-tabs.swift */; };
 		AAQ00001000000000000B001 /* all-agents-section-quota.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAQ00002000000000000F001 /* all-agents-section-quota.swift */; };
 		AAC00001000000000000B001 /* all-agents-section-cost-breakdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAC00002000000000000F001 /* all-agents-section-cost-breakdown.swift */; };
 		AACF0001000000000000B001 /* all-agents-section-configured.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACF0002000000000000F001 /* all-agents-section-configured.swift */; };
@@ -355,7 +354,6 @@
 		AGAW0002000000000000F001 /* AgentActivityWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/AgentActivityWindow.swift; sourceTree = "<group>"; };
 		WABB0002000000000000F001 /* WeeklyActivityBucketBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/WeeklyActivityBucketBuilder.swift; sourceTree = "<group>"; };
 		WABT0002000000000000F001 /* WeeklyActivityBucketBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WeeklyActivityBucketBuilderTests.swift; sourceTree = "<group>"; };
-		AGRT0002000000000000F001 /* agent-roster-tabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/agent-roster-tabs.swift; sourceTree = "<group>"; };
 		AAQ00002000000000000F001 /* all-agents-section-quota.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-section-quota.swift; sourceTree = "<group>"; };
 		AAC00002000000000000F001 /* all-agents-section-cost-breakdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-section-cost-breakdown.swift; sourceTree = "<group>"; };
 		AACF0002000000000000F001 /* all-agents-section-configured.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-section-configured.swift; sourceTree = "<group>"; };
@@ -859,7 +857,6 @@
 				AGDC0001000000000000B001 /* AgentDetailPanelCoordinator.swift in Sources */,
 				AGAW0001000000000000B001 /* AgentActivityWindow.swift in Sources */,
 				WABB0001000000000000B001 /* WeeklyActivityBucketBuilder.swift in Sources */,
-				AGRT0001000000000000B001 /* agent-roster-tabs.swift in Sources */,
 				AAQ00001000000000000B001 /* all-agents-section-quota.swift in Sources */,
 				AAC00001000000000000B001 /* all-agents-section-cost-breakdown.swift in Sources */,
 				AACF0001000000000000B001 /* all-agents-section-configured.swift in Sources */,
