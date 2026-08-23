@@ -65,6 +65,11 @@ enum WeeklyDigest {
         UserDefaults.standard.double(forKey: "monthlyBudgetUSD")
     }
 
+    static var budgetPeriod: BudgetPeriod {
+        let raw = UserDefaults.standard.string(forKey: "birdnion.budgetPeriod")
+        return raw.flatMap(BudgetPeriod.init(rawValue:)) ?? .week
+    }
+
     /// Per-provider budgets — same keys `SettingsStore`'s `@AppStorage`
     /// writes (`claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD`), same "0 =
     /// not configured" convention as `budgetUSD` above. Used as `evaluate`'s
@@ -91,13 +96,14 @@ enum WeeklyDigest {
     // MARK: - Pure model
 
     enum SourceID: String, CaseIterable, Equatable, Sendable {
-        case claude, codex, grok, omp, pi
+        case claude, codex, grok, kiro, omp, pi
 
         var displayName: String {
             switch self {
             case .claude: return "Claude"
             case .codex: return "Codex"
             case .grok: return "Grok"
+            case .kiro: return "Kiro"
             case .omp: return "Oh My Pi"
             case .pi: return "Pi"
             }
@@ -199,6 +205,9 @@ enum WeeklyDigest {
             (.claude, window.reduce(0) { $0 + $1.claudeUSD }, window.reduce(0) { $0 + $1.claudeTokens }),
             (.codex, window.reduce(0) { $0 + $1.codexUSD }, window.reduce(0) { $0 + $1.codexTokens }),
             (.grok, window.reduce(0) { $0 + $1.grokUSD }, window.reduce(0) { $0 + $1.grokTokens }),
+            (.kiro, window.reduce(0) { $0 + $1.kiroUSD }, window.reduce(0) { $0 + $1.kiroTokens }),
+            (.omp, window.reduce(0) { $0 + $1.ompUSD }, window.reduce(0) { $0 + $1.ompTokens }),
+            (.pi, window.reduce(0) { $0 + $1.piUSD }, window.reduce(0) { $0 + $1.piTokens }),
         ]
         let active = sums.filter { $0.1 > 0 || $0.2 > 0 }
         guard !active.isEmpty else { return nil }
@@ -262,10 +271,17 @@ enum WeeklyDigest {
         claude: ClaudeUsageReport?,
         codex: CodexUsageReport?,
         grok: GrokUsageReport?,
+        kiro: KiroUsageReport? = nil,
+        omp: OMPUsageReport? = nil,
+        pi: PiUsageReport? = nil,
         includeClaude: Bool,
         includeCodex: Bool,
         includeGrok: Bool,
+        includeKiro: Bool = false,
+        includeOMP: Bool = false,
+        includePi: Bool = false,
         budgetUSD: Double?,
+        budgetPeriod: BudgetPeriod = .week,
         claudeBudgetUSD: Double? = WeeklyDigest.claudeBudgetUSD,
         codexBudgetUSD: Double? = WeeklyDigest.codexBudgetUSD,
         grokBudgetUSD: Double? = WeeklyDigest.grokBudgetUSD,
@@ -275,7 +291,9 @@ enum WeeklyDigest {
     ) -> Evaluation {
         let combined = CombinedUsageReport.build(
             claude: claude, codex: codex, grok: grok,
+            kiro: kiro, omp: omp, pi: pi,
             includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            includeKiro: includeKiro, includeOMP: includeOMP, includePi: includePi,
             calendar: calendar, now: now)
         let pulse = pulse(daily: combined.daily, now: now, calendar: calendar)
 
@@ -283,6 +301,9 @@ enum WeeklyDigest {
             (.claude, includeClaude, combined.claudeConfidence),
             (.codex, includeCodex, combined.codexConfidence),
             (.grok, includeGrok, combined.grokConfidence),
+            (.kiro, includeKiro, combined.kiroConfidence),
+            (.omp, includeOMP, combined.ompConfidence),
+            (.pi, includePi, combined.piConfidence),
         ]
         let hasLiveSource = confidences.contains { $0.1 && $0.2?.live == true }
         let hasActivity = pulse.currentUSD > 0 || pulse.currentTokens > 0
@@ -291,7 +312,12 @@ enum WeeklyDigest {
             .filter { $0.1 && $0.2?.live != true }
             .map(\.0)
 
-        let forecast = MonthlyForecast.build(daily: combined.daily, budgetUSD: budgetUSD, now: now, calendar: calendar)
+        let forecast = MonthlyForecast.build(
+            daily: combined.daily,
+            budgetUSD: budgetUSD,
+            period: budgetPeriod,
+            now: now,
+            calendar: calendar)
 
         // Trust rule: a provider whose confidence is `nil` or `included ==
         // false` (disabled, or never landed a scan) never contributes a risk
@@ -308,7 +334,12 @@ enum WeeklyDigest {
             guard let confidence, confidence.included else { return nil }
             guard let budget, budget.isFinite, budget > 0 else { return nil }
             let providerForecast = MonthlyForecast.build(
-                daily: combined.daily, budgetUSD: budget, source: usageSource, now: now, calendar: calendar)
+                daily: combined.daily,
+                budgetUSD: budget,
+                period: budgetPeriod,
+                source: usageSource,
+                now: now,
+                calendar: calendar)
             guard let status = providerForecast.status, status != .onTrack else { return nil }
             return ProviderBudgetRisk(
                 source: source, status: status,

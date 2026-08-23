@@ -100,10 +100,10 @@ final class SettingsStore: ObservableObject {
     @AppStorage(QuotaWarnConfig.soundKey) var quotaWarningSoundEnabled: Bool = true
     @AppStorage(QuotaWarnConfig.alertKey) var quotaWarningOnScreenAlertEnabled: Bool = false
     /// All-tab budget period (week vs month). Default is month (preserving legacy behavior).
-    @AppStorage("birdnion.budgetPeriod") var budgetPeriodRaw: String = BudgetPeriod.month.rawValue
+    @AppStorage("birdnion.budgetPeriod") var budgetPeriodRaw: String = BudgetPeriod.week.rawValue
 
     var budgetPeriod: BudgetPeriod {
-        get { BudgetPeriod(rawValue: budgetPeriodRaw) ?? .month }
+        get { BudgetPeriod(rawValue: budgetPeriodRaw) ?? .week }
         set { budgetPeriodRaw = newValue.rawValue; objectWillChange.send() }
     }
 
