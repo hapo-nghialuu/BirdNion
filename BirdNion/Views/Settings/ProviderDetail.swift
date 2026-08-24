@@ -47,8 +47,11 @@ private extension View {
 // MARK: - Provider detail shell (P4 module split)
 
 extension ProvidersPane {
+    /// Chỉ đọc cache — KHÔNG dò trực tiếp: `detectOnboardingSource` spawn
+    /// process nên gọi trong view body sẽ gây AttributeGraph cycle.
     func onboardingDetection(for id: String) -> OnboardingDetection {
-        Self.detectOnboardingSource(for: id)
+        onboardingCache.detection(for: id)
+            ?? OnboardingDetection(isReady: false, source: "")
     }
 
     static func detectOnboardingSource(for id: String) -> OnboardingDetection {
@@ -426,9 +429,12 @@ extension ProvidersPane {
                             ProgressView().controlSize(.small)
                         } else {
                             Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 12, weight: .medium))
                         }
                     }
-                    .frame(minWidth: 28, minHeight: 28)
+                    // Bằng chiều cao SELF-TEST (30pt) — trước đây 28+padding
+                    // style làm nút refresh cao hơn cả hàng.
+                    .frame(width: 12, height: 12)
                 }
                 .buttonStyle(.instrumentOutline)
                 .disabled(quota.isRefreshing)
@@ -448,89 +454,121 @@ extension ProvidersPane {
             .inkRuleBottom()
     }
 
-    func detailInfoGrid(_ row: BirdNionConfigStore.Provider) -> some View {
+    /// Một ô trong lưới INFO — dựng thành mảng (thay vì ViewBuilder lồng
+    /// điều kiện) để render bằng LazyVGrid nhiều cột.
+    struct ProviderInfoItem: Identifiable {
+        enum Kind {
+            case text(String)
+            case status(text: String, level: String?)
+            case error(message: String, raw: String)
+            case link(title: String, url: URL)
+        }
+        let label: String
+        let kind: Kind
+        var id: String { label }
+    }
+
+    func providerInfoItems(_ row: BirdNionConfigStore.Provider) -> [ProviderInfoItem] {
         let s = status(for: row.id)
-        return InstrumentSection(header: L10n.t("settings.section.info", language)) {
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-                infoRow(
-                    L10n.t("provider.status", language),
-                    row.enabled == true ? L10n.t("popover.ready", language) : L10n.t("provider.disabled", language)
-                )
-                if row.id == "codex" {
-                    // Which source actually produced the data (OAuth / CLI).
-                    infoRow(L10n.t("provider.source", language),
-                            L10n.providerText(s?.sourceLabel ?? "OAuth", preference: language))
-                } else if row.id == "claude" {
-                    // OAuth token comes from the Claude Code Keychain item.
-                    infoRow(L10n.t("provider.source", language), "OAuth")
-                } else if row.id == "kiro", let auth = s?.sourceLabel, !auth.isEmpty {
-                    // Auth method from `kiro-cli whoami` ("Logged in with …") —
-                    // CodexBar's "Auth:" menu note.
-                    infoRow(L10n.t("provider.source", language),
-                            L10n.providerText(auth, preference: language))
-                }
-                if row.id == "kiro", let ctx = s?.kiroMenu?.contextPercentUsed {
-                    // Context-window usage from `kiro-cli /context` (best-effort).
-                    infoRow(L10n.t("provider.kiroContext", language),
-                            String(format: "%.0f%%", ctx))
-                }
-                if let plan = s?.planType, !plan.isEmpty {
-                    infoRow(L10n.t("provider.plan", language),
-                            L10n.providerText(plan.capitalized, preference: language))
-                }
-                if let name = s?.planName, !name.isEmpty {
-                    // Plan display name (MiniMax `current_subscribe_title`) — distinct
-                    // from `planType` which carries a code (`plus` / `pro`).
-                    infoRow(L10n.t("provider.planName", language),
-                            L10n.providerText(name, preference: language))
-                }
-                if let label = s?.accountLabel, !label.isEmpty {
-                    infoRow(L10n.t("provider.account", language), label)
-                }
-                if let version = s?.version, !version.isEmpty {
-                    infoRow(L10n.t("provider.version", language), version)
-                }
-                if let svc = s?.serviceStatus, !svc.isEmpty {
-                    serviceStatusRow(svc, level: s?.serviceStatusLevel)
-                }
-                if row.id == "codex", let n = s?.resetCreditsAvailable {
-                    infoRow(L10n.t("provider.resetCredits", language), "\(n)")
-                }
-                if row.id == "codex", let web = s?.codexWeb {
-                    if let cr = web.codeReviewRemainingPercent {
-                        infoRow(L10n.t("provider.codeReview", language), L10n.f("provider.remaining", language, cr))
-                    }
-                    if let n = web.creditsHistoryCount {
-                        infoRow(L10n.t("provider.creditsHistory", language), "\(n)")
-                    }
-                    if let url = web.creditsPurchaseURL, let u = URL(string: url) {
-                        GridRow {
-                            Text(L10n.t("provider.buyCredits", language)).gridColumnAlignment(.leading)
-                            Link(L10n.t("provider.openPage", language), destination: u)
-                                .font(.plexSans(12))
+        var items: [ProviderInfoItem] = []
+        func add(_ label: String, _ value: String) {
+            items.append(ProviderInfoItem(label: label, kind: .text(value)))
+        }
+
+        add(L10n.t("provider.status", language),
+            row.enabled == true ? L10n.t("popover.ready", language) : L10n.t("provider.disabled", language))
+
+        if row.id == "codex" {
+            // Which source actually produced the data (OAuth / CLI).
+            add(L10n.t("provider.source", language),
+                L10n.providerText(s?.sourceLabel ?? "OAuth", preference: language))
+        } else if row.id == "claude" {
+            // OAuth token comes from the Claude Code Keychain item.
+            add(L10n.t("provider.source", language), "OAuth")
+        } else if row.id == "kiro", let auth = s?.sourceLabel, !auth.isEmpty {
+            // Auth method from `kiro-cli whoami` ("Logged in with …").
+            add(L10n.t("provider.source", language),
+                L10n.providerText(auth, preference: language))
+        }
+        if row.id == "kiro", let ctx = s?.kiroMenu?.contextPercentUsed {
+            add(L10n.t("provider.kiroContext", language), String(format: "%.0f%%", ctx))
+        }
+        if let plan = s?.planType, !plan.isEmpty {
+            add(L10n.t("provider.plan", language),
+                L10n.providerText(plan.capitalized, preference: language))
+        }
+        if let name = s?.planName, !name.isEmpty {
+            // Plan display name (MiniMax) — distinct from the `planType` code.
+            add(L10n.t("provider.planName", language),
+                L10n.providerText(name, preference: language))
+        }
+        if let label = s?.accountLabel, !label.isEmpty {
+            add(L10n.t("provider.account", language), label)
+        }
+        if let version = s?.version, !version.isEmpty {
+            add(L10n.t("provider.version", language), version)
+        }
+        if let svc = s?.serviceStatus, !svc.isEmpty {
+            items.append(ProviderInfoItem(
+                label: L10n.t("provider.serviceStatus", language),
+                kind: .status(text: svc, level: s?.serviceStatusLevel)))
+        }
+        if row.id == "codex", let n = s?.resetCreditsAvailable {
+            add(L10n.t("provider.resetCredits", language), "\(n)")
+        }
+        if row.id == "codex", let web = s?.codexWeb {
+            if let cr = web.codeReviewRemainingPercent {
+                add(L10n.t("provider.codeReview", language), L10n.f("provider.remaining", language, cr))
+            }
+            if let n = web.creditsHistoryCount {
+                add(L10n.t("provider.creditsHistory", language), "\(n)")
+            }
+            if let url = web.creditsPurchaseURL, let u = URL(string: url) {
+                items.append(ProviderInfoItem(
+                    label: L10n.t("provider.buyCredits", language),
+                    kind: .link(title: L10n.t("provider.openPage", language), url: u)))
+            }
+        }
+        if let err = s?.error {
+            // Classified remediation hint; raw string stays on hover. For
+            // `unknown` show the raw error inline (R1.3).
+            let kind = classify(rawError: err) ?? .unknown
+            items.append(ProviderInfoItem(
+                label: L10n.t("provider.error", language),
+                kind: .error(
+                    message: kind == .unknown
+                        ? L10n.providerText(err, preference: language)
+                        : classifiedMessage(for: err),
+                    raw: err)))
+        } else {
+            add(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
+        }
+        // On-disk data size (Settings → Advanced toggle).
+        if settings.providerStorageFootprintsEnabled,
+           !ProviderStoragePaths.candidatePaths(for: row.id).isEmpty {
+            add(L10n.t("provider.storage", language), storageText(for: row.id))
+        }
+        return items
+    }
+
+    func detailInfoGrid(_ row: BirdNionConfigStore.Provider) -> some View {
+        // Lưới nhiều cột: mỗi thuộc tính là ô "eyebrow + value" — gọn hơn
+        // hẳn so với mỗi thuộc tính một dòng (2026-08-24).
+        InstrumentSection(header: L10n.t("settings.section.info", language)) {
+            // Bố cục tĩnh 2 cột: chunk mảng item rồi HStack — deterministic,
+            // không dùng Layout tự viết / LazyVGrid adaptive (từng gây
+            // AttributeGraph precondition crash trong hosting view).
+            VStack(alignment: .leading, spacing: 12) {
+                let items = providerInfoItems(row)
+                ForEach(Array(stride(from: 0, to: items.count, by: 2)), id: \.self) { index in
+                    HStack(alignment: .top, spacing: 18) {
+                        infoItemCell(items[index])
+                        if index + 1 < items.count {
+                            infoItemCell(items[index + 1])
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
                         }
                     }
-                }
-                if let err = s?.error {
-                    // Classified remediation hint instead of the raw string;
-                    // raw stays on hover. For `unknown` the hint would be a
-                    // dead-end ("see details" with no details anywhere), so
-                    // show the raw error inline instead (R1.3).
-                    let kind = classify(rawError: err) ?? .unknown
-                    errorRow(
-                        value: kind == .unknown
-                            ? L10n.providerText(err, preference: language)
-                            : classifiedMessage(for: err),
-                        rawError: err)
-                } else {
-                    infoRow(L10n.t("provider.updated", language), updatedSubtitle(for: row.id))
-                }
-                // On-disk data size (Settings → Advanced toggle). Only for
-                // providers with known local dirs; scan runs off-main via
-                // ProviderStorageScanner with a 5-minute cache.
-                if settings.providerStorageFootprintsEnabled,
-                   !ProviderStoragePaths.candidatePaths(for: row.id).isEmpty {
-                    infoRow(L10n.t("provider.storage", language), storageText(for: row.id))
                 }
             }
             .font(.plexSans(12))
@@ -540,22 +578,55 @@ extension ProvidersPane {
         }
     }
 
-    func infoRow(_ label: String, _ value: String) -> some View {
-        GridRow {
-            Text(label).gridColumnAlignment(.leading)
-            Text(value)
-                .foregroundStyle(SettingsTheme.primary)
-                .lineLimit(2)
+    @ViewBuilder
+    func infoItemCell(_ item: ProviderInfoItem) -> some View {
+        switch item.kind {
+        case let .text(value):
+            infoRow(item.label, value)
+        case let .status(text, level):
+            serviceStatusRow(text, level: level)
+        case let .error(message, raw):
+            errorRow(value: message, rawError: raw)
+        case let .link(title, url):
+            infoCell(item.label) {
+                Link(title, destination: url)
+                    .font(.plexSans(12, weight: .medium))
+            }
         }
+    }
+
+    func infoRow(_ label: String, _ value: String) -> some View {
+        infoCell(label) {
+            Text(value)
+                .font(.plexSans(12, weight: .medium))
+                .foregroundStyle(SettingsTheme.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(value)
+        }
+    }
+
+    /// Ô thông tin: nhãn eyebrow mono nhỏ ở trên, giá trị đậm ở dưới.
+    @ViewBuilder
+    func infoCell<V: View>(_ label: String, @ViewBuilder value: () -> V) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label.uppercased())
+                .font(.plexMono(9, weight: .medium))
+                .foregroundStyle(SettingsTheme.tertiary)
+                .tracking(0.5)
+                .lineLimit(1)
+            value()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Error info row: classified message as the value, raw error string on
     /// hover so the detail is always reachable (R2.3).
     func errorRow(value: String, rawError: String) -> some View {
-        GridRow {
-            Text(L10n.t("provider.error", language)).gridColumnAlignment(.leading)
+        infoCell(L10n.t("provider.error", language)) {
             Text(value)
-                .foregroundStyle(SettingsTheme.primary)
+                .font(.plexSans(12, weight: .medium))
+                .foregroundStyle(SettingsTheme.critical)
                 .lineLimit(2)
                 .help(L10n.providerText(rawError, preference: language))
         }
@@ -573,15 +644,15 @@ extension ProvidersPane {
 
     /// Service-status row with a severity dot (green/yellow/orange/red).
     func serviceStatusRow(_ text: String, level: String?) -> some View {
-        GridRow {
-            Text(L10n.t("provider.serviceStatus", language)).gridColumnAlignment(.leading)
+        infoCell(L10n.t("provider.serviceStatus", language)) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(serviceStatusColor(level))
                     .frame(width: 7, height: 7)
                 Text(L10n.providerText(text, preference: language))
+                    .font(.plexSans(12, weight: .medium))
                     .foregroundStyle(SettingsTheme.primary)
-                    .lineLimit(2)
+                    .lineLimit(1)
             }
         }
     }

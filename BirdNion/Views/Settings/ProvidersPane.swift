@@ -27,6 +27,8 @@ struct ProvidersPane: View {
     @EnvironmentObject var settings: SettingsStore
     /// On-disk footprint cache for the "Dung lượng" info row (Advanced toggle).
     @ObservedObject var storageScanner = ProviderStorageScanner.shared
+    /// Kết quả dò nguồn đăng nhập (tính off-main — xem OnboardingDetectionCache).
+    @ObservedObject var onboardingCache = OnboardingDetectionCache.shared
 
     /// Settings nav selection — the pane renders the whole window row
     /// (sidebar with embedded provider roster + detail), so it needs the
@@ -170,6 +172,10 @@ struct ProvidersPane: View {
             // On-disk footprint for the storage row (Advanced toggle).
             if settings.providerStorageFootprintsEnabled, let id = selectedID {
                 storageScanner.refreshIfStale(id: id)
+            }
+            // Dò nguồn đăng nhập off-main cho khối onboarding.
+            if let id = selectedID, Self.onboardingProviderIDs.contains(id) {
+                onboardingCache.prime(id)
             }
         }
         .task(id: antigravityReloadTick) {
@@ -1311,6 +1317,38 @@ struct CodexAutoPrimeCard: View {
                 DatePicker("", selection: timeBinding, displayedComponents: .hourAndMinute)
                     .labelsHidden()
                     .disabled(!settings.codexAutoPrimeEnabled)
+            }
+        }
+    }
+}
+
+
+/// Cache kết quả dò nguồn đăng nhập cho khối "Kết nối provider".
+///
+/// `ProvidersPane.detectOnboardingSource` chạm đĩa VÀ spawn process
+/// (`codex --version`, `zsh -lc "command -v codex"`) — gọi thẳng trong view
+/// body sẽ chặn main thread giữa layout pass, khiến SwiftUI update lồng nhau
+/// và abort với `AttributeGraph: cycle detected` (crash Settings → Providers
+/// → Codex, 2026-08-24). Body chỉ đọc cache; việc dò chạy off-main.
+@MainActor
+final class OnboardingDetectionCache: ObservableObject {
+    static let shared = OnboardingDetectionCache()
+
+    @Published private(set) var values: [String: ProvidersPane.OnboardingDetection] = [:]
+    private var inflight: Set<String> = []
+
+    func detection(for id: String) -> ProvidersPane.OnboardingDetection? { values[id] }
+
+    /// Dò một lần cho mỗi provider trong vòng đời app (kết quả chỉ đổi khi
+    /// người dùng cài/gỡ CLI — refresh thủ công đã có nút Connect & test).
+    func prime(_ id: String) {
+        guard values[id] == nil, !inflight.contains(id) else { return }
+        inflight.insert(id)
+        Task.detached(priority: .utility) {
+            let detected = ProvidersPane.detectOnboardingSource(for: id)
+            await MainActor.run {
+                self.values[id] = detected
+                self.inflight.remove(id)
             }
         }
     }
