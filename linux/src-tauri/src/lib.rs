@@ -487,7 +487,7 @@ fn claude_code_state_for(provider_id: &str) -> ClaudeCodeState {
     let provider = config::find_provider(provider_id);
     let scope = claude_code::current_scope(&provider);
     let configured = scope.is_some() && claude_code::is_fully_configured(provider_id, &provider);
-    let target = scope.as_ref().and_then(claude_code::target_path);
+    let target = scope.as_ref().map(claude_code::target_path);
     if scope.is_some() && target.is_none() {
         return ClaudeCodeState { state: "unavailable", target_path: None };
     }
@@ -604,7 +604,7 @@ fn claude_code_profile_state_for(profile_id: &str) -> ClaudeCodeState {
     };
     let scope = claude_code::profile_scope(&profile);
     let configured = scope.is_some() && claude_code::profile_ready(&profile);
-    let target = scope.as_ref().and_then(claude_code::target_path);
+    let target = scope.as_ref().map(claude_code::target_path);
     if scope.is_some() && target.is_none() {
         return ClaudeCodeState { state: "unavailable", target_path: None };
     }
@@ -914,8 +914,7 @@ fn codex_active_id() -> Option<String> {
 
 #[tauri::command]
 async fn codex_apply(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
-    let target = codex_config::target_config_path()
-        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
+    let target = codex_config::target_config_path();
     let mut profile =
         config::find_codex_profile(&id).ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
     if !profile.has_upstream_configuration() {
@@ -945,8 +944,7 @@ async fn codex_apply(app: tauri::AppHandle, id: String) -> Result<codex_config::
 
 #[tauri::command]
 async fn codex_deactivate(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
-    let target = codex_config::target_config_path()
-        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
+    let target = codex_config::target_config_path();
     let _ = codex_config::deactivate(Some(&target))?;
     if let Some(mut profile) = config::find_codex_profile(&id) {
         profile.cli_proxy_applied_signature = None;
@@ -962,22 +960,20 @@ async fn codex_delete(
     id: String,
     delete_linked_claude: bool,
 ) -> Result<(), String> {
-    let target = codex_config::target_config_path()
-        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
+    let target = codex_config::target_config_path();
     // Best-effort: if this was the active proxy codex profile, drop it from helper.
     if let Some(p) = config::find_codex_profile(&id) {
         if p.uses_embedded_cli_proxy() {
             let _ = cli_proxy::deactivate_codex_proxy_profiles(&app).await;
         }
     }
-    codex_config::delete_profile(&id, delete_linked_claude, Some(&target))
+    let _ = &target;
+    codex_config::delete_profile(&id, delete_linked_claude)
 }
 
 /// Ensure a custom Claude profile has a linked Codex counterpart (create if needed).
 #[tauri::command]
 fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexProfile, String> {
-    codex_config::target_config_path()
-        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
     config::update(|settings| {
         let claude = settings
             .claude_code_profiles
@@ -1014,8 +1010,6 @@ fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexPr
 /// Ensure a preset provider has a derived Codex profile (Anthropic + local proxy).
 #[tauri::command]
 fn codex_ensure_preset(provider_id: String) -> Result<config::CodexProfile, String> {
-    codex_config::target_config_path()
-        .ok_or_else(|| "Không xác định được đường dẫn cấu hình Codex tuyệt đối".to_string())?;
     config::update(|settings| {
         let provider = settings
             .providers
