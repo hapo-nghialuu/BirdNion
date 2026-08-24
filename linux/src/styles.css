@@ -9,6 +9,7 @@
   --ink-rule: #16150F;
   /* Chrome rule: line header/footer — đậm hơn hairline một nấc (macOS parity). */
   --chrome-rule: #C9C5BA;
+  --heat-0: #EFEDE6;
   --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --bg: #FBFAF7;
@@ -74,6 +75,7 @@
   --hairline: #2A2A22;
   --ink-rule: #F2F0E8;
   --chrome-rule: #3F3F36;
+  --heat-0: #24241C;
   --bg: #17170F;
   --sidebar: #1E1E16;
   --surface: #17170F;
@@ -5359,7 +5361,7 @@ body.settings-body-root {
 .insights-activity-col { display: flex; flex-direction: column; gap: 2px; }
 
 .insights-activity-cell { display: block; width: 10px; height: 10px; }
-.insights-activity-cell.level-0 { background: var(--heat-0, #EFEDE6); }
+.insights-activity-cell.level-0 { background: var(--heat-0); }
 .insights-activity-cell.level-1 { background: var(--heat-1); }
 .insights-activity-cell.level-2 { background: var(--heat-2); }
 .insights-activity-cell.level-3 { background: var(--heat-3); }
