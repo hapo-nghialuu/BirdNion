@@ -970,6 +970,8 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "shadedByTokens": { vi: "đậm nhạt theo token", en: "shaded by tokens" },
   "avgPerActiveDay": { vi: "TB/ngày", en: "Avg/day" },
   "streak": { vi: "Chuỗi ngày", en: "Streak" },
+  "clickToPin": { vi: "CLICK ĐỂ GHIM", en: "CLICK TO PIN" },
+  "ofPeriod": { vi: "của", en: "of" },
   "quota": { vi: "Quota", en: "Quota" },
   "agentsWithQuota": { vi: "{n}/{total} agent có quota", en: "{n}/{total} agents with quota" },
   "moreAgentsWithQuota": { vi: "+{n} agent còn quota cao ›", en: "+{n} more agents with quota ›" },

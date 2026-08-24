@@ -10,6 +10,7 @@ import {
 } from "./usage";
 import { t, currentLang } from "./i18n";
 import { logoMark } from "./logos";
+import { showDayPanel, closeTransientPanel, closePinnedPanel } from "./side-panel";
 
 const PERIOD_KEY = "birdnion.allChartDays";
 
@@ -269,6 +270,7 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
         period = days;
         pinnedDay = null; // new window starts with detail hidden
         localStorage.setItem(PERIOD_KEY, String(days));
+        closePinnedPanel();   // ngày đã ghim không còn thuộc cửa sổ mới
         render();
         // Top models card listens and re-ranks for the new window.
         window.dispatchEvent(new CustomEvent(PERIOD_CHANGE_EVENT, { detail: { days } }));
@@ -421,6 +423,9 @@ type PinApi = {
  * Click toggles pin/detail; hover only highlights (never opens detail). */
 function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi): HTMLElement {
   const max = Math.max(...days.map((d) => d.tokens), 1);
+  // Ngữ cảnh cho panel phụ: tổng USD của đúng cửa sổ đang xem + nhãn kỳ.
+  const windowUsdTotal = () => days.reduce((sum, d) => sum + d.usd, 0);
+  const windowLabel = `${days.length}d`;
   const chart = el("div", `bar-chart${days.length > 45 ? " dense" : ""}`);
   let hoverDay: CombinedDay | null = null;
 
@@ -463,16 +468,24 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
     }
     col.addEventListener("mouseenter", () => {
       hoverDay = day;
-      paint(); // highlight only — detail still follows pin
+      // Hover mở panel phụ transient (macOS parity); rời chuột thì đóng.
+      showDayPanel(day, windowUsdTotal(), windowLabel, false);
+      paint();
     });
     col.addEventListener("mouseleave", () => {
       hoverDay = null;
+      closeTransientPanel();
       paint();
     });
     col.addEventListener("click", () => {
-      const pinned = pin.getPinned();
-      if (pinned && pinned.date === day.date) pin.setPinned(null);
-      else pin.setPinned(day);
+      const pinnedDay = pin.getPinned();
+      if (pinnedDay && pinnedDay.date === day.date) {
+        pin.setPinned(null);
+        closePinnedPanel();
+      } else {
+        pin.setPinned(day);
+        showDayPanel(day, windowUsdTotal(), windowLabel, true);
+      }
       paint();
     });
     chart.append(col);

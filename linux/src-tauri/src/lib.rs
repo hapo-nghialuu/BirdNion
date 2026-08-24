@@ -1224,6 +1224,67 @@ async fn list_installed_agents() -> Vec<installed_agents::InstalledAgent> {
     installed_agents::detect(&with_quota, &totals)
 }
 
+
+/// Mở (hoặc cập nhật) cửa sổ panel phụ cạnh popover — port của macOS
+/// `AgentDetailPanelCoordinator`. `pinned=false` là panel transient do hover,
+/// sẽ bị `close_side_panel` đóng khi chuột rời; panel đã ghim chỉ đóng bằng
+/// nút ✕ trong nội dung.
+#[tauri::command]
+async fn open_side_panel(
+    app: tauri::AppHandle,
+    payload: serde_json::Value,
+    pinned: bool,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+
+    let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+
+    if let Some(existing) = app.get_webview_window("panel") {
+        let _ = existing.emit("birdnion-panel-payload", payload.clone());
+        position_panel_beside_main(&app, &existing);
+        let _ = existing.show();
+        if pinned {
+            let _ = existing.set_focus();
+        }
+        return Ok(());
+    }
+
+    // Seed payload trước khi script chạy để panel không nháy trống.
+    let init = format!("window.__BIRDNION_PANEL__={payload_json};");
+    let win = WebviewWindowBuilder::new(&app, "panel", WebviewUrl::App("panel.html".into()))
+        .title("BirdNion")
+        .inner_size(340.0, 430.0)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(pinned)
+        .initialization_script(&init)
+        .build()
+        .map_err(|e| e.to_string())?;
+    position_panel_beside_main(&app, &win);
+    Ok(())
+}
+
+/// Ẩn panel phụ (hover rời hoặc bấm ✕).
+#[tauri::command]
+fn close_side_panel(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(panel) = app.get_webview_window("panel") {
+        let _ = panel.hide();
+    }
+    Ok(())
+}
+
+/// Neo panel vào cạnh phải popover, lệch 4px như bản macOS.
+fn position_panel_beside_main(app: &tauri::AppHandle, panel: &tauri::WebviewWindow) {
+    use tauri::Manager;
+    let Some(main) = app.get_webview_window("main") else { return };
+    let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) else { return };
+    let x = pos.x + size.width as i32 + 4;
+    let _ = panel.set_position(tauri::PhysicalPosition::new(x, pos.y));
+}
+
 /// Open (or focus) the dedicated Settings window — macOS Settings scene parity
 /// (780×720, separate from the tray popover).
 #[tauri::command]
@@ -1313,6 +1374,8 @@ pub fn run() {
              project_insights_report,
             provider_statuses,
             list_installed_agents,
+            open_side_panel,
+            close_side_panel,
             classify_provider_error,
             is_transient_provider_error,
             is_fixable_provider_error,

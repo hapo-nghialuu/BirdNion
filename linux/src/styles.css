@@ -5440,3 +5440,150 @@ body.settings-body-root {
 
 .sw-segment-btn + .sw-segment-btn { border-left: 1px solid var(--border); }
 .sw-segment-btn.is-active { background: var(--ink-rule); color: var(--bg); font-weight: 600; }
+
+
+/* ------------------------------------------------------- Side panel window
+   Cửa sổ phụ 340px cạnh popover (macOS AgentDetailPanelCoordinator parity):
+   không viền hệ thống, bo 3pt, viền xám nhạt. */
+.panel-body-root { margin: 0; background: transparent; }
+
+.panel-root {
+  width: 340px;
+  min-height: 100vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-sizing: border-box;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+}
+
+.panel-content { display: flex; flex-direction: column; }
+
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--chrome-rule);
+}
+
+.panel-head-text { flex: 1; min-width: 0; }
+.panel-title { font-size: 14px; font-weight: 600; }
+
+.panel-subtitle {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.panel-close {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.panel-hint {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.panel-hero {
+  padding: 12px 14px 4px;
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.9px;
+}
+
+.panel-section-title {
+  padding: 12px 14px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.9px;
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--hairline);
+  margin-top: 8px;
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  min-width: 0;
+}
+
+.panel-tick { width: 6px; height: 6px; flex-shrink: 0; }
+.panel-row-logo { width: 16px; height: 16px; flex-shrink: 0; }
+
+.panel-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-row-value {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.panel-heat {
+  display: grid;
+  grid-template-columns: repeat(26, 10px);
+  gap: 2px;
+  padding: 12px 14px;
+}
+
+.panel-heat-cell { width: 10px; height: 10px; display: block; }
+.panel-heat-cell.level-0 { background: var(--heat-0); }
+.panel-heat-cell.level-1 { background: var(--heat-1); }
+.panel-heat-cell.level-2 { background: var(--heat-2); }
+.panel-heat-cell.level-3 { background: var(--heat-3); }
+.panel-heat-cell.level-4 { background: var(--heat-4); }
+
+.panel-stats {
+  display: flex;
+  padding: 12px 14px;
+  border-top: 1px solid var(--chrome-rule);
+}
+
+.panel-stat { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+
+.panel-stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.panel-stat-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Viền xám nhạt cho popover chính (macOS parity 2026-08-24). */
+.container {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-sizing: border-box;
+}

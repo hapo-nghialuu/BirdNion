@@ -6,12 +6,13 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  // Multi-page: popover (index) + dedicated Settings window.
+  // Multi-page: popover (index) + Settings window + side panel window.
   build: {
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
         settings: resolve(__dirname, "settings.html"),
+        panel: resolve(__dirname, "panel.html"),
       },
     },
   },
