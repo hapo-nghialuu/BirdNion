@@ -275,19 +275,26 @@ fn detected_agent_ids() -> HashSet<String> {
     ids
 }
 
+/// Cost đi theo AGENT, provider chỉ gate quota/tab/menu bar: Grok CLI vẫn hiện
+/// chi phí khi provider Grok đang tắt (macOS parity 2026-08-24). Tách riêng
+/// khỏi `enabled_usage_sources` để test được mà không cần đụng config/PATH.
+fn usage_sources_for(
+    enabled_providers: &HashSet<String>,
+    detected_agents: &HashSet<String>,
+) -> HashSet<String> {
+    LOCAL_COST_SOURCES
+        .iter()
+        .filter(|id| enabled_providers.contains(**id) || detected_agents.contains(**id))
+        .map(|id| (*id).to_string())
+        .collect()
+}
+
 fn enabled_usage_sources() -> HashSet<String> {
-    // Cost đi theo AGENT, provider chỉ gate quota/tab/menu bar: Grok CLI vẫn
-    // hiện chi phí khi provider Grok đang tắt (macOS parity 2026-08-24).
-    let detected = detected_agent_ids();
     let enabled: HashSet<String> = config::enabled_providers()
         .into_iter()
         .map(|provider| provider.id)
         .collect();
-    LOCAL_COST_SOURCES
-        .iter()
-        .filter(|id| enabled.contains(**id) || detected.contains(**id))
-        .map(|id| (*id).to_string())
-        .collect()
+    usage_sources_for(&enabled, &detected_agent_ids())
 }
 
 fn local_usage_source_enabled(source: &str) -> bool {
@@ -303,6 +310,46 @@ fn fresh_cached_usage_reports(
         .filter(|(_, (at, _))| now.saturating_duration_since(*at) < USAGE_REPORT_TTL)
         .map(|(source, (_, report))| ((*source).to_string(), report.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod usage_source_gating_tests {
+    use super::*;
+
+    fn ids(list: &[&str]) -> HashSet<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn detected_agent_reports_cost_even_when_its_provider_is_off() {
+        // Grok CLI có log trên máy nhưng provider Grok đang tắt: chi phí vẫn
+        // phải được quét, chỉ quota/tab mới bị provider gate.
+        let sources = usage_sources_for(&ids(&["claude"]), &ids(&["grok"]));
+        assert!(sources.contains("grok"), "agent detected phải được quét");
+        assert!(sources.contains("claude"), "provider bật phải được quét");
+    }
+
+    #[test]
+    fn agents_without_a_provider_are_reachable() {
+        // omp/pi/kiro không có provider tương ứng — trước đây bị bỏ quét hẳn.
+        let sources = usage_sources_for(&HashSet::new(), &ids(&["omp", "pi", "kiro"]));
+        for id in ["omp", "pi", "kiro"] {
+            assert!(sources.contains(id), "{id} phải được quét khi detected");
+        }
+    }
+
+    #[test]
+    fn nothing_enabled_or_detected_scans_nothing() {
+        assert!(usage_sources_for(&HashSet::new(), &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn only_the_six_local_cost_sources_are_ever_returned() {
+        // Provider bật nhưng không phải nguồn cost cục bộ (vd. openai admin)
+        // không được kéo theo một scanner không tồn tại.
+        let sources = usage_sources_for(&ids(&["openai", "gemini", "claude"]), &HashSet::new());
+        assert_eq!(sources, ids(&["claude"]));
+    }
 }
 
 #[cfg(test)]

@@ -45,8 +45,9 @@ function budgetTone(status: BudgetStatus): string {
 
 /** Weekly budget + linear-projection forecast card. Only rendered when a
  * budget is configured (`monthlyForecast` returns non-null) — `main.ts`
- * places it right after `confidenceRow`. Estimated from local
- * Claude+Codex+Grok logs only, current calendar week — read-only summary. */
+ * places it last in the All tab, after the configured-agents row. Estimated
+ * from local logs of all six cost sources, current calendar week — read-only
+ * summary. */
 export function budgetForecastCard(combined: Combined, budgetUsd: number | null): HTMLElement | null {
   const forecast = monthlyForecast(combined.daily, budgetUsd);
   if (!forecast) return null;
