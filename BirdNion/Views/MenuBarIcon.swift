@@ -201,7 +201,7 @@ enum MenuBarIconRenderer {
 
             if pref == .average {
                 let avg = windows.map(\.remainingPct).reduce(0, +) / max(1, windows.count)
-                return .provider(id: status.id, name: status.displayName, percents: [avg], text: "Avg \(avg)%")
+                return .provider(id: status.id, name: status.displayName, percents: [avg], text: L10n.f("menuBar.avg", nil, "\(avg)"))
             }
 
             let canonicalClaudeWindows = status.id == "claude" && pref == .automatic

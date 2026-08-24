@@ -20,7 +20,7 @@ enum CodexConfigWriter {
         var errorDescription: String? {
             switch self {
             case .incompleteConfiguration:
-                return "Thiếu Base URL, API key hoặc model cho Codex"
+                return L10n.t("codexWriter.incomplete", nil)
             }
         }
     }

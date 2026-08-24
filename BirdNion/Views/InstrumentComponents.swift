@@ -838,10 +838,10 @@ struct InstrumentPowerControl: View {
 
     private var accessibilityLabel: String {
         switch state {
-        case .on: return "Stop"
-        case .off: return "Start"
-        case .stale: return "Update"
-        case .needsSetup: return "Needs setup"
+        case .on: return L10n.t("power.stop", nil)
+        case .off: return L10n.t("power.start", nil)
+        case .stale: return L10n.t("power.update", nil)
+        case .needsSetup: return L10n.t("power.needsSetup", nil)
         }
     }
 }

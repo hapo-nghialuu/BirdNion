@@ -147,8 +147,8 @@ struct PiPane: View {
                 .plexEyebrow(size: 11, color: VocabbyTheme.tertiary)
 
             VStack(alignment: .leading, spacing: 6) {
-                pathRow(label: "Settings file:", value: PiAgentConfigStore.configFile.path)
-                pathRow(label: "Sessions directory:", value: PiCostScanner.defaultSessionsDirectory.path)
+                pathRow(label: L10n.t("field.settingsFile", settings.appLanguage), value: PiAgentConfigStore.configFile.path)
+                pathRow(label: L10n.t("field.sessionsDir", settings.appLanguage), value: PiCostScanner.defaultSessionsDirectory.path)
             }
 
             if let status = statusMessage {

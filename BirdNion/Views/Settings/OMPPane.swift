@@ -153,8 +153,8 @@ struct OMPPane: View {
                 .plexEyebrow(size: 11, color: VocabbyTheme.tertiary)
 
             VStack(alignment: .leading, spacing: 6) {
-                pathRow(label: "Config file:", value: OMPPaths.configFile().path)
-                pathRow(label: "Sessions directory:", value: OMPPaths.defaultSessionsDirectory.path)
+                pathRow(label: L10n.t("field.configFile", settings.appLanguage), value: OMPPaths.configFile().path)
+                pathRow(label: L10n.t("field.sessionsDir", settings.appLanguage), value: OMPPaths.defaultSessionsDirectory.path)
             }
 
             if let status = statusMessage {

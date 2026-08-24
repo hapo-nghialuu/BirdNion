@@ -891,7 +891,7 @@ extension ProvidersPane {
             if row.id == "deepgram" {
                 HairlineRule()
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Project ID")
+                    Text(L10n.t("field.projectID", language))
                         .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(L10n.languageCode(language) == "vi"
@@ -1760,12 +1760,12 @@ extension ProvidersPane {
                     .font(.plexSans(10))
                     .foregroundStyle(SettingsTheme.tertiary)
             } else {
-                bedrockField(idx, title: "Access key ID",
+                bedrockField(idx, title: L10n.t("field.accessKeyID", language),
                              placeholder: "AKIA…", keyPath: \.apiKey, secure: true)
-                bedrockField(idx, title: vi ? "Secret access key" : "Secret access key",
+                bedrockField(idx, title: L10n.t("field.secretAccessKey", language),
                              placeholder: "", keyPath: \.secretKey, secure: true)
             }
-            bedrockField(idx, title: "Region", placeholder: "us-east-1",
+            bedrockField(idx, title: L10n.t("field.region", language), placeholder: "us-east-1",
                          keyPath: \.region, secure: false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

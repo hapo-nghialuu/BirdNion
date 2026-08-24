@@ -126,7 +126,7 @@ struct ActivityPanelRoot: View {
         return HStack(alignment: .top, spacing: Self.cellGap) {
             VStack(alignment: .leading, spacing: Self.cellGap) {
                 ForEach(0..<7, id: \.self) { row in
-                    Text([0: "T2", 2: "T4", 4: "T6", 6: "CN"][row] ?? "")
+                    Text([0: vi ? "T2" : "Mon", 2: vi ? "T4" : "Wed", 4: vi ? "T6" : "Fri", 6: vi ? "CN" : "Sun"][row] ?? "")
                         .font(.plexMono(8))
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .frame(width: 22, height: Self.cellSize, alignment: .leading)
@@ -325,7 +325,7 @@ struct ActivityPanelRoot: View {
             VocabbyTheme.hairline.frame(width: 1).padding(.vertical, 4)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("STREAK")
+                Text(vi ? "CHUỖI NGÀY" : "STREAK")
                     .font(.plexMono(9, weight: .medium))
                     .foregroundStyle(VocabbyTheme.tertiary)
                 // Nổi bật streak bằng màu accent + đếm ngược tới kỷ lục.

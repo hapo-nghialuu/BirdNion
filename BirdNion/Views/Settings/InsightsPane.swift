@@ -51,7 +51,7 @@ struct InsightsPane: View {
         SettingsPage(maxContentWidth: 680) {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Insights")
+                    Text(L10n.t("settings.tab.insights", settings.appLanguage))
                         .font(.plexSans(24, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                     Text(vi ? "Chi phí sử dụng cục bộ, không hiển thị đường dẫn đầy đủ."

@@ -540,7 +540,7 @@ struct AgentDetailPanelRoot: View {
                         .foregroundStyle(VocabbyTheme.tertiary)
                     ForEach(status.windows) { window in
                         HStack {
-                            Text(window.label.uppercased())
+                            Text(L10n.windowLabel(window.label, preference: settings.appLanguage).uppercased())
                                 .font(.plexMono(11))
                                 .foregroundStyle(VocabbyTheme.secondary)
                             Spacer()

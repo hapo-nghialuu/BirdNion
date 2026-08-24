@@ -71,7 +71,7 @@ struct AllAgentsQuotaSection: View {
                 .foregroundStyle(VocabbyTheme.primary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            Text(row.windowLabel.uppercased())
+            Text(L10n.windowLabel(row.windowLabel, preference: settings.appLanguage).uppercased())
                 .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .lineLimit(1)

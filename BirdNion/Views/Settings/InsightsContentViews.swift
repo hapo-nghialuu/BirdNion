@@ -61,7 +61,7 @@ struct InsightsOverviewContent: View {
     private var confidenceText: String {
         let c = report.overview.confidence
         var parts: [String] = []
-        if !c.live.isEmpty { parts.append("LIVE: " + c.live.map(\.displayName).joined(separator: ", ")) }
+        if !c.live.isEmpty { parts.append((vi ? "LIVE: " : "LIVE: ") + c.live.map(\.displayName).joined(separator: ", ")) }
         if !c.historyOnly.isEmpty {
             parts.append((vi ? "LỊCH SỬ: " : "HISTORY: ")
                          + c.historyOnly.map(\.displayName).joined(separator: ", "))
@@ -157,7 +157,7 @@ struct InsightsProjectsContent: View {
                         .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                         .lineLimit(1)
-                    Text(row.source.displayName + (row.attribution == .unknown ? " · Unknown" : ""))
+                    Text(row.source.displayName + (row.attribution == .unknown ? " · " + L10n.t("insights.unknownSource", settings.appLanguage) : ""))
                         .font(.plexMono(9))
                         .foregroundStyle(SettingsTheme.tertiary)
                         .lineLimit(1)

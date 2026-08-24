@@ -197,7 +197,7 @@ extension AgentDetailSnapshot {
             ],
             recentActivity: Array(days.suffix(90)),
             sourceName: effectiveSourceName,
-            sourceType: status == nil ? "Local evidence" : "Provider status",
+            sourceType: status == nil ? L10n.t("agent.source.localEvidence", nil) : L10n.t("agent.source.providerStatus", nil),
             logPath: logEvidence,
             configPath: configEvidence,
             connectionStatus: connectionStatus,

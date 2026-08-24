@@ -111,13 +111,13 @@ struct AgentActivityContent: View {
 
     private var weekdayLabelsColumn: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            Text("T2").frame(height: 10)
+            Text(vi ? "T2" : "Mon").frame(height: 10)
             Text("").frame(height: 10)
-            Text("T4").frame(height: 10)
+            Text(vi ? "T4" : "Wed").frame(height: 10)
             Text("").frame(height: 10)
-            Text("T6").frame(height: 10)
+            Text(vi ? "T6" : "Fri").frame(height: 10)
             Text("").frame(height: 10)
-            Text("CN").frame(height: 10)
+            Text(vi ? "CN" : "Sun").frame(height: 10)
         }
         .font(.plexMono(8))
         .foregroundStyle(VocabbyTheme.tertiary)

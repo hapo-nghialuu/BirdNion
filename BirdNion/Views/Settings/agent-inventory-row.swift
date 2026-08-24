@@ -127,7 +127,7 @@ struct AgentInventoryRow: View {
             HStack(spacing: 12) {
                 if let status = snapshot.providerStatus,
                    let window = ProviderStatusSummary.lowestWindow(status) {
-                    Text("QUOTA · \(window.label) \(window.remainingPct)%")
+                    Text("QUOTA · \(L10n.windowLabel(window.label, preference: language)) \(window.remainingPct)%")
                 }
                 if let cost = snapshot.costSummary {
                     Text("90D · \(AllUsageFormat.usd(cost.periodUSD)) · \(AllUsageFormat.tokens(cost.periodTokens))")

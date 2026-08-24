@@ -21,9 +21,9 @@ enum ClaudeCodeConfigWriter {
 
         var message: String {
             switch self {
-            case .notSupported: return "Provider không hỗ trợ làm backend Claude Code"
-            case .missingToken: return "Provider chưa có API key"
-            case .missingModels: return "Chưa chọn đủ 3 model (Haiku/Sonnet/Opus)"
+            case .notSupported: return L10n.t("ccWriter.notSupported", nil)
+            case .missingToken: return L10n.t("ccWriter.missingToken", nil)
+            case .missingModels: return L10n.t("ccWriter.missingModels", nil)
             }
         }
     }
@@ -290,8 +290,8 @@ enum ClaudeCodeConfigWriter {
 
         var message: String {
             switch self {
-            case .invalidJSON: return "JSON không hợp lệ"
-            case .noEnv: return "Không tìm thấy khối env / các biến ANTHROPIC_*"
+            case .invalidJSON: return L10n.t("ccWriter.invalidJSON", nil)
+            case .noEnv: return L10n.t("ccWriter.noEnv", nil)
             }
         }
     }

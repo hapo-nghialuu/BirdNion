@@ -155,7 +155,7 @@ struct AgentsPane: View {
                     HStack(spacing: 12) {
                         Text(vi ? "HIỆN" : "SHOW")
                             .frame(width: 40, alignment: .leading)
-                        Text("AGENT")
+                        Text(vi ? "AGENT" : "AGENT")
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text(vi ? "NGUỒN" : "SOURCE")
                             .frame(width: 110, alignment: .leading)
