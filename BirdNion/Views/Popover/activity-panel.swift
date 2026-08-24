@@ -5,6 +5,8 @@ struct ActivityPanelRoot: View {
     let window: AgentActivityWindow
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+    /// Ô ngày được click — hiện dòng chi tiết dưới heatmap.
+    @State private var selectedDay: AgentActivityDay?
 
     private static let colorSteps: [Color] = [
         Color(red: 0.94, green: 0.93, blue: 0.90), // #EFEDE6
@@ -30,6 +32,9 @@ struct ActivityPanelRoot: View {
             ForEach(Array(weekBands.enumerated()), id: \.offset) { _, band in
                 heatmapBlock(weeks: band)
                 rangeRow(weeks: band)
+            }
+            if let day = selectedDay {
+                selectedDayRow(day)
             }
             legendRow
             footerStats
@@ -100,7 +105,9 @@ struct ActivityPanelRoot: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .overlay(alignment: .bottom) { VocabbyTheme.hairline.frame(height: 1) }
+        .overlay(alignment: .bottom) {
+            VocabbyTheme.hairline.frame(height: 1).padding(.horizontal, 14)
+        }
     }
 
     /// Grid ngang: cột nhãn thứ bên trái (T2/T4/T6/CN) + mỗi tuần một cột 7 ô.
@@ -126,6 +133,16 @@ struct ActivityPanelRoot: View {
                         Rectangle()
                             .fill(colorForFraction(fraction))
                             .frame(width: Self.cellSize, height: Self.cellSize)
+                            .overlay(
+                                Rectangle().stroke(
+                                    selectedDay?.date == day.date ? VocabbyTheme.primary : Color.clear,
+                                    lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedDay = (selectedDay?.date == day.date) ? nil : day
+                                NotificationCenter.default.post(name: .birdnionAgentPanelRefit, object: nil)
+                            }
                             .help(dayHelp(day))
                     }
                 }
@@ -152,6 +169,38 @@ struct ActivityPanelRoot: View {
         .foregroundStyle(VocabbyTheme.tertiary)
         .padding(.horizontal, 14)
         .padding(.bottom, 8)
+    }
+
+    /// Chi tiết ngày được click: thứ + ngày, token, tiền.
+    private func selectedDayRow(_ day: AgentActivityDay) -> some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(VocabbyTheme.blue).frame(width: 3, height: 12)
+            Text(fullDayLabel(day.date))
+                .font(.plexSans(12, weight: .medium))
+                .foregroundStyle(VocabbyTheme.primary)
+            Spacer(minLength: 8)
+            if day.isActive {
+                Text("\(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
+                    .font(.plexMono(11, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            } else {
+                Text(vi ? "Không hoạt động" : "No activity")
+                    .font(.plexMono(11))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .overlay(alignment: .top) {
+            VocabbyTheme.hairline.frame(height: 1).padding(.horizontal, 14)
+        }
+    }
+
+    private func fullDayLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
+        formatter.dateFormat = "EEEE, d MMM"
+        return formatter.string(from: date).capitalized
     }
 
     private func dayHelp(_ day: AgentActivityDay) -> String {
@@ -189,7 +238,9 @@ struct ActivityPanelRoot: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .overlay(alignment: .top) { VocabbyTheme.hairline.frame(height: 1) }
+        .overlay(alignment: .top) {
+            VocabbyTheme.hairline.frame(height: 1).padding(.horizontal, 14)
+        }
     }
 
     private var footerStats: some View {
@@ -226,9 +277,26 @@ struct ActivityPanelRoot: View {
                 Text("STREAK")
                     .font(.plexMono(9, weight: .medium))
                     .foregroundStyle(VocabbyTheme.tertiary)
+                // Nổi bật streak bằng màu accent + đếm ngược tới kỷ lục.
                 Text("\(window.currentStreak) " + (vi ? "ngày" : "days"))
                     .font(.plexMono(13, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
+                    .foregroundStyle(VocabbyTheme.blue)
+                if window.currentStreak > 0 {
+                    if window.currentStreak >= window.longestStreak {
+                        Text(vi ? "ĐANG LÀ KỶ LỤC" : "RECORD PACE")
+                            .font(.plexMono(8, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.success)
+                            .tracking(0.4)
+                    } else {
+                        let remain = window.longestStreak - window.currentStreak + 1
+                        Text(vi
+                             ? "CÒN \(remain) NGÀY VƯỢT KỶ LỤC \(window.longestStreak)"
+                             : "\(remain)D TO BEAT \(window.longestStreak)D BEST")
+                            .font(.plexMono(8, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                            .tracking(0.3)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 10)
