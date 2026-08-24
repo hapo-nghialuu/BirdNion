@@ -371,7 +371,8 @@ function stackedBarChart(days: CombinedDay[], pin: PinApi): HTMLElement {
   };
 
   for (const day of days) {
-    const col = el("div", "bar-col");
+    // Chỉ cột ngày mới bấm được — biểu đồ 24h bên macOS không có tương tác.
+    const col = el("div", "bar-col is-clickable");
     col.dataset.date = day.date;
     col.title = `${dayLabel(day.date)}: ${tokens(day.tokens)} · ${usd(day.usd)}`;
     if (day.tokens > 0) {
