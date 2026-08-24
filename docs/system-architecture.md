@@ -125,6 +125,16 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
 - OMP/Pi stream JSONL theo chunk 64 KiB với read cursor tuyến tính và file cap 64 MiB; chỉ compact prefix đã consume. Malformed complete line, missing root, enumeration/read error, cancellation hoặc entry-limit truncation đều làm scan incomplete. Partial result không được merge vào high-water history hoặc cache/stamp như live; malformed unterminated tail đang được writer append mới được bỏ qua. Dedup chỉ claim key sau khi record có timestamp/usage hợp lệ, nên duplicate rỗng không chặn record usage hợp lệ phía sau. Kiro trả typed scan completion theo từng archive/SQLite/CLI source; JSON đúng cú pháp nhưng sai schema vẫn là failure, còn clean zero-usage khác I/O/parse failure và partial source không được stamp live.
 - `CostHistoryStore.applyWithReceipt` chỉ công bố merged window/freshness sau durable atomic write. Mutation read chỉ tạo document mới khi file thật sự chưa tồn tại; file hiện hữu unreadable/malformed làm receipt fail-closed và không bị ghi đè. Persist failure trả lại persisted window cũ; Claude/Codex/Grok/Kiro/OMP/Pi không phát `live` hoặc advance pricing/counting revision từ state chỉ tồn tại trong memory. Claude cũng không publish/cache hourly live khi daily history chưa persist.
 - **52-week Activity Ledger**: Tổng hợp daily token evidence thật từ 400 ngày trong `CostHistoryStore` thành đúng 52 tuần; future/out-of-window evidence bị loại, zero-day có evidence khác missing-day, streak/current/longest tính theo ngày liên tiếp.
+
+#### 3.6.1 Bản Linux (Tauri) — cùng mô hình (2026-08-24)
+
+Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
+
+- Catalog: `installed_agents.rs` giữ đúng allowlist bounded và kiểm tra mode bit thực thi; visibility lưu ở `localStorage` key `birdnion.agentVisibility`, vẫn chỉ ảnh hưởng hiển thị.
+- Sáu nguồn cost giống macOS sau khi thêm `kiro_scanner.rs` (CLI sessions với credit tính phí thật, SQLite v1/v2, archive JSON).
+- Cost tách khỏi provider toggle: `enabled_usage_sources()` là hợp của provider đang bật và agent phát hiện được, nên CLI tắt provider vẫn báo chi phí.
+- Panel phụ không nằm trong popover 420px mà là cửa sổ Tauri riêng (`panel.html`, 340px, frameless, always-on-top) neo cạnh popover — tương đương NSPanel con bên macOS, giữ nguyên vòng đời hover-transient / click-pin.
+- Không build được trên macOS (crate Linux-only); kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu.
 ## 4. Luồng quota
 
 ```

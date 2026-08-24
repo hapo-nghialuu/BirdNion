@@ -1,6 +1,8 @@
 # Linux ↔ macOS parity matrix
 
-Baseline updated 2026-08-21: macOS + Linux after Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest, per-provider budget, Usage Insights, Guided Setup và Action Center v1.
+Baseline updated 2026-08-24: macOS + Linux after the agent-centric remake — installed-agent catalog, 4-block All tab, side panels, 52-week activity, Kiro as the sixth cost source.
+
+Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest, per-provider budget, Usage Insights, Guided Setup và Action Center v1.
 
 | Area | macOS | Linux target | Status |
 |---|---|---|---|
@@ -36,6 +38,24 @@ Baseline updated 2026-08-21: macOS + Linux after Data Confidence, budget/forecas
 | Antigravity/Copilot OAuth accounts cards | multi-account store | copilot device-flow có; multi-account chưa | **gap (todo)** |
 | Kilo org picker / menu-bar metric pickers | riêng macOS menu bar | tray tooltip không có metric per-provider | **accepted gap** |
 
+## Agent-centric remake (2026-08-23 → 2026-08-24)
+
+| Area | macOS | Linux | Status |
+|---|---|---|---|
+| Installed-agent catalog | `InstalledAgentCatalog` + `InstalledAgentDetectors` (allowlist bounded) | `installed_agents.rs` — cùng allowlist 16 agent, `is_executable` theo mode bit, không quét đệ quy | **done** |
+| Settings tab Agent | `AgentsPane` bảng phẳng + filter pill + cost 90d | `settings-agents.ts` cùng filter/predicate/sort (active lên trước) | **done** |
+| All tab 4 khối | quota / cost-by / configured / budget | `all-agents-sections.ts` cùng 4 khối | **done** |
+| Cost by: mode agent/model/token | 3 mode, đổi theo kỳ đang chọn | `costByMode()` lưu ở `birdnion.costByMode`, cùng 3 mode | **done** |
+| Cost source thứ 6 (Kiro) | `KiroCostScanner.swift` (3 thế hệ lưu trữ) | `kiro_scanner.rs` — CLI sessions (credit thật × $0.04), SQLite v1/v2, archive JSON | **done** |
+| Cost tách khỏi provider toggle | scan theo agent detected, provider chỉ gate quota/tab/menu bar | `enabled_usage_sources()` hợp provider bật ∪ agent detected | **done** |
+| Side panel (hover/pin) | `AgentDetailPanelCoordinator` (NSPanel con 340px) | cửa sổ Tauri `panel.html` 340px, frameless, always-on-top, đặt cạnh popover +4px | **done** |
+| Kỳ ngân sách tuần/tháng | mặc định tuần, ẩn card khi chưa cấu hình | `BudgetPeriod` trong `usage.ts`, cùng mặc định và cùng điều kiện ẩn | **done** |
+| Heatmap hoạt động 52 tuần | Insights pane grid 52 cột | `insights-activity.ts` cùng grid, tô đậm theo token | **done** |
+| Footer luân phiên nguồn | `ActionsList` đổi 5s giữa UPDATED ↔ LIVE/LỊCH SỬ | slot cố định 16px cùng cadence | **done** |
+| Logo agent ngoài provider | OhMyPi/Pi/Aider/Amp/Auggie/Goose imageset, qwen dùng mark Alibaba | cùng bộ asset trong `public/logos/` | **done** |
+| Action Center | sheet mở từ icon header mỗi pane | `settings-window.ts` cùng cách (không nằm trong sidebar) | **done** |
+| Hotkey / menu-bar metric | xem bảng trên | — | **accepted gap** |
+
 ## Provider ids (canonical order)
 
 claude, codex, minimax, hapo, openrouter, deepseek, zai, elevenlabs, deepgram, groq, **grok**, **openai**, **ollama**, copilot, kilo, commandcode, freemodel, mimo, alibaba, cursor, gemini, kiro, opencode, opencodego, antigravity, bedrock
@@ -53,3 +73,9 @@ claude, codex, minimax, hapo, openrouter, deepseek, zai, elevenlabs, deepgram, g
 Path: `~/.config/birdnion/cost-history.json` (shared schema with macOS).
 
 Never-shrink merge for `claude` / `codex` / `grok` so deleted local sessions keep past daily bars.
+
+Sáu nguồn chi phí cục bộ: `claude`, `codex`, `grok`, `omp`, `pi`, `kiro`.
+
+## Verification
+
+Bản Linux KHÔNG build được trên máy macOS: crate `src-tauri` là Linux-only và `cargo check` báo đúng 9 lỗi có sẵn ở `lib.rs`/`codex_config.rs` trên host macOS. Kiểm chứng thật chạy ở `.github/workflows/linux-build.yml` (Ubuntu 22.04, `cargo test` + `npm run tauri build`), trigger bằng `workflow_dispatch`.
