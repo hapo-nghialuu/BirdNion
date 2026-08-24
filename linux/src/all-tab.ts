@@ -9,7 +9,7 @@ import {
 } from "./usage";
 import { t, currentLang } from "./i18n";
 import { logoMark } from "./logos";
-import { showDayPanel, showActivityPanel, closeTransientPanel, closeDayPanelOnly } from "./side-panel";
+import { showDayPanel, showActivityPanel, bindHoverPanel, closeDayPanelOnly } from "./side-panel";
 
 const PERIOD_KEY = "birdnion.allChartDays";
 
@@ -292,12 +292,13 @@ function compactStatsRow(windowDaily: CombinedDay[]): HTMLElement {
 
   // Banded heatmap cần dải ngày LIÊN TỤC (kể cả ngày không active) để dựng
   // đúng lưới tuần Thứ 2 → CN — không filter active như trước.
-  const cells = windowDaily.map((d) => ({ date: d.date, usd: d.usd, tokens: d.tokens }));
+  const cells = windowDaily.map((d) => ({
+    date: d.date, usd: d.usd, tokens: d.tokens, models: d.models,
+  }));
   const longestStreak = longestStreakIn(windowDaily);
   const openActivity = (pinned: boolean) =>
     showActivityPanel(cells, peak, average, streak, longestStreak, pinned);
-  row.addEventListener("mouseenter", () => openActivity(false));
-  row.addEventListener("mouseleave", () => closeTransientPanel());
+  bindHoverPanel(row, () => openActivity(false));
   row.addEventListener("click", () => openActivity(true));
   return row;
 }
@@ -407,15 +408,14 @@ function stackedBarChart(days: CombinedDay[], pin: PinApi): HTMLElement {
     } else {
       col.append(el("div", "bar-idle"));
     }
-    col.addEventListener("mouseenter", () => {
+    // Hover mở panel phụ transient (macOS parity); rời chuột thì đóng.
+    bindHoverPanel(col, () => {
       hoverDay = day;
-      // Hover mở panel phụ transient (macOS parity); rời chuột thì đóng.
       showDayPanel(day, windowUsdTotal(), windowLabel, false);
       paint();
     });
     col.addEventListener("mouseleave", () => {
       hoverDay = null;
-      closeTransientPanel();
       paint();
     });
     col.addEventListener("click", () => {

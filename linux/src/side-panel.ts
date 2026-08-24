@@ -64,6 +64,22 @@ export function closeDayPanelOnly(): void {
   closePinnedPanel();
 }
 
+/** Thuộc tính đánh dấu phần tử mở panel khi hover. Container dùng nó để biết
+ *  con trỏ có còn nằm trên "chủ" của panel hay không. */
+export const PANEL_OWNER_ATTR = "data-panel-owner";
+
+/** Gắn hover mở panel transient cho một phần tử.
+ *
+ *  Không thể chỉ dựa vào `mouseleave` của chính phần tử: mỗi lần scan trả kết
+ *  quả, popover dựng lại toàn bộ body nên node đang hover bị vứt đi và sự kiện
+ *  rời chuột của nó KHÔNG BAO GIỜ bắn — panel sẽ nằm lại vĩnh viễn. Vì vậy
+ *  container còn theo dõi `mouseover` để đóng khi con trỏ sang chỗ khác. */
+export function bindHoverPanel(node: HTMLElement, open: () => void): void {
+  node.setAttribute(PANEL_OWNER_ATTR, "1");
+  node.addEventListener("mouseenter", open);
+  node.addEventListener("mouseleave", () => closeTransientPanel());
+}
+
 export function isPanelPinned(): boolean {
   return pinned;
 }
@@ -99,7 +115,7 @@ export function showAgentPanel(
 }
 
 export function showActivityPanel(
-  cells: { date: string; usd: number; tokens: number }[],
+  cells: { date: string; usd: number; tokens: number; models?: CombinedModel[] }[],
   peakUsd: number,
   avgUsd: number,
   streak: number,

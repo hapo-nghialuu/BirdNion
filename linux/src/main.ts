@@ -29,6 +29,7 @@ import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
 import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
+import { closeTransientPanel, PANEL_OWNER_ATTR } from "./side-panel";
 import { InstalledAgent, visibleAgentIds } from "./settings-agents";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
@@ -809,8 +810,29 @@ function scheduleFitWindow() {
   if (!fitWindowInFlight) void runPendingWindowFits();
 }
 
+/** Rời hẳn popover thì panel transient phải đóng.
+ *
+ *  Không thể chỉ dựa vào `mouseleave` của từng hàng: mỗi lần scan trả kết quả,
+ *  `render()` dựng lại toàn bộ body, node đang hover bị vứt đi và sự kiện rời
+ *  chuột của nó không bao giờ bắn — panel sẽ nằm lại. Chốt ở cấp container thì
+ *  luôn bắt được, vì container không bị thay. */
+let popoverLeaveBound = false;
+function bindPopoverLeave(app: Element): void {
+  if (popoverLeaveBound) return;
+  popoverLeaveBound = true;
+  app.addEventListener("mouseleave", () => closeTransientPanel());
+  // Chốt chính: node mở panel có thể bị render() phá huỷ khi đang hover, khi đó
+  // `mouseleave` của nó không bắn. `mouseover` nổi bọt lên container nên mọi
+  // dịch chuyển sang chỗ khác đều bị bắt.
+  app.addEventListener("mouseover", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target?.closest(`[${PANEL_OWNER_ATTR}]`)) closeTransientPanel();
+  });
+}
+
 function render() {
   const app = document.querySelector("#app")!;
+  bindPopoverLeave(app);
   app.textContent = "";
   // Fall back to All when the remembered provider tab disappeared — but only
   // once statuses are real; early paints during load have an empty/partial

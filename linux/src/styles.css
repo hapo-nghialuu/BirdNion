@@ -5813,3 +5813,11 @@ body.settings-body-root {
 .panel-quota-pct.tone-ok { color: var(--success); }
 .panel-quota-pct.tone-critical { color: var(--critical); }
 .cost-hero-agents { color: var(--text3); }
+
+/* Dòng gộp "+N model khác" dưới danh sách model của ngày đã chọn. */
+.panel-row-more {
+  padding: 2px 14px 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text3);
+}

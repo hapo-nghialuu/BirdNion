@@ -27,6 +27,7 @@ mod pi_scanner;
  mod usage;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -1327,6 +1328,24 @@ async fn list_installed_agents() -> Vec<installed_agents::InstalledAgent> {
 /// `AgentDetailPanelCoordinator`. `pinned=false` là panel transient do hover,
 /// sẽ bị `close_side_panel` đóng khi chuột rời; panel đã ghim chỉ đóng bằng
 /// nút ✕ trong nội dung.
+/// Panel có đang được MUỐN hiện hay không.
+///
+/// `open_side_panel` là async và lần đầu phải dựng hẳn một cửa sổ, trong khi
+/// `close_side_panel` chạy đồng bộ. Rê chuột qua rồi rời ngay thì lệnh đóng
+/// chạy trước lúc cửa sổ dựng xong: `get_webview_window("panel")` trả `None`
+/// nên chẳng ẩn được gì, và cửa sổ hiện ra sau đó nằm lại trên màn hình.
+/// Cờ này cho lệnh đóng "thắng" cuộc đua — cửa sổ vừa dựng thấy ý định đã bị
+/// huỷ thì tự ẩn ngay.
+static PANEL_WANTED: AtomicBool = AtomicBool::new(false);
+
+/// Log vòng đời panel ra stderr khi đặt `BIRDNION_PANEL_DEBUG=1` — dùng để
+/// truy vết đua mở/đóng mà không phải đoán.
+fn panel_log(msg: &str) {
+    if std::env::var_os("BIRDNION_PANEL_DEBUG").is_some() {
+        eprintln!("[panel] {msg}");
+    }
+}
+
 #[tauri::command]
 async fn open_side_panel(
     app: tauri::AppHandle,
@@ -1335,18 +1354,27 @@ async fn open_side_panel(
 ) -> Result<(), String> {
     use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
+    PANEL_WANTED.store(true, Ordering::SeqCst);
+    panel_log(&format!("open pinned={pinned}"));
     let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
     if let Some(existing) = app.get_webview_window("panel") {
         let _ = existing.emit("birdnion-panel-payload", payload.clone());
         position_panel_beside_main(&app, &existing);
-        let _ = existing.show();
-        if pinned {
-            let _ = existing.set_focus();
+        if PANEL_WANTED.load(Ordering::SeqCst) {
+            let _ = existing.show();
+            if pinned {
+                let _ = existing.set_focus();
+            }
+            panel_log("open: reused existing window");
+        } else {
+            let _ = existing.hide();
+            panel_log("open: cancelled before show (reuse)");
         }
         return Ok(());
     }
 
+    // Dựng ẩn rồi mới hiện: tránh nháy, và cho phép huỷ giữa chừng.
     // Seed payload trước khi script chạy để panel không nháy trống.
     let init = format!("window.__BIRDNION_PANEL__={payload_json};");
     let win = WebviewWindowBuilder::new(&app, "panel", WebviewUrl::App("panel.html".into()))
@@ -1356,11 +1384,22 @@ async fn open_side_panel(
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
+        .visible(false)
         .focused(pinned)
         .initialization_script(&init)
         .build()
         .map_err(|e| e.to_string())?;
     position_panel_beside_main(&app, &win);
+    // Chuột đã rời trong lúc dựng → không hiện nữa.
+    if PANEL_WANTED.load(Ordering::SeqCst) {
+        let _ = win.show();
+        if pinned {
+            let _ = win.set_focus();
+        }
+        panel_log("open: built and shown");
+    } else {
+        panel_log("open: cancelled while building");
+    }
     Ok(())
 }
 
@@ -1371,8 +1410,14 @@ async fn open_side_panel(
 #[tauri::command]
 fn close_side_panel(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::{Emitter, Manager};
-    if let Some(panel) = app.get_webview_window("panel") {
-        let _ = panel.hide();
+    // Đặt trước khi ẩn: nếu cửa sổ đang dựng dở, nó sẽ thấy cờ này và không hiện.
+    PANEL_WANTED.store(false, Ordering::SeqCst);
+    match app.get_webview_window("panel") {
+        Some(panel) => {
+            let _ = panel.hide();
+            panel_log("close: hidden");
+        }
+        None => panel_log("close: no window yet (intent cleared)"),
     }
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.emit("birdnion-panel-closed", ());
@@ -1449,6 +1494,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 /// mỗi lần đóng popover).
 fn hide_side_panel_with_popover(app: &tauri::AppHandle) {
     use tauri::Manager;
+    PANEL_WANTED.store(false, Ordering::SeqCst);
     if let Some(panel) = app.get_webview_window("panel") {
         let _ = panel.hide();
     }

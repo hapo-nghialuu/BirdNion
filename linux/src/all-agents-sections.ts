@@ -8,7 +8,7 @@
 import { Combined, CombinedDay, CombinedModel, UsageSourceId, usd, tokensShort } from "./usage";
 import { t } from "./i18n";
 import { logoMark, logoUrl } from "./logos";
-import { showModelsPanel, showAgentPanel, closeTransientPanel } from "./side-panel";
+import { showModelsPanel, showAgentPanel, bindHoverPanel } from "./side-panel";
 import { buildAgentPanelPayload } from "./agent-panel-payload";
 import type { ProviderStatus } from "./provider-tab";
 
@@ -214,8 +214,7 @@ export function costBySection(
         source: row.id as UsageSourceId,
         sourceLabel: SOURCE_LABEL[row.id as UsageSourceId],
       });
-      node.addEventListener("mouseenter", () => showAgentPanel(payload(), "cost", false));
-      node.addEventListener("mouseleave", () => closeTransientPanel());
+      bindHoverPanel(node, () => showAgentPanel(payload(), "cost", false));
       node.addEventListener("click", () => showAgentPanel(payload(), "cost", true));
     }
     wrap.append(node);
@@ -232,8 +231,7 @@ export function costBySection(
     if (mode !== "agent") {
       // Hover dòng "+N model khác" mở panel liệt kê toàn bộ model tràn.
       const overflow = overflowModels(window, rest.map((r) => r.id));
-      node.addEventListener("mouseenter", () => showModelsPanel(overflow, mode));
-      node.addEventListener("mouseleave", () => closeTransientPanel());
+      bindHoverPanel(node, () => showModelsPanel(overflow, mode));
     } else {
       // Mode agent: click mở panel của agent bị ẩn đầu tiên (macOS summaryRow).
       const next = rest[0];

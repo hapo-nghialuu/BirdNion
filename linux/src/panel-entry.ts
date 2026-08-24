@@ -29,7 +29,13 @@ export type PanelPayload =
       longestStreak: number;
     };
 
-export type ActivityCell = { date: string; usd: number; tokens: number };
+export type ActivityCell = {
+  date: string;
+  usd: number;
+  tokens: number;
+  /** Model dùng trong ngày — hiện khi click ô (macOS `selectedDayModels`). */
+  models?: CombinedModel[];
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -366,7 +372,8 @@ function aggregateModels(days: AgentCostDay[]): CombinedModel[] {
 // footer — mở từ hàng stats của chart tab All (KHÔNG phải tab của agent
 // panel; đọc lại Swift `ActivityPanelRoot` làm nguồn sự thật 2026-08-24).
 
-type DayCell = { date: string; usd: number; tokens: number };
+/** Ô trong lưới hoạt động — `models` chỉ có ở ngày thật, ô đệm để trống. */
+type DayCell = { date: string; usd: number; tokens: number; models?: CombinedModel[] };
 
 function activityPanel(payload: Extract<PanelPayload, { kind: "activity" }>): HTMLElement {
   const wrap = el("div", "panel-content");
@@ -409,7 +416,17 @@ function activityPanel(payload: Extract<PanelPayload, { kind: "activity" }>): HT
 
     if (selectedDate) {
       const day = flat.find((d) => d.date === selectedDate);
-      if (day) bodyEl.append(heatmapSelectedDayRow(day));
+      if (day) {
+        bodyEl.append(heatmapSelectedDayRow(day));
+        // Click ô còn liệt kê model của đúng ngày đó (macOS parity), tối đa 6
+        // dòng rồi gộp phần dư — panel cao tự động nên không được dài vô hạn.
+        const models = [...(day.models ?? [])].sort((a, b) => b.tokens - a.tokens);
+        for (const model of models.slice(0, 6)) bodyEl.append(modelRow(model, "usd"));
+        if (models.length > 6) {
+          bodyEl.append(el("div", "panel-row-more",
+            t("moreModels", { n: models.length - 6 })));
+        }
+      }
     }
 
     bodyEl.append(heatmapLegendRow());
