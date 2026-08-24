@@ -4,6 +4,8 @@
 const EXT: Record<string, "svg" | "png"> = {
   minimax: "png",
   hapo: "png",
+  aider: "png",
+  goose: "png",
 };
 
 /** Absolute-ish public path for a provider logo, or null when unknown. */
@@ -13,6 +15,8 @@ export function logoUrl(id: string): string | null {
     "openrouter", "tryapi", "deepseek", "zai", "elevenlabs", "hiyo", "deepgram", "groq",
     "copilot", "kilo", "commandcode", "freemodel", "mimo", "alibaba",
     "cursor", "gemini", "kiro", "opencode", "opencodego", "antigravity", "bedrock",
+    // Agent không phải provider — cần logo cho Cost by / danh sách agent cài đặt.
+    "omp", "pi", "aider", "amp", "auggie", "goose", "qwen",
   ]);
   if (!known.has(id)) return null;
   const ext = EXT[id] ?? "svg";
