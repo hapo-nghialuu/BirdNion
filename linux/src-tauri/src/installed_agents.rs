@@ -92,7 +92,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         id: "kiro", display_name: "Kiro", kind: "ide",
         binaries: &["kiro-cli", "kiro"],
         config_paths: &[".kiro", ".local/share/kiro"],
-        provider_id: Some("kiro"), cost_source: None,
+        provider_id: Some("kiro"), cost_source: Some("kiro"),
     },
     AgentDescriptor {
         id: "antigravity", display_name: "Antigravity", kind: "cli",

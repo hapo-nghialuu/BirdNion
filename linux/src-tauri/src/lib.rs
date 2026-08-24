@@ -15,6 +15,7 @@ mod hiyo_keys;
 mod installed_agents;
 mod freemodel_accounts;
  mod grok_scanner;
+mod kiro_scanner;
 mod omp_scanner;
 mod pi_scanner;
  mod platform;
@@ -165,6 +166,33 @@ async fn omp_usage_report() -> Option<usage::UsageReport> {
     .ok()
 }
 
+/// Kiro CLI local session cost (real billed credits) + history merge.
+/// Kiro sessions carry no `cwd`, so unlike omp/pi there is no per-project
+/// contribution to persist here.
+#[tauri::command]
+async fn kiro_usage_report() -> Option<usage::UsageReport> {
+    if !local_usage_source_enabled("kiro") {
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("kiro") {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return report.clone();
+            }
+        }
+        let now = chrono::Local::now();
+        let scan = kiro_scanner::scan_kiro_usage(now);
+        let merged = cost_history::apply_and_report("kiro", Some(&scan.usage));
+        USAGE_REPORT_CACHE
+            .lock()
+            .unwrap()
+            .insert("kiro", (Instant::now(), merged.clone()));
+        merged
+    })
+    .await
+    .ok()
+}
+
 /// Pi Agent local session cost + history merge.
 #[tauri::command]
 async fn pi_usage_report() -> Option<usage::UsageReport> {
@@ -225,13 +253,42 @@ async fn project_insights_report(
     .map_err(|error| error.to_string())
 }
 
- fn enabled_usage_sources() -> HashSet<String> {
-     config::enabled_providers()
-         .into_iter()
-         .map(|provider| provider.id)
-        .filter(|id| matches!(id.as_str(), "claude" | "codex" | "grok" | "omp" | "pi"))
-         .collect()
- }
+/// Nguồn chi phí cục bộ quét được từ log trên máy.
+const LOCAL_COST_SOURCES: [&str; 6] = ["claude", "codex", "grok", "omp", "pi", "kiro"];
+
+/// Agent phát hiện được trên máy, cache 5 phút — dò PATH nên không gọi mỗi lần
+/// dựng báo cáo.
+static DETECTED_AGENT_CACHE: LazyLock<Mutex<Option<(Instant, HashSet<String>)>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+fn detected_agent_ids() -> HashSet<String> {
+    if let Some((at, ids)) = DETECTED_AGENT_CACHE.lock().unwrap().as_ref() {
+        if at.elapsed() < USAGE_REPORT_TTL {
+            return ids.clone();
+        }
+    }
+    let ids: HashSet<String> = installed_agents::detect(&[], &HashMap::new())
+        .into_iter()
+        .map(|agent| agent.id)
+        .collect();
+    *DETECTED_AGENT_CACHE.lock().unwrap() = Some((Instant::now(), ids.clone()));
+    ids
+}
+
+fn enabled_usage_sources() -> HashSet<String> {
+    // Cost đi theo AGENT, provider chỉ gate quota/tab/menu bar: Grok CLI vẫn
+    // hiện chi phí khi provider Grok đang tắt (macOS parity 2026-08-24).
+    let detected = detected_agent_ids();
+    let enabled: HashSet<String> = config::enabled_providers()
+        .into_iter()
+        .map(|provider| provider.id)
+        .collect();
+    LOCAL_COST_SOURCES
+        .iter()
+        .filter(|id| enabled.contains(**id) || detected.contains(**id))
+        .map(|id| (*id).to_string())
+        .collect()
+}
 
 fn local_usage_source_enabled(source: &str) -> bool {
     enabled_usage_sources().contains(source)
@@ -1369,6 +1426,7 @@ pub fn run() {
             claude_usage_report,
             codex_usage_report,
              grok_usage_report,
+            kiro_usage_report,
             omp_usage_report,
             pi_usage_report,
              project_insights_report,
