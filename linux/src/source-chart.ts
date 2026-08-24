@@ -81,6 +81,10 @@ export function sourceChartCard(
     } else {
       col.append(el("div", "bar-idle"));
     }
+    // Hover chỉ highlight, không mở gì — đúng như macOS `onHover` ở chart
+    // của tab provider (khác chart tab All, chỗ đó hover mở panel phụ).
+    col.addEventListener("mouseenter", () => col.classList.add("hovered"));
+    col.addEventListener("mouseleave", () => col.classList.remove("hovered"));
     col.addEventListener("click", () => {
       const key = dayKey(day);
       if (pinnedKey === key) {
