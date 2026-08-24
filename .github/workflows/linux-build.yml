@@ -40,6 +40,22 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # tauri.conf.json khai báo resource `binaries/cliproxyapi`, nhưng thư mục
+      # đó bị gitignore và helper build từ một repo Go riêng, nên CI không có
+      # cách nào lấy bản thật. Không có file này thì build.rs fail và cả job
+      # dừng trước khi chạy được test (CI hỏng từ 2026-07-21).
+      # Job này CHỈ để verify compile/test/bundle — bundle sinh ra ở đây không
+      # dùng để phát hành. Bản phát hành đi qua `linux-release.yml`, workflow
+      # đó tải helper thật kèm checksum.
+      - name: Stub bundled CLIProxyAPI helper (verification build only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          printf '#!/bin/sh\necho "BirdNion CI stub - not a real CLIProxyAPI helper" >&2\nexit 1\n' \
+            > src-tauri/binaries/cliproxyapi
+          chmod 755 src-tauri/binaries/cliproxyapi
+
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
@@ -52,7 +68,7 @@ jobs:
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:
-          name: birdnion-linux-bundles
+          name: birdnion-linux-bundles-verification-only
           path: |
             linux/src-tauri/target/release/bundle/deb/*.deb
             linux/src-tauri/target/release/bundle/rpm/*.rpm
