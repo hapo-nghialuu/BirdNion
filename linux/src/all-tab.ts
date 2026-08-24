@@ -220,14 +220,13 @@ export function chartCard(
     hero.append(heroRow);
     card.append(hero);
 
-    const detail = el("div", "day-detail");
+    // Chi tiết ngày KHÔNG hiện inline nữa — hover/click cột mở panel phụ, đúng
+    // như macOS `CombinedChartCard` (hero → chart → trục → hàng stats).
     if (is24h) {
-      card.append(hourChart(claudeHourly, detail));
-      // Share rows follow the 24h period (Claude hours + Codex/Grok today).
-      card.append(detail);
+      card.append(hourChart(claudeHourly));
       card.append(el("div", "footnote", t("hourBarsNote")));
     } else {
-      card.append(stackedBarChart(windowDaily, detail, {
+      card.append(stackedBarChart(windowDaily, {
         getPinned: () => pinnedDay,
         setPinned: (d) => { pinnedDay = d; },
       }));
@@ -242,7 +241,6 @@ export function chartCard(
       // Phân bổ theo nguồn KHÔNG nằm ở đây nữa — nó thuộc khối "Chi phí theo".
       // Chỗ này là hàng 4 stat, click/hover mở panel Hoạt động (macOS parity).
       if (includedSourceCount > 0) card.append(compactStatsRow(windowDaily));
-      card.append(detail);
     }
   };
   render();
@@ -353,7 +351,7 @@ type PinApi = {
 
 /** Stacked per-source bars: Claude → Codex → Grok; height by tokens.
  * Click toggles pin/detail; hover only highlights (never opens detail). */
-function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi): HTMLElement {
+function stackedBarChart(days: CombinedDay[], pin: PinApi): HTMLElement {
   const max = Math.max(...days.map((d) => d.tokens), 1);
   // Ngữ cảnh cho panel phụ: tổng USD của đúng cửa sổ đang xem + nhãn kỳ.
   const windowUsdTotal = () => days.reduce((sum, d) => sum + d.usd, 0);
@@ -362,10 +360,7 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
   let hoverDay: CombinedDay | null = null;
 
   const paint = () => {
-    // Detail only from click-pin — default empty, no latest-day fallback.
-    const day = pin.getPinned();
-    if (day) showDayDetail(detail, day);
-    else detail.textContent = "";
+    // Chi tiết ngày nằm ở panel phụ; ở đây chỉ tô lại trạng thái ghim/hover.
     chart.querySelectorAll(".bar-col").forEach((col) => {
       const elCol = col as HTMLElement;
       const date = elCol.dataset.date;
@@ -410,14 +405,10 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
       paint();
     });
     col.addEventListener("click", () => {
-      const pinnedDay = pin.getPinned();
-      if (pinnedDay && pinnedDay.date === day.date) {
-        pin.setPinned(null);
-        closePinnedPanel();
-      } else {
-        pin.setPinned(day);
-        showDayPanel(day, windowUsdTotal(), windowLabel, true);
-      }
+      // Click LUÔN ghim — không toggle. Chỉ nút ✕ trong panel mới đóng được,
+      // đúng như macOS `barChart.onTapGesture`.
+      pin.setPinned(day);
+      showDayPanel(day, windowUsdTotal(), windowLabel, true);
       paint();
     });
     chart.append(col);
@@ -427,7 +418,7 @@ function stackedBarChart(days: CombinedDay[], detail: HTMLElement, pin: PinApi):
 }
 
 /** 24 Claude-only hour bars (Codex has no hourly resolution); height by tokens. */
-function hourChart(hourly: HourlyUsage[], detail: HTMLElement): HTMLElement {
+function hourChart(hourly: HourlyUsage[]): HTMLElement {
   const max = Math.max(...hourly.map((h) => h.tokens), 1);
   const chart = el("div", "bar-chart");
   for (const hour of hourly) {
@@ -441,14 +432,7 @@ function hourChart(hourly: HourlyUsage[], detail: HTMLElement): HTMLElement {
     } else {
       col.append(el("div", "bar-idle"));
     }
-    col.addEventListener("mouseenter", () => {
-      detail.textContent = "";
-      detail.append(el("div", "day-detail-head",
-        `${label} · ${tokens(hour.tokens)} · ${usd(hour.usd)}`));
-    });
-    col.addEventListener("mouseleave", () => {
-      detail.textContent = "";
-    });
+
     chart.append(col);
   }
   return chart;

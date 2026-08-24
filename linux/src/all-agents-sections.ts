@@ -86,9 +86,23 @@ export function quotaSection(
   for (const row of rows.slice(0, QUOTA_ROW_LIMIT)) {
     wrap.append(quotaRow(row, daily));
   }
-  const rest = rows.length - QUOTA_ROW_LIMIT;
-  if (rest > 0) {
-    wrap.append(el("div", "agents-more-row", t("moreAgentsWithQuota", { n: rest })));
+  const hidden = rows.slice(QUOTA_ROW_LIMIT);
+  if (hidden.length > 0) {
+    const more = el("div", "agents-more-row is-clickable",
+      t("moreAgentsWithQuota", { n: hidden.length }));
+    // Click mở panel của agent bị ẩn đầu tiên (macOS `AllAgentsQuotaSection`).
+    const next = hidden[0];
+    const nextSource = isUsageSourceId(next.status.id) ? next.status.id : undefined;
+    more.addEventListener("click", () => showAgentPanel(buildAgentPanelPayload({
+      agentId: next.status.id,
+      displayName: next.displayName,
+      quotaWindows: next.status.windows ?? [],
+      daily: nextSource ? daily : undefined,
+      source: nextSource,
+      sourceLabel: next.status.sourceLabel,
+      scannedAt: next.status.lastUpdated,
+    }), true));
+    wrap.append(more);
   }
   return wrap;
 }
@@ -136,8 +150,8 @@ function quotaRow(data: QuotaRowData, daily: CombinedDay[]): HTMLElement {
     sourceLabel: status.sourceLabel,
     scannedAt: status.lastUpdated,
   });
-  row.addEventListener("mouseenter", () => showAgentPanel(buildPayload(), false));
-  row.addEventListener("mouseleave", () => closeTransientPanel());
+  // Chỉ click, KHÔNG hover: macOS `AllAgentsQuotaSection` bọc hàng trong
+  // Button trần, không gắn `.onHover` như bên Chi phí theo.
   row.addEventListener("click", () => showAgentPanel(buildPayload(), true));
   return row;
 }
@@ -192,15 +206,17 @@ export function costBySection(
     const node = costRow(row, total, mode);
     if (mode === "agent") {
       node.classList.add("is-clickable");
-      node.addEventListener("click", () => {
-        showAgentPanel(buildAgentPanelPayload({
-          agentId: row.id,
-          displayName: row.name,
-          daily: combined.daily,
-          source: row.id as UsageSourceId,
-          sourceLabel: SOURCE_LABEL[row.id as UsageSourceId],
-        }));
+      // Khác quota: hàng chi phí có CẢ hover (panel tạm) lẫn click (ghim).
+      const payload = () => buildAgentPanelPayload({
+        agentId: row.id,
+        displayName: row.name,
+        daily: combined.daily,
+        source: row.id as UsageSourceId,
+        sourceLabel: SOURCE_LABEL[row.id as UsageSourceId],
       });
+      node.addEventListener("mouseenter", () => showAgentPanel(payload(), false));
+      node.addEventListener("mouseleave", () => closeTransientPanel());
+      node.addEventListener("click", () => showAgentPanel(payload(), true));
     }
     wrap.append(node);
   }
@@ -218,6 +234,19 @@ export function costBySection(
       const overflow = overflowModels(window, rest.map((r) => r.id));
       node.addEventListener("mouseenter", () => showModelsPanel(overflow, mode));
       node.addEventListener("mouseleave", () => closeTransientPanel());
+    } else {
+      // Mode agent: click mở panel của agent bị ẩn đầu tiên (macOS summaryRow).
+      const next = rest[0];
+      node.classList.add("is-clickable");
+      node.addEventListener("click", () => showAgentPanel(
+        buildAgentPanelPayload({
+          agentId: next.id,
+          displayName: next.name,
+          daily: isUsageSourceId(next.id) ? combined.daily : undefined,
+          source: isUsageSourceId(next.id) ? next.id : undefined,
+        }),
+        true,
+      ));
     }
     wrap.append(node);
   }
@@ -367,6 +396,13 @@ export function configuredSection(agents: ConfiguredAgent[]): HTMLElement | null
   row.append(badges);
   row.append(el("span", "agents-row-meta", t("configuredNoLogs", { n: agents.length })));
   row.append(el("span", "agents-row-chevron", "›"));
+  // Click mở panel của agent đầu tiên trong nhóm (macOS
+  // `AllAgentsConfiguredSection`); nhóm này không có quota lẫn log nên panel
+  // chỉ có tab Config.
+  const first = agents[0];
+  row.classList.add("is-clickable");
+  row.addEventListener("click", () => showAgentPanel(
+    buildAgentPanelPayload({ agentId: first.id, displayName: first.displayName }), true));
   wrap.append(row);
   return wrap;
 }
