@@ -948,6 +948,18 @@ struct ProviderLogoMark: View {
             logo("BedrockLogo", brand: VocabbyTheme.bedrock)
         case "hiyo":
             logo("HiyoLogo", brand: VocabbyTheme.hiyo)
+        // Agent logos (2026-08-24): aider/goose PNG màu gốc, amp mark
+        // Sourcegraph, auggie SVG template, qwen tái dùng mark Alibaba.
+        case "aider":
+            logo("AiderLogo")
+        case "amp":
+            logo("AmpLogo")
+        case "auggie":
+            logo("AuggieLogo", brand: VocabbyTheme.primary)
+        case "goose":
+            logo("GooseLogo")
+        case "qwen":
+            logo("AlibabaLogo", brand: VocabbyTheme.alibaba)
         default:
             Image(systemName: "circle.fill")
                 .foregroundStyle(tint ?? VocabbyTheme.secondary)

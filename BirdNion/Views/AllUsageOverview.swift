@@ -1196,11 +1196,14 @@ struct CombinedChartCard: View {
                     .foregroundStyle(VocabbyTheme.primary)
                     .tracking(-1)
                     .lineLimit(1)
-                Text(summaryAgentCount.map {
-                    AllUsageFormat.tokens(periodTotalTokens) + " · \($0) agent"
-                } ?? AllUsageFormat.tokens(periodTotalTokens))
+                // Tokens nổi bật (semibold, đậm màu hơn) — phần "· N agent" giữ mờ.
+                (Text(AllUsageFormat.tokens(periodTotalTokens))
+                    .font(.plexMono(12, weight: .semibold))
+                    .foregroundColor(VocabbyTheme.secondary)
+                 + Text(summaryAgentCount.map { " · \($0) agent" } ?? "")
                     .font(.plexMono(11))
-                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .foregroundColor(VocabbyTheme.tertiary))
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
