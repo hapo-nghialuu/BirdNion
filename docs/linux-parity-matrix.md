@@ -78,4 +78,6 @@ Sáu nguồn chi phí cục bộ: `claude`, `codex`, `grok`, `omp`, `pi`, `kiro`
 
 ## Verification
 
-Bản Linux KHÔNG build được trên máy macOS: crate `src-tauri` là Linux-only và `cargo check` báo đúng 9 lỗi có sẵn ở `lib.rs`/`codex_config.rs` trên host macOS. Kiểm chứng thật chạy ở `.github/workflows/linux-build.yml` (Ubuntu 22.04, `cargo test` + `npm run tauri build`), trigger bằng `workflow_dispatch`.
+`cargo check` từng báo 9 lỗi ở `lib.rs`/`codex_config.rs` và điều đó dễ bị hiểu nhầm là "crate Linux-only nên không build trên macOS". Thực tế crate KHÔNG compile ở đâu cả kể từ khi `target_config_path()`/`target_path()` chuyển sang infallible mà call site không đổi theo. Đã sửa 2026-08-24; hiện `cargo check` sạch và `cargo test` chạy 448 test, 0 fail, cả trên macOS lẫn Ubuntu.
+
+Kiểm chứng đầy đủ chạy ở `.github/workflows/linux-build.yml` (Ubuntu 22.04, `cargo test` + `tsc --noEmit` + `npm run tauri build`), trigger bằng `workflow_dispatch`. Workflow này cũng từng hỏng từ 2026-07-21 vì `tauri.conf.json` khai báo resource `binaries/cliproxyapi` trong khi thư mục đó bị gitignore và helper build từ repo Go riêng — job nay tạo file stub để verify compile/test/bundle; bản phát hành vẫn đi qua `linux-release.yml` với helper thật kèm checksum.

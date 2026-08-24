@@ -134,7 +134,7 @@ Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
 - Sáu nguồn cost giống macOS sau khi thêm `kiro_scanner.rs` (CLI sessions với credit tính phí thật, SQLite v1/v2, archive JSON).
 - Cost tách khỏi provider toggle: `enabled_usage_sources()` là hợp của provider đang bật và agent phát hiện được, nên CLI tắt provider vẫn báo chi phí.
 - Panel phụ không nằm trong popover 420px mà là cửa sổ Tauri riêng (`panel.html`, 340px, frameless, always-on-top) neo cạnh popover — tương đương NSPanel con bên macOS, giữ nguyên vòng đời hover-transient / click-pin.
-- Không build được trên macOS (crate Linux-only); kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu.
+- Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24, hiện 448 test Rust xanh.
 ## 4. Luồng quota
 
 ```
