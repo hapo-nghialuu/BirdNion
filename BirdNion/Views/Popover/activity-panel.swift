@@ -14,24 +14,30 @@ struct ActivityPanelRoot: View {
         Color(red: 0.12, green: 0.31, blue: 0.85)  // #1F4FD8
     ]
 
+    /// Heatmap ngang kiểu GitHub: tuần = cột, 7 hàng thứ — gọn, không cột
+    /// tiền chiếm chỗ; giá trị từng ô nằm ở tooltip, tổng ở subheader/footer.
+    private static let cellSize: CGFloat = 10
+    private static let cellGap: CGFloat = 2
+    /// Số cột tuần vừa khít 340 − 2×14 inset − cột nhãn thứ (26).
+    private static let maxWeekColumns = 23
+
     var body: some View {
         VStack(spacing: 0) {
             header
             subHeader
-            weekdayHeaderRow
-            ScrollView(.vertical, showsIndicators: true) {
-                weeksGrid
+            // Vượt quá 23 cột thì wrap xuống band heatmap tiếp theo bên dưới,
+            // tất cả band dùng chung thang màu.
+            ForEach(Array(weekBands.enumerated()), id: \.offset) { _, band in
+                heatmapBlock(weeks: band)
+                rangeRow(weeks: band)
             }
             legendRow
             footerStats
         }
         .frame(width: 340)
-        .frame(minHeight: 460, maxHeight: 600)
         .background(VocabbyTheme.background)
-        .overlay(
-            Rectangle()
-                .stroke(VocabbyTheme.primary, lineWidth: 1)
-        )
+        // Không viền ngoài — đồng bộ style với các panel con khác.
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 
     private var header: some View {
@@ -48,92 +54,117 @@ struct ActivityPanelRoot: View {
             Button {
                 NotificationCenter.default.post(name: .birdnionCloseAgentDetail, object: nil)
             } label: {
-                Text("×")
-                    .font(.plexMono(16))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                    .frame(width: 22, height: 22)
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .frame(width: 24, height: 24)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                            .stroke(VocabbyTheme.border, lineWidth: 1)
+                    )
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .overlay(alignment: .bottom) { VocabbyTheme.primary.frame(height: 1) }
+        .overlay(alignment: .bottom) { VocabbyTheme.chromeRule.frame(height: 1) }
+    }
+
+    /// Heatmap bắt đầu từ tuần có dữ liệu đầu tiên — không vẽ cả năm trống.
+    private var meaningfulWeeks: [AgentActivityWeek] {
+        guard let first = window.weeks.firstIndex(where: { $0.hasEvidence }) else {
+            return Array(window.weeks.suffix(Self.maxWeekColumns))
+        }
+        return Array(window.weeks[first...])
+    }
+
+    /// Cắt thành các band 23 cột — band sau (mới hơn) nằm dưới band trước.
+    private var weekBands: [[AgentActivityWeek]] {
+        stride(from: 0, to: meaningfulWeeks.count, by: Self.maxWeekColumns).map { start in
+            Array(meaningfulWeeks[start..<min(start + Self.maxWeekColumns, meaningfulWeeks.count)])
+        }
     }
 
     private var subHeader: some View {
         HStack {
-            Text(vi ? "LỊCH HOẠT ĐỘNG" : "ACTIVITY LEDGER")
-                .font(.plexMono(9, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.primary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(VocabbyTheme.primary)
-                .foregroundStyle(VocabbyTheme.background)
-                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius))
-
+            // Eyebrow thường — badge nền đen cũ render chữ đen trên nền đen.
+            Text((vi ? "LỊCH HOẠT ĐỘNG · " : "ACTIVITY · ") + "\(meaningfulWeeks.count) " + (vi ? "TUẦN" : "WEEKS"))
+                .font(.plexMono(10, weight: .medium))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .tracking(0.6)
             Spacer()
             Text(AllUsageFormat.usd(window.totalUSD))
-                .font(.plexMono(10))
-                .foregroundStyle(VocabbyTheme.tertiary)
+                .font(.plexMono(12, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.primary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .overlay(alignment: .bottom) { VocabbyTheme.hairline.frame(height: 1) }
     }
 
-    private var weekdayHeaderRow: some View {
-        HStack(spacing: 3) {
-            Spacer().frame(width: 26)
-            Text("T2").frame(width: 18)
-            Text("T3").frame(width: 18)
-            Text("T4").frame(width: 18)
-            Text("T5").frame(width: 18)
-            Text("T6").frame(width: 18)
-            Text("T7").frame(width: 18)
-            Text("CN").frame(width: 18)
-            Spacer()
-            Text(vi ? "TUẦN" : "WEEK")
-                .font(.plexMono(8))
-                .foregroundStyle(VocabbyTheme.tertiary)
-        }
-        .font(.plexMono(8))
-        .foregroundStyle(VocabbyTheme.tertiary)
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
-    }
-
-    private var weeksGrid: some View {
+    /// Grid ngang: cột nhãn thứ bên trái (T2/T4/T6/CN) + mỗi tuần một cột 7 ô.
+    private func heatmapBlock(weeks: [AgentActivityWeek]) -> some View {
+        // Thang màu chung cho MỌI band — so sánh được giữa các band.
         let maxTokens = max(window.days.map(\.tokens).max() ?? 1, 1)
 
-        return VStack(spacing: 3) {
-            ForEach(Array(window.weeks.enumerated()), id: \.offset) { index, week in
-                HStack(spacing: 3) {
-                    Text(monthLabel(for: week.startDate, index: index))
-                        .font(.plexMono(9, weight: .medium))
+        return HStack(alignment: .top, spacing: Self.cellGap) {
+            VStack(alignment: .leading, spacing: Self.cellGap) {
+                ForEach(0..<7, id: \.self) { row in
+                    Text([0: "T2", 2: "T4", 4: "T6", 6: "CN"][row] ?? "")
+                        .font(.plexMono(8))
                         .foregroundStyle(VocabbyTheme.tertiary)
-                        .frame(width: 26, alignment: .leading)
-
+                        .frame(width: 22, height: Self.cellSize, alignment: .leading)
+                }
+            }
+            ForEach(weeks) { week in
+                VStack(spacing: Self.cellGap) {
                     ForEach(week.days) { day in
                         let fraction = day.hasEvidence && day.tokens > 0
                             ? Double(day.tokens) / Double(maxTokens)
                             : 0
                         Rectangle()
                             .fill(colorForFraction(fraction))
-                            .frame(width: 18, height: 18)
+                            .frame(width: Self.cellSize, height: Self.cellSize)
+                            .help(dayHelp(day))
                     }
-
-                    Spacer()
-
-                    Text(AllUsageFormat.usd(week.usd))
-                        .font(.plexMono(10, weight: .medium))
-                        .foregroundStyle(week.usd > 1000 ? Color(red: 0.56, green: 0.37, blue: 0.07) : VocabbyTheme.primary)
-                        .monospacedDigit()
                 }
-                .padding(.horizontal, 14)
             }
         }
-        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    /// Mốc thời gian 2 đầu của band.
+    private func rangeRow(weeks: [AgentActivityWeek]) -> some View {
+        HStack {
+            if let first = weeks.first?.days.first {
+                Text(dayLabel(first.date))
+            }
+            Spacer(minLength: 8)
+            if let last = weeks.last?.days.last {
+                Text(dayLabel(last.date))
+            }
+        }
+        .font(.plexMono(9))
+        .foregroundStyle(VocabbyTheme.tertiary)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+    }
+
+    private func dayHelp(_ day: AgentActivityDay) -> String {
+        let date = dayLabel(day.date)
+        guard day.isActive else { return date + (vi ? ": không hoạt động" : ": no activity") }
+        return "\(date): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))"
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
+        formatter.dateFormat = "d MMM"
+        return formatter.string(from: date)
     }
 
     private var legendRow: some View {
@@ -152,7 +183,7 @@ struct ActivityPanelRoot: View {
                 .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
             Spacer()
-            Text(vi ? "cuộn xem 52 tuần" : "scroll for 52 weeks")
+            Text(vi ? "đậm nhạt theo token" : "intensity by tokens")
                 .font(.plexMono(9))
                 .foregroundStyle(VocabbyTheme.tertiary)
         }
@@ -204,7 +235,7 @@ struct ActivityPanelRoot: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .overlay(alignment: .top) { VocabbyTheme.primary.frame(height: 1) }
+        .overlay(alignment: .top) { VocabbyTheme.chromeRule.frame(height: 1) }
     }
 
     private func colorForFraction(_ f: Double) -> Color {
@@ -215,13 +246,4 @@ struct ActivityPanelRoot: View {
         return Self.colorSteps[4]
     }
 
-    private func monthLabel(for date: Date, index: Int) -> String {
-        if index % 4 == 0 {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
-            formatter.dateFormat = "MMM"
-            return formatter.string(from: date)
-        }
-        return ""
-    }
 }
