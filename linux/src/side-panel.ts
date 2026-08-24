@@ -84,6 +84,7 @@ export function showActivityPanel(
   peakUsd: number,
   avgUsd: number,
   streak: number,
+  isPinned = true,
 ): void {
-  void show({ kind: "activity", cells, peakUsd, avgUsd, streak }, true);
+  void show({ kind: "activity", cells, peakUsd, avgUsd, streak }, isPinned);
 }

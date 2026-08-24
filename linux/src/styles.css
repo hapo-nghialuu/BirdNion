@@ -444,12 +444,6 @@ html.popover-capped .app-body {
 }
 
 /* Token-share bar + rows; USD stays in row labels */
-.share-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 4px 0 6px;
-}
 
 .share-bar {
   display: flex;
@@ -466,18 +460,7 @@ html.popover-capped .app-body {
   .share-seg.omp { background: var(--omp); }
   .share-seg.pi { background: var(--pi); }
 
-.share-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 0;
-}
 
-.share-name {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text);
-}
 
 .share-pct {
   font-size: 11px;
@@ -485,18 +468,7 @@ html.popover-capped .app-body {
   color: var(--text3);
 }
 
-.share-usd {
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--text2);
-}
 
-.share-divider {
-  height: 0.5px;
-  background: color-mix(in srgb, var(--border) 70%, transparent);
-}
 
 /* --- Provider tabs (macOS ProviderTabs remake — pill strip) ----------- */
 
@@ -4176,7 +4148,6 @@ body.settings-body-root {
 .heatmap-total,
 .legend-label,
 .share-pct,
-.share-usd,
 .model-amount,
 .top-model-amount,
 .day-detail-head,
@@ -4321,50 +4292,7 @@ body.settings-body-root {
   color: var(--text3);
 }
 
-.share-section { margin: 2px 0 0; gap: 0; }
-.share-list { display: flex; flex-direction: column; }
-.share-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 0;
-}
-.share-tick {
-  width: 3px;
-  height: 12px;
-  flex-shrink: 0;
-  background: var(--text3);
-}
-.share-tick.claude { background: var(--claude); }
-.share-tick.codex { background: var(--codex); }
-.share-tick.grok { background: var(--grok); }
-.share-tick.omp { background: var(--omp); }
-.share-tick.pi { background: var(--pi); }
 
-.share-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  min-width: 0;
-}
-.share-mid {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text3);
-  white-space: nowrap;
-}
-.share-usd {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  min-width: 56px;
-  text-align: right;
-}
-.share-divider {
-  height: 1px;
-  background: var(--hairline);
-}
 
 .heat-stats-row {
   display: flex;
@@ -5787,3 +5715,56 @@ body.settings-body-root {
   color: var(--text2);
   word-break: break-all;
 }
+
+/* ---------- Hàng 4 stat dưới biểu đồ tab All (macOS compactStatsRow) */
+.chart-stats {
+  display: flex;
+  align-items: center;
+  padding-top: 10px;
+}
+
+.chart-stat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chart-stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  color: var(--text3);
+  white-space: nowrap;
+}
+
+.chart-stat-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.chart-stat-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 3px 10px 3px 0;
+  background: var(--hairline);
+  flex-shrink: 0;
+}
+
+.chart-stat-chevron {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text3);
+  padding-left: 4px;
+}
+
+.chart-stats:hover { background: var(--selected-surface); }
+
+/* Token đậm, "· N agent" mờ hơn — cùng tương phản như macOS. */
+.cost-hero-tokens-value { font-weight: 600; color: var(--text2); }
+.cost-hero-agents { color: var(--text3); }

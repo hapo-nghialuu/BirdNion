@@ -417,6 +417,11 @@ export function usd(amount: number): string {
   return "$" + amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** USD làm tròn nguyên — dùng cho hàng stats gọn dưới biểu đồ. */
+export function usdWhole(amount: number): string {
+  return "$" + amount.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
 export function tokens(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B tokens`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M tokens`;

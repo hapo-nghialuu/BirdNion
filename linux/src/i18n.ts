@@ -952,6 +952,8 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "weekday.fri": { vi: "T6", en: "Fri" },
   "weekday.sun": { vi: "CN", en: "Sun" },
   "activeDaysWord": { vi: "ngày active", en: "active days" },
+  "activeDaysLabel": { vi: "Ngày active", en: "Active days" },
+  "nAgents": { vi: "{n} agent", en: "{n} agents" },
   "daysWord": { vi: "ngày", en: "days" },
   "less": { vi: "ÍT", en: "LESS" },
   "more": { vi: "NHIỀU", en: "MORE" },

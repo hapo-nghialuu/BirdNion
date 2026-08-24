@@ -51,27 +51,40 @@ function sectionHead(title: string, trailing?: string): HTMLElement {
 
 // ---------------------------------------------------------------- Quota
 
-/** Danh sách quota trong tab All — thứ tự bám theo tab strip provider,
- *  không sort theo % còn lại (parity macOS `AllUsageOverview.quotaRows`).
- *  `daily` (combined.daily đầy đủ, không windowed) chỉ dùng để widen panel
- *  phụ khi agent này cũng có log chi phí thật (claude/codex/grok/omp/pi). */
-export function quotaSection(statuses: ProviderStatus[], daily: CombinedDay[]): HTMLElement | null {
+/** Danh sách quota trong tab All — AGENT-centric như macOS `quotaRows`: tên
+ *  hiển thị lấy từ catalog agent ("Claude Code", "Codex CLI"), không phải tên
+ *  provider ("Claude", "Codex"). Thứ tự bám theo tab strip provider, không sort
+ *  theo % còn lại. `daily` (combined.daily đầy đủ, không windowed) chỉ dùng để
+ *  widen panel phụ khi agent này cũng có log chi phí thật.
+ *  `agents` rỗng/null (catalog chưa nạp) thì lùi về tên provider. */
+export function quotaSection(
+  statuses: ProviderStatus[],
+  daily: CombinedDay[],
+  agents: { id: string; displayName: string }[] | null = null,
+  totalAgentCount = 0,
+): HTMLElement | null {
+  const nameById = new Map((agents ?? []).map((a) => [a.id, a.displayName]));
   const rows = statuses
     .map((status) => {
       const window = lowestWindow(status);
-      return window ? { status, window } : null;
+      return window
+        ? { status, window, displayName: nameById.get(status.id) ?? status.displayName }
+        : null;
     })
-    .filter((row): row is { status: ProviderStatus; window: QuotaWindowLike } => row != null);
+    .filter((row): row is QuotaRowData => row != null);
   if (rows.length === 0) return null;
 
   const wrap = el("div", "agents-section");
   wrap.append(sectionHead(
     t("quota"),
-    t("agentsWithQuota", { n: rows.length, total: statuses.length }),
+    t("agentsWithQuota", {
+      n: rows.length,
+      total: totalAgentCount > 0 ? totalAgentCount : statuses.length,
+    }),
   ));
 
   for (const row of rows.slice(0, QUOTA_ROW_LIMIT)) {
-    wrap.append(quotaRow(row.status, row.window, daily));
+    wrap.append(quotaRow(row, daily));
   }
   const rest = rows.length - QUOTA_ROW_LIMIT;
   if (rest > 0) {
@@ -88,10 +101,17 @@ function lowestWindow(status: ProviderStatus): QuotaWindowLike | null {
   return windows.reduce((lowest, w) => (w.remainingPct < lowest.remainingPct ? w : lowest));
 }
 
-function quotaRow(status: ProviderStatus, window: QuotaWindowLike, daily: CombinedDay[]): HTMLElement {
+type QuotaRowData = {
+  status: ProviderStatus;
+  window: QuotaWindowLike;
+  displayName: string;
+};
+
+function quotaRow(data: QuotaRowData, daily: CombinedDay[]): HTMLElement {
+  const { status, window, displayName } = data;
   const row = el("div", "agents-row");
   row.append(logoMark(status.id, "agents-row-logo"));
-  row.append(el("span", "agents-row-name", status.displayName));
+  row.append(el("span", "agents-row-name", displayName));
   row.append(el("span", "agents-row-window", window.label.toUpperCase()));
 
   const track = el("span", "agents-quota-track");
@@ -109,7 +129,7 @@ function quotaRow(status: ProviderStatus, window: QuotaWindowLike, daily: Combin
   const source = isUsageSourceId(status.id) ? status.id : undefined;
   const buildPayload = () => buildAgentPanelPayload({
     agentId: status.id,
-    displayName: status.displayName,
+    displayName,
     quotaWindows: status.windows ?? [],
     daily: source ? daily : undefined,
     source,

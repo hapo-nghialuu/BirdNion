@@ -5,11 +5,11 @@
 
 import {
   Combined, CombinedDay, HourlyUsage, UsageReport, UsageSourceId, BudgetStatus,
-  usd, tokens, tokensShort, tokensAndUsd, dayLabel, scanConfidence, monthlyForecast,
+  usd, usdWhole, tokens, tokensAndUsd, dayLabel, scanConfidence, monthlyForecast,
 } from "./usage";
 import { t, currentLang } from "./i18n";
 import { logoMark } from "./logos";
-import { showDayPanel, closeTransientPanel, closePinnedPanel } from "./side-panel";
+import { showDayPanel, showActivityPanel, closeTransientPanel, closePinnedPanel } from "./side-panel";
 
 const PERIOD_KEY = "birdnion.allChartDays";
 
@@ -122,7 +122,7 @@ export function providerBudgetCard(
     card.append(el("div", "summary-label", t("budgetMonthly")));
     const row = el("div", "budget-provider-row");
     const left = el("span", "legend-item");
-    left.append(logoMark(id, `confidence-logo confidence-logo-${id}`));
+    left.append(logoMark(id, "agents-row-logo"));
     left.append(el("span", "budget-provider-name", label));
     row.append(left);
     row.append(el("span", "budget-provider-nodata", t("budgetPerProviderNoData")));
@@ -140,7 +140,11 @@ export function providerBudgetCard(
 
 // --- Chart card -----------------------------------------------------------
 
-export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTMLElement {
+export function chartCard(
+  combined: Combined,
+  claudeHourly: HourlyUsage[],
+  includedSourceCount = 0,
+): HTMLElement {
   const card = el("section", "card");
   let period = Number(localStorage.getItem(PERIOD_KEY)) || 30;
   if (!PERIODS.includes(period)) period = 30;
@@ -152,16 +156,6 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const windowDaily = combined.daily.slice(-period);
     const wUsd = windowDaily.reduce((s, d) => s + d.usd, 0);
     const wTokens = windowDaily.reduce((s, d) => s + d.tokens, 0);
-    const wClaudeTokens = windowDaily.reduce((s, d) => s + d.claudeTokens, 0);
-    const wCodexTokens = windowDaily.reduce((s, d) => s + d.codexTokens, 0);
-    const wGrokTokens = windowDaily.reduce((s, d) => s + d.grokTokens, 0);
-    const wOmpTokens = windowDaily.reduce((s, d) => s + d.ompTokens, 0);
-    const wPiTokens = windowDaily.reduce((s, d) => s + d.piTokens, 0);
-    const wClaudeUsd = windowDaily.reduce((s, d) => s + d.claudeUsd, 0);
-    const wCodexUsd = windowDaily.reduce((s, d) => s + d.codexUsd, 0);
-    const wGrokUsd = windowDaily.reduce((s, d) => s + d.grokUsd, 0);
-    const wOmpUsd = windowDaily.reduce((s, d) => s + d.ompUsd, 0);
-    const wPiUsd = windowDaily.reduce((s, d) => s + d.piUsd, 0);
     const is24h = period === 1;
     const claude24Usd = claudeHourly.reduce((s, h) => s + h.usd, 0);
     const claude24Tokens = claudeHourly.reduce((s, h) => s + h.tokens, 0);
@@ -210,7 +204,14 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     const heroRow = el("div", "cost-hero-row");
     const left = el("div", "cost-hero-main");
     left.append(el("div", "cost-hero-amount", usd(periodUsd)));
-    left.append(el("div", "cost-hero-tokens", tokens(periodTokens)));
+    // Token đậm, phần "· N agent" giữ mờ (macOS costHero).
+    const tokenLine = el("div", "cost-hero-tokens");
+    tokenLine.append(el("span", "cost-hero-tokens-value", tokens(periodTokens)));
+    if (includedSourceCount > 0) {
+      tokenLine.append(el("span", "cost-hero-agents",
+        ` · ${t("nAgents", { n: includedSourceCount })}`));
+    }
+    left.append(tokenLine);
     const right = el("div", "cost-hero-today");
     right.append(el("div", "cost-hero-today-label", t("today")));
     right.append(el("div", "cost-hero-today-amount", usd(combined.todayUsd)));
@@ -223,13 +224,6 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
     if (is24h) {
       card.append(hourChart(claudeHourly, detail));
       // Share rows follow the 24h period (Claude hours + Codex/Grok today).
-      card.append(sourceShareSection([
-        { name: "Claude", usd: claude24Usd, tokens: claude24Tokens, css: "claude" },
-        { name: "Codex", usd: today?.codexUsd ?? 0, tokens: today?.codexTokens ?? 0, css: "codex" },
-        { name: "Grok", usd: today?.grokUsd ?? 0, tokens: today?.grokTokens ?? 0, css: "grok" },
-        { name: "Oh My Pi", usd: today?.ompUsd ?? 0, tokens: today?.ompTokens ?? 0, css: "omp" },
-        { name: "Pi", usd: today?.piUsd ?? 0, tokens: today?.piTokens ?? 0, css: "pi" },
-      ]));
       card.append(detail);
       card.append(el("div", "footnote", t("hourBarsNote")));
     } else {
@@ -245,14 +239,9 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
           dayLabel(windowDaily[windowDaily.length - 1].date)));
         card.append(axis);
       }
-      // Share rows for the selected multi-day window (7d/30d/90d/120d).
-      card.append(sourceShareSection([
-        { name: "Claude", usd: wClaudeUsd, tokens: wClaudeTokens, css: "claude" },
-        { name: "Codex", usd: wCodexUsd, tokens: wCodexTokens, css: "codex" },
-        { name: "Grok", usd: wGrokUsd, tokens: wGrokTokens, css: "grok" },
-        { name: "Oh My Pi", usd: wOmpUsd, tokens: wOmpTokens, css: "omp" },
-        { name: "Pi", usd: wPiUsd, tokens: wPiTokens, css: "pi" },
-      ]));
+      // Phân bổ theo nguồn KHÔNG nằm ở đây nữa — nó thuộc khối "Chi phí theo".
+      // Chỗ này là hàng 4 stat, click/hover mở panel Hoạt động (macOS parity).
+      if (includedSourceCount > 0) card.append(compactStatsRow(windowDaily));
       card.append(detail);
     }
   };
@@ -260,31 +249,46 @@ export function chartCard(combined: Combined, claudeHourly: HourlyUsage[]): HTML
   return card;
 }
 
-/** Per-source rows: tick · name · "12.1B · 72%" · $amount (design share list). */
-function sourceShareSection(
-  rows: { name: string; usd: number; tokens: number; css: string }[],
-): HTMLElement {
-  const wrap = el("div", "share-section");
-  const active = rows.filter((r) => r.tokens > 0);
-  if (active.length === 0) return wrap;
-  const total = Math.max(active.reduce((s, r) => s + r.tokens, 0), 1);
+/** Hàng 4 stat dưới biểu đồ: CAO NHẤT · TB/NGÀY · STREAK · NGÀY ACTIVE.
+ *  Hover mở panel Hoạt động tạm, click ghim — đúng như macOS `compactStatsRow`.
+ *  Phân bổ theo nguồn không ở đây; nó nằm trong khối "Chi phí theo". */
+function compactStatsRow(windowDaily: CombinedDay[]): HTMLElement {
+  const active = windowDaily.filter((d) => d.active);
+  const peak = windowDaily.reduce((m, d) => Math.max(m, d.usd), 0);
+  const total = windowDaily.reduce((sum, d) => sum + d.usd, 0);
+  const average = active.length > 0 ? total / active.length : 0;
 
-  const list = el("div", "share-list");
-  active.forEach((r, i) => {
-    if (i > 0) list.append(el("div", "share-divider"));
-    const row = el("div", "share-row");
-    const left = el("span", "legend-item");
-    left.append(el("span", `share-tick ${r.css}`), el("span", "share-name", r.name));
-    const sharePct = Math.round((r.tokens / total) * 100);
-    row.append(
-      left,
-      el("span", "share-mid", `${tokensShort(r.tokens)} · ${sharePct}%`),
-      el("span", "share-usd", usd(r.usd)),
-    );
-    list.append(row);
-  });
-  wrap.append(list);
-  return wrap;
+  // Hôm nay chưa hoạt động thì không phá streak — ngày chưa kết thúc.
+  let streak = 0;
+  let i = windowDaily.length - 1;
+  if (i >= 0 && !windowDaily[i].active) i -= 1;
+  while (i >= 0 && windowDaily[i].active) { streak += 1; i -= 1; }
+
+  const row = el("div", "chart-stats is-clickable");
+  const cell = (label: string, value: string) => {
+    const col = el("div", "chart-stat");
+    col.append(el("span", "chart-stat-label", label.toUpperCase()));
+    col.append(el("span", "chart-stat-value", value));
+    return col;
+  };
+  row.append(cell(t("peakDay"), usdWhole(peak)));
+  row.append(el("span", "chart-stat-divider"));
+  row.append(cell(t("avgPerActiveDay"), usdWhole(average)));
+  row.append(el("span", "chart-stat-divider"));
+  row.append(cell(t("streak"), `${streak} ${t("daysWord")}`));
+  row.append(el("span", "chart-stat-divider"));
+  row.append(cell(t("activeDaysLabel"), `${active.length}/${windowDaily.length}`));
+  row.append(el("span", "chart-stat-chevron", "›"));
+
+  const cells = windowDaily
+    .filter((d) => d.active)
+    .map((d) => ({ date: d.date, usd: d.usd, tokens: d.tokens }));
+  const openActivity = (pinned: boolean) =>
+    showActivityPanel(cells, peak, average, streak, pinned);
+  row.addEventListener("mouseenter", () => openActivity(false));
+  row.addEventListener("mouseleave", () => closeTransientPanel());
+  row.addEventListener("click", () => openActivity(true));
+  return row;
 }
 
 function showDayDetail(detail: HTMLElement, day: CombinedDay) {

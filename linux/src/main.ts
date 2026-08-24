@@ -629,6 +629,13 @@ function configuredAgents(): InstalledAgent[] {
     visible.has(agent.id) && !agent.hasQuota && !agent.hasCost);
 }
 
+/** Số nguồn chi phí thật sự được tính vào tổng — hiện sau token ở hero
+ *  ("20.3B tokens · 6 agent"), parity macOS `CombinedUsageReport
+ *  .includedSourceCount`. */
+function includedSourceCount(): number {
+  return SCAN_SOURCES.filter((id) => state[id]?.included === true).length;
+}
+
 function pendingScanSources(): ScanSource[] {
   return SCAN_SOURCES.filter((s) => state.scanning.has(s) && !state[s]);
 }
@@ -853,8 +860,13 @@ function render() {
       // Heatmap và insights card cố tình KHÔNG nằm ở All nữa: nhịp hoạt động
       // xem trong Settings → Phân tích. Badge LIVE/LỊCH SỬ cũng không nằm ở
       // đây nữa — footer luân phiên đã mang thông tin đó (macOS parity).
-      body.append(chartCard(combined, state.claude?.hourly ?? []));
-      const quota = quotaSection(state.statuses, combined.daily);
+      body.append(chartCard(
+        combined, state.claude?.hourly ?? [], includedSourceCount()));
+      const visibleAgents = state.agents
+        ? state.agents.filter((a) => visibleAgentIds(state.agents!).includes(a.id))
+        : null;
+      const quota = quotaSection(
+        state.statuses, combined.daily, visibleAgents, visibleAgents?.length ?? 0);
       if (quota) body.append(quota);
       const costBy = costBySection(combined, allChartDays(), render);
       if (costBy) body.append(costBy);
