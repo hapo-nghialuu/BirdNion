@@ -554,8 +554,12 @@ struct AllUsageOverview: View {
     let visibleAgentRecords: [InstalledAgentRecord]
     let allAgentRecords: [InstalledAgentRecord]
     let providerStatuses: [ProviderStatus]
-    let onOpenAgentDetail: (InstalledAgentRecord) -> Void
+    let onOpenAgentDetail: (InstalledAgentRecord, String?) -> Void
     let onOpenActivity: () -> Void
+    /// Hover mở panel transient (rời chuột đóng) — click mới ghim.
+    let onHoverAgentDetail: (InstalledAgentRecord) -> Void
+    let onHoverActivity: () -> Void
+    let onHoverEnd: () -> Void
     var claudeEnabled: Bool = true
     var codexEnabled: Bool = true
     var grokEnabled: Bool = true
@@ -571,8 +575,11 @@ struct AllUsageOverview: View {
         visibleAgentRecords: [InstalledAgentRecord] = [],
         allAgentRecords: [InstalledAgentRecord] = [],
         providerStatuses: [ProviderStatus] = [],
-        onOpenAgentDetail: @escaping (InstalledAgentRecord) -> Void = { _ in },
+        onOpenAgentDetail: @escaping (InstalledAgentRecord, String?) -> Void = { _, _ in },
         onOpenActivity: @escaping () -> Void = {},
+        onHoverAgentDetail: @escaping (InstalledAgentRecord) -> Void = { _ in },
+        onHoverActivity: @escaping () -> Void = {},
+        onHoverEnd: @escaping () -> Void = {},
         claudeEnabled: Bool = true,
         codexEnabled: Bool = true,
         grokEnabled: Bool = true,
@@ -589,6 +596,9 @@ struct AllUsageOverview: View {
         self.providerStatuses = providerStatuses
         self.onOpenAgentDetail = onOpenAgentDetail
         self.onOpenActivity = onOpenActivity
+        self.onHoverAgentDetail = onHoverAgentDetail
+        self.onHoverActivity = onHoverActivity
+        self.onHoverEnd = onHoverEnd
         self.claudeEnabled = claudeEnabled
         self.codexEnabled = codexEnabled
         self.grokEnabled = grokEnabled
@@ -631,6 +641,7 @@ struct AllUsageOverview: View {
                 includeKiro: kiroEnabled,
                 includeOMP: omp != nil || allAgentRecords.contains(where: { $0.id == .omp }),
                 includePi: pi != nil || allAgentRecords.contains(where: { $0.id == .pi }))
+            let rows = costRows(daily: report.daily)
 
             AllAgentsOverview(
                 report: report,
@@ -638,13 +649,19 @@ struct AllUsageOverview: View {
                 visibleRecords: visibleAgentRecords,
                 aggregateAgentCount: report.includedSourceCount,
                 quotaRows: quotaRows,
-                costRows: costRows,
-                configuredRows: configuredRows,
-                onOpenAgent: { id in
+                costRows: rows,
+                configuredRows: configuredRows(costRows: rows),
+                onOpenAgent: { id, tab in
                     guard let record = allAgentRecords.first(where: { $0.id == id }) ?? visibleAgentRecords.first(where: { $0.id == id }) else { return }
-                    onOpenAgentDetail(record)
+                    onOpenAgentDetail(record, tab)
                 },
-                onOpenActivity: onOpenActivity
+                onOpenActivity: onOpenActivity,
+                onHoverAgent: { id in
+                    guard let record = allAgentRecords.first(where: { $0.id == id }) ?? visibleAgentRecords.first(where: { $0.id == id }) else { return }
+                    onHoverAgentDetail(record)
+                },
+                onHoverActivity: onHoverActivity,
+                onHoverEnd: onHoverEnd
             )
         }
     }
@@ -663,35 +680,50 @@ struct AllUsageOverview: View {
         }
     }
 
-    private var costRows: [AgentCostRow] {
-        visibleAgentRecords.compactMap { record in
+    /// Cost by ăn theo đúng cửa sổ chart (key AppStorage chung với period chips):
+    /// tổng per-source tính lại từ `report.daily` thay vì đóng cứng last30.
+    @AppStorage("popover.allChartDays") private var allChartDays = 30
+
+    private func costRows(daily: [CombinedDailyUsage]) -> [AgentCostRow] {
+        let window = Array(daily.suffix(max(allChartDays, 1)))
+        func sums(_ usd: (CombinedDailyUsage) -> Double,
+                  _ tokens: (CombinedDailyUsage) -> Int) -> (usd: Double, tokens: Int) {
+            (window.reduce(0) { $0 + usd($1) }, window.reduce(0) { $0 + tokens($1) })
+        }
+        return visibleAgentRecords.compactMap { record in
             guard record.capabilities.contains(.localCost) else { return nil }
             switch record.id {
             case .claude:
                 guard let claude else { return nil }
-                return AgentCostRow(record: record, last30USD: claude.last30USD, todayUSD: claude.todayUSD, tokens: claude.last30Tokens, topModel: claude.topModel)
+                let s = sums({ $0.claudeUSD }, { $0.claudeTokens })
+                return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: claude.todayUSD, tokens: s.tokens, topModel: claude.topModel)
             case .codex:
                 guard let codex else { return nil }
-                return AgentCostRow(record: record, last30USD: codex.last30USD, todayUSD: codex.todayUSD, tokens: codex.last30Tokens, topModel: codex.topModel)
+                let s = sums({ $0.codexUSD }, { $0.codexTokens })
+                return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: codex.todayUSD, tokens: s.tokens, topModel: codex.topModel)
             case .grok:
                 guard let grok else { return nil }
-                return AgentCostRow(record: record, last30USD: grok.last30USD, todayUSD: grok.todayUSD, tokens: grok.last30Tokens, topModel: grok.topModel)
+                let s = sums({ $0.grokUSD }, { $0.grokTokens })
+                return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: grok.todayUSD, tokens: s.tokens, topModel: grok.topModel)
             case .kiro:
                 guard let kiro else { return nil }
-                return AgentCostRow(record: record, last30USD: kiro.last30USD, todayUSD: kiro.todayUSD, tokens: kiro.last30Tokens, topModel: kiro.topModel)
+                let s = sums({ $0.kiroUSD }, { $0.kiroTokens })
+                return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: kiro.todayUSD, tokens: s.tokens, topModel: kiro.topModel)
             case .omp:
                 guard let omp else { return nil }
-                return AgentCostRow(record: record, last30USD: omp.last30USD, todayUSD: omp.todayUSD, tokens: omp.last30Tokens, topModel: omp.topModel)
+                let s = sums({ $0.ompUSD }, { $0.ompTokens })
+                return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: omp.todayUSD, tokens: s.tokens, topModel: omp.topModel)
             case .pi:
                 guard let pi else { return nil }
-                return AgentCostRow(record: record, last30USD: pi.last30USD, todayUSD: pi.todayUSD, tokens: pi.last30Tokens, topModel: pi.topModel)
+                let s = sums({ $0.piUSD }, { $0.piTokens })
+                return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: pi.todayUSD, tokens: s.tokens, topModel: pi.topModel)
             default:
                 return nil
             }
         }
     }
 
-    private var configuredRows: [AgentConfiguredRow] {
+    private func configuredRows(costRows: [AgentCostRow]) -> [AgentConfiguredRow] {
         let costIDs = Set(costRows.map(\.id))
         let quotaIDs = Set(quotaRows.map(\.id))
         return visibleAgentRecords.filter { record in
@@ -770,92 +802,6 @@ enum CombinedHeatmapIntensity: Equatable {
     }
 }
 
-struct SourceConfidenceBadgeRow: View {
-    @EnvironmentObject var settings: SettingsStore
-    let report: CombinedUsageReport
-
-    private var language: String? { settings.appLanguage }
-    private var vi: Bool { L10n.languageCode(language) == "vi" }
-
-    /// Chỉ các nguồn có quota (provider) như UI gốc — OMP/Pi là agent thuần
-    /// cost-log, cố tình không nằm trong hàng badge này.
-    private var entries: [(id: String, name: String, color: Color, confidence: CostHistoryStore.UsageScanConfidence)] {
-        [
-            ("claude", "Claude", VocabbyTheme.chartClaude, report.claudeConfidence),
-            ("codex", "Codex", VocabbyTheme.chartCodex, report.codexConfidence),
-            ("grok", "Grok", VocabbyTheme.chartGrok, report.grokConfidence),
-            ("kiro", "Kiro", VocabbyTheme.chartKiro, report.kiroConfidence),
-        ].compactMap { id, name, color, confidence in
-            confidence.map { (id, name, color, $0) }
-        }
-    }
-
-    var body: some View {
-        if !entries.isEmpty {
-            // No top hairline; tight gap under the chart card.
-            HStack(spacing: 8) { badges }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .popoverContentInset()
-                .padding(.top, 2)
-                .padding(.bottom, 6)
-        }
-    }
-
-    @ViewBuilder
-    private var badges: some View {
-        ForEach(entries, id: \.id) { entry in
-            badge(id: entry.id, name: entry.name, color: entry.color, confidence: entry.confidence)
-        }
-    }
-
-    private func badge(id: String,
-                       name: String,
-                       color: Color,
-                       confidence: CostHistoryStore.UsageScanConfidence) -> some View {
-        let state = SourceConfidenceState.classify(confidence)
-        let tag = state == .live ? "LIVE" : (vi ? "LỊCH SỬ" : "HISTORY")
-        let fullFreshness = SourceConfidenceFormat.freshnessLabel(
-            scannedAt: confidence.scannedAt, preference: language)
-        let badgeFresh = SourceConfidenceFormat.compactFreshnessLabel(
-            scannedAt: confidence.scannedAt)
-        let help = fullFreshness.map { L10n.f("confidence.badgeHelp", language, name, tag, $0) }
-            ?? L10n.f("confidence.badgeHelpNoFreshness", language, name, tag)
-        // Compact badge như bản gốc: logo tint + LIVE/LỊCH SỬ + freshness ngắn —
-        // KHÔNG có tên chữ trong label, logo tự nhận diện nguồn; tên nằm ở tooltip.
-        return HStack(spacing: 4) {
-            ProviderLogoMark(id: id, tint: color)
-                .frame(width: 12, height: 12)
-                .accessibilityHidden(true)
-            Text(tag)
-                .font(.plexMono(9, weight: .semibold))
-                .foregroundStyle(stateColor(state))
-                .tracking(0.4)
-            if let badgeFresh {
-                Text("·")
-                    .font(.plexMono(9))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                Text(badgeFresh.uppercased())
-                    .font(.plexMono(9, weight: .medium))
-                    .foregroundStyle(stateColor(state).opacity(0.85))
-                    .tracking(0.3)
-            }
-        }
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
-        .help(help)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(help)
-    }
-
-    private func stateColor(_ state: SourceConfidenceState) -> Color {
-        switch state {
-        case .live: return VocabbyTheme.success
-        case .historyOnly: return VocabbyTheme.warningFill
-        case .unavailable: return VocabbyTheme.disabled
-        }
-    }
-}
-
 // MARK: - Budget Forecast Card
 
 struct BudgetForecastCard: View {
@@ -915,7 +861,7 @@ struct BudgetForecastCard: View {
             }
             .popoverContentInset()
             .padding(.vertical, 14)
-            .overlay(alignment: .bottom) { PopoverInsetHairline() }
+            .overlay(alignment: .top) { PopoverInsetHairline() }
         }
         // Chưa đặt ngân sách → không render gì (yêu cầu 2026-08-23);
         // thiết lập budget nằm trong Settings → Cài chung.
@@ -937,7 +883,7 @@ struct BudgetForecastCard: View {
         }
         .popoverContentInset()
         .padding(.vertical, 12)
-        .overlay(alignment: .bottom) { PopoverInsetHairline() }
+        .overlay(alignment: .top) { PopoverInsetHairline() }
     }
 
     private func progressBar(status: BudgetForecastStatus) -> some View {
@@ -1125,6 +1071,9 @@ struct CombinedChartCard: View {
     let claudeHourly: [ClaudeHourlyUsage]
     var summaryAgentCount: Int? = nil
     var onOpenActivity: (() -> Void)? = nil
+    /// Hover stats row → panel Hoạt động transient; rời chuột → đóng.
+    var onHoverActivity: (() -> Void)? = nil
+    var onHoverEnd: (() -> Void)? = nil
 
     @State private var hoveredDay: CombinedDailyUsage?
     @State private var pinnedDay: CombinedDailyUsage?
@@ -1405,6 +1354,9 @@ struct CombinedChartCard: View {
             .padding(.top, 10)
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { onHoverActivity?() } else { onHoverEnd?() }
+        }
     }
 
     private func statColumn(_ label: String, _ value: String) -> some View {
@@ -1496,7 +1448,8 @@ struct DayDetailPanelRoot: View {
         // chiều cao luôn nằm trong màn hình.
         VStack(alignment: .leading, spacing: 0) {
             header
-            VocabbyTheme.inkRule.frame(height: 1).padding(.horizontal, 14)
+            // Chrome rule top: đậm hơn hairline, full-bleed (quy ước 2026-08-24).
+            VocabbyTheme.chromeRule.frame(height: 1)
             VStack(alignment: .leading, spacing: 0) {
                 agentSection
                 if !models.isEmpty {
@@ -1508,6 +1461,9 @@ struct DayDetailPanelRoot: View {
         }
         .frame(width: 340)
         .background(VocabbyTheme.background)
+        // Bo góc 3pt cứng ở tầng SwiftUI — window nền clear nên đây là hình
+        // dạng thật của panel, không bị corner mask hệ thống lấn.
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 
     private var header: some View {

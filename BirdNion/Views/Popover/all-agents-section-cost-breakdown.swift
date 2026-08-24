@@ -5,6 +5,9 @@ struct AllAgentsCostBreakdownSection: View {
 
     let rows: [AgentCostRow]
     let onOpenAgent: (InstalledAgentID) -> Void
+    /// Hover row agent → panel transient; rời chuột → đóng.
+    var onHoverAgent: (InstalledAgentID) -> Void = { _ in }
+    var onHoverEnd: () -> Void = {}
 
     enum Mode: String, CaseIterable, Identifiable {
         case agent, model
@@ -38,7 +41,7 @@ struct AllAgentsCostBreakdownSection: View {
                 DisplayRow(
                     id: $0.id.rawValue,
                     name: $0.record.displayName,
-                    amount: $0.last30USD,
+                    amount: $0.periodUSD,
                     color: $0.color,
                     agentID: $0.id
                 )
@@ -68,6 +71,13 @@ struct AllAgentsCostBreakdownSection: View {
                         if let id = row.agentID { onOpenAgent(id) }
                     } label: { rowView(row) }
                     .buttonStyle(.plain)
+                    .onHover { inside in
+                        if inside {
+                            if let id = row.agentID { onHoverAgent(id) }
+                        } else {
+                            onHoverEnd()
+                        }
+                    }
                 }
 
                 let remainder = Array(displayRows.dropFirst(Self.visibleRowLimit))
@@ -77,7 +87,7 @@ struct AllAgentsCostBreakdownSection: View {
             }
             .popoverContentInset()
             .padding(.vertical, 14)
-            .overlay(alignment: .bottom) { PopoverInsetHairline() }
+            .overlay(alignment: .top) { PopoverInsetHairline() }
         }
     }
 
@@ -216,7 +226,7 @@ struct AllAgentsCostBreakdownSection: View {
             groups[name] = DisplayRow(
                 id: name,
                 name: name,
-                amount: (current?.amount ?? 0) + row.last30USD,
+                amount: (current?.amount ?? 0) + row.periodUSD,
                 color: current?.color ?? row.color,
                 agentID: nil
             )

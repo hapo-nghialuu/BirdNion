@@ -55,8 +55,9 @@ struct AllAgentsQuotaSection: View {
             }
             .popoverContentInset()
             .padding(.vertical, 14)
-            .overlay(alignment: .top) { PopoverInsetHairline(color: VocabbyTheme.primary) }
-            .overlay(alignment: .bottom) { PopoverInsetHairline() }
+            // Chỉ kẻ line đỉnh — line đáy do section kế tiếp tự kẻ, tránh
+            // double line với chrome rule của footer.
+            .overlay(alignment: .top) { PopoverInsetHairline() }
         }
     }
 

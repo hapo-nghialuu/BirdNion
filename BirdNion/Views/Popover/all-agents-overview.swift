@@ -10,8 +10,13 @@ struct AllAgentsOverview: View {
     let quotaRows: [AgentQuotaRow]
     let costRows: [AgentCostRow]
     let configuredRows: [AgentConfiguredRow]
-    let onOpenAgent: (InstalledAgentID) -> Void
+    /// Mở panel agent kèm tab theo nguồn click (quota/cost/config).
+    let onOpenAgent: (InstalledAgentID, String?) -> Void
     let onOpenActivity: () -> Void
+    /// Hover = panel transient; click = ghim.
+    let onHoverAgent: (InstalledAgentID) -> Void
+    let onHoverActivity: () -> Void
+    let onHoverEnd: () -> Void
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
     private var insightsSources: Set<ProjectUsageSource> {
@@ -29,34 +34,36 @@ struct AllAgentsOverview: View {
             .padding(.top, 12)
         }
 
-        // Khối 1: Tổng chi phí — confidence badges nằm ngay dưới chart
-        // (vị trí gốc trước remake) vì chúng chú thích độ tươi của chính
-        // số liệu chart này, đọc liền mạch từ trên xuống.
+        // Khối 1: Tổng chi phí. (Confidence badges đã dời xuống footer,
+        // luân phiên với dòng UPDATED.)
         CombinedChartCard(
             report: report,
             claudeHourly: [],
             summaryAgentCount: aggregateAgentCount,
-            onOpenActivity: onOpenActivity
+            onOpenActivity: onOpenActivity,
+            onHoverActivity: onHoverActivity,
+            onHoverEnd: onHoverEnd
         )
-        SourceConfidenceBadgeRow(report: report)
 
         // Khối 2: Quota
         AllAgentsQuotaSection(
             rows: quotaRows,
             totalAgentCount: visibleRecords.count,
-            onOpenAgent: onOpenAgent
+            onOpenAgent: { onOpenAgent($0, "quota") }
         )
 
         // Khối 3: Chi phí theo
         AllAgentsCostBreakdownSection(
             rows: costRows,
-            onOpenAgent: onOpenAgent
+            onOpenAgent: { onOpenAgent($0, "cost") },
+            onHoverAgent: onHoverAgent,
+            onHoverEnd: onHoverEnd
         )
 
         // Khối 4: Đã cấu hình
         AllAgentsConfiguredSection(
             rows: configuredRows,
-            onOpenAgent: onOpenAgent
+            onOpenAgent: { onOpenAgent($0, "config") }
         )
 
         // Khối 5: Ngân sách (theo setting tuần/tháng)
@@ -79,7 +86,8 @@ struct AgentQuotaRow: Identifiable {
 
 struct AgentCostRow: Identifiable {
     let record: InstalledAgentRecord
-    let last30USD: Double
+    /// Tổng USD trong đúng cửa sổ thời gian đang chọn ở chart (24h/7d/30d/90d/120d).
+    let periodUSD: Double
     let todayUSD: Double
     let tokens: Int
     let topModel: String?

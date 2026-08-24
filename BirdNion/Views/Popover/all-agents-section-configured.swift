@@ -40,7 +40,7 @@ struct AllAgentsConfiguredSection: View {
             .buttonStyle(.plain)
             .popoverContentInset()
             .padding(.vertical, 12)
-            .overlay(alignment: .bottom) { PopoverInsetHairline() }
+            .overlay(alignment: .top) { PopoverInsetHairline() }
         }
     }
 

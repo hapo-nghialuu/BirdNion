@@ -100,8 +100,11 @@ struct QuotaOverview: View {
                             visibleAgentRecords: visibleAgentRecords,
                             allAgentRecords: projectedAgentRecords,
                             providerStatuses: quota.displayStatuses,
-                            onOpenAgentDetail: openAgentDetail,
-                            onOpenActivity: openActivity,
+                            onOpenAgentDetail: { openAgentDetail($0, tab: $1) },
+                            onOpenActivity: { openActivity() },
+                            onHoverAgentDetail: { openAgentDetail($0, pinned: false) },
+                            onHoverActivity: { openActivity(pinned: false) },
+                            onHoverEnd: { endHoverPanel() },
                             claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
                             codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
                             grokEnabled: quota.displayStatuses.contains { $0.id == "grok" },
@@ -115,7 +118,7 @@ struct QuotaOverview: View {
                 // AppDelegate.fittingSize. A Spacer here absorbed leftover
                 // host height (seed / prior tall tab) into a visible gap
                 // between the last section (e.g. Accounts) and the footer.
-                ActionsList()
+                ActionsList(sourceStates: footerSourceStates)
             }
             // No horizontal pad here: header/tabs own full-bleed rules;
             // body sections inset content + hairlines themselves.
@@ -458,6 +461,23 @@ struct QuotaOverview: View {
         agentVisibility.visibleRecords(from: projectedAgentRecords)
     }
 
+    /// Trạng thái nguồn (LIVE/LỊCH SỬ + freshness) cho footer — chỉ nguồn
+    /// quota-backed đang enabled, không gộp OMP/Pi (quy ước 2026-08-24).
+    private var footerSourceStates: [FooterSourceState] {
+        var out: [FooterSourceState] = []
+        func add(_ id: String, _ tint: Color, _ confidence: CostHistoryStore.UsageScanConfidence?) {
+            guard quota.displayStatuses.contains(where: { $0.id == id }),
+                  let confidence, confidence.included else { return }
+            out.append(FooterSourceState(
+                id: id, tint: tint, live: confidence.live, scannedAt: confidence.scannedAt))
+        }
+        add("claude", VocabbyTheme.chartClaude, claudeReport?.scanConfidence)
+        add("codex", VocabbyTheme.chartCodex, codexReport?.scanConfidence)
+        add("grok", VocabbyTheme.chartGrok, grokReport?.scanConfidence)
+        add("kiro", VocabbyTheme.chartKiro, kiroReport?.scanConfidence)
+        return out
+    }
+
     /// The All tab exists for enabled local providers or detected local-cost agents.
     private var hasLocalCostSources: Bool {
         quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" || $0.id == "grok" }
@@ -503,7 +523,7 @@ struct QuotaOverview: View {
             includePi: projectedAgentRecords.contains { $0.id == .pi })
     }
 
-    private func openAgentDetail(_ record: InstalledAgentRecord) {
+    private func openAgentDetail(_ record: InstalledAgentRecord, pinned: Bool = true, tab: String? = nil) {
         let statuses = quota.displayStatuses
         let combined = combinedReport()
         let taskId = UUID().uuidString
@@ -526,15 +546,21 @@ struct QuotaOverview: View {
                 sourceName: sourceName)
             await MainActor.run {
                 guard panelRequestTaskId == taskId else { return }
+                var info: [String: Any] = ["snapshot": snapshot, "pinned": pinned]
+                if let tab { info["tab"] = tab }
                 NotificationCenter.default.post(
-                    name: .birdnionOpenAgentDetail,
-                    object: nil,
-                    userInfo: ["snapshot": snapshot])
+                    name: .birdnionOpenAgentDetail, object: nil, userInfo: info)
             }
         }
     }
 
-    private func openActivity() {
+    /// Hover-out từ các row: hủy build snapshot đang bay + đóng panel transient.
+    private func endHoverPanel() {
+        panelRequestTaskId = UUID().uuidString
+        NotificationCenter.default.post(name: .birdnionCloseDayDetailTransient, object: nil)
+    }
+
+    private func openActivity(pinned: Bool = true) {
         let ids = projectedAgentRecords.compactMap { record in
             record.capabilities.contains(.localCost) ? record.id : nil
         }
@@ -551,7 +577,7 @@ struct QuotaOverview: View {
                 NotificationCenter.default.post(
                     name: .birdnionOpenAgentActivity,
                     object: nil,
-                    userInfo: ["snapshot": snapshot])
+                    userInfo: ["snapshot": snapshot, "pinned": pinned])
             }
         }
     }
@@ -648,7 +674,8 @@ struct BirdNionHeader: View {
         .padding(.top, 8)
         .padding(.bottom, 11)
         .overlay(alignment: .bottom) {
-            PopoverInsetHairline(color: VocabbyTheme.inkRule)
+            // Chrome rule top: đậm hơn hairline, full-bleed (quy ước 2026-08-24).
+            VocabbyTheme.chromeRule.frame(height: 1)
         }
     }
 
@@ -2068,7 +2095,8 @@ struct QuotaSummaryStrip: View {
         .padding(.top, 30)
         .padding(.bottom, 16)
         .overlay(alignment: .top) {
-            PopoverInsetHairline(color: VocabbyTheme.inkRule)
+            // Section divider: xám, inset (quy ước 2026-08-24).
+            PopoverInsetHairline()
                 .padding(.top, 16)
         }
         .accessibilityElement(children: .combine)
@@ -2810,11 +2838,25 @@ struct FreemodelAccountsPopoverSection: View {
 
 // MARK: - Actions List
 
+/// Trạng thái một nguồn cost cho footer (LIVE/LỊCH SỬ + freshness).
+struct FooterSourceState: Identifiable {
+    let id: String
+    let tint: Color
+    let live: Bool
+    let scannedAt: Date?
+}
+
 /// Footer row: last-refresh caption (left) + mono text links (right).
-/// Footer: "UPDATED …" left + icon buttons Settings / About / Quit.
+/// Footer: góc trái luân phiên "UPDATED …" ↔ trạng thái nguồn LIVE/LỊCH SỬ.
 struct ActionsList: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var quota: QuotaService
+
+    var sourceStates: [FooterSourceState] = []
+
+    /// Luân phiên 5 giây/lượt giữa caption cập nhật và trạng thái nguồn.
+    @State private var showSources = false
+    private let rotation = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     /// Most recent provider `lastUpdated` across the live display list.
     /// Nil when nothing has been fetched yet (don't invent a timestamp).
@@ -2827,15 +2869,26 @@ struct ActionsList: View {
     }
 
     private var lang: String { settings.appLanguage }
+    private var vi: Bool { L10n.languageCode(lang) == "vi" }
 
     var body: some View {
         HStack(spacing: 8) {
-            if let lastRefreshCaption {
-                Text(lastRefreshCaption.uppercased())
-                    .font(.plexMono(10, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                    .tracking(0.4)
-                    .lineLimit(1)
+            ZStack(alignment: .leading) {
+                if showSources, !sourceStates.isEmpty {
+                    sourceStateRow
+                        .transition(.opacity)
+                } else if let lastRefreshCaption {
+                    Text(lastRefreshCaption.uppercased())
+                        .font(.plexMono(10, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                        .tracking(0.4)
+                        .lineLimit(1)
+                        .transition(.opacity)
+                }
+            }
+            .onReceive(rotation) { _ in
+                guard !sourceStates.isEmpty else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { showSources.toggle() }
             }
             Spacer(minLength: 8)
             footerIcon(
@@ -2864,9 +2917,32 @@ struct ActionsList: View {
         .padding(.top, 10)
         .padding(.bottom, 10)
         .overlay(alignment: .top) {
-            // Body rule — inset; only header + tabs stay edge-to-edge.
-            PopoverInsetHairline()
+            // Chrome rule foot: đậm hơn hairline, full-bleed (quy ước 2026-08-24).
+            VocabbyTheme.chromeRule.frame(height: 1)
         }
+    }
+
+    /// Dòng trạng thái nguồn compact: logo tint + LIVE/LỊCH SỬ + freshness.
+    private var sourceStateRow: some View {
+        HStack(spacing: 10) {
+            ForEach(sourceStates) { state in
+                HStack(spacing: 4) {
+                    ProviderLogoMark(id: state.id, tint: state.tint)
+                        .frame(width: 12, height: 12)
+                    Text(state.live ? "LIVE" : (vi ? "LỊCH SỬ" : "HISTORY"))
+                        .font(.plexMono(9, weight: .semibold))
+                        .foregroundStyle(state.live ? VocabbyTheme.success : VocabbyTheme.warningFill)
+                        .tracking(0.4)
+                    if let fresh = SourceConfidenceFormat.compactFreshnessLabel(scannedAt: state.scannedAt) {
+                        Text("· " + fresh.uppercased())
+                            .font(.plexMono(9))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                }
+            }
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     /// Square icon control matching header actions (26×26, r4, hairline border).
