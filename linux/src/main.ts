@@ -7,7 +7,7 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { combine, UsageReport, UsageSourceId } from "./usage";
+import { combine, scanFreshness, UsageReport, UsageSourceId } from "./usage";
 import {
   chartCard, confidenceRow, budgetForecastCard, providerBudgetCard, allChartDays,
 } from "./all-tab";
@@ -75,6 +75,11 @@ type ProviderCfg = {
   menuBarMetric?: string | null;
 };
 type Settings = { version: number; providers: ProviderCfg[] };
+
+/** Footer luân phiên caption ↔ trạng thái nguồn, 5 giây một lượt (macOS parity). */
+const FOOTER_ROTATE_MS = 5000;
+let footerShowingSources = false;
+let footerRotateTimer: number | null = null;
 
 /** Local usage-report sources scanned from disk (Claude → Codex → Grok → OMP → Pi). */
 const SCAN_SOURCES = ["claude", "codex", "grok", "omp", "pi"] as const;
@@ -493,7 +498,41 @@ function tabsStrip(): HTMLElement {
   return strip;
 }
 
-/** Footer: "CẬP NHẬT …" left + icon buttons Settings / About / Quit (macOS parity). */
+/** Nguồn chi phí đủ điều kiện lên footer: có tab hiển thị và scan đã tính vào
+ *  tổng (parity macOS `footerSourceStates`). */
+function footerSourceStates(): { id: ScanSource; live: boolean; scannedAt: number | null }[] {
+  const out: { id: ScanSource; live: boolean; scannedAt: number | null }[] = [];
+  for (const id of SCAN_SOURCES) {
+    if (!state.statuses.some((s) => s.id === id)) continue;
+    const report = state[id];
+    if (!report?.included) continue;
+    out.push({ id, live: report.live === true, scannedAt: report.scannedAt ?? null });
+  }
+  return out;
+}
+
+/** Dòng trạng thái nguồn: logo tint + LIVE/LỊCH SỬ + độ tươi của lần quét. */
+function footerSourceRow(
+  sources: { id: ScanSource; live: boolean; scannedAt: number | null }[],
+): HTMLElement {
+  const row = el("div", "footer-sources");
+  for (const source of sources) {
+    const item = el("span", "footer-source");
+    const mark = logoMark(source.id, "tab-logo-mono footer-source-logo");
+    const tint = providerTintCss(source.id);
+    if (tint) mark.style.setProperty("--tab-tint", tint);
+    item.append(mark);
+    item.append(el("span", `footer-source-state ${source.live ? "is-live" : "is-history"}`,
+      source.live ? t("confidence.state.live") : t("confidence.state.history")));
+    const fresh = scanFreshness(source.scannedAt);
+    if (fresh) item.append(el("span", "footer-source-fresh", `· ${fresh.toUpperCase()}`));
+    row.append(item);
+  }
+  return row;
+}
+
+/** Footer: "CẬP NHẬT …" left + icon buttons Settings / About / Quit (macOS parity).
+ *  Ô bên trái luân phiên 5 giây giữa caption cập nhật và trạng thái nguồn. */
 function popoverFooter(): HTMLElement {
   const foot = el("footer", "popover-footer footer-compact");
 
@@ -501,11 +540,36 @@ function popoverFooter(): HTMLElement {
   for (const s of state.statuses) {
     if (s.lastUpdated && s.lastUpdated > latest) latest = s.lastUpdated;
   }
-  if (latest > 0) {
-    const rel = relativeTime(latest);
-    if (rel) foot.append(el("span", "footer-updated", t("lastUpdated", { time: rel })));
+  const caption = latest > 0 ? relativeTime(latest) : null;
+  const slot = el("div", "footer-rotate-slot");
+  const sources = footerSourceStates();
+
+  const paintSlot = () => {
+    slot.textContent = "";
+    if (footerShowingSources && sources.length > 0) {
+      slot.append(footerSourceRow(sources));
+    } else if (caption) {
+      slot.append(el("span", "footer-updated", t("lastUpdated", { time: caption })));
+    }
+  };
+  paintSlot();
+  foot.append(slot);
+
+  if (footerRotateTimer != null) clearInterval(footerRotateTimer);
+  if (sources.length > 0) {
+    footerRotateTimer = window.setInterval(() => {
+      // Slot cao cố định trong CSS nên đổi nội dung không làm popover đổi cỡ.
+      if (!slot.isConnected) {
+        if (footerRotateTimer != null) clearInterval(footerRotateTimer);
+        footerRotateTimer = null;
+        return;
+      }
+      footerShowingSources = !footerShowingSources;
+      paintSlot();
+    }, FOOTER_ROTATE_MS);
   } else {
-    foot.append(el("span", "footer-updated", ""));
+    footerRotateTimer = null;
+    footerShowingSources = false;
   }
 
   const actions = el("div", "footer-actions");
