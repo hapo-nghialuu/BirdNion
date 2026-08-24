@@ -193,7 +193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.level = .popUpMenu
         p.isOpaque = false
         p.backgroundColor = .clear
-        p.hasShadow = true
+        // Shadow hệ thống kèm rim xám 1px quanh window không tắt riêng được —
+        // tắt hẳn để hết viền xám (quy ước 2026-08-24).
+        p.hasShadow = false
         p.hidesOnDeactivate = false
         p.contentViewController = host
         // Round the corners of the hosted content; the panel itself stays
@@ -233,7 +235,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.agentDetailCoordinator.show(
                     snapshot: snapshot,
                     settings: self.services.settings,
-                    beside: parent)
+                    beside: parent,
+                    pinned: note.userInfo?["pinned"] as? Bool ?? true,
+                    initialTab: note.userInfo?["tab"] as? String)
             }
             .store(in: &cancellables)
 
@@ -253,7 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.agentDetailCoordinator.showActivity(
                     snapshot: snapshot,
                     settings: self.services.settings,
-                    beside: parent)
+                    beside: parent,
+                    pinned: note.userInfo?["pinned"] as? Bool ?? true)
             }
             .store(in: &cancellables)
 
@@ -292,7 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NotificationCenter.default.publisher(for: .birdnionCloseDayDetailTransient)
             .sink { [weak self] _ in
-                self?.agentDetailCoordinator.closeDayDetailTransient()
+                // Dùng chung cho mọi panel transient (day/agent/activity).
+                self?.agentDetailCoordinator.closeTransient()
             }
             .store(in: &cancellables)
 

@@ -13,44 +13,61 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     private weak var parentWindow: NSWindow?
     private var settings: SettingsStore?
     private var content: Content?
-    /// Day panel opened by click (pinned) vs hover (transient).
-    private var dayDetailPinned = false
+    /// Agent đang hiển thị trong panel — để click cùng agent lần nữa = toggle đóng.
+    private var currentAgentID: InstalledAgentID?
+    /// Panel đang ghim (mở bằng click) hay transient (mở bằng hover).
+    private var contentPinned = false
     /// Generation token: a new hover cancels the pending transient close.
     private var transientCloseGeneration = 0
 
-    func show(snapshot: AgentDetailSnapshot, settings: SettingsStore, beside parent: NSWindow) {
+    func show(snapshot: AgentDetailSnapshot, settings: SettingsStore, beside parent: NSWindow, pinned: Bool = true, initialTab: String? = nil) {
+        transientCloseGeneration += 1
+        if pinned, let panel, panel.isVisible, contentPinned,
+           content == .agent, currentAgentID == snapshot.id {
+            // Toggle: click lại đúng agent đang ghim → đóng.
+            NotificationCenter.default.post(name: .birdnionInvalidateAgentPanelRequests, object: nil)
+            close()
+            return
+        }
+        // Hover không đè panel đang ghim.
+        if !pinned, contentPinned { return }
         let detailPanel = panel ?? makePanel()
         parentWindow = parent
         self.settings = settings
         content = .agent
-        dayDetailPinned = false
+        currentAgentID = snapshot.id
+        contentPinned = pinned
         detailPanel.contentViewController = hostController(
-            for: AgentDetailPanelRoot(snapshot: snapshot)
+            for: AgentDetailPanelRoot(snapshot: snapshot, initialTab: initialTab)
                 .environmentObject(settings)
         )
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
-        detailPanel.makeKeyAndOrderFront(nil)
+        if pinned { detailPanel.makeKeyAndOrderFront(nil) } else { detailPanel.orderFront(nil) }
         panel = detailPanel
     }
 
     func showActivity(
         snapshot: AgentActivitySnapshot,
         settings: SettingsStore,
-        beside parent: NSWindow
+        beside parent: NSWindow,
+        pinned: Bool = true
     ) {
+        transientCloseGeneration += 1
+        if !pinned, contentPinned { return }
         let detailPanel = panel ?? makePanel()
         parentWindow = parent
         self.settings = settings
         content = .activity
-        dayDetailPinned = false
+        currentAgentID = nil
+        contentPinned = pinned
         detailPanel.contentViewController = hostController(
             for: ActivityPanelRoot(window: snapshot.overall)
                 .environmentObject(settings)
         )
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
-        detailPanel.makeKeyAndOrderFront(nil)
+        if pinned { detailPanel.makeKeyAndOrderFront(nil) } else { detailPanel.orderFront(nil) }
         panel = detailPanel
     }
 
@@ -65,16 +82,14 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         beside parent: NSWindow
     ) {
         transientCloseGeneration += 1
-        if !pinned {
-            // Hover không đè panel đang ghim hoặc surface agent/activity đang mở.
-            if dayDetailPinned { return }
-            if let panel, panel.isVisible, content != nil, content != .day { return }
-        }
+        // Hover không đè panel đang ghim; transient thay transient thoải mái.
+        if !pinned, contentPinned { return }
         let detailPanel = panel ?? makePanel()
         parentWindow = parent
         self.settings = settings
         content = .day
-        dayDetailPinned = pinned
+        currentAgentID = nil
+        contentPinned = pinned
         detailPanel.contentViewController = hostController(
             for: DayDetailPanelRoot(
                 day: day, pinned: pinned,
@@ -88,19 +103,23 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         panel = detailPanel
     }
 
-    /// Hover-out: close after a short debounce, only while un-pinned — moving
-    /// between adjacent bars re-enters before the deadline and keeps the panel.
-    func closeDayDetailTransient() {
-        guard content == .day, !dayDetailPinned else { return }
+    /// Hover-out: đóng sau debounce ngắn, chỉ khi chưa ghim — rê chuột giữa
+    /// các phần tử liền kề sẽ re-enter trước deadline và giữ panel.
+    func closeTransient() {
+        guard content != nil, !contentPinned else { return }
         transientCloseGeneration += 1
         let generation = transientCloseGeneration
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            guard let self, self.content == .day, !self.dayDetailPinned,
+            try? await Task.sleep(nanoseconds: 140_000_000)
+            guard let self, self.content != nil, !self.contentPinned,
                   self.transientCloseGeneration == generation else { return }
+            let wasDay = self.content == .day
             self.panel?.orderOut(nil)
             self.content = nil
-            NotificationCenter.default.post(name: .birdnionDayDetailClosed, object: nil)
+            self.currentAgentID = nil
+            if wasDay {
+                NotificationCenter.default.post(name: .birdnionDayDetailClosed, object: nil)
+            }
         }
     }
 
@@ -108,15 +127,16 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     func closeDayDetail() {
         guard content == .day else { return }
         transientCloseGeneration += 1
-        dayDetailPinned = false
+        contentPinned = false
         content = nil
         panel?.orderOut(nil)
         NotificationCenter.default.post(name: .birdnionDayDetailClosed, object: nil)
     }
 
     func close() {
-        dayDetailPinned = false
+        contentPinned = false
         content = nil
+        currentAgentID = nil
         panel?.orderOut(nil)
     }
 
@@ -154,8 +174,9 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
             if content == .day {
                 NotificationCenter.default.post(name: .birdnionDayDetailClosed, object: nil)
             }
-            dayDetailPinned = false
+            contentPinned = false
             content = nil
+            currentAgentID = nil
             panel = nil
         }
     }
@@ -170,28 +191,26 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func makePanel() -> NSPanel {
+        // Borderless: window KHÔNG có chrome hệ thống — hết viền xám quanh
+        // shadow và hết corner mask ~10pt đè lên radius 3 của content.
+        // .nonactivatingPanel giữ được key khi cần mà không activate app.
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: defaultHeight),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
         )
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
         panel.level = .popUpMenu
         panel.collectionBehavior = [.fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.delegate = self
-        // Ẩn traffic lights hệ thống — mọi panel con đều có nút đóng riêng
-        // trong nội dung, chấm đỏ/xám của titlebar chỉ làm bẩn giao diện.
-        panel.standardWindowButton(.closeButton)?.isHidden = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
         // Nền window trong suốt để bo góc 3pt của content là hình dạng thật.
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        // Đồng bộ popover chính: không shadow hệ thống → không rim xám.
+        panel.hasShadow = false
         return panel
     }
 
