@@ -1,43 +1,42 @@
-// Payload cho panel phụ "agent" — 3 tab Overview / Activity / Config, port
-// từ macOS `AgentDetailPanelRoot` + `ActivityPanelRoot` (agent-centric
-// remake 2026-08-24). Popover đã có sẵn report từ scanner (Combined +
-// ProviderStatus) nên panel chỉ NHẬN dữ liệu qua payload này — không tự gọi
-// lại scanner (panel-entry.ts chỉ render, không invoke Tauri command nào).
+// Payload cho panel phụ "agent" — 3 tab THẬT: Quota / Chi phí (Cost) / Config,
+// port từ macOS `AgentDetailPanelRoot` (đọc lại Swift làm nguồn sự thật
+// 2026-08-24 — bản trước có Overview/Activity/Config là SAI cấu trúc tab).
+// KHÔNG có tab Activity ở đây: banded heatmap thuộc panel "activity" riêng,
+// mở từ hàng stats của chart (xem `all-tab.ts` + `panel-entry.ts`). Popover
+// đã có sẵn report từ scanner (Combined + ProviderStatus) nên panel chỉ NHẬN
+// dữ liệu qua payload này — không tự gọi lại scanner.
 
 import { CombinedDay, CombinedModel, UsageSourceId, scanFreshness } from "./usage";
 import { t } from "./i18n";
 
-export type AgentOverviewRow = { label: string; value: string };
+export type AgentTabId = "quota" | "cost" | "config";
+
+export type AgentQuotaWindow = { label: string; remainingPct: number };
 export type AgentConfigRow = { label: string; value: string };
 
-export type AgentActivityDay = {
+export type AgentCostDay = {
   date: string;
   usd: number;
   tokens: number;
-  /** Ngày có bằng chứng chi phí thật (usd>0 hoặc tokens>0) — ngày đệm cho đủ
-   *  tuần luôn là false, KHÔNG nội suy giá trị. */
+  /** Ngày có bằng chứng chi phí thật (usd>0 hoặc tokens>0) — KHÔNG nội suy. */
   hasEvidence: boolean;
   models: CombinedModel[];
-};
-
-export type AgentActivityBlock = {
-  /** Tuần Thứ 2 → Chủ nhật, cũ → mới; tuần đầu/cuối được đệm ô ngày thật
-   *  nhưng không bằng chứng cho đủ 7 ngày. */
-  weeks: AgentActivityDay[][];
-  totalUsd: number;
-  peakUsd: number;
-  avgUsd: number;
-  currentStreak: number;
-  longestStreak: number;
 };
 
 export type AgentPanelPayload = {
   kind: "agent";
   agentId: string;
   displayName: string;
-  overviewRows: AgentOverviewRow[];
-  activity: AgentActivityBlock | null;
+  quotaWindows: AgentQuotaWindow[];
+  /** null khi agent này chưa từng có bằng chứng chi phí cục bộ thật — panel
+   *  disable tab Cost thay vì vẽ chart rỗng (parity macOS `costSummary == nil`
+   *  khi không có `hasLocalCost`/confidence/evidence). */
+  costDays: AgentCostDay[] | null;
   configRows: AgentConfigRow[];
+  /** Tab mở đầu theo nguồn click ("quota"/"cost"/"config"); undefined = panel
+   *  tự suy theo capability — parity macOS `initialTab: String?` + fallback
+   *  heuristics trong `.onAppear` (cost → quota → config). */
+  initialTab?: AgentTabId;
 };
 
 /** Path log cục bộ mà scanner của từng agent thật sự đọc (khớp
@@ -73,58 +72,6 @@ function dayTokens(day: CombinedDay, source: UsageSourceId): number {
   }
 }
 
-function addDays(dateStr: string, delta: number): string {
-  const d = new Date(dateStr + "T12:00:00");
-  d.setDate(d.getDate() + delta);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-/** 0 = Thứ 2 … 6 = Chủ nhật (ISO), khác `Date#getDay()` vốn 0 = Chủ nhật. */
-function mondayIndex(dateStr: string): number {
-  const dow = new Date(dateStr + "T12:00:00").getDay();
-  return (dow + 6) % 7;
-}
-
-function emptyDay(date: string): AgentActivityDay {
-  return { date, usd: 0, tokens: 0, hasEvidence: false, models: [] };
-}
-
-/** Đệm đầu/cuối cho đủ tuần Thứ 2 → CN rồi cắt thành từng tuần 7 ngày. Ô đệm
- *  dùng ngày thật (tính theo lịch) nhưng đánh dấu không bằng chứng — giữ
- *  nguyên tắc "không fabricate" xuyên suốt BirdNion. */
-function toWeeks(days: AgentActivityDay[]): AgentActivityDay[][] {
-  if (days.length === 0) return [];
-  const leadPad = mondayIndex(days[0].date);
-  const lead: AgentActivityDay[] = [];
-  for (let i = leadPad; i > 0; i--) lead.push(emptyDay(addDays(days[0].date, -i)));
-  const last = days[days.length - 1];
-  const trailPad = 6 - mondayIndex(last.date);
-  const trail: AgentActivityDay[] = [];
-  for (let i = 1; i <= trailPad; i++) trail.push(emptyDay(addDays(last.date, i)));
-  const full = [...lead, ...days, ...trail];
-  const weeks: AgentActivityDay[][] = [];
-  for (let i = 0; i < full.length; i += 7) weeks.push(full.slice(i, i + 7));
-  return weeks;
-}
-
-/** Chuỗi ngày hoạt động liên tiếp — parity với streak trong `usage.ts`
- *  (`combine()`), cộng thêm kỷ lục dài nhất (macOS `WeeklyActivityBucketBuilder`). */
-function streakMetrics(days: AgentActivityDay[]): { current: number; longest: number } {
-  let longest = 0;
-  let run = 0;
-  for (const day of days) {
-    if (day.hasEvidence) { run++; longest = Math.max(longest, run); } else { run = 0; }
-  }
-  let i = days.length - 1;
-  if (i >= 0 && !days[i].hasEvidence) i--;
-  let current = 0;
-  while (i >= 0 && days[i].hasEvidence) { current++; i--; }
-  return { current, longest };
-}
-
 /** `lastUpdated`/`scannedAt` có thể ở giây (backend Rust) hoặc milli-giây
  *  (frontend) — cùng quy ước chuẩn hoá đang dùng ở `provider-tab.ts`. */
 function normalizeToMillis(ts: number | null | undefined): number | null {
@@ -149,20 +96,18 @@ export type BuildAgentPanelPayloadOptions = {
 };
 
 /** Dựng payload panel "agent" từ dữ liệu popover đã có sẵn (Combined +
- *  ProviderStatus) — KHÔNG gọi lại scanner. Trả về `activity: null` khi
- *  agent chưa từng có bằng chứng chi phí thật, để panel không vẽ chart rỗng. */
+ *  ProviderStatus) — KHÔNG gọi lại scanner. Trả về `costDays: null` khi agent
+ *  chưa từng có bằng chứng chi phí thật, để tab Cost bị disable thay vì vẽ
+ *  chart rỗng. */
 export function buildAgentPanelPayload(opts: BuildAgentPanelPayloadOptions): AgentPanelPayload {
-  const overviewRows: AgentOverviewRow[] = (opts.quotaWindows ?? [])
+  const quotaWindows: AgentQuotaWindow[] = (opts.quotaWindows ?? [])
     .filter((w) => Number.isFinite(w.remainingPct))
-    .map((w) => ({
-      label: w.label.toUpperCase(),
-      value: t("provider.remainingPct", { n: Math.round(w.remainingPct) }),
-    }));
+    .map((w) => ({ label: w.label, remainingPct: w.remainingPct }));
 
-  let activity: AgentActivityBlock | null = null;
+  let costDays: AgentCostDay[] | null = null;
   if (opts.source && opts.daily && opts.daily.length > 0) {
     const source = opts.source;
-    const days: AgentActivityDay[] = opts.daily.map((d) => {
+    const days: AgentCostDay[] = opts.daily.map((d) => {
       const usdVal = dayUsd(d, source);
       const tokensVal = dayTokens(d, source);
       return {
@@ -173,21 +118,7 @@ export function buildAgentPanelPayload(opts: BuildAgentPanelPayloadOptions): Age
         models: d.models.filter((m) => m.source === source),
       };
     });
-    if (days.some((d) => d.hasEvidence)) {
-      const totalUsd = days.reduce((s, d) => s + d.usd, 0);
-      const peakUsd = days.reduce((m, d) => Math.max(m, d.usd), 0);
-      const activeDays = days.filter((d) => d.hasEvidence).length;
-      const avgUsd = activeDays > 0 ? totalUsd / activeDays : 0;
-      const { current, longest } = streakMetrics(days);
-      activity = {
-        weeks: toWeeks(days),
-        totalUsd,
-        peakUsd,
-        avgUsd,
-        currentStreak: current,
-        longestStreak: longest,
-      };
-    }
+    if (days.some((d) => d.hasEvidence)) costDays = days;
   }
 
   const configRows: AgentConfigRow[] = [];
@@ -207,8 +138,8 @@ export function buildAgentPanelPayload(opts: BuildAgentPanelPayloadOptions): Age
     kind: "agent",
     agentId: opts.agentId,
     displayName: opts.displayName,
-    overviewRows,
-    activity,
+    quotaWindows,
+    costDays,
     configRows,
   };
 }

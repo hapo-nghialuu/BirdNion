@@ -997,14 +997,16 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "configured": { vi: "Đã cấu hình", en: "Configured" },
   "configuredNoLogs": { vi: "{n} agent · không có log", en: "{n} agents · no logs" },
 
-  // Agent detail side panel — 3 tab Overview/Activity/Config (macOS
-  // AgentDetailPanelRoot + ActivityPanelRoot parity 2026-08-24).
+  // Agent detail side panel — 3 tab THẬT Quota/Cost/Config (đọc lại macOS
+  // `AgentDetailPanelRoot` làm nguồn sự thật 2026-08-24 — không có tab
+  // Activity, banded heatmap thuộc panel "activity" riêng).
+  "cost": { vi: "Chi phí", en: "Cost" },
+  "agentPanelQuotaDisabled": { vi: "Quota — không", en: "Quota — none" },
+  "agentPanelCostDisabled": { vi: "Chi phí — không", en: "Cost — none" },
+  "agentPanelCurrentQuota": { vi: "Quota hiện tại", en: "Current quota" },
+  "agentPanelNoQuota": { vi: "Không có quota trực tiếp.", en: "No direct quota surface." },
   "agentPanelLocalLog": { vi: "Log cục bộ", en: "Local log" },
   "agentPanelLastScanned": { vi: "Quét gần nhất", en: "Last scanned" },
-  "agentPanelNoOverview": {
-    vi: "Chưa có quota hoặc chi phí để hiển thị.",
-    en: "No quota or cost data to show yet.",
-  },
   "agentPanelNoConfig": { vi: "Không có thông tin cấu hình.", en: "No configuration details." },
   "agentPanelModelsTitle": { vi: "Model trong agent này", en: "Models in this agent" },
   "weeksWord": { vi: "tuần", en: "weeks" },

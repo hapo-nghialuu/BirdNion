@@ -12,7 +12,7 @@ import { t } from "./i18n";
 import { logoMark } from "./logos";
 import { usd, tokens as tokensLabel, tokensShort, dayLabel } from "./usage";
 import type { CombinedDay, CombinedModel } from "./usage";
-import type { AgentActivityBlock, AgentActivityDay, AgentPanelPayload } from "./agent-panel-payload";
+import type { AgentCostDay, AgentPanelPayload, AgentQuotaWindow, AgentTabId } from "./agent-panel-payload";
 
 export const PANEL_PAYLOAD_EVENT = "birdnion-panel-payload";
 
@@ -20,7 +20,14 @@ export type PanelPayload =
   | { kind: "day"; pinned: boolean; day: CombinedDay; windowUsd: number; windowLabel: string }
   | { kind: "models"; models: CombinedModel[]; mode: "model" | "token" }
   | AgentPanelPayload
-  | { kind: "activity"; cells: ActivityCell[]; peakUsd: number; avgUsd: number; streak: number };
+  | {
+      kind: "activity";
+      cells: ActivityCell[];
+      peakUsd: number;
+      avgUsd: number;
+      streak: number;
+      longestStreak: number;
+    };
 
 export type ActivityCell = { date: string; usd: number; tokens: number };
 
@@ -118,20 +125,32 @@ function modelsPanel(payload: Extract<PanelPayload, { kind: "models" }>): HTMLEl
 }
 
 // -------------------------------------------------------- Agent detail panel
-// 3 tab Overview / Activity / Config — port của macOS `AgentDetailPanelRoot`
-// + `ActivityPanelRoot` (agent-centric remake 2026-08-24). State tab/kỳ/ngày
-// chọn sống trong closure của lần render này — payload mới (agent khác) sẽ
-// dựng lại từ đầu, giống macOS `@State` reset khi đổi `snapshot`.
+// 3 tab THẬT: Quota / Chi phí (Cost) / Config — port của macOS
+// `AgentDetailPanelRoot` (đọc lại Swift làm nguồn sự thật 2026-08-24, sửa lại
+// cấu trúc tab SAI của bản trước — KHÔNG có tab Activity ở đây; banded
+// heatmap thuộc `activityPanel()` riêng bên dưới). State tab/kỳ/ngày chọn
+// sống trong closure của lần render này — payload mới (agent khác) sẽ dựng
+// lại từ đầu, giống macOS `@State` reset khi đổi `snapshot`.
 
-type AgentTab = "overview" | "activity" | "config";
 const MAX_WEEK_COLUMNS = 23;
 const MAX_MODEL_ROWS = 8;
 const PERIOD_OPTIONS = [7, 30, 90] as const;
 
 function agentPanel(payload: Extract<PanelPayload, { kind: "agent" }>): HTMLElement {
   const wrap = el("div", "panel-content");
-  const hasOverview = payload.overviewRows.length > 0 || payload.activity != null;
-  let tab: AgentTab = hasOverview ? "overview" : "config";
+  const hasQuota = payload.quotaWindows.length > 0;
+  const hasCost = payload.costDays != null;
+
+  // Tab mở đầu theo nguồn click, fallback theo capability (cost → quota →
+  // config) — parity macOS `AgentDetailPanelRoot.onAppear`.
+  let tab: AgentTabId;
+  if (payload.initialTab === "quota" && hasQuota) tab = "quota";
+  else if (payload.initialTab === "cost" && hasCost) tab = "cost";
+  else if (payload.initialTab === "config") tab = "config";
+  else if (hasCost) tab = "cost";
+  else if (hasQuota) tab = "quota";
+  else tab = "config";
+
   let periodDays: number = 30;
   let selectedDate: string | null = null;
 
@@ -143,9 +162,11 @@ function agentPanel(payload: Extract<PanelPayload, { kind: "agent" }>): HTMLElem
 
   function paintTabs(): void {
     tabsEl.textContent = "";
-    const items: { id: AgentTab; label: string; enabled: boolean }[] = [
-      { id: "overview", label: t("insightsOverview"), enabled: hasOverview },
-      { id: "activity", label: t("insightsSegmentActivity"), enabled: payload.activity != null },
+    // Tab disabled vẫn hiện (nhãn suffix "— không"/"— none") — không ẩn đi,
+    // giống macOS `tabBar` (Config luôn enabled).
+    const items: { id: AgentTabId; label: string; enabled: boolean }[] = [
+      { id: "quota", label: hasQuota ? t("quota") : t("agentPanelQuotaDisabled"), enabled: hasQuota },
+      { id: "cost", label: hasCost ? t("cost") : t("agentPanelCostDisabled"), enabled: hasCost },
       { id: "config", label: "Config", enabled: true },
     ];
     for (const item of items) {
@@ -169,36 +190,52 @@ function agentPanel(payload: Extract<PanelPayload, { kind: "agent" }>): HTMLElem
 
   function paintBody(): void {
     bodyEl.textContent = "";
-    if (tab === "overview") bodyEl.append(overviewTab());
-    else if (tab === "activity" && payload.activity) bodyEl.append(activityTab(payload.activity));
+    if (tab === "quota") bodyEl.append(quotaTab());
+    else if (tab === "cost" && payload.costDays) bodyEl.append(costTab(payload.costDays));
     else bodyEl.append(configTab());
   }
 
-  function overviewTab(): HTMLElement {
+  // ---- Quota tab: mỗi window = label + bar 56×3 + % phải (đỏ dưới 20%) —
+  // parity macOS `quotaTabContent`. Không có window nào thì hiện dòng
+  // "Không có quota trực tiếp." thay vì vẽ bar rỗng (không fabricate).
+  function quotaTab(): HTMLElement {
     const box = el("div", "panel-tab-content");
-    if (payload.overviewRows.length > 0) {
-      box.append(el("div", "panel-section-title", t("quota").toUpperCase()));
-      for (const row of payload.overviewRows) {
-        const r = el("div", "panel-row");
-        r.append(el("span", "panel-tick tint-muted"));
-        r.append(el("span", "panel-row-name", row.label));
-        r.append(el("span", "panel-row-value", row.value));
-        box.append(r);
-      }
-    }
-    if (payload.activity) box.append(costHero(payload.activity));
-    if (payload.overviewRows.length === 0 && !payload.activity) {
-      box.append(el("div", "panel-empty", t("agentPanelNoOverview")));
+    if (payload.quotaWindows.length > 0) {
+      box.append(el("div", "panel-section-title", t("agentPanelCurrentQuota").toUpperCase()));
+      for (const win of payload.quotaWindows) box.append(quotaWindowRow(win));
+    } else {
+      box.append(el("div", "panel-empty", t("agentPanelNoQuota")));
     }
     return box;
   }
 
-  function costHero(activity: AgentActivityBlock): HTMLElement {
-    const flat = activity.weeks.flat();
-    const windowDays = flat.slice(-periodDays);
+  function quotaWindowRow(win: AgentQuotaWindow): HTMLElement {
+    const tone = win.remainingPct < 20 ? "tone-critical" : "tone-ok";
+    const row = el("div", "panel-quota-row");
+    row.append(el("span", "panel-quota-label", win.label.toUpperCase()));
+    const track = el("span", "panel-quota-track");
+    const fill = el("span", `panel-quota-fill ${tone}`);
+    fill.style.width = `${Math.max(0, Math.min(100, win.remainingPct))}%`;
+    track.append(fill);
+    row.append(track);
+    row.append(el("span", `panel-quota-pct ${tone}`, `${Math.round(win.remainingPct)}%`));
+    return row;
+  }
+
+  // ---- Cost tab: hero (7/30/90d) + mini chart + model list, cùng bám theo
+  // period đang chọn — parity macOS `costTabContent`. SOURCE + LOCAL LOG
+  // KHÔNG nằm ở đây, chúng thuộc tab Config.
+  function costTab(days: AgentCostDay[]): HTMLElement {
+    const box = el("div", "panel-tab-content");
+    box.append(costHero(days));
+    return box;
+  }
+
+  function costHero(days: AgentCostDay[]): HTMLElement {
+    const windowDays = days.slice(-periodDays);
     const windowUsd = windowDays.reduce((s, d) => s + d.usd, 0);
     const windowTokens = windowDays.reduce((s, d) => s + d.tokens, 0);
-    const today = flat[flat.length - 1];
+    const today = days[days.length - 1];
 
     const box = el("div", "panel-cost-hero");
     const top = el("div", "panel-cost-hero-top");
@@ -248,7 +285,7 @@ function agentPanel(payload: Extract<PanelPayload, { kind: "agent" }>): HTMLElem
     return group;
   }
 
-  function miniChart(days: AgentActivityDay[]): HTMLElement {
+  function miniChart(days: AgentCostDay[]): HTMLElement {
     const chart = el("div", "panel-mini-chart");
     const max = Math.max(...days.map((d) => d.tokens), 1);
     for (const day of days) {
@@ -290,130 +327,6 @@ function agentPanel(payload: Extract<PanelPayload, { kind: "agent" }>): HTMLElem
     return box;
   }
 
-  function activityTab(activity: AgentActivityBlock): HTMLElement {
-    const box = el("div", "panel-tab-content");
-    const flat = activity.weeks.flat();
-    const firstIdx = activity.weeks.findIndex((week) => week.some((d) => d.hasEvidence));
-    const meaningful = firstIdx >= 0
-      ? activity.weeks.slice(firstIdx)
-      : activity.weeks.slice(-MAX_WEEK_COLUMNS);
-    const maxTokens = Math.max(...flat.map((d) => d.tokens), 1);
-
-    const sub = el("div", "panel-activity-sub");
-    sub.append(el("span", "panel-activity-sub-label",
-      `${t("insightsSegmentActivity").toUpperCase()} · ${meaningful.length} ${t("weeksWord").toUpperCase()}`));
-    sub.append(el("span", "panel-activity-sub-total", usd(activity.totalUsd)));
-    box.append(sub);
-
-    // Vượt quá MAX_WEEK_COLUMNS thì wrap xuống band tiếp theo — mọi band
-    // dùng chung thang màu (maxTokens tính trên cả window).
-    for (let i = 0; i < meaningful.length; i += MAX_WEEK_COLUMNS) {
-      const band = meaningful.slice(i, i + MAX_WEEK_COLUMNS);
-      box.append(heatmapBand(band, maxTokens));
-      box.append(rangeRow(band));
-    }
-
-    if (selectedDate) {
-      const day = flat.find((d) => d.date === selectedDate);
-      if (day) {
-        box.append(selectedDayRow(day));
-        if (day.models.length > 0) {
-          const list = el("div", "panel-day-models");
-          for (const model of day.models.slice(0, 6)) list.append(modelRow(model, "usd"));
-          box.append(list);
-        }
-      }
-    }
-
-    box.append(legendRow());
-    box.append(footerStats(activity));
-    return box;
-  }
-
-  function heatmapBand(weeks: AgentActivityDay[][], maxTokens: number): HTMLElement {
-    const row = el("div", "panel-heatband");
-    const labels = el("div", "panel-heatband-labels");
-    for (const key of ["mon", "", "wed", "", "fri", "", "sun"]) {
-      labels.append(el("span", "panel-heatband-weekday", key ? t(`weekday.${key}`) : ""));
-    }
-    row.append(labels);
-
-    for (const week of weeks) {
-      const col = el("div", "panel-heatband-col");
-      for (const day of week) {
-        const level = day.hasEvidence ? heatLevel(day.tokens, maxTokens) : 0;
-        const cell = el("span",
-          `panel-heat-cell level-${level}${selectedDate === day.date ? " is-selected" : ""}`);
-        cell.title = day.hasEvidence
-          ? `${dayLabel(day.date)}: ${tokensLabel(day.tokens)} · ${usd(day.usd)}`
-          : `${dayLabel(day.date)}: ${t("noActivity")}`;
-        if (day.hasEvidence) {
-          cell.classList.add("is-clickable");
-          cell.addEventListener("click", () => {
-            selectedDate = selectedDate === day.date ? null : day.date;
-            paintBody();
-          });
-        }
-        col.append(cell);
-      }
-      row.append(col);
-    }
-    return row;
-  }
-
-  function rangeRow(weeks: AgentActivityDay[][]): HTMLElement {
-    const row = el("div", "panel-heatband-range");
-    const firstWeek = weeks[0];
-    const lastWeek = weeks[weeks.length - 1];
-    row.append(el("span", "", firstWeek ? dayLabel(firstWeek[0].date) : ""));
-    row.append(el("span", "", lastWeek ? dayLabel(lastWeek[lastWeek.length - 1].date) : ""));
-    return row;
-  }
-
-  function selectedDayRow(day: AgentActivityDay): HTMLElement {
-    const row = el("div", "panel-row panel-day-detail");
-    row.append(el("span", "panel-tick tint-muted"));
-    row.append(el("span", "panel-row-name", dayLabel(day.date)));
-    row.append(el("span", "panel-row-value",
-      day.hasEvidence ? `${tokensLabel(day.tokens)} · ${usd(day.usd)}` : t("noActivity")));
-    return row;
-  }
-
-  function legendRow(): HTMLElement {
-    const row = el("div", "panel-legend");
-    row.append(el("span", "panel-legend-label", t("less")));
-    const swatches = el("span", "panel-legend-swatches");
-    for (let level = 0; level <= 4; level++) {
-      swatches.append(el("span", `panel-heat-cell panel-legend-cell level-${level}`));
-    }
-    row.append(swatches);
-    row.append(el("span", "panel-legend-label", t("more")));
-    row.append(el("span", "panel-legend-note", t("shadedByTokens")));
-    return row;
-  }
-
-  function footerStats(activity: AgentActivityBlock): HTMLElement {
-    const row = el("div", "panel-stats");
-    row.append(statCell(t("peakDay"), usd(activity.peakUsd)));
-    row.append(statCell(t("avgPerActiveDay"), usd(activity.avgUsd)));
-
-    const streakCell = el("div", "panel-stat");
-    streakCell.append(el("span", "panel-stat-label", t("streak").toUpperCase()));
-    streakCell.append(el("span", "panel-stat-value panel-stat-streak",
-      `${activity.currentStreak} ${t("daysWord")}`));
-    if (activity.currentStreak > 0) {
-      if (activity.currentStreak >= activity.longestStreak) {
-        streakCell.append(el("span", "panel-streak-record", t("agentPanelStreakRecord").toUpperCase()));
-      } else {
-        const remain = activity.longestStreak - activity.currentStreak + 1;
-        streakCell.append(el("span", "panel-streak-countdown",
-          t("agentPanelStreakCountdown", { n: remain, best: activity.longestStreak }).toUpperCase()));
-      }
-    }
-    row.append(streakCell);
-    return row;
-  }
-
   function configTab(): HTMLElement {
     const box = el("div", "panel-tab-content");
     if (payload.configRows.length === 0) {
@@ -436,7 +349,7 @@ function agentPanel(payload: Extract<PanelPayload, { kind: "agent" }>): HTMLElem
 
 /** Gộp model theo danh sách ngày đang xét (window hoặc 1 ngày filter) —
  *  parity macOS `AgentDetailPanelRoot.windowModels`. */
-function aggregateModels(days: AgentActivityDay[]): CombinedModel[] {
+function aggregateModels(days: AgentCostDay[]): CombinedModel[] {
   const totals = new Map<string, CombinedModel>();
   for (const day of days) {
     for (const model of day.models) {
@@ -448,29 +361,194 @@ function aggregateModels(days: AgentActivityDay[]): CombinedModel[] {
   return [...totals.values()].sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
 }
 
+// ------------------------------------------------------------ Activity panel
+// Banded heatmap 23-cột/band, thang màu chung, streak spotlight + stats
+// footer — mở từ hàng stats của chart tab All (KHÔNG phải tab của agent
+// panel; đọc lại Swift `ActivityPanelRoot` làm nguồn sự thật 2026-08-24).
+
+type DayCell = { date: string; usd: number; tokens: number };
+
 function activityPanel(payload: Extract<PanelPayload, { kind: "activity" }>): HTMLElement {
   const wrap = el("div", "panel-content");
-  const activeDays = payload.cells.filter((c) => c.tokens > 0).length;
+  const weeks = toActivityWeeks(payload.cells);
+  const activeDays = payload.cells.filter((c) => c.usd > 0 || c.tokens > 0).length;
+
   wrap.append(header(t("insightsSegmentActivity"),
-    `${activeDays} ${t("activeDaysWord")}`, true));
+    `${weeks.length} ${t("weeksWord").toUpperCase()} · ${activeDays} ${t("activeDaysWord").toUpperCase()}`,
+    true));
 
-  const max = Math.max(...payload.cells.map((c) => c.tokens), 1);
-  const grid = el("div", "panel-heat");
-  for (const cell of payload.cells) {
-    const box = el("span", `panel-heat-cell level-${heatLevel(cell.tokens, max)}`);
-    box.title = cell.tokens > 0
-      ? `${cell.date}: ${tokensLabel(cell.tokens)} · ${usd(cell.usd)}`
-      : `${cell.date}: ${t("noActivity")}`;
-    grid.append(box);
+  const bodyEl = el("div", "panel-tab-content");
+  wrap.append(bodyEl);
+
+  let selectedDate: string | null = null;
+
+  function paint(): void {
+    bodyEl.textContent = "";
+    // Heatmap bắt đầu từ tuần có dữ liệu đầu tiên — không vẽ cả window trống.
+    const meaningful = meaningfulActivityWeeks(weeks);
+    const flat = meaningful.flat();
+    const totalUsd = payload.cells.reduce((s, c) => s + c.usd, 0);
+
+    const sub = el("div", "panel-activity-sub");
+    sub.append(el("span", "panel-activity-sub-label",
+      `${t("insightsSegmentActivity").toUpperCase()} · ${meaningful.length} ${t("weeksWord").toUpperCase()}`));
+    sub.append(el("span", "panel-activity-sub-total", usd(totalUsd)));
+    bodyEl.append(sub);
+
+    const maxTokens = Math.max(...flat.map((d) => d.tokens), 1);
+    // Vượt quá MAX_WEEK_COLUMNS thì wrap xuống band tiếp theo — mọi band
+    // dùng chung thang màu (maxTokens tính trên cả window).
+    for (let i = 0; i < meaningful.length; i += MAX_WEEK_COLUMNS) {
+      const band = meaningful.slice(i, i + MAX_WEEK_COLUMNS);
+      bodyEl.append(heatmapBand(band, maxTokens, selectedDate, (date) => {
+        selectedDate = selectedDate === date ? null : date;
+        paint();
+      }));
+      bodyEl.append(heatmapRangeRow(band));
+    }
+
+    if (selectedDate) {
+      const day = flat.find((d) => d.date === selectedDate);
+      if (day) bodyEl.append(heatmapSelectedDayRow(day));
+    }
+
+    bodyEl.append(heatmapLegendRow());
+    bodyEl.append(activityFooterStats(payload.peakUsd, payload.avgUsd, payload.streak, payload.longestStreak));
   }
-  wrap.append(grid);
 
-  const stats = el("div", "panel-stats");
-  stats.append(statCell(t("peakDay"), usd(payload.peakUsd)));
-  stats.append(statCell(t("avgPerActiveDay"), usd(payload.avgUsd)));
-  stats.append(statCell(t("streak"), `${payload.streak} ${t("daysWord")}`));
-  wrap.append(stats);
+  paint();
   return wrap;
+}
+
+function addDays(dateStr: string, delta: number): string {
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + delta);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** 0 = Thứ 2 … 6 = Chủ nhật (ISO), khác `Date#getDay()` vốn 0 = Chủ nhật. */
+function mondayIndex(dateStr: string): number {
+  const dow = new Date(dateStr + "T12:00:00").getDay();
+  return (dow + 6) % 7;
+}
+
+/** Đệm đầu/cuối cho đủ tuần Thứ 2 → CN rồi cắt thành từng tuần 7 ngày. Ô đệm
+ *  dùng ngày thật nhưng usd/tokens=0 (không fabricate, chỉ để lưới thẳng
+ *  hàng thứ — giống ô đệm không bằng chứng của macOS `weekBands`). */
+function toActivityWeeks(days: DayCell[]): DayCell[][] {
+  if (days.length === 0) return [];
+  const leadPad = mondayIndex(days[0].date);
+  const lead: DayCell[] = [];
+  for (let i = leadPad; i > 0; i--) lead.push({ date: addDays(days[0].date, -i), usd: 0, tokens: 0 });
+  const last = days[days.length - 1];
+  const trailPad = 6 - mondayIndex(last.date);
+  const trail: DayCell[] = [];
+  for (let i = 1; i <= trailPad; i++) trail.push({ date: addDays(last.date, i), usd: 0, tokens: 0 });
+  const full = [...lead, ...days, ...trail];
+  const weeks: DayCell[][] = [];
+  for (let i = 0; i < full.length; i += 7) weeks.push(full.slice(i, i + 7));
+  return weeks;
+}
+
+function meaningfulActivityWeeks(weeks: DayCell[][]): DayCell[][] {
+  const firstIdx = weeks.findIndex((week) => week.some((d) => d.usd > 0 || d.tokens > 0));
+  return firstIdx >= 0 ? weeks.slice(firstIdx) : weeks.slice(-MAX_WEEK_COLUMNS);
+}
+
+function heatmapBand(
+  weeks: DayCell[][],
+  maxTokens: number,
+  selectedDate: string | null,
+  onSelect: (date: string) => void,
+): HTMLElement {
+  const row = el("div", "panel-heatband");
+  const labels = el("div", "panel-heatband-labels");
+  for (const key of ["mon", "", "wed", "", "fri", "", "sun"]) {
+    labels.append(el("span", "panel-heatband-weekday", key ? t(`weekday.${key}`) : ""));
+  }
+  row.append(labels);
+
+  for (const week of weeks) {
+    const col = el("div", "panel-heatband-col");
+    for (const day of week) {
+      const active = day.usd > 0 || day.tokens > 0;
+      const level = active ? heatLevel(day.tokens, maxTokens) : 0;
+      const cell = el("span",
+        `panel-heat-cell level-${level}${selectedDate === day.date ? " is-selected" : ""}`);
+      cell.title = active
+        ? `${dayLabel(day.date)}: ${tokensLabel(day.tokens)} · ${usd(day.usd)}`
+        : `${dayLabel(day.date)}: ${t("noActivity")}`;
+      if (active) {
+        cell.classList.add("is-clickable");
+        cell.addEventListener("click", () => onSelect(day.date));
+      }
+      col.append(cell);
+    }
+    row.append(col);
+  }
+  return row;
+}
+
+function heatmapRangeRow(weeks: DayCell[][]): HTMLElement {
+  const row = el("div", "panel-heatband-range");
+  const firstWeek = weeks[0];
+  const lastWeek = weeks[weeks.length - 1];
+  row.append(el("span", "", firstWeek ? dayLabel(firstWeek[0].date) : ""));
+  row.append(el("span", "", lastWeek ? dayLabel(lastWeek[lastWeek.length - 1].date) : ""));
+  return row;
+}
+
+function heatmapSelectedDayRow(day: DayCell): HTMLElement {
+  const active = day.usd > 0 || day.tokens > 0;
+  const row = el("div", "panel-row panel-day-detail");
+  row.append(el("span", "panel-tick tint-muted"));
+  row.append(el("span", "panel-row-name", dayLabel(day.date)));
+  row.append(el("span", "panel-row-value",
+    active ? `${tokensLabel(day.tokens)} · ${usd(day.usd)}` : t("noActivity")));
+  return row;
+}
+
+function heatmapLegendRow(): HTMLElement {
+  const row = el("div", "panel-legend");
+  row.append(el("span", "panel-legend-label", t("less")));
+  const swatches = el("span", "panel-legend-swatches");
+  for (let level = 0; level <= 4; level++) {
+    swatches.append(el("span", `panel-heat-cell panel-legend-cell level-${level}`));
+  }
+  row.append(swatches);
+  row.append(el("span", "panel-legend-label", t("more")));
+  row.append(el("span", "panel-legend-note", t("shadedByTokens")));
+  return row;
+}
+
+function activityFooterStats(
+  peakUsd: number,
+  avgUsd: number,
+  currentStreak: number,
+  longestStreak: number,
+): HTMLElement {
+  const row = el("div", "panel-stats");
+  row.append(statCell(t("peakDay"), usd(peakUsd)));
+  row.append(statCell(t("avgPerActiveDay"), usd(avgUsd)));
+
+  const streakCell = el("div", "panel-stat");
+  streakCell.append(el("span", "panel-stat-label", t("streak").toUpperCase()));
+  streakCell.append(el("span", "panel-stat-value panel-stat-streak",
+    `${currentStreak} ${t("daysWord")}`));
+  if (currentStreak > 0) {
+    if (currentStreak >= longestStreak) {
+      streakCell.append(el("span", "panel-streak-record", t("agentPanelStreakRecord").toUpperCase()));
+    } else {
+      const remain = longestStreak - currentStreak + 1;
+      streakCell.append(el("span", "panel-streak-countdown",
+        t("agentPanelStreakCountdown", { n: remain, best: longestStreak }).toUpperCase()));
+    }
+  }
+  row.append(streakCell);
+  return row;
 }
 
 function statCell(label: string, value: string): HTMLElement {

@@ -7,12 +7,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CombinedDay, CombinedModel } from "./usage";
-import type { AgentPanelPayload } from "./agent-panel-payload";
+import type { AgentPanelPayload, AgentTabId } from "./agent-panel-payload";
 
 const CLOSE_DELAY_MS = 140;
 
 let pinned = false;
 let closeTimer: number | null = null;
+/** Loại nội dung panel đang mở — quyết định phạm vi đóng khi đổi kỳ. */
+let openKind: "day" | "models" | "agent" | "activity" | null = null;
 
 function cancelPendingClose(): void {
   if (closeTimer != null) {
@@ -26,6 +28,7 @@ async function show(payload: unknown, isPinned: boolean): Promise<void> {
   // Hover không được đè panel đang ghim.
   if (!isPinned && pinned) return;
   pinned = isPinned;
+  openKind = (payload as { kind?: typeof openKind }).kind ?? null;
   try {
     await invoke("open_side_panel", { payload, pinned: isPinned });
   } catch {
@@ -45,11 +48,20 @@ export function closeTransientPanel(): void {
   }, CLOSE_DELAY_MS);
 }
 
-/** Đóng dứt khoát (đổi period, đổi tab, ✕ trong panel). */
+/** Đóng dứt khoát (nút ✕, hoặc khi panel không còn hợp lệ). */
 export function closePinnedPanel(): void {
   cancelPendingClose();
   pinned = false;
+  openKind = null;
   void invoke("close_side_panel").catch(() => { /* phụ trợ */ });
+}
+
+/** Đổi kỳ thời gian: chỉ đóng panel NGÀY — ngày đã ghim không còn thuộc cửa
+ *  sổ mới. Panel agent/hoạt động vẫn hợp lệ nên giữ nguyên, đúng như macOS
+ *  `closeDayDetail()` (`guard content == .day`). */
+export function closeDayPanelOnly(): void {
+  if (openKind !== "day") return;
+  closePinnedPanel();
 }
 
 export function isPanelPinned(): boolean {
@@ -60,6 +72,7 @@ export function isPanelPinned(): boolean {
 void listen("birdnion-panel-closed", () => {
   cancelPendingClose();
   pinned = false;
+  openKind = null;
 });
 
 export function showDayPanel(
@@ -75,8 +88,14 @@ export function showModelsPanel(models: CombinedModel[], mode: "model" | "token"
   void show({ kind: "models", models, mode }, false);
 }
 
-export function showAgentPanel(payload: AgentPanelPayload, isPinned = true): void {
-  void show(payload, isPinned);
+/** `initialTab` chọn tab mở đầu theo nguồn click (hàng quota/cost/config) —
+ *  parity macOS `AgentDetailPanelCoordinator.show(initialTab:)`. */
+export function showAgentPanel(
+  payload: AgentPanelPayload,
+  initialTab: AgentTabId,
+  isPinned = true,
+): void {
+  void show({ ...payload, initialTab }, isPinned);
 }
 
 export function showActivityPanel(
@@ -84,7 +103,8 @@ export function showActivityPanel(
   peakUsd: number,
   avgUsd: number,
   streak: number,
+  longestStreak: number,
   isPinned = true,
 ): void {
-  void show({ kind: "activity", cells, peakUsd, avgUsd, streak }, isPinned);
+  void show({ kind: "activity", cells, peakUsd, avgUsd, streak, longestStreak }, isPinned);
 }

@@ -5769,4 +5769,47 @@ body.settings-body-root {
 
 /* Token đậm, "· N agent" mờ hơn — cùng tương phản như macOS. */
 .cost-hero-tokens-value { font-weight: 600; color: var(--text2); }
+
+/* ---------- Tab Quota trong agent panel: label + bar 56×3 + % phải 38pt,
+   đỏ dưới 20% (parity macOS AgentDetailPanelRoot.quotaTabContent). */
+.panel-quota-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  min-width: 0;
+}
+
+.panel-quota-label {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-quota-track {
+  width: 56px;
+  height: 3px;
+  flex-shrink: 0;
+  background: var(--track);
+}
+
+.panel-quota-fill { display: block; height: 100%; }
+.panel-quota-fill.tone-ok { background: var(--success); }
+.panel-quota-fill.tone-critical { background: var(--critical); }
+
+.panel-quota-pct {
+  width: 38px;
+  flex-shrink: 0;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.panel-quota-pct.tone-ok { color: var(--success); }
+.panel-quota-pct.tone-critical { color: var(--critical); }
 .cost-hero-agents { color: var(--text3); }

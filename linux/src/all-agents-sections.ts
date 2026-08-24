@@ -101,7 +101,7 @@ export function quotaSection(
       source: nextSource,
       sourceLabel: next.status.sourceLabel,
       scannedAt: next.status.lastUpdated,
-    }), true));
+    }), "quota", true));
     wrap.append(more);
   }
   return wrap;
@@ -152,7 +152,7 @@ function quotaRow(data: QuotaRowData, daily: CombinedDay[]): HTMLElement {
   });
   // Chỉ click, KHÔNG hover: macOS `AllAgentsQuotaSection` bọc hàng trong
   // Button trần, không gắn `.onHover` như bên Chi phí theo.
-  row.addEventListener("click", () => showAgentPanel(buildPayload(), true));
+  row.addEventListener("click", () => showAgentPanel(buildPayload(), "quota", true));
   return row;
 }
 
@@ -214,9 +214,9 @@ export function costBySection(
         source: row.id as UsageSourceId,
         sourceLabel: SOURCE_LABEL[row.id as UsageSourceId],
       });
-      node.addEventListener("mouseenter", () => showAgentPanel(payload(), false));
+      node.addEventListener("mouseenter", () => showAgentPanel(payload(), "cost", false));
       node.addEventListener("mouseleave", () => closeTransientPanel());
-      node.addEventListener("click", () => showAgentPanel(payload(), true));
+      node.addEventListener("click", () => showAgentPanel(payload(), "cost", true));
     }
     wrap.append(node);
   }
@@ -245,6 +245,7 @@ export function costBySection(
           daily: isUsageSourceId(next.id) ? combined.daily : undefined,
           source: isUsageSourceId(next.id) ? next.id : undefined,
         }),
+        "cost",
         true,
       ));
     }
@@ -402,7 +403,7 @@ export function configuredSection(agents: ConfiguredAgent[]): HTMLElement | null
   const first = agents[0];
   row.classList.add("is-clickable");
   row.addEventListener("click", () => showAgentPanel(
-    buildAgentPanelPayload({ agentId: first.id, displayName: first.displayName }), true));
+    buildAgentPanelPayload({ agentId: first.id, displayName: first.displayName }), "config", true));
   wrap.append(row);
   return wrap;
 }

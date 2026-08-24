@@ -30,7 +30,6 @@ import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
 import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
 import { InstalledAgent, visibleAgentIds } from "./settings-agents";
-import { closePinnedPanel } from "./side-panel";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
@@ -318,8 +317,8 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 }
 
 function goTab(id: string) {
-  // Panel phụ thuộc về tab đang mở — đổi tab thì bỏ ghim (macOS parity).
-  closePinnedPanel();
+  // KHÔNG đóng panel phụ ở đây: macOS chỉ đóng khi đổi kỳ (và chỉ panel ngày)
+  // hoặc khi bấm ✕ — đổi tab provider để panel nguyên trạng.
   state.tab = id;
   localStorage.setItem(TAB_KEY, id);
   render();

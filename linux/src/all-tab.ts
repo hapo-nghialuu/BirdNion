@@ -9,7 +9,7 @@ import {
 } from "./usage";
 import { t, currentLang } from "./i18n";
 import { logoMark } from "./logos";
-import { showDayPanel, showActivityPanel, closeTransientPanel, closePinnedPanel } from "./side-panel";
+import { showDayPanel, showActivityPanel, closeTransientPanel, closeDayPanelOnly } from "./side-panel";
 
 const PERIOD_KEY = "birdnion.allChartDays";
 
@@ -192,7 +192,7 @@ export function chartCard(
         period = days;
         pinnedDay = null; // new window starts with detail hidden
         localStorage.setItem(PERIOD_KEY, String(days));
-        closePinnedPanel();   // ngày đã ghim không còn thuộc cửa sổ mới
+        closeDayPanelOnly();  // ngày đã ghim không còn thuộc cửa sổ mới
         render();
         // Top models card listens and re-ranks for the new window.
         window.dispatchEvent(new CustomEvent(PERIOD_CHANGE_EVENT, { detail: { days } }));
@@ -247,6 +247,18 @@ export function chartCard(
   return card;
 }
 
+/** Chuỗi ngày active dài nhất trong window — dùng cho đếm ngược kỷ lục ở
+ *  panel Hoạt động (macOS `longestStreak`); khác `streak` (chuỗi hiện tại,
+ *  tính lùi từ hôm nay). */
+function longestStreakIn(windowDaily: CombinedDay[]): number {
+  let longest = 0;
+  let run = 0;
+  for (const d of windowDaily) {
+    if (d.active) { run += 1; longest = Math.max(longest, run); } else { run = 0; }
+  }
+  return longest;
+}
+
 /** Hàng 4 stat dưới biểu đồ: CAO NHẤT · TB/NGÀY · STREAK · NGÀY ACTIVE.
  *  Hover mở panel Hoạt động tạm, click ghim — đúng như macOS `compactStatsRow`.
  *  Phân bổ theo nguồn không ở đây; nó nằm trong khối "Chi phí theo". */
@@ -278,11 +290,12 @@ function compactStatsRow(windowDaily: CombinedDay[]): HTMLElement {
   row.append(cell(t("activeDaysLabel"), `${active.length}/${windowDaily.length}`));
   row.append(el("span", "chart-stat-chevron", "›"));
 
-  const cells = windowDaily
-    .filter((d) => d.active)
-    .map((d) => ({ date: d.date, usd: d.usd, tokens: d.tokens }));
+  // Banded heatmap cần dải ngày LIÊN TỤC (kể cả ngày không active) để dựng
+  // đúng lưới tuần Thứ 2 → CN — không filter active như trước.
+  const cells = windowDaily.map((d) => ({ date: d.date, usd: d.usd, tokens: d.tokens }));
+  const longestStreak = longestStreakIn(windowDaily);
   const openActivity = (pinned: boolean) =>
-    showActivityPanel(cells, peak, average, streak, pinned);
+    showActivityPanel(cells, peak, average, streak, longestStreak, pinned);
   row.addEventListener("mouseenter", () => openActivity(false));
   row.addEventListener("mouseleave", () => closeTransientPanel());
   row.addEventListener("click", () => openActivity(true));
