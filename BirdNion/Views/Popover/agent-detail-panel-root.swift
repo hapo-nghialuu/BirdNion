@@ -8,7 +8,15 @@ struct AgentDetailPanelRoot: View {
         case quota, cost, config
     }
 
+    /// Tab mở đầu theo NGUỒN click (quota row → "quota", cost row → "cost",
+    /// configured row → "config"); nil = heuristics theo capability.
+    var initialTab: String? = nil
+
     @State private var selectedTab: Tab = .cost
+    /// Cửa sổ thời gian của chart chi phí trong panel — mặc định 30 ngày.
+    @State private var agentPeriodDays = 30
+    /// Ngày được click-pin trên chart — filter list model theo đúng ngày đó.
+    @State private var selectedDay: Date?
     /// Cap danh sách model để panel height-auto không vượt màn hình.
     private static let maxModelRows = 8
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
@@ -34,17 +42,25 @@ struct AgentDetailPanelRoot: View {
         }
         .frame(width: 340)
         .background(VocabbyTheme.background)
-        .overlay(
-            Rectangle()
-                .stroke(VocabbyTheme.primary, lineWidth: 1)
-        )
+        // Không viền ngoài — đồng bộ với panel ngày: shadow + bo góc 3pt.
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
         .onAppear {
-            if snapshot.hasLocalCost || snapshot.costSummary != nil {
-                selectedTab = .cost
-            } else if snapshot.hasQuota {
+            // Ưu tiên tab theo nguồn click; fallback heuristics capability.
+            switch initialTab {
+            case "quota" where snapshot.hasQuota:
                 selectedTab = .quota
-            } else {
+            case "cost" where snapshot.hasLocalCost || snapshot.costSummary != nil:
+                selectedTab = .cost
+            case "config":
                 selectedTab = .config
+            default:
+                if snapshot.hasLocalCost || snapshot.costSummary != nil {
+                    selectedTab = .cost
+                } else if snapshot.hasQuota {
+                    selectedTab = .quota
+                } else {
+                    selectedTab = .config
+                }
             }
         }
         .onChange(of: selectedTab) { _ in
@@ -69,6 +85,23 @@ struct AgentDetailPanelRoot: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
+            // Icon mở Settings → tab Agent (nút Configure dạng icon).
+            Button {
+                openAgentSettings(id: snapshot.id)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .frame(width: 24, height: 24)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                            .stroke(VocabbyTheme.border, lineWidth: 1)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(vi ? "Cấu hình trong Settings" : "Configure in Settings")
+
             // Nút đóng theo ngôn ngữ Instrument (ô vuông viền hairline).
             Button {
                 NotificationCenter.default.post(name: .birdnionCloseAgentDetail, object: nil)
@@ -89,7 +122,8 @@ struct AgentDetailPanelRoot: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .overlay(alignment: .bottom) {
-            VocabbyTheme.primary.frame(height: 1)
+            // Chrome rule top: đậm hơn hairline, full-bleed (quy ước 2026-08-24).
+            VocabbyTheme.chromeRule.frame(height: 1)
         }
     }
 
@@ -135,10 +169,12 @@ struct AgentDetailPanelRoot: View {
                 isEnabled: true
             )
         }
+        // Căn trái full-width như design gốc (VStack cha mặc định căn giữa).
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .overlay(alignment: .bottom) {
-            VocabbyTheme.hairline.frame(height: 1)
+            VocabbyTheme.hairline.frame(height: 1).padding(.horizontal, 14)
         }
     }
 
@@ -172,39 +208,71 @@ struct AgentDetailPanelRoot: View {
     // MARK: - Cost Tab Content
 
     private var costTabContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            costHeroSection
-            if !snapshot.models.isEmpty {
-                modelsSection
-            }
-            sourceSection
-            if let log = effectiveLogPath {
-                localLogSection(log)
+        // Cửa sổ thời gian chọn được (7d/30d/90d) — hero, chart, mốc ngày
+        // VÀ danh sách model đều bám theo cùng một window.
+        let windowDays = Array(snapshot.recentActivity.suffix(agentPeriodDays))
+        let models = windowModels(windowDays)
+        // SOURCE + LOCAL LOG thuộc tab Config (yêu cầu 2026-08-24) — tab Cost
+        // chỉ còn hero + chart + models. Click một cột chart → models chỉ của
+        // ngày đó; click lại cột để bỏ filter.
+        let filterDay = selectedDay.flatMap { sel in windowDays.first { $0.date == sel } }
+        let shownModels = filterDay.map { windowModels([$0]) } ?? models
+        return VStack(alignment: .leading, spacing: 0) {
+            costHeroSection(windowDays: windowDays)
+            if !shownModels.isEmpty {
+                modelsSection(models: shownModels,
+                              filterLabel: filterDay.map { dayLabel($0.date) })
             }
         }
     }
 
+    /// Gộp model theo window đang chọn (thay cho snapshot.models cố định 90d).
+    private func windowModels(_ days: [AgentDetailSnapshot.ActivityDay]) -> [AgentDetailSnapshot.ModelItem] {
+        var totals: [String: (usd: Double, tokens: Int)] = [:]
+        for m in days.flatMap(\.models) {
+            var t = totals[m.name] ?? (0, 0)
+            t.usd += m.usd
+            t.tokens += m.tokens
+            totals[m.name] = t
+        }
+        let sorted = totals.sorted {
+            if $0.value.tokens != $1.value.tokens { return $0.value.tokens > $1.value.tokens }
+            return $0.value.usd > $1.value.usd
+        }
+        let totalTokens = max(sorted.reduce(0) { $0 + $1.value.tokens }, 1)
+        return sorted.map { name, value in
+            AgentDetailSnapshot.ModelItem(
+                name: name,
+                tokens: value.tokens,
+                usd: value.usd,
+                percentage: Int((Double(value.tokens) / Double(totalTokens) * 100).rounded()))
+        }
+    }
+
     @ViewBuilder
-    private var costHeroSection: some View {
+    private func costHeroSection(windowDays: [AgentDetailSnapshot.ActivityDay]) -> some View {
         if let summary = snapshot.costSummary {
+            let windowUSD = windowDays.reduce(0) { $0 + $1.usd }
+            let windowTokens = windowDays.reduce(0) { $0 + $1.tokens }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                     Text(vi
-                         ? "CHI PHÍ \(summary.periodDays) NGÀY"
-                         : "\(summary.periodDays)-DAY COST")
+                         ? "CHI PHÍ \(windowDays.count) NGÀY"
+                         : "\(windowDays.count)-DAY COST")
                         .font(.plexMono(10, weight: .medium))
                         .foregroundStyle(VocabbyTheme.tertiary)
-                    Text(AllUsageFormat.usd(summary.periodUSD))
+                    Text(AllUsageFormat.usd(windowUSD))
                         .font(.plexMono(26, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.primary)
                         .tracking(-0.8)
-                    Text(AllUsageFormat.tokens(summary.periodTokens))
+                    Text(AllUsageFormat.tokens(windowTokens))
                         .font(.plexMono(11))
                         .foregroundStyle(VocabbyTheme.tertiary)
                     }
                     Spacer(minLength: 8)
                     VStack(alignment: .trailing, spacing: 6) {
+                        agentPeriodPicker
                         Text(vi ? "HÔM NAY" : "TODAY")
                             .font(.plexMono(10, weight: .medium))
                             .foregroundStyle(VocabbyTheme.tertiary)
@@ -214,12 +282,25 @@ struct AgentDetailPanelRoot: View {
                     }
                 }
 
-                miniAgentChart
-                    .frame(height: 44)
+                miniAgentChart(days: windowDays)
+                    .frame(height: 56)
                     .padding(.top, 4)
                     .overlay(alignment: .bottom) {
                         VocabbyTheme.primary.frame(height: 1)
                     }
+                // Mốc thời gian 2 đầu chart.
+                if let first = windowDays.first, let last = windowDays.last {
+                    HStack {
+                        Text(dayLabel(first.date))
+                            .font(.plexMono(9))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                        Spacer(minLength: 8)
+                        Text(dayLabel(last.date))
+                            .font(.plexMono(9))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                    .padding(.top, 2)
+                }
             }
             .padding(.vertical, 14)
         } else {
@@ -235,8 +316,42 @@ struct AgentDetailPanelRoot: View {
         }
     }
 
-    private var miniAgentChart: some View {
-        let days = snapshot.recentActivity
+    private var agentPeriodPicker: some View {
+        HStack(spacing: 4) {
+            ForEach([7, 30, 90], id: \.self) { days in
+                let active = agentPeriodDays == days
+                Button {
+                    agentPeriodDays = days
+                    selectedDay = nil  // đổi window → bỏ filter ngày
+                    // Nội dung đổi độ dài → nhờ coordinator refit panel.
+                    NotificationCenter.default.post(name: .birdnionAgentPanelRefit, object: nil)
+                } label: {
+                    Text("\(days)d")
+                        .font(.plexMono(9, weight: active ? .semibold : .medium))
+                        .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
+                        .frame(width: 30, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .fill(active ? VocabbyTheme.primary : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .stroke(active ? Color.clear : VocabbyTheme.border, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
+        formatter.dateFormat = "d MMM"
+        return formatter.string(from: date)
+    }
+
+    private func miniAgentChart(days: [AgentDetailSnapshot.ActivityDay]) -> some View {
         let maxTokens = max(days.map(\.tokens).max() ?? 1, 1)
         let agentColor = agentBrandColor(snapshot.id)
 
@@ -246,7 +361,7 @@ struct AgentDetailPanelRoot: View {
             } else {
                 ForEach(Array(days.enumerated()), id: \.offset) { _, day in
                     let fraction = day.tokens > 0 ? CGFloat(Double(day.tokens) / Double(maxTokens)) : 0
-                    let height = max(44 * fraction, day.tokens > 0 ? 3 : 1)
+                    let height = max(56 * fraction, day.tokens > 0 ? 3 : 1)
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         Rectangle()
@@ -254,19 +369,30 @@ struct AgentDetailPanelRoot: View {
                             .frame(height: height)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(selectedDay == day.date
+                                ? VocabbyTheme.selectedSurface.opacity(0.7) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Click cột = filter models theo ngày; click lại để bỏ.
+                        selectedDay = (selectedDay == day.date) ? nil : day.date
+                        NotificationCenter.default.post(name: .birdnionAgentPanelRefit, object: nil)
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
                 }
             }
         }
     }
 
-    private var modelsSection: some View {
+    private func modelsSection(models: [AgentDetailSnapshot.ModelItem],
+                               filterLabel: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(vi ? "MODEL TRONG AGENT NÀY" : "MODELS IN THIS AGENT")
+            Text((vi ? "MODEL TRONG AGENT NÀY" : "MODELS IN THIS AGENT")
+                 + (filterLabel.map { " · \($0.uppercased())" } ?? ""))
                 .font(.plexMono(10, weight: .medium))
-                .foregroundStyle(VocabbyTheme.tertiary)
+                .foregroundStyle(filterLabel == nil ? VocabbyTheme.tertiary : VocabbyTheme.primary)
 
             // Cap danh sách để panel height-auto không vượt màn hình.
-            ForEach(Array(snapshot.models.prefix(Self.maxModelRows))) { model in
+            ForEach(Array(models.prefix(Self.maxModelRows))) { model in
                 HStack(spacing: 8) {
                     Rectangle()
                         .fill(agentBrandColor(snapshot.id))
@@ -282,13 +408,13 @@ struct AgentDetailPanelRoot: View {
                     }
                     .frame(width: 48, height: 3)
                     Text("\(AllUsageFormat.tokensShort(model.tokens)) · \(AllUsageFormat.usd(model.usd))")
-                        .font(.plexMono(10))
-                        .foregroundStyle(VocabbyTheme.tertiary)
+                        .font(.plexMono(10, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.primary)
                         .frame(width: 76, alignment: .trailing)
                 }
                 .padding(.vertical, 3)
             }
-            let rest = snapshot.models.dropFirst(Self.maxModelRows)
+            let rest = models.dropFirst(Self.maxModelRows)
             if !rest.isEmpty {
                 HStack(spacing: 8) {
                     Rectangle().fill(VocabbyTheme.track).frame(width: 6, height: 6)
@@ -304,6 +430,7 @@ struct AgentDetailPanelRoot: View {
             }
         }
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .top) { VocabbyTheme.hairline.frame(height: 1) }
     }
 
@@ -337,6 +464,7 @@ struct AgentDetailPanelRoot: View {
             }
         }
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .top) { VocabbyTheme.hairline.frame(height: 1) }
     }
 
@@ -351,6 +479,7 @@ struct AgentDetailPanelRoot: View {
                 .textSelection(.enabled)
         }
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .top) { VocabbyTheme.hairline.frame(height: 1) }
     }
 
@@ -386,7 +515,12 @@ struct AgentDetailPanelRoot: View {
                         .textSelection(.enabled)
                 }
                 .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .top) { VocabbyTheme.hairline.frame(height: 1) }
+            }
+
+            if let log = effectiveLogPath {
+                localLogSection(log)
             }
         }
     }
@@ -441,24 +575,12 @@ struct AgentDetailPanelRoot: View {
                 .font(.plexMono(10, weight: .medium))
                 .foregroundStyle(VocabbyTheme.tertiary)
             Spacer()
-            Button {
-                openAgentSettings(id: snapshot.id)
-            } label: {
-                Text(vi ? "CẤU HÌNH" : "CONFIGURE")
-                    .font(.plexMono(10, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.primary)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .overlay(
-                        Rectangle().stroke(VocabbyTheme.primary, lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .overlay(alignment: .top) {
-            VocabbyTheme.primary.frame(height: 1)
+            // Chrome rule foot: đậm hơn hairline, full-bleed.
+            VocabbyTheme.chromeRule.frame(height: 1)
         }
     }
 

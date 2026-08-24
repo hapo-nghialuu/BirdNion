@@ -97,6 +97,9 @@ enum VocabbyTheme {
     // `--ink-rule` in the CSS).
     static let hairline   = dyn(0xE2DFD6, 0x2A2A22)  // --hairline
     static let inkRule    = dyn(0x16150F, 0xF2F0E8)  // --ink-rule
+    /// Chrome rule: line phân chia header (top) và footer — đậm hơn hairline
+    /// một nấc (không đen như inkRule) và là 2 line DUY NHẤT chạy full-bleed.
+    static let chromeRule = dyn(0xC9C5BA, 0x3F3F36)
 
     // Charts — series colors now track the CSS `--claude` / `--codex` /
     // `--grok` chart tokens (distinct from the `claude` / `codex` / `grok`

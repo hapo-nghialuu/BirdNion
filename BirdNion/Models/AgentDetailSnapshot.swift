@@ -29,11 +29,20 @@ struct AgentDetailSnapshot: Equatable, Sendable {
         var id: String { label }
     }
 
+    struct ModelDayCost: Equatable, Sendable {
+        let name: String
+        let usd: Double
+        let tokens: Int
+    }
+
     struct ActivityDay: Equatable, Identifiable, Sendable {
         let date: Date
         let usd: Double
         let tokens: Int
         let topModel: String?
+        /// Breakdown model của riêng agent này trong ngày — panel dùng để
+        /// tính lại danh sách model theo cửa sổ 7d/30d/90d.
+        let models: [ModelDayCost]
 
         var id: Date { date }
     }
@@ -108,14 +117,16 @@ extension AgentDetailSnapshot {
         let sourceID = record.id.rawValue
         let days = combined.daily.map { day -> ActivityDay in
             let values = sourceValues(for: record.id, day: day)
-            let topModel = day.models
+            let dayModels = day.models
                 .filter { $0.source == sourceID }
-                .max { $0.tokens < $1.tokens }?.name
+                .map { ModelDayCost(name: $0.name, usd: $0.usd, tokens: $0.tokens) }
+            let topModel = dayModels.max { $0.tokens < $1.tokens }?.name
             return ActivityDay(
                 date: day.date,
                 usd: values.usd,
                 tokens: values.tokens,
-                topModel: topModel)
+                topModel: topModel,
+                models: dayModels)
         }
         let periodDays = min(90, days.count)
         let period = days.suffix(periodDays)
