@@ -5,7 +5,7 @@ import SwiftUI
 final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     /// What the shared side panel is currently rendering — hover-driven day
     /// detail must never hijack a pinned agent/activity surface.
-    private enum Content { case agent, activity, day }
+    private enum Content { case agent, activity, day, models }
 
     private let panelWidth: CGFloat = 340
     private let defaultHeight: CGFloat = 480
@@ -99,6 +99,31 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
         // orderFront (không makeKey) để hover không giật focus khỏi popover.
+        detailPanel.orderFront(nil)
+        panel = detailPanel
+    }
+
+    /// Danh sách model tràn ("+N more models") — hover-only, không ghim.
+    func showModelList(
+        items: [AgentModelRow],
+        mode: String,
+        settings: SettingsStore,
+        beside parent: NSWindow
+    ) {
+        transientCloseGeneration += 1
+        if contentPinned { return }
+        let detailPanel = panel ?? makePanel()
+        parentWindow = parent
+        self.settings = settings
+        content = .models
+        currentAgentID = nil
+        contentPinned = false
+        detailPanel.contentViewController = hostController(
+            for: ModelOverflowPanelRoot(items: items, mode: mode)
+                .environmentObject(settings)
+        )
+        position(detailPanel, beside: parent)
+        applyPanelChrome(detailPanel)
         detailPanel.orderFront(nil)
         panel = detailPanel
     }
@@ -258,4 +283,5 @@ extension Notification.Name {
     static let birdnionCloseDayDetail = Notification.Name("com.local.birdnion.closeDayDetail")
     static let birdnionDayDetailClosed = Notification.Name("com.local.birdnion.dayDetailClosed")
     static let birdnionAgentPanelRefit = Notification.Name("com.local.birdnion.agentPanelRefit")
+    static let birdnionOpenModelList = Notification.Name("com.local.birdnion.openModelList")
 }

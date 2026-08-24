@@ -559,6 +559,7 @@ struct AllUsageOverview: View {
     /// Hover mở panel transient (rời chuột đóng) — click mới ghim.
     let onHoverAgentDetail: (InstalledAgentRecord) -> Void
     let onHoverActivity: () -> Void
+    let onHoverModels: ([AgentModelRow], String) -> Void
     let onHoverEnd: () -> Void
     var claudeEnabled: Bool = true
     var codexEnabled: Bool = true
@@ -579,6 +580,7 @@ struct AllUsageOverview: View {
         onOpenActivity: @escaping () -> Void = {},
         onHoverAgentDetail: @escaping (InstalledAgentRecord) -> Void = { _ in },
         onHoverActivity: @escaping () -> Void = {},
+        onHoverModels: @escaping ([AgentModelRow], String) -> Void = { _, _ in },
         onHoverEnd: @escaping () -> Void = {},
         claudeEnabled: Bool = true,
         codexEnabled: Bool = true,
@@ -598,6 +600,7 @@ struct AllUsageOverview: View {
         self.onOpenActivity = onOpenActivity
         self.onHoverAgentDetail = onHoverAgentDetail
         self.onHoverActivity = onHoverActivity
+        self.onHoverModels = onHoverModels
         self.onHoverEnd = onHoverEnd
         self.claudeEnabled = claudeEnabled
         self.codexEnabled = codexEnabled
@@ -650,6 +653,7 @@ struct AllUsageOverview: View {
                 aggregateAgentCount: report.includedSourceCount,
                 quotaRows: quotaRows,
                 costRows: rows,
+                modelRows: modelRows(daily: report.daily),
                 configuredRows: configuredRows(costRows: rows),
                 onOpenAgent: { id, tab in
                     guard let record = allAgentRecords.first(where: { $0.id == id }) ?? visibleAgentRecords.first(where: { $0.id == id }) else { return }
@@ -661,6 +665,7 @@ struct AllUsageOverview: View {
                     onHoverAgentDetail(record)
                 },
                 onHoverActivity: onHoverActivity,
+                onHoverModels: onHoverModels,
                 onHoverEnd: onHoverEnd
             )
         }
@@ -720,6 +725,26 @@ struct AllUsageOverview: View {
             default:
                 return nil
             }
+        }
+    }
+
+    /// Gộp model theo đúng window chart (MODEL = $, TOKEN = tokens).
+    private func modelRows(daily: [CombinedDailyUsage]) -> [AgentModelRow] {
+        let window = Array(daily.suffix(max(allChartDays, 1)))
+        var totals: [String: (usd: Double, tokens: Int, sourceTokens: [String: Int])] = [:]
+        for model in window.flatMap(\.models) {
+            var entry = totals[model.name] ?? (0, 0, [:])
+            entry.usd += model.usd
+            entry.tokens += model.tokens
+            entry.sourceTokens[model.source, default: 0] += model.tokens
+            totals[model.name] = entry
+        }
+        return totals.map { name, value in
+            AgentModelRow(
+                name: name,
+                usd: value.usd,
+                tokens: value.tokens,
+                source: value.sourceTokens.max { $0.value < $1.value }?.key ?? "")
         }
     }
 

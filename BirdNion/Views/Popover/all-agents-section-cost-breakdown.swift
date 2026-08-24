@@ -4,19 +4,24 @@ struct AllAgentsCostBreakdownSection: View {
     @EnvironmentObject var settings: SettingsStore
 
     let rows: [AgentCostRow]
+    /// Model gộp theo window — nguồn cho mode MODEL ($) và TOKEN (tokens).
+    var modelRows: [AgentModelRow] = []
     let onOpenAgent: (InstalledAgentID) -> Void
     /// Hover row agent → panel transient; rời chuột → đóng.
     var onHoverAgent: (InstalledAgentID) -> Void = { _ in }
+    /// Hover "+N model khác" → panel liệt kê model tràn.
+    var onHoverModels: ([AgentModelRow], String) -> Void = { _, _ in }
     var onHoverEnd: () -> Void = {}
 
     enum Mode: String, CaseIterable, Identifiable {
-        case agent, model
+        case agent, model, token
         var id: String { rawValue }
 
         func label(vi: Bool) -> String {
             switch self {
-            case .agent: vi ? "Agent" : "Agent"
-            case .model: vi ? "Model" : "Model"
+            case .agent: "Agent"
+            case .model: "Model"
+            case .token: "Token"
             }
         }
     }
@@ -29,7 +34,10 @@ struct AllAgentsCostBreakdownSection: View {
     struct DisplayRow: Identifiable {
         let id: String
         let name: String
+        /// Giá trị xếp hạng/share: USD (agent, model) hoặc tokens (token).
         let amount: Double
+        /// Chuỗi hiển thị cột phải, đã format theo mode ($ hoặc tokens).
+        let display: String
         let color: Color
         let agentID: InstalledAgentID?
     }
@@ -42,12 +50,34 @@ struct AllAgentsCostBreakdownSection: View {
                     id: $0.id.rawValue,
                     name: $0.record.displayName,
                     amount: $0.periodUSD,
+                    display: AllUsageFormat.usd($0.periodUSD),
                     color: $0.color,
                     agentID: $0.id
                 )
             }.sorted { $0.amount > $1.amount }
         case .model:
-            return groupedRows { $0.topModel ?? (vi ? "Chưa rõ model" : "Unknown model") }
+            return modelRows.map {
+                DisplayRow(
+                    id: $0.id,
+                    name: AllUsageFormat.shortName($0.name),
+                    amount: $0.usd,
+                    display: AllUsageFormat.usd($0.usd),
+                    color: $0.color,
+                    agentID: nil
+                )
+            }.sorted { $0.amount > $1.amount }
+        case .token:
+            // Cùng danh sách model, giá trị là token — vẫn theo window chart.
+            return modelRows.map {
+                DisplayRow(
+                    id: $0.id,
+                    name: AllUsageFormat.shortName($0.name),
+                    amount: Double($0.tokens),
+                    display: AllUsageFormat.tokensShort($0.tokens),
+                    color: $0.color,
+                    agentID: nil
+                )
+            }.sorted { $0.amount > $1.amount }
         }
     }
 
@@ -83,6 +113,14 @@ struct AllAgentsCostBreakdownSection: View {
                 let remainder = Array(displayRows.dropFirst(Self.visibleRowLimit))
                 if !remainder.isEmpty {
                     summaryRow(remainder)
+                        .onHover { inside in
+                            if inside, mode != .agent {
+                                let ids = Set(remainder.map(\.id))
+                                onHoverModels(modelRows.filter { ids.contains($0.id) }, mode.rawValue)
+                            } else {
+                                onHoverEnd()
+                            }
+                        }
                 }
             }
             .popoverContentInset()
@@ -152,7 +190,7 @@ struct AllAgentsCostBreakdownSection: View {
             Text(percent(row.amount))
                 .font(.plexMono(10))
                 .foregroundStyle(VocabbyTheme.tertiary)
-            Text(AllUsageFormat.usd(row.amount))
+            Text(row.display)
                 .font(.plexMono(12, weight: .semibold))
                 .frame(width: 62, alignment: .trailing)
             Text("›").font(.plexSans(12)).foregroundStyle(VocabbyTheme.tertiary)
@@ -162,6 +200,9 @@ struct AllAgentsCostBreakdownSection: View {
 
     private func summaryRow(_ remainder: [DisplayRow]) -> some View {
         let amount = remainder.reduce(0) { $0 + $1.amount }
+        let display = mode == .token
+            ? AllUsageFormat.tokensShort(Int(amount))
+            : AllUsageFormat.usd(amount)
         return Button {
             if let first = remainder.compactMap(\.agentID).first {
                 onOpenAgent(first)
@@ -173,12 +214,14 @@ struct AllAgentsCostBreakdownSection: View {
                     .font(.plexMono(12))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .frame(width: 16, height: 16)
-                Text(vi ? "\(remainder.count) agent khác" : "\(remainder.count) more agents")
+                Text(mode == .agent
+                     ? (vi ? "\(remainder.count) agent khác" : "\(remainder.count) more agents")
+                     : (vi ? "\(remainder.count) model khác" : "\(remainder.count) more models"))
                     .font(.plexSans(13))
                     .foregroundStyle(VocabbyTheme.secondary)
                 Spacer(minLength: 8)
                 Text(percent(amount)).font(.plexMono(10)).foregroundStyle(VocabbyTheme.tertiary)
-                Text(AllUsageFormat.usd(amount)).font(.plexMono(12, weight: .semibold))
+                Text(display).font(.plexMono(12, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.secondary)
                     .frame(width: 62, alignment: .trailing)
                 Text("›").font(.plexSans(12)).foregroundStyle(VocabbyTheme.tertiary)
@@ -216,22 +259,6 @@ struct AllAgentsCostBreakdownSection: View {
 
     private func percent(_ amount: Double) -> String {
         String(format: "%.0f%%", amount / max(totalUSD, 0.01) * 100)
-    }
-
-    private func groupedRows(key: (AgentCostRow) -> String) -> [DisplayRow] {
-        var groups: [String: DisplayRow] = [:]
-        for row in rows {
-            let name = key(row)
-            let current = groups[name]
-            groups[name] = DisplayRow(
-                id: name,
-                name: name,
-                amount: (current?.amount ?? 0) + row.periodUSD,
-                color: current?.color ?? row.color,
-                agentID: nil
-            )
-        }
-        return groups.values.sorted { $0.amount > $1.amount }
     }
 
     private func sectionTitle(_ title: String) -> some View {

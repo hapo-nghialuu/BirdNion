@@ -295,6 +295,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .birdnionOpenModelList)
+            .sink { [weak self] note in
+                guard let self,
+                      let items = note.userInfo?["items"] as? [AgentModelRow],
+                      let parent = self.panel,
+                      parent.isVisible else { return }
+                self.agentDetailCoordinator.showModelList(
+                    items: items,
+                    mode: note.userInfo?["mode"] as? String ?? "model",
+                    settings: self.services.settings,
+                    beside: parent)
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .birdnionCloseDayDetailTransient)
             .sink { [weak self] _ in
                 // Dùng chung cho mọi panel transient (day/agent/activity).

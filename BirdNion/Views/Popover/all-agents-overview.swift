@@ -9,6 +9,7 @@ struct AllAgentsOverview: View {
     let aggregateAgentCount: Int
     let quotaRows: [AgentQuotaRow]
     let costRows: [AgentCostRow]
+    let modelRows: [AgentModelRow]
     let configuredRows: [AgentConfiguredRow]
     /// Mở panel agent kèm tab theo nguồn click (quota/cost/config).
     let onOpenAgent: (InstalledAgentID, String?) -> Void
@@ -16,6 +17,8 @@ struct AllAgentsOverview: View {
     /// Hover = panel transient; click = ghim.
     let onHoverAgent: (InstalledAgentID) -> Void
     let onHoverActivity: () -> Void
+    /// Hover dòng "+N model khác" → panel liệt kê model tràn.
+    let onHoverModels: ([AgentModelRow], String) -> Void
     let onHoverEnd: () -> Void
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
@@ -55,8 +58,10 @@ struct AllAgentsOverview: View {
         // Khối 3: Chi phí theo
         AllAgentsCostBreakdownSection(
             rows: costRows,
+            modelRows: modelRows,
             onOpenAgent: { onOpenAgent($0, "cost") },
             onHoverAgent: onHoverAgent,
+            onHoverModels: onHoverModels,
             onHoverEnd: onHoverEnd
         )
 
@@ -105,6 +110,76 @@ struct AgentCostRow: Identifiable {
     }
 
     var id: InstalledAgentID { record.id }
+}
+
+/// Panel hover liệt kê các model tràn khỏi top-5 của Cost by.
+struct ModelOverflowPanelRoot: View {
+    @EnvironmentObject var settings: SettingsStore
+    let items: [AgentModelRow]
+    let mode: String
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+    private var sorted: [AgentModelRow] {
+        mode == "token" ? items.sorted { $0.tokens > $1.tokens }
+                        : items.sorted { $0.usd > $1.usd }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text((vi ? "MODEL KHÁC" : "MORE MODELS") + " (\(items.count))")
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.8)
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            VocabbyTheme.chromeRule.frame(height: 1)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(sorted) { item in
+                    HStack(spacing: 8) {
+                        Rectangle().fill(item.color).frame(width: 6, height: 6)
+                        Text(AllUsageFormat.shortName(item.name))
+                            .font(.plexSans(12))
+                            .foregroundStyle(VocabbyTheme.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text("\(AllUsageFormat.tokensShort(item.tokens)) · \(AllUsageFormat.usd(item.usd))")
+                            .font(.plexMono(10, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+        .frame(width: 340)
+        .background(VocabbyTheme.background)
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
+}
+
+/// Một model gộp trong window đang chọn — nguồn màu theo agent chi phối.
+struct AgentModelRow: Identifiable {
+    let name: String
+    let usd: Double
+    let tokens: Int
+    let source: String
+
+    var id: String { name }
+    var color: Color {
+        switch source {
+        case "claude": VocabbyTheme.chartClaude
+        case "codex": VocabbyTheme.chartCodex
+        case "grok": VocabbyTheme.chartGrok
+        case "kiro": VocabbyTheme.chartKiro
+        case "omp": VocabbyTheme.chartOMP
+        case "pi": VocabbyTheme.chartPi
+        default: VocabbyTheme.tertiary
+        }
+    }
 }
 
 struct AgentConfiguredRow: Identifiable {
