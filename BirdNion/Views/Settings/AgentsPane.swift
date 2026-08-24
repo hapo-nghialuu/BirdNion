@@ -125,8 +125,8 @@ struct AgentsPane: View {
                                 .textFieldStyle(.plain)
                                 .font(.plexSans(12))
                         }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 7)
+                        .padding(.horizontal, 8)
+                        .frame(minHeight: InstrumentMetrics.controlHeight)
                         .overlay(
                             RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
                                 .stroke(VocabbyTheme.border, lineWidth: 1)
@@ -230,7 +230,7 @@ struct AgentsPane: View {
                 .font(.plexMono(10, weight: active ? .semibold : .medium))
                 .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
                 .padding(.horizontal, 11)
-                .padding(.vertical, 7)
+                .frame(minHeight: InstrumentMetrics.controlHeight)
                 .background(
                     RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
                         .fill(active ? VocabbyTheme.primary : Color.clear)

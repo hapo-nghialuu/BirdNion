@@ -37,9 +37,9 @@ struct ClaudeCodeLocalProxyStatusCard: View {
                     Image(systemName: presentation.icon)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(presentation.color)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 38, height: 38)
                         .overlay(
-                            RoundedRectangle(cornerRadius: InstrumentShape.plateRadius, style: .continuous)
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                                 .stroke(presentation.color, lineWidth: 1)
                         )
 
@@ -60,9 +60,9 @@ struct ClaudeCodeLocalProxyStatusCard: View {
                     Button(action: onRefresh) {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 28, height: 28)
+                            .instrumentIconTile()
                     }
-                    .buttonStyle(.instrumentOutline)
+                    .buttonStyle(.plain)
                     .disabled(busy || runtimeState == .starting)
                     .pointingHandCursor(enabled: !busy && runtimeState != .starting)
                     .help(L10n.t("ccx.proxy.refresh", lang))
@@ -89,9 +89,9 @@ struct ClaudeCodeLocalProxyStatusCard: View {
                     } label: {
                         Image(systemName: "doc.on.doc")
                             .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 28, height: 28)
+                            .instrumentIconTile()
                     }
-                    .buttonStyle(.instrumentOutline)
+                    .buttonStyle(.plain)
                     .pointingHandCursor()
                     .help(L10n.t("ccx.proxy.copyEndpoint", lang))
                     .accessibilityLabel(L10n.t("ccx.proxy.copyEndpoint", lang))

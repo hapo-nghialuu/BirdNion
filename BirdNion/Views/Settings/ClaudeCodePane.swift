@@ -812,14 +812,8 @@ struct ClaudeCodePane: View {
                     .foregroundStyle(SettingsTheme.primary)
                     .frame(width: 62, alignment: .leading)
                 TextField("gpt-5.6", text: profile.model)
-                    .textFieldStyle(.plain)
                     .font(.plexMono(12))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                            .strokeBorder(SettingsTheme.border, lineWidth: 1)
-                    )
+                    .instrumentControlFieldStyle()
                 Button {
                     loadCodexModels()
                 } label: {
@@ -1188,7 +1182,9 @@ struct ClaudeCodePane: View {
             HStack {
                 Spacer()
                 Button(L10n.t("ccx.pasteJSON.cancel", lang)) { showingPasteJSON = false }
+                    .buttonStyle(.instrumentOutline)
                 Button(L10n.t("ccx.pasteJSON.apply", lang)) { importJSON() }
+                    .buttonStyle(.instrumentPrimary)
                     .keyboardShortcut(.defaultAction)
                     .disabled(pasteJSONText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -1717,14 +1713,8 @@ struct ClaudeCodePane: View {
                 .foregroundStyle(SettingsTheme.primary)
                 .frame(width: 62, alignment: .leading)
             TextField(L10n.t("claudeCode.model.pickPlaceholder", lang), text: selection)
-                .textFieldStyle(.plain)
                 .font(.plexMono(12))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .strokeBorder(SettingsTheme.border, lineWidth: 1)
-                )
+                .instrumentControlFieldStyle()
             Menu {
                 ForEach(options, id: \.self) { id in
                     Button(id) { selection.wrappedValue = id }

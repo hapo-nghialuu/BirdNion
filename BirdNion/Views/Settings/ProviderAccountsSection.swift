@@ -40,6 +40,7 @@ extension ProvidersPane {
                         quota.refreshFromSettings("claude")
                     } label: {
                         Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
+                            .instrumentIconTile(bordered: false)
                     }
                     .buttonStyle(.plain)
                     .pointingHandCursor()
@@ -57,11 +58,11 @@ extension ProvidersPane {
                     ],
                     selection: $newAccountKind
                 )
-                .frame(width: 90, height: 28)
+                .frame(width: InstrumentMetrics.selectWidthCompact)
                 TextField(L10n.languageCode(language) == "vi" ? "Nhãn" : "Label", text: $newAccountLabel)
                     .font(.plexSans(11))
                     .instrumentControlFieldStyle()
-                    .frame(width: 90)
+                    .frame(width: InstrumentMetrics.selectWidthCompact)
                 SecureField(newAccountKind == .admin ? "sk-ant-admin..." : "sessionKey sk-ant-...",
                             text: $newAccountToken)
                     .font(.plexSans(11))
@@ -126,7 +127,7 @@ extension ProvidersPane {
                         set: { settings.kiloUsageDataSource = $0; quota.refreshFromSettings("kilo") }
                     )
                 )
-                .frame(width: 170)
+                .frame(width: InstrumentMetrics.selectWidth)
             }
             Text(kiloSourceSubtitle(for: settings.kiloUsageDataSource))
                 .font(.plexSans(10))
@@ -266,7 +267,7 @@ extension ProvidersPane {
                         set: { settings.antigravityUsageSource = $0; quota.refreshFromSettings("antigravity") }
                     )
                 )
-                .frame(width: 180)
+                .frame(width: InstrumentMetrics.selectWidth)
             }
         }
         .padding(.horizontal, 14)
@@ -341,6 +342,7 @@ extension ProvidersPane {
                             quota.refreshFromSettings("antigravity")
                         } label: {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
+                            .instrumentIconTile(bordered: false)
                         }
                         .buttonStyle(.plain)
                         .pointingHandCursor()
@@ -511,6 +513,7 @@ extension ProvidersPane {
                             NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                         } label: {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
+                            .instrumentIconTile(bordered: false)
                         }
                         .buttonStyle(.plain)
                         .pointingHandCursor()

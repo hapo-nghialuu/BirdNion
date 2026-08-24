@@ -432,18 +432,17 @@ extension ProvidersPane {
                                 .font(.system(size: 12, weight: .medium))
                         }
                     }
-                    // Bằng chiều cao SELF-TEST (30pt) — trước đây 28+padding
-                    // style làm nút refresh cao hơn cả hàng.
-                    .frame(width: 12, height: 12)
+                    // Icon tile chuẩn 28×28 — bằng mọi control khác.
+                    .instrumentIconTile()
                 }
-                .buttonStyle(.instrumentOutline)
+                .buttonStyle(.plain)
                 .disabled(quota.isRefreshing)
                 .pointingHandCursor(enabled: !quota.isRefreshing)
                 .help(L10n.t("provider.reloadHelp", language))
 
                 Toggle("", isOn: enabledBinding(idx))
                     .labelsHidden()
-                    .toggleStyle(.instrument)
+                    .toggleStyle(.instrumentSwitch)
                 }
                 if selfTestState[row.id] != nil, selfTestState[row.id] != .idle {
                     selfTestResult(for: row.id)
@@ -782,7 +781,7 @@ extension ProvidersPane {
                                 set: { settings.codexUsageSource = $0; quota.refreshFromSettings("codex") }
                             )
                         )
-                        .frame(width: 150)
+                        .frame(width: InstrumentMetrics.selectWidth)
                     }
                     Text(codexSourceSubtitle(for: settings.codexUsageSource))
                         .font(.plexSans(10))
@@ -813,7 +812,7 @@ extension ProvidersPane {
                             set: { settings.minimaxRegion = $0; quota.refreshFromSettings("minimax") }
                         )
                     )
-                    .frame(width: 150)
+                    .frame(width: InstrumentMetrics.selectWidth)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -835,7 +834,7 @@ extension ProvidersPane {
                             set: { settings.zaiRegion = $0; quota.refreshFromSettings("zai") }
                         )
                     )
-                    .frame(width: 170)
+                    .frame(width: InstrumentMetrics.selectWidth)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -857,7 +856,7 @@ extension ProvidersPane {
                             set: { settings.alibabaRegion = $0; quota.refreshFromSettings("alibaba") }
                         )
                     )
-                    .frame(width: 170)
+                    .frame(width: InstrumentMetrics.selectWidth)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -1029,7 +1028,7 @@ extension ProvidersPane {
                     }
                 )
             )
-            .frame(width: 150)
+            .frame(width: InstrumentMetrics.selectWidth)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1148,7 +1147,7 @@ extension ProvidersPane {
                         set: { UserDefaults.standard.set($0, forKey: sourceKey); quota.refreshFromSettings(id) }
                     )
                 )
-                .frame(width: 120)
+                .frame(width: InstrumentMetrics.selectWidth)
             }
             Text(vi
                  ? "Auto: tự đọc cookie từ trình duyệt (Brave/Chrome/Safari…). Manual: dán Cookie header bên dưới."
@@ -1202,7 +1201,7 @@ extension ProvidersPane {
                                quota.refreshFromSettings("claude") }
                     )
                 )
-                .frame(width: 170)
+                .frame(width: InstrumentMetrics.selectWidth)
             }
             Text(sourceSubtitle(for: settings.claudeUsageDataSource))
                 .font(.plexSans(10))
@@ -1303,7 +1302,7 @@ extension ProvidersPane {
                             set: { settings.codexCookieSource = $0; quota.refreshFromSettings("codex") }
                         )
                     )
-                    .frame(width: 110)
+                    .frame(width: InstrumentMetrics.selectWidthCompact)
                 }
                 if settings.codexCookieSource == "manual" {
                     TextField(L10n.t("provider.cookiePlaceholder", language), text: Binding(
@@ -1339,7 +1338,7 @@ extension ProvidersPane {
                            quota.refreshFromSettings("claude") }
                 )
             )
-            .frame(width: 110)
+            .frame(width: InstrumentMetrics.selectWidthCompact)
         }
         .id(ProviderRemediationTarget.cookieSource)
         .padding(.horizontal, 14)
@@ -1408,7 +1407,7 @@ extension ProvidersPane {
                            quota.refreshFromSettings("claude") }
                 )
             )
-            .frame(width: 130)
+            .frame(width: InstrumentMetrics.selectWidth)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1549,7 +1548,7 @@ extension ProvidersPane {
                         }
                     )
                 )
-                .frame(width: 200)
+                .frame(width: InstrumentMetrics.selectWidth)
             }
             Text(vi ? "Hiện credits, phần trăm, hoặc cả hai cạnh icon menu bar."
                     : "Show or hide Kiro credits, percent, or both next to the menu bar icon.")

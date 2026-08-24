@@ -115,14 +115,11 @@ struct GeneralPane: View {
                 SettingsLabeledRow(
                     title: L10n.languageCode(settings.appLanguage) == "vi" ? "Kỳ ngân sách" : "Budget period"
                 ) {
-                    Picker("", selection: $settings.budgetPeriod) {
-                        ForEach(BudgetPeriod.allCases) { period in
-                            Text(period.label(vi: L10n.languageCode(settings.appLanguage) == "vi"))
-                                .tag(period)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 140)
+                    InstrumentSegmentedControl(
+                        options: BudgetPeriod.allCases.map {
+                            ($0, $0.label(vi: L10n.languageCode(settings.appLanguage) == "vi"))
+                        },
+                        selection: $settings.budgetPeriod)
                 }
 
                 SettingsRowDivider()
@@ -144,6 +141,7 @@ struct GeneralPane: View {
                         }
                     ))
                     .multilineTextAlignment(.trailing)
+                    .instrumentControlFieldStyle()
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
@@ -312,6 +310,7 @@ struct GeneralPane: View {
                 }
             ))
             .multilineTextAlignment(.trailing)
+            .instrumentControlFieldStyle()
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }

@@ -180,12 +180,7 @@ struct ActionCenterSheet: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(SettingsTheme.secondary)
-                        .frame(width: 26, height: 26)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
-                                .stroke(VocabbyTheme.border, lineWidth: 1)
-                        )
-                        .contentShape(Rectangle())
+                        .instrumentIconTile()
                 }
                 .buttonStyle(.plain)
                 .help(vi ? "Đóng" : "Close")
@@ -233,8 +228,8 @@ struct ActionCenterIconButton: View {
                         .foregroundStyle(SettingsTheme.critical)
                 }
             }
-            .frame(height: 26)
-            .padding(.horizontal, has ? 8 : 7)
+            .frame(height: InstrumentMetrics.controlHeight)
+            .padding(.horizontal, has ? 9 : 8)
             .background(
                 RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
                     .fill(has ? SettingsTheme.criticalSurface : Color.clear)

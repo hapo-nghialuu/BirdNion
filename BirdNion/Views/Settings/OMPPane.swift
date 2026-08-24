@@ -49,7 +49,7 @@ struct OMPPane: View {
     private var headerCard: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .fill(VocabbyTheme.chartOMP.opacity(0.15))
                     .frame(width: 44, height: 44)
                 Image(systemName: "cpu")
@@ -72,16 +72,8 @@ struct OMPPane: View {
                 saveChanges()
             } label: {
                 Text(vi ? "Lưu cấu hình" : "Save Config")
-                    .font(.plexSans(12, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.background)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(VocabbyTheme.primary)
-                    )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.instrumentPrimary)
         }
     }
 
@@ -123,18 +115,8 @@ struct OMPPane: View {
                 .foregroundStyle(VocabbyTheme.primary)
 
             TextField(hint, text: text)
-                .textFieldStyle(.plain)
                 .font(.plexMono(12))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(VocabbyTheme.card)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(VocabbyTheme.border, lineWidth: 1)
-                        )
-                )
+                .instrumentControlFieldStyle()
         }
     }
 
@@ -157,7 +139,8 @@ struct OMPPane: View {
                 Spacer()
                 Toggle("", isOn: $prewalkEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .labelsHidden()
+                .toggleStyle(.instrumentSwitch)
             }
         }
     }

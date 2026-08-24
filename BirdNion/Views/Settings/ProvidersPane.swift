@@ -835,6 +835,7 @@ struct ElevenLabsKeysCard: View {
             } label: {
                 Image(systemName: "trash")
                     .foregroundStyle(SettingsTheme.critical)
+                    .instrumentIconTile(bordered: false)
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
@@ -996,6 +997,7 @@ struct HiyoKeysCard: View {
             } label: {
                 Image(systemName: "trash")
                     .foregroundStyle(SettingsTheme.critical)
+                    .instrumentIconTile(bordered: false)
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
@@ -1305,7 +1307,7 @@ struct CodexAutoPrimeCard: View {
             ) {
                 Toggle("", isOn: $settings.codexAutoPrimeEnabled)
                     .labelsHidden()
-                    .toggleStyle(.instrument)
+                    .toggleStyle(.instrumentSwitch)
             }
 
             SettingsRowDivider()

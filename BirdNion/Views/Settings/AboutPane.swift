@@ -127,7 +127,7 @@ struct AboutPane: View {
                     title: L10n.t("about.autoCheck.title", settings.appLanguage),
                     subtitle: L10n.t("about.autoCheck.subtitle", settings.appLanguage)
                 ) {
-                    Toggle("", isOn: $settings.updateAutoCheckEnabled).labelsHidden().toggleStyle(.instrument)
+                    Toggle("", isOn: $settings.updateAutoCheckEnabled).labelsHidden().toggleStyle(.instrumentSwitch)
                 }
 
                 SettingsLabeledRow(
@@ -141,7 +141,7 @@ struct AboutPane: View {
                         ],
                         selection: $settings.updateChannel
                     )
-                    .frame(width: 110)
+                    .frame(width: InstrumentMetrics.selectWidthCompact)
                     .onChange(of: settings.updateChannel) { _ in
                         Task { await checker.check() }
                     }

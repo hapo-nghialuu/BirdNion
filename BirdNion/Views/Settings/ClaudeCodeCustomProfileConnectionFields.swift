@@ -216,7 +216,7 @@ struct ClaudeCodeCustomProfileConnectionFields: View {
                 Image(systemName: isVisible ? "eye.slash" : "eye")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.secondary)
-                    .frame(width: 24, height: 24)
+                    .instrumentIconTile(bordered: false)
             }
             .buttonStyle(.plain)
             .pointingHandCursor()

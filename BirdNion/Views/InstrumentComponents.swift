@@ -159,6 +159,17 @@ enum InstrumentShape {
 
 /// Outlined square button (mono uppercase) — Settings / About actions.
 /// Mirrors Linux `.sw-pill-btn`: transparent fill, 1px border, hover fill.
+/// Kích thước control dùng chung cho toàn Settings/popover — mọi input,
+/// button, select, segmented, icon-button đều cao bằng nhau để thẳng hàng.
+enum InstrumentMetrics {
+    static let controlHeight: CGFloat = 28
+    static let iconButtonSize: CGFloat = 28
+    /// Bề rộng chuẩn cho `InstrumentMenuSelect` trong hàng Settings — hai cỡ
+    /// duy nhất thay cho 9 giá trị rời rạc trước đây (2026-08-24).
+    static let selectWidth: CGFloat = 170
+    static let selectWidthCompact: CGFloat = 110
+}
+
 struct InstrumentButtonStyle: ButtonStyle {
     var textColor: Color = VocabbyTheme.secondary
     var borderColor: Color = VocabbyTheme.border
@@ -170,7 +181,7 @@ struct InstrumentButtonStyle: ButtonStyle {
             .textCase(.uppercase)
             .foregroundStyle(textColor)
             .padding(.horizontal, 13)
-            .padding(.vertical, 9)
+            .frame(minHeight: InstrumentMetrics.controlHeight)
             .background(
                 RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .fill(configuration.isPressed ? VocabbyTheme.hoverSurface : Color.clear)
@@ -568,7 +579,7 @@ struct InstrumentSegmentedControl<Value: Hashable>: View {
                                          : VocabbyTheme.primary)
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
+                        .frame(minHeight: InstrumentMetrics.controlHeight)
                         .background(selection == option.value
                                     ? VocabbyTheme.primary
                                     : Color.clear)
@@ -858,5 +869,21 @@ struct PopoverInsetHairline: View {
         color
             .frame(height: 1)
             .padding(.horizontal, InstrumentPopoverMetrics.contentInset)
+    }
+}
+
+
+extension View {
+    /// Nút icon vuông chuẩn Instrument: 28×28, viền hairline, bo 4.
+    /// Dùng cho mọi icon-only button trong Settings để cùng cỡ và thẳng hàng
+    /// với input/button/select (2026-08-24).
+    func instrumentIconTile(bordered: Bool = true) -> some View {
+        frame(width: InstrumentMetrics.iconButtonSize,
+              height: InstrumentMetrics.iconButtonSize)
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                    .stroke(bordered ? VocabbyTheme.border : Color.clear, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
     }
 }
