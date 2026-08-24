@@ -39,7 +39,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     /// cần sửa, mở dạng sheet từ nút cảnh báo (popover header / General),
     /// không phải một mục cấu hình thường trực (2026-08-24).
     static let allSidebar: [SettingsTab] = [
-        .general, .providers, .agents, .aiCoding, .insights, .advanced, .about,
+        .general, .providers, .agents, .insights, .aiCoding, .advanced, .about,
     ]
 
     static func restored(_ raw: String?) -> SettingsTab {
