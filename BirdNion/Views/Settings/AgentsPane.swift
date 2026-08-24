@@ -64,8 +64,24 @@ struct AgentsPane: View {
         case .configOnly:
             list = allRecords.filter { !$0.capabilities.contains(.quota) && !$0.capabilities.contains(.localCost) }
         }
-        if query.isEmpty { return list }
-        return list.filter { SettingsSearchIndex.installedAgentMatches($0, query: query) }
+        let matched = query.isEmpty
+            ? list
+            : list.filter { SettingsSearchIndex.installedAgentMatches($0, query: query) }
+        return sortedByActivity(matched)
+    }
+
+    /// Agent đang bật (visible) lên trước, sau đó tới agent có dữ liệu thật,
+    /// rồi mới đến phần còn lại — trong mỗi nhóm giữ thứ tự A→Z.
+    private func sortedByActivity(_ list: [InstalledAgentRecord]) -> [InstalledAgentRecord] {
+        list.sorted { lhs, rhs in
+            let lv = agentVisibility.isVisible(lhs.id)
+            let rv = agentVisibility.isVisible(rhs.id)
+            if lv != rv { return lv }
+            let lc = real90dCost(for: lhs.id) ?? 0
+            let rc = real90dCost(for: rhs.id) ?? 0
+            if (lc > 0) != (rc > 0) { return lc > 0 }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
     }
 
     var body: some View {
@@ -74,7 +90,8 @@ struct AgentsPane: View {
 
             SettingsPage {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Header Title
+                    // Header Title (kèm icon Action Center bên phải)
+                    HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(vi ? "Agent" : "Agents")
                             .font(.plexSans(22, weight: .bold))
@@ -87,6 +104,12 @@ struct AgentsPane: View {
                             .foregroundStyle(SettingsTheme.secondary)
                             .lineSpacing(2)
                     }
+                    Spacer(minLength: 8)
+                    ActionCenterIconButton()
+                    }
+                    // Ép full-width: VStack .leading tự co theo text nên rule
+                    // dưới tiêu đề bị hụt bên phải (2026-08-24).
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.bottom, 16)
                     .overlay(alignment: .bottom) {
                         VocabbyTheme.primary.frame(height: 1)
@@ -146,7 +169,8 @@ struct AgentsPane: View {
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .padding(.vertical, 8)
                     .padding(.horizontal, 8)
-                    .overlay(alignment: .top) { VocabbyTheme.primary.frame(height: 1) }
+                    // Rule chạy hết bề ngang bảng (yêu cầu 2026-08-24).
+                    .overlay(alignment: .top) { VocabbyTheme.chromeRule.frame(height: 1) }
                     .overlay(alignment: .bottom) { VocabbyTheme.hairline.frame(height: 1) }
 
                     // Table Rows
