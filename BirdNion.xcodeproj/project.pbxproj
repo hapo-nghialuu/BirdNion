@@ -161,11 +161,9 @@
 		SET0009000000000000B005 /* SettingsSceneRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET000A000000000000F005 /* SettingsSceneRoot.swift */; };
 		SET000B0000000000B006 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET000C0000000000F006 /* GeneralPane.swift */; };
 		SET000D0000000000B007 /* ProvidersPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET000E0000000000F007 /* ProvidersPane.swift */; };
-		SET000F0000000000B008 /* DisplayPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET00100000000000F008 /* DisplayPane.swift */; };
 		SET00110000000000B009 /* AdvancedPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET00120000000000F009 /* AdvancedPane.swift */; };
 		SET00130000000000B00A /* AboutPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET00140000000000F00A /* AboutPane.swift */; };
 		SET00150000000000B00B /* AboutLinkRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET00160000000000F00B /* AboutLinkRow.swift */; };
-		SET00170000000000B00C /* DebugPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = SET00180000000000F00C /* DebugPane.swift */; };
 		ACTC00010000000000B001 /* ActionCenterPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACTC00020000000000F001 /* ActionCenterPane.swift */; };
 		C0DE0001000000000000B001 /* CodexAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F001 /* CodexAuth.swift */; };
 		C0DE0003000000000000B002 /* CodexUsageAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0004000000000000F002 /* CodexUsageAPI.swift */; };
@@ -373,11 +371,9 @@
 		SET000A000000000000F005 /* SettingsSceneRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/SettingsSceneRoot.swift; sourceTree = "<group>"; };
 		SET000C0000000000F006 /* GeneralPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/GeneralPane.swift; sourceTree = "<group>"; };
 		SET000E0000000000F007 /* ProvidersPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ProvidersPane.swift; sourceTree = "<group>"; };
-		SET00100000000000F008 /* DisplayPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/DisplayPane.swift; sourceTree = "<group>"; };
 		SET00120000000000F009 /* AdvancedPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/AdvancedPane.swift; sourceTree = "<group>"; };
 		SET00140000000000F00A /* AboutPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/AboutPane.swift; sourceTree = "<group>"; };
 		SET00160000000000F00B /* AboutLinkRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/AboutLinkRow.swift; sourceTree = "<group>"; };
-		SET00180000000000F00C /* DebugPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/DebugPane.swift; sourceTree = "<group>"; };
 		ACTC00020000000000F001 /* ActionCenterPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/ActionCenterPane.swift; sourceTree = "<group>"; };
 		C0DE0002000000000000F001 /* CodexAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexAuth.swift; sourceTree = "<group>"; };
 		C0DE0004000000000000F002 /* CodexUsageAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Codex/CodexUsageAPI.swift; sourceTree = "<group>"; };
@@ -874,11 +870,9 @@
 				SET0009000000000000B005 /* SettingsSceneRoot.swift in Sources */,
 				SET000B0000000000B006 /* GeneralPane.swift in Sources */,
 				SET000D0000000000B007 /* ProvidersPane.swift in Sources */,
-				SET000F0000000000B008 /* DisplayPane.swift in Sources */,
 				SET00110000000000B009 /* AdvancedPane.swift in Sources */,
 				SET00130000000000B00A /* AboutPane.swift in Sources */,
 				SET00150000000000B00B /* AboutLinkRow.swift in Sources */,
-				SET00170000000000B00C /* DebugPane.swift in Sources */,
 				ACTC00010000000000B001 /* ActionCenterPane.swift in Sources */,
 				C0DE0001000000000000B001 /* CodexAuth.swift in Sources */,
 				C0DE0003000000000000B002 /* CodexUsageAPI.swift in Sources */,
