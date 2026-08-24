@@ -16,7 +16,24 @@ let closeTimer: number | null = null;
 /** Loại nội dung panel đang mở — quyết định phạm vi đóng khi đổi kỳ. */
 let openKind: "day" | "models" | "agent" | "activity" | null = null;
 
+/** Truy vết vòng đời hover. Tắt mặc định — bật bằng
+ *  `localStorage.setItem("birdnion.panelDebug", "1")` rồi mở lại app, kèm
+ *  `BIRDNION_PANEL_DEBUG=1` phía tiến trình để log ra stderr. */
+const PANEL_DEBUG = (() => {
+  try {
+    return localStorage.getItem("birdnion.panelDebug") === "1";
+  } catch {
+    return false;
+  }
+})();
+
+function beacon(msg: string): void {
+  if (!PANEL_DEBUG) return;
+  void invoke("panel_debug", { msg }).catch(() => { /* debug thôi */ });
+}
+
 function cancelPendingClose(): void {
+  if (closeTimer != null) beacon("timer CANCELLED");
   if (closeTimer != null) {
     clearTimeout(closeTimer);
     closeTimer = null;
@@ -39,12 +56,19 @@ async function show(payload: unknown, isPinned: boolean): Promise<void> {
 /** Hover rời: đóng sau debounce, chỉ khi chưa ghim — rê chuột giữa các cột
  *  liền kề sẽ re-enter trước deadline nên panel không nháy. */
 export function closeTransientPanel(): void {
-  if (pinned) return;
+  // Chưa có panel nào mở thì không việc gì phải hẹn giờ (macOS
+  // `closeTransient` cũng có `guard content != nil`).
+  if (openKind === null || pinned) return;
+  beacon(`closeTransient pinned=${pinned}`);
   cancelPendingClose();
   closeTimer = window.setTimeout(() => {
     closeTimer = null;
+    beacon(`timer FIRED pinned=${pinned}`);
     if (pinned) return;
-    void invoke("close_side_panel").catch(() => { /* phụ trợ */ });
+    openKind = null;
+    void invoke("close_side_panel")
+      .then(() => beacon("invoke close OK"))
+      .catch((e) => beacon(`invoke close FAILED: ${e}`));
   }, CLOSE_DELAY_MS);
 }
 

@@ -1346,6 +1346,12 @@ fn panel_log(msg: &str) {
     }
 }
 
+/// Beacon tạm để truy vết vòng đời hover phía web.
+#[tauri::command]
+fn panel_debug(msg: String) {
+    panel_log(&msg);
+}
+
 /// Trả focus về popover ngay sau khi hiện panel.
 ///
 /// `show()` có thể kích hoạt cửa sổ tuỳ nền tảng. Chỉ cửa sổ key mới nhận sự
@@ -1551,6 +1557,7 @@ pub fn run() {
              project_insights_report,
             provider_statuses,
             list_installed_agents,
+            panel_debug,
             open_side_panel,
             close_side_panel,
             classify_provider_error,

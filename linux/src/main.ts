@@ -824,9 +824,15 @@ function bindPopoverLeave(app: Element): void {
   // Chốt chính: node mở panel có thể bị render() phá huỷ khi đang hover, khi đó
   // `mouseleave` của nó không bắn. `mouseover` nổi bọt lên container nên mọi
   // dịch chuyển sang chỗ khác đều bị bắt.
+  // Chỉ bắn tại CẠNH rời vùng chủ. Bắn liên tục theo từng `mouseover` sẽ huỷ
+  // rồi hẹn lại timer 140ms không ngừng, nên chuột còn di chuyển là panel
+  // không bao giờ đủ yên để đóng.
+  let overOwner = false;
   app.addEventListener("mouseover", (event) => {
     const target = event.target as HTMLElement | null;
-    if (!target?.closest(`[${PANEL_OWNER_ATTR}]`)) closeTransientPanel();
+    const nowOverOwner = !!target?.closest(`[${PANEL_OWNER_ATTR}]`);
+    if (overOwner && !nowOverOwner) closeTransientPanel();
+    overOwner = nowOverOwner;
   });
 }
 
