@@ -1444,11 +1444,22 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Ẩn popover thì panel phụ phải đi cùng — nếu không nó lơ lửng một mình
+/// trên màn hình (macOS `AppDelegate` gọi `agentDetailCoordinator.close()`
+/// mỗi lần đóng popover).
+fn hide_side_panel_with_popover(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(panel) = app.get_webview_window("panel") {
+        let _ = panel.hide();
+    }
+}
+
 fn toggle_main_window(app: &tauri::AppHandle) {
     use tauri::Manager;
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
+            hide_side_panel_with_popover(app);
         } else {
             let _ = window.show();
             let _ = window.set_focus();
@@ -1602,6 +1613,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            use tauri::Manager;
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Settings is a real window — destroy on close.
                 // Main popover stays tray-resident (hide only).
@@ -1609,6 +1621,11 @@ pub fn run() {
                     return;
                 }
                 let _ = window.hide();
+                if window.label() == "main" {
+                    // Không bám vào `Focused(false)`: bấm vào chính panel cũng
+                    // làm popover mất focus, panel sẽ tự đóng oan.
+                    hide_side_panel_with_popover(window.app_handle());
+                }
                 api.prevent_close();
             }
         })
