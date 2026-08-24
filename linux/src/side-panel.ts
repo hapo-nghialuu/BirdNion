@@ -71,8 +71,9 @@ export function showAgentPanel(
   agentId: string,
   displayName: string,
   rows: { label: string; value: string }[],
+  isPinned = true,
 ): void {
-  void show({ kind: "agent", agentId, displayName, rows }, true);
+  void show({ kind: "agent", agentId, displayName, rows }, isPinned);
 }
 
 export function showActivityPanel(

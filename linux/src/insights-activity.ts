@@ -7,6 +7,7 @@
 
 import { Combined, CombinedDay, usd, tokens as tokensLabel } from "./usage";
 import { t } from "./i18n";
+import { showDayPanel, closeTransientPanel, closePinnedPanel } from "./side-panel";
 
 const WEEKS = 52;
 const CELL = 10;
@@ -76,6 +77,8 @@ export function streakDays(daily: CombinedDay[]): number {
 
 export function activityContent(combined: Combined): HTMLElement {
   const wrap = el("div", "insights-activity");
+  const byDate = new Map(combined.daily.map((d) => [d.date, d]));
+  let pinnedDate: string | null = null;
   const grid = weeklyGrid(combined.daily);
   const cells = grid.flat();
   const maxTokens = Math.max(...cells.map((c) => c.tokens), 1);
@@ -108,6 +111,24 @@ export function activityContent(combined: Combined): HTMLElement {
       box.title = cell.tokens > 0
         ? `${cell.date}: ${tokensLabel(cell.tokens)} · ${usd(cell.usd)}`
         : `${cell.date}: ${t("noActivity")}`;
+      const day = byDate.get(cell.date);
+      if (day && day.active) {
+        // Ô có dữ liệu drill-down được: hover xem tạm, click ghim (parity macOS).
+        box.classList.add("is-clickable");
+        box.addEventListener("mouseenter", () => {
+          showDayPanel(day, totalUsd, t("insightsSegmentActivity"), false);
+        });
+        box.addEventListener("mouseleave", () => closeTransientPanel());
+        box.addEventListener("click", () => {
+          if (pinnedDate === cell.date) {
+            pinnedDate = null;
+            closePinnedPanel();
+          } else {
+            pinnedDate = cell.date;
+            showDayPanel(day, totalUsd, t("insightsSegmentActivity"), true);
+          }
+        });
+      }
       col.append(box);
     }
     gridEl.append(col);

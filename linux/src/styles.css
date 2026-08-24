@@ -5587,3 +5587,7 @@ body.settings-body-root {
   border-radius: 3px;
   box-sizing: border-box;
 }
+
+/* Hàng/ô mở được panel phụ. */
+.is-clickable { cursor: pointer; }
+.agents-row.is-clickable:hover { background: var(--selected-surface); }

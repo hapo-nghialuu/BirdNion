@@ -5,9 +5,10 @@
 // liệu, mỗi khối cắt ở N dòng rồi gộp phần còn lại vào một dòng "+N", khối
 // rỗng thì ẩn hẳn.
 
-import { Combined, CombinedDay, UsageSourceId, usd, tokensShort } from "./usage";
+import { Combined, CombinedDay, CombinedModel, UsageSourceId, usd, tokensShort } from "./usage";
 import { t } from "./i18n";
 import { logoMark } from "./logos";
+import { showModelsPanel, showAgentPanel, closeTransientPanel } from "./side-panel";
 import type { ProviderStatus } from "./provider-tab";
 
 const QUOTA_ROW_LIMIT = 3;
@@ -93,6 +94,21 @@ function quotaRow(status: ProviderStatus, window: QuotaWindowLike): HTMLElement 
   const pct = el("span", `agents-row-pct ${quotaTone(window.remainingPct)}`,
     `${Math.round(window.remainingPct)}%`);
   row.append(pct, el("span", "agents-row-chevron", "›"));
+
+  row.classList.add("is-clickable");
+  const detail = () => (status.windows ?? [])
+    .filter((w) => Number.isFinite(w.remainingPct))
+    .map((w) => ({
+      label: w.label.toUpperCase(),
+      value: t("provider.remainingPct", { n: Math.round(w.remainingPct) }),
+    }));
+  row.addEventListener("mouseenter", () => {
+    showAgentPanel(status.id, status.displayName, detail(), false);
+  });
+  row.addEventListener("mouseleave", () => closeTransientPanel());
+  row.addEventListener("click", () => {
+    showAgentPanel(status.id, status.displayName, detail(), true);
+  });
   return row;
 }
 
@@ -142,7 +158,17 @@ export function costBySection(
   wrap.append(shareBar(rows, total));
 
   for (const row of rows.slice(0, COST_ROW_LIMIT)) {
-    wrap.append(costRow(row, total, mode));
+    const node = costRow(row, total, mode);
+    if (mode === "agent") {
+      node.classList.add("is-clickable");
+      node.addEventListener("click", () => {
+        showAgentPanel(row.id, row.name, [
+          { label: t("costBy"), value: row.display },
+          { label: t("quota"), value: "—" },
+        ]);
+      });
+    }
+    wrap.append(node);
   }
   const rest = rows.slice(COST_ROW_LIMIT);
   if (rest.length > 0) {
@@ -151,10 +177,36 @@ export function costBySection(
       ? t("moreAgents", { n: rest.length })
       : t("moreModels", { n: rest.length });
     const display = mode === "token" ? tokensShort(Math.round(amount)) : usd(amount);
-    wrap.append(costRow(
-      { id: "rest", name: label, amount, display, css: "muted" }, total, mode));
+    const node = costRow(
+      { id: "rest", name: label, amount, display, css: "muted" }, total, mode);
+    if (mode !== "agent") {
+      // Hover dòng "+N model khác" mở panel liệt kê toàn bộ model tràn.
+      const overflow = overflowModels(window, rest.map((r) => r.id));
+      node.addEventListener("mouseenter", () => showModelsPanel(overflow, mode));
+      node.addEventListener("mouseleave", () => closeTransientPanel());
+    }
+    wrap.append(node);
   }
   return wrap;
+}
+
+/** Model thuộc phần tràn của Cost by — dùng cho panel hover "+N model khác". */
+function overflowModels(window: CombinedDay[], names: string[]): CombinedModel[] {
+  const wanted = new Set(names);
+  const merged = new Map<string, CombinedModel>();
+  for (const day of window) {
+    for (const model of day.models) {
+      if (!wanted.has(model.name)) continue;
+      const existing = merged.get(model.name);
+      if (existing) {
+        existing.usd += model.usd;
+        existing.tokens += model.tokens;
+      } else {
+        merged.set(model.name, { ...model });
+      }
+    }
+  }
+  return [...merged.values()];
 }
 
 function agentRows(window: CombinedDay[]): CostRow[] {
