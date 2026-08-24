@@ -2904,22 +2904,24 @@ struct ActionsList: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // Slot chiều cao cố định, KHÔNG animation/transition: mọi thay
+            // đổi fitting-size ở đây sẽ kích hoạt resize panel giữa layout
+            // pass và gây AttributeGraph cycle (crash 2026-08-24).
             ZStack(alignment: .leading) {
                 if showSources, !sourceStates.isEmpty {
                     sourceStateRow
-                        .transition(.opacity)
                 } else if let lastRefreshCaption {
                     Text(lastRefreshCaption.uppercased())
                         .font(.plexMono(10, weight: .medium))
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .tracking(0.4)
                         .lineLimit(1)
-                        .transition(.opacity)
                 }
             }
+            .frame(height: 16, alignment: .leading)
             .onReceive(rotation) { _ in
                 guard !sourceStates.isEmpty else { return }
-                withAnimation(.easeInOut(duration: 0.3)) { showSources.toggle() }
+                showSources.toggle()
             }
             Spacer(minLength: 8)
             footerIcon(
