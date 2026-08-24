@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for main popover + settings windows",
+  "description": "Capability for main popover, settings and side-panel windows",
   "windows": [
     "main",
-    "settings"
+    "settings",
+    "panel"
   ],
   "permissions": [
     "core:default",

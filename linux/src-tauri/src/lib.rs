@@ -1365,11 +1365,17 @@ async fn open_side_panel(
 }
 
 /// Ẩn panel phụ (hover rời hoặc bấm ✕).
+///
+/// Báo về popover để nó bỏ cờ ghim: nếu không, sau khi bấm ✕ phía popover vẫn
+/// tưởng panel đang ghim và chặn mọi lần hover mở lại.
 #[tauri::command]
 fn close_side_panel(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
+    use tauri::{Emitter, Manager};
     if let Some(panel) = app.get_webview_window("panel") {
         let _ = panel.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.emit("birdnion-panel-closed", ());
     }
     Ok(())
 }

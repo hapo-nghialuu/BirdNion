@@ -6,6 +6,7 @@
 // panel đã ghim không bị hover khác chiếm chỗ, chỉ đóng bằng nút ✕.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { t } from "./i18n";
 import { logoMark } from "./logos";
@@ -38,7 +39,10 @@ function header(title: string, subtitle: string, pinned: boolean): HTMLElement {
   head.append(col);
   if (pinned) {
     const close = el("button", "panel-close", "✕");
-    close.addEventListener("click", () => { void getCurrentWindow().hide(); });
+    // Qua command chứ không hide() thẳng: popover cần biết để bỏ cờ ghim.
+    close.addEventListener("click", () => {
+      void invoke("close_side_panel").catch(() => { void getCurrentWindow().hide(); });
+    });
     head.append(close);
   } else {
     head.append(el("span", "panel-hint", t("clickToPin")));

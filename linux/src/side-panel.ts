@@ -5,6 +5,7 @@
 // và chỉ nút ✕ trong panel mới đóng được.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { CombinedDay, CombinedModel } from "./usage";
 import type { AgentPanelPayload } from "./agent-panel-payload";
 
@@ -54,6 +55,12 @@ export function closePinnedPanel(): void {
 export function isPanelPinned(): boolean {
   return pinned;
 }
+
+// Panel tự đóng (nút ✕ trong cửa sổ phụ) — nhả cờ ghim để hover mở lại được.
+void listen("birdnion-panel-closed", () => {
+  cancelPendingClose();
+  pinned = false;
+});
 
 export function showDayPanel(
   day: CombinedDay,
