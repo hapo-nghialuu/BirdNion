@@ -27,12 +27,14 @@ import { isClaudeCodeSupported } from "./claude-code";
 import { settingsIcon, type SettingsIconId } from "./settings-icons";
 import { getAppearance, setAppearance, type Appearance } from "./theme";
 import { insightsPane } from "./insights-pane";
-import { actionCenterPane } from "./action-center";
+import { actionCenterPane, latestIssueCount, ACTION_CENTER_UPDATED_EVENT } from "./action-center";
+import { agentsPane } from "./settings-agents";
 
 const TAB_KEY = "birdnion.settingsSection";
 
 type SettingsTabId =
-  | "general" | "actionCenter" | "providers" | "claudeCode" | "insights" | "advanced" | "about"
+  | "general" | "actionCenter" | "providers" | "agents" | "claudeCode" | "insights"
+  | "advanced" | "about"
   // legacy ids still routed from tray / older localStorage
   | "display" | "debug";
 
@@ -44,12 +46,14 @@ type NavItem = {
 };
 
 /** Sidebar items — Display→General, Debug→Advanced (macOS P2). */
+/** `actionCenter` cố tình KHÔNG nằm trong sidebar (macOS parity 2026-08-24):
+ *  nó là danh sách việc cần sửa, mở dạng sheet từ icon ở header mỗi pane. */
 const NAV: NavItem[] = [
   { id: "general", icon: "gearshape", titleKey: "settingsTabGeneral", iconBg: "#8C8C94" },
-  { id: "actionCenter", icon: "exclamationmark.circle", titleKey: "settingsTabActionCenter", iconBg: "#DC514B" },
   { id: "providers", icon: "square.grid.2x2", titleKey: "settingsTabProviders", iconBg: "#2563EB" },
-  { id: "claudeCode", icon: "terminal", titleKey: "settingsTabClaudeCode", iconBg: "#8C59D9" },
+  { id: "agents", icon: "chart.bar", titleKey: "settingsTabAgents", iconBg: "#0F766E" },
   { id: "insights", icon: "chart.bar", titleKey: "settingsTabInsights", iconBg: "#D97706" },
+  { id: "claudeCode", icon: "terminal", titleKey: "settingsTabClaudeCode", iconBg: "#8C59D9" },
   { id: "advanced", icon: "slider.horizontal.3", titleKey: "settingsTabAdvanced", iconBg: "#8C8C94" },
   { id: "about", icon: "info.circle", titleKey: "settingsTabAbout", iconBg: "#33A659" },
 ];
@@ -57,6 +61,8 @@ const NAV: NavItem[] = [
 function normalizeTab(id: string | null): SettingsTabId {
   if (id === "display") return "general";
   if (id === "debug") return "advanced";
+  // Action Center giờ là sheet: giữ pane nền là General.
+  if (id === "actionCenter") return "general";
   if (NAV.some((n) => n.id === id)) return id as SettingsTabId;
   return "general";
 }
@@ -110,9 +116,66 @@ function card(header: string | null, rows: HTMLElement[], footer?: string): HTML
 
 function paneHeader(title: string, subtitle?: string): HTMLElement {
   const h = el("div", "sw-pane-header");
-  h.append(el("div", "sw-pane-title", title));
-  if (subtitle) h.append(el("div", "sw-pane-subtitle", subtitle));
+  const textCol = el("div", "sw-pane-header-text");
+  textCol.append(el("div", "sw-pane-title", title));
+  if (subtitle) textCol.append(el("div", "sw-pane-subtitle", subtitle));
+  h.append(textCol);
+  // Action Center: icon góc phải trên MỌI pane (macOS parity 2026-08-24) —
+  // ✓ khi sạch, ⚠ + số khi có việc; bấm mở sheet.
+  h.append(actionCenterIconButton());
   return h;
+}
+
+/** Nút icon mở sheet Action Center; tự cập nhật badge sau khi đếm xong. */
+function actionCenterIconButton(): HTMLElement {
+  const button = el("button", "sw-action-center-icon");
+  const icon = el("span", "sw-action-center-glyph", "✓");
+  const count = el("span", "sw-action-center-count");
+  button.append(icon, count);
+  button.title = t("actionCenterOpen");
+  button.addEventListener("click", () => { void openActionCenterSheet(); });
+  const paintBadge = () => {
+    const n = latestIssueCount();
+    if (n == null) return;   // chưa có snapshot: giữ trạng thái trung tính
+    button.classList.toggle("has-issues", n > 0);
+    icon.textContent = n > 0 ? "!" : "✓";
+    count.textContent = n > 0 ? String(n) : "";
+    button.title = n > 0
+      ? `${t("actionCenterOpen")}: ${t("actionCenterIssues", { n })}`
+      : `${t("actionCenterOpen")}: ${t("actionCenterNoIssues")}`;
+  };
+  paintBadge();
+  void import("@tauri-apps/api/event")
+    .then(({ listen }) => listen(ACTION_CENTER_UPDATED_EVENT, paintBadge))
+    .catch(() => { /* badge chỉ là phụ trợ */ });
+  return button;
+}
+
+/** Sheet Action Center — thay cho mục sidebar cũ. */
+async function openActionCenterSheet(): Promise<void> {
+  const existing = document.querySelector(".sw-sheet-backdrop");
+  if (existing) existing.remove();
+  const backdrop = el("div", "sw-sheet-backdrop");
+  const sheet = el("div", "sw-sheet");
+  const head = el("div", "sw-sheet-head");
+  head.append(el("div", "sw-sheet-title", t("actionCenterOpen")));
+  const close = el("button", "sw-sheet-close", "✕");
+  close.addEventListener("click", () => backdrop.remove());
+  head.append(close);
+  const bodyWrap = el("div", "sw-sheet-body");
+  sheet.append(head, bodyWrap);
+  backdrop.append(sheet);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) backdrop.remove();
+  });
+  document.body.append(backdrop);
+  const pane = await actionCenterPane((providerId, target) => {
+    localStorage.setItem("birdnion.selectedProvider", providerId);
+    localStorage.setItem("birdnion.providerRemediationTarget", target);
+    backdrop.remove();
+    window.dispatchEvent(new CustomEvent("birdnion-settings-section", { detail: "providers" }));
+  });
+  bodyWrap.append(pane);
 }
 
 function page(...children: HTMLElement[]): HTMLElement {
@@ -503,12 +566,8 @@ export function settingsWindowRoot(onProvidersSaved: () => void): HTMLElement {
         case "providers":
           pane = await providersPane(onProvidersSaved);
           break;
-        case "actionCenter":
-          pane = await actionCenterPane((providerId, target) => {
-            localStorage.setItem("birdnion.selectedProvider", providerId);
-            localStorage.setItem("birdnion.providerRemediationTarget", target);
-            setActive("providers");
-          });
+        case "agents":
+          pane = await agentsPane();
           break;
         case "claudeCode":
           pane = await claudeCodePane(onProvidersSaved);

@@ -110,6 +110,12 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 type IssueSubscriber = (snapshot: ActionCenterSnapshot) => void;
 const issueSubscribers = new Set<IssueSubscriber>();
 let latestSnapshot: ActionCenterSnapshot | null = null;
+
+/** Số việc đang mở theo snapshot gần nhất — dùng cho badge icon Action Center
+ *  ở header mỗi pane Settings. `null` khi chưa nhận được snapshot nào. */
+export function latestIssueCount(): number | null {
+  return latestSnapshot ? latestSnapshot.issues.length : null;
+}
 let listenerStarted = false;
 
 function ensureIssueListener() {

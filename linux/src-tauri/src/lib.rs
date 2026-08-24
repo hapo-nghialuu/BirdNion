@@ -12,6 +12,7 @@ mod config;
 mod cost_history;
 mod elevenlabs_keys;
 mod hiyo_keys;
+mod installed_agents;
 mod freemodel_accounts;
  mod grok_scanner;
 mod omp_scanner;
@@ -1192,6 +1193,37 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+
+/// Catalog agent cài trên máy cho Settings → Agent (macOS parity).
+/// Quota lấy từ provider đang bật, chi phí 90 ngày lấy từ cost-history.
+#[tauri::command]
+async fn list_installed_agents() -> Vec<installed_agents::InstalledAgent> {
+    let statuses = provider_statuses(None).await;
+    let with_quota: Vec<String> = statuses
+        .iter()
+        .filter(|s| !s.windows.is_empty())
+        .map(|s| s.id.clone())
+        .collect();
+
+    // Tổng 90 ngày theo source, đọc thẳng từ history đã lưu.
+    let doc = cost_history::read();
+    let cutoff = chrono::Local::now().date_naive() - chrono::Duration::days(89);
+    let mut totals: HashMap<String, f64> = HashMap::new();
+    for (source, days) in &doc.sources {
+        let mut sum = 0.0;
+        for (day, entry) in days {
+            if let Ok(parsed) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d") {
+                if parsed >= cutoff {
+                    sum += entry.usd;
+                }
+            }
+        }
+        totals.insert(source.clone(), sum);
+    }
+
+    installed_agents::detect(&with_quota, &totals)
+}
+
 /// Open (or focus) the dedicated Settings window — macOS Settings scene parity
 /// (780×720, separate from the tray popover).
 #[tauri::command]
@@ -1280,6 +1312,7 @@ pub fn run() {
             pi_usage_report,
              project_insights_report,
             provider_statuses,
+            list_installed_agents,
             classify_provider_error,
             is_transient_provider_error,
             is_fixable_provider_error,
