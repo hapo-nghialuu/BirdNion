@@ -6,6 +6,7 @@ import SwiftUI
 /// Sử dụng / Tự động.
 struct GeneralPane: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
 
     var body: some View {
         SettingsPage {

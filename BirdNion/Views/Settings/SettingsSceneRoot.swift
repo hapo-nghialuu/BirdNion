@@ -51,6 +51,8 @@ struct SettingsSceneRoot: View {
     /// One Settings-wide search (nav + contextual roster). Owned here so
     /// Providers/AI Coding don't mount a second search field.
     @State private var sidebarSearch = ""
+    /// Action Center mở dạng sheet (không còn là mục sidebar).
+    @State private var showActionCenter = false
 
     /// One constant window size for all tabs — wide enough for the providers
     /// sidebar + detail, still fine for the single-column tabs. This MUST stay
@@ -70,11 +72,12 @@ struct SettingsSceneRoot: View {
             case .providers: ProvidersPane(tab: $selected, searchText: $sidebarSearch)
             case .agents: AgentsPane(tab: $selected, searchText: $sidebarSearch)
             case .aiCoding: AICodingPane(tab: $selected, searchText: $sidebarSearch)
-            case .actionCenter: navAndContent { ActionCenterPane() }
             case .insights: navAndContent { InsightsPane() }
             case .general: navAndContent { GeneralPane() }
             case .advanced: navAndContent { AdvancedPane() }
             case .about: navAndContent { AboutPane() }
+            // Action Center không có pane riêng nữa (sheet) — fallback General.
+            case .actionCenter: navAndContent { GeneralPane() }
             }
         }
         .frame(width: contentWidth, height: contentHeight)
@@ -95,7 +98,8 @@ struct SettingsSceneRoot: View {
             selected = .insights
         }
         .onReceive(NotificationCenter.default.publisher(for: .openActionCenterTab)) { _ in
-            selected = .actionCenter
+            // Action Center giờ là sheet, không phải mục sidebar.
+            showActionCenter = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .openGeneralTab)) { _ in
             selected = .general
@@ -106,6 +110,11 @@ struct SettingsSceneRoot: View {
         }
         .onChange(of: selected) { _, value in
             UserDefaults.standard.set(value.rawValue, forKey: "birdnion.settingsSection")
+        }
+        .sheet(isPresented: $showActionCenter) {
+            ActionCenterSheet(isPresented: $showActionCenter)
+                .environmentObject(quota)
+                .environmentObject(settings)
         }
     }
 
@@ -388,18 +397,24 @@ struct SettingsRowDivider: View {
 struct SettingsPaneHeader: View {
     let title: String
     var subtitle: String? = nil
+    /// Action Center nằm trong header để thẳng lề nội dung + ngang tiêu đề.
+    var showsActionCenter: Bool = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.plexSans(22, weight: .bold))
-                .tracking(-0.5)
-                .foregroundStyle(SettingsTheme.primary)
-            if let subtitle, !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.plexSans(13))
-                    .foregroundStyle(SettingsTheme.secondary)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.plexSans(22, weight: .bold))
+                    .tracking(-0.5)
+                    .foregroundStyle(SettingsTheme.primary)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.plexSans(13))
+                        .foregroundStyle(SettingsTheme.secondary)
+                }
             }
+            Spacer(minLength: 8)
+            if showsActionCenter { ActionCenterIconButton() }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 16)

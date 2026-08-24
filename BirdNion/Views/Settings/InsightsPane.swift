@@ -67,8 +67,7 @@ struct InsightsPane: View {
                             (.activity, vi ? "Hoạt động" : "Activity"),
                             (.projects, vi ? "Dự án" : "Projects"),
                         ],
-                        selection: segment,
-                        width: InsightsSegmentBar.viewWidth)
+                        selection: segment)
                     if segment.wrappedValue == .projects {
                         Spacer(minLength: InsightsSegmentBar.gap)
                         InstrumentSegmentedControl(
@@ -78,8 +77,7 @@ struct InsightsPane: View {
                                 (30, "30d"),
                                 (90, "90d"),
                             ],
-                            selection: periodDays,
-                            width: InsightsSegmentBar.periodWidth)
+                            selection: periodDays)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

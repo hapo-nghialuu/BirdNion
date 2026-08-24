@@ -562,7 +562,7 @@ struct InstrumentSegmentedControl<Value: Hashable>: View {
                         .tracking(0.35)
                         .textCase(.uppercase)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(selection == option.value
                                          ? VocabbyTheme.background
                                          : VocabbyTheme.primary)
@@ -578,7 +578,9 @@ struct InstrumentSegmentedControl<Value: Hashable>: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .frame(width: width ?? CGFloat(count) * 108)
+        // width nil = tự co theo nhãn dài nhất (không cắt chữ thành "OVERVI…").
+        .frame(width: width)
+        .fixedSize(horizontal: width == nil, vertical: false)
         .overlay(
             RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                 .strokeBorder(VocabbyTheme.primary, lineWidth: 1)

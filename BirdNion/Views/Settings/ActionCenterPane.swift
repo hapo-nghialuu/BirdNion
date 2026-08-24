@@ -79,6 +79,8 @@ struct ActionCenterIssue: Identifiable, Equatable {
 struct ActionCenterPane: View {
     @EnvironmentObject private var quota: QuotaService
     @EnvironmentObject private var settings: SettingsStore
+    /// Sheet đã có header riêng nên pane bỏ tiêu đề để khỏi trùng.
+    var showsHeader: Bool = true
 
     private var issues: [ActionCenterIssue] {
         ActionCenterIssue.current(
@@ -88,9 +90,11 @@ struct ActionCenterPane: View {
 
     var body: some View {
         SettingsPage {
-            SettingsPaneHeader(
-                title: L10n.t("actionCenter.title", settings.appLanguage),
-                subtitle: L10n.t("actionCenter.subtitle", settings.appLanguage))
+            if showsHeader {
+                SettingsPaneHeader(
+                    title: L10n.t("actionCenter.title", settings.appLanguage),
+                    subtitle: L10n.t("actionCenter.subtitle", settings.appLanguage))
+            }
 
             if issues.isEmpty {
                 emptyState
@@ -153,5 +157,98 @@ struct ActionCenterPane: View {
         case .setup: L10n.t("actionCenter.setupHint", settings.appLanguage)
         case .connection: L10n.t("actionCenter.connectionHint", settings.appLanguage)
         }
+    }
+}
+
+
+/// Action Center dạng sheet: header riêng + nút đóng, bọc quanh pane cũ.
+struct ActionCenterSheet: View {
+    @EnvironmentObject private var quota: QuotaService
+    @EnvironmentObject private var settings: SettingsStore
+    @Binding var isPresented: Bool
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(L10n.t("actionCenter.title", settings.appLanguage))
+                    .font(.plexSans(15, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.primary)
+                Spacer(minLength: 8)
+                Button { isPresented = false } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.secondary)
+                        .frame(width: 26, height: 26)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                                .stroke(VocabbyTheme.border, lineWidth: 1)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(vi ? "Đóng" : "Close")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .overlay(alignment: .bottom) { VocabbyTheme.chromeRule.frame(height: 1) }
+
+            ActionCenterPane(showsHeader: false)
+                .environmentObject(quota)
+                .environmentObject(settings)
+        }
+        .frame(width: 620, height: 460)
+        .background(SettingsTheme.background)
+    }
+}
+
+
+/// Icon Action Center dùng trong header mọi pane Settings: ✓ khi sạch,
+/// ⚠ + số khi có việc cần xử lý. Bấm phát notification để SceneRoot mở sheet.
+struct ActionCenterIconButton: View {
+    @EnvironmentObject private var quota: QuotaService
+    @EnvironmentObject private var settings: SettingsStore
+
+    private var count: Int {
+        ActionCenterIssue.current(
+            statuses: quota.displayStatuses,
+            staleWarning: { quota.staleWarning(for: $0) }).count
+    }
+
+    var body: some View {
+        let vi = L10n.languageCode(settings.appLanguage) == "vi"
+        let title = L10n.t("actionCenter.title", settings.appLanguage)
+        let has = count > 0
+        return Button {
+            NotificationCenter.default.post(name: .openActionCenterTab, object: nil)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: has ? "exclamationmark.circle.fill" : "checkmark.circle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(has ? SettingsTheme.critical : SettingsTheme.success)
+                if has {
+                    Text("\(count)")
+                        .font(.plexMono(10, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.critical)
+                }
+            }
+            .frame(height: 26)
+            .padding(.horizontal, has ? 8 : 7)
+            .background(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                    .fill(has ? SettingsTheme.criticalSurface : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                    .stroke(has ? Color.clear : VocabbyTheme.border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(has
+              ? (vi ? "\(title): \(count) việc cần xử lý" : "\(title): \(count) open issues")
+              : (vi ? "\(title): không có vấn đề" : "\(title): no open issues"))
     }
 }

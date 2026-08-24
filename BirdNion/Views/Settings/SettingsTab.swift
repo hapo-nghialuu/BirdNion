@@ -35,8 +35,11 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     /// All sidebar items in display order — one contiguous block; the
     /// contextual provider/AI-coding list renders below it when active.
+    /// `actionCenter` cố tình KHÔNG nằm trong sidebar: nó là danh sách việc
+    /// cần sửa, mở dạng sheet từ nút cảnh báo (popover header / General),
+    /// không phải một mục cấu hình thường trực (2026-08-24).
     static let allSidebar: [SettingsTab] = [
-        .general, .actionCenter, .providers, .agents, .aiCoding, .insights, .advanced, .about,
+        .general, .providers, .agents, .aiCoding, .insights, .advanced, .about,
     ]
 
     static func restored(_ raw: String?) -> SettingsTab {
