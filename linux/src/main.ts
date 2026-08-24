@@ -29,6 +29,8 @@ import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
 import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
+import { InstalledAgent, visibleAgentIds } from "./settings-agents";
+import { closePinnedPanel } from "./side-panel";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
@@ -93,6 +95,9 @@ type State = {
   pi: UsageReport | null;
   kiro: UsageReport | null;
   statuses: ProviderStatus[];
+  /** Agent phát hiện trên máy (`list_installed_agents`) — nguồn cho hàng "đã
+   *  cấu hình" và cho visibility. Null khi chưa nạp xong. */
+  agents: InstalledAgent[] | null;
   claudeAdmin: ClaudeAdminSnapshot | null;
   insights: ProjectInsightsReport | null;
   tab: string; // "all" | provider id
@@ -111,6 +116,7 @@ const state: State = {
   pi: null,
   kiro: null,
   statuses: [],
+  agents: null,
   claudeAdmin: null,
   insights: null,
   tab: (() => {
@@ -312,6 +318,8 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 }
 
 function goTab(id: string) {
+  // Panel phụ thuộc về tab đang mở — đổi tab thì bỏ ghim (macOS parity).
+  closePinnedPanel();
   state.tab = id;
   localStorage.setItem(TAB_KEY, id);
   render();
@@ -611,18 +619,14 @@ function relativeTime(ts: number): string | null {
  * so it never counts as pending). */
 /** Agent phát hiện được nhưng không có quota lẫn log chi phí — dòng gộp
  *  "ĐÃ CẤU HÌNH" ở tab All (parity macOS `configuredRows`). */
-function configuredAgentNames(): string[] {
-  const names: string[] = [];
-  const hasQuota = (id: string) => state.statuses.some((s) => s.id === id && s.windows.length > 0);
-  const entries: { id: UsageSourceId; label: string; report: UsageReport | null }[] = [
-    { id: "omp", label: "Oh My Pi", report: state.omp },
-    { id: "pi", label: "Pi Agent", report: state.pi },
-  ];
-  for (const entry of entries) {
-    const hasCost = (entry.report?.daily ?? []).some((d) => d.usd > 0 || d.tokens > 0);
-    if (!hasCost && !hasQuota(entry.id)) names.push(entry.label);
-  }
-  return names;
+function configuredAgents(): InstalledAgent[] {
+  const all = state.agents;
+  if (!all) return [];
+  const visible = new Set(visibleAgentIds(all));
+  // Chỉ agent KHÔNG quota và KHÔNG log chi phí mới thuộc hàng gộp này; ẩn
+  // agent trong Settings chỉ giấu nó khỏi đây, tổng chi phí giữ nguyên.
+  return all.filter((agent) =>
+    visible.has(agent.id) && !agent.hasQuota && !agent.hasCost);
 }
 
 function pendingScanSources(): ScanSource[] {
@@ -854,7 +858,7 @@ function render() {
       if (quota) body.append(quota);
       const costBy = costBySection(combined, allChartDays(), render);
       if (costBy) body.append(costBy);
-      const configured = configuredSection(configuredAgentNames());
+      const configured = configuredSection(configuredAgents());
       if (configured) body.append(configured);
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
       if (budget) body.append(budget);
@@ -1653,6 +1657,12 @@ async function load(manual = false) {
     // pi, kiro): backend tự quyết định qua `enabled_usage_sources()` — bật
     // provider HOẶC phát hiện agent trên máy — nên tắt provider không còn làm
     // mất chi phí của CLI đó (macOS parity 2026-08-24).
+    // Catalog agent: nguồn cho hàng "đã cấu hình" ở tab All. Lỗi dò không
+    // được làm hỏng lần load — hàng đó chỉ đơn giản không hiện.
+    void invoke<InstalledAgent[]>("list_installed_agents")
+      .catch(() => [] as InstalledAgent[])
+      .then((agents) => publish(() => { state.agents = agents; }));
+
     const usageDone = Promise.all(SCAN_SOURCES.map((id) => scanReport(id))).then(async () => {
       const insights = await fetchProjectInsightsReport(7);
       publish(() => { state.insights = insights; });

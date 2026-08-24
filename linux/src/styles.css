@@ -5042,6 +5042,9 @@ body.settings-body-root {
 
 .agents-configured-badges { display: inline-flex; gap: 4px; }
 
+/* Agent có brand mark dùng logo thay monogram (macOS `agentBadge`). */
+.agents-configured-logo { width: 15px; height: 15px; flex-shrink: 0; }
+
 .agents-configured-badge {
   width: 15px;
   height: 15px;

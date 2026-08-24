@@ -7,7 +7,7 @@
 
 import { Combined, CombinedDay, CombinedModel, UsageSourceId, usd, tokensShort } from "./usage";
 import { t } from "./i18n";
-import { logoMark } from "./logos";
+import { logoMark, logoUrl } from "./logos";
 import { showModelsPanel, showAgentPanel, closeTransientPanel } from "./side-panel";
 import { buildAgentPanelPayload } from "./agent-panel-payload";
 import type { ProviderStatus } from "./provider-tab";
@@ -331,22 +331,28 @@ function shortModelName(name: string): string {
 // --------------------------------------------------------- Đã cấu hình
 
 /** Dòng gộp các agent chỉ có cấu hình (không quota, không log chi phí).
- *  Ẩn hẳn khi rỗng — parity macOS `AllAgentsConfiguredSection`. */
-export function configuredSection(names: string[]): HTMLElement | null {
-  if (names.length === 0) return null;
+ *  Ẩn hẳn khi rỗng — parity macOS `AllAgentsConfiguredSection`. Agent có
+ *  brand mark thì dùng logo, còn lại dùng monogram như bản macOS. */
+export function configuredSection(agents: ConfiguredAgent[]): HTMLElement | null {
+  if (agents.length === 0) return null;
   const wrap = el("div", "agents-section");
   const row = el("div", "agents-row agents-configured-row");
   row.append(el("span", "agents-section-title", t("configured").toUpperCase()));
   const badges = el("span", "agents-configured-badges");
-  for (const name of names.slice(0, 4)) {
-    badges.append(el("span", "agents-configured-badge", initials(name)));
+  for (const agent of agents.slice(0, 4)) {
+    badges.append(logoUrl(agent.id)
+      ? logoMark(agent.id, "agents-configured-logo")
+      : el("span", "agents-configured-badge", initials(agent.displayName)));
   }
   row.append(badges);
-  row.append(el("span", "agents-row-meta", t("configuredNoLogs", { n: names.length })));
+  row.append(el("span", "agents-row-meta", t("configuredNoLogs", { n: agents.length })));
   row.append(el("span", "agents-row-chevron", "›"));
   wrap.append(row);
   return wrap;
 }
+
+/** Chỉ cần id + tên để vẽ badge — nhận cả `InstalledAgent`. */
+export type ConfiguredAgent = { id: string; displayName: string };
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
