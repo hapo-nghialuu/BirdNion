@@ -672,17 +672,24 @@ struct AllUsageOverview: View {
     }
 
     private var quotaRows: [AgentQuotaRow] {
-        visibleAgentRecords.compactMap { record -> AgentQuotaRow? in
+        // Thứ tự bám theo tab strip provider (thứ tự người dùng sắp trong
+        // Settings), không sort theo % còn lại (2026-08-24).
+        let order = Dictionary(
+            uniqueKeysWithValues: providerStatuses.enumerated().map { ($0.element.id, $0.offset) })
+        return visibleAgentRecords.compactMap { record -> (row: AgentQuotaRow, rank: Int)? in
             guard record.capabilities.contains(.quota) else { return nil }
             guard let status = providerStatus(for: record),
                   let window = ProviderStatusSummary.lowestWindow(status)
             else { return nil }
-            return AgentQuotaRow(
+            let row = AgentQuotaRow(
                 record: record,
                 providerName: status.displayName,
                 windowLabel: window.label,
                 remainingPct: window.remainingPct)
+            return (row, order[status.id] ?? Int.max)
         }
+        .sorted { $0.rank < $1.rank }
+        .map(\.row)
     }
 
     /// Cost by ăn theo đúng cửa sổ chart (key AppStorage chung với period chips):
@@ -695,8 +702,10 @@ struct AllUsageOverview: View {
                   _ tokens: (CombinedDailyUsage) -> Int) -> (usd: Double, tokens: Int) {
             (window.reduce(0) { $0 + usd($1) }, window.reduce(0) { $0 + tokens($1) })
         }
+        // Điều kiện là CÓ REPORT thật, không phải capability projected: agent
+        // đã bật + có history (vd Grok, Pi) vẫn phải hiện dù capability chưa
+        // kịp cập nhật trong vòng render này (2026-08-24).
         return visibleAgentRecords.compactMap { record in
-            guard record.capabilities.contains(.localCost) else { return nil }
             switch record.id {
             case .claude:
                 guard let claude else { return nil }
@@ -1492,6 +1501,11 @@ struct DayDetailPanelRoot: View {
         // Bo góc 3pt cứng ở tầng SwiftUI — window nền clear nên đây là hình
         // dạng thật của panel, không bị corner mask hệ thống lấn.
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        // Viền xám nhạt cho mọi popover (quy ước 2026-08-24).
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
     }
 
     private var header: some View {

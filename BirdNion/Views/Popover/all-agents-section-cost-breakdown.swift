@@ -233,7 +233,7 @@ struct AllAgentsCostBreakdownSection: View {
 
     private func hasBrandLogo(_ id: InstalledAgentID) -> Bool {
         switch id {
-        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen:
+        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen, .omp, .pi:
             return true
         default:
             return false

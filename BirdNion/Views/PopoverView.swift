@@ -74,6 +74,12 @@ struct PopoverView: View {
         // absorbed it into a visible gap).
         .frame(width: 420)
         .background(VocabbyTheme.background)
+        // Viền xám nhạt quanh popover (quy ước 2026-08-24). Bo 3pt trùng với
+        // corner radius panel do AppDelegate đặt.
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
     }
 
     /// Single place that swaps the popover section. We intentionally switch

@@ -256,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       parent.isVisible else { return }
                 self.agentDetailCoordinator.showActivity(
                     snapshot: snapshot,
+                    dayModels: note.userInfo?["dayModels"] as? [Date: [CombinedModelCost]] ?? [:],
                     settings: self.services.settings,
                     beside: parent,
                     pinned: note.userInfo?["pinned"] as? Bool ?? true)

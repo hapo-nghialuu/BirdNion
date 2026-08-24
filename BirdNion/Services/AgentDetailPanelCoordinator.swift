@@ -49,6 +49,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
 
     func showActivity(
         snapshot: AgentActivitySnapshot,
+        dayModels: [Date: [CombinedModelCost]] = [:],
         settings: SettingsStore,
         beside parent: NSWindow,
         pinned: Bool = true
@@ -62,7 +63,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         currentAgentID = nil
         contentPinned = pinned
         detailPanel.contentViewController = hostController(
-            for: ActivityPanelRoot(window: snapshot.overall)
+            for: ActivityPanelRoot(window: snapshot.overall, dayModels: dayModels)
                 .environmentObject(settings)
         )
         position(detailPanel, beside: parent)

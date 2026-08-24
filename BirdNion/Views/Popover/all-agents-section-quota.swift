@@ -9,9 +9,8 @@ struct AllAgentsQuotaSection: View {
 
     private static let visibleRowLimit = 3
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    private var sortedRows: [AgentQuotaRow] {
-        rows.sorted { ($0.remainingPct ?? 101) < ($1.remainingPct ?? 101) }
-    }
+    /// Giữ nguyên thứ tự do AllUsageOverview dựng (khớp tab strip provider).
+    private var sortedRows: [AgentQuotaRow] { rows }
 
     var body: some View {
         if !sortedRows.isEmpty {

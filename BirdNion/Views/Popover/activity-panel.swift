@@ -3,6 +3,9 @@ import SwiftUI
 struct ActivityPanelRoot: View {
     @EnvironmentObject var settings: SettingsStore
     let window: AgentActivityWindow
+    /// Breakdown model theo ngày (từ CombinedUsageReport) — dùng cho dòng
+    /// chi tiết khi click một ô heatmap.
+    var dayModels: [Date: [CombinedModelCost]] = [:]
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
     /// Ô ngày được click — hiện dòng chi tiết dưới heatmap.
@@ -35,14 +38,19 @@ struct ActivityPanelRoot: View {
             }
             if let day = selectedDay {
                 selectedDayRow(day)
+                selectedDayModels(day)
             }
             legendRow
             footerStats
         }
         .frame(width: 340)
         .background(VocabbyTheme.background)
-        // Không viền ngoài — đồng bộ style với các panel con khác.
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        // Viền xám nhạt cho mọi popover (quy ước 2026-08-24).
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
     }
 
     private var header: some View {
@@ -193,6 +201,49 @@ struct ActivityPanelRoot: View {
         .padding(.vertical, 8)
         .overlay(alignment: .top) {
             VocabbyTheme.hairline.frame(height: 1).padding(.horizontal, 14)
+        }
+    }
+
+    /// Model đã dùng trong ngày được chọn: tên + tokens + tiền.
+    @ViewBuilder
+    private func selectedDayModels(_ day: AgentActivityDay) -> some View {
+        let models = (dayModels[day.date] ?? []).sorted { $0.tokens > $1.tokens }
+        if !models.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(models.prefix(6))) { model in
+                    HStack(spacing: 8) {
+                        Rectangle().fill(modelTint(model.source)).frame(width: 6, height: 6)
+                        Text(AllUsageFormat.shortName(model.name))
+                            .font(.plexSans(11))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text("\(AllUsageFormat.tokensShort(model.tokens)) · \(AllUsageFormat.usd(model.usd))")
+                            .font(.plexMono(10, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                }
+                let rest = models.dropFirst(6)
+                if !rest.isEmpty {
+                    Text(vi ? "+\(rest.count) model khác" : "+\(rest.count) more models")
+                        .font(.plexMono(9))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func modelTint(_ source: String) -> Color {
+        switch source {
+        case "claude": return VocabbyTheme.chartClaude
+        case "codex": return VocabbyTheme.chartCodex
+        case "grok": return VocabbyTheme.chartGrok
+        case "kiro": return VocabbyTheme.chartKiro
+        case "omp": return VocabbyTheme.chartOMP
+        case "pi": return VocabbyTheme.chartPi
+        default: return VocabbyTheme.tertiary
         }
     }
 

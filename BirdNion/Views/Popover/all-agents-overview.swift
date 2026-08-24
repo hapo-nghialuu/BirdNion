@@ -158,6 +158,11 @@ struct ModelOverflowPanelRoot: View {
         .frame(width: 340)
         .background(VocabbyTheme.background)
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        // Viền xám nhạt cho mọi popover (quy ước 2026-08-24).
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
     }
 }
 
