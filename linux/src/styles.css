@@ -5621,3 +5621,201 @@ body.settings-body-root {
   font-size: 9px;
   color: var(--text3);
 }
+
+/* ------------------------------------------------ Agent detail side panel
+   3 tab Overview / Activity / Config — port macOS AgentDetailPanelRoot +
+   ActivityPanelRoot (agent-centric remake 2026-08-24). Các block full-bleed
+   (.panel-row/.panel-section-title/.panel-stats) tự có padding ngang 14px
+   sẵn; các div "thô" mới ở đây tự thêm padding ngang để không bị đúp. */
+.panel-root { overflow-y: auto; }
+
+.panel-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.panel-tab {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+
+.panel-tab.is-active { border-color: var(--text); color: var(--text); font-weight: 600; }
+.panel-tab.is-disabled,
+.panel-tab:disabled { color: var(--track); border-color: var(--border); cursor: default; }
+
+.panel-empty { padding: 16px 14px; font-size: 12px; color: var(--text2); }
+
+.panel-cost-hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 14px 14px 0; }
+.panel-cost-hero-col { display: flex; flex-direction: column; gap: 6px; }
+.panel-cost-hero-col-end { align-items: flex-end; }
+
+.panel-cost-hero-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text3);
+}
+
+.panel-cost-hero-value {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.8px;
+  color: var(--text);
+}
+
+.panel-cost-hero-note { font-family: var(--font-mono); font-size: 11px; color: var(--text3); }
+.panel-cost-hero-today { font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--text); }
+
+.panel-cost-hero-range {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 14px 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text3);
+}
+
+.panel-period-picker { display: inline-flex; gap: 4px; }
+
+.panel-period-btn {
+  width: 30px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.panel-period-btn.is-active { background: var(--ink-rule); color: var(--bg); border-color: transparent; font-weight: 600; }
+
+.panel-mini-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 56px;
+  margin: 8px 14px 0;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--text);
+}
+
+.panel-mini-bar { flex: 1; min-width: 1px; background: var(--hairline); }
+.panel-mini-bar.is-active { background: var(--accent); }
+.panel-mini-bar.is-clickable { cursor: pointer; }
+.panel-mini-bar.is-selected { outline: 1px solid var(--text); outline-offset: 1px; }
+
+/* Border/margin phân tách đã có sẵn trên .panel-section-title bên trong. */
+.panel-models-section { padding-bottom: 4px; }
+
+.panel-activity-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+}
+
+.panel-activity-sub-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  color: var(--text3);
+}
+
+.panel-activity-sub-total { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--text); }
+
+.panel-heatband { display: flex; align-items: flex-start; gap: 2px; padding: 0 14px; }
+.panel-heatband-labels { display: flex; flex-direction: column; gap: 2px; }
+
+.panel-heatband-weekday {
+  display: block;
+  width: 20px;
+  height: 10px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--text3);
+}
+
+.panel-heatband-col { display: flex; flex-direction: column; gap: 2px; }
+
+.panel-heat-cell.is-selected { outline: 1px solid var(--text); outline-offset: -1px; }
+
+.panel-heatband-range {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 14px 10px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text3);
+}
+
+.panel-row.panel-day-detail { border-top: 1px solid var(--hairline); margin-top: 2px; padding-top: 8px; }
+.panel-day-models { padding-bottom: 8px; }
+
+.panel-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.panel-legend-label { font-family: var(--font-mono); font-size: 9px; color: var(--text3); }
+.panel-legend-swatches { display: flex; gap: 2px; }
+.panel-legend-cell { width: 9px; height: 9px; }
+.panel-legend-note { margin-left: auto; font-family: var(--font-mono); font-size: 9px; color: var(--text3); }
+
+.panel-stat-streak { color: var(--accent); }
+
+.panel-streak-record {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--success);
+}
+
+.panel-streak-countdown {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.3px;
+  color: var(--text3);
+}
+
+.panel-config-row { padding: 12px 0; border-top: 1px solid var(--hairline); }
+.panel-config-row:first-child { border-top: 0; }
+
+.panel-config-label {
+  padding: 0 14px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.9px;
+  color: var(--text3);
+}
+
+.panel-config-value {
+  padding: 0 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text2);
+  word-break: break-all;
+}

@@ -6,6 +6,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { CombinedDay, CombinedModel } from "./usage";
+import type { AgentPanelPayload } from "./agent-panel-payload";
 
 const CLOSE_DELAY_MS = 140;
 
@@ -67,13 +68,8 @@ export function showModelsPanel(models: CombinedModel[], mode: "model" | "token"
   void show({ kind: "models", models, mode }, false);
 }
 
-export function showAgentPanel(
-  agentId: string,
-  displayName: string,
-  rows: { label: string; value: string }[],
-  isPinned = true,
-): void {
-  void show({ kind: "agent", agentId, displayName, rows }, isPinned);
+export function showAgentPanel(payload: AgentPanelPayload, isPinned = true): void {
+  void show(payload, isPinned);
 }
 
 export function showActivityPanel(

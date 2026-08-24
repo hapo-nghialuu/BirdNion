@@ -9,7 +9,15 @@ import { Combined, CombinedDay, CombinedModel, UsageSourceId, usd, tokensShort }
 import { t } from "./i18n";
 import { logoMark } from "./logos";
 import { showModelsPanel, showAgentPanel, closeTransientPanel } from "./side-panel";
+import { buildAgentPanelPayload } from "./agent-panel-payload";
 import type { ProviderStatus } from "./provider-tab";
+
+/** 5 nguồn có log chi phí thật (khớp `UsageSourceId`) — agent khác (kiro,
+ *  cursor, gemini…) chỉ có quota hoặc config, không có tab Activity. */
+const USAGE_SOURCE_IDS: readonly UsageSourceId[] = ["claude", "codex", "grok", "omp", "pi"];
+function isUsageSourceId(id: string): id is UsageSourceId {
+  return (USAGE_SOURCE_IDS as readonly string[]).includes(id);
+}
 
 const QUOTA_ROW_LIMIT = 3;
 const COST_ROW_LIMIT = 5;
@@ -44,8 +52,10 @@ function sectionHead(title: string, trailing?: string): HTMLElement {
 // ---------------------------------------------------------------- Quota
 
 /** Danh sách quota trong tab All — thứ tự bám theo tab strip provider,
- *  không sort theo % còn lại (parity macOS `AllUsageOverview.quotaRows`). */
-export function quotaSection(statuses: ProviderStatus[]): HTMLElement | null {
+ *  không sort theo % còn lại (parity macOS `AllUsageOverview.quotaRows`).
+ *  `daily` (combined.daily đầy đủ, không windowed) chỉ dùng để widen panel
+ *  phụ khi agent này cũng có log chi phí thật (claude/codex/grok/omp/pi). */
+export function quotaSection(statuses: ProviderStatus[], daily: CombinedDay[]): HTMLElement | null {
   const rows = statuses
     .map((status) => {
       const window = lowestWindow(status);
@@ -61,7 +71,7 @@ export function quotaSection(statuses: ProviderStatus[]): HTMLElement | null {
   ));
 
   for (const row of rows.slice(0, QUOTA_ROW_LIMIT)) {
-    wrap.append(quotaRow(row.status, row.window));
+    wrap.append(quotaRow(row.status, row.window, daily));
   }
   const rest = rows.length - QUOTA_ROW_LIMIT;
   if (rest > 0) {
@@ -78,7 +88,7 @@ function lowestWindow(status: ProviderStatus): QuotaWindowLike | null {
   return windows.reduce((lowest, w) => (w.remainingPct < lowest.remainingPct ? w : lowest));
 }
 
-function quotaRow(status: ProviderStatus, window: QuotaWindowLike): HTMLElement {
+function quotaRow(status: ProviderStatus, window: QuotaWindowLike, daily: CombinedDay[]): HTMLElement {
   const row = el("div", "agents-row");
   row.append(logoMark(status.id, "agents-row-logo"));
   row.append(el("span", "agents-row-name", status.displayName));
@@ -96,19 +106,19 @@ function quotaRow(status: ProviderStatus, window: QuotaWindowLike): HTMLElement 
   row.append(pct, el("span", "agents-row-chevron", "›"));
 
   row.classList.add("is-clickable");
-  const detail = () => (status.windows ?? [])
-    .filter((w) => Number.isFinite(w.remainingPct))
-    .map((w) => ({
-      label: w.label.toUpperCase(),
-      value: t("provider.remainingPct", { n: Math.round(w.remainingPct) }),
-    }));
-  row.addEventListener("mouseenter", () => {
-    showAgentPanel(status.id, status.displayName, detail(), false);
+  const source = isUsageSourceId(status.id) ? status.id : undefined;
+  const buildPayload = () => buildAgentPanelPayload({
+    agentId: status.id,
+    displayName: status.displayName,
+    quotaWindows: status.windows ?? [],
+    daily: source ? daily : undefined,
+    source,
+    sourceLabel: status.sourceLabel,
+    scannedAt: status.lastUpdated,
   });
+  row.addEventListener("mouseenter", () => showAgentPanel(buildPayload(), false));
   row.addEventListener("mouseleave", () => closeTransientPanel());
-  row.addEventListener("click", () => {
-    showAgentPanel(status.id, status.displayName, detail(), true);
-  });
+  row.addEventListener("click", () => showAgentPanel(buildPayload(), true));
   return row;
 }
 
@@ -162,10 +172,13 @@ export function costBySection(
     if (mode === "agent") {
       node.classList.add("is-clickable");
       node.addEventListener("click", () => {
-        showAgentPanel(row.id, row.name, [
-          { label: t("costBy"), value: row.display },
-          { label: t("quota"), value: "—" },
-        ]);
+        showAgentPanel(buildAgentPanelPayload({
+          agentId: row.id,
+          displayName: row.name,
+          daily: combined.daily,
+          source: row.id as UsageSourceId,
+          sourceLabel: SOURCE_LABEL[row.id as UsageSourceId],
+        }));
       });
     }
     wrap.append(node);

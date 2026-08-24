@@ -982,6 +982,23 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "moreAgents": { vi: "{n} agent khác", en: "{n} more agents" },
   "configured": { vi: "Đã cấu hình", en: "Configured" },
   "configuredNoLogs": { vi: "{n} agent · không có log", en: "{n} agents · no logs" },
+
+  // Agent detail side panel — 3 tab Overview/Activity/Config (macOS
+  // AgentDetailPanelRoot + ActivityPanelRoot parity 2026-08-24).
+  "agentPanelLocalLog": { vi: "Log cục bộ", en: "Local log" },
+  "agentPanelLastScanned": { vi: "Quét gần nhất", en: "Last scanned" },
+  "agentPanelNoOverview": {
+    vi: "Chưa có quota hoặc chi phí để hiển thị.",
+    en: "No quota or cost data to show yet.",
+  },
+  "agentPanelNoConfig": { vi: "Không có thông tin cấu hình.", en: "No configuration details." },
+  "agentPanelModelsTitle": { vi: "Model trong agent này", en: "Models in this agent" },
+  "weeksWord": { vi: "tuần", en: "weeks" },
+  "agentPanelStreakRecord": { vi: "Đang là kỷ lục", en: "Record pace" },
+  "agentPanelStreakCountdown": {
+    vi: "Còn {n} ngày vượt kỷ lục {best}",
+    en: "{n}d to beat {best}d best",
+  },
   "link.usage": { vi: "Trang sử dụng", en: "Usage page" },
   "link.subscription": { vi: "Gói đăng ký", en: "Subscription" },
   "link.billing": { vi: "Thanh toán", en: "Billing" },

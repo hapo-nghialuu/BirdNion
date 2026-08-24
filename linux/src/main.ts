@@ -848,7 +848,7 @@ function render() {
       // xem trong Settings → Phân tích.
       body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(confidenceRow(state.claude, state.codex, state.grok, state.omp, state.pi, pending));
-      const quota = quotaSection(state.statuses);
+      const quota = quotaSection(state.statuses, combined.daily);
       if (quota) body.append(quota);
       const costBy = costBySection(combined, allChartDays(), render);
       if (costBy) body.append(costBy);
