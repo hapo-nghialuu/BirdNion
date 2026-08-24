@@ -320,15 +320,16 @@ function activityView(): HTMLElement {
   host.append(el("div", "loading", "…"));
   void (async () => {
     try {
-      const [claude, codex, grok, omp, pi] = await Promise.all([
+      const [claude, codex, grok, omp, pi, kiro] = await Promise.all([
         invoke<UsageReport | null>("claude_usage_report").catch(() => null),
         invoke<UsageReport | null>("codex_usage_report").catch(() => null),
         invoke<UsageReport | null>("grok_usage_report").catch(() => null),
         invoke<UsageReport | null>("omp_usage_report").catch(() => null),
         invoke<UsageReport | null>("pi_usage_report").catch(() => null),
+        invoke<UsageReport | null>("kiro_usage_report").catch(() => null),
       ]);
       host.textContent = "";
-      host.append(activityContent(combine(claude, codex, grok, omp, pi)));
+      host.append(activityContent(combine(claude, codex, grok, omp, pi, kiro)));
     } catch {
       host.textContent = "";
       host.append(el("div", "empty", t("insightsLoadError")));

@@ -142,6 +142,7 @@ const SOURCE_LABEL: Record<UsageSourceId, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",
   grok: "Grok CLI",
+  kiro: "Kiro",
   omp: "Oh My Pi",
   pi: "Pi Agent",
 };
@@ -224,7 +225,7 @@ function overflowModels(window: CombinedDay[], names: string[]): CombinedModel[]
 
 function agentRows(window: CombinedDay[]): CostRow[] {
   const totals: Record<UsageSourceId, number> = {
-    claude: 0, codex: 0, grok: 0, omp: 0, pi: 0,
+    claude: 0, codex: 0, grok: 0, omp: 0, pi: 0, kiro: 0,
   };
   for (const day of window) {
     totals.claude += day.claudeUsd;

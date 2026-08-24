@@ -24,7 +24,7 @@ export type UsageReport = {
 };
 
 /** Cost sources for confidence badges and spend attribution. */
-export type UsageSourceId = "claude" | "codex" | "grok" | "omp" | "pi";
+export type UsageSourceId = "claude" | "codex" | "grok" | "omp" | "pi" | "kiro";
 export type ScanConfidence = "live" | "history" | "unavailable";
 
 /** Data Confidence Pass: classify a source's report into the compact
@@ -76,6 +76,8 @@ export type CombinedDay = {
   ompTokens: number;
   piUsd: number;
   piTokens: number;
+  kiroUsd: number;
+  kiroTokens: number;
   usd: number;
   tokens: number;
   active: boolean;
@@ -105,6 +107,7 @@ export function combine(
   grok: UsageReport | null = null,
   omp: UsageReport | null = null,
   pi: UsageReport | null = null,
+  kiro: UsageReport | null = null,
 ): Combined {
   const byDate = new Map<string, CombinedDay>();
   const seed = (r: UsageReport | null, source: UsageSourceId) => {
@@ -118,6 +121,7 @@ export function combine(
           grokUsd: 0, grokTokens: 0,
           ompUsd: 0, ompTokens: 0,
           piUsd: 0, piTokens: 0,
+          kiroUsd: 0, kiroTokens: 0,
           usd: 0, tokens: 0, active: false, models: [],
         };
         byDate.set(d.date, day);
@@ -127,8 +131,10 @@ export function combine(
       else if (source === "grok") { day.grokUsd += d.usd; day.grokTokens += d.tokens; }
       else if (source === "omp") { day.ompUsd += d.usd; day.ompTokens += d.tokens; }
       else if (source === "pi") { day.piUsd += d.usd; day.piTokens += d.tokens; }
-      day.usd = day.claudeUsd + day.codexUsd + day.grokUsd + day.ompUsd + day.piUsd;
-      day.tokens = day.claudeTokens + day.codexTokens + day.grokTokens + day.ompTokens + day.piTokens;
+      else if (source === "kiro") { day.kiroUsd += d.usd; day.kiroTokens += d.tokens; }
+      day.usd = day.claudeUsd + day.codexUsd + day.grokUsd + day.ompUsd + day.piUsd + day.kiroUsd;
+      day.tokens = day.claudeTokens + day.codexTokens + day.grokTokens + day.ompTokens
+        + day.piTokens + day.kiroTokens;
       day.active = day.usd > 0 || day.tokens > 0;
       for (const m of d.models) {
         const existing = day.models.find((x) => x.source === source && x.name === m.name);
@@ -142,6 +148,7 @@ export function combine(
   seed(grok, "grok");
   seed(omp, "omp");
   seed(pi, "pi");
+  seed(kiro, "kiro");
   const daily = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   // Token-first ranking (matches macOS All chart + top-models list).
   for (const d of daily) d.models.sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
@@ -226,6 +233,7 @@ export function digestWindowStats(
     grok: { usd: 0, tokens: 0 },
     omp: { usd: 0, tokens: 0 },
     pi: { usd: 0, tokens: 0 },
+    kiro: { usd: 0, tokens: 0 },
   };
   const modelMap = new Map<string, CombinedModel>();
   for (const d of daily) {
@@ -234,6 +242,7 @@ export function digestWindowStats(
     if (enabledSources.has("codex")) { bySource.codex.usd += d.codexUsd; bySource.codex.tokens += d.codexTokens; }
     if (enabledSources.has("grok")) { bySource.grok.usd += d.grokUsd; bySource.grok.tokens += d.grokTokens; }
     if (enabledSources.has("omp")) { bySource.omp.usd += d.ompUsd; bySource.omp.tokens += d.ompTokens; }
+    if (enabledSources.has("kiro")) { bySource.kiro.usd += d.kiroUsd; bySource.kiro.tokens += d.kiroTokens; }
     if (enabledSources.has("pi")) { bySource.pi.usd += d.piUsd; bySource.pi.tokens += d.piTokens; }
     for (const m of d.models) {
       if (!enabledSources.has(m.source)) continue;

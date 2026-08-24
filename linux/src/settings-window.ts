@@ -350,9 +350,9 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
   // (`providerBudgetInput` shares the validation path across all three).
   const providerBudgetTitleKeys: Record<UsageSourceId, string> = {
     claude: "settingsClaudeBudget", codex: "settingsCodexBudget", grok: "settingsGrokBudget",
-    omp: "settingsOMPBudget", pi: "settingsPiBudget",
+    omp: "settingsOMPBudget", pi: "settingsPiBudget", kiro: "settingsKiroBudget",
   };
-  const providerBudgetRows = (["claude", "codex", "grok", "omp", "pi"] as UsageSourceId[]).map(
+  const providerBudgetRows = (["claude", "codex", "grok", "omp", "pi", "kiro"] as UsageSourceId[]).map(
     (provider) => labeledRow(t(providerBudgetTitleKeys[provider]) || provider, "", providerBudgetInput(provider)),
   );
   const perProviderBudget = card(

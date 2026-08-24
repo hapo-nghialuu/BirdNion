@@ -5,8 +5,7 @@
 
 import {
   Combined, CombinedDay, HourlyUsage, UsageReport, UsageSourceId, BudgetStatus,
-  usd, tokens, tokensShort, tokensAndUsd, dayLabel, scanConfidence, scanFreshness,
-  badgeFreshness, monthlyForecast,
+  usd, tokens, tokensShort, tokensAndUsd, dayLabel, scanConfidence, monthlyForecast,
 } from "./usage";
 import { t, currentLang } from "./i18n";
 import { logoMark } from "./logos";
@@ -31,78 +30,6 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   return node;
 }
 
-// --- Data Confidence Pass: compact per-source scan metadata ----------------
-
-const CONFIDENCE_SOURCES: readonly [UsageSourceId, string][] = [
-  ["claude", "Claude"],
-  ["codex", "Codex"],
-  ["grok", "Grok"],
-  ["omp", "Oh My Pi"],
-  ["pi", "Pi"],
-];
-
-/** Compact "included / live / history-only" + freshness badge per cost
- * source (Claude/Codex/Grok) — Data Confidence Pass. Purely informational,
- * no click handlers, so a `title` tooltip + matching `aria-label` carry the
- * full sentence while the visible text stays short.
- *
- * `pending` is the source ids whose first scan is still in flight and has
- * no report yet (main's `pendingScanSources()`, which already excludes a
- * source with an existing report — a background rescan keeps showing that
- * old report/badge, never a skeleton). A pending source with no report yet
- * skips its badge entirely instead of flashing "No data" before the first
- * scan even settles. */
-export function confidenceRow(
-  claude: UsageReport | null,
-  codex: UsageReport | null,
-  grok: UsageReport | null,
-  omp: UsageReport | null = null,
-  pi: UsageReport | null = null,
-  pending: readonly UsageSourceId[] = [],
-): HTMLElement {
-  const reports: Record<UsageSourceId, UsageReport | null> = { claude, codex, grok, omp, pi };
-  const row = el("div", "confidence-row");
-  for (const [id, label] of CONFIDENCE_SOURCES) {
-    const report = reports[id];
-    if (!report && pending.includes(id)) continue;
-    row.append(confidenceItem(id, label, report));
-  }
-  return row;
-}
-
-function confidenceItem(id: UsageSourceId, label: string, report: UsageReport | null): HTMLElement {
-  const state = scanConfidence(report);
-  const fullFresh = scanFreshness(report?.scannedAt ?? null);
-  const badgeFresh = badgeFreshness(report?.scannedAt ?? null);
-
-  // Design: "CLAUDE · LIVE VỪA XONG" — name · state · short freshness.
-  let stateTag: string;
-  let hint: string;
-  if (state === "unavailable") {
-    stateTag = t("confidence.state.unavailable");
-    hint = t("confidence.noDataHint", { source: label });
-  } else if (state === "live") {
-    stateTag = t("confidence.state.live");
-    hint = t("confidence.liveHint", { source: label });
-  } else {
-    stateTag = t("confidence.state.history");
-    hint = t("confidence.historyHint", { source: label });
-  }
-
-  // Old compact badge: provider logo + LIVE/HISTORY + short freshness
-  // (no text name — logos identify the source on the dense row).
-  const item = el("span", `confidence-item ${state}`);
-  item.title = fullFresh ? `${label}: ${stateTag} · ${fullFresh}` : hint;
-  item.setAttribute("aria-label", item.title);
-  item.append(logoMark(id, `confidence-logo confidence-logo-${id}`));
-  const stateEl = el("span", `confidence-state ${state}`, stateTag);
-  item.append(stateEl);
-  if (badgeFresh && state !== "unavailable") {
-    item.append(el("span", "confidence-sep", "·"));
-    item.append(el("span", `confidence-fresh ${state}`, badgeFresh.toUpperCase()));
-  }
-  return item;
-}
 
 // --- Budget & monthly forecast (Phase 2) ------------------------------------
 
@@ -569,6 +496,7 @@ function heatmapWindow(daily: CombinedDay[], weekCount: number): CombinedDay[] {
         grokUsd: 0, grokTokens: 0,
         ompUsd: 0, ompTokens: 0,
         piUsd: 0, piTokens: 0,
+        kiroUsd: 0, kiroTokens: 0,
         usd: 0, tokens: 0, active: false, models: [],
       });
     }
@@ -633,6 +561,7 @@ function trailingDays(daily: CombinedDay[], n: number): CombinedDay[] {
         grokUsd: 0, grokTokens: 0,
         ompUsd: 0, ompTokens: 0,
         piUsd: 0, piTokens: 0,
+        kiroUsd: 0, kiroTokens: 0,
         usd: 0, tokens: 0, active: false, models: [],
       });
     }

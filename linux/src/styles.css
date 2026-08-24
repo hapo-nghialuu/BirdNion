@@ -45,6 +45,7 @@
   --grok: #4A4A4A;
   --omp: #8B5CF6;
   --pi: #06B6D4;
+  --kiro: #8B47F9;
   --commandcode: #16150F;
   --heat-1: #D5DDF3;
   --heat-2: #A9BCE8;
@@ -104,6 +105,7 @@
   --grok: #C8CCD6;
   --omp: #A78BFA;
   --pi: #22D3EE;
+  --kiro: #A766FF;
   --commandcode: #F2F0E8;
 
   --background: var(--bg);
@@ -1422,18 +1424,6 @@ html.popover-capped .app-body {
 }
 /* Data Confidence Pass — compact per-source (Claude/Codex/Grok) scan
  * metadata row on the All tab: included/live/history-only + freshness. */
-.confidence-row { display: flex; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
-
-.confidence-item { display: inline-flex; align-items: center; gap: 4px; }
-
-.confidence-state {
-  font-size: 9px;
-  color: var(--tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-.confidence-state.live { color: var(--success); }
-.confidence-state.history { color: var(--warning); }
 
 /* Budget & monthly forecast (Phase 2) — All-tab card, local-only estimate. */
 .budget-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
@@ -4193,7 +4183,6 @@ body.settings-body-root {
 .provider-meta,
 .provider-extras,
 .provider-storage,
-.confidence-state,
 .budget-mtd,
 .budget-projected,
 .budget-of,
@@ -4233,50 +4222,6 @@ body.settings-body-root {
   color: var(--text3);
 }
 
-/* ---------- All-tab design polish (confidence / budget / share / footer) */
-/* No top hairline — sit tight under share rows (macOS parity). */
-.confidence-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  padding: 2px 0 6px;
-  border-top: none;
-}
-.confidence-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-}
-/* Old compact badge: 12px provider logo instead of text name. */
-.confidence-logo {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  display: inline-block;
-  background-color: var(--text2);
-  mask-position: center;
-  -webkit-mask-position: center;
-}
-.confidence-logo-claude { background-color: var(--claude); }
-.confidence-logo-codex { background-color: var(--codex); }
-  .confidence-logo-grok { background-color: var(--grok); }
-  .confidence-logo-omp { background-color: var(--omp); }
-  .confidence-logo-pi { background-color: var(--pi); }
-  .confidence-name.claude { color: var(--claude); }
-  .confidence-name.codex { color: var(--codex); }
-  .confidence-name.grok { color: var(--grok); }
-  .confidence-name.omp { color: var(--omp); }
-  .confidence-name.pi { color: var(--pi); }
-.confidence-state.live,
-.confidence-fresh.live { color: var(--success); }
-.confidence-state.history,
-.confidence-fresh.history { color: var(--warning); }
-.confidence-state.unavailable { color: var(--disabled); }
 
 .budget-card { padding-top: 14px; }
 .budget-head {
@@ -5089,6 +5034,7 @@ body.settings-body-root {
 .tint-codex { background: var(--codex); }
 .tint-grok { background: var(--grok); }
 .tint-omp { background: var(--omp); }
+.tint-kiro { background: var(--kiro); }
 .tint-pi { background: var(--pi); }
 .tint-muted { background: var(--track); }
 

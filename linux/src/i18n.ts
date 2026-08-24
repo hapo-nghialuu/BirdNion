@@ -284,6 +284,9 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   settingsClaudeBudget: { vi: "Ngân sách tuần Claude (USD)", en: "Claude weekly budget (USD)" },
   settingsCodexBudget: { vi: "Ngân sách tuần Codex (USD)", en: "Codex weekly budget (USD)" },
   settingsGrokBudget: { vi: "Ngân sách tuần Grok (USD)", en: "Grok weekly budget (USD)" },
+  settingsOMPBudget: { vi: "Ngân sách tuần Oh My Pi (USD)", en: "Oh My Pi weekly budget (USD)" },
+  settingsPiBudget: { vi: "Ngân sách tuần Pi (USD)", en: "Pi weekly budget (USD)" },
+  settingsKiroBudget: { vi: "Ngân sách tuần Kiro (USD)", en: "Kiro weekly budget (USD)" },
   budgetPerProviderNoData: { vi: "Chưa có dữ liệu chi phí", en: "No cost data yet" },
   budgetPerProviderNoDataHint: {
     vi: "{source}: chưa có dữ liệu chi phí — không đủ căn cứ để đánh giá ngân sách.",
@@ -486,9 +489,6 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "time.hoursAgo": { vi: "{n} giờ trước", en: "{n}h ago" },
 
   // Data Confidence Pass — All-tab compact per-source scan badge.
-  "confidence.live": { vi: "Live · {time}", en: "Live · {time}" },
-  "confidence.history": { vi: "Lịch sử · {time}", en: "History · {time}" },
-  "confidence.noData": { vi: "Chưa có dữ liệu", en: "No data" },
   "confidence.state.live": { vi: "LIVE", en: "LIVE" },
   "confidence.state.history": { vi: "LỊCH SỬ", en: "HISTORY" },
   "confidence.state.unavailable": { vi: "CHƯA CÓ", en: "NO DATA" },
@@ -496,18 +496,6 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "confidence.fresh.minutes": { vi: "{n} phút", en: "{n}m" },
   "confidence.fresh.hours": { vi: "{n} giờ", en: "{n}h" },
   "confidence.fresh.days": { vi: "{n} ngày", en: "{n}d" },
-  "confidence.liveHint": {
-    vi: "{source}: dữ liệu vừa quét trực tiếp, đã gộp vào lịch sử.",
-    en: "{source}: freshly scanned live and merged into history.",
-  },
-  "confidence.historyHint": {
-    vi: "{source}: không quét được lượt này — hiển thị dữ liệu lịch sử đã lưu.",
-    en: "{source}: could not scan this cycle — showing saved history only.",
-  },
-  "confidence.noDataHint": {
-    vi: "{source}: chưa tìm thấy dữ liệu nào trên máy này.",
-    en: "{source}: no data found on this machine yet.",
-  },
 
   // Budget & weekly forecast (Phase 2) — All-tab + per-provider cards.
   budgetMonthly: { vi: "Ngân sách tuần", en: "Weekly budget" },

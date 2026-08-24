@@ -16,7 +16,7 @@ import { getMonthlyBudgetUsd, getProviderBudgetUsd } from "./settings-about";
 import { NAME_BY_ID } from "./settings-tab";
 import { t } from "./i18n";
 
-const SOURCES: UsageSourceId[] = ["claude", "codex", "grok", "omp", "pi"];
+const SOURCES: UsageSourceId[] = ["claude", "codex", "grok", "omp", "pi", "kiro"];
 type ProviderCfg = { id: string; enabled?: boolean | null };
 type Settings = { providers: ProviderCfg[] };
 
@@ -79,7 +79,8 @@ async function fetchEnabledReports(): Promise<{
   for (const s of SOURCES) {
     if (settings?.providers.find((p) => p.id === s)?.enabled === true) enabled.add(s);
   }
-  const reports: Record<UsageSourceId, UsageReport | null> = { claude: null, codex: null, grok: null, omp: null, pi: null };
+  const reports: Record<UsageSourceId, UsageReport | null> =
+    { claude: null, codex: null, grok: null, omp: null, pi: null, kiro: null };
   for (const s of enabled) {
     reports[s] = await invoke<UsageReport | null>(`${s}_usage_report`).catch(() => null);
   }
@@ -178,6 +179,7 @@ async function evaluateAndMaybeNotify(): Promise<void> {
       grok: getProviderBudgetUsd("grok"),
       omp: getProviderBudgetUsd("omp"),
       pi: getProviderBudgetUsd("pi"),
+      kiro: getProviderBudgetUsd("kiro"),
     };
     const providerRiskLines = providerBudgetRiskLines(combined, reports, providerBudgets, now);
     const body = buildBody(current, prior, forecast, nonLive, providerRiskLines);

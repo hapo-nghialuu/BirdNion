@@ -214,6 +214,7 @@ export const PROVIDER_BUDGET_STORAGE_KEYS: Record<UsageSourceId, string> = {
   grok: "birdnion.grokBudgetUSD",
   omp: "birdnion.ompBudgetUSD",
   pi: "birdnion.piBudgetUSD",
+  kiro: "birdnion.kiroBudgetUSD",
 };
 /** Same-window event — mirrors `MONTHLY_BUDGET_CHANGED_EVENT` — since
  * `storage` only fires in OTHER windows. */

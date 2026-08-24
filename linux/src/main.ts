@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { combine, scanFreshness, UsageReport, UsageSourceId } from "./usage";
 import {
-  chartCard, confidenceRow, budgetForecastCard, providerBudgetCard, allChartDays,
+  chartCard, budgetForecastCard, providerBudgetCard, allChartDays,
 } from "./all-tab";
 import {
   providerCard,
@@ -82,7 +82,7 @@ let footerShowingSources = false;
 let footerRotateTimer: number | null = null;
 
 /** Local usage-report sources scanned from disk (Claude → Codex → Grok → OMP → Pi). */
-const SCAN_SOURCES = ["claude", "codex", "grok", "omp", "pi"] as const;
+const SCAN_SOURCES = ["claude", "codex", "grok", "omp", "pi", "kiro"] as const;
 type ScanSource = (typeof SCAN_SOURCES)[number];
 
 type State = {
@@ -91,6 +91,7 @@ type State = {
   grok: UsageReport | null;
   omp: UsageReport | null;
   pi: UsageReport | null;
+  kiro: UsageReport | null;
   statuses: ProviderStatus[];
   claudeAdmin: ClaudeAdminSnapshot | null;
   insights: ProjectInsightsReport | null;
@@ -108,6 +109,7 @@ const state: State = {
   grok: null,
   omp: null,
   pi: null,
+  kiro: null,
   statuses: [],
   claudeAdmin: null,
   insights: null,
@@ -841,13 +843,13 @@ function render() {
       }
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
-      const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi);
+      const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi, state.kiro);
       // Agent-centric order (macOS parity 2026-08-24): tổng chi phí →
-      // confidence → quota → chi phí theo → đã cấu hình → ngân sách.
+      // quota → chi phí theo → đã cấu hình → ngân sách.
       // Heatmap và insights card cố tình KHÔNG nằm ở All nữa: nhịp hoạt động
-      // xem trong Settings → Phân tích.
+      // xem trong Settings → Phân tích. Badge LIVE/LỊCH SỬ cũng không nằm ở
+      // đây nữa — footer luân phiên đã mang thông tin đó (macOS parity).
       body.append(chartCard(combined, state.claude?.hourly ?? []));
-      body.append(confidenceRow(state.claude, state.codex, state.grok, state.omp, state.pi, pending));
       const quota = quotaSection(state.statuses, combined.daily);
       if (quota) body.append(quota);
       const costBy = costBySection(combined, allChartDays(), render);
@@ -904,13 +906,17 @@ function render() {
     // just this source (other two passed `null`) so `monthlyForecast` never
     // mixes in another provider's spend. Renders even before the scan lands
     // (report null → scanConfidence "unavailable" → "no cost data" row).
-    if (state.tab === "claude" || state.tab === "codex" || state.tab === "grok") {
+    if (state.tab === "claude" || state.tab === "codex" || state.tab === "grok"
+        || state.tab === "kiro") {
       const sourceId = state.tab as UsageSourceId;
       const sourceReport = state[sourceId];
       const sourceCombined = combine(
         sourceId === "claude" ? sourceReport : null,
         sourceId === "codex" ? sourceReport : null,
         sourceId === "grok" ? sourceReport : null,
+        null,
+        null,
+        sourceId === "kiro" ? sourceReport : null,
       );
       const providerBudget = providerBudgetCard(
         sourceId, NAME_BY_ID.get(sourceId) ?? sourceId, sourceReport, sourceCombined,
@@ -1643,13 +1649,11 @@ async function load(manual = false) {
           .then((fresh) => publishStatuses(fresh.map((status) => status.id), fresh))
     ).then(async () => updateTrayTooltip(state.statuses, await fetchTrayHidden()));
 
-    const enabledUsageSources = settings
-      ? (["claude", "codex", "grok"] as const).filter((id) => enabledIds.includes(id))
-      : [];
-    const usageDone = Promise.all(enabledUsageSources.map((id) => scanReport(id))).then(async () => {
-      for (const id of ["claude", "codex", "grok"] as const) {
-        if (!enabledUsageSources.includes(id)) state[id] = null;
-      }
+    // Cả 6 nguồn chi phí đều được quét, kể cả agent không có provider (omp,
+    // pi, kiro): backend tự quyết định qua `enabled_usage_sources()` — bật
+    // provider HOẶC phát hiện agent trên máy — nên tắt provider không còn làm
+    // mất chi phí của CLI đó (macOS parity 2026-08-24).
+    const usageDone = Promise.all(SCAN_SOURCES.map((id) => scanReport(id))).then(async () => {
       const insights = await fetchProjectInsightsReport(7);
       publish(() => { state.insights = insights; });
     });
