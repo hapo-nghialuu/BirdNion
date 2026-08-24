@@ -104,11 +104,20 @@ struct QuotaOverview: View {
                             onOpenActivity: { openActivity() },
                             onHoverAgentDetail: { openAgentDetail($0, pinned: false) },
                             onHoverActivity: { openActivity(pinned: false) },
+                            onHoverModels: { items, mode in
+                                NotificationCenter.default.post(
+                                    name: .birdnionOpenModelList, object: nil,
+                                    userInfo: ["items": items, "mode": mode])
+                            },
                             onHoverEnd: { endHoverPanel() },
-                            claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" },
-                            codexEnabled: quota.displayStatuses.contains { $0.id == "codex" },
-                            grokEnabled: quota.displayStatuses.contains { $0.id == "grok" },
-                            kiroEnabled: quota.displayStatuses.contains { $0.id == "kiro" })
+                            claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" }
+                                || claudeReport != nil,
+                            codexEnabled: quota.displayStatuses.contains { $0.id == "codex" }
+                                || codexReport != nil,
+                            grokEnabled: quota.displayStatuses.contains { $0.id == "grok" }
+                                || grokReport != nil,
+                            kiroEnabled: quota.displayStatuses.contains { $0.id == "kiro" }
+                                || kiroReport != nil)
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
                         providerDetailStack(s)
@@ -319,9 +328,11 @@ struct QuotaOverview: View {
     private func triggerClaudeReportIfNeeded(providerId: String) {
         // The All tab needs the Claude scan too — but only when the Claude
         // provider is actually enabled (disabled sources stay out of the mix).
+        // Cost path độc lập provider: agent detected là đủ để scan.
         let wantsClaude = providerId == "claude"
             || (providerId == "all"
-                && quota.displayStatuses.contains(where: { $0.id == "claude" }))
+                && (quota.displayStatuses.contains(where: { $0.id == "claude" })
+                    || projectedAgentRecords.contains { $0.id == .claude }))
         guard wantsClaude else { return }
         let taskId = UUID().uuidString
         claudeReportTaskId = taskId
@@ -347,7 +358,8 @@ struct QuotaOverview: View {
     private func triggerCodexReportIfNeeded(providerId: String) {
         let wantsCodex = providerId == "codex"
             || (providerId == "all"
-                && quota.displayStatuses.contains(where: { $0.id == "codex" }))
+                && (quota.displayStatuses.contains(where: { $0.id == "codex" })
+                    || projectedAgentRecords.contains { $0.id == .codex }))
         guard wantsCodex else {
             codexReport = nil
             return
@@ -374,9 +386,13 @@ struct QuotaOverview: View {
     /// Trigger the Grok session-signal scan when the user views Grok or All.
     /// Cached 5 min by `GrokCostScanner`.
     private func triggerGrokReportIfNeeded(providerId: String) {
+        // Cost đi theo AGENT: provider (quota) tắt nhưng agent detected và có
+        // history thật thì tab All vẫn scan/hiện; detection suông (không
+        // history) thì im lặng bỏ qua — không "Scanning..." vô nghĩa.
         let wantsGrok = providerId == "grok"
             || (providerId == "all"
-                && quota.displayStatuses.contains(where: { $0.id == "grok" }))
+                && (quota.displayStatuses.contains(where: { $0.id == "grok" })
+                    || projectedAgentRecords.contains { $0.id == .grok }))
         guard wantsGrok else { return }
         let taskId = UUID().uuidString
         grokReportTaskId = taskId
@@ -400,12 +416,12 @@ struct QuotaOverview: View {
     /// Trigger the Kiro CLI session scan when the user views the Kiro tab.
     /// Cached 5 min by `KiroCostScanner`.
     private func triggerKiroReportIfNeeded(providerId: String) {
-        // Same rule as Claude/Codex/Grok: the All tab only scans sources whose
-        // provider is enabled. Detection evidence alone (a stale ~/.kiro dir)
-        // must not start scans or show the scanning banner.
+        // Cost đi theo AGENT (như Grok): provider tắt nhưng có history thật
+        // thì vẫn hiện; ~/.kiro rỗng (detection suông) thì bỏ qua im lặng.
         let wantsKiro = providerId == "kiro"
             || (providerId == "all"
-                && quota.displayStatuses.contains(where: { $0.id == "kiro" }))
+                && (quota.displayStatuses.contains(where: { $0.id == "kiro" })
+                    || projectedAgentRecords.contains { $0.id == .kiro }))
         guard wantsKiro else { return }
         let taskId = UUID().uuidString
         kiroReportTaskId = taskId
@@ -514,11 +530,14 @@ struct QuotaOverview: View {
             kiro: kiroReport,
             omp: ompReport,
             pi: piReport,
-            includeClaude: quota.displayStatuses.contains { $0.id == "claude" },
-            includeCodex: quota.displayStatuses.contains { $0.id == "codex" },
-            includeGrok: quota.displayStatuses.contains { $0.id == "grok" },
+            includeClaude: quota.displayStatuses.contains { $0.id == "claude" }
+                || claudeReport != nil,
+            includeCodex: quota.displayStatuses.contains { $0.id == "codex" }
+                || codexReport != nil,
+            includeGrok: quota.displayStatuses.contains { $0.id == "grok" }
+                || grokReport != nil,
             includeKiro: quota.displayStatuses.contains { $0.id == "kiro" }
-                || projectedAgentRecords.contains { $0.id == .kiro },
+                || kiroReport != nil,
             includeOMP: projectedAgentRecords.contains { $0.id == .omp },
             includePi: projectedAgentRecords.contains { $0.id == .pi })
     }
