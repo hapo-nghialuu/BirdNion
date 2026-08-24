@@ -1205,6 +1205,10 @@ struct CombinedChartCard: View {
         }
         .padding(.top, 12)
         .padding(.bottom, 8)
+        // Panel ngày đóng (nút × / chuyển surface) → bỏ highlight bar đã ghim.
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionDayDetailClosed)) { _ in
+            pinnedDay = nil
+        }
     }
 
     private var costHero: some View {
@@ -1253,6 +1257,8 @@ struct CombinedChartCard: View {
                     hoveredDay = nil
                     pinnedDay = nil
                     hoveredHour = nil
+                    // Đổi cửa sổ thời gian → ngày ghim không còn thuộc window, đóng panel.
+                    NotificationCenter.default.post(name: .birdnionCloseDayDetail, object: nil)
                 } label: {
                     Text(periodShortLabel(days))
                         .font(.plexMono(9, weight: active ? .semibold : .medium))
@@ -1301,6 +1307,35 @@ struct CombinedChartCard: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
+                                ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        // Hover mở panel cạnh popover (transient); rời chuột thì
+                        // coordinator tự đóng sau debounce nếu chưa ghim.
+                        if inside {
+                            hoveredDay = day
+                            NotificationCenter.default.post(
+                                name: .birdnionOpenDayDetail, object: nil,
+                                userInfo: ["day": day, "pinned": false,
+                                           "windowUSD": periodTotalUSD,
+                                           "windowLabel": periodShortLabel(periodDays)])
+                        } else if hoveredDay?.id == day.id {
+                            hoveredDay = nil
+                            NotificationCenter.default.post(
+                                name: .birdnionCloseDayDetailTransient, object: nil)
+                        }
+                    }
+                    .onTapGesture {
+                        // Click = ghim panel; chỉ nút × trong panel mới đóng được.
+                        pinnedDay = day
+                        NotificationCenter.default.post(
+                            name: .birdnionOpenDayDetail, object: nil,
+                            userInfo: ["day": day, "pinned": true,
+                                       "windowUSD": periodTotalUSD,
+                                       "windowLabel": periodShortLabel(periodDays)])
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
                 }
             }
         }
@@ -1397,6 +1432,239 @@ struct CombinedChartCard: View {
         formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
         formatter.dateFormat = "d MMM"
         return formatter.string(from: date)
+    }
+
+}
+
+/// Side-panel drill-down for one chart day — hover shows it transiently,
+/// click pins it (then only the × button closes it). Full breakdown:
+/// hero (weekday + big $ + share of window) → per-agent split → per-model list.
+struct DayDetailPanelRoot: View {
+    @EnvironmentObject var settings: SettingsStore
+    let day: CombinedDailyUsage
+    let pinned: Bool
+    /// Tổng USD của cửa sổ chart đang xem — cho dòng "chiếm X% của kỳ".
+    var windowUSD: Double = 0
+    var windowLabel: String = ""
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+
+    private struct AgentSlice: Identifiable {
+        let id: String
+        let name: String
+        let color: Color
+        let usd: Double
+        let tokens: Int
+    }
+
+    private var slices: [AgentSlice] {
+        [
+            AgentSlice(id: "claude", name: "Claude Code", color: VocabbyTheme.chartClaude,
+                       usd: day.claudeUSD, tokens: day.claudeTokens),
+            AgentSlice(id: "codex", name: "Codex CLI", color: VocabbyTheme.chartCodex,
+                       usd: day.codexUSD, tokens: day.codexTokens),
+            AgentSlice(id: "grok", name: "Grok CLI", color: VocabbyTheme.chartGrok,
+                       usd: day.grokUSD, tokens: day.grokTokens),
+            AgentSlice(id: "kiro", name: "Kiro", color: VocabbyTheme.chartKiro,
+                       usd: day.kiroUSD, tokens: day.kiroTokens),
+            AgentSlice(id: "omp", name: "Oh My Pi", color: VocabbyTheme.chartOMP,
+                       usd: day.ompUSD, tokens: day.ompTokens),
+            AgentSlice(id: "pi", name: "Pi Agent", color: VocabbyTheme.chartPi,
+                       usd: day.piUSD, tokens: day.piTokens),
+        ]
+        .filter { $0.usd > 0 || $0.tokens > 0 }
+        .sorted { $0.usd > $1.usd }
+    }
+
+    private var models: [CombinedModelCost] { day.models.sorted { $0.usd > $1.usd } }
+    private static let maxModelRows = 10
+
+    private func pct(_ usd: Double, of total: Double) -> Int {
+        total > 0 ? Int((usd / total * 100).rounded()) : 0
+    }
+
+    private var weekdayLabel: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
+        formatter.dateFormat = "EEEE"
+        return formatter.string(from: day.date).uppercased()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            VocabbyTheme.inkRule.frame(height: 1).padding(.horizontal, 14)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    agentSection
+                    if !models.isEmpty {
+                        VocabbyTheme.hairline.frame(height: 1)
+                        modelSection
+                    }
+                }
+                .padding(.horizontal, 14)
+            }
+        }
+        .frame(width: 340, height: 430)
+        .background(VocabbyTheme.background)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(weekdayLabel) · \(L10n.dayMonth(day.date, preference: settings.appLanguage).uppercased())")
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.6)
+                Spacer(minLength: 8)
+                if pinned {
+                    Button {
+                        NotificationCenter.default.post(name: .birdnionCloseDayDetail, object: nil)
+                    } label: {
+                        Text("×")
+                            .font(.plexMono(15))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(vi ? "Đóng" : "Close")
+                } else {
+                    Text(vi ? "CLICK ĐỂ GHIM" : "CLICK TO PIN")
+                        .font(.plexMono(8, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                        .tracking(0.5)
+                }
+            }
+            Text(AllUsageFormat.usd(day.usd))
+                .font(.plexMono(26, weight: .bold))
+                .foregroundStyle(VocabbyTheme.primary)
+                .tracking(-0.9)
+            HStack(spacing: 6) {
+                Text(AllUsageFormat.tokens(day.tokens))
+                    .font(.plexMono(11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                if windowUSD > 0, !windowLabel.isEmpty {
+                    Text("·")
+                        .font(.plexMono(11))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                    Text(vi
+                         ? "\(pct(day.usd, of: windowUSD))% của \(windowLabel)"
+                         : "\(pct(day.usd, of: windowUSD))% of \(windowLabel)")
+                        .font(.plexMono(11))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+    }
+
+    private var agentSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(vi ? "THEO AGENT" : "BY AGENT")
+                .font(.plexMono(10, weight: .medium))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .tracking(0.9)
+            // Thanh phân bố chia theo chi phí trong ngày (312 = 340 - inset 2×14).
+            if day.usd > 0 {
+                ZStack(alignment: .leading) {
+                    VocabbyTheme.track
+                    HStack(spacing: 0) {
+                        ForEach(slices) { slice in
+                            Rectangle()
+                                .fill(slice.color)
+                                .frame(width: max(1, CGFloat(slice.usd / day.usd) * 312))
+                        }
+                    }
+                }
+                .frame(height: 5)
+                .clipped()
+            }
+            ForEach(slices) { slice in
+                HStack(spacing: 8) {
+                    Rectangle().fill(slice.color).frame(width: 3, height: 12)
+                    Text(slice.name)
+                        .font(.plexSans(12, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("\(pct(slice.usd, of: day.usd))%")
+                        .font(.plexMono(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                    Text(AllUsageFormat.tokensAndUSD(slice.tokens, slice.usd))
+                        .font(.plexMono(11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                }
+                .padding(.vertical, 3)
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    private var modelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text((vi ? "MODEL" : "MODELS") + " (\(models.count))")
+                .font(.plexMono(10, weight: .medium))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .tracking(0.9)
+            let maxUSD = max(models.first?.usd ?? 0, 0.0001)
+            ForEach(Array(models.prefix(Self.maxModelRows))) { m in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Rectangle()
+                            .fill(sliceColor(m.source))
+                            .frame(width: 6, height: 6)
+                        Text(AllUsageFormat.shortName(m.name))
+                            .font(.plexSans(11))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(AllUsageFormat.tokensAndUSD(m.tokens, m.usd))
+                            .font(.plexMono(10))
+                            .foregroundStyle(VocabbyTheme.tertiary)
+                    }
+                    // Mini bar so sánh giữa các model trong ngày.
+                    VocabbyTheme.track
+                        .frame(height: 3)
+                        .overlay(alignment: .leading) {
+                            Rectangle()
+                                .fill(sliceColor(m.source))
+                                .frame(width: max(2, CGFloat(m.usd / maxUSD) * 312), height: 3)
+                        }
+                }
+                .padding(.vertical, 2)
+            }
+            let rest = models.dropFirst(Self.maxModelRows)
+            if !rest.isEmpty {
+                HStack(spacing: 8) {
+                    Rectangle().fill(VocabbyTheme.track).frame(width: 6, height: 6)
+                    Text(vi ? "+\(rest.count) model khác" : "+\(rest.count) more models")
+                        .font(.plexSans(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                    Spacer(minLength: 8)
+                    Text(AllUsageFormat.tokensAndUSD(
+                        rest.reduce(0) { $0 + $1.tokens },
+                        rest.reduce(0) { $0 + $1.usd }))
+                        .font(.plexMono(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func sliceColor(_ source: String) -> Color {
+        switch source {
+        case "claude": return VocabbyTheme.chartClaude
+        case "codex": return VocabbyTheme.chartCodex
+        case "grok": return VocabbyTheme.chartGrok
+        case "kiro": return VocabbyTheme.chartKiro
+        case "omp": return VocabbyTheme.chartOMP
+        case "pi": return VocabbyTheme.chartPi
+        default: return VocabbyTheme.chartCodex
+        }
     }
 }
 

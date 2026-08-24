@@ -265,6 +265,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.agentDetailCoordinator.close()
             }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .birdnionOpenDayDetail)
+            .sink { [weak self] note in
+                guard let self,
+                      let day = note.userInfo?["day"] as? CombinedDailyUsage,
+                      let pinned = note.userInfo?["pinned"] as? Bool,
+                      let parent = self.panel,
+                      parent.isVisible else { return }
+                self.agentDetailCoordinator.showDayDetail(
+                    day: day,
+                    pinned: pinned,
+                    windowUSD: note.userInfo?["windowUSD"] as? Double ?? 0,
+                    windowLabel: note.userInfo?["windowLabel"] as? String ?? "",
+                    settings: self.services.settings,
+                    beside: parent)
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .birdnionCloseDayDetailTransient)
+            .sink { [weak self] _ in
+                self?.agentDetailCoordinator.closeDayDetailTransient()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .birdnionCloseDayDetail)
+            .sink { [weak self] _ in
+                self?.agentDetailCoordinator.closeDayDetail()
+            }
+            .store(in: &cancellables)
         services.quotaService.$displayStatuses
             .receive(on: RunLoop.main)
             .sink { [weak self] statuses in self?.updateFrames(from: statuses) }
