@@ -7,6 +7,8 @@
   /* Plan tokens (light) */
   --hairline: #E2DFD6;
   --ink-rule: #16150F;
+  /* Chrome rule: line header/footer — đậm hơn hairline một nấc (macOS parity). */
+  --chrome-rule: #C9C5BA;
   --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --bg: #FBFAF7;
@@ -71,6 +73,7 @@
   --heat-4: #7EA2FF;
   --hairline: #2A2A22;
   --ink-rule: #F2F0E8;
+  --chrome-rule: #3F3F36;
   --bg: #17170F;
   --sidebar: #1E1E16;
   --surface: #17170F;
@@ -4917,4 +4920,190 @@ body.settings-body-root {
   letter-spacing: 0.4px;
   text-transform: uppercase;
   border-top: 1px solid var(--hairline);
+}
+
+
+/* ---------------------------------------------------------------- Agent
+   sections (All tab): Quota / Chi phí theo / Đã cấu hình — port macOS
+   agent-centric remake. Line phân section xám inset, chỉ header/footer của
+   popover mới dùng --chrome-rule full-bleed. */
+.agents-section {
+  padding: 14px 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.agents-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.agents-section-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.9px;
+  color: var(--text-tertiary);
+}
+
+.agents-section-meta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.agents-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  min-width: 0;
+}
+
+.agents-row-logo { width: 16px; height: 16px; flex-shrink: 0; }
+
+.agents-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-row-window {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.agents-quota-track {
+  width: 56px;
+  height: 3px;
+  flex-shrink: 0;
+  background: var(--track);
+}
+
+.agents-quota-fill { display: block; height: 100%; }
+.agents-quota-fill.tone-ok { background: var(--success); }
+.agents-quota-fill.tone-warning { background: var(--warning-fill, #8F5F12); }
+.agents-quota-fill.tone-critical { background: var(--critical); }
+
+.agents-row-pct {
+  width: 34px;
+  flex-shrink: 0;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.agents-row-pct.tone-ok { color: var(--success); }
+.agents-row-pct.tone-warning { color: var(--warning-fill, #8F5F12); }
+.agents-row-pct.tone-critical { color: var(--critical); }
+
+.agents-row-pctmuted {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.agents-row-amount {
+  width: 62px;
+  flex-shrink: 0;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agents-row-meta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.agents-row-chevron {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.agents-more-row {
+  padding-top: 7px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.agents-row-tick { width: 3px; height: 12px; flex-shrink: 0; }
+
+/* Mode picker (Agent | Model | Token) */
+.agents-mode-picker {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.agents-mode {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.agents-mode + .agents-mode { border-left: 1px solid var(--border); }
+.agents-mode.is-active { background: var(--ink-rule); color: var(--bg); font-weight: 600; }
+
+.agents-share-bar {
+  display: flex;
+  height: 5px;
+  margin-bottom: 7px;
+  background: var(--track);
+}
+
+.agents-share-seg { flex-basis: 0; }
+
+/* Tint dùng chung cho tick + share segment */
+.tint-claude { background: var(--claude); }
+.tint-codex { background: var(--codex); }
+.tint-grok { background: var(--grok); }
+.tint-omp { background: var(--omp); }
+.tint-pi { background: var(--pi); }
+.tint-muted { background: var(--track); }
+
+.agents-configured-row { gap: 8px; }
+
+.agents-configured-badges { display: inline-flex; gap: 4px; }
+
+.agents-configured-badge {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  color: var(--text-tertiary);
 }

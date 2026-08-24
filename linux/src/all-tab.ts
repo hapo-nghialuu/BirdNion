@@ -12,6 +12,11 @@ import { t, currentLang } from "./i18n";
 import { logoMark } from "./logos";
 
 const PERIOD_KEY = "birdnion.allChartDays";
+
+/** Cửa sổ ngày đang chọn ở chart — các khối khác của tab All bám theo. */
+export function allChartDays(): number {
+  return Number(localStorage.getItem(PERIOD_KEY)) || 30;
+}
 /** Chart + top-models period chips (heatmap fills width independently). */
 const PERIODS = [1, 7, 30, 90, 120]; // 1 = the 24h hourly view
 const PERIOD_CHANGE_EVENT = "birdnion-all-period";

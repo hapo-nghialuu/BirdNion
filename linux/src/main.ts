@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { combine, UsageReport, UsageSourceId } from "./usage";
 import {
-  chartCard, heatmapCard, topModelsCard, confidenceRow, budgetForecastCard, providerBudgetCard,
+  chartCard, confidenceRow, budgetForecastCard, providerBudgetCard, allChartDays,
 } from "./all-tab";
 import {
   providerCard,
@@ -28,6 +28,7 @@ import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
+import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
@@ -51,9 +52,7 @@ import {
 } from "./action-center";
 import { initTheme, setAppearance, resolveTheme } from "./theme";
 import { checkWeeklyDigest } from "./weekly-digest";
-import {
-  fetchProjectInsightsReport, insightsHighlightCard, type ProjectInsightsReport,
-} from "./insights-pane";
+import { fetchProjectInsightsReport, type ProjectInsightsReport } from "./insights-pane";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
 const POPOVER_WIDTH = 420;
@@ -544,6 +543,22 @@ function relativeTime(ts: number): string | null {
 /** Sources whose scan is in flight AND that have no report yet — macOS
  * AllUsageOverview `pendingSources` (a rescan keeps the old report visible,
  * so it never counts as pending). */
+/** Agent phát hiện được nhưng không có quota lẫn log chi phí — dòng gộp
+ *  "ĐÃ CẤU HÌNH" ở tab All (parity macOS `configuredRows`). */
+function configuredAgentNames(): string[] {
+  const names: string[] = [];
+  const hasQuota = (id: string) => state.statuses.some((s) => s.id === id && s.windows.length > 0);
+  const entries: { id: UsageSourceId; label: string; report: UsageReport | null }[] = [
+    { id: "omp", label: "Oh My Pi", report: state.omp },
+    { id: "pi", label: "Pi Agent", report: state.pi },
+  ];
+  for (const entry of entries) {
+    const hasCost = (entry.report?.daily ?? []).some((d) => d.usd > 0 || d.tokens > 0);
+    if (!hasCost && !hasQuota(entry.id)) names.push(entry.label);
+  }
+  return names;
+}
+
 function pendingScanSources(): ScanSource[] {
   return SCAN_SOURCES.filter((s) => state.scanning.has(s) && !state[s]);
 }
@@ -763,20 +778,20 @@ function render() {
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
       const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi);
-      // Design order: chart/share → confidence → insights → budget → heatmap → models.
-      // Per-provider budgets live on each provider's own tab now, not here.
+      // Agent-centric order (macOS parity 2026-08-24): tổng chi phí →
+      // confidence → quota → chi phí theo → đã cấu hình → ngân sách.
+      // Heatmap và insights card cố tình KHÔNG nằm ở All nữa: nhịp hoạt động
+      // xem trong Settings → Phân tích.
       body.append(chartCard(combined, state.claude?.hourly ?? []));
       body.append(confidenceRow(state.claude, state.codex, state.grok, state.omp, state.pi, pending));
-      const insights = insightsHighlightCard(state.insights, () => {
-        localStorage.setItem("birdnion.insightsSegment", "overview");
-        openSettings("insights");
-      });
-      body.append(insights);
+      const quota = quotaSection(state.statuses);
+      if (quota) body.append(quota);
+      const costBy = costBySection(combined, allChartDays(), render);
+      if (costBy) body.append(costBy);
+      const configured = configuredSection(configuredAgentNames());
+      if (configured) body.append(configured);
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
       if (budget) body.append(budget);
-      body.append(heatmapCard(combined));
-      // Top models follow chart period chips (may hide itself if empty window).
-      body.append(topModelsCard(combined));
     }
   } else {
     const status = state.statuses.find((s) => s.id === state.tab);
