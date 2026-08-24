@@ -22,7 +22,7 @@ struct AgentInventoryRow: View {
                     get: { isVisible },
                     set: onVisibilityChange
                 ))
-                .toggleStyle(.switch)
+                .toggleStyle(.instrumentSwitch)
                 .labelsHidden()
                 .frame(width: 40, alignment: .leading)
                 .help(vi
@@ -32,7 +32,7 @@ struct AgentInventoryRow: View {
                 // Agent Icon + Name + Subtitle (flex: 1)
                 HStack(spacing: 9) {
                     agentIcon
-                        .frame(width: 18, height: 18)
+                        .frame(width: 24, height: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(record.displayName)
                             .font(.plexSans(13, weight: .semibold))
@@ -79,15 +79,9 @@ struct AgentInventoryRow: View {
             }
             .padding(.vertical, 10)
             .padding(.horizontal, 8)
-            .background(
-                isSelected
-                    ? Color(red: 0.91, green: 0.90, blue: 0.86) // #E9E6DC
-                    : Color.clear
-            )
+            .background(isSelected ? VocabbyTheme.selectedSurface : Color.clear)
             .contentShape(Rectangle())
-            .overlay(alignment: .bottom) {
-                VocabbyTheme.hairline.frame(height: 1)
-            }
+            .overlay(alignment: .bottom) { VocabbyTheme.hairline.frame(height: 1) }
         }
         .buttonStyle(.plain)
     }
@@ -98,11 +92,12 @@ struct AgentInventoryRow: View {
             ProviderLogoMark(id: record.id.rawValue)
         } else {
             Text(monogram(for: record.id))
-                .font(.plexMono(9, weight: .semibold))
+                .font(.plexMono(11, weight: .semibold))
                 .foregroundStyle(isVisible ? SettingsTheme.primary : SettingsTheme.tertiary)
-                .frame(width: 18, height: 18)
+                .frame(width: 24, height: 24)
                 .overlay {
-                    Rectangle().stroke(VocabbyTheme.border, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                        .stroke(VocabbyTheme.border, lineWidth: 1)
                 }
         }
     }
@@ -114,7 +109,7 @@ struct AgentInventoryRow: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .overlay(
-                Rectangle()
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
                     .stroke(active ? VocabbyTheme.primary : VocabbyTheme.border, lineWidth: 1)
             )
     }
@@ -155,7 +150,7 @@ struct AgentInventoryRow: View {
 
     private func hasBrandLogo(_ id: InstalledAgentID) -> Bool {
         switch id {
-        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen: return true
+        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen, .omp, .pi: return true
         default: return false
         }
     }

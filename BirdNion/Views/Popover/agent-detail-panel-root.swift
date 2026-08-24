@@ -42,8 +42,12 @@ struct AgentDetailPanelRoot: View {
         }
         .frame(width: 340)
         .background(VocabbyTheme.background)
-        // Không viền ngoài — đồng bộ với panel ngày: shadow + bo góc 3pt.
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        // Viền xám nhạt cho mọi popover (quy ước 2026-08-24).
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(VocabbyTheme.border, lineWidth: 1)
+        )
         .onAppear {
             // Ưu tiên tab theo nguồn click; fallback heuristics capability.
             switch initialTab {
@@ -625,7 +629,7 @@ struct AgentDetailPanelRoot: View {
 
     private func hasBrandLogo(_ id: InstalledAgentID) -> Bool {
         switch id {
-        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen: return true
+        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen, .omp, .pi: return true
         default: return false
         }
     }

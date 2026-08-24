@@ -44,7 +44,16 @@ struct AllAgentsConfiguredSection: View {
         }
     }
 
+    @ViewBuilder
     private func agentBadge(_ record: InstalledAgentRecord) -> some View {
+        if record.id == .omp || record.id == .pi {
+            ProviderLogoMark(id: record.id.rawValue).frame(width: 15, height: 15)
+        } else {
+            monogramBadge(record)
+        }
+    }
+
+    private func monogramBadge(_ record: InstalledAgentRecord) -> some View {
         Text(monogram(for: record.id))
             .font(.plexMono(8, weight: .semibold))
             .foregroundStyle(VocabbyTheme.tertiary)

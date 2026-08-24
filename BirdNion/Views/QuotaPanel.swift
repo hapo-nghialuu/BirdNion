@@ -583,6 +583,9 @@ struct QuotaOverview: View {
         let ids = projectedAgentRecords.compactMap { record in
             record.capabilities.contains(.localCost) ? record.id : nil
         }
+        // Breakdown model theo ngày cho dòng chi tiết trong panel Hoạt động.
+        let dayModels = Dictionary(
+            uniqueKeysWithValues: combinedReport().daily.map { ($0.date, $0.models) })
         let taskId = UUID().uuidString
         panelRequestTaskId = taskId
         Task {
@@ -596,7 +599,7 @@ struct QuotaOverview: View {
                 NotificationCenter.default.post(
                     name: .birdnionOpenAgentActivity,
                     object: nil,
-                    userInfo: ["snapshot": snapshot, "pinned": pinned])
+                    userInfo: ["snapshot": snapshot, "pinned": pinned, "dayModels": dayModels])
             }
         }
     }
@@ -960,6 +963,10 @@ struct ProviderLogoMark: View {
             logo("GooseLogo")
         case "qwen":
             logo("AlibabaLogo", brand: VocabbyTheme.alibaba)
+        case "omp":
+            logo("OhMyPiLogo")
+        case "pi":
+            logo("PiLogo", brand: VocabbyTheme.primary)
         default:
             Image(systemName: "circle.fill")
                 .foregroundStyle(tint ?? VocabbyTheme.secondary)
