@@ -5343,11 +5343,12 @@ body.settings-body-root {
 /* ------------------------------------------------------- Side panel window
    Cửa sổ phụ 340px cạnh popover (macOS AgentDetailPanelCoordinator parity):
    không viền hệ thống, bo 3pt, viền xám nhạt. */
-.panel-body-root { margin: 0; background: transparent; }
+.panel-body-root { margin: 0; background: var(--bg); }
 
 .panel-root {
   width: 340px;
-  min-height: 100vh;
+  /* KHÔNG đặt min-height theo viewport: cửa sổ được resize theo nội dung
+     (macOS `refitToContent`), nên chiều cao phải do nội dung quyết định. */
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 3px;

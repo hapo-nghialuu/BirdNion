@@ -596,6 +596,24 @@ function render(payload: PanelPayload): void {
   }
 }
 
+/** Khớp cửa sổ với chiều cao nội dung — port của macOS `refitToContent`.
+ *
+ *  Dùng `ResizeObserver` thay vì gọi tay sau mỗi lần render: nội dung còn đổi
+ *  chiều cao khi chuyển tab, chọn ngày hay đổi kỳ bên trong panel, nên bám vào
+ *  chính kích thước thật là chắc nhất. Rust chặn trên theo màn hình. */
+let lastRequestedHeight = 0;
+function fitWindowToContent(root: HTMLElement): void {
+  const height = Math.ceil(root.scrollHeight);
+  if (height <= 0 || Math.abs(height - lastRequestedHeight) < 2) return;
+  lastRequestedHeight = height;
+  void invoke("resize_side_panel", { height }).catch(() => { /* phụ trợ */ });
+}
+
+const panelRoot = document.getElementById("panel");
+if (panelRoot && typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(() => fitWindowToContent(panelRoot)).observe(panelRoot);
+}
+
 void listen<PanelPayload>(PANEL_PAYLOAD_EVENT, (event) => render(event.payload));
 
 // Payload đầu tiên được nhét sẵn khi cửa sổ mở (tránh nháy trống).

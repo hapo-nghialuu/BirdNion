@@ -1376,7 +1376,8 @@ async fn open_side_panel(
     use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
     PANEL_WANTED.store(true, Ordering::SeqCst);
-    panel_log(&format!("open pinned={pinned}"));
+    let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
+    panel_log(&format!("open kind={kind} pinned={pinned}"));
     let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
     if let Some(existing) = app.get_webview_window("panel") {
@@ -1447,12 +1448,42 @@ fn close_side_panel(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Neo panel vào cạnh phải popover, lệch 4px như bản macOS.
+const PANEL_WIDTH: f64 = 340.0;
+const PANEL_MIN_HEIGHT: f64 = 180.0;
+/// Chừa mép màn hình như macOS `position(_:beside:)`.
+const PANEL_SCREEN_MARGIN: f64 = 16.0;
+
 fn position_panel_beside_main(app: &tauri::AppHandle, panel: &tauri::WebviewWindow) {
     use tauri::Manager;
     let Some(main) = app.get_webview_window("main") else { return };
     let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) else { return };
     let x = pos.x + size.width as i32 + 4;
     let _ = panel.set_position(tauri::PhysicalPosition::new(x, pos.y));
+}
+
+/// Khớp chiều cao panel với nội dung thật (macOS `refitToContent`).
+///
+/// Panel cố định 430px thì tab ngắn thừa khoảng trắng, tab dài lại phải cuộn.
+/// Trang panel tự đo `scrollHeight` rồi gọi lệnh này; ở đây chỉ chặn trên theo
+/// chiều cao màn hình để panel không tràn ra ngoài.
+#[tauri::command]
+fn resize_side_panel(app: tauri::AppHandle, height: f64) -> Result<(), String> {
+    use tauri::Manager;
+    let Some(panel) = app.get_webview_window("panel") else { return Ok(()) };
+
+    let scale = panel.scale_factor().unwrap_or(1.0);
+    let available = panel
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.size().height as f64 / scale - PANEL_SCREEN_MARGIN * 2.0)
+        .unwrap_or(900.0);
+    let clamped = height.max(PANEL_MIN_HEIGHT).min(available);
+
+    let _ = panel.set_size(tauri::LogicalSize::new(PANEL_WIDTH, clamped));
+    position_panel_beside_main(&app, &panel);
+    panel_log(&format!("resize to {clamped:.0} (asked {height:.0})"));
+    Ok(())
 }
 
 /// Open (or focus) the dedicated Settings window — macOS Settings scene parity
@@ -1560,6 +1591,7 @@ pub fn run() {
             panel_debug,
             open_side_panel,
             close_side_panel,
+            resize_side_panel,
             classify_provider_error,
             is_transient_provider_error,
             is_fixable_provider_error,
