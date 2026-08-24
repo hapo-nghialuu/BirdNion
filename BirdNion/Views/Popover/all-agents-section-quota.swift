@@ -55,7 +55,7 @@ struct AllAgentsQuotaSection: View {
             }
             .popoverContentInset()
             .padding(.vertical, 14)
-            .overlay(alignment: .top) { VocabbyTheme.primary.frame(height: 1) }
+            .overlay(alignment: .top) { PopoverInsetHairline(color: VocabbyTheme.primary) }
             .overlay(alignment: .bottom) { PopoverInsetHairline() }
         }
     }

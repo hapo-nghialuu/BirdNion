@@ -283,6 +283,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .birdnionAgentPanelRefit)
+            .sink { [weak self] _ in
+                // Đợi SwiftUI layout xong tab mới rồi mới đo fitting size.
+                DispatchQueue.main.async { self?.agentDetailCoordinator.refitToContent() }
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .birdnionCloseDayDetailTransient)
             .sink { [weak self] _ in
                 self?.agentDetailCoordinator.closeDayDetailTransient()

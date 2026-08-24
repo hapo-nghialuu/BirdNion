@@ -9,29 +9,30 @@ struct AgentDetailPanelRoot: View {
     }
 
     @State private var selectedTab: Tab = .cost
+    /// Cap danh sách model để panel height-auto không vượt màn hình.
+    private static let maxModelRows = 8
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             tabBar
-            ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 0) {
-                    switch selectedTab {
-                    case .quota:
-                        quotaTabContent
-                    case .cost:
-                        costTabContent
-                    case .config:
-                        configTabContent
-                    }
+            // Height auto theo nội dung (không scroll) — đổi tab thì nhờ
+            // coordinator refit lại khung panel theo fitting size mới.
+            VStack(alignment: .leading, spacing: 0) {
+                switch selectedTab {
+                case .quota:
+                    quotaTabContent
+                case .cost:
+                    costTabContent
+                case .config:
+                    configTabContent
                 }
-                .padding(.horizontal, 14)
             }
+            .padding(.horizontal, 14)
             footer
         }
         .frame(width: 340)
-        .frame(minHeight: 460, maxHeight: 600)
         .background(VocabbyTheme.background)
         .overlay(
             Rectangle()
@@ -45,6 +46,9 @@ struct AgentDetailPanelRoot: View {
             } else {
                 selectedTab = .config
             }
+        }
+        .onChange(of: selectedTab) { _ in
+            NotificationCenter.default.post(name: .birdnionAgentPanelRefit, object: nil)
         }
     }
 
@@ -65,13 +69,19 @@ struct AgentDetailPanelRoot: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
+            // Nút đóng theo ngôn ngữ Instrument (ô vuông viền hairline).
             Button {
                 NotificationCenter.default.post(name: .birdnionCloseAgentDetail, object: nil)
             } label: {
-                Text("×")
-                    .font(.plexMono(16, weight: .regular))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-                    .frame(width: 22, height: 22)
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .frame(width: 24, height: 24)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                            .stroke(VocabbyTheme.border, lineWidth: 1)
+                    )
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(vi ? "Đóng" : "Close")
@@ -255,7 +265,8 @@ struct AgentDetailPanelRoot: View {
                 .font(.plexMono(10, weight: .medium))
                 .foregroundStyle(VocabbyTheme.tertiary)
 
-            ForEach(snapshot.models) { model in
+            // Cap danh sách để panel height-auto không vượt màn hình.
+            ForEach(Array(snapshot.models.prefix(Self.maxModelRows))) { model in
                 HStack(spacing: 8) {
                     Rectangle()
                         .fill(agentBrandColor(snapshot.id))
@@ -274,6 +285,20 @@ struct AgentDetailPanelRoot: View {
                         .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .frame(width: 76, alignment: .trailing)
+                }
+                .padding(.vertical, 3)
+            }
+            let rest = snapshot.models.dropFirst(Self.maxModelRows)
+            if !rest.isEmpty {
+                HStack(spacing: 8) {
+                    Rectangle().fill(VocabbyTheme.track).frame(width: 6, height: 6)
+                    Text(vi ? "+\(rest.count) model khác" : "+\(rest.count) more models")
+                        .font(.plexSans(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                    Spacer(minLength: 8)
+                    Text("\(AllUsageFormat.tokensShort(rest.reduce(0) { $0 + $1.tokens })) · \(AllUsageFormat.usd(rest.reduce(0) { $0 + $1.usd }))")
+                        .font(.plexMono(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
                 }
                 .padding(.vertical, 3)
             }

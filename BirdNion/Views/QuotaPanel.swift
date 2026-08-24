@@ -648,7 +648,7 @@ struct BirdNionHeader: View {
         .padding(.top, 8)
         .padding(.bottom, 11)
         .overlay(alignment: .bottom) {
-            VocabbyTheme.inkRule.frame(height: 1)
+            PopoverInsetHairline(color: VocabbyTheme.inkRule)
         }
     }
 
@@ -748,7 +748,7 @@ struct ProviderTabs: View {
         .contentMargins(.horizontal, 0, for: .scrollContent)
         .popoverContentInset()
         .overlay(alignment: .bottom) {
-            VocabbyTheme.hairline.frame(height: 1)
+            PopoverInsetHairline()
         }
     }
 

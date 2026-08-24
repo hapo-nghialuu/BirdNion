@@ -24,12 +24,12 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         self.settings = settings
         content = .agent
         dayDetailPinned = false
-        detailPanel.contentViewController = NSHostingController(
-            rootView: AgentDetailPanelRoot(snapshot: snapshot)
+        detailPanel.contentViewController = hostController(
+            for: AgentDetailPanelRoot(snapshot: snapshot)
                 .environmentObject(settings)
-                .ignoresSafeArea()
         )
         position(detailPanel, beside: parent)
+        applyPanelChrome(detailPanel)
         detailPanel.makeKeyAndOrderFront(nil)
         panel = detailPanel
     }
@@ -44,12 +44,12 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         self.settings = settings
         content = .activity
         dayDetailPinned = false
-        detailPanel.contentViewController = NSHostingController(
-            rootView: ActivityPanelRoot(window: snapshot.overall)
+        detailPanel.contentViewController = hostController(
+            for: ActivityPanelRoot(window: snapshot.overall)
                 .environmentObject(settings)
-                .ignoresSafeArea()
         )
         position(detailPanel, beside: parent)
+        applyPanelChrome(detailPanel)
         detailPanel.makeKeyAndOrderFront(nil)
         panel = detailPanel
     }
@@ -75,14 +75,14 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         self.settings = settings
         content = .day
         dayDetailPinned = pinned
-        detailPanel.contentViewController = NSHostingController(
-            rootView: DayDetailPanelRoot(
+        detailPanel.contentViewController = hostController(
+            for: DayDetailPanelRoot(
                 day: day, pinned: pinned,
                 windowUSD: windowUSD, windowLabel: windowLabel)
                 .environmentObject(settings)
-                .ignoresSafeArea()
         )
         position(detailPanel, beside: parent)
+        applyPanelChrome(detailPanel)
         // orderFront (không makeKey) để hover không giật focus khỏi popover.
         detailPanel.orderFront(nil)
         panel = detailPanel
@@ -122,11 +122,20 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
 
     func update(snapshot: AgentDetailSnapshot) {
         guard let panel, let settings else { return }
-        panel.contentViewController = NSHostingController(
-            rootView: AgentDetailPanelRoot(snapshot: snapshot)
+        panel.contentViewController = hostController(
+            for: AgentDetailPanelRoot(snapshot: snapshot)
                 .environmentObject(settings)
-                .ignoresSafeArea()
         )
+        applyPanelChrome(panel)
+    }
+
+    /// Đổi tab trong panel làm nội dung đổi chiều cao — đo lại fitting size
+    /// của hosting view và co khung panel cho khít (height-auto, không scroll).
+    func refitToContent() {
+        guard let panel, let view = panel.contentViewController?.view else { return }
+        panel.setContentSize(view.fittingSize)
+        if let parentWindow { position(panel, beside: parentWindow) }
+        applyPanelChrome(panel)
     }
 
     func contains(window: NSWindow?) -> Bool {
@@ -151,6 +160,15 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Hosting controller with the titlebar safe area disabled — the hidden
+    /// titled bar otherwise pads the fitting size, leaving a blank strip at
+    /// the top (content pushed down) or bottom (auto-height overshoot).
+    private func hostController<V: View>(for view: V) -> NSHostingController<V> {
+        let host = NSHostingController(rootView: view)
+        host.safeAreaRegions = []
+        return host
+    }
+
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: defaultHeight),
@@ -171,19 +189,32 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
+        // Nền window trong suốt để bo góc 3pt của content là hình dạng thật.
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
         return panel
+    }
+
+    /// Bo góc 3pt cho content — phải re-apply mỗi lần contentViewController
+    /// bị thay (content view mới chưa có layer mask).
+    private func applyPanelChrome(_ panel: NSPanel) {
+        guard let content = panel.contentView else { return }
+        content.wantsLayer = true
+        content.layer?.cornerRadius = 3
+        content.layer?.masksToBounds = true
     }
 
     private func position(_ panel: NSPanel, beside parent: NSWindow) {
         let parentFrame = parent.frame
         let screen = parent.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        // Gap 4pt — panel con nép sát cạnh popover chính.
         let height = min(panel.frame.height, max(320, visible.height - 16))
-        let preferredRightX = parentFrame.maxX + 8
+        let preferredRightX = parentFrame.maxX + 4
         let rightFits = preferredRightX + panelWidth <= visible.maxX - 8
         let originX = rightFits
             ? preferredRightX
-            : max(visible.minX + 8, parentFrame.minX - panelWidth - 8)
+            : max(visible.minX + 8, parentFrame.minX - panelWidth - 4)
         let originY = min(
             max(visible.minY + 8, parentFrame.maxY - height),
             visible.maxY - height - 8
@@ -207,4 +238,5 @@ extension Notification.Name {
         "com.local.birdnion.closeDayDetailTransient")
     static let birdnionCloseDayDetail = Notification.Name("com.local.birdnion.closeDayDetail")
     static let birdnionDayDetailClosed = Notification.Name("com.local.birdnion.dayDetailClosed")
+    static let birdnionAgentPanelRefit = Notification.Name("com.local.birdnion.agentPanelRefit")
 }

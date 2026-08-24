@@ -1491,21 +1491,22 @@ struct DayDetailPanelRoot: View {
     }
 
     var body: some View {
+        // Height auto theo nội dung — panel NSHostingController fit đúng
+        // chiều cao view, không scroll; model list đã cap 10 + "+N" nên
+        // chiều cao luôn nằm trong màn hình.
         VStack(alignment: .leading, spacing: 0) {
             header
             VocabbyTheme.inkRule.frame(height: 1).padding(.horizontal, 14)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    agentSection
-                    if !models.isEmpty {
-                        VocabbyTheme.hairline.frame(height: 1)
-                        modelSection
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                agentSection
+                if !models.isEmpty {
+                    VocabbyTheme.hairline.frame(height: 1)
+                    modelSection
                 }
-                .padding(.horizontal, 14)
             }
+            .padding(.horizontal, 14)
         }
-        .frame(width: 340, height: 430)
+        .frame(width: 340)
         .background(VocabbyTheme.background)
     }
 
@@ -1518,13 +1519,19 @@ struct DayDetailPanelRoot: View {
                     .tracking(0.6)
                 Spacer(minLength: 8)
                 if pinned {
+                    // Nút đóng theo ngôn ngữ Instrument: ô vuông viền hairline
+                    // như các nút icon 26×26 ở header popover.
                     Button {
                         NotificationCenter.default.post(name: .birdnionCloseDayDetail, object: nil)
                     } label: {
-                        Text("×")
-                            .font(.plexMono(15))
-                            .foregroundStyle(VocabbyTheme.tertiary)
-                            .frame(width: 22, height: 22)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .frame(width: 24, height: 24)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius)
+                                    .stroke(VocabbyTheme.border, lineWidth: 1)
+                            )
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
