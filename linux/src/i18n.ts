@@ -1,17 +1,38 @@
 // Minimal vi/en string table for the web UI — mirrors the macOS app's
 // hardcoded-dictionary approach (AppLocalizer) rather than gettext.
-// Language persists in localStorage; vi is the default like on macOS.
+// Lựa chọn lưu ở localStorage; mặc định "system" = theo locale hệ điều hành,
+// đúng như macOS `SettingsStore.Language.system`.
 
 const LANG_KEY = "birdnion.lang";
 
 export type Lang = "vi" | "en";
+/** Lựa chọn người dùng: "" = theo hệ thống (macOS Language.system). */
+export type LangPreference = Lang | "";
 
-export function currentLang(): Lang {
-  return localStorage.getItem(LANG_KEY) === "en" ? "en" : "vi";
+/** Ngôn ngữ hệ thống quy về vi/en; không nhận diện được thì dùng vi. */
+function systemLang(): Lang {
+  const tags = navigator.languages?.length ? navigator.languages : [navigator.language];
+  for (const tag of tags) {
+    const base = (tag || "").toLowerCase().split("-")[0];
+    if (base === "vi") return "vi";
+    if (base === "en") return "en";
+  }
+  return "vi";
 }
 
-export function setLang(lang: Lang) {
-  localStorage.setItem(LANG_KEY, lang);
+export function langPreference(): LangPreference {
+  const raw = localStorage.getItem(LANG_KEY);
+  return raw === "en" || raw === "vi" ? raw : "";
+}
+
+export function currentLang(): Lang {
+  const pref = langPreference();
+  return pref === "" ? systemLang() : pref;
+}
+
+export function setLang(lang: LangPreference) {
+  if (lang === "") localStorage.removeItem(LANG_KEY);
+  else localStorage.setItem(LANG_KEY, lang);
 }
 
 const STRINGS: Record<string, { vi: string; en: string }> = {
@@ -953,6 +974,9 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "weekday.sun": { vi: "CN", en: "Sun" },
   "activeDaysWord": { vi: "ngày active", en: "active days" },
   "activeDaysLabel": { vi: "Ngày active", en: "Active days" },
+  "language.system": { vi: "Theo hệ thống", en: "System" },
+  "language.vietnamese": { vi: "Tiếng Việt", en: "Vietnamese" },
+  "language.english": { vi: "Tiếng Anh", en: "English" },
   "nAgents": { vi: "{n} agent", en: "{n} agents" },
   "daysWord": { vi: "ngày", en: "days" },
   "less": { vi: "ÍT", en: "LESS" },

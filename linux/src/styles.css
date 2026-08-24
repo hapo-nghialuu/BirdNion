@@ -4822,7 +4822,9 @@ body.settings-body-root {
    agent-centric remake. Line phân section xám inset, chỉ header/footer của
    popover mới dùng --chrome-rule full-bleed. */
 .agents-section {
-  padding: 14px 16px;
+  /* Nội dung và đường kẻ dùng CHUNG một inset — `.app-body` đã thụt 16px, nên
+     ở đây không thụt thêm nữa (macOS InstrumentPopoverMetrics.contentInset). */
+  padding: 14px 0;
   border-top: 1px solid var(--hairline);
 }
 

@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { t, currentLang, setLang, type Lang } from "./i18n";
+import { t, currentLang, langPreference, setLang, type LangPreference } from "./i18n";
 import {
   getPollSeconds, setPollSeconds, isManualRefresh, isRefreshOnOpenEnabled,
   setRefreshOnOpenEnabledPublic, isProviderStorageEnabled, setProviderStorageEnabledPublic,
@@ -226,15 +226,18 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
   // Language
   const langSelect = document.createElement("select");
   langSelect.className = "sw-select";
-  for (const [val, label] of [["vi", "Tiếng Việt"], ["en", "English"]] as const) {
+  // Ba lựa chọn như macOS: theo hệ thống / Tiếng Việt / Tiếng Anh.
+  for (const val of ["", "vi", "en"] as const) {
     const o = document.createElement("option");
     o.value = val;
-    o.textContent = label;
+    o.textContent = val === ""
+      ? t("language.system")
+      : t(val === "vi" ? "language.vietnamese" : "language.english");
     langSelect.append(o);
   }
-  langSelect.value = currentLang();
+  langSelect.value = langPreference();
   langSelect.addEventListener("change", () => {
-    setLang(langSelect.value as Lang);
+    setLang(langSelect.value as LangPreference);
     void mountSettingsWindow(onRefreshMain);
   });
 

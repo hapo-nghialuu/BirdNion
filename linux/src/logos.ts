@@ -32,8 +32,10 @@ export function logoUrl(id: string): string | null {
 export function logoMark(id: string, className = "tab-logo"): HTMLElement {
   const url = logoUrl(id);
   const mono = className.includes("tab-logo-mono");
+  // Tab strip tự đặt `--tab-tint`; chỗ khác thì tô ngay bằng màu brand.
+  const tinted = !mono && !NATURAL_COLOR_LOGOS.has(id);
 
-  if (url && mono) {
+  if (url && (mono || tinted)) {
     const wrap = document.createElement("span");
     wrap.className = className;
     wrap.setAttribute("role", "img");
@@ -47,6 +49,10 @@ export function logoMark(id: string, className = "tab-logo"): HTMLElement {
     wrap.style.webkitMaskRepeat = "no-repeat";
     wrap.style.maskPosition = "center";
     wrap.style.webkitMaskPosition = "center";
+    wrap.style.display = "inline-block";
+    if (tinted) {
+      wrap.style.backgroundColor = LOGO_INK[id] ?? providerTintCss(id) ?? "var(--text2)";
+    }
     return wrap;
   }
 
@@ -103,6 +109,35 @@ const PROVIDER_TINT: Record<string, [string, string]> = {
   opencodego: ["#3B82F6", "#3B82F6"],
   antigravity: ["#60BA7E", "#60BA7E"],
   bedrock: ["#FF9900", "#FF9900"],
+  // elevenlabs/auggie/pi bám màu chữ như macOS (mark gốc gần như đen/trắng).
+  elevenlabs: ["#16150F", "#F2F0E8"],
+  auggie: ["#16150F", "#F2F0E8"],
+  pi: ["#06B6D4", "#22D3EE"],
+  omp: ["#8B5CF6", "#A78BFA"],
+  qwen: ["#FF6A00", "#FF6A00"],
+};
+
+/**
+ * Mark giữ NGUYÊN màu gốc — phần còn lại là template (một màu, `none`,
+ * `currentColor` hoặc trắng) nên phải tô mới nhìn thấy được. Đây chính là
+ * chỗ macOS phân biệt `logo(name)` với `logo(name, brand:)`.
+ *
+ * Không tô thì grok/claude/commandcode... ra trắng trên nền sáng, và mọi mark
+ * gần-đen sẽ biến mất ở theme tối.
+ */
+const NATURAL_COLOR_LOGOS = new Set(["minimax", "hapo", "aider", "goose", "amp", "omp"]);
+
+/**
+ * Màu mực của mark khi đứng trong danh sách (hàng agent, panel, settings).
+ * KHÁC với `providerTintCss` dùng cho chip tab: macOS tô Codex/Pi/Auggie bằng
+ * màu chữ chứ không phải màu thương hiệu, nên chip teal không được lan sang
+ * logo trong hàng. Id không có ở đây thì lùi về màu tab.
+ */
+const LOGO_INK: Record<string, string> = {
+  codex: "var(--text)",
+  pi: "var(--text)",
+  auggie: "var(--text)",
+  elevenlabs: "var(--text)",
 };
 
 /** CSS light-dark() pair for the chip tint; undefined → fall back to secondary. */

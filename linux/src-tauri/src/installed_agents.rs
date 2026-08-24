@@ -164,10 +164,26 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// Thư mục dự phòng khi biến `PATH` không có — app khởi động từ desktop entry
+/// thường chỉ thừa hưởng PATH tối thiểu (macOS `executableExists` cũng có danh
+/// sách tương đương).
+fn fallback_path_dirs(home: &Path) -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        home.join(".local/bin"),
+        home.join(".cargo/bin"),
+    ]
+}
+
 /// Dò một lệnh trong PATH, trả về đường dẫn đầu tiên thực thi được.
 fn which(binary: &str) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
+    let dirs: Vec<PathBuf> = match std::env::var_os("PATH") {
+        Some(path_var) => std::env::split_paths(&path_var).collect(),
+        None => home_dir().map(|home| fallback_path_dirs(&home)).unwrap_or_default(),
+    };
+    for dir in dirs {
         let candidate = dir.join(binary);
         if is_executable(&candidate) {
             return Some(candidate);
@@ -242,6 +258,17 @@ mod tests {
         std::fs::write(&plain, b"text").unwrap();
         assert!(!is_executable(&plain));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fallback_dirs_cover_the_usual_install_locations() {
+        // Không có PATH thì vẫn phải dò được binary cài ở các chỗ thường gặp,
+        // nếu không app mở từ desktop entry sẽ báo "không có agent nào".
+        let home = PathBuf::from("/home/tester");
+        let dirs = fallback_path_dirs(&home);
+        assert!(dirs.contains(&PathBuf::from("/usr/bin")));
+        assert!(dirs.contains(&home.join(".local/bin")));
+        assert!(dirs.contains(&home.join(".cargo/bin")));
     }
 
     #[test]
