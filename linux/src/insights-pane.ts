@@ -3,7 +3,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "./i18n";
-import { tokens, usd } from "./usage";
+import { tokens, usd, combine } from "./usage";
+import type { UsageReport } from "./usage";
+import { activityContent } from "./insights-activity";
 
 export type InsightConfidence = {
   source: string;
@@ -48,6 +50,9 @@ export type ProjectInsightsReport = {
     models: DetailModel[];
   } | null;
 };
+
+/** 3 segment như macOS: tổng quan / hoạt động / dự án. */
+export type InsightsSegment = "overview" | "activity" | "projects";
 
 const SEGMENT_KEY = "birdnion.insightsSegment";
 const DAYS_KEY = "birdnion.insightsDays";
@@ -136,11 +141,13 @@ function paneHeader(): HTMLElement {
   return head;
 }
 
-function segmentControl(active: "overview" | "projects", onChange: (segment: "overview" | "projects") => void): HTMLElement {
+function segmentControl(active: InsightsSegment, onChange: (segment: InsightsSegment) => void): HTMLElement {
   const control = el("div", "insights-segments");
-  for (const segment of ["overview", "projects"] as const) {
-    const button = el("button", `insights-segment${active === segment ? " active" : ""}`,
-      t(segment === "overview" ? "insightsOverview" : "insightsProjects"));
+  for (const segment of ["overview", "activity", "projects"] as const) {
+    const label = segment === "overview" ? t("insightsOverview")
+      : segment === "activity" ? t("insightsSegmentActivity")
+        : t("insightsProjects");
+    const button = el("button", `insights-segment${active === segment ? " active" : ""}`, label);
     button.setAttribute("type", "button");
     button.addEventListener("click", () => onChange(segment));
     control.append(button);
@@ -174,9 +181,9 @@ function periodControl(
 
 /** Overview: view bar only. Projects: view + period, both leading (no stretch). */
 function insightsToolbar(
-  segment: "overview" | "projects",
+  segment: InsightsSegment,
   days: InsightsPeriodDays,
-  onSegment: (segment: "overview" | "projects") => void,
+  onSegment: (segment: InsightsSegment) => void,
   onDays: (days: InsightsPeriodDays) => void,
 ): HTMLElement {
   const row = el("div", "insights-toolbar");
@@ -307,9 +314,35 @@ function projectDetail(detail: NonNullable<ProjectInsightsReport["selectedProjec
   return section;
 }
 
+/** Segment "Hoạt động": heatmap 52 tuần dựng từ báo cáo cost đã quét. */
+function activityView(): HTMLElement {
+  const host = el("div", "insights-activity-host");
+  host.append(el("div", "loading", "…"));
+  void (async () => {
+    try {
+      const [claude, codex, grok, omp, pi] = await Promise.all([
+        invoke<UsageReport | null>("claude_usage_report").catch(() => null),
+        invoke<UsageReport | null>("codex_usage_report").catch(() => null),
+        invoke<UsageReport | null>("grok_usage_report").catch(() => null),
+        invoke<UsageReport | null>("omp_usage_report").catch(() => null),
+        invoke<UsageReport | null>("pi_usage_report").catch(() => null),
+      ]);
+      host.textContent = "";
+      host.append(activityContent(combine(claude, codex, grok, omp, pi)));
+    } catch {
+      host.textContent = "";
+      host.append(el("div", "empty", t("insightsLoadError")));
+    }
+  })();
+  return host;
+}
+
+
 export async function insightsPane(): Promise<HTMLElement> {
   const page = el("div", "settings-page insights-page");
-  let segment: "overview" | "projects" = localStorage.getItem(SEGMENT_KEY) === "projects" ? "projects" : "overview";
+  const savedSegment = localStorage.getItem(SEGMENT_KEY);
+  let segment: InsightsSegment = savedSegment === "projects" ? "projects"
+    : savedSegment === "activity" ? "activity" : "overview";
   const savedDays = Number(localStorage.getItem(DAYS_KEY));
   let days: InsightsPeriodDays =
     savedDays === 1 || savedDays === 30 || savedDays === 90 ? savedDays : 7;
@@ -355,6 +388,7 @@ export async function insightsPane(): Promise<HTMLElement> {
       return;
     }
     if (segment === "overview") page.append(overviewView(report));
+    else if (segment === "activity") page.append(activityView());
     else page.append(projectsView(report, selectProject));
   };
 

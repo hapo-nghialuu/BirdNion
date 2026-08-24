@@ -5303,3 +5303,138 @@ body.settings-body-root {
   font-weight: 600;
   color: var(--text-primary);
 }
+
+
+/* ------------------------------------------------ Insights → Hoạt động
+   Heatmap 52 tuần (macOS parity). Đậm nhạt theo token. */
+.insights-activity { padding: 4px 0 18px; }
+
+.insights-activity-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.insights-activity-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.9px;
+  color: var(--text-tertiary);
+}
+
+.insights-activity-meta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.insights-activity-board { display: flex; align-items: flex-start; gap: 6px; }
+
+.insights-activity-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 26px;
+  flex-shrink: 0;
+}
+
+.insights-activity-weekday {
+  height: 10px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--text-tertiary);
+  line-height: 10px;
+}
+
+.insights-activity-grid {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.insights-activity-col { display: flex; flex-direction: column; gap: 2px; }
+
+.insights-activity-cell { display: block; width: 10px; height: 10px; }
+.insights-activity-cell.level-0 { background: var(--heat-0, #EFEDE6); }
+.insights-activity-cell.level-1 { background: var(--heat-1); }
+.insights-activity-cell.level-2 { background: var(--heat-2); }
+.insights-activity-cell.level-3 { background: var(--heat-3); }
+.insights-activity-cell.level-4 { background: var(--heat-4); }
+
+.insights-activity-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.insights-activity-legend-label,
+.insights-activity-legend-note {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  color: var(--text-tertiary);
+}
+
+.insights-activity-legend-note { margin-left: auto; }
+
+.insights-activity-stats {
+  display: flex;
+  gap: 0;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--chrome-rule);
+}
+
+.insights-activity-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--hairline);
+}
+
+.insights-activity-stat:first-child { padding-left: 0; border-left: 0; }
+
+.insights-activity-stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  color: var(--text-tertiary);
+}
+
+.insights-activity-stat-value {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Segmented control cho kỳ ngân sách trong General */
+.sw-segment {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.sw-segment-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  height: 28px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.sw-segment-btn + .sw-segment-btn { border-left: 1px solid var(--border); }
+.sw-segment-btn.is-active { background: var(--ink-rule); color: var(--bg); font-weight: 600; }

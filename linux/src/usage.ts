@@ -338,28 +338,46 @@ function ymdLocal(d: Date): string {
  * all return `null` so the caller hides the card entirely (feature off).
  * Non-finite or negative per-day `usd` is ignored. `source` (default
  * `"total"`) selects which field is summed. */
+/** Kỳ ngân sách — người dùng chọn trong Settings (macOS parity 2026-08-23). */
+export type BudgetPeriod = "week" | "month";
+const BUDGET_PERIOD_KEY = "birdnion.budgetPeriod";
+
+export function budgetPeriod(): BudgetPeriod {
+  return localStorage.getItem(BUDGET_PERIOD_KEY) === "month" ? "month" : "week";
+}
+
+export function setBudgetPeriod(period: BudgetPeriod): void {
+  localStorage.setItem(BUDGET_PERIOD_KEY, period);
+}
+
 export function monthlyForecast(
   daily: CombinedDay[],
   budgetUsd: number | null | undefined,
   now: Date = new Date(),
   source: MonthlyForecastSource = "total",
+  period: BudgetPeriod = budgetPeriod(),
 ): MonthlyForecast | null {
   if (budgetUsd == null || !Number.isFinite(budgetUsd) || budgetUsd <= 0) return null;
 
-  const weekStart = startOfLocalWeek(now);
+  const isMonth = period === "month";
+  const periodStart = isMonth
+    ? new Date(now.getFullYear(), now.getMonth(), 1)
+    : startOfLocalWeek(now);
   const todayKey = ymdLocal(now);
-  const weekStartKey = ymdLocal(weekStart);
+  const periodStartKey = ymdLocal(periodStart);
   const monthToDateUsd = daily
-    .filter((d) => d.date >= weekStartKey && d.date <= todayKey)
+    .filter((d) => d.date >= periodStartKey && d.date <= todayKey)
     .reduce((sum, d) => {
       const v = monthlyForecastDayUsd(d, source);
       return sum + (Number.isFinite(v) && v > 0 ? v : 0);
     }, 0);
 
-  const daysInMonth = 7;
+  const daysInMonth = isMonth
+    ? new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+    : 7;
   const msPerDay = 24 * 60 * 60 * 1000;
   const dayOffset = Math.floor(
-    (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - weekStart.getTime())
+    (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - periodStart.getTime())
       / msPerDay,
   );
   const daysElapsed = Math.min(Math.max(dayOffset + 1, 1), daysInMonth);

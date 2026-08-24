@@ -19,7 +19,8 @@ import {
   getProviderBudgetUsd, setProviderBudgetUsd,
   REFRESH_OPTIONS, aboutSection,
 } from "./settings-about";
-import type { UsageSourceId } from "./usage";
+import type { UsageSourceId, BudgetPeriod } from "./usage";
+import { budgetPeriod, setBudgetPeriod } from "./usage";
 import { isWeeklyDigestEnabled, setWeeklyDigestEnabled } from "./weekly-digest";
 import { providersPane } from "./settings-tab";
 import { claudeCodePane } from "./claude-code-pane";
@@ -314,9 +315,28 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     budgetInput.value = normalized != null ? String(normalized) : "";
   });
 
+  // Kỳ ngân sách (tuần/tháng) — macOS parity; mặc định tuần.
+  const periodPicker = el("div", "sw-segment");
+  const paintPeriod = () => {
+    periodPicker.textContent = "";
+    const options: { id: BudgetPeriod; label: string }[] = [
+      { id: "week", label: t("budgetPeriodWeek") },
+      { id: "month", label: t("budgetPeriodMonth") },
+    ];
+    for (const option of options) {
+      const button = el("button",
+        `sw-segment-btn${budgetPeriod() === option.id ? " is-active" : ""}`,
+        option.label.toUpperCase());
+      button.addEventListener("click", () => { setBudgetPeriod(option.id); paintPeriod(); });
+      periodPicker.append(button);
+    }
+  };
+  paintPeriod();
+
   const usageRows = [
     labeledRow(t("settingsRefreshFrequency"), t("settingsRefreshFrequencySub"), freq),
     labeledRow(t("settingsRefreshOnOpen"), t("settingsRefreshOnOpenSub"), refreshOnOpen),
+    labeledRow(t("budgetPeriod"), "", periodPicker),
     labeledRow(t("settingsMonthlyBudget"), t("settingsMonthlyBudgetSub"), budgetInput),
   ];
   const usage = card(
