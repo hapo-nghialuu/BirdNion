@@ -1346,6 +1346,21 @@ fn panel_log(msg: &str) {
     }
 }
 
+/// Trả focus về popover ngay sau khi hiện panel.
+///
+/// `show()` có thể kích hoạt cửa sổ tuỳ nền tảng. Chỉ cửa sổ key mới nhận sự
+/// kiện chuột, nên nếu panel giữ focus thì popover ngừng nhận
+/// `mouseover`/`mouseleave` và panel hover sẽ không bao giờ đóng được. Đây là
+/// cách bù cho việc Tauri không có "panel không-thành-key" như NSPanel.
+fn keep_popover_key(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(main) = app.get_webview_window("main") {
+        if main.is_visible().unwrap_or(false) {
+            let _ = main.set_focus();
+        }
+    }
+}
+
 #[tauri::command]
 async fn open_side_panel(
     app: tauri::AppHandle,
@@ -1363,9 +1378,7 @@ async fn open_side_panel(
         position_panel_beside_main(&app, &existing);
         if PANEL_WANTED.load(Ordering::SeqCst) {
             let _ = existing.show();
-            if pinned {
-                let _ = existing.set_focus();
-            }
+            keep_popover_key(&app);
             panel_log("open: reused existing window");
         } else {
             let _ = existing.hide();
@@ -1385,7 +1398,11 @@ async fn open_side_panel(
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
-        .focused(pinned)
+        // KHÔNG BAO GIỜ lấy focus. Cửa sổ key mới được nhận sự kiện chuột, nên
+        // panel mà giành focus thì popover ngừng nhận `mouseover`/`mouseleave`
+        // — hover mở panel xong là không cách nào đóng lại được. macOS dùng
+        // NSPanel không-thành-key chính vì lý do này.
+        .focused(false)
         .initialization_script(&init)
         .build()
         .map_err(|e| e.to_string())?;
@@ -1393,9 +1410,7 @@ async fn open_side_panel(
     // Chuột đã rời trong lúc dựng → không hiện nữa.
     if PANEL_WANTED.load(Ordering::SeqCst) {
         let _ = win.show();
-        if pinned {
-            let _ = win.set_focus();
-        }
+        keep_popover_key(&app);
         panel_log("open: built and shown");
     } else {
         panel_log("open: cancelled while building");
