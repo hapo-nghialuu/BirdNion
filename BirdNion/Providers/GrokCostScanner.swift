@@ -110,31 +110,53 @@ struct GrokModelPrice {
 /// Walks `~/.grok/sessions/**/signals.json` (path overridable via `GROK_HOME`)
 /// and builds a 120-day daily cost report for the All tab.
 ///
+/// Token attribution (rev 3, 2026-08-25)
+/// -------------------------------------
 /// Each session signal file only exposes a **lifetime** token snapshot
-/// (`totalTokensBeforeCompaction + contextTokensUsed`), overwritten in place
-/// with no per-request time series. Matching CodexBar's
-/// `GrokLocalSessionScanner` and the Linux `grok_scanner`, each session
-/// contributes its full lifetime total `T = before + context` to the calendar
-/// day of last activity (`summary.json` `last_active_at` / `updated_at`, else
-/// signals mtime). `CostHistoryStore.preferHigher` then keeps the high-water
-/// mark as sessions grow.
+/// (`totalTokensBeforeCompaction + contextTokensUsed`); `chat_history.jsonl`
+/// carries no per-turn usage, so there is no way to know exactly how many
+/// tokens were spent on any given day.
+///
+/// Rev 2 attributed the full lifetime total `T = before + context` to the
+/// session's last-active calendar day. That is wrong two ways: merely
+/// opening a session bumps `last_active_at`, so a session with zero turns
+/// today still reported its entire lifetime total for today; and as the
+/// last-active day moved forward day by day, the never-shrink history kept a
+/// stale copy on every earlier day, so one session was counted many times
+/// (measured on real data: 6.8M tokens inflated to 34.3M, 5.04x).
+///
+/// Rev 3 spreads `T` across the session's OWN timeline instead:
+/// `events.jsonl` carries one `"type":"first_token"` event (with an RFC3339
+/// `ts`) per model response, so the response count per calendar day is real
+/// evidence for how to divide `T`. A day with no responses gets exactly
+/// zero. The split uses largest-remainder rounding so the parts always sum
+/// to exactly `T`. When `events.jsonl` is missing or has no usable events,
+/// this falls back to the rev 2 last-active-day behavior — there is no
+/// better evidence then, and inventing a distribution would be worse.
+///
+/// This is an APPORTIONMENT backed by evidence, not a measurement of each
+/// response's real tokens: the weight is response count, not real per-turn
+/// token usage. `CostHistoryStore.preferHigher` then keeps the high-water
+/// mark per day as sessions grow.
 ///
 /// Local signals are a lower-bound proxy for billed usage (no server-side
-/// request log). Multi-day sessions only land on the current last-active day
-/// in a live scan; older days may retain a previous high-water if the session
-/// was attributed there before `last_active` moved.
+/// request log).
 enum GrokCostScanner {
     private static let cacheTTL: TimeInterval = 300
     static let chartWindowDays = 120
     /// Bump when Grok counting semantics change. Existing persisted days need
     /// one full rescan; `usageReport` then applies with `replacingSource: true`
     /// so under/over-counted high-water marks are replaced atomically by the
-    /// fresh full-T scan (never an empty source on disk mid-flight).
+    /// fresh rescan (never an empty source on disk mid-flight).
     ///
     /// Rev 2: full lifetime T per session (CodexBar/Linux), not per-scan delta
     /// against `GrokSessionBaselineStore`. Delta + preferHigher never summed
     /// intra-day growth and left today stuck at the first partial observation.
-    static let countingRevision = 2
+    ///
+    /// Rev 3 (2026-08-25): split `T` across the session's own event timeline
+    /// (`events.jsonl`) instead of dumping it all on the last-active day —
+    /// see the file doc comment above.
+    static let countingRevision = 3
     private static let countingRevisionKey = "grokCostCountingRevision"
 
     private actor Cache {
@@ -258,8 +280,8 @@ enum GrokCostScanner {
         let sessions = loadSessions(
             root: root, fileManager: fileManager, now: now, windowDays: windowDays)
         return ScanResult(
-            report: buildReport(sessions: sessions, now: now, windowDays: windowDays),
-            projects: buildProjects(sessions: sessions, calendar: .current))
+            report: buildReport(sessions: sessions.report, now: now, windowDays: windowDays),
+            projects: buildProjects(sessions: sessions.projects, calendar: .current))
     }
 
     /// The sessions root, but only when it actually exists as a directory —
@@ -309,52 +331,122 @@ enum GrokCostScanner {
         var projectName: String? = nil
     }
 
-    /// Walk session directories; one point per `signals.json` attributed to the
-    /// session's last-active calendar day (from `summary.json` when present,
-    /// else signals mtime). Token contribution is the full lifetime total
-    /// `before + context` (CodexBar / Linux), not a per-scan delta.
+    /// Report points (one per apportioned day, no project attribution) plus
+    /// project points (one per session that resolves to a project, unsplit,
+    /// full lifetime total on the last-active day) — see `loadSessions`.
+    struct SessionsBundle: Equatable {
+        let report: [SessionPoint]
+        let projects: [SessionPoint]
+    }
+
+    /// Unsplit, per-session facts shared by the report split (`parseSession`)
+    /// and the project rollup, which stays unsplit — see the file doc
+    /// comment. Parsed once per session so both consumers share one read of
+    /// `summary.json` / `signals.json`.
+    private struct RawSession {
+        let model: String
+        let activeAt: Date
+        /// Full lifetime total `T = before + context`. Not monotonic:
+        /// `contextTokensUsed` shrinks after compaction; we still report the
+        /// current snapshot `T` (same as CodexBar).
+        let lifetime: Int
+        let project: ProjectIdentity?
+    }
+
+    /// Walk session directories and split each `signals.json` into report
+    /// points (one per apportioned day, see `parseSession`) plus, when the
+    /// session resolves to a project, a single unsplit project point on its
+    /// last-active calendar day (from `summary.json` when present, else
+    /// signals mtime) — project rollups aggregate by project, not by day, so
+    /// splitting there adds nothing.
     static func loadSessions(
         root: URL,
         fileManager: FileManager = .default,
         now: Date = Date(),
         windowDays: Int = chartWindowDays,
-        calendar: Calendar = .current) -> [SessionPoint]
+        calendar: Calendar = .current) -> SessionsBundle
     {
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
             options: [.skipsHiddenFiles])
-        else { return [] }
+        else { return SessionsBundle(report: [], projects: []) }
 
         let startOfToday = calendar.startOfDay(for: now)
         let cutoff = calendar.date(byAdding: .day, value: -(windowDays - 1), to: startOfToday)
             ?? startOfToday.addingTimeInterval(-Double(windowDays) * 86_400)
+        let cutoffDay = calendar.startOfDay(for: cutoff)
 
-        var points: [SessionPoint] = []
+        var report: [SessionPoint] = []
+        var projects: [SessionPoint] = []
         while let url = enumerator.nextObject() as? URL {
             guard url.lastPathComponent == "signals.json" else { continue }
-            if let point = parseSession(
-                signalsURL: url,
-                sessionsRoot: root,
-                fileManager: fileManager,
-                calendar: calendar,
-                cutoff: cutoff)
-            {
-                points.append(point)
+            guard let raw = parseRawSession(
+                signalsURL: url, sessionsRoot: root, fileManager: fileManager)
+            else { continue }
+
+            let day = calendar.startOfDay(for: raw.activeAt)
+            guard day >= cutoffDay else { continue }
+
+            let sessionDir = url.deletingLastPathComponent()
+            report.append(contentsOf: reportPoints(
+                raw: raw, sessionDir: sessionDir, day: day,
+                cutoffDay: cutoffDay, today: startOfToday,
+                fileManager: fileManager, calendar: calendar))
+
+            if let project = raw.project {
+                projects.append(SessionPoint(
+                    day: day,
+                    tokens: raw.lifetime,
+                    usd: GrokModelPrice.estimateUSD(tokens: raw.lifetime, model: raw.model),
+                    model: raw.model,
+                    projectKey: project.key,
+                    projectName: project.displayName))
             }
         }
-        return points
+        return SessionsBundle(report: report, projects: projects)
     }
 
-    /// Parse one session. Emits a `SessionPoint` when signals are readable,
-    /// T > 0, and the last-active day is inside the chart window. Tokens are
-    /// the full lifetime total (CodexBar `GrokLocalSessionScanner`).
+    /// Parse one session into report points — one per apportioned day. A
+    /// session's lifetime total `T = before + context` is split across the
+    /// calendar days its `events.jsonl` shows a model response
+    /// (`"type":"first_token"`) on, weighted by response count per day
+    /// (largest-remainder rounded so the parts sum to exactly `T`); a day
+    /// with no responses gets nothing, even if it is the session's
+    /// last-active day. Falls back to a single point on the last-active day
+    /// when `events.jsonl` is missing or has no usable events — see the file
+    /// doc comment.
     static func parseSession(
         signalsURL: URL,
         sessionsRoot: URL,
         fileManager: FileManager = .default,
         calendar: Calendar = .current,
-        cutoff: Date) -> SessionPoint?
+        now: Date = Date(),
+        cutoff: Date) -> [SessionPoint]
+    {
+        guard let raw = parseRawSession(
+            signalsURL: signalsURL, sessionsRoot: sessionsRoot, fileManager: fileManager)
+        else { return [] }
+
+        let cutoffDay = calendar.startOfDay(for: cutoff)
+        let day = calendar.startOfDay(for: raw.activeAt)
+        guard day >= cutoffDay else { return [] }
+
+        let today = calendar.startOfDay(for: now)
+        let sessionDir = signalsURL.deletingLastPathComponent()
+        return reportPoints(
+            raw: raw, sessionDir: sessionDir, day: day,
+            cutoffDay: cutoffDay, today: today,
+            fileManager: fileManager, calendar: calendar)
+    }
+
+    /// Read `summary.json` (model / last-active day / git root) and
+    /// `signals.json` (model override, lifetime total) once. `nil` when
+    /// signals are unreadable or the lifetime total is `<= 0`.
+    private static func parseRawSession(
+        signalsURL: URL,
+        sessionsRoot: URL,
+        fileManager: FileManager) -> RawSession?
     {
         let attrs = try? signalsURL.resourceValues(forKeys: [.contentModificationDateKey])
         let mtime = attrs?.contentModificationDate ?? Date.distantPast
@@ -398,25 +490,101 @@ enum GrokCostScanner {
 
         let before = intValue(json["totalTokensBeforeCompaction"])
         let context = intValue(json["contextTokensUsed"])
-        // Match CodexBar GrokLocalSessionScanner token aggregation.
-        // T is not monotonic: contextTokensUsed shrinks after compaction;
-        // we still report current snapshot T (same as CodexBar).
         let lifetime = max(0, before + context)
         guard lifetime > 0 else { return nil }
 
-        let day = calendar.startOfDay(for: activeAt)
-        guard day >= calendar.startOfDay(for: cutoff) else { return nil }
-
-        let usd = GrokModelPrice.estimateUSD(tokens: lifetime, model: model)
         let project = encodedDirectory(sessionsRoot: sessionsRoot, signalsURL: signalsURL)
             .flatMap { ProjectIdentity.grok(encodedDirectory: $0, gitRootDir: gitRootDir) }
-        return SessionPoint(
-            day: day,
-            tokens: lifetime,
-            usd: usd,
-            model: model,
-            projectKey: project?.key,
-            projectName: project?.displayName)
+
+        return RawSession(model: model, activeAt: activeAt, lifetime: lifetime, project: project)
+    }
+
+    /// Apportion `raw.lifetime` across the days `events.jsonl` shows
+    /// responses on (see `inferenceDayCounts`), dropping any part outside
+    /// `[cutoffDay, today]`. Falls back to a single point on `day` (the
+    /// session's last-active day) when there are no usable events.
+    private static func reportPoints(
+        raw: RawSession,
+        sessionDir: URL,
+        day: Date,
+        cutoffDay: Date,
+        today: Date,
+        fileManager: FileManager,
+        calendar: Calendar) -> [SessionPoint]
+    {
+        let weights = inferenceDayCounts(
+            sessionDir: sessionDir, fileManager: fileManager, calendar: calendar)
+        let spread: [(day: Date, tokens: Int)] = weights.isEmpty
+            ? [(day, raw.lifetime)]
+            : apportion(total: raw.lifetime, weights: weights)
+
+        return spread.compactMap { part in
+            guard part.day >= cutoffDay, part.day <= today, part.tokens > 0 else { return nil }
+            return SessionPoint(
+                day: part.day,
+                tokens: part.tokens,
+                usd: GrokModelPrice.estimateUSD(tokens: part.tokens, model: raw.model),
+                model: raw.model)
+        }
+    }
+
+    /// Count of `"type":"first_token"` events per LOCAL calendar day, read
+    /// from the session's `events.jsonl` (one JSON object per line, `ts` an
+    /// RFC3339 UTC timestamp). `first_token` fires once per model response,
+    /// so it tracks real inference effort more closely than `turn_started`
+    /// (one turn can contain several tool-call round-trips). Empty when the
+    /// file is missing or has no usable events — callers then fall back to
+    /// the last-active-day attribution.
+    private static func inferenceDayCounts(
+        sessionDir: URL,
+        fileManager: FileManager,
+        calendar: Calendar) -> [Date: Int]
+    {
+        let eventsURL = sessionDir.appendingPathComponent("events.jsonl")
+        guard let data = try? Data(contentsOf: eventsURL),
+              let text = String(data: data, encoding: .utf8)
+        else { return [:] }
+
+        var counts: [Date: Int] = [:]
+        text.enumerateLines { line, _ in
+            guard let lineData = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  json["type"] as? String == "first_token",
+                  let ts = json["ts"] as? String,
+                  let parsed = parseISO8601(ts)
+            else { return }
+            let day = calendar.startOfDay(for: parsed)
+            counts[day, default: 0] += 1
+        }
+        return counts
+    }
+
+    /// Split `total` across days weighted by `weights`, preserving the exact
+    /// sum via largest-remainder rounding: integer-divide per day, then hand
+    /// the leftover units to the days with the largest remainders (ties
+    /// broken by date, for scan-to-scan stability). `total <= 0` or an
+    /// all-zero `weights` yields no parts.
+    private static func apportion(
+        total: Int, weights: [Date: Int]) -> [(day: Date, tokens: Int)]
+    {
+        let weightSum = weights.values.reduce(0, +)
+        guard total > 0, weightSum > 0 else { return [] }
+
+        var parts: [(day: Date, share: Int, remainder: Int)] = weights.map { day, weight in
+            let exact = total * weight
+            return (day, exact / weightSum, exact % weightSum)
+        }
+
+        var leftover = total - parts.reduce(0) { $0 + $1.share }
+        parts.sort { lhs, rhs in
+            lhs.remainder != rhs.remainder ? lhs.remainder > rhs.remainder : lhs.day < rhs.day
+        }
+        for index in parts.indices where leftover > 0 {
+            parts[index].share += 1
+            leftover -= 1
+        }
+
+        return parts.filter { $0.share > 0 }.map { (day: $0.day, tokens: $0.share) }
     }
 
     // MARK: - Report build

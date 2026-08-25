@@ -806,6 +806,99 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNil(stored[CostHistoryStore.dayKey(yesterday, calendar: cal)])
     }
 
+    /// Rev 3 regression (2026-08-25): a session merely OPENED today (bumping
+    /// `last_active_at`) but whose real turns happened on earlier days must
+    /// not dump its whole lifetime total onto today. `events.jsonl`
+    /// (`first_token` timestamps) gives real per-day evidence to split the
+    /// total instead — today gets exactly zero, the earlier days get the
+    /// split, and the parts still sum to exactly the lifetime total. Fails
+    /// under the pre-fix "attribute T to the last-active day" behavior,
+    /// which would put all 100,000 tokens on today instead.
+    func testGrokEventsApportionTokensAcrossTheirOwnDaysNotLastActiveDay() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let session = base.appendingPathComponent("sessions/proj/sess-timeline")
+        try fm.createDirectory(at: session, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let fiveDaysAgo = cal.date(byAdding: .day, value: -5, to: today)!
+        let fourDaysAgo = cal.date(byAdding: .day, value: -4, to: today)!
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        // last_active_at is "now" (today), but T = 100_000 was earned on two
+        // earlier days: 75% five days ago, 25% four days ago.
+        let summary = """
+        {"current_model_id":"grok-4.5","last_active_at":"\(iso.string(from: now))"}
+        """
+        try summary.write(to: session.appendingPathComponent("summary.json"),
+                          atomically: true, encoding: .utf8)
+        let signals = """
+        {"totalTokensBeforeCompaction":75000,"contextTokensUsed":25000,"primaryModelId":"grok-4.5"}
+        """
+        try signals.write(to: session.appendingPathComponent("signals.json"),
+                          atomically: true, encoding: .utf8)
+
+        var events = ""
+        let t5 = fiveDaysAgo.addingTimeInterval(10 * 3600)
+        let t4 = fourDaysAgo.addingTimeInterval(10 * 3600)
+        for _ in 0..<75 {
+            events += "{\"ts\":\"\(iso.string(from: t5))\",\"type\":\"first_token\"}\n"
+        }
+        for _ in 0..<25 {
+            events += "{\"ts\":\"\(iso.string(from: t4))\",\"type\":\"first_token\"}\n"
+        }
+        try events.write(to: session.appendingPathComponent("events.jsonl"),
+                         atomically: true, encoding: .utf8)
+
+        let report = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+
+        XCTAssertEqual(report.todayTokens, 0, "today has zero first_token events, so it must get zero tokens")
+        func tokens(daysAgo: Int) -> Int {
+            let day = cal.date(byAdding: .day, value: -daysAgo, to: today)!
+            return report.daily.first { $0.date == day }?.tokens ?? 0
+        }
+        XCTAssertEqual(tokens(daysAgo: 5), 75_000)
+        XCTAssertEqual(tokens(daysAgo: 4), 25_000)
+        let total = report.daily.map(\.tokens).reduce(0, +)
+        XCTAssertEqual(total, 100_000, "split must sum to exactly the lifetime total")
+    }
+
+    /// Rev 3 companion: without `events.jsonl` there is no evidence better
+    /// than "last active day" — the full lifetime total must still land
+    /// there entirely rather than inventing a distribution.
+    func testGrokSessionWithoutEventsFileStillLandsOnLastActiveDay() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let session = base.appendingPathComponent("sessions/proj/sess-no-events")
+        try fm.createDirectory(at: session, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let now = Date()
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let summary = """
+        {"current_model_id":"grok-4.5","last_active_at":"\(iso.string(from: now))"}
+        """
+        try summary.write(to: session.appendingPathComponent("summary.json"),
+                          atomically: true, encoding: .utf8)
+        let signals = """
+        {"totalTokensBeforeCompaction":75000,"contextTokensUsed":25000,"primaryModelId":"grok-4.5"}
+        """
+        try signals.write(to: session.appendingPathComponent("signals.json"),
+                          atomically: true, encoding: .utf8)
+        // Deliberately no events.jsonl written.
+
+        let report = GrokCostScanner.scanFull(homeURL: base, now: now, windowDays: 90)
+
+        XCTAssertEqual(report.todayTokens, 100_000)
+        XCTAssertEqual(report.last30Tokens, 100_000)
+    }
+
     // MARK: - Parity additions (Wave 2-3)
 
     func testElevenLabsProVoicesAndStatusSuffix() {
