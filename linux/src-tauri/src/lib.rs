@@ -126,8 +126,16 @@ async fn grok_usage_report() -> Option<usage::UsageReport> {
             }
         }
         let live = grok_scanner::usage_scan();
-        let merged =
-            cost_history::apply_and_report("grok", live.as_ref().map(|scan| &scan.usage));
+        // Ngữ nghĩa đếm của Grok đổi ở rev 3 (chia theo dòng thời gian session
+        // thay vì dồn vào ngày hoạt động cuối). Các ngày đã lưu theo công thức
+        // cũ bị phồng vì cùng một session để lại bản sao ở mỗi ngày nó từng là
+        // "hoạt động cuối", nên phải ghi đè một lần rồi mới quay về gộp
+        // thường (macOS làm y hệt qua `countingRevision`).
+        let merged = if grok_scanner::take_counting_revision_upgrade() {
+            cost_history::apply_and_report_replacing("grok", live.as_ref().map(|scan| &scan.usage))
+        } else {
+            cost_history::apply_and_report("grok", live.as_ref().map(|scan| &scan.usage))
+        };
         if let Some(scan) = &live {
             let _ = project_cost_history::apply("grok", &scan.projects, false);
         }

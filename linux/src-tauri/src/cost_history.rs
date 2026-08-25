@@ -41,6 +41,23 @@ pub struct Document {
     /// source that never had a live scan) read back as `None`.
     #[serde(default)]
     pub scanned_at: HashMap<String, i64>,
+    /// source → revision của ngữ nghĩa đếm đã dùng để dựng các ngày đang lưu.
+    /// Scanner bump số này khi đổi cách tính; chênh lệch buộc dựng lại một lần.
+    #[serde(default)]
+    pub counting_revision: HashMap<String, i64>,
+}
+
+/// Revision đã lưu cho một nguồn (0 nếu chưa từng ghi).
+pub fn counting_revision(source: &str) -> i64 {
+    read().counting_revision.get(source).copied().unwrap_or(0)
+}
+
+/// Ghi nhận nguồn đã được dựng lại theo revision mới.
+pub fn set_counting_revision(source: &str, revision: i64) {
+    let _guard = HISTORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut doc = read();
+    doc.counting_revision.insert(source.to_string(), revision);
+    let _ = write(&doc);
 }
 
 pub fn history_path() -> Option<PathBuf> {
@@ -93,6 +110,25 @@ static HISTORY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Merge live daily buckets for `source`, persist, return 90-day window as UsageReport.
 pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport {
+    apply_and_report_inner(source, live, false)
+}
+
+/// Như `apply_and_report` nhưng THAY THẾ hẳn chuỗi ngày của nguồn thay vì gộp
+/// không-bao-giờ-giảm.
+///
+/// Chỉ dùng khi ngữ nghĩa đếm của một nguồn thay đổi: lúc đó các giá trị
+/// high-water cũ được tính bằng công thức khác, giữ lại là sai. Bình thường
+/// vẫn phải gộp, vì không-bao-giờ-giảm chính là thứ giữ lại lịch sử của
+/// session đã bị xoá khỏi đĩa (macOS `applyWithReceipt(replacingSource:)`).
+pub fn apply_and_report_replacing(source: &str, live: Option<&UsageReport>) -> UsageReport {
+    apply_and_report_inner(source, live, true)
+}
+
+fn apply_and_report_inner(
+    source: &str,
+    live: Option<&UsageReport>,
+    replacing: bool,
+) -> UsageReport {
     let _guard = HISTORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let now = Local::now();
     let today = now.date_naive();
@@ -100,6 +136,12 @@ pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport
     let mut doc = previous.clone();
     {
         let by_day = doc.sources.entry(source.to_string()).or_default();
+
+        // Chỉ xoá khi CÓ dữ liệu quét mới thay thế — quét hỏng mà xoá trước là
+        // mất trắng lịch sử.
+        if replacing && live.is_some() {
+            by_day.clear();
+        }
 
         if let Some(live) = live {
             for d in &live.daily {
