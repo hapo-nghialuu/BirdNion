@@ -10,7 +10,7 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 | OpenAI Admin/API | OpenAIProvider.swift | `providers/openai.rs` | **done** |
 | Ollama cloud | OllamaProvider.swift | `providers/ollama.rs` | **done** |
 | Grok quota | GrokProvider.swift | `providers/grok.rs` | **done** |
-| Grok cost scanner | GrokCostScanner.swift | `grok_scanner.rs` | **done** |
+| Grok cost scanner | GrokCostScanner.swift | `grok_scanner.rs` | **done** — rev 3 chia token theo `events.jsonl` (xem "Quy ngày của Grok") |
 | Cost history | CostHistoryStore.swift | `cost_history.rs` (high-water merge) | **done** |
 | Usage Insights + project cost | compact All highlight; Settings `Insights` Overview/Projects; `ProjectCostHistoryStore` | compact All highlight; Settings `Insights`; `project_cost_history.rs` + `project_insights.rs` | **done** — Claude/Codex/Grok SHA-256 identity + safe basename; only unattributed residual stays `Unknown` |
 | Guided Setup + Action Center v1 | exact remediation flow; save-first real self-test; header badge + Settings current issues | cùng remediation flow; header badge + Settings current issues | **done** — không All card, issue history, quota/budget/release item hoặc raw-error persistence |
@@ -75,6 +75,23 @@ Path: `~/.config/birdnion/cost-history.json` (shared schema with macOS).
 Never-shrink merge for `claude` / `codex` / `grok` so deleted local sessions keep past daily bars.
 
 Sáu nguồn chi phí cục bộ: `claude`, `codex`, `grok`, `omp`, `pi`, `kiro`.
+
+### Quy ngày của Grok (rev 3, 2026-08-25)
+
+Grok chỉ ghi token ở mức **session** — `signals.json` có tổng cả đời, `chat_history.jsonl` không mang usage — nên không thể đo chính xác từng ngày tiêu bao nhiêu.
+
+Rev 2 (cả hai bản) dồn TRỌN tổng cả đời vào **ngày hoạt động cuối**. Sai hai kiểu:
+
+1. Chỉ cần MỞ session là `last_active_at` nhảy sang hôm nay, kéo theo cả chục ngày tích luỹ đổ vào một ngày không hề chạy lượt nào.
+2. Khi ngày-hoạt-động-cuối trôi dần, merge không-bao-giờ-giảm giữ lại bản sao ở từng ngày cũ → một session bị đếm nhiều lần. Đo trên máy thật: **6,810,391 token thành 34,346,238, phồng 5.04×**.
+
+Rev 3 chia tổng theo **dòng thời gian của chính session**: `events.jsonl` có `first_token` kèm `ts` cho mỗi lượt model trả lời, dùng số lượt mỗi ngày (theo giờ máy) làm trọng số, largest-remainder để tổng sau khi chia bằng đúng tổng cả đời. Ngày không có lượt nhận đúng 0. Không có `events.jsonl` thì lùi về ngày hoạt động cuối.
+
+Đây là **phân bổ có bằng chứng, không phải số đo**: trọng số là số lượt trả lời, không phải token thật của từng lượt.
+
+Đổi ngữ nghĩa đếm buộc dựng lại lịch sử một lần (Linux `cost_history::apply_and_report_replacing` + `Document.counting_revision`; macOS `countingRevision` + `replacingSource`), nếu không giá trị high-water cũ sẽ sống mãi.
+
+Các nguồn khác không dính lỗi này: `claude`, `codex`, `omp` đều quy ngày theo timestamp của từng dòng log.
 
 ## Verification
 
