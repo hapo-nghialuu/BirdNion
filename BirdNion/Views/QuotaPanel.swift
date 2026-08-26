@@ -1205,21 +1205,23 @@ struct ProviderHeaderCard: View {
                 RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
                     .stroke(VocabbyTheme.border, lineWidth: 1)
             )
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(status.displayName)
                     .font(.plexSans(15, weight: .semibold))
                     .tracking(-0.2)
                     .foregroundStyle(VocabbyTheme.primary)
                 if isPlaceholder {
-                    HStack(spacing: 4) {
+                    HStack(alignment: .center, spacing: 6) {
                         ProgressView()
-                            .controlSize(.small)
+                            .controlSize(.mini)
                             .tint(VocabbyTheme.blue)
-                            .frame(width: 12, height: 12)
+                            .frame(width: 14, height: 14, alignment: .center)
                         Text(L10n.t("provider.loading", settings.appLanguage))
                             .font(.plexMono(11))
                             .foregroundStyle(VocabbyTheme.muted)
+                            .lineLimit(1)
                     }
+                    .frame(height: 14, alignment: .center)
                 } else {
                     Text(metadataParts.joined(separator: " · ").uppercased())
                         .font(.plexMono(11))
