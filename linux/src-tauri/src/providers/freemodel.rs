@@ -62,7 +62,13 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
             .await;
             match scan {
                 Ok(Ok(h)) => h,
-                Ok(Err(_)) => return ProviderStatus::failure(&id, &name, "Chưa đăng nhập FreeModel trên trình duyệt"),
+                Ok(Err(_)) => {
+                    return ProviderStatus::failure(
+                        &id,
+                        &name,
+                        "Chưa đăng nhập FreeModel trên trình duyệt",
+                    )
+                }
                 Err(_) => return ProviderStatus::failure(&id, &name, "Lỗi nội bộ khi đọc cookie"),
             }
         }
@@ -80,7 +86,13 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
             Ok(t) => t,
             Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
         },
-        Ok(r) => return ProviderStatus::failure(&id, &name, format!("Network: HTTP {}", r.status().as_u16())),
+        Ok(r) => {
+            return ProviderStatus::failure(
+                &id,
+                &name,
+                format!("Network: HTTP {}", r.status().as_u16()),
+            )
+        }
         Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
     };
 
@@ -90,7 +102,12 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     };
     // Account email + bonus balance — best-effort enrichment, never blocks
     // the budgets.
-    status.account_label = match cfg.account_label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    status.account_label = match cfg
+        .account_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(explicit) => Some(explicit.to_string()),
         None => fetch_email(&client, &cookie_header).await,
     };
@@ -149,15 +166,18 @@ fn load_stored_balances() -> StoredBalances {
 }
 
 fn persist_balance_window(window: &QuotaWindow, saved_at: i64) -> Result<(), String> {
-    let path = balance_cache_path()
-        .ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
+    let path =
+        balance_cache_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let mut stored = load_stored_balances();
     stored.accounts.insert(
         crate::freemodel_accounts::active_id(),
-        PersistedBalance { window: window.clone(), saved_at },
+        PersistedBalance {
+            window: window.clone(),
+            saved_at,
+        },
     );
     let json = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
@@ -209,7 +229,10 @@ fn append_balance_window(windows: &mut Vec<QuotaWindow>, balance: Option<QuotaWi
 /// total up when it answers. None when nothing was earned.
 fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<QuotaWindow> {
     let referral = referral?;
-    let credits = referral.get("credits").and_then(Value::as_f64).unwrap_or(0.0);
+    let credits = referral
+        .get("credits")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     let used = referral.get("used").and_then(Value::as_f64).unwrap_or(0.0);
     let count = referral.get("count").and_then(Value::as_i64).unwrap_or(0);
     let billing_usd = billing
@@ -228,7 +251,9 @@ fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<Q
     if count > 0 {
         subtitle += &format!(" · {count} giới thiệu");
     }
-    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
+    Some(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Số dư".to_string(),
         used_pct: pct,
         remaining_pct: 100 - pct,
@@ -239,7 +264,11 @@ fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<Q
 }
 
 /// GET with the browser-like header set freemodel/Akamai expects.
-fn browser_get(client: &reqwest::Client, url: &str, cookie_header: &str) -> reqwest::RequestBuilder {
+fn browser_get(
+    client: &reqwest::Client,
+    url: &str,
+    cookie_header: &str,
+) -> reqwest::RequestBuilder {
     client
         .get(url)
         .header("Cookie", cookie_header)
@@ -285,7 +314,10 @@ pub(crate) fn filtered_cookie_header(raw: &str) -> Option<String> {
 
     let has_session = stripped.split(';').any(|chunk| {
         let t = chunk.trim();
-        t.split('=').next().map(|n| n.trim().eq_ignore_ascii_case("bm_session")).unwrap_or(false)
+        t.split('=')
+            .next()
+            .map(|n| n.trim().eq_ignore_ascii_case("bm_session"))
+            .unwrap_or(false)
     });
 
     if has_session {
@@ -305,7 +337,8 @@ fn strip_cookie_prefix(s: &str) -> &str {
 }
 
 fn parse_status(id: &str, name: &str, body: &str) -> Result<ProviderStatus, String> {
-    let v: Value = serde_json::from_str(body).map_err(|_| "Response /api/usage không hợp lệ".to_string())?;
+    let v: Value =
+        serde_json::from_str(body).map_err(|_| "Response /api/usage không hợp lệ".to_string())?;
 
     let mut windows = Vec::new();
     if let Some(w5h) = v.get("window5h") {
@@ -329,13 +362,26 @@ fn parse_status(id: &str, name: &str, body: &str) -> Result<ProviderStatus, Stri
 }
 
 fn cents_window(label: &str, window: &Value) -> Result<QuotaWindow, String> {
-    let used_cents = window.get("usedCents").and_then(Value::as_f64).ok_or_else(|| "Response /api/usage không hợp lệ".to_string())?;
-    let limit_cents = window.get("limitCents").and_then(Value::as_f64).ok_or_else(|| "Response /api/usage không hợp lệ".to_string())?;
-    let resets_at = window.get("resetsAt").and_then(Value::as_i64).filter(|&t| t != 0);
+    let used_cents = window
+        .get("usedCents")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "Response /api/usage không hợp lệ".to_string())?;
+    let limit_cents = window
+        .get("limitCents")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "Response /api/usage không hợp lệ".to_string())?;
+    let resets_at = window
+        .get("resetsAt")
+        .and_then(Value::as_i64)
+        .filter(|&t| t != 0);
 
     let used_usd = used_cents / 100.0;
     let limit_usd = limit_cents / 100.0;
-    let pct = if limit_usd > 0.0 { (used_usd / limit_usd * 100.0).round().clamp(0.0, 100.0) as i32 } else { 0 };
+    let pct = if limit_usd > 0.0 {
+        (used_usd / limit_usd * 100.0).round().clamp(0.0, 100.0) as i32
+    } else {
+        0
+    };
 
     // Window lengths are fixed by the product (5h + weekly) — drives the
     // settings pace line, macOS windowSeconds parity.
@@ -344,7 +390,9 @@ fn cents_window(label: &str, window: &Value) -> Result<QuotaWindow, String> {
         "Tuần" => Some(7 * 24 * 3600),
         _ => None,
     };
-    Ok(QuotaWindow { semantic_key: None, semantic_kind: None,
+    Ok(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: label.to_string(),
         used_pct: pct,
         remaining_pct: 100 - pct,
@@ -401,11 +449,15 @@ mod tests {
     #[test]
     fn balance_window_from_referral_and_billing() {
         let referral: Value =
-            serde_json::from_str(r#"{"code":"x","count":8,"credits":100.62,"used":67.22}"#).unwrap();
+            serde_json::from_str(r#"{"code":"x","count":8,"credits":100.62,"used":67.22}"#)
+                .unwrap();
         let billing: Value = serde_json::from_str(r#"{"signupCreditCents":2000}"#).unwrap();
         let w = balance_window(Some(&referral), Some(&billing)).unwrap();
         assert_eq!(w.label, "Số dư");
-        assert_eq!(w.subtitle.as_deref(), Some("$67.22 / $187.84 · 8 giới thiệu"));
+        assert_eq!(
+            w.subtitle.as_deref(),
+            Some("$67.22 / $187.84 · 8 giới thiệu")
+        );
         assert_eq!(w.used_pct, 36);
 
         // No referral payload → no window; zero balance → hidden.
@@ -424,12 +476,18 @@ mod tests {
         let billing: Value =
             serde_json::from_str(r#"{"creditCents":13373,"signupCreditCents":13373}"#).unwrap();
         let w = balance_window(Some(&referral), Some(&billing)).unwrap();
-        assert_eq!(w.subtitle.as_deref(), Some("$189.79 / $323.52 · 8 giới thiệu"));
+        assert_eq!(
+            w.subtitle.as_deref(),
+            Some("$189.79 / $323.52 · 8 giới thiệu")
+        );
         assert_eq!(w.used_pct, 59);
 
         // Billing timed out: referral-only figure still renders (used/used).
         let w = balance_window(Some(&referral), None).unwrap();
-        assert_eq!(w.subtitle.as_deref(), Some("$189.79 / $189.79 · 8 giới thiệu"));
+        assert_eq!(
+            w.subtitle.as_deref(),
+            Some("$189.79 / $189.79 · 8 giới thiệu")
+        );
         assert_eq!(w.used_pct, 100);
     }
 
@@ -440,7 +498,10 @@ mod tests {
 
     #[test]
     fn bare_token_wraps_as_bm_session() {
-        assert_eq!(filtered_cookie_header("abc123").unwrap(), "bm_session=abc123");
+        assert_eq!(
+            filtered_cookie_header("abc123").unwrap(),
+            "bm_session=abc123"
+        );
     }
 
     #[test]

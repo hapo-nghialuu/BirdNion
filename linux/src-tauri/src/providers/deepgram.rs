@@ -34,7 +34,11 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         return ProviderStatus::failure(&cfg.id, &name, "Không có project Deepgram cho key này");
     }
 
-    let config_pid = cfg.project_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let config_pid = cfg
+        .project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let mut target_projects: Vec<(String, Option<String>)> = projects
         .iter()
         .filter_map(|p| {
@@ -44,12 +48,22 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         })
         .collect();
     if let Some(pid) = config_pid {
-        let matched: Vec<_> = target_projects.iter().filter(|(id, _)| id == pid).cloned().collect();
-        target_projects = if matched.is_empty() { vec![(pid.to_string(), None)] } else { matched };
+        let matched: Vec<_> = target_projects
+            .iter()
+            .filter(|(id, _)| id == pid)
+            .cloned()
+            .collect();
+        target_projects = if matched.is_empty() {
+            vec![(pid.to_string(), None)]
+        } else {
+            matched
+        };
     }
 
     let now = chrono::Utc::now();
-    let start = (now - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
+    let start = (now - chrono::Duration::days(30))
+        .format("%Y-%m-%d")
+        .to_string();
     let end = now.format("%Y-%m-%d").to_string();
 
     let mut agg = Aggregate::default();
@@ -91,7 +105,9 @@ async fn get(client: &reqwest::Client, url: &str, token: &str) -> Result<Value, 
         401 | 403 => return Err("API key Deepgram không hợp lệ".to_string()),
         code => return Err(format!("HTTP {code}")),
     }
-    resp.json().await.map_err(|_| "Response thiếu trường".to_string())
+    resp.json()
+        .await
+        .map_err(|_| "Response thiếu trường".to_string())
 }
 
 #[derive(Default)]
@@ -107,7 +123,9 @@ struct Aggregate {
 
 impl Aggregate {
     fn add(&mut self, usage: &Value) {
-        let Some(results) = usage.get("results").and_then(Value::as_array) else { return };
+        let Some(results) = usage.get("results").and_then(Value::as_array) else {
+            return;
+        };
         for r in results {
             self.requests += r.get("requests").and_then(Value::as_i64).unwrap_or(0);
             self.hours += r.get("hours").and_then(Value::as_f64).unwrap_or(0.0);
@@ -126,7 +144,13 @@ fn fmt(n: i64) -> String {
         .chars()
         .rev()
         .enumerate()
-        .flat_map(|(i, c)| if i > 0 && i % 3 == 0 { vec![c, ','] } else { vec![c] })
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 {
+                vec![c, ',']
+            } else {
+                vec![c]
+            }
+        })
         .collect::<String>()
         .chars()
         .rev()
@@ -139,8 +163,16 @@ fn fmt(n: i64) -> String {
 }
 
 /// Pure aggregate → status mapping (unit-tested).
-fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_name: &str) -> ProviderStatus {
-    let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+fn materialize(
+    id: &str,
+    name: &str,
+    account_label: &str,
+    agg: &Aggregate,
+    plan_name: &str,
+) -> ProviderStatus {
+    let mut windows = vec![QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Requests (30d)".into(),
         used_pct: 0,
         remaining_pct: 100,
@@ -154,7 +186,9 @@ fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_
         } else {
             format!("{:.1} giờ", agg.hours)
         };
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Audio (30d)".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -175,7 +209,9 @@ fn materialize(id: &str, name: &str, account_label: &str, agg: &Aggregate, plan_
         extra.push(format!("{:.1} agent giờ", agg.agent_hours));
     }
     if !extra.is_empty() {
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Chi tiết (30d)".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -210,7 +246,10 @@ mod tests {
         assert!(s.error.is_none());
         assert_eq!(s.windows.len(), 3);
         assert_eq!(s.windows[0].subtitle.as_deref(), Some("10"));
-        assert_eq!(s.windows[1].subtitle.as_deref(), Some("1.5 giờ · 2.0 billable"));
+        assert_eq!(
+            s.windows[1].subtitle.as_deref(),
+            Some("1.5 giờ · 2.0 billable")
+        );
         assert_eq!(s.windows[2].subtitle.as_deref(), Some("150 tokens"));
     }
 

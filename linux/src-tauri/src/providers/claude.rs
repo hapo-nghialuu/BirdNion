@@ -66,15 +66,37 @@ fn parse_oauth_credentials(contents: &str) -> Option<Credentials> {
     if token.is_empty() {
         return None;
     }
-    let expires_at = oauth.get("expiresAt").and_then(Value::as_f64).map(|ms| (ms / 1000.0) as i64);
-    let refresh_token = oauth.get("refreshToken").and_then(Value::as_str).map(String::from);
-    let subscription_type = oauth.get("subscriptionType").and_then(Value::as_str).map(String::from);
-    let rate_limit_tier = oauth.get("rateLimitTier").and_then(Value::as_str).map(String::from);
-    Some(Credentials { access_token: token.to_string(), refresh_token, expires_at, subscription_type, rate_limit_tier })
+    let expires_at = oauth
+        .get("expiresAt")
+        .and_then(Value::as_f64)
+        .map(|ms| (ms / 1000.0) as i64);
+    let refresh_token = oauth
+        .get("refreshToken")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let subscription_type = oauth
+        .get("subscriptionType")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let rate_limit_tier = oauth
+        .get("rateLimitTier")
+        .and_then(Value::as_str)
+        .map(String::from);
+    Some(Credentials {
+        access_token: token.to_string(),
+        refresh_token,
+        expires_at,
+        subscription_type,
+        rate_limit_tier,
+    })
 }
 
 fn load_from_env() -> Option<Credentials> {
-    for key in ["CLAUDE_CODE_OAUTH_TOKEN", "BIRDNION_CLAUDE_OAUTH_TOKEN", "CODEXBAR_CLAUDE_OAUTH_TOKEN"] {
+    for key in [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "BIRDNION_CLAUDE_OAUTH_TOKEN",
+        "CODEXBAR_CLAUDE_OAUTH_TOKEN",
+    ] {
         if let Ok(v) = std::env::var(key) {
             let trimmed = v.trim();
             if !trimmed.is_empty() {
@@ -105,7 +127,10 @@ fn load_credentials() -> Option<Credentials> {
 }
 
 fn client_id() -> String {
-    for key in ["BIRDNION_CLAUDE_OAUTH_CLIENT_ID", "CODEXBAR_CLAUDE_OAUTH_CLIENT_ID"] {
+    for key in [
+        "BIRDNION_CLAUDE_OAUTH_CLIENT_ID",
+        "CODEXBAR_CLAUDE_OAUTH_CLIENT_ID",
+    ] {
         if let Ok(v) = std::env::var(key) {
             let trimmed = v.trim();
             if !trimmed.is_empty() {
@@ -139,12 +164,22 @@ async fn refresh(refresh_token: &str) -> Result<(String, Option<String>, i64), S
             "Claude OAuth refresh HTTP {status} — chạy `claude` để đăng nhập lại."
         ));
     }
-    let json: Value = resp.json().await.map_err(|_| "Claude OAuth refresh: phản hồi không hợp lệ.".to_string())?;
-    let access_token = json.get("access_token").and_then(Value::as_str).unwrap_or_default().to_string();
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|_| "Claude OAuth refresh: phản hồi không hợp lệ.".to_string())?;
+    let access_token = json
+        .get("access_token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     if access_token.is_empty() {
         return Err("Claude OAuth refresh: phản hồi không hợp lệ.".to_string());
     }
-    let new_refresh = json.get("refresh_token").and_then(Value::as_str).map(String::from);
+    let new_refresh = json
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .map(String::from);
     let expires_in = json.get("expires_in").and_then(Value::as_i64).unwrap_or(0);
     Ok((access_token, new_refresh, expires_in))
 }
@@ -204,7 +239,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     match resolved_source(cfg) {
         "web" => fetch_web(cfg, &name).await,
         "api" => fetch_admin_api(cfg, &name).await,
-        "cli" => ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trong bản này"),
+        "cli" => {
+            ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trong bản này")
+        }
         "auto" => {
             let status = fetch_oauth(cfg, &name).await;
             if status.error.is_some() {
@@ -219,10 +256,18 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 
 async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
     let Some(creds) = load_with_auto_refresh().await else {
-        return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Claude — đăng nhập bằng Claude Code");
+        return ProviderStatus::failure(
+            &cfg.id,
+            name,
+            "Chưa đăng nhập Claude — đăng nhập bằng Claude Code",
+        );
     };
     if creds.access_token.is_empty() {
-        return ProviderStatus::failure(&cfg.id, name, "Chưa đăng nhập Claude — đăng nhập bằng Claude Code");
+        return ProviderStatus::failure(
+            &cfg.id,
+            name,
+            "Chưa đăng nhập Claude — đăng nhập bằng Claude Code",
+        );
     }
     // Side-channel info alongside usage (macOS parity): CLI version
     // (memoized) + statuspage probe — both best-effort, never fail the fetch.
@@ -258,7 +303,9 @@ async fn fetch_admin_api(cfg: &config::Provider, name: &str) -> ProviderStatus {
         Some(snap) => ProviderStatus {
             id: cfg.id.clone(),
             display_name: name.to_string(),
-            windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+            windows: vec![QuotaWindow {
+                semantic_key: None,
+                semantic_kind: None,
                 label: "Chi phí 30 ngày".into(),
                 used_pct: 0,
                 remaining_pct: 100,
@@ -296,18 +343,27 @@ async fn fetch_web(cfg: &config::Provider, name: &str) -> ProviderStatus {
         Err(_) => return ProviderStatus::failure(&cfg.id, name, "Lỗi nội bộ khi đọc cookie"),
     };
     let Some(session_key) = session_key_from_header(&raw_header) else {
-        return ProviderStatus::failure(&cfg.id, name, "Không tìm thấy session cookie claude.ai trong trình duyệt.");
+        return ProviderStatus::failure(
+            &cfg.id,
+            name,
+            "Không tìm thấy session cookie claude.ai trong trình duyệt.",
+        );
     };
 
     let client = crate::providers::shared_client();
     let cookie = format!("sessionKey={session_key}");
 
-    let orgs_body = match fetch_web_json(&client, &format!("{CLAUDE_AI_BASE}/organizations"), &cookie).await {
-        Ok(b) => b,
-        Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
-    };
+    let orgs_body =
+        match fetch_web_json(&client, &format!("{CLAUDE_AI_BASE}/organizations"), &cookie).await {
+            Ok(b) => b,
+            Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
+        };
     let Some(org_id) = pick_organization_id(&orgs_body) else {
-        return ProviderStatus::failure(&cfg.id, name, "Không tìm thấy tổ chức Claude cho tài khoản này.");
+        return ProviderStatus::failure(
+            &cfg.id,
+            name,
+            "Không tìm thấy tổ chức Claude cho tài khoản này.",
+        );
     };
 
     let usage_url = format!("{CLAUDE_AI_BASE}/organizations/{org_id}/usage");
@@ -340,7 +396,11 @@ async fn fetch_web(cfg: &config::Provider, name: &str) -> ProviderStatus {
     status
 }
 
-async fn fetch_web_json(client: &reqwest::Client, url: &str, cookie: &str) -> Result<Value, String> {
+async fn fetch_web_json(
+    client: &reqwest::Client,
+    url: &str,
+    cookie: &str,
+) -> Result<Value, String> {
     let resp = client
         .get(url)
         .header("Cookie", cookie)
@@ -379,7 +439,13 @@ fn pick_organization_id(body: &Value) -> Option<String> {
     let has_chat = |o: &&Value| {
         o.get("capabilities")
             .and_then(Value::as_array)
-            .map(|caps| caps.iter().any(|c| c.as_str().map(|s| s.eq_ignore_ascii_case("chat")).unwrap_or(false)))
+            .map(|caps| {
+                caps.iter().any(|c| {
+                    c.as_str()
+                        .map(|s| s.eq_ignore_ascii_case("chat"))
+                        .unwrap_or(false)
+                })
+            })
             .unwrap_or(false)
     };
     let is_api_only = |o: &&Value| {
@@ -387,12 +453,23 @@ fn pick_organization_id(body: &Value) -> Option<String> {
             .and_then(Value::as_array)
             .map(|caps| {
                 !caps.is_empty()
-                    && caps.iter().all(|c| c.as_str().map(|s| s.eq_ignore_ascii_case("api")).unwrap_or(false))
+                    && caps.iter().all(|c| {
+                        c.as_str()
+                            .map(|s| s.eq_ignore_ascii_case("api"))
+                            .unwrap_or(false)
+                    })
             })
             .unwrap_or(false)
     };
-    let selected = orgs.iter().find(has_chat).or_else(|| orgs.iter().find(|o| !is_api_only(o))).or_else(|| orgs.first());
-    selected?.get("uuid").and_then(Value::as_str).map(String::from)
+    let selected = orgs
+        .iter()
+        .find(has_chat)
+        .or_else(|| orgs.iter().find(|o| !is_api_only(o)))
+        .or_else(|| orgs.first());
+    selected?
+        .get("uuid")
+        .and_then(Value::as_str)
+        .map(String::from)
 }
 
 struct RateWindow {
@@ -405,14 +482,19 @@ fn parse_iso8601(s: Option<&str>) -> Option<i64> {
     if s.is_empty() {
         return None;
     }
-    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp())
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.timestamp())
 }
 
 fn parse_window(v: Option<&Value>) -> Option<RateWindow> {
     let v = v?;
     let used_pct = v.get("utilization").and_then(Value::as_f64)?;
     let resets_at = parse_iso8601(v.get("resets_at").and_then(Value::as_str));
-    Some(RateWindow { used_pct, resets_at })
+    Some(RateWindow {
+        used_pct,
+        resets_at,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -426,11 +508,18 @@ fn parse_prepaid_balance(body: &Value) -> Option<PrepaidBalance> {
     if !amount.is_finite() || amount < 0.0 {
         return None;
     }
-    let currency = body.get("currency").and_then(Value::as_str)?.trim().to_uppercase();
+    let currency = body
+        .get("currency")
+        .and_then(Value::as_str)?
+        .trim()
+        .to_uppercase();
     if currency.is_empty() {
         return None;
     }
-    Some(PrepaidBalance { amount: amount / 100.0, currency })
+    Some(PrepaidBalance {
+        amount: amount / 100.0,
+        currency,
+    })
 }
 
 /// 2026 schema: some accounts no longer return a flat `seven_day` — weekly
@@ -448,7 +537,9 @@ fn all_models_weekly_limit(body: &Value) -> Option<RateWindow> {
         {
             continue;
         }
-        let Some(percent) = entry.get("percent").and_then(Value::as_f64) else { continue };
+        let Some(percent) = entry.get("percent").and_then(Value::as_f64) else {
+            continue;
+        };
         if !percent.is_finite() {
             continue;
         }
@@ -481,7 +572,9 @@ const SEVEN_DAYS_SECS: i64 = 7 * 24 * 3600;
 
 fn to_quota_window(w: RateWindow, label: &str, window_seconds: Option<i64>) -> QuotaWindow {
     let used = w.used_pct.round().clamp(0.0, 100.0) as i32;
-    QuotaWindow { semantic_key: None, semantic_kind: None,
+    QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: label.to_string(),
         used_pct: used,
         remaining_pct: 100 - used,
@@ -510,7 +603,9 @@ fn build_status(
     let seven_day_sonnet = parse_window(body.get("seven_day_sonnet"));
 
     let mut windows = Vec::new();
-    let primary = five_hour.or(seven_day_oauth_apps).or_else(|| parse_window(body.get("seven_day")));
+    let primary = five_hour
+        .or(seven_day_oauth_apps)
+        .or_else(|| parse_window(body.get("seven_day")));
     let has_primary = primary.is_some();
 
     if let Some(w) = primary {
@@ -571,10 +666,16 @@ fn spend_limit_window(extra: Option<&Value>) -> Option<(QuotaWindow, Option<f64>
     }
     let used = used_cents / 100.0;
     let limit = limit_cents / 100.0;
-    let pct = extra.get("utilization").and_then(Value::as_f64).unwrap_or((used / limit) * 100.0).clamp(0.0, 100.0);
+    let pct = extra
+        .get("utilization")
+        .and_then(Value::as_f64)
+        .unwrap_or((used / limit) * 100.0)
+        .clamp(0.0, 100.0);
     let remaining = (limit - used).max(0.0);
     Some((
-        QuotaWindow { semantic_key: None, semantic_kind: None,
+        QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Spend limit".into(),
             used_pct: pct.round() as i32,
             remaining_pct: 100 - pct.round() as i32,
@@ -643,7 +744,10 @@ mod tests {
     /// every user who never touched the picker.
     #[test]
     fn unset_source_defaults_to_auto() {
-        let cfg = config::Provider { id: "claude".to_string(), ..Default::default() };
+        let cfg = config::Provider {
+            id: "claude".to_string(),
+            ..Default::default()
+        };
         assert_eq!(resolved_source(&cfg), "auto");
     }
 
@@ -718,10 +822,22 @@ mod tests {
 
     #[test]
     fn is_expired_checks_epoch() {
-        let creds = Credentials { access_token: "a".into(), refresh_token: None, expires_at: Some(1000), subscription_type: None, rate_limit_tier: None };
+        let creds = Credentials {
+            access_token: "a".into(),
+            refresh_token: None,
+            expires_at: Some(1000),
+            subscription_type: None,
+            rate_limit_tier: None,
+        };
         assert!(creds.is_expired(1000));
         assert!(!creds.is_expired(999));
-        let never = Credentials { access_token: "a".into(), refresh_token: None, expires_at: None, subscription_type: None, rate_limit_tier: None };
+        let never = Credentials {
+            access_token: "a".into(),
+            refresh_token: None,
+            expires_at: None,
+            subscription_type: None,
+            rate_limit_tier: None,
+        };
         assert!(!never.is_expired(999_999_999));
     }
 
@@ -772,8 +888,14 @@ mod tests {
         // callers (e.g. settings row) when a login-method/source label is
         // needed, not baked into `plan_name`.
         assert_eq!(plan_label(None, Some("default_claude_max_5x")), "Max 5x");
-        assert_eq!(plan_label(None, Some("v2_default_claude_max_20x")), "Max 20x");
-        assert_eq!(plan_label(Some("team"), Some("default_claude_max_5x")), "Team");
+        assert_eq!(
+            plan_label(None, Some("v2_default_claude_max_20x")),
+            "Max 20x"
+        );
+        assert_eq!(
+            plan_label(Some("team"), Some("default_claude_max_5x")),
+            "Team"
+        );
         assert_eq!(plan_label(Some("max"), None), "Max");
         assert_eq!(plan_label(Some("pro"), None), "Pro");
         assert_eq!(plan_label(None, None), "Claude account");
@@ -781,15 +903,22 @@ mod tests {
 
     #[test]
     fn prepaid_balance_parses_minor_units() {
-        let balance = parse_prepaid_balance(&json!({"amount": 12345.0, "currency": "usd"})).unwrap();
+        let balance =
+            parse_prepaid_balance(&json!({"amount": 12345.0, "currency": "usd"})).unwrap();
         assert!((balance.amount - 123.45).abs() < 0.001);
         assert_eq!(balance.currency, "USD");
     }
 
     #[test]
     fn prepaid_balance_failure_is_noop() {
-        assert_eq!(parse_prepaid_balance(&json!({"amount": "bad", "currency": "USD"})), None);
-        assert_eq!(parse_prepaid_balance(&json!({"amount": 100, "currency": ""})), None);
+        assert_eq!(
+            parse_prepaid_balance(&json!({"amount": "bad", "currency": "USD"})),
+            None
+        );
+        assert_eq!(
+            parse_prepaid_balance(&json!({"amount": 100, "currency": ""})),
+            None
+        );
     }
 
     #[test]
@@ -803,7 +932,10 @@ mod tests {
     #[test]
     fn session_key_from_header_requires_sk_ant_prefix() {
         let header = "other=1; sessionKey=sk-ant-abc123; foo=bar";
-        assert_eq!(session_key_from_header(header), Some("sk-ant-abc123".to_string()));
+        assert_eq!(
+            session_key_from_header(header),
+            Some("sk-ant-abc123".to_string())
+        );
         assert_eq!(session_key_from_header("sessionKey=not-a-real-key"), None);
         assert_eq!(session_key_from_header("unrelated=xyz"), None);
     }
@@ -820,10 +952,16 @@ mod tests {
     #[test]
     fn pick_organization_id_falls_back_to_first_non_api_only_then_first() {
         let no_chat = json!([{"uuid": "org-api", "capabilities": ["api"]}, {"uuid": "org-plain"}]);
-        assert_eq!(pick_organization_id(&no_chat), Some("org-plain".to_string()));
+        assert_eq!(
+            pick_organization_id(&no_chat),
+            Some("org-plain".to_string())
+        );
 
         let all_api_only = json!([{"uuid": "org-api", "capabilities": ["api"]}]);
-        assert_eq!(pick_organization_id(&all_api_only), Some("org-api".to_string()));
+        assert_eq!(
+            pick_organization_id(&all_api_only),
+            Some("org-api".to_string())
+        );
 
         assert_eq!(pick_organization_id(&json!([])), None);
         assert_eq!(pick_organization_id(&json!({})), None);

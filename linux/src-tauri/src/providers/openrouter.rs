@@ -63,7 +63,10 @@ pub fn parse_credits(
 ) -> Option<ProviderStatus> {
     let data = body.get("data")?;
     let total = data.get("total_credits").and_then(Value::as_f64)?;
-    let usage = data.get("total_usage").and_then(Value::as_f64).unwrap_or(0.0);
+    let usage = data
+        .get("total_usage")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     let remaining = (total - usage).max(0.0);
     let used_pct = if total > 0.0 {
         ((usage / total) * 100.0).round().clamp(0.0, 100.0) as i32
@@ -73,7 +76,9 @@ pub fn parse_credits(
     Some(ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
-        windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows: vec![QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Credits".into(),
             used_pct,
             remaining_pct: 100 - used_pct,
@@ -110,10 +115,15 @@ async fn fetch_key_window(client: &reqwest::Client, token: &str) -> Option<Quota
 /// unlimited keys (limit null/0) or malformed payloads.
 pub fn parse_key_window(body: &Value) -> Option<QuotaWindow> {
     let data = body.get("data")?;
-    let limit = data.get("limit").and_then(Value::as_f64).filter(|l| *l > 0.0)?;
+    let limit = data
+        .get("limit")
+        .and_then(Value::as_f64)
+        .filter(|l| *l > 0.0)?;
     let usage = data.get("usage").and_then(Value::as_f64).unwrap_or(0.0);
     let used_pct = ((usage / limit) * 100.0).round().clamp(0.0, 100.0) as i32;
-    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
+    Some(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Hạn mức key".into(),
         used_pct,
         remaining_pct: 100 - used_pct,

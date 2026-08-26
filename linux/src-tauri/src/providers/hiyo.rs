@@ -47,9 +47,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     };
     match resp.status().as_u16() {
         200..=299 => {}
-        401 | 403 => {
-            return ProviderStatus::failure(&cfg.id, &name, "API key Hiyo không hợp lệ")
-        }
+        401 | 403 => return ProviderStatus::failure(&cfg.id, &name, "API key Hiyo không hợp lệ"),
         code => return ProviderStatus::failure(&cfg.id, &name, format!("HTTP {code}")),
     }
     let body: Value = match resp.json().await {
@@ -72,10 +70,7 @@ pub fn parse_balance(id: &str, name: &str, account_label: &str, body: &Value) ->
         .and_then(Value::as_f64)
         .or_else(|| body.get("remaining").and_then(Value::as_f64))
         .unwrap_or(0.0);
-    let unit = body
-        .get("unit")
-        .and_then(Value::as_str)
-        .unwrap_or("USD");
+    let unit = body.get("unit").and_then(Value::as_str).unwrap_or("USD");
     let symbol = if unit.eq_ignore_ascii_case("USD") {
         "$".to_string()
     } else {

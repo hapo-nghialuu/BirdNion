@@ -145,7 +145,9 @@ fn price_for(model: &str) -> Option<Price> {
 /// the remainder is fresh input; long-context rates kick in when the turn's
 /// input exceeds the model threshold.
 fn cost_usd(model: &str, input: i64, cached: i64, output: i64) -> f64 {
-    let Some(p) = price_for(model) else { return 0.0 };
+    let Some(p) = price_for(model) else {
+        return 0.0;
+    };
     let cached = cached.clamp(0, input.max(0));
     let non_cached = (input - cached).max(0);
     let above = p.threshold.is_some_and(|t| input.max(0) > t);
@@ -244,13 +246,20 @@ struct CodexFileScan {
 /// subagent transcript instead of the true parent).
 fn parse_codex_session_meta(
     obj: &Value,
-) -> Option<(Option<String>, Option<String>, Option<String>, Option<String>)> {
+) -> Option<(
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
     if obj.get("type").and_then(Value::as_str) != Some("session_meta") {
         return None;
     }
     let payload = obj.get("payload")?;
     let field = |v: &Value, keys: &[&str]| -> Option<String> {
-        keys.iter().find_map(|k| v.get(*k).and_then(Value::as_str)).map(String::from)
+        keys.iter()
+            .find_map(|k| v.get(*k).and_then(Value::as_str))
+            .map(String::from)
     };
     let id = field(payload, &["id", "session_id", "sessionId"]);
     let forked_from_id = field(payload, &["forked_from_id", "forkedFromId"]);
@@ -426,8 +435,7 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
         models: HashMap<String, (f64, i64)>,
     }
     let mut project_buckets: HashMap<(String, NaiveDate), ProjectAcc> = HashMap::new();
-    let mut retraction_buckets: HashMap<(String, String, NaiveDate), ProjectAcc> =
-        HashMap::new();
+    let mut retraction_buckets: HashMap<(String, String, NaiveDate), ProjectAcc> = HashMap::new();
 
     // Pass 1: read every file once, capturing its identity/fork lineage and
     // full event stream (not yet bucketed — a forked file's events need its
@@ -492,9 +500,8 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
                 let payload = obj.get("payload");
                 match obj.get("type").and_then(Value::as_str) {
                     Some("turn_context") => {
-                        if let Some(m) = payload
-                            .and_then(|p| p.get("model"))
-                            .and_then(Value::as_str)
+                        if let Some(m) =
+                            payload.and_then(|p| p.get("model")).and_then(Value::as_str)
                         {
                             model = m.to_string();
                         }
@@ -505,7 +512,9 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
                             continue;
                         }
                         let Some(info) = p.get("info") else { continue };
-                        let Some(last) = info.get("last_token_usage") else { continue };
+                        let Some(last) = info.get("last_token_usage") else {
+                            continue;
+                        };
                         let ts = obj
                             .get("timestamp")
                             .and_then(Value::as_str)
@@ -533,7 +542,11 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
                     let retraction_project = existing
                         .retraction_project
                         .clone()
-                        .or_else(|| (invalid || conflicts).then(|| existing.project.clone()).flatten())
+                        .or_else(|| {
+                            (invalid || conflicts)
+                                .then(|| existing.project.clone())
+                                .flatten()
+                        })
                         .or_else(|| file_scan.retraction_project.clone());
                     let retraction_events = if existing.retraction_project.is_some() {
                         existing.retraction_events.clone()
@@ -586,9 +599,7 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
             .session_id
             .as_deref()
             .zip(scans[scan_index].retraction_project.as_ref())
-            .map(|(session_id, project)| {
-                (codex_retraction_id(session_id, &project.key), project)
-            });
+            .map(|(session_id, project)| (codex_retraction_id(session_id, &project.key), project));
         for ev in &scans[scan_index].events {
             // Unresolved baseline (parent outside the scan window, or no
             // fork at all) falls back to the turn's own delta — identical
@@ -627,7 +638,10 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
                 project_day.display_name = project.display_name.clone();
                 project_day.usd += usd;
                 project_day.tokens += tokens;
-                let model = project_day.models.entry(ev.model.clone()).or_insert((0.0, 0));
+                let model = project_day
+                    .models
+                    .entry(ev.model.clone())
+                    .or_insert((0.0, 0));
                 model.0 += usd;
                 model.1 += tokens;
             }
@@ -664,12 +678,7 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
                 if ev.ts < cutoff || ev.ts > now {
                     continue;
                 }
-                let usd = cost_usd(
-                    &ev.model,
-                    counted.input,
-                    counted.cached,
-                    counted.output,
-                );
+                let usd = cost_usd(&ev.model, counted.input, counted.cached, counted.output);
                 let tokens = counted.total;
                 if usd == 0.0 && tokens == 0 {
                     continue;
@@ -681,7 +690,10 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
                 project_day.display_name = project.display_name.clone();
                 project_day.usd += usd;
                 project_day.tokens += tokens;
-                let model = project_day.models.entry(ev.model.clone()).or_insert((0.0, 0));
+                let model = project_day
+                    .models
+                    .entry(ev.model.clone())
+                    .or_insert((0.0, 0));
                 model.0 += usd;
                 model.1 += tokens;
             }
@@ -710,7 +722,12 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
             }
             None => (0.0, 0, Vec::new()),
         };
-        daily.push(DailyUsage { date: day.to_string(), usd, tokens, models });
+        daily.push(DailyUsage {
+            date: day.to_string(),
+            usd,
+            tokens,
+            models,
+        });
     }
 
     let mut hourly = Vec::with_capacity(24);
@@ -729,11 +746,7 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
 
     let top_model = model_totals
         .into_iter()
-        .max_by(|a, b| {
-            a.1 .0
-                .total_cmp(&b.1 .0)
-                .then_with(|| a.1 .1.cmp(&b.1 .1))
-        })
+        .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0).then_with(|| a.1 .1.cmp(&b.1 .1)))
         .map(|(name, _)| name);
 
     let usage = UsageReport {
@@ -782,8 +795,7 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
             .cmp(&b.date)
             .then_with(|| a.project_key.cmp(&b.project_key))
     });
-    let mut retractions_by_id: HashMap<(String, String), Vec<ProjectContribution>> =
-        HashMap::new();
+    let mut retractions_by_id: HashMap<(String, String), Vec<ProjectContribution>> = HashMap::new();
     for ((retraction_id, project_key, date), day) in retraction_buckets {
         if day.usd <= 0.0 && day.tokens <= 0 {
             continue;
@@ -838,10 +850,8 @@ mod tests {
     }
 
     fn temp_base(tag: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!(
-            "birdnion-codex-test-{tag}-{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("birdnion-codex-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         base
     }
@@ -852,7 +862,9 @@ mod tests {
     }
 
     fn turn_context(model: &str) -> String {
-        format!(r#"{{"timestamp":"2026-01-01T00:00:00Z","type":"turn_context","payload":{{"model":"{model}"}}}}"#)
+        format!(
+            r#"{{"timestamp":"2026-01-01T00:00:00Z","type":"turn_context","payload":{{"model":"{model}"}}}}"#
+        )
     }
 
     fn token_count(ts: &str, input: i64, cached: i64, output: i64, total: i64) -> String {
@@ -892,8 +904,14 @@ mod tests {
     ) -> String {
         format!(
             r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{ti},"cached_input_tokens":{tc},"output_tokens":{to},"total_tokens":{tt}}},"last_token_usage":{{"input_tokens":{li},"cached_input_tokens":{lc},"output_tokens":{lo},"total_tokens":{lt}}}}}}}}}"#,
-            li = last.0, lc = last.1, lo = last.2, lt = last.3,
-            ti = total.0, tc = total.1, to = total.2, tt = total.3,
+            li = last.0,
+            lc = last.1,
+            lo = last.2,
+            lt = last.3,
+            ti = total.0,
+            tc = total.1,
+            to = total.2,
+            tt = total.3,
         )
     }
 
@@ -951,7 +969,7 @@ mod tests {
             "rollout-a.jsonl",
             &[
                 turn_context("gpt-5"),
-                token_count(&old, 1_000_000, 0, 0, 1_000_000),    // $1.25, outside 30d
+                token_count(&old, 1_000_000, 0, 0, 1_000_000), // $1.25, outside 30d
                 token_count(&recent, 1_000_000, 0, 0, 1_000_000), // $1.25, today
             ],
         );
@@ -1024,7 +1042,11 @@ mod tests {
             token_count(&ts, 100_000, 0, 0, 100_000),
         ];
         write_lines(&base.join("sessions"), "rollout-live.jsonl", &lines);
-        write_lines(&base.join("archived_sessions"), "rollout-archived.jsonl", &lines);
+        write_lines(
+            &base.join("archived_sessions"),
+            "rollout-archived.jsonl",
+            &lines,
+        );
 
         let scan = scan_with_projects(
             &[base.join("sessions"), base.join("archived_sessions")],
@@ -1093,11 +1115,7 @@ mod tests {
             turn_context("gpt-5"),
             token_count(&ts, 80_000, 20_000, 20_000, 100_000),
         ];
-        write_lines(
-            &base.join("sessions"),
-            "rollout-live.jsonl",
-            &session_lines,
-        );
+        write_lines(&base.join("sessions"), "rollout-live.jsonl", &session_lines);
 
         let first = scan_with_projects(&[base.join("sessions")], now).unwrap();
         assert_eq!(first.projects.len(), 1);
@@ -1128,7 +1146,10 @@ mod tests {
             codex_retraction_id("private-session-id", &first.projects[0].project_key)
         );
         assert_eq!(retraction.project_key, first.projects[0].project_key);
-        assert_eq!(retraction.contributions[0].date, now.date_naive().to_string());
+        assert_eq!(
+            retraction.contributions[0].date,
+            now.date_naive().to_string()
+        );
         assert_eq!(retraction.contributions[0].tokens, 100_000);
         assert_eq!(retraction.contributions[0].models[0].name, "gpt-5");
         assert_eq!(retraction.contributions[0].models[0].tokens, 100_000);
@@ -1161,12 +1182,7 @@ mod tests {
             &base.join("sessions"),
             "rollout-control.jsonl",
             &[
-                session_meta_with_cwd(
-                    &ts,
-                    "control-id",
-                    None,
-                    Some("/Users/alice/secret\\nrepo"),
-                ),
+                session_meta_with_cwd(&ts, "control-id", None, Some("/Users/alice/secret\\nrepo")),
                 turn_context("gpt-5"),
                 token_count(&ts, 25_000, 0, 0, 25_000),
             ],

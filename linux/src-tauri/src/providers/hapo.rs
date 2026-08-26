@@ -58,10 +58,17 @@ pub fn resolved_base_url(cfg: &config::Provider) -> Option<String> {
 }
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
-    let name = cfg.display_name.clone().unwrap_or_else(|| "AIHub".to_string());
+    let name = cfg
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "AIHub".to_string());
 
     let Some(base_url) = resolved_base_url(cfg) else {
-        return ProviderStatus::failure(&cfg.id, &name, "Hapo endpoint chưa được cấu hình trong bản build");
+        return ProviderStatus::failure(
+            &cfg.id,
+            &name,
+            "Hapo endpoint chưa được cấu hình trong bản build",
+        );
     };
     let me_url = env_or("HAPO_ME_URL").or_else(|| BAKED_ME_URL.and_then(clean_value));
     let auth_template = env_or("HAPO_AUTH_TEMPLATE")
@@ -71,7 +78,10 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let Some(token) = config::api_key(cfg) else {
         return ProviderStatus::failure(&cfg.id, &name, "Chưa cấu hình token");
     };
-    if !token.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-') {
+    if !token
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
         return ProviderStatus::failure(&cfg.id, &name, "Token chứa ký tự không hợp lệ");
     }
 
@@ -125,7 +135,11 @@ async fn fetch_budget(
         .unwrap_or("")
         .to_string();
     if !content_type.starts_with("application/json") {
-        return ProviderStatus::failure(id, name, format!("Endpoint trả về non-JSON (Content-Type: {content_type})"));
+        return ProviderStatus::failure(
+            id,
+            name,
+            format!("Endpoint trả về non-JSON (Content-Type: {content_type})"),
+        );
     }
     let body: Value = match resp.json().await {
         Ok(v) => v,
@@ -146,11 +160,15 @@ pub fn parse_budget(id: &str, name: &str, body: &Value) -> ProviderStatus {
     };
     let remaining_pct = (100.0 - usage_pct).round().clamp(0.0, 100.0) as i32;
     let used_pct = 100 - remaining_pct;
-    let resets_at = chrono::DateTime::parse_from_rfc3339(week_ends_at).ok().map(|d| d.timestamp());
+    let resets_at = chrono::DateTime::parse_from_rfc3339(week_ends_at)
+        .ok()
+        .map(|d| d.timestamp());
     ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
-        windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows: vec![QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Tuần".into(),
             used_pct,
             remaining_pct,

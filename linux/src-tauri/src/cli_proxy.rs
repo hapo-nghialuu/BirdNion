@@ -155,7 +155,8 @@ pub fn open_ai_proxy_format(p: &ClaudeCodeProfile) -> Option<String> {
 
 /// macOS `usesEmbeddedCLIProxy`: explicit flag, else OpenAI defaults to proxy.
 pub fn uses_embedded_cli_proxy(p: &ClaudeCodeProfile) -> bool {
-    p.embedded_local_proxy.unwrap_or_else(|| is_openai_compatible(p))
+    p.embedded_local_proxy
+        .unwrap_or_else(|| is_openai_compatible(p))
 }
 
 /// Upstream base/key for registration — OpenAI fields with Anthropic fallback.
@@ -180,12 +181,11 @@ pub fn has_upstream_configuration(p: &ClaudeCodeProfile) -> bool {
 }
 
 pub fn cli_proxy_provider_name(p: &ClaudeCodeProfile) -> String {
-    let safe: String = p
-        .id
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
+    let safe: String =
+        p.id.to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
     format!("birdnion-{safe}")
 }
 
@@ -215,10 +215,14 @@ pub fn normalized_cli_proxy_base_url(raw: Option<&str>) -> Option<String> {
 }
 
 pub fn model_names(p: &ClaudeCodeProfile) -> Vec<String> {
-    [p.haiku_model.as_deref(), p.sonnet_model.as_deref(), p.opus_model.as_deref()]
-        .into_iter()
-        .filter_map(cleaned)
-        .collect()
+    [
+        p.haiku_model.as_deref(),
+        p.sonnet_model.as_deref(),
+        p.opus_model.as_deref(),
+    ]
+    .into_iter()
+    .filter_map(cleaned)
+    .collect()
 }
 
 pub fn is_embedded_cli_proxy_ready(p: &ClaudeCodeProfile) -> bool {
@@ -278,7 +282,10 @@ pub fn configuration_signature(p: &ClaudeCodeProfile) -> Option<String> {
 }
 
 pub fn is_configuration_current(p: &ClaudeCodeProfile) -> bool {
-    match (configuration_signature(p), cleaned(p.cli_proxy_applied_signature.as_deref())) {
+    match (
+        configuration_signature(p),
+        cleaned(p.cli_proxy_applied_signature.as_deref()),
+    ) {
         (Some(sig), Some(applied)) => sig == applied,
         _ => false,
     }
@@ -367,9 +374,7 @@ impl ProxyConfiguration {
             .collect();
         let managed_codex: Vec<_> = codex_profiles
             .iter()
-            .filter(|p| {
-                p.uses_embedded_cli_proxy() && codex_config::is_embedded_cli_proxy_ready(p)
-            })
+            .filter(|p| p.uses_embedded_cli_proxy() && codex_config::is_embedded_cli_proxy_ready(p))
             .collect();
 
         let management_key = managed_claude
@@ -511,7 +516,10 @@ impl ProxyConfiguration {
         }
         lines.push("remote-management:".into());
         lines.push("  allow-remote: false".into());
-        lines.push(format!("  secret-key: {}", yaml_quote(&self.management_key)));
+        lines.push(format!(
+            "  secret-key: {}",
+            yaml_quote(&self.management_key)
+        ));
         lines.push("  disable-control-panel: true".into());
         lines.push("  disable-auto-update-panel: true".into());
         lines.push("disable-claude-cloak-mode: true".into());
@@ -534,7 +542,12 @@ impl ProxyConfiguration {
                 lines.push(format!("  - name: {}", yaml_quote(&entry.name)));
                 lines.push(format!("    prefix: {}", yaml_quote(&entry.prefix)));
                 lines.push(format!("    base-url: {}", yaml_quote(&entry.base_url)));
-                if let Some(fmt) = entry.format.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if let Some(fmt) = entry
+                    .format
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     lines.push(format!("    format: {}", yaml_quote(fmt)));
                 }
                 lines.push("    api-key-entries:".into());
@@ -569,7 +582,8 @@ pub fn yaml_quote(value: &str) -> String {
 }
 
 fn write_configuration(configuration: &ProxyConfiguration) -> Result<(), String> {
-    let dir = config_directory().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
+    let dir =
+        config_directory().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let auth = dir.join("auth");
     crate::platform::atomic_file::ensure_private_directory(&dir).map_err(|e| e.to_string())?;
     crate::platform::atomic_file::ensure_private_directory(&auth).map_err(|e| e.to_string())?;
@@ -1007,7 +1021,8 @@ async fn ensure_running(executable: &Path) -> Result<(), String> {
         #[cfg(not(windows))]
         return Ok(());
     }
-    let work_dir = config_directory().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
+    let work_dir =
+        config_directory().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let config_url = work_dir.join("config.yaml");
     start_process(executable, &config_url, &work_dir)?;
     for _ in 0..25 {
@@ -1040,8 +1055,8 @@ async fn reload(
     claude_profiles: &[ClaudeCodeProfile],
     codex_profiles: &[CodexProfile],
 ) -> Result<(), String> {
-    let auth_directory = auth_directory()
-        .ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
+    let auth_directory =
+        auth_directory().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
     let configuration =
         ProxyConfiguration::from_profiles(claude_profiles, codex_profiles, &auth_directory)
             .ok_or_else(|| "Thiếu Base URL hoặc API key".to_string())?;
@@ -1212,7 +1227,9 @@ fn active_claude_profiles(profiles: &[ClaudeCodeProfile]) -> Vec<ClaudeCodeProfi
 fn active_codex_profiles(profiles: &[CodexProfile]) -> Vec<CodexProfile> {
     profiles
         .iter()
-        .filter(|p| p.uses_embedded_cli_proxy() && codex_config::is_cli_proxy_configuration_current(p))
+        .filter(|p| {
+            p.uses_embedded_cli_proxy() && codex_config::is_cli_proxy_configuration_current(p)
+        })
         .cloned()
         .collect()
 }
@@ -1286,10 +1303,7 @@ pub async fn status_for_profile(profile_id: &str) -> ProxyStatus {
     }
 }
 
-pub async fn prepare_profile(
-    app: &AppHandle,
-    profile_id: &str,
-) -> Result<ProxyStatus, String> {
+pub async fn prepare_profile(app: &AppHandle, profile_id: &str) -> Result<ProxyStatus, String> {
     let _prepare_guard = PREPARE_LOCK.lock().await;
     let profile =
         config::find_profile(profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
@@ -1350,8 +1364,8 @@ pub async fn prepare_codex_profile_cmd(
     profile_id: &str,
 ) -> Result<ProxyStatus, String> {
     let _prepare_guard = PREPARE_LOCK.lock().await;
-    let profile =
-        config::find_codex_profile(profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
+    let profile = config::find_codex_profile(profile_id)
+        .ok_or_else(|| "Không tìm thấy config".to_string())?;
     if cleaned(Some(profile.base_url.as_str())).is_none()
         || cleaned(Some(profile.api_key.as_str())).is_none()
         || cleaned(Some(profile.model.as_str())).is_none()
@@ -1543,7 +1557,8 @@ pub async fn restore_if_configured(app: &AppHandle) {
 
     let active = active_claude_profiles(&profiles);
     let active_codex = active_codex_profiles(&settings.codex_profiles);
-    if active.len() > 1 || active_codex.len() > 1 || (active.is_empty() && active_codex.is_empty()) {
+    if active.len() > 1 || active_codex.len() > 1 || (active.is_empty() && active_codex.is_empty())
+    {
         set_runtime(RuntimeState::Stopped);
         return;
     }
@@ -1569,10 +1584,7 @@ pub async fn cli_proxy_status(profile_id: String) -> ProxyStatus {
 }
 
 #[tauri::command]
-pub async fn cli_proxy_prepare(
-    app: AppHandle,
-    profile_id: String,
-) -> Result<ProxyStatus, String> {
+pub async fn cli_proxy_prepare(app: AppHandle, profile_id: String) -> Result<ProxyStatus, String> {
     prepare_profile(&app, &profile_id).await
 }
 
@@ -1684,7 +1696,10 @@ mod tests {
             "nginx -c /home/u/.config/birdnion/cli-proxy-api/config.yaml",
             path
         ));
-        assert!(!is_managed_process("cliproxyapi -config /other/config.yaml", path));
+        assert!(!is_managed_process(
+            "cliproxyapi -config /other/config.yaml",
+            path
+        ));
     }
 
     #[test]
@@ -1792,9 +1807,6 @@ mod tests {
             upstream_base_url(&p).as_deref(),
             Some("https://openai-upstream.example/v1")
         );
-        assert_eq!(
-            upstream_api_key(&p).as_deref(),
-            Some("upstream-openai-key")
-        );
+        assert_eq!(upstream_api_key(&p).as_deref(), Some("upstream-openai-key"));
     }
 }

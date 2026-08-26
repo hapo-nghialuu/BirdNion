@@ -147,8 +147,12 @@ async fn fetch_json(client: &reqwest::Client, url: &str, key: &str) -> Result<Va
 /// Pure: `starting_at`/`ending_at`/`bucket_width=1d`/`limit` query builder,
 /// mirroring `ClaudeAdminAPIUsageFetcher.url`.
 fn build_url(base: &str, start: i64, end: i64, group_by: &str) -> String {
-    let start_s = chrono::DateTime::from_timestamp(start, 0).unwrap_or_default().to_rfc3339();
-    let end_s = chrono::DateTime::from_timestamp(end, 0).unwrap_or_default().to_rfc3339();
+    let start_s = chrono::DateTime::from_timestamp(start, 0)
+        .unwrap_or_default()
+        .to_rfc3339();
+    let end_s = chrono::DateTime::from_timestamp(end, 0)
+        .unwrap_or_default()
+        .to_rfc3339();
     format!(
         "{base}?starting_at={start_s}&ending_at={end_s}&bucket_width=1d&limit={MAX_DAILY_BUCKETS}&group_by[]={group_by}"
     )
@@ -220,18 +224,25 @@ fn display_name_or(raw: Option<&str>, fallback: &str) -> String {
 /// `ClaudeAdminAPIUsageFetcher.makeSnapshot`: joins cost_report + messages
 /// usage_report by `starting_at` day-bucket key.
 fn build_snapshot(costs: &Value, messages: &Value, now: i64) -> ClaudeAdminSnapshot {
-    let mut accumulators: std::collections::HashMap<String, DailyAccumulator> = std::collections::HashMap::new();
+    let mut accumulators: std::collections::HashMap<String, DailyAccumulator> =
+        std::collections::HashMap::new();
 
     if let Some(data) = costs.get("data").and_then(Value::as_array) {
         for bucket in data {
-            let starting_at = bucket.get("starting_at").and_then(Value::as_str).unwrap_or("").to_string();
+            let starting_at = bucket
+                .get("starting_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             if starting_at.is_empty() {
                 continue;
             }
-            let acc = accumulators.entry(starting_at.clone()).or_insert_with(|| DailyAccumulator {
-                starting_at: starting_at.clone(),
-                ..Default::default()
-            });
+            let acc = accumulators
+                .entry(starting_at.clone())
+                .or_insert_with(|| DailyAccumulator {
+                    starting_at: starting_at.clone(),
+                    ..Default::default()
+                });
             if let Some(results) = bucket.get("results").and_then(Value::as_array) {
                 for result in results {
                     let amount_cents: f64 = result
@@ -242,7 +253,10 @@ fn build_snapshot(costs: &Value, messages: &Value, now: i64) -> ClaudeAdminSnaps
                     let value = amount_cents / 100.0;
                     acc.cost_usd += value;
                     let item = display_name_or(
-                        result.get("description").and_then(Value::as_str).or_else(|| result.get("cost_type").and_then(Value::as_str)),
+                        result
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .or_else(|| result.get("cost_type").and_then(Value::as_str)),
                         "Claude API",
                     );
                     *acc.cost_items.entry(item).or_insert(0.0) += value;
@@ -253,34 +267,60 @@ fn build_snapshot(costs: &Value, messages: &Value, now: i64) -> ClaudeAdminSnaps
 
     if let Some(data) = messages.get("data").and_then(Value::as_array) {
         for bucket in data {
-            let starting_at = bucket.get("starting_at").and_then(Value::as_str).unwrap_or("").to_string();
+            let starting_at = bucket
+                .get("starting_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             if starting_at.is_empty() {
                 continue;
             }
-            let acc = accumulators.entry(starting_at.clone()).or_insert_with(|| DailyAccumulator {
-                starting_at: starting_at.clone(),
-                ..Default::default()
-            });
+            let acc = accumulators
+                .entry(starting_at.clone())
+                .or_insert_with(|| DailyAccumulator {
+                    starting_at: starting_at.clone(),
+                    ..Default::default()
+                });
             if let Some(results) = bucket.get("results").and_then(Value::as_array) {
                 for result in results {
-                    let input = result.get("uncached_input_tokens").and_then(Value::as_i64).unwrap_or(0);
+                    let input = result
+                        .get("uncached_input_tokens")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
                     let cache_creation = result
                         .get("cache_creation")
                         .map(|c| {
-                            c.get("ephemeral_1h_input_tokens").and_then(Value::as_i64).unwrap_or(0)
-                                + c.get("ephemeral_5m_input_tokens").and_then(Value::as_i64).unwrap_or(0)
+                            c.get("ephemeral_1h_input_tokens")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0)
+                                + c.get("ephemeral_5m_input_tokens")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(0)
                         })
                         .unwrap_or(0);
-                    let cache_read = result.get("cache_read_input_tokens").and_then(Value::as_i64).unwrap_or(0);
-                    let output = result.get("output_tokens").and_then(Value::as_i64).unwrap_or(0);
+                    let cache_read = result
+                        .get("cache_read_input_tokens")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    let output = result
+                        .get("output_tokens")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
                     let total = input + cache_creation + cache_read + output;
                     acc.input_tokens += input;
                     acc.cache_creation_input_tokens += cache_creation;
                     acc.cache_read_input_tokens += cache_read;
                     acc.output_tokens += output;
                     acc.total_tokens += total;
-                    let model_name = display_name_or(result.get("model").and_then(Value::as_str), "Claude API");
-                    acc.models.entry(model_name).or_default().add(input, cache_creation, cache_read, output, total);
+                    let model_name =
+                        display_name_or(result.get("model").and_then(Value::as_str), "Claude API");
+                    acc.models.entry(model_name).or_default().add(
+                        input,
+                        cache_creation,
+                        cache_read,
+                        output,
+                        total,
+                    );
                 }
             }
         }
@@ -289,16 +329,36 @@ fn build_snapshot(costs: &Value, messages: &Value, now: i64) -> ClaudeAdminSnaps
     let mut daily: Vec<DailyBucket> = accumulators
         .into_values()
         .filter_map(|acc| {
-            let start = chrono::DateTime::parse_from_rfc3339(&acc.starting_at).ok()?.timestamp();
+            let start = chrono::DateTime::parse_from_rfc3339(&acc.starting_at)
+                .ok()?
+                .timestamp();
             if start > now {
                 return None;
             }
-            let day = chrono::DateTime::from_timestamp(start, 0)?.format("%Y-%m-%d").to_string();
-            let mut cost_items: Vec<CostBreakdown> =
-                acc.cost_items.into_iter().map(|(name, cost_usd)| CostBreakdown { name, cost_usd }).collect();
-            cost_items.sort_by(|a, b| b.cost_usd.partial_cmp(&a.cost_usd).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
-            let mut models: Vec<ModelBreakdown> = acc.models.iter().map(|(name, m)| m.to_model(name)).collect();
-            models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens).then_with(|| a.name.cmp(&b.name)));
+            let day = chrono::DateTime::from_timestamp(start, 0)?
+                .format("%Y-%m-%d")
+                .to_string();
+            let mut cost_items: Vec<CostBreakdown> = acc
+                .cost_items
+                .into_iter()
+                .map(|(name, cost_usd)| CostBreakdown { name, cost_usd })
+                .collect();
+            cost_items.sort_by(|a, b| {
+                b.cost_usd
+                    .partial_cmp(&a.cost_usd)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            let mut models: Vec<ModelBreakdown> = acc
+                .models
+                .iter()
+                .map(|(name, m)| m.to_model(name))
+                .collect();
+            models.sort_by(|a, b| {
+                b.total_tokens
+                    .cmp(&a.total_tokens)
+                    .then_with(|| a.name.cmp(&b.name))
+            });
             Some(DailyBucket {
                 day,
                 start_time: start,
@@ -320,7 +380,11 @@ fn build_snapshot(costs: &Value, messages: &Value, now: i64) -> ClaudeAdminSnaps
 
 fn summarize(daily: &[DailyBucket], days: usize) -> Summary {
     let take = days.max(1);
-    let selected = if daily.len() > take { &daily[daily.len() - take..] } else { daily };
+    let selected = if daily.len() > take {
+        &daily[daily.len() - take..]
+    } else {
+        daily
+    };
     let mut s = Summary::default();
     for d in selected {
         s.cost_usd += d.cost_usd;
@@ -338,7 +402,8 @@ fn make_snapshot(daily: Vec<DailyBucket>, now: i64) -> ClaudeAdminSnapshot {
     let last7_days = summarize(&daily, 7);
     let latest_day = summarize(&daily, 1);
 
-    let mut model_totals: std::collections::HashMap<String, ModelAccumulator> = std::collections::HashMap::new();
+    let mut model_totals: std::collections::HashMap<String, ModelAccumulator> =
+        std::collections::HashMap::new();
     let mut cost_totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for d in &daily {
         for m in &d.models {
@@ -354,13 +419,35 @@ fn make_snapshot(daily: Vec<DailyBucket>, now: i64) -> ClaudeAdminSnapshot {
             *cost_totals.entry(c.name.clone()).or_insert(0.0) += c.cost_usd;
         }
     }
-    let mut top_models: Vec<ModelBreakdown> = model_totals.iter().map(|(name, m)| m.to_model(name)).collect();
-    top_models.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens).then_with(|| a.name.cmp(&b.name)));
-    let mut top_cost_items: Vec<CostBreakdown> =
-        cost_totals.into_iter().map(|(name, cost_usd)| CostBreakdown { name, cost_usd }).collect();
-    top_cost_items.sort_by(|a, b| b.cost_usd.partial_cmp(&a.cost_usd).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
+    let mut top_models: Vec<ModelBreakdown> = model_totals
+        .iter()
+        .map(|(name, m)| m.to_model(name))
+        .collect();
+    top_models.sort_by(|a, b| {
+        b.total_tokens
+            .cmp(&a.total_tokens)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let mut top_cost_items: Vec<CostBreakdown> = cost_totals
+        .into_iter()
+        .map(|(name, cost_usd)| CostBreakdown { name, cost_usd })
+        .collect();
+    top_cost_items.sort_by(|a, b| {
+        b.cost_usd
+            .partial_cmp(&a.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
-    ClaudeAdminSnapshot { daily, updated_at: now, last30_days, last7_days, latest_day, top_models, top_cost_items }
+    ClaudeAdminSnapshot {
+        daily,
+        updated_at: now,
+        last30_days,
+        last7_days,
+        latest_day,
+        top_models,
+        top_cost_items,
+    }
 }
 
 #[cfg(test)]
@@ -370,7 +457,10 @@ mod tests {
 
     #[test]
     fn cleans_quoted_and_whitespace_keys() {
-        assert_eq!(clean_key("  \"sk-ant-admin-1\"  "), Some("sk-ant-admin-1".to_string()));
+        assert_eq!(
+            clean_key("  \"sk-ant-admin-1\"  "),
+            Some("sk-ant-admin-1".to_string())
+        );
         assert_eq!(clean_key("'sk-2'"), Some("sk-2".to_string()));
         assert_eq!(clean_key(""), None);
         assert_eq!(clean_key("   "), None);
@@ -378,16 +468,28 @@ mod tests {
 
     #[test]
     fn admin_api_key_prefers_provider_field_when_no_env() {
-        let cfg = config::Provider { id: "claude".into(), admin_api_key: Some("sk-ant-admin-cfg".into()), ..Default::default() };
+        let cfg = config::Provider {
+            id: "claude".into(),
+            admin_api_key: Some("sk-ant-admin-cfg".into()),
+            ..Default::default()
+        };
         assert_eq!(admin_api_key(&cfg), Some("sk-ant-admin-cfg".to_string()));
     }
 
     #[test]
     fn daily_range_spans_31_days_ending_tomorrow() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z").unwrap().timestamp();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T12:00:00Z")
+            .unwrap()
+            .timestamp();
         let (start, end) = daily_range(now);
-        let start_day = chrono::DateTime::from_timestamp(start, 0).unwrap().format("%Y-%m-%d").to_string();
-        let end_day = chrono::DateTime::from_timestamp(end, 0).unwrap().format("%Y-%m-%d").to_string();
+        let start_day = chrono::DateTime::from_timestamp(start, 0)
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
+        let end_day = chrono::DateTime::from_timestamp(end, 0)
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
         assert_eq!(start_day, "2026-05-16");
         assert_eq!(end_day, "2026-06-16");
     }
@@ -406,7 +508,9 @@ mod tests {
                  "results": [{"uncached_input_tokens": 100, "output_tokens": 50, "model": "claude-sonnet-4"}]}
             ]
         });
-        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z").unwrap().timestamp();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z")
+            .unwrap()
+            .timestamp();
         let snap = build_snapshot(&costs, &messages, now);
         assert_eq!(snap.daily.len(), 1);
         assert_eq!(snap.daily[0].day, "2026-06-01");
@@ -428,7 +532,9 @@ mod tests {
                  "results": [{"uncached_input_tokens": 5, "model": "x"}]}
             ]
         });
-        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z").unwrap().timestamp();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z")
+            .unwrap()
+            .timestamp();
         let snap = build_snapshot(&costs, &messages, now);
         assert!(snap.daily.is_empty());
     }
@@ -437,7 +543,13 @@ mod tests {
     fn summaries_use_the_tail_window() {
         let mut daily = Vec::new();
         for i in 0..10 {
-            daily.push(DailyBucket { day: format!("d{i}"), start_time: i, cost_usd: 1.0, total_tokens: 10, ..Default::default() });
+            daily.push(DailyBucket {
+                day: format!("d{i}"),
+                start_time: i,
+                cost_usd: 1.0,
+                total_tokens: 10,
+                ..Default::default()
+            });
         }
         let s7 = summarize(&daily, 7);
         assert!((s7.cost_usd - 7.0).abs() < 0.001);
@@ -450,7 +562,10 @@ mod tests {
     fn missing_env_and_provider_key_returns_none() {
         std::env::remove_var("ANTHROPIC_ADMIN_KEY");
         std::env::remove_var("ANTHROPIC_ADMIN_API_KEY");
-        let cfg = config::Provider { id: "claude".into(), ..Default::default() };
+        let cfg = config::Provider {
+            id: "claude".into(),
+            ..Default::default()
+        };
         assert_eq!(admin_api_key(&cfg), None);
     }
 }

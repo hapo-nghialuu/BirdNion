@@ -73,15 +73,19 @@ fn load_stored() -> Stored {
 
 fn persist(entries: &[Entry]) -> Result<(), String> {
     let path = metadata_path().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
-    let json = serde_json::to_string_pretty(&Stored { accounts: entries.to_vec() })
-        .map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&Stored {
+        accounts: entries.to_vec(),
+    })
+    .map_err(|e| e.to_string())?;
     crate::platform::atomic_file::write_private_json_atomic::<Stored>(&path, json.as_bytes())
         .map_err(|e| e.to_string())
 }
 
 /// Active account id, persisted in settings.json. Defaults to `"browser"`.
 pub fn active_id() -> String {
-    config::load().active_freemodel_account.unwrap_or_else(|| BROWSER_ID.to_string())
+    config::load()
+        .active_freemodel_account
+        .unwrap_or_else(|| BROWSER_ID.to_string())
 }
 
 pub fn set_active(id: &str) -> Result<(), String> {
@@ -92,7 +96,12 @@ pub fn set_active(id: &str) -> Result<(), String> {
 }
 
 fn to_account(e: &Entry) -> FreemodelAccount {
-    FreemodelAccount { id: e.id.clone(), email: e.email.clone(), label: e.label.clone(), is_browser: false }
+    FreemodelAccount {
+        id: e.id.clone(),
+        email: e.email.clone(),
+        label: e.label.clone(),
+        is_browser: false,
+    }
 }
 
 /// Browser entry first, then managed accounts in stored order.
@@ -114,7 +123,11 @@ pub fn active_cookie() -> Option<String> {
     if id == BROWSER_ID || id.starts_with(BROWSER_PREFIX) {
         return None;
     }
-    load_stored().accounts.into_iter().find(|e| e.id == id).map(|e| e.cookie)
+    load_stored()
+        .accounts
+        .into_iter()
+        .find(|e| e.id == id)
+        .map(|e| e.cookie)
 }
 
 /// The specific browser name when the active account is a `browser:<name>`
@@ -124,16 +137,28 @@ pub fn active_browser() -> Option<String> {
 }
 
 /// Stores a validated cookie as a new managed account.
-pub fn add(cookie: &str, label: Option<&str>, email: Option<&str>) -> Result<FreemodelAccount, String> {
-    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+pub fn add(
+    cookie: &str,
+    label: Option<&str>,
+    email: Option<&str>,
+) -> Result<FreemodelAccount, String> {
+    let _guard = STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let cookie = cookie.trim();
     if cookie.is_empty() {
         return Err("Cookie trống".to_string());
     }
     let entry = Entry {
         id: uuid_v4(),
-        email: email.map(str::trim).filter(|s| !s.is_empty()).map(String::from),
-        label: label.map(str::trim).filter(|s| !s.is_empty()).map(String::from),
+        email: email
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        label: label
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from),
         cookie: cookie.to_string(),
     };
     let account = to_account(&entry);
@@ -149,8 +174,14 @@ pub fn remove(id: &str) -> Result<(), String> {
     if id == BROWSER_ID || id.starts_with(BROWSER_PREFIX) {
         return Ok(());
     }
-    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let entries: Vec<Entry> = load_stored().accounts.into_iter().filter(|e| e.id != id).collect();
+    let _guard = STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let entries: Vec<Entry> = load_stored()
+        .accounts
+        .into_iter()
+        .filter(|e| e.id != id)
+        .collect();
     persist(&entries)?;
     if active_id() == id {
         set_active(BROWSER_ID)?;
@@ -167,7 +198,8 @@ mod tests {
     use crate::config::TEST_ENV_LOCK as ENV_LOCK;
 
     fn temp_config(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("birdnion-fm-accounts-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("birdnion-fm-accounts-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

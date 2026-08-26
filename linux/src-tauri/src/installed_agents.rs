@@ -47,100 +47,148 @@ struct AgentDescriptor {
 /// Allowlist — song song với bảng descriptor bên macOS.
 const DESCRIPTORS: &[AgentDescriptor] = &[
     AgentDescriptor {
-        id: "claude", display_name: "Claude Code", kind: "cli",
+        id: "claude",
+        display_name: "Claude Code",
+        kind: "cli",
         binaries: &["claude"],
         config_paths: &[".claude", ".claude.json", ".claude/projects"],
-        provider_id: Some("claude"), cost_source: Some("claude"),
+        provider_id: Some("claude"),
+        cost_source: Some("claude"),
     },
     AgentDescriptor {
-        id: "codex", display_name: "Codex CLI", kind: "cli",
+        id: "codex",
+        display_name: "Codex CLI",
+        kind: "cli",
         binaries: &["codex"],
         config_paths: &[".codex", ".codex/sessions", ".codex/auth.json"],
-        provider_id: Some("codex"), cost_source: Some("codex"),
+        provider_id: Some("codex"),
+        cost_source: Some("codex"),
     },
     AgentDescriptor {
-        id: "grok", display_name: "Grok CLI", kind: "cli",
+        id: "grok",
+        display_name: "Grok CLI",
+        kind: "cli",
         binaries: &["grok"],
         config_paths: &[".grok/auth.json", ".grok/sessions"],
-        provider_id: Some("grok"), cost_source: Some("grok"),
+        provider_id: Some("grok"),
+        cost_source: Some("grok"),
     },
     AgentDescriptor {
-        id: "omp", display_name: "Oh My Pi", kind: "cli",
+        id: "omp",
+        display_name: "Oh My Pi",
+        kind: "cli",
         binaries: &["omp"],
         config_paths: &[".omp/agent/config.yml", ".omp/agent/sessions"],
-        provider_id: None, cost_source: Some("omp"),
+        provider_id: None,
+        cost_source: Some("omp"),
     },
     AgentDescriptor {
-        id: "pi", display_name: "Pi Agent", kind: "cli",
+        id: "pi",
+        display_name: "Pi Agent",
+        kind: "cli",
         binaries: &["pi"],
         config_paths: &[".pi/agent/settings.json", ".pi/agent/sessions"],
-        provider_id: None, cost_source: Some("pi"),
+        provider_id: None,
+        cost_source: Some("pi"),
     },
     AgentDescriptor {
-        id: "gemini", display_name: "Gemini CLI", kind: "cli",
+        id: "gemini",
+        display_name: "Gemini CLI",
+        kind: "cli",
         binaries: &["gemini"],
         config_paths: &[".gemini/settings.json", ".gemini/oauth_creds.json"],
-        provider_id: Some("gemini"), cost_source: None,
+        provider_id: Some("gemini"),
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "opencode", display_name: "OpenCode", kind: "cli",
+        id: "opencode",
+        display_name: "OpenCode",
+        kind: "cli",
         binaries: &["opencode"],
         config_paths: &[".config/opencode", ".local/share/opencode"],
-        provider_id: Some("opencode"), cost_source: None,
+        provider_id: Some("opencode"),
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "kiro", display_name: "Kiro", kind: "ide",
+        id: "kiro",
+        display_name: "Kiro",
+        kind: "ide",
         binaries: &["kiro-cli", "kiro"],
-        config_paths: &[".kiro", ".local/share/kiro"],
-        provider_id: Some("kiro"), cost_source: Some("kiro"),
+        config_paths: &[".kiro", ".local/share/kiro", ".kiro_sessions"],
+        provider_id: Some("kiro"),
+        cost_source: Some("kiro"),
     },
     AgentDescriptor {
-        id: "antigravity", display_name: "Antigravity", kind: "cli",
+        id: "antigravity",
+        display_name: "Antigravity",
+        kind: "cli",
         binaries: &["agy"],
         config_paths: &[".gemini/antigravity", ".config/antigravity"],
-        provider_id: Some("antigravity"), cost_source: None,
+        provider_id: Some("antigravity"),
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "copilot", display_name: "Copilot CLI", kind: "cli",
+        id: "copilot",
+        display_name: "Copilot CLI",
+        kind: "cli",
         binaries: &["copilot"],
         config_paths: &[".copilot/config.json", ".config/github-copilot"],
-        provider_id: Some("copilot"), cost_source: None,
+        provider_id: Some("copilot"),
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "auggie", display_name: "Auggie", kind: "cli",
+        id: "auggie",
+        display_name: "Auggie",
+        kind: "cli",
         binaries: &["auggie"],
         config_paths: &[".augment"],
-        provider_id: None, cost_source: None,
+        provider_id: None,
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "amp", display_name: "Amp", kind: "cli",
+        id: "amp",
+        display_name: "Amp",
+        kind: "cli",
         binaries: &["amp"],
         config_paths: &[".config/amp/settings.json"],
-        provider_id: None, cost_source: None,
+        provider_id: None,
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "cursor", display_name: "Cursor", kind: "ide",
+        id: "cursor",
+        display_name: "Cursor",
+        kind: "ide",
         binaries: &["cursor", "cursor-agent"],
         config_paths: &[".cursor", ".config/Cursor"],
-        provider_id: Some("cursor"), cost_source: None,
+        provider_id: Some("cursor"),
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "aider", display_name: "Aider", kind: "cli",
+        id: "aider",
+        display_name: "Aider",
+        kind: "cli",
         binaries: &["aider"],
         config_paths: &[".aider", ".aider.conf.yml"],
-        provider_id: None, cost_source: None,
+        provider_id: None,
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "qwen", display_name: "Qwen Code", kind: "cli",
+        id: "qwen",
+        display_name: "Qwen Code",
+        kind: "cli",
         binaries: &["qwen"],
         config_paths: &[".qwen"],
-        provider_id: None, cost_source: None,
+        provider_id: None,
+        cost_source: None,
     },
     AgentDescriptor {
-        id: "goose", display_name: "Goose", kind: "cli",
+        id: "goose",
+        display_name: "Goose",
+        kind: "cli",
         binaries: &["goose"],
         config_paths: &[".config/goose"],
-        provider_id: None, cost_source: None,
+        provider_id: None,
+        cost_source: None,
     },
 ];
 
@@ -181,7 +229,9 @@ fn fallback_path_dirs(home: &Path) -> Vec<PathBuf> {
 fn which(binary: &str) -> Option<PathBuf> {
     let dirs: Vec<PathBuf> = match std::env::var_os("PATH") {
         Some(path_var) => std::env::split_paths(&path_var).collect(),
-        None => home_dir().map(|home| fallback_path_dirs(&home)).unwrap_or_default(),
+        None => home_dir()
+            .map(|home| fallback_path_dirs(&home))
+            .unwrap_or_default(),
     };
     for dir in dirs {
         let candidate = dir.join(binary);
@@ -208,10 +258,52 @@ pub fn detect(
         Some(h) => h,
         None => return Vec::new(),
     };
+    let xdg_data_home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    detect_at_with_xdg(
+        &home,
+        xdg_data_home.as_deref(),
+        provider_ids_with_quota,
+        cost_totals_90d,
+        which,
+    )
+}
+
+#[cfg(test)]
+fn detect_at(
+    home: &Path,
+    provider_ids_with_quota: &[String],
+    cost_totals_90d: &std::collections::HashMap<String, f64>,
+) -> Vec<InstalledAgent> {
+    detect_at_with_xdg(home, None, provider_ids_with_quota, cost_totals_90d, |_| {
+        None
+    })
+}
+
+fn detect_at_with_xdg(
+    home: &Path,
+    xdg_data_home: Option<&Path>,
+    provider_ids_with_quota: &[String],
+    cost_totals_90d: &std::collections::HashMap<String, f64>,
+    find_binary: impl Fn(&str) -> Option<PathBuf>,
+) -> Vec<InstalledAgent> {
     let mut out = Vec::new();
     for descriptor in DESCRIPTORS {
-        let binary = descriptor.binaries.iter().find_map(|name| which(name));
-        let config = first_existing_config(&home, descriptor.config_paths);
+        let binary = descriptor
+            .binaries
+            .iter()
+            .find_map(|name| find_binary(name));
+        let kiro_db = (descriptor.id == "kiro")
+            .then(|| {
+                xdg_data_home
+                    .filter(|root| root.is_absolute())
+                    .map(|root| root.join("kiro-cli").join("data.sqlite3"))
+                    .filter(|path| path.is_file())
+                    .unwrap_or_else(|| home.join(".local/share/kiro-cli/data.sqlite3"))
+            })
+            .filter(|path| path.is_file());
+        let config = kiro_db.or_else(|| first_existing_config(home, descriptor.config_paths));
         if binary.is_none() && config.is_none() {
             continue;
         }
@@ -223,8 +315,7 @@ pub fn detect(
         let cost90d = descriptor
             .cost_source
             .and_then(|source| cost_totals_90d.get(source).copied());
-        let has_cost = cost90d.map(|v| v > 0.0).unwrap_or(false)
-            || descriptor.cost_source.is_some();
+        let has_cost = cost90d.is_some();
 
         let source_label = match (&binary, &config) {
             (Some(path), _) => path.display().to_string(),
@@ -249,6 +340,25 @@ pub fn detect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn temp_home(label: &str) -> PathBuf {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "birdnion-installed-agents-{label}-{}-{id}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, b"marker").unwrap();
+    }
 
     #[test]
     fn which_rejects_non_executable_files() {
@@ -283,5 +393,77 @@ mod tests {
                 agent.id
             );
         }
+    }
+
+    #[test]
+    fn detects_kiro_from_legacy_archive_marker_when_provider_is_off() {
+        let home = temp_home("kiro-archive");
+        std::fs::create_dir_all(home.join(".kiro_sessions")).unwrap();
+
+        let totals = std::collections::HashMap::new();
+        let agents = detect_at(&home, &[], &totals);
+        let kiro = agents.iter().find(|agent| agent.id == "kiro").unwrap();
+
+        assert!(kiro.has_config);
+        assert!(!kiro.has_quota);
+        assert!(!kiro.has_cost);
+
+        let totals = std::collections::HashMap::from([("kiro".to_string(), 0.0)]);
+        let with_empty_scan = detect_at(&home, &[], &totals);
+        let kiro_with_scan = with_empty_scan
+            .iter()
+            .find(|agent| agent.id == "kiro")
+            .unwrap();
+        assert!(kiro_with_scan.has_cost);
+        assert_eq!(kiro_with_scan.cost90d_usd, Some(0.0));
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn detects_kiro_from_legacy_sqlite_markers_when_provider_is_off() {
+        let home = temp_home("kiro-sqlite");
+        let sqlite = home.join(".local/share/kiro-cli/data.sqlite3");
+        touch(&sqlite);
+
+        let totals = std::collections::HashMap::new();
+        let agents = detect_at(&home, &[], &totals);
+        let kiro = agents.iter().find(|agent| agent.id == "kiro").unwrap();
+
+        assert!(kiro.has_config);
+        assert!(!kiro.has_quota);
+
+        std::fs::remove_file(&sqlite).unwrap();
+        let xdg_data_home = home.join("custom-xdg-data");
+        touch(&xdg_data_home.join("kiro-cli/data.sqlite3"));
+        let xdg_agents = detect_at_with_xdg(&home, Some(&xdg_data_home), &[], &totals, |_| None);
+        let xdg_kiro = xdg_agents.iter().find(|agent| agent.id == "kiro").unwrap();
+        assert!(xdg_kiro.has_config);
+        assert!(!xdg_kiro.has_quota);
+
+        std::fs::remove_file(xdg_data_home.join("kiro-cli/data.sqlite3")).unwrap();
+        std::fs::create_dir_all(xdg_data_home.join("kiro-cli/data.sqlite3")).unwrap();
+        let directory_agents =
+            detect_at_with_xdg(&home, Some(&xdg_data_home), &[], &totals, |_| None);
+        assert!(directory_agents
+            .iter()
+            .find(|agent| agent.id == "kiro")
+            .map(|agent| !agent.has_config)
+            .unwrap_or(true));
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn ignores_kiro_when_default_sqlite_marker_is_a_directory() {
+        let home = temp_home("kiro-default-sqlite-directory");
+        std::fs::create_dir_all(home.join(".local/share/kiro-cli/data.sqlite3")).unwrap();
+
+        let totals = std::collections::HashMap::new();
+        let agents = detect_at(&home, &[], &totals);
+
+        assert!(agents.iter().all(|agent| agent.id != "kiro"));
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

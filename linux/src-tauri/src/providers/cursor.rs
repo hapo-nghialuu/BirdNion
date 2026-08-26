@@ -28,46 +28,79 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let id = cfg.id.clone();
     let cfg_clone = cfg.clone();
 
-    let cookie_header = match tauri::async_runtime::spawn_blocking(move || resolve_cookie_header(&cfg_clone)).await {
-        Ok(Ok(h)) => h,
-        Ok(Err(e)) => return ProviderStatus::failure(&id, &name, e),
-        Err(_) => return ProviderStatus::failure(&id, &name, "Lỗi nội bộ khi đọc cookie"),
-    };
+    let cookie_header =
+        match tauri::async_runtime::spawn_blocking(move || resolve_cookie_header(&cfg_clone)).await
+        {
+            Ok(Ok(h)) => h,
+            Ok(Err(e)) => return ProviderStatus::failure(&id, &name, e),
+            Err(_) => return ProviderStatus::failure(&id, &name, "Lỗi nội bộ khi đọc cookie"),
+        };
 
     let client = crate::providers::shared_client();
 
-    let usage_summary_resp = client.get(USAGE_SUMMARY_URL).header("Cookie", &cookie_header).send().await;
+    let usage_summary_resp = client
+        .get(USAGE_SUMMARY_URL)
+        .header("Cookie", &cookie_header)
+        .send()
+        .await;
     let usage_summary_text = match usage_summary_resp {
         Ok(resp) if resp.status().is_success() => match resp.text().await {
             Ok(t) => t,
             Err(_) => return ProviderStatus::failure(&id, &name, "Không đọc được phản hồi Cursor"),
         },
         Ok(resp) if resp.status().as_u16() == 401 || resp.status().as_u16() == 403 => {
-            return ProviderStatus::failure(&id, &name, "Chưa đăng nhập Cursor (mở app Cursor hoặc đăng nhập cursor.com)")
+            return ProviderStatus::failure(
+                &id,
+                &name,
+                "Chưa đăng nhập Cursor (mở app Cursor hoặc đăng nhập cursor.com)",
+            )
         }
-        Ok(resp) => return ProviderStatus::failure(&id, &name, format!("Lỗi mạng Cursor: HTTP {}", resp.status().as_u16())),
+        Ok(resp) => {
+            return ProviderStatus::failure(
+                &id,
+                &name,
+                format!("Lỗi mạng Cursor: HTTP {}", resp.status().as_u16()),
+            )
+        }
         Err(_) => return ProviderStatus::failure(&id, &name, "Không kết nối được Cursor"),
     };
 
     // Best-effort /auth/me for sub (drives the legacy /api/usage call).
-    let auth_me_resp = client.get(AUTH_ME_URL).header("Cookie", &cookie_header).send().await.ok().filter(|r| r.status().is_success());
+    let auth_me_resp = client
+        .get(AUTH_ME_URL)
+        .header("Cookie", &cookie_header)
+        .send()
+        .await
+        .ok()
+        .filter(|r| r.status().is_success());
     let user_info: Option<CursorUserInfo> = match auth_me_resp {
         Some(resp) => resp.json::<CursorUserInfo>().await.ok(),
         None => None,
     };
 
     // Best-effort legacy request-based usage (only fetched when sub is known).
-    let request_usage_text: Option<String> = if let Some(sub) = user_info.as_ref().and_then(|u| u.sub.as_deref()) {
-        let url = format!("{USAGE_URL}?user={sub}");
-        match client.get(&url).header("Cookie", &cookie_header).send().await {
-            Ok(resp) if resp.status().is_success() => resp.text().await.ok(),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let request_usage_text: Option<String> =
+        if let Some(sub) = user_info.as_ref().and_then(|u| u.sub.as_deref()) {
+            let url = format!("{USAGE_URL}?user={sub}");
+            match client
+                .get(&url)
+                .header("Cookie", &cookie_header)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => resp.text().await.ok(),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
-    match parse_status(&id, &name, &usage_summary_text, request_usage_text.as_deref()) {
+    match parse_status(
+        &id,
+        &name,
+        &usage_summary_text,
+        request_usage_text.as_deref(),
+    ) {
         Ok(status) => status,
         Err(_) => ProviderStatus::failure(&id, &name, "Dữ liệu Cursor không hợp lệ"),
     }
@@ -95,8 +128,12 @@ fn read_token_from_sqlite() -> Option<String> {
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI;
     let conn = rusqlite::Connection::open_with_flags(&uri, flags).ok()?;
     let _ = conn.busy_timeout(std::time::Duration::from_millis(200));
-    conn.query_row("SELECT value FROM ItemTable WHERE key = ? LIMIT 1;", ["cursorAuth/accessToken"], |row| row.get::<_, String>(0))
-        .ok()
+    conn.query_row(
+        "SELECT value FROM ItemTable WHERE key = ? LIMIT 1;",
+        ["cursorAuth/accessToken"],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
 }
 
 /// Builds `WorkosCursorSessionToken=<userID>::<token>` (`::` percent-encoded
@@ -114,7 +151,9 @@ fn extract_user_id(token: &str) -> Option<String> {
     let v: Value = serde_json::from_slice(&payload_json).ok()?;
     let sub = v.get("sub")?.as_str()?;
     let user_id = sub.rsplit('|').next().unwrap_or(sub);
-    let valid = user_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    let valid = user_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
     if valid && !user_id.is_empty() {
         Some(user_id.to_string())
     } else {
@@ -128,7 +167,9 @@ fn decode_base64url(s: &str) -> Option<Vec<u8>> {
     while normalized.len() % 4 != 0 {
         normalized.push('=');
     }
-    base64::engine::general_purpose::STANDARD.decode(normalized).ok()
+    base64::engine::general_purpose::STANDARD
+        .decode(normalized)
+        .ok()
 }
 
 // Note: Swift's CursorUsageSummary also carries billingCycleStart/End, but
@@ -228,37 +269,59 @@ fn membership_label(membership_type: Option<&str>) -> String {
     }
 }
 
-fn parse_status(id: &str, name: &str, usage_summary_json: &str, request_usage_json: Option<&str>) -> Result<ProviderStatus, String> {
-    let summary: CursorUsageSummary = serde_json::from_str(usage_summary_json).map_err(|e| e.to_string())?;
+fn parse_status(
+    id: &str,
+    name: &str,
+    usage_summary_json: &str,
+    request_usage_json: Option<&str>,
+) -> Result<ProviderStatus, String> {
+    let summary: CursorUsageSummary =
+        serde_json::from_str(usage_summary_json).map_err(|e| e.to_string())?;
     let mut windows = Vec::new();
 
-    let plan = summary.individual_usage.as_ref().and_then(|u| u.plan.clone());
-    let overall = summary.individual_usage.as_ref().and_then(|u| u.overall.clone());
+    let plan = summary
+        .individual_usage
+        .as_ref()
+        .and_then(|u| u.plan.clone());
+    let overall = summary
+        .individual_usage
+        .as_ref()
+        .and_then(|u| u.overall.clone());
     let pooled = summary.team_usage.as_ref().and_then(|t| t.pooled.clone());
 
     // Primary window: Total (when auto/api percent present) else Plan.
     if let Some(p) = &plan {
         let has_auto_api = p.auto_percent_used.is_some() || p.api_percent_used.is_some();
         let label = if has_auto_api { "Total" } else { "Plan" };
-        let pct = p.total_percent_used.or(p.auto_percent_used).or(p.api_percent_used).unwrap_or_else(|| {
-            match (p.used, p.limit) {
+        let pct = p
+            .total_percent_used
+            .or(p.auto_percent_used)
+            .or(p.api_percent_used)
+            .unwrap_or_else(|| match (p.used, p.limit) {
                 (Some(u), Some(l)) if l > 0.0 => (u / l * 100.0).clamp(0.0, 100.0),
                 _ => 0.0,
-            }
-        });
+            });
         windows.push(pct_window(label, pct, subtitle_used_limit(p.used, p.limit)));
     } else if let Some(o) = &overall {
         let pct = match (o.used, o.limit) {
             (Some(u), Some(l)) if l > 0.0 => (u / l * 100.0).clamp(0.0, 100.0),
             _ => 0.0,
         };
-        windows.push(pct_window("Plan", pct, subtitle_used_limit(o.used, o.limit)));
+        windows.push(pct_window(
+            "Plan",
+            pct,
+            subtitle_used_limit(o.used, o.limit),
+        ));
     } else if let Some(pool) = &pooled {
         let pct = match (pool.used, pool.limit) {
             (Some(u), Some(l)) if l > 0.0 => (u / l * 100.0).clamp(0.0, 100.0),
             _ => 0.0,
         };
-        windows.push(pct_window("Plan", pct, subtitle_used_limit(pool.used, pool.limit)));
+        windows.push(pct_window(
+            "Plan",
+            pct,
+            subtitle_used_limit(pool.used, pool.limit),
+        ));
     }
 
     if let Some(p) = &plan {
@@ -271,14 +334,30 @@ fn parse_status(id: &str, name: &str, usage_summary_json: &str, request_usage_js
     }
 
     // On-demand: prefer individual over team pooled.
-    let od = summary.individual_usage.as_ref().and_then(|u| u.on_demand.clone())
-        .or_else(|| summary.team_usage.as_ref().and_then(|t| t.on_demand.clone()));
+    let od = summary
+        .individual_usage
+        .as_ref()
+        .and_then(|u| u.on_demand.clone())
+        .or_else(|| {
+            summary
+                .team_usage
+                .as_ref()
+                .and_then(|t| t.on_demand.clone())
+        });
     if let Some(od) = od {
         let used = od.used.unwrap_or(0.0);
         let limit = od.limit.unwrap_or(0.0);
         if used > 0.0 || limit > 0.0 {
-            let pct = if limit > 0.0 { (used / limit * 100.0).clamp(0.0, 100.0) } else { 0.0 };
-            windows.push(pct_window("On-demand", pct, subtitle_used_limit(Some(used), Some(limit))));
+            let pct = if limit > 0.0 {
+                (used / limit * 100.0).clamp(0.0, 100.0)
+            } else {
+                0.0
+            };
+            windows.push(pct_window(
+                "On-demand",
+                pct,
+                subtitle_used_limit(Some(used), Some(limit)),
+            ));
         }
     }
 
@@ -289,7 +368,11 @@ fn parse_status(id: &str, name: &str, usage_summary_json: &str, request_usage_js
                 if max_req > 0.0 {
                     let used = gpt4.num_requests.unwrap_or(0.0);
                     let pct = (used / max_req * 100.0).clamp(0.0, 100.0);
-                    windows.push(pct_window("Yêu cầu", pct, Some(format!("{used:.0} / {max_req:.0} requests"))));
+                    windows.push(pct_window(
+                        "Yêu cầu",
+                        pct,
+                        Some(format!("{used:.0} / {max_req:.0} requests")),
+                    ));
                 }
             }
         }
@@ -308,7 +391,9 @@ fn parse_status(id: &str, name: &str, usage_summary_json: &str, request_usage_js
 
 fn pct_window(label: &str, pct: f64, subtitle: Option<String>) -> QuotaWindow {
     let used = pct.round().clamp(0.0, 100.0) as i32;
-    QuotaWindow { semantic_key: None, semantic_kind: None,
+    QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: label.to_string(),
         used_pct: used,
         remaining_pct: 100 - used,

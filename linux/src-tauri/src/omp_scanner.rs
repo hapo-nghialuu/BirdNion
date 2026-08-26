@@ -55,7 +55,11 @@ fn normalized_absolute_path(raw: &str) -> Option<PathBuf> {
 fn safe_absolute_basename(raw: &str) -> Option<String> {
     let normalized = normalized_absolute_path(raw)?;
     let raw_name = normalized.file_name()?.to_str()?;
-    if raw_name.is_empty() || raw_name.chars().any(|c| c.is_control() || c == '/' || c == '\\') {
+    if raw_name.is_empty()
+        || raw_name
+            .chars()
+            .any(|c| c.is_control() || c == '/' || c == '\\')
+    {
         None
     } else {
         Some(raw_name.to_string())
@@ -72,8 +76,12 @@ impl ProjectIdentity {
     fn from_cwd(cwd: Option<&str>) -> Option<Self> {
         let cwd = cwd?;
         let normalized = normalized_absolute_path(cwd)?;
-        let display_name = safe_absolute_basename(cwd)
-            .unwrap_or_else(|| format!("OMP Project {}", &sha256_hex(normalized.to_string_lossy().as_bytes())[..8]));
+        let display_name = safe_absolute_basename(cwd).unwrap_or_else(|| {
+            format!(
+                "OMP Project {}",
+                &sha256_hex(normalized.to_string_lossy().as_bytes())[..8]
+            )
+        });
         let key = sha256_hex(format!("omp:cwd-v1\0{}", normalized.to_string_lossy()).as_bytes());
         Some(Self {
             key,
@@ -107,7 +115,11 @@ pub fn discover_session_roots() -> Vec<PathBuf> {
     // 2. Active profile from environment
     if let Ok(profile) = std::env::var("OMP_PROFILE").or_else(|_| std::env::var("PI_PROFILE")) {
         if !profile.trim().is_empty() {
-            let p_dir = base_dir.join("profiles").join(profile.trim()).join("agent").join("sessions");
+            let p_dir = base_dir
+                .join("profiles")
+                .join(profile.trim())
+                .join("agent")
+                .join("sessions");
             if p_dir.is_dir() && !roots.contains(&p_dir) {
                 roots.push(p_dir);
             }
@@ -127,7 +139,10 @@ pub fn discover_session_roots() -> Vec<PathBuf> {
 
     // 4. XDG Data Home
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        let xdg_p = PathBuf::from(xdg).join("omp").join("agent").join("sessions");
+        let xdg_p = PathBuf::from(xdg)
+            .join("omp")
+            .join("agent")
+            .join("sessions");
         if xdg_p.is_dir() && !roots.contains(&xdg_p) {
             roots.push(xdg_p);
         }
@@ -170,7 +185,10 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
                     continue;
                 };
 
-                let entry_type = json.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                let entry_type = json
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 if entry_type == "session" {
                     if let Some(cwd) = json.get("cwd").and_then(|v| v.as_str()) {
                         if !cwd.is_empty() {
@@ -178,18 +196,24 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
                         }
                     }
                 } else if entry_type == "message" {
-                    let Some(msg) = json.get("message") else { continue };
+                    let Some(msg) = json.get("message") else {
+                        continue;
+                    };
                     let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or_default();
                     if role != "assistant" {
                         continue;
                     }
 
-                    let entry_id = json.get("id").and_then(|v| v.as_str())
+                    let entry_id = json
+                        .get("id")
+                        .and_then(|v| v.as_str())
                         .or_else(|| msg.get("id").and_then(|v| v.as_str()))
                         .unwrap_or_default()
                         .to_string();
 
-                    let timestamp_str = msg.get("timestamp").and_then(|v| v.as_str())
+                    let timestamp_str = msg
+                        .get("timestamp")
+                        .and_then(|v| v.as_str())
                         .or_else(|| json.get("timestamp").and_then(|v| v.as_str()))
                         .unwrap_or_default();
 
@@ -199,26 +223,40 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
                     }
                     seen_turns.insert(turn_key);
 
-                    let Ok(ts) = DateTime::parse_from_rfc3339(timestamp_str) else { continue };
+                    let Ok(ts) = DateTime::parse_from_rfc3339(timestamp_str) else {
+                        continue;
+                    };
                     let date = ts.with_timezone(&Local).date_naive();
                     if date < cutoff_date {
                         continue;
                     }
 
-                    let model = msg.get("model").and_then(|v| v.as_str())
+                    let model = msg
+                        .get("model")
+                        .and_then(|v| v.as_str())
                         .or_else(|| json.get("model").and_then(|v| v.as_str()))
                         .unwrap_or("unknown")
                         .to_string();
 
                     let usage = msg.get("usage").or_else(|| json.get("usage"));
-                    let total_tokens = usage.and_then(|u| u.get("totalTokens").or_else(|| u.get("total_tokens")))
+                    let total_tokens = usage
+                        .and_then(|u| u.get("totalTokens").or_else(|| u.get("total_tokens")))
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
 
-                    let cost_usd = usage.and_then(|u| {
-                        u.get("cost").and_then(|c| c.get("total")).and_then(|v| v.as_f64())
-                            .or_else(|| u.get("costUSD").or_else(|| u.get("cost_usd")).and_then(|v| v.as_f64()))
-                    }).unwrap_or(0.0).max(0.0);
+                    let cost_usd = usage
+                        .and_then(|u| {
+                            u.get("cost")
+                                .and_then(|c| c.get("total"))
+                                .and_then(|v| v.as_f64())
+                                .or_else(|| {
+                                    u.get("costUSD")
+                                        .or_else(|| u.get("cost_usd"))
+                                        .and_then(|v| v.as_f64())
+                                })
+                        })
+                        .unwrap_or(0.0)
+                        .max(0.0);
 
                     turns.push(ParsedTurn {
                         date,
@@ -235,10 +273,19 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
     // Build Daily and Project aggregates
     let today_date = now.date_naive();
     let mut daily_map: HashMap<NaiveDate, (f64, i64, HashMap<String, (f64, i64)>)> = HashMap::new();
-    let mut project_map: HashMap<String, (String, bool, HashMap<NaiveDate, (f64, i64, HashMap<String, (f64, i64)>)>)> = HashMap::new();
+    let mut project_map: HashMap<
+        String,
+        (
+            String,
+            bool,
+            HashMap<NaiveDate, (f64, i64, HashMap<String, (f64, i64)>)>,
+        ),
+    > = HashMap::new();
 
     for turn in turns {
-        let entry = daily_map.entry(turn.date).or_insert_with(|| (0.0, 0, HashMap::new()));
+        let entry = daily_map
+            .entry(turn.date)
+            .or_insert_with(|| (0.0, 0, HashMap::new()));
         entry.0 += turn.usd;
         entry.1 += turn.tokens;
         let m_entry = entry.2.entry(turn.model.clone()).or_insert((0.0, 0));
@@ -247,9 +294,16 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
 
         if let Some(identity) = ProjectIdentity::from_cwd(turn.cwd.as_deref()) {
             let p_entry = project_map.entry(identity.key.clone()).or_insert_with(|| {
-                (identity.display_name.clone(), identity.label_is_verified, HashMap::new())
+                (
+                    identity.display_name.clone(),
+                    identity.label_is_verified,
+                    HashMap::new(),
+                )
             });
-            let p_day = p_entry.2.entry(turn.date).or_insert_with(|| (0.0, 0, HashMap::new()));
+            let p_day = p_entry
+                .2
+                .entry(turn.date)
+                .or_insert_with(|| (0.0, 0, HashMap::new()));
             p_day.0 += turn.usd;
             p_day.1 += turn.tokens;
             let pm_entry = p_day.2.entry(turn.model).or_insert((0.0, 0));
@@ -267,11 +321,14 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
     for i in (0..HISTORY_DAYS).rev() {
         let d = (now - Duration::days(i)).date_naive();
         if let Some((usd, tokens, model_map)) = daily_map.get(&d) {
-            let models: Vec<DailyModel> = model_map.iter().map(|(name, (m_usd, m_tok))| DailyModel {
-                name: name.clone(),
-                usd: *m_usd,
-                tokens: *m_tok,
-            }).collect();
+            let models: Vec<DailyModel> = model_map
+                .iter()
+                .map(|(name, (m_usd, m_tok))| DailyModel {
+                    name: name.clone(),
+                    usd: *m_usd,
+                    tokens: *m_tok,
+                })
+                .collect();
 
             if d > last30_cutoff {
                 last30_usd += usd;
@@ -304,20 +361,30 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
             *all_models.entry(m.clone()).or_insert(0.0) += usd;
         }
     }
-    let top_model = all_models.into_iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).map(|(m, _)| m);
+    let top_model = all_models
+        .into_iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(m, _)| m);
 
     let mut projects = Vec::new();
     for (key, (name, verified, days)) in project_map {
         for (d, (usd, tokens, m_map)) in days {
-            let p_models: Vec<ProjectModel> = m_map.into_iter().map(|(m_name, (m_usd, m_tok))| ProjectModel {
-                name: m_name,
-                usd: m_usd,
-                tokens: m_tok,
-            }).collect();
+            let p_models: Vec<ProjectModel> = m_map
+                .into_iter()
+                .map(|(m_name, (m_usd, m_tok))| ProjectModel {
+                    name: m_name,
+                    usd: m_usd,
+                    tokens: m_tok,
+                })
+                .collect();
             projects.push(ProjectContribution {
                 project_key: key.clone(),
                 display_name: name.clone(),
-                capability: if verified { "exact".to_string() } else { "derivedPath".to_string() },
+                capability: if verified {
+                    "exact".to_string()
+                } else {
+                    "derivedPath".to_string()
+                },
                 date: d.format("%Y-%m-%d").to_string(),
                 usd,
                 tokens,

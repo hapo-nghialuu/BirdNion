@@ -16,7 +16,11 @@ use crate::config;
 use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
 
 const BASE_URL: &str = "https://app.kilo.ai/api/trpc";
-const PROCEDURES: [&str; 3] = ["user.getCreditBlocks", "kiloPass.getState", "user.getAutoTopUpPaymentMethod"];
+const PROCEDURES: [&str; 3] = [
+    "user.getCreditBlocks",
+    "kiloPass.getState",
+    "user.getAutoTopUpPaymentMethod",
+];
 const OPTIONAL_PROCEDURES: [&str; 1] = ["user.getAutoTopUpPaymentMethod"];
 
 /// CLI session file candidates, first hit wins: the Swift app reads
@@ -37,8 +41,15 @@ fn cli_auth_paths() -> Vec<std::path::PathBuf> {
 /// Resolves the bearer token: config `api_key` (or `KILO_API_KEY` env) first,
 /// then the CLI session file. Returns `(token, label)`.
 fn resolve_token(cfg: &config::Provider) -> Option<(String, String)> {
-    if let Some(key) = config::api_key(cfg).or_else(|| std::env::var("KILO_API_KEY").ok().filter(|s| !s.trim().is_empty())) {
-        let label = cfg.account_label.clone().unwrap_or_else(|| key.chars().take(8).collect());
+    if let Some(key) = config::api_key(cfg).or_else(|| {
+        std::env::var("KILO_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    }) {
+        let label = cfg
+            .account_label
+            .clone()
+            .unwrap_or_else(|| key.chars().take(8).collect());
         return Some((key, label));
     }
     let token = read_cli_token()?;
@@ -58,7 +69,11 @@ fn read_cli_token() -> Option<String> {
 
 fn parse_cli_token(contents: &str) -> Option<String> {
     let json: Value = serde_json::from_str(contents).ok()?;
-    if let Some(access) = json.get("kilo").and_then(|k| k.get("access")).and_then(Value::as_str) {
+    if let Some(access) = json
+        .get("kilo")
+        .and_then(|k| k.get("access"))
+        .and_then(Value::as_str)
+    {
         let t = access.trim();
         if !t.is_empty() {
             return Some(t.to_string());
@@ -91,7 +106,11 @@ fn make_batch_url() -> Result<reqwest::Url, String> {
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     let Some((token, label)) = resolve_token(cfg) else {
-        return ProviderStatus::failure(&cfg.id, &name, "Chưa cấu hình API key cho Kilo Code (hoặc đăng nhập CLI)");
+        return ProviderStatus::failure(
+            &cfg.id,
+            &name,
+            "Chưa cấu hình API key cho Kilo Code (hoặc đăng nhập CLI)",
+        );
     };
 
     let url = match make_batch_url() {
@@ -100,7 +119,12 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     };
 
     let client = shared_client();
-    let resp = client.get(url).bearer_auth(&token).header("Accept", "application/json").send().await;
+    let resp = client
+        .get(url)
+        .bearer_auth(&token)
+        .header("Accept", "application/json")
+        .send()
+        .await;
     let resp = match resp {
         Ok(r) => r,
         Err(e) => return ProviderStatus::failure(&cfg.id, &name, format!("Network: {e}")),
@@ -108,9 +132,27 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 
     match resp.status().as_u16() {
         200..=299 => {}
-        401 | 403 => return ProviderStatus::failure(&cfg.id, &name, "Xác thực thất bại. Kiểm tra lại API key."),
-        404 => return ProviderStatus::failure(&cfg.id, &name, "Endpoint không tồn tại (HTTP 404). Kilo tRPC path có thể đã thay đổi."),
-        code @ 500..=599 => return ProviderStatus::failure(&cfg.id, &name, format!("Kilo API tạm thời không khả dụng (HTTP {code}).")),
+        401 | 403 => {
+            return ProviderStatus::failure(
+                &cfg.id,
+                &name,
+                "Xác thực thất bại. Kiểm tra lại API key.",
+            )
+        }
+        404 => {
+            return ProviderStatus::failure(
+                &cfg.id,
+                &name,
+                "Endpoint không tồn tại (HTTP 404). Kilo tRPC path có thể đã thay đổi.",
+            )
+        }
+        code @ 500..=599 => {
+            return ProviderStatus::failure(
+                &cfg.id,
+                &name,
+                format!("Kilo API tạm thời không khả dụng (HTTP {code})."),
+            )
+        }
         code => return ProviderStatus::failure(&cfg.id, &name, format!("HTTP {code}")),
     }
 
@@ -133,7 +175,9 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
 
     let mut payloads: [Option<&Value>; 3] = [None, None, None];
     for (index, procedure) in PROCEDURES.iter().enumerate() {
-        let Some(entry) = entries.get(&index) else { continue };
+        let Some(entry) = entries.get(&index) else {
+            continue;
+        };
         if let Some(err) = trpc_error(entry) {
             if !OPTIONAL_PROCEDURES.contains(procedure) {
                 return ProviderStatus::failure(id, name, err);
@@ -154,7 +198,9 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
     if let Some(total) = credit_snap.total.filter(|t| *t > 0.0) {
         let used = credit_snap.used.unwrap_or(0.0);
         let used_pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Credits".into(),
             used_pct,
             remaining_pct: 100 - used_pct,
@@ -163,7 +209,9 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
             window_seconds: None,
         });
     } else if credit_snap.total == Some(0.0) {
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Credits".into(),
             used_pct: 100,
             remaining_pct: 0,
@@ -182,7 +230,9 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
         if bonus > 0.0 {
             subtitle += &format!(" (+ ${bonus:.2} bonus)");
         }
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Kilo Pass".into(),
             used_pct,
             remaining_pct: 100 - used_pct,
@@ -210,7 +260,13 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
 
 fn response_entries(root: &Value) -> Option<std::collections::HashMap<usize, Value>> {
     if let Some(arr) = root.as_array() {
-        return Some(arr.iter().take(PROCEDURES.len()).cloned().enumerate().collect());
+        return Some(
+            arr.iter()
+                .take(PROCEDURES.len())
+                .cloned()
+                .enumerate()
+                .collect(),
+        );
     }
     if let Some(obj) = root.as_object() {
         if obj.contains_key("result") || obj.contains_key("error") {
@@ -218,7 +274,12 @@ fn response_entries(root: &Value) -> Option<std::collections::HashMap<usize, Val
         }
         let indexed: std::collections::HashMap<usize, Value> = obj
             .iter()
-            .filter_map(|(k, v)| k.parse::<usize>().ok().filter(|i| *i < PROCEDURES.len()).map(|i| (i, v.clone())))
+            .filter_map(|(k, v)| {
+                k.parse::<usize>()
+                    .ok()
+                    .filter(|i| *i < PROCEDURES.len())
+                    .map(|i| (i, v.clone()))
+            })
             .collect();
         if !indexed.is_empty() {
             return Some(indexed);
@@ -232,12 +293,21 @@ fn trpc_error(entry: &Value) -> Option<String> {
     let code = nested_string(error_obj, &["json", "data", "code"])
         .or_else(|| nested_string(error_obj, &["data", "code"]))
         .or_else(|| nested_string(error_obj, &["code"]));
-    let message = nested_string(error_obj, &["json", "message"]).or_else(|| nested_string(error_obj, &["message"]));
-    let combined = [&code, &message].iter().filter_map(|s| s.as_deref()).collect::<Vec<_>>().join(" ").to_lowercase();
+    let message = nested_string(error_obj, &["json", "message"])
+        .or_else(|| nested_string(error_obj, &["message"]));
+    let combined = [&code, &message]
+        .iter()
+        .filter_map(|s| s.as_deref())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
     if combined.contains("unauthorized") || combined.contains("forbidden") {
         return Some("Xác thực thất bại. Kiểm tra lại API key.".to_string());
     }
-    Some(format!("Lỗi tRPC: {}", code.or(message).unwrap_or_else(|| "unknown".to_string())))
+    Some(format!(
+        "Lỗi tRPC: {}",
+        code.or(message).unwrap_or_else(|| "unknown".to_string())
+    ))
 }
 
 fn nested_string(v: &Value, path: &[&str]) -> Option<String> {
@@ -269,7 +339,13 @@ struct CreditSnapshot {
 }
 
 fn parse_credits(payload: Option<&Value>) -> CreditSnapshot {
-    let Some(payload) = payload else { return CreditSnapshot { used: None, total: None, remaining: None } };
+    let Some(payload) = payload else {
+        return CreditSnapshot {
+            used: None,
+            total: None,
+            remaining: None,
+        };
+    };
 
     if let Some(blocks) = payload.get("creditBlocks").and_then(Value::as_array) {
         let mut total_sum = 0.0;
@@ -290,13 +366,21 @@ fn parse_credits(payload: Option<&Value>) -> CreditSnapshot {
             let total = saw_total.then(|| total_sum.max(0.0));
             let remaining = saw_remain.then(|| remain_sum.max(0.0));
             let used = total.zip(remaining).map(|(t, r)| (t - r).max(0.0));
-            return CreditSnapshot { used, total, remaining };
+            return CreditSnapshot {
+                used,
+                total,
+                remaining,
+            };
         }
     }
 
     if let Some(bal_milli) = payload.get("totalBalance_mUsd").and_then(Value::as_f64) {
         let bal = (bal_milli / 1_000_000.0).max(0.0);
-        return CreditSnapshot { used: Some(0.0), total: Some(bal), remaining: Some(bal) };
+        return CreditSnapshot {
+            used: Some(0.0),
+            total: Some(bal),
+            remaining: Some(bal),
+        };
     }
 
     CreditSnapshot {
@@ -326,16 +410,36 @@ fn subscription_data(payload: Option<&Value>) -> Option<&Value> {
 
 fn parse_pass(payload: Option<&Value>) -> PassSnapshot {
     let Some(sub) = subscription_data(payload) else {
-        return PassSnapshot { used: None, total: None, bonus: None, resets_at: None };
+        return PassSnapshot {
+            used: None,
+            total: None,
+            bonus: None,
+            resets_at: None,
+        };
     };
-    let used = sub.get("currentPeriodUsageUsd").and_then(Value::as_f64).map(|v| v.max(0.0));
-    let base = sub.get("currentPeriodBaseCreditsUsd").and_then(Value::as_f64).map(|v| v.max(0.0));
-    let bonus = sub.get("currentPeriodBonusCreditsUsd").and_then(Value::as_f64).unwrap_or(0.0).max(0.0);
+    let used = sub
+        .get("currentPeriodUsageUsd")
+        .and_then(Value::as_f64)
+        .map(|v| v.max(0.0));
+    let base = sub
+        .get("currentPeriodBaseCreditsUsd")
+        .and_then(Value::as_f64)
+        .map(|v| v.max(0.0));
+    let bonus = sub
+        .get("currentPeriodBonusCreditsUsd")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .max(0.0);
     let total = base.map(|b| b + bonus);
     let resets_at = ["nextBillingAt", "nextRenewalAt", "renewsAt", "renewAt"]
         .iter()
         .find_map(|k| sub.get(k).and_then(parse_date));
-    PassSnapshot { used, total, bonus: (bonus > 0.0).then_some(bonus), resets_at }
+    PassSnapshot {
+        used,
+        total,
+        bonus: (bonus > 0.0).then_some(bonus),
+        resets_at,
+    }
 }
 
 fn parse_plan_name(payload: Option<&Value>) -> Option<String> {
@@ -362,7 +466,12 @@ struct AutoTopUpSnapshot {
 }
 
 fn parse_auto_top_up(payload: Option<&Value>) -> AutoTopUpSnapshot {
-    let Some(obj) = payload else { return AutoTopUpSnapshot { enabled: None, method: None } };
+    let Some(obj) = payload else {
+        return AutoTopUpSnapshot {
+            enabled: None,
+            method: None,
+        };
+    };
     let enabled = obj
         .get("enabled")
         .or_else(|| obj.get("isEnabled"))
@@ -404,11 +513,17 @@ fn parse_date(v: &Value) -> Option<i64> {
     if let Ok(n) = s.parse::<f64>() {
         return Some(epoch_to_ts(n));
     }
-    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp())
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.timestamp())
 }
 
 fn epoch_to_ts(value: f64) -> i64 {
-    let seconds = if value.abs() > 10_000_000_000.0 { value / 1000.0 } else { value };
+    let seconds = if value.abs() > 10_000_000_000.0 {
+        value / 1000.0
+    } else {
+        value
+    };
     seconds as i64
 }
 
@@ -454,10 +569,14 @@ mod tests {
 
     #[test]
     fn unauthorized_trpc_error_is_surfaced() {
-        let body = json!([{"error": {"json": {"data": {"code": "UNAUTHORIZED"}, "message": "no"}}}]);
+        let body =
+            json!([{"error": {"json": {"data": {"code": "UNAUTHORIZED"}, "message": "no"}}}]);
         let bytes = serde_json::to_vec(&body).unwrap();
         let s = parse_batch_response(&bytes, "kilo", "Kilo", "label");
-        assert_eq!(s.error.as_deref(), Some("Xác thực thất bại. Kiểm tra lại API key."));
+        assert_eq!(
+            s.error.as_deref(),
+            Some("Xác thực thất bại. Kiểm tra lại API key.")
+        );
     }
 
     #[test]

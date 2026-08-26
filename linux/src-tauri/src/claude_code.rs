@@ -102,13 +102,21 @@ pub fn base_url_for_provider(id: &str, provider: &Provider) -> Option<String> {
         }
         "minimax" => {
             let region = provider.region.as_deref().unwrap_or("io");
-            let host = if region == "com" { "api.minimaxi.com" } else { "api.minimax.io" };
+            let host = if region == "com" {
+                "api.minimaxi.com"
+            } else {
+                "api.minimax.io"
+            };
             Some(format!("https://{host}/anthropic"))
         }
         "deepseek" => Some("https://api.deepseek.com/anthropic".to_string()),
         "zai" => {
             let region = provider.region.as_deref().unwrap_or("global");
-            let host = if region == "cn" { "open.bigmodel.cn" } else { "api.z.ai" };
+            let host = if region == "cn" {
+                "open.bigmodel.cn"
+            } else {
+                "api.z.ai"
+            };
             Some(format!("https://{host}/api/anthropic"))
         }
         _ => None,
@@ -188,14 +196,22 @@ pub fn spec_for_provider(id: &str, provider: &Provider) -> Option<EnvSpec> {
     if provider.claude_disable_1m == Some(true) {
         env.insert(DISABLE_1M_KEY.to_string(), Value::String("1".to_string()));
     }
-    Some(EnvSpec { env, api_key_helper: None })
+    Some(EnvSpec {
+        env,
+        api_key_helper: None,
+    })
 }
 
 /// Suggested model ids per preset backend — macOS `ClaudeCodeBackend.suggestedModels`.
 pub fn suggested_models(id: &str) -> &'static [&'static str] {
     match id {
         "minimax" => &["MiniMax-M3[1m]", "MiniMax-M3", "MiniMax-M2"],
-        "deepseek" => &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+        "deepseek" => &[
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ],
         "zai" => &["GLM-4.7", "GLM-4.5-Air", "glm-4.6", "glm-4.5"],
         _ => &[],
     }
@@ -271,7 +287,8 @@ pub fn spec_for_profile(p: &ClaudeCodeProfile) -> Option<EnvSpec> {
 
     let base = cleaned(p.base_url.as_deref())?;
     let token = cleaned(p.token.as_deref())?;
-    let token_key = cleaned(p.token_env_key.as_deref()).unwrap_or_else(|| AUTH_TOKEN_KEY.to_string());
+    let token_key =
+        cleaned(p.token_env_key.as_deref()).unwrap_or_else(|| AUTH_TOKEN_KEY.to_string());
 
     let mut env = Map::new();
     env.insert(token_key, Value::String(token));
@@ -291,7 +308,10 @@ pub fn spec_for_profile(p: &ClaudeCodeProfile) -> Option<EnvSpec> {
             env.insert(key.to_string(), Value::String(row.value.clone()));
         }
     }
-    Some(EnvSpec { env, api_key_helper: cleaned(p.api_key_helper.as_deref()) })
+    Some(EnvSpec {
+        env,
+        api_key_helper: cleaned(p.api_key_helper.as_deref()),
+    })
 }
 
 /// Sync state for a custom profile, treating a signature mismatch on an
@@ -335,23 +355,26 @@ fn models_url(base: &str) -> String {
 /// Sort newest-first by `created_at` (ISO) / `created` (unix); entries with
 /// no timestamp keep their API order after the dated ones.
 fn parse_models(body: &Value) -> Vec<String> {
-    let Some(data) = body.get("data").and_then(Value::as_array) else { return Vec::new() };
+    let Some(data) = body.get("data").and_then(Value::as_array) else {
+        return Vec::new();
+    };
     let mut dated: Vec<(i64, String)> = Vec::new();
     let mut undated: Vec<String> = Vec::new();
     for entry in data {
-        let Some(id) = entry.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+        let Some(id) = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
             continue;
         };
-        let ts = entry
-            .get("created")
-            .and_then(Value::as_i64)
-            .or_else(|| {
-                entry
-                    .get("created_at")
-                    .and_then(Value::as_str)
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    .map(|d| d.timestamp())
-            });
+        let ts = entry.get("created").and_then(Value::as_i64).or_else(|| {
+            entry
+                .get("created_at")
+                .and_then(Value::as_str)
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| d.timestamp())
+        });
         match ts {
             Some(ts) => dated.push((ts, id.to_string())),
             None => undated.push(id.to_string()),
@@ -399,7 +422,10 @@ pub async fn fetch_models(base_url: &str, token: &str) -> Result<Vec<String>, St
     if !(200..=299).contains(&code) {
         return Err(format!("HTTP {code}"));
     }
-    let body: Value = resp.json().await.map_err(|_| "Không đọc được danh sách model".to_string())?;
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|_| "Không đọc được danh sách model".to_string())?;
     let models = parse_models(&body);
     if models.is_empty() {
         return Err("Không có model nào".to_string());
@@ -426,7 +452,8 @@ fn serialize_settings(settings: &Map<String, Value>) -> String {
     // Pretty-print with sorted keys isn't guaranteed by serde_json's default
     // Map (BTreeMap when `preserve_order` is off); this matches Claude Code's
     // own formatting closely enough and stays byte-stable across writes.
-    serde_json::to_string_pretty(&Value::Object(settings.clone())).unwrap_or_else(|_| "{}".to_string())
+    serde_json::to_string_pretty(&Value::Object(settings.clone()))
+        .unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Merge this env spec into the settings JSON content: the `env` block
@@ -472,9 +499,15 @@ pub fn remove_env_content(content: &str) -> Result<(String, bool), String> {
 /// Whether the settings content points at this spec and whether the written
 /// values still match the current source.
 pub fn sync_state_content(content: &str, spec: &EnvSpec) -> SyncState {
-    let Some(base) = spec.base_url() else { return SyncState::Off };
-    let Ok(settings) = parse_settings(content) else { return SyncState::Off };
-    let Some(Value::Object(env)) = settings.get("env") else { return SyncState::Off };
+    let Some(base) = spec.base_url() else {
+        return SyncState::Off;
+    };
+    let Ok(settings) = parse_settings(content) else {
+        return SyncState::Off;
+    };
+    let Some(Value::Object(env)) = settings.get("env") else {
+        return SyncState::Off;
+    };
     let Some(current_base) = env.get(BASE_URL_KEY).and_then(Value::as_str) else {
         return SyncState::Off;
     };
@@ -590,7 +623,10 @@ mod tests {
     use super::*;
 
     fn provider(id: &str) -> Provider {
-        Provider { id: id.to_string(), ..Default::default() }
+        Provider {
+            id: id.to_string(),
+            ..Default::default()
+        }
     }
 
     fn configured_minimax() -> Provider {
@@ -611,19 +647,26 @@ mod tests {
         let parsed: Value = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed["permissions"]["allow"][0], "Bash");
         assert_eq!(parsed["otherTopLevel"], 42);
-        assert_eq!(parsed["env"][BASE_URL_KEY], "https://api.minimax.io/anthropic");
+        assert_eq!(
+            parsed["env"][BASE_URL_KEY],
+            "https://api.minimax.io/anthropic"
+        );
         assert_eq!(parsed["env"][AUTH_TOKEN_KEY], "sk-test");
         assert_eq!(parsed["env"]["ANTHROPIC_MODEL"], "MiniMax-M3");
     }
 
     #[test]
     fn merge_replaces_env_block_entirely_when_switching_providers() {
-        let existing = r#"{"env": {"ANTHROPIC_BASE_URL": "https://old.example.com", "LEFTOVER_KEY": "x"}}"#;
+        let existing =
+            r#"{"env": {"ANTHROPIC_BASE_URL": "https://old.example.com", "LEFTOVER_KEY": "x"}}"#;
         let spec = spec_for_provider("minimax", &configured_minimax()).unwrap();
         let merged = merge_content(existing, &spec).unwrap();
         let parsed: Value = serde_json::from_str(&merged).unwrap();
         assert!(parsed["env"].get("LEFTOVER_KEY").is_none());
-        assert_eq!(parsed["env"][BASE_URL_KEY], "https://api.minimax.io/anthropic");
+        assert_eq!(
+            parsed["env"][BASE_URL_KEY],
+            "https://api.minimax.io/anthropic"
+        );
     }
 
     #[test]
@@ -647,7 +690,10 @@ mod tests {
     fn sync_state_stale_when_base_matches_but_value_differs() {
         let spec = spec_for_provider("minimax", &configured_minimax()).unwrap();
         let mut stale_env = spec.env.clone();
-        stale_env.insert(AUTH_TOKEN_KEY.to_string(), Value::String("sk-old-token".to_string()));
+        stale_env.insert(
+            AUTH_TOKEN_KEY.to_string(),
+            Value::String("sk-old-token".to_string()),
+        );
         let content = serde_json::to_string(&serde_json::json!({"env": stale_env})).unwrap();
         assert_eq!(sync_state_content(&content, &spec), SyncState::Stale);
     }
@@ -696,9 +742,15 @@ mod tests {
     fn zai_region_selects_correct_host() {
         let mut p = provider("zai");
         p.region = Some("cn".to_string());
-        assert_eq!(base_url_for_provider("zai", &p).unwrap(), "https://open.bigmodel.cn/api/anthropic");
+        assert_eq!(
+            base_url_for_provider("zai", &p).unwrap(),
+            "https://open.bigmodel.cn/api/anthropic"
+        );
         p.region = Some("global".to_string());
-        assert_eq!(base_url_for_provider("zai", &p).unwrap(), "https://api.z.ai/api/anthropic");
+        assert_eq!(
+            base_url_for_provider("zai", &p).unwrap(),
+            "https://api.z.ai/api/anthropic"
+        );
     }
 
     #[test]
@@ -766,10 +818,7 @@ mod tests {
         let spec = spec_for_profile(&p).unwrap();
         // Claude Code always sees loopback, never the OpenAI upstream secret.
         assert_eq!(spec.env[AUTH_TOKEN_KEY], "loopback-key");
-        assert_eq!(
-            spec.env[BASE_URL_KEY],
-            crate::cli_proxy::LOCAL_BASE_URL
-        );
+        assert_eq!(spec.env[BASE_URL_KEY], crate::cli_proxy::LOCAL_BASE_URL);
         assert_eq!(spec.env[SONNET_KEY], "gpt-s"); // [1m] stripped for local alias
         assert!(spec.api_key_helper.is_none());
         // Upstream OpenAI credentials must never leak into the env block.
@@ -796,10 +845,22 @@ mod tests {
 
     #[test]
     fn models_url_tolerates_v1_and_trailing_slash() {
-        assert_eq!(models_url("https://api.x.com"), "https://api.x.com/v1/models");
-        assert_eq!(models_url("https://api.x.com/"), "https://api.x.com/v1/models");
-        assert_eq!(models_url("https://api.x.com/v1"), "https://api.x.com/v1/models");
-        assert_eq!(models_url("https://api.x.com/anthropic"), "https://api.x.com/anthropic/v1/models");
+        assert_eq!(
+            models_url("https://api.x.com"),
+            "https://api.x.com/v1/models"
+        );
+        assert_eq!(
+            models_url("https://api.x.com/"),
+            "https://api.x.com/v1/models"
+        );
+        assert_eq!(
+            models_url("https://api.x.com/v1"),
+            "https://api.x.com/v1/models"
+        );
+        assert_eq!(
+            models_url("https://api.x.com/anthropic"),
+            "https://api.x.com/anthropic/v1/models"
+        );
     }
 
     #[test]
@@ -815,7 +876,8 @@ mod tests {
 
     #[test]
     fn remove_env_content_strips_env_and_helper() {
-        let existing = r#"{"env": {"ANTHROPIC_BASE_URL": "x"}, "apiKeyHelper": "echo", "keep": true}"#;
+        let existing =
+            r#"{"env": {"ANTHROPIC_BASE_URL": "x"}, "apiKeyHelper": "echo", "keep": true}"#;
         let (content, changed) = remove_env_content(existing).unwrap();
         assert!(changed);
         let parsed: Value = serde_json::from_str(&content).unwrap();

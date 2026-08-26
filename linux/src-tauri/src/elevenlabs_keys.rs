@@ -74,7 +74,9 @@ fn to_key(e: &Entry) -> ElevenLabsKey {
 /// file has never been created. An empty list after the user deleted every
 /// key is left empty (no re-import loop).
 pub fn ensure_legacy_import() {
-    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if metadata_path().is_some_and(|path| path.exists()) {
         return;
     }
@@ -134,7 +136,12 @@ pub fn active_api_key() -> Option<String> {
 pub fn active_display_label() -> Option<String> {
     let id = active_id()?;
     let entry = load_stored().accounts.into_iter().find(|e| e.id == id)?;
-    if let Some(label) = entry.label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(label) = entry
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         return Some(label.to_string());
     }
     Some(preview_of(&entry.api_key))
@@ -148,14 +155,19 @@ pub fn all_keys() -> Vec<ElevenLabsKey> {
 
 /// Stores a new managed API key. Sets active when this is the first key.
 pub fn add(api_key: &str, label: Option<&str>) -> Result<ElevenLabsKey, String> {
-    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let api_key = api_key.trim();
     if api_key.is_empty() {
         return Err("API key trống".to_string());
     }
     let entry = Entry {
         id: uuid_v4(),
-        label: label.map(str::trim).filter(|s| !s.is_empty()).map(String::from),
+        label: label
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from),
         api_key: api_key.to_string(),
     };
     let key = to_key(&entry);
@@ -171,7 +183,9 @@ pub fn add(api_key: &str, label: Option<&str>) -> Result<ElevenLabsKey, String> 
 
 /// Removes a managed key; falls active back to the first remaining key.
 pub fn remove(id: &str) -> Result<(), String> {
-    let _guard = STORE_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let previous = config::load().active_elevenlabs_key;
     let remaining: Vec<Entry> = load_stored()
         .accounts
@@ -198,10 +212,8 @@ mod tests {
     use crate::config::TEST_ENV_LOCK as ENV_LOCK;
 
     fn temp_config(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "birdnion-el-keys-{tag}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("birdnion-el-keys-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

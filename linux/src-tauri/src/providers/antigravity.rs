@@ -40,7 +40,8 @@ use serde_json::Value;
 use crate::config;
 use crate::providers::{display_name, ProviderStatus, QuotaWindow};
 
-const QUOTA_SUMMARY_PATH: &str = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+const QUOTA_SUMMARY_PATH: &str =
+    "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
 const USER_STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const WARM_SPAWN_TIMEOUT: Duration = Duration::from_secs(7);
@@ -65,7 +66,11 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         return status;
     }
 
-    ProviderStatus::failure(&cfg.id, &name, "Antigravity: cần IDE đang chạy, agy CLI, hoặc đăng nhập Google")
+    ProviderStatus::failure(
+        &cfg.id,
+        &name,
+        "Antigravity: cần IDE đang chạy, agy CLI, hoặc đăng nhập Google",
+    )
 }
 
 /// Probe an already-running `language_server`/`agy` process found via `ps`.
@@ -74,7 +79,10 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 async fn fetch_from_running_process(cfg: &config::Provider, name: &str) -> Option<ProviderStatus> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     // ps/lsof are blocking subprocess calls; run them off the async executor.
-    let processes = tauri::async_runtime::spawn_blocking(move || detect_processes(deadline)).await.ok()?.ok()?;
+    let processes = tauri::async_runtime::spawn_blocking(move || detect_processes(deadline))
+        .await
+        .ok()?
+        .ok()?;
     let process_count = processes.len();
     let mut account_mismatch = None;
     for (index, process) in processes.into_iter().enumerate() {
@@ -83,7 +91,10 @@ async fn fetch_from_running_process(cfg: &config::Provider, name: &str) -> Optio
         let process_deadline = fair_deadline(deadline, process_count - index)?;
         let timeout = remaining_time(process_deadline)?;
         let pid = process.pid;
-        let ports = tauri::async_runtime::spawn_blocking(move || listening_ports(pid, timeout)).await.ok()?.ok();
+        let ports = tauri::async_runtime::spawn_blocking(move || listening_ports(pid, timeout))
+            .await
+            .ok()?
+            .ok();
         let Some(ports) = ports else { continue };
         if let Some(status) = probe_endpoints(cfg, name, &process, &ports, process_deadline).await {
             if is_account_mismatch_status(&status) {
@@ -97,7 +108,10 @@ async fn fetch_from_running_process(cfg: &config::Provider, name: &str) -> Optio
 }
 
 fn is_account_mismatch_status(status: &ProviderStatus) -> bool {
-    status.error.as_deref().is_some_and(|error| error.starts_with("Account không khớp:"))
+    status
+        .error
+        .as_deref()
+        .is_some_and(|error| error.starts_with("Account không khớp:"))
 }
 
 /// Spawn the `agy` CLI so its embedded localhost server opens a port, then
@@ -107,7 +121,9 @@ fn is_account_mismatch_status(status: &ProviderStatus) -> bool {
 #[cfg(unix)]
 async fn fetch_via_cli_warm_session(cfg: &config::Provider, name: &str) -> Option<ProviderStatus> {
     let deadline = Instant::now() + WARM_SPAWN_TIMEOUT;
-    let binary = tauri::async_runtime::spawn_blocking(resolve_agy_binary).await.ok()?;
+    let binary = tauri::async_runtime::spawn_blocking(resolve_agy_binary)
+        .await
+        .ok()?;
     let binary = binary?;
 
     let session = spawn_agy_in_pty(&binary).ok()?;
@@ -121,7 +137,9 @@ async fn fetch_via_cli_warm_session(cfg: &config::Provider, name: &str) -> Optio
                 break;
             }
             _ => {
-                let Some(remaining) = remaining_time(deadline) else { break };
+                let Some(remaining) = remaining_time(deadline) else {
+                    break;
+                };
                 tokio::time::sleep(remaining.min(Duration::from_millis(400))).await;
             }
         }
@@ -130,13 +148,19 @@ async fn fetch_via_cli_warm_session(cfg: &config::Provider, name: &str) -> Optio
     if ports.is_empty() {
         None
     } else {
-        let process = ProcessInfo { pid, csrf_token: String::new() };
+        let process = ProcessInfo {
+            pid,
+            csrf_token: String::new(),
+        };
         probe_endpoints(cfg, name, &process, &ports, deadline).await
     }
 }
 
 #[cfg(not(unix))]
-async fn fetch_via_cli_warm_session(_cfg: &config::Provider, _name: &str) -> Option<ProviderStatus> {
+async fn fetch_via_cli_warm_session(
+    _cfg: &config::Provider,
+    _name: &str,
+) -> Option<ProviderStatus> {
     None
 }
 
@@ -152,18 +176,28 @@ struct PtySession {
 #[cfg(unix)]
 impl Drop for PtySession {
     fn drop(&mut self) {
-        unsafe { libc::kill(-self.pid, libc::SIGTERM); }
+        unsafe {
+            libc::kill(-self.pid, libc::SIGTERM);
+        }
         let deadline = Instant::now() + Duration::from_millis(250);
         let mut reaped = false;
         while Instant::now() < deadline {
-            if matches!(self.child.try_wait(), Ok(Some(_))) { reaped = true; }
-            if !process_group_exists(self.pid) { break; }
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                reaped = true;
+            }
+            if !process_group_exists(self.pid) {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(25));
         }
         if process_group_exists(self.pid) {
-            unsafe { libc::kill(-self.pid, libc::SIGKILL); }
+            unsafe {
+                libc::kill(-self.pid, libc::SIGKILL);
+            }
         }
-        if !reaped { let _ = self.child.wait(); }
+        if !reaped {
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -179,8 +213,22 @@ fn process_group_exists(pid: i32) -> bool {
 fn spawn_agy_in_pty(binary: &str) -> io::Result<PtySession> {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    let mut size = libc::winsize { ws_row: 24, ws_col: 120, ws_xpixel: 0, ws_ypixel: 0 };
-    if unsafe { libc::openpty(&mut master_fd, &mut slave_fd, std::ptr::null_mut(), std::ptr::null_mut(), &mut size) } == -1 {
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    if unsafe {
+        libc::openpty(
+            &mut master_fd,
+            &mut slave_fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    } == -1
+    {
         return Err(io::Error::last_os_error());
     }
 
@@ -193,7 +241,9 @@ fn spawn_agy_in_pty(binary: &str) -> io::Result<PtySession> {
         .stderr(Stdio::from(slave));
     unsafe {
         command.pre_exec(|| {
-            if libc::setsid() == -1 { return Err(io::Error::last_os_error()); }
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
             if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY as _, 0) == -1 {
                 return Err(io::Error::last_os_error());
             }
@@ -203,7 +253,11 @@ fn spawn_agy_in_pty(binary: &str) -> io::Result<PtySession> {
 
     let child = command.spawn()?;
     let pid = i32::try_from(child.id()).map_err(|_| io::Error::other("agy PID vượt quá i32"))?;
-    Ok(PtySession { child, pid, _master: master })
+    Ok(PtySession {
+        child,
+        pid,
+        _master: master,
+    })
 }
 
 /// Resolves the `agy` binary: `PATH` lookup, then well-known install paths
@@ -218,15 +272,22 @@ fn resolve_agy_binary() -> Option<String> {
         }
     }
     let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = [format!("{home}/.local/bin/agy"), "/usr/local/bin/agy".to_string()];
-    candidates.into_iter().find(|p| is_executable(std::path::Path::new(p)))
+    let candidates = [
+        format!("{home}/.local/bin/agy"),
+        "/usr/local/bin/agy".to_string(),
+    ];
+    candidates
+        .into_iter()
+        .find(|p| is_executable(std::path::Path::new(p)))
 }
 
 fn is_executable(path: &std::path::Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+        std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {
@@ -253,7 +314,9 @@ async fn probe_endpoints(
 }
 
 fn remaining_time(deadline: Instant) -> Option<Duration> {
-    deadline.checked_duration_since(Instant::now()).filter(|duration| !duration.is_zero())
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
 }
 
 fn fair_deadline(overall_deadline: Instant, remaining_processes: usize) -> Option<Instant> {
@@ -266,7 +329,9 @@ fn detect_processes(deadline: Instant) -> Result<Vec<ProcessInfo>, String> {
     let timeout = remaining_time(deadline).ok_or_else(|| "probe deadline exceeded".to_string())?;
     let output = run_command("/bin/ps", &["-ax", "-o", "pid=,command="], timeout)?;
     let processes = parse_process_list(&output);
-    (!processes.is_empty()).then_some(processes).ok_or_else(|| "notRunning".to_string())
+    (!processes.is_empty())
+        .then_some(processes)
+        .ok_or_else(|| "notRunning".to_string())
 }
 
 /// Pure: parse every matching `language_server`/`agy` process in `ps` order.
@@ -275,7 +340,9 @@ fn parse_process_list(output: &str) -> Vec<ProcessInfo> {
     for raw_line in output.lines() {
         let trimmed = raw_line.trim();
         let mut parts = trimmed.splitn(2, ' ');
-        let Some(pid) = parts.next().and_then(|value| value.parse::<i32>().ok()) else { continue };
+        let Some(pid) = parts.next().and_then(|value| value.parse::<i32>().ok()) else {
+            continue;
+        };
         let command = parts.next().unwrap_or("").trim();
         if command.is_empty() {
             continue;
@@ -299,15 +366,20 @@ fn is_language_server_process(lower: &str) -> bool {
         .split(|c: char| c == '/' || c == '\\' || c.is_whitespace())
         .any(|segment| {
             let s = segment.strip_suffix(".exe").unwrap_or(segment);
-            s == "language_server" || s == "language-server" || (s.starts_with("language") && (s.contains('_') || s.contains('-')))
+            s == "language_server"
+                || s == "language-server"
+                || (s.starts_with("language") && (s.contains('_') || s.contains('-')))
         });
-    looks_like_language_server && (lower.contains("antigravity") || lower.contains("--app_data_dir"))
+    looks_like_language_server
+        && (lower.contains("antigravity") || lower.contains("--app_data_dir"))
 }
 
 fn is_cli_process(lower: &str) -> bool {
-    lower.split(|c: char| c == '/' || c == '\\' || c.is_whitespace()).any(|segment| {
-        segment == "antigravity-cli" || segment == "antigravity_cli" || segment == "agy"
-    })
+    lower
+        .split(|c: char| c == '/' || c == '\\' || c.is_whitespace())
+        .any(|segment| {
+            segment == "antigravity-cli" || segment == "antigravity_cli" || segment == "agy"
+        })
 }
 
 fn extract_flag(flag: &str, command: &str) -> Option<String> {
@@ -325,7 +397,11 @@ fn listening_ports(pid: i32, timeout: Duration) -> Result<Vec<u16>, String> {
         .find(|p| std::path::Path::new(p).exists())
         .ok_or_else(|| "lsof không có sẵn".to_string())?;
     let pid_str = pid.to_string();
-    let output = run_command(lsof, &["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid_str], timeout)?;
+    let output = run_command(
+        lsof,
+        &["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", &pid_str],
+        timeout,
+    )?;
     let ports = parse_listening_ports(&output);
     if ports.is_empty() {
         return Err("Không tìm thấy port đang listen".to_string());
@@ -337,10 +413,17 @@ fn listening_ports(pid: i32, timeout: Duration) -> Result<Vec<u16>, String> {
 fn parse_listening_ports(output: &str) -> Vec<u16> {
     let mut ports: Vec<u16> = Vec::new();
     for line in output.lines() {
-        let Some(listen_idx) = line.find("(LISTEN)") else { continue };
+        let Some(listen_idx) = line.find("(LISTEN)") else {
+            continue;
+        };
         let before = &line[..listen_idx];
-        let Some(colon_idx) = before.rfind(':') else { continue };
-        let port_str: String = before[colon_idx + 1..].chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Some(colon_idx) = before.rfind(':') else {
+            continue;
+        };
+        let port_str: String = before[colon_idx + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         if let Ok(port) = port_str.trim().parse::<u16>() {
             if !ports.contains(&port) {
                 ports.push(port);
@@ -361,7 +444,10 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration) -> Result<String,
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Không chạy được {binary}: {e}"))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| format!("{binary} không có stdout pipe"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("{binary} không có stdout pipe"))?;
     let stdout_reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         stdout.read_to_end(&mut bytes).map(|_| bytes)
@@ -397,7 +483,13 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration) -> Result<String,
     Ok(String::from_utf8_lossy(&output).to_string())
 }
 
-async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value, deadline: Instant) -> Result<Value, String> {
+async fn post_connect_json(
+    port: u16,
+    path: &str,
+    csrf_token: &str,
+    body: Value,
+    deadline: Instant,
+) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .build()
@@ -407,17 +499,25 @@ async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value,
     let mut last_err = String::new();
 
     for scheme in schemes {
-        let timeout = remaining_time(deadline).ok_or_else(|| "probe deadline exceeded".to_string())?;
+        let timeout =
+            remaining_time(deadline).ok_or_else(|| "probe deadline exceeded".to_string())?;
         let url = format!("{scheme}://127.0.0.1:{port}{path}");
-        let mut req = client.post(&url).timeout(timeout).header("Content-Type", "application/json").header("Connect-Protocol-Version", "1").json(&body);
+        let mut req = client
+            .post(&url)
+            .timeout(timeout)
+            .header("Content-Type", "application/json")
+            .header("Connect-Protocol-Version", "1")
+            .json(&body);
         if !csrf_token.is_empty() {
             req = req.header("X-Codeium-Csrf-Token", csrf_token);
         }
         match tokio::time::timeout(timeout, req.send()).await {
             Err(_) => last_err = "probe deadline exceeded".to_string(),
             Ok(Ok(resp)) if resp.status().as_u16() == 200 => {
-                let timeout = remaining_time(deadline).ok_or_else(|| "probe deadline exceeded".to_string())?;
-                return tokio::time::timeout(timeout, resp.json::<Value>()).await
+                let timeout = remaining_time(deadline)
+                    .ok_or_else(|| "probe deadline exceeded".to_string())?;
+                return tokio::time::timeout(timeout, resp.json::<Value>())
+                    .await
                     .map_err(|_| "probe deadline exceeded".to_string())?
                     .map_err(|e| format!("Invalid JSON: {e}"));
             }
@@ -433,9 +533,23 @@ async fn post_connect_json(port: u16, path: &str, csrf_token: &str, body: Value,
     Err(last_err)
 }
 
-async fn try_summary_endpoint(cfg: &config::Provider, name: &str, process: &ProcessInfo, port: u16, deadline: Instant) -> Option<ProviderStatus> {
+async fn try_summary_endpoint(
+    cfg: &config::Provider,
+    name: &str,
+    process: &ProcessInfo,
+    port: u16,
+    deadline: Instant,
+) -> Option<ProviderStatus> {
     let body = serde_json::json!({"forceRefresh": true});
-    let data = post_connect_json(port, QUOTA_SUMMARY_PATH, &process.csrf_token, body, deadline).await.ok()?;
+    let data = post_connect_json(
+        port,
+        QUOTA_SUMMARY_PATH,
+        &process.csrf_token,
+        body,
+        deadline,
+    )
+    .await
+    .ok()?;
     let groups = parse_quota_summary(&data)?;
     let windows = map_summary_windows(&groups);
     if windows.is_empty() {
@@ -445,9 +559,17 @@ async fn try_summary_endpoint(cfg: &config::Provider, name: &str, process: &Proc
     Some(build_status(cfg, name, windows, email))
 }
 
-async fn try_user_status_endpoint(cfg: &config::Provider, name: &str, process: &ProcessInfo, port: u16, deadline: Instant) -> Option<ProviderStatus> {
+async fn try_user_status_endpoint(
+    cfg: &config::Provider,
+    name: &str,
+    process: &ProcessInfo,
+    port: u16,
+    deadline: Instant,
+) -> Option<ProviderStatus> {
     let body = default_request_body();
-    let data = post_connect_json(port, USER_STATUS_PATH, &process.csrf_token, body, deadline).await.ok()?;
+    let data = post_connect_json(port, USER_STATUS_PATH, &process.csrf_token, body, deadline)
+        .await
+        .ok()?;
     let (quotas, email) = parse_user_status(&data)?;
     let windows = map_model_windows(&quotas);
     if windows.is_empty() {
@@ -456,8 +578,20 @@ async fn try_user_status_endpoint(cfg: &config::Provider, name: &str, process: &
     Some(build_status(cfg, name, windows, email))
 }
 
-async fn fetch_identity_email(process: &ProcessInfo, port: u16, deadline: Instant) -> Option<String> {
-    let data = post_connect_json(port, USER_STATUS_PATH, &process.csrf_token, default_request_body(), deadline).await.ok()?;
+async fn fetch_identity_email(
+    process: &ProcessInfo,
+    port: u16,
+    deadline: Instant,
+) -> Option<String> {
+    let data = post_connect_json(
+        port,
+        USER_STATUS_PATH,
+        &process.csrf_token,
+        default_request_body(),
+        deadline,
+    )
+    .await
+    .ok()?;
     parse_user_status(&data)?.1
 }
 
@@ -472,11 +606,20 @@ fn default_request_body() -> Value {
     })
 }
 
-fn build_status(cfg: &config::Provider, name: &str, windows: Vec<QuotaWindow>, email: Option<String>) -> ProviderStatus {
+fn build_status(
+    cfg: &config::Provider,
+    name: &str,
+    windows: Vec<QuotaWindow>,
+    email: Option<String>,
+) -> ProviderStatus {
     if let Some(error) = account_mismatch_error(cfg.account_label.as_deref(), email.as_deref()) {
         return ProviderStatus::failure(&cfg.id, name, error);
     }
-    let account_label = cfg.account_label.clone().or(email).unwrap_or_else(|| "Antigravity".to_string());
+    let account_label = cfg
+        .account_label
+        .clone()
+        .or(email)
+        .unwrap_or_else(|| "Antigravity".to_string());
     ProviderStatus {
         id: cfg.id.clone(),
         display_name: name.to_string(),
@@ -488,12 +631,17 @@ fn build_status(cfg: &config::Provider, name: &str, windows: Vec<QuotaWindow>, e
     }
 }
 
-fn account_mismatch_error(config_label: Option<&str>, response_email: Option<&str>) -> Option<String> {
+fn account_mismatch_error(
+    config_label: Option<&str>,
+    response_email: Option<&str>,
+) -> Option<String> {
     let expected = config_label?.trim();
     if !expected.contains('@') {
         return None;
     }
-    let found = response_email.map(str::trim).filter(|value| !value.is_empty());
+    let found = response_email
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if found.is_some_and(|value| value.eq_ignore_ascii_case(expected)) {
         return None;
     }
@@ -640,7 +788,9 @@ fn semantic_label(pool: SemanticPool, interval: SemanticInterval) -> String {
     format!("{} {}", pool.label(), interval.label())
 }
 
-fn normalize_candidates(candidates: impl IntoIterator<Item = SemanticCandidate>) -> Vec<QuotaWindow> {
+fn normalize_candidates(
+    candidates: impl IntoIterator<Item = SemanticCandidate>,
+) -> Vec<QuotaWindow> {
     let mut by_key: std::collections::HashMap<(SemanticPool, SemanticInterval), SemanticCandidate> =
         std::collections::HashMap::new();
     for candidate in candidates {
@@ -686,7 +836,10 @@ fn parse_user_status(json: &Value) -> Option<(Vec<ModelQuota>, Option<String>)> 
         }
     }
     let user_status = json.get("userStatus")?;
-    let email = user_status.get("email").and_then(Value::as_str).map(String::from);
+    let email = user_status
+        .get("email")
+        .and_then(Value::as_str)
+        .map(String::from);
     let configs = user_status
         .get("cascadeModelConfigData")
         .and_then(|v| v.get("clientModelConfigs"))
@@ -699,7 +852,11 @@ fn parse_user_status(json: &Value) -> Option<(Vec<ModelQuota>, Option<String>)> 
 
 fn parse_model_config(config: &Value) -> Option<ModelQuota> {
     let quota_info = config.get("quotaInfo")?;
-    let label = config.get("label").and_then(Value::as_str).unwrap_or("").to_string();
+    let label = config
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let model_id = config
         .get("modelOrAlias")
         .and_then(|m| m.get("model"))
@@ -708,11 +865,19 @@ fn parse_model_config(config: &Value) -> Option<ModelQuota> {
         .unwrap_or_else(|| label.clone());
     let remaining_fraction = quota_info.get("remainingFraction").and_then(Value::as_f64);
     let reset_time = quota_info.get("resetTime").and_then(parse_reset_value);
-    Some(ModelQuota { label, model_id, remaining_fraction, reset_time })
+    Some(ModelQuota {
+        label,
+        model_id,
+        remaining_fraction,
+        reset_time,
+    })
 }
 
 fn parse_reset_time(s: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(s).ok().map(|d| d.timestamp()).or_else(|| s.parse::<f64>().ok().map(|t| t as i64))
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.timestamp())
+        .or_else(|| s.parse::<f64>().ok().map(|t| t as i64))
 }
 
 /// Pure: normalize `GetUserStatus` model quotas to canonical semantic windows.
@@ -736,7 +901,13 @@ fn parse_quota_summary(json: &Value) -> Option<Vec<Value>> {
         }
     }
     let summary = json.get("quotaSummary").unwrap_or(json);
-    Some(summary.get("groups").and_then(Value::as_array).cloned().unwrap_or_default())
+    Some(
+        summary
+            .get("groups")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    )
 }
 
 /// Pure: map quota-summary groups to canonical semantic windows.
@@ -748,7 +919,10 @@ fn map_summary_windows(groups: &[Value]) -> Vec<QuotaWindow> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim();
-        let group_description = group.get("description").and_then(Value::as_str).unwrap_or("");
+        let group_description = group
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let Some(buckets) = group.get("buckets").and_then(Value::as_array) else {
             continue;
         };
@@ -851,11 +1025,18 @@ fn active_account(store: &OAuthStore) -> Option<&OAuthAccount> {
 /// Resolves the OAuth client id: store file → env var. No installed-app-bundle
 /// scan on Linux (macOS-only discovery step, intentionally not ported).
 fn resolved_client_id(store: &OAuthStore) -> Option<String> {
-    non_empty(store.client_id.as_deref()).or_else(|| non_empty(std::env::var("ANTIGRAVITY_OAUTH_CLIENT_ID").ok().as_deref()))
+    non_empty(store.client_id.as_deref())
+        .or_else(|| non_empty(std::env::var("ANTIGRAVITY_OAUTH_CLIENT_ID").ok().as_deref()))
 }
 
 fn resolved_client_secret(store: &OAuthStore) -> Option<String> {
-    non_empty(store.client_secret.as_deref()).or_else(|| non_empty(std::env::var("ANTIGRAVITY_OAUTH_CLIENT_SECRET").ok().as_deref()))
+    non_empty(store.client_secret.as_deref()).or_else(|| {
+        non_empty(
+            std::env::var("ANTIGRAVITY_OAUTH_CLIENT_SECRET")
+                .ok()
+                .as_deref(),
+        )
+    })
 }
 
 fn non_empty(s: Option<&str>) -> Option<String> {
@@ -872,20 +1053,45 @@ async fn fetch_via_oauth(cfg: &config::Provider, name: &str) -> Option<ProviderS
     let client_id = resolved_client_id(&store)?;
     let client_secret = resolved_client_secret(&store)?;
 
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().ok()?;
-    let access_token = match refresh_access_token(&client, &account.refresh_token, &client_id, &client_secret).await {
-        Ok(t) => t,
-        Err(e) => return Some(ProviderStatus::failure(&cfg.id, name, format!("Antigravity OAuth: {e}"))),
-    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .ok()?;
+    let access_token =
+        match refresh_access_token(&client, &account.refresh_token, &client_id, &client_secret)
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                return Some(ProviderStatus::failure(
+                    &cfg.id,
+                    name,
+                    format!("Antigravity OAuth: {e}"),
+                ))
+            }
+        };
     let windows = match fetch_quota_windows(&client, &access_token).await {
         Ok(w) => w,
-        Err(e) => return Some(ProviderStatus::failure(&cfg.id, name, format!("Antigravity OAuth: {e}"))),
+        Err(e) => {
+            return Some(ProviderStatus::failure(
+                &cfg.id,
+                name,
+                format!("Antigravity OAuth: {e}"),
+            ))
+        }
     };
     if windows.is_empty() {
-        return Some(ProviderStatus::failure(&cfg.id, name, "Antigravity: không lấy được quota OAuth"));
+        return Some(ProviderStatus::failure(
+            &cfg.id,
+            name,
+            "Antigravity: không lấy được quota OAuth",
+        ));
     }
 
-    let account_label = cfg.account_label.clone().unwrap_or_else(|| account.label.clone());
+    let account_label = cfg
+        .account_label
+        .clone()
+        .unwrap_or_else(|| account.label.clone());
     Some(ProviderStatus {
         id: cfg.id.clone(),
         display_name: name.to_string(),
@@ -897,22 +1103,41 @@ async fn fetch_via_oauth(cfg: &config::Provider, name: &str) -> Option<ProviderS
     })
 }
 
-async fn refresh_access_token(client: &reqwest::Client, refresh_token: &str, client_id: &str, client_secret: &str) -> Result<String, String> {
+async fn refresh_access_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<String, String> {
     let resp = client
         .post(OAUTH_TOKEN_URL)
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .form(&[("client_id", client_id), ("client_secret", client_secret), ("refresh_token", refresh_token), ("grant_type", "refresh_token")])
+        .form(&[
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", refresh_token),
+            ("grant_type", "refresh_token"),
+        ])
         .send()
         .await
         .map_err(|e| format!("Network: {e}"))?;
     if resp.status().as_u16() != 200 {
         return Err(format!("HTTP {}", resp.status().as_u16()));
     }
-    let json: Value = resp.json().await.map_err(|e| format!("Invalid JSON: {e}"))?;
-    json.get("access_token").and_then(Value::as_str).map(String::from).ok_or_else(|| "Không parse được access_token".to_string())
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid JSON: {e}"))?;
+    json.get("access_token")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .ok_or_else(|| "Không parse được access_token".to_string())
 }
 
-async fn fetch_quota_windows(client: &reqwest::Client, access_token: &str) -> Result<Vec<QuotaWindow>, String> {
+async fn fetch_quota_windows(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<Vec<QuotaWindow>, String> {
     let resp = client
         .post(OAUTH_QUOTA_URL)
         .bearer_auth(access_token)
@@ -926,8 +1151,15 @@ async fn fetch_quota_windows(client: &reqwest::Client, access_token: &str) -> Re
         401 => return Err("Access token hết hạn (401)".to_string()),
         code => return Err(format!("HTTP {code}")),
     }
-    let json: Value = resp.json().await.map_err(|e| format!("Invalid JSON: {e}"))?;
-    let buckets = json.get("buckets").and_then(Value::as_array).cloned().unwrap_or_default();
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid JSON: {e}"))?;
+    let buckets = json
+        .get("buckets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     if buckets.is_empty() {
         return Err("Không có quota buckets trong response".to_string());
     }
@@ -970,7 +1202,8 @@ mod tests {
 
     #[test]
     fn parses_language_server_process_with_csrf_token() {
-        let output = "  1234 /opt/antigravity/language_server --csrf_token=abc123 --app_data_dir=/x\n";
+        let output =
+            "  1234 /opt/antigravity/language_server --csrf_token=abc123 --app_data_dir=/x\n";
         let processes = parse_process_list(output);
         let info = &processes[0];
         assert_eq!(info.pid, 1234);
@@ -1030,12 +1263,16 @@ mod tests {
 
     #[test]
     fn configured_email_matches_response_case_insensitively() {
-        assert_eq!(account_mismatch_error(Some("User@Example.com"), Some("user@example.com")), None);
+        assert_eq!(
+            account_mismatch_error(Some("User@Example.com"), Some("user@example.com")),
+            None
+        );
     }
 
     #[test]
     fn configured_email_rejects_different_response_account() {
-        let error = account_mismatch_error(Some("expected@example.com"), Some("other@example.com")).unwrap();
+        let error = account_mismatch_error(Some("expected@example.com"), Some("other@example.com"))
+            .unwrap();
         assert!(error.contains("expected@example.com"));
         assert!(error.contains("other@example.com"));
     }
@@ -1048,8 +1285,12 @@ mod tests {
 
     #[test]
     fn account_mismatch_candidate_is_non_terminal() {
-        let mismatch = ProviderStatus::failure("antigravity", "Antigravity", "Account không khớp: old");
-        let success = ProviderStatus { id: "antigravity".into(), ..Default::default() };
+        let mismatch =
+            ProviderStatus::failure("antigravity", "Antigravity", "Account không khớp: old");
+        let success = ProviderStatus {
+            id: "antigravity".into(),
+            ..Default::default()
+        };
         assert!(is_account_mismatch_status(&mismatch));
         assert!(!is_account_mismatch_status(&success));
     }
@@ -1071,7 +1312,10 @@ mod tests {
         assert_eq!(quotas.len(), 2);
         assert_eq!(email.as_deref(), Some("user@example.com"));
         let windows = map_model_windows(&quotas);
-        assert_eq!(windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), vec!["Gemini weekly", "Claude/GPT 5-hour"]);
+        assert_eq!(
+            windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(),
+            vec!["Gemini weekly", "Claude/GPT 5-hour"]
+        );
         assert_eq!(windows[0].remaining_pct, 50);
     }
 
@@ -1084,10 +1328,30 @@ mod tests {
     #[test]
     fn image_lite_and_non_target_models_are_filtered_out() {
         let quotas = vec![
-            ModelQuota { label: "image-gen 5h".into(), model_id: "image-model".into(), remaining_fraction: Some(1.0), reset_time: None },
-            ModelQuota { label: "claude-lite 5h".into(), model_id: "claude-lite".into(), remaining_fraction: Some(1.0), reset_time: None },
-            ModelQuota { label: "custom 5h".into(), model_id: "custom-model".into(), remaining_fraction: Some(1.0), reset_time: None },
-            ModelQuota { label: "gpt 5h".into(), model_id: "gpt-5".into(), remaining_fraction: Some(0.9), reset_time: None },
+            ModelQuota {
+                label: "image-gen 5h".into(),
+                model_id: "image-model".into(),
+                remaining_fraction: Some(1.0),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "claude-lite 5h".into(),
+                model_id: "claude-lite".into(),
+                remaining_fraction: Some(1.0),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "custom 5h".into(),
+                model_id: "custom-model".into(),
+                remaining_fraction: Some(1.0),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "gpt 5h".into(),
+                model_id: "gpt-5".into(),
+                remaining_fraction: Some(0.9),
+                reset_time: None,
+            },
         ];
         let windows = map_model_windows(&quotas);
         assert_eq!(windows.len(), 1);
@@ -1097,9 +1361,24 @@ mod tests {
     #[test]
     fn unknown_placeholder_and_missing_fraction_are_filtered_out() {
         let quotas = vec![
-            ModelQuota { label: "unknown 5h".into(), model_id: "unknown".into(), remaining_fraction: Some(0.1), reset_time: None },
-            ModelQuota { label: "placeholder 5h".into(), model_id: "MODEL_PLACEHOLDER".into(), remaining_fraction: Some(0.1), reset_time: None },
-            ModelQuota { label: "gemini 5h".into(), model_id: "gemini-pro".into(), remaining_fraction: None, reset_time: None },
+            ModelQuota {
+                label: "unknown 5h".into(),
+                model_id: "unknown".into(),
+                remaining_fraction: Some(0.1),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "placeholder 5h".into(),
+                model_id: "MODEL_PLACEHOLDER".into(),
+                remaining_fraction: Some(0.1),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "gemini 5h".into(),
+                model_id: "gemini-pro".into(),
+                remaining_fraction: None,
+                reset_time: None,
+            },
         ];
         assert!(map_model_windows(&quotas).is_empty());
     }
@@ -1137,8 +1416,14 @@ mod tests {
             client_secret: None,
             active_label: Some("work".to_string()),
             accounts: vec![
-                OAuthAccount { label: "personal".into(), refresh_token: "rt1".into() },
-                OAuthAccount { label: "work".into(), refresh_token: "rt2".into() },
+                OAuthAccount {
+                    label: "personal".into(),
+                    refresh_token: "rt1".into(),
+                },
+                OAuthAccount {
+                    label: "work".into(),
+                    refresh_token: "rt2".into(),
+                },
             ],
         };
         assert_eq!(active_account(&store).unwrap().refresh_token, "rt2");
@@ -1150,46 +1435,103 @@ mod tests {
             client_id: None,
             client_secret: None,
             active_label: None,
-            accounts: vec![OAuthAccount { label: "only".into(), refresh_token: "rt".into() }],
+            accounts: vec![OAuthAccount {
+                label: "only".into(),
+                refresh_token: "rt".into(),
+            }],
         };
         assert_eq!(active_account(&store).unwrap().label, "only");
     }
 
     #[test]
     fn resolved_client_id_prefers_store_over_env() {
-        let store = OAuthStore { client_id: Some("store-id".into()), ..Default::default() };
+        let store = OAuthStore {
+            client_id: Some("store-id".into()),
+            ..Default::default()
+        };
         assert_eq!(resolved_client_id(&store).as_deref(), Some("store-id"));
     }
 
     #[test]
     fn resolved_client_secret_blank_falls_through() {
-        let store = OAuthStore { client_secret: Some("   ".into()), ..Default::default() };
-        assert!(resolved_client_secret(&store).is_none() || std::env::var("ANTIGRAVITY_OAUTH_CLIENT_SECRET").is_ok());
+        let store = OAuthStore {
+            client_secret: Some("   ".into()),
+            ..Default::default()
+        };
+        assert!(
+            resolved_client_secret(&store).is_none()
+                || std::env::var("ANTIGRAVITY_OAUTH_CLIENT_SECRET").is_ok()
+        );
     }
 
     #[test]
     fn semantic_windows_use_canonical_order_and_cap_at_four() {
         let quotas = vec![
-            ModelQuota { label: "claude weekly".into(), model_id: "claude".into(), remaining_fraction: Some(0.8), reset_time: None },
-            ModelQuota { label: "gemini 5h".into(), model_id: "gemini".into(), remaining_fraction: Some(0.7), reset_time: None },
-            ModelQuota { label: "gpt 5-hour".into(), model_id: "gpt".into(), remaining_fraction: Some(0.6), reset_time: None },
-            ModelQuota { label: "gemini weekly".into(), model_id: "gemini".into(), remaining_fraction: Some(0.5), reset_time: None },
-            ModelQuota { label: "claude 5h".into(), model_id: "claude".into(), remaining_fraction: Some(0.4), reset_time: None },
+            ModelQuota {
+                label: "claude weekly".into(),
+                model_id: "claude".into(),
+                remaining_fraction: Some(0.8),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "gemini 5h".into(),
+                model_id: "gemini".into(),
+                remaining_fraction: Some(0.7),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "gpt 5-hour".into(),
+                model_id: "gpt".into(),
+                remaining_fraction: Some(0.6),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "gemini weekly".into(),
+                model_id: "gemini".into(),
+                remaining_fraction: Some(0.5),
+                reset_time: None,
+            },
+            ModelQuota {
+                label: "claude 5h".into(),
+                model_id: "claude".into(),
+                remaining_fraction: Some(0.4),
+                reset_time: None,
+            },
         ];
         let windows = map_model_windows(&quotas);
         assert_eq!(windows.len(), 4);
         assert_eq!(
             windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(),
-            vec!["Gemini 5-hour", "Gemini weekly", "Claude/GPT 5-hour", "Claude/GPT weekly"]
+            vec![
+                "Gemini 5-hour",
+                "Gemini weekly",
+                "Claude/GPT 5-hour",
+                "Claude/GPT weekly"
+            ]
         );
     }
 
     #[test]
     fn duplicate_keeps_higher_usage_then_earlier_reset() {
         let quotas = vec![
-            ModelQuota { label: "gemini 5h late".into(), model_id: "gemini".into(), remaining_fraction: Some(0.2), reset_time: Some(200) },
-            ModelQuota { label: "gemini 5h early".into(), model_id: "gemini".into(), remaining_fraction: Some(0.2), reset_time: Some(100) },
-            ModelQuota { label: "gemini 5h unused".into(), model_id: "gemini".into(), remaining_fraction: Some(0.9), reset_time: Some(50) },
+            ModelQuota {
+                label: "gemini 5h late".into(),
+                model_id: "gemini".into(),
+                remaining_fraction: Some(0.2),
+                reset_time: Some(200),
+            },
+            ModelQuota {
+                label: "gemini 5h early".into(),
+                model_id: "gemini".into(),
+                remaining_fraction: Some(0.2),
+                reset_time: Some(100),
+            },
+            ModelQuota {
+                label: "gemini 5h unused".into(),
+                model_id: "gemini".into(),
+                remaining_fraction: Some(0.9),
+                reset_time: Some(50),
+            },
         ];
         let windows = map_model_windows(&quotas);
         assert_eq!(windows.len(), 1);
@@ -1201,8 +1543,18 @@ mod tests {
     #[test]
     fn known_interval_sets_duration_but_explicit_reset_wins() {
         let quotas = vec![
-            ModelQuota { label: "gemini 5-hour".into(), model_id: "gemini".into(), remaining_fraction: Some(0.75), reset_time: Some(1_700_000_000) },
-            ModelQuota { label: "claude weekly".into(), model_id: "claude".into(), remaining_fraction: Some(0.5), reset_time: None },
+            ModelQuota {
+                label: "gemini 5-hour".into(),
+                model_id: "gemini".into(),
+                remaining_fraction: Some(0.75),
+                reset_time: Some(1_700_000_000),
+            },
+            ModelQuota {
+                label: "claude weekly".into(),
+                model_id: "claude".into(),
+                remaining_fraction: Some(0.5),
+                reset_time: None,
+            },
         ];
         let windows = map_model_windows(&quotas);
         assert_eq!(windows[0].resets_at, Some(1_700_000_000));
@@ -1221,7 +1573,10 @@ mod tests {
             {"modelId": "custom", "quotaType": "5h", "remainingFraction": 0.1}
         ]);
         let windows = map_buckets_to_windows(buckets.as_array().unwrap());
-        assert_eq!(windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), vec!["Gemini 5-hour", "Gemini weekly"]);
+        assert_eq!(
+            windows.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(),
+            vec!["Gemini 5-hour", "Gemini weekly"]
+        );
         assert_eq!(windows[0].remaining_pct, 80);
     }
 
@@ -1241,7 +1596,10 @@ mod tests {
         ]);
         let windows = map_buckets_to_windows(buckets.as_array().unwrap());
         // Custom model without gemini/claude/gpt in modelId should be dropped
-        assert!(windows.is_empty(), "Custom model with 'Gemini' in description should not be classified as Gemini pool");
+        assert!(
+            windows.is_empty(),
+            "Custom model with 'Gemini' in description should not be classified as Gemini pool"
+        );
     }
 
     #[test]

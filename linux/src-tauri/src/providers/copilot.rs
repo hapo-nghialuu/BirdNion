@@ -24,7 +24,13 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let account = load_active_account();
     let token = account
         .as_ref()
-        .and_then(|a| if a.token.is_empty() { None } else { Some(a.token.clone()) })
+        .and_then(|a| {
+            if a.token.is_empty() {
+                None
+            } else {
+                Some(a.token.clone())
+            }
+        })
         .or_else(|| crate::config::api_key(cfg));
 
     let Some(token) = token else {
@@ -34,9 +40,18 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let api_host = resolve_api_host(cfg);
     let client = crate::providers::shared_client();
 
-    let account_label = if let Some(login) = account.as_ref().and_then(|a| a.login.clone()).filter(|l| !l.is_empty()) {
+    let account_label = if let Some(login) = account
+        .as_ref()
+        .and_then(|a| a.login.clone())
+        .filter(|l| !l.is_empty())
+    {
         login
-    } else if let Some(manual) = cfg.account_label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    } else if let Some(manual) = cfg
+        .account_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         manual.to_string()
     } else if let Some(login) = fetch_github_username(&client, &api_host, &token).await {
         login
@@ -62,9 +77,15 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
             Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
         },
         Ok(r) if r.status().as_u16() == 401 || r.status().as_u16() == 403 => {
-            return ProviderStatus::failure(&id, &name, "GitHub token không hợp lệ / thiếu quyền Copilot")
+            return ProviderStatus::failure(
+                &id,
+                &name,
+                "GitHub token không hợp lệ / thiếu quyền Copilot",
+            )
         }
-        Ok(r) => return ProviderStatus::failure(&id, &name, format!("HTTP {}", r.status().as_u16())),
+        Ok(r) => {
+            return ProviderStatus::failure(&id, &name, format!("HTTP {}", r.status().as_u16()))
+        }
         Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
     };
 
@@ -116,12 +137,21 @@ fn load_active_account() -> Option<CopilotAccount> {
         .and_then(|label| store.accounts.iter().find(|a| &a.label == label))
         .or_else(|| store.accounts.first())?;
 
-    Some(CopilotAccount { login: active.login.clone(), token: active.token.clone() })
+    Some(CopilotAccount {
+        login: active.login.clone(),
+        token: active.token.clone(),
+    })
 }
 
 fn resolve_api_host(cfg: &crate::config::Provider) -> String {
-    let config_host = cfg.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let env_host = std::env::var("GH_HOST").ok().or_else(|| std::env::var("GITHUB_HOST").ok());
+    let config_host = cfg
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let env_host = std::env::var("GH_HOST")
+        .ok()
+        .or_else(|| std::env::var("GITHUB_HOST").ok());
     let host = config_host.map(str::to_string).or(env_host);
 
     match host {
@@ -136,7 +166,11 @@ fn resolve_api_host(cfg: &crate::config::Provider) -> String {
     }
 }
 
-async fn fetch_github_username(client: &reqwest::Client, api_host: &str, token: &str) -> Option<String> {
+async fn fetch_github_username(
+    client: &reqwest::Client,
+    api_host: &str,
+    token: &str,
+) -> Option<String> {
     let url = format!("https://{api_host}/user");
     let resp = client
         .get(&url)
@@ -184,7 +218,16 @@ fn window(label: &str, snap: Option<&Snap>, reset: Option<i64>) -> Option<QuotaW
     };
 
     let used = (100.0 - percent_remaining).round().clamp(0.0, 100.0) as i32;
-    Some(QuotaWindow { semantic_key: None, semantic_kind: None, label: label.to_string(), used_pct: used, remaining_pct: 100 - used, subtitle: None, resets_at: reset, window_seconds: None })
+    Some(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
+        label: label.to_string(),
+        used_pct: used,
+        remaining_pct: 100 - used,
+        subtitle: None,
+        resets_at: reset,
+        window_seconds: None,
+    })
 }
 
 fn parse_reset(value: Option<&str>) -> Option<i64> {
@@ -216,13 +259,22 @@ fn capitalize_words(s: &str) -> String {
 }
 
 /// Pure parser (fixture-tested). Budget windows are layered on by `fetch()`.
-fn parse_status(id: &str, name: &str, body: &str, account_label: Option<String>) -> Result<ProviderStatus, String> {
+fn parse_status(
+    id: &str,
+    name: &str,
+    body: &str,
+    account_label: Option<String>,
+) -> Result<ProviderStatus, String> {
     let v: Value = serde_json::from_str(body).map_err(|_| "Response thiếu trường".to_string())?;
 
     let reset = parse_reset(v.get("quota_reset_date").and_then(Value::as_str));
     let snapshots = v.get("quota_snapshots");
-    let premium: Option<Snap> = snapshots.and_then(|s| s.get("premium_interactions")).and_then(|s| serde_json::from_value(s.clone()).ok());
-    let chat: Option<Snap> = snapshots.and_then(|s| s.get("chat")).and_then(|s| serde_json::from_value(s.clone()).ok());
+    let premium: Option<Snap> = snapshots
+        .and_then(|s| s.get("premium_interactions"))
+        .and_then(|s| serde_json::from_value(s.clone()).ok());
+    let chat: Option<Snap> = snapshots
+        .and_then(|s| s.get("chat"))
+        .and_then(|s| serde_json::from_value(s.clone()).ok());
 
     let mut windows = Vec::new();
     if let Some(w) = window("Premium", premium.as_ref(), reset) {
@@ -232,9 +284,16 @@ fn parse_status(id: &str, name: &str, body: &str, account_label: Option<String>)
         windows.push(w);
     }
 
-    let plan = v.get("copilot_plan").and_then(Value::as_str).map(capitalize_words);
+    let plan = v
+        .get("copilot_plan")
+        .and_then(Value::as_str)
+        .map(capitalize_words);
 
-    let error = if windows.is_empty() && plan.is_none() { Some("Copilot chưa có dữ liệu quota".to_string()) } else { None };
+    let error = if windows.is_empty() && plan.is_none() {
+        Some("Copilot chưa có dữ liệu quota".to_string())
+    } else {
+        None
+    };
 
     Ok(ProviderStatus {
         id: id.to_string(),
@@ -247,9 +306,16 @@ fn parse_status(id: &str, name: &str, body: &str, account_label: Option<String>)
     })
 }
 
-async fn fetch_budget_windows_best_effort(cfg: &crate::config::Provider, client: &reqwest::Client) -> Vec<QuotaWindow> {
+async fn fetch_budget_windows_best_effort(
+    cfg: &crate::config::Provider,
+    client: &reqwest::Client,
+) -> Vec<QuotaWindow> {
     let cfg_clone = cfg.clone();
-    let cookie_header = match tauri::async_runtime::spawn_blocking(move || browser_cookies::cookie_header(&["github.com"], &cfg_clone)).await {
+    let cookie_header = match tauri::async_runtime::spawn_blocking(move || {
+        browser_cookies::cookie_header(&["github.com"], &cfg_clone)
+    })
+    .await
+    {
         Ok(Ok(h)) if !h.trim().is_empty() => h,
         _ => return Vec::new(),
     };
@@ -262,7 +328,10 @@ async fn fetch_budget_windows_best_effort(cfg: &crate::config::Provider, client:
     budget_windows(&budgets)
 }
 
-async fn fetch_budget_nonce_best_effort(client: &reqwest::Client, cookie_header: &str) -> Option<String> {
+async fn fetch_budget_nonce_best_effort(
+    client: &reqwest::Client,
+    cookie_header: &str,
+) -> Option<String> {
     let resp = client
         .get("https://github.com/settings/billing/budgets")
         .header("Cookie", cookie_header)
@@ -312,7 +381,11 @@ struct BudgetEntry {
     current_amount: f64,
 }
 
-async fn fetch_budget_page(client: &reqwest::Client, cookie_header: &str, nonce: Option<&str>) -> Result<Vec<BudgetEntry>, String> {
+async fn fetch_budget_page(
+    client: &reqwest::Client,
+    cookie_header: &str,
+    nonce: Option<&str>,
+) -> Result<Vec<BudgetEntry>, String> {
     let mut req = client
         .get("https://github.com/settings/billing/budgets")
         .query(&[("page", "1"), ("page_size", "10"), ("scope", "customer")])
@@ -341,7 +414,11 @@ fn parse_budget_page(v: &Value) -> Vec<BudgetEntry> {
     }
     v.get("budgets")
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(|e| serde_json::from_value(e.clone()).ok()).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| serde_json::from_value(e.clone()).ok())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -354,14 +431,24 @@ fn budget_windows(budgets: &[BudgetEntry]) -> Vec<QuotaWindow> {
             if b.budget_amount <= 0.0 {
                 return None;
             }
-            let mut identifiers: Vec<String> = [b.name.as_deref(), b.budget_type.as_deref(), b.budget_entity_name.as_deref()]
-                .into_iter()
-                .flatten()
-                .map(|s| s.to_lowercase().replace('-', "_"))
-                .collect();
-            identifiers.extend(b.budget_product_skus.iter().map(|s| s.to_lowercase().replace('-', "_")));
+            let mut identifiers: Vec<String> = [
+                b.name.as_deref(),
+                b.budget_type.as_deref(),
+                b.budget_entity_name.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|s| s.to_lowercase().replace('-', "_"))
+            .collect();
+            identifiers.extend(
+                b.budget_product_skus
+                    .iter()
+                    .map(|s| s.to_lowercase().replace('-', "_")),
+            );
 
-            let is_copilot = identifiers.iter().any(|id| COPILOT_KEYWORDS.iter().any(|kw| id.contains(kw)));
+            let is_copilot = identifiers
+                .iter()
+                .any(|id| COPILOT_KEYWORDS.iter().any(|kw| id.contains(kw)));
             if !is_copilot {
                 return None;
             }
@@ -369,11 +456,16 @@ fn budget_windows(budgets: &[BudgetEntry]) -> Vec<QuotaWindow> {
             let used_raw = b.current_amount / b.budget_amount * 100.0;
             let used = used_raw.round().clamp(0.0, 100.0) as i32;
             let label_name = b.name.clone().unwrap_or_else(|| "Copilot".to_string());
-            Some(QuotaWindow { semantic_key: None, semantic_kind: None,
+            Some(QuotaWindow {
+                semantic_key: None,
+                semantic_kind: None,
                 label: format!("Budget · {label_name}"),
                 used_pct: used,
                 remaining_pct: 100 - used,
-                subtitle: Some(format!("${:.2} / ${:.2}", b.current_amount, b.budget_amount)),
+                subtitle: Some(format!(
+                    "${:.2} / ${:.2}",
+                    b.current_amount, b.budget_amount
+                )),
                 resets_at: None,
                 window_seconds: None,
             })
@@ -405,7 +497,8 @@ mod tests {
 
     #[test]
     fn zero_entitlement_and_remaining_is_placeholder_skipped() {
-        let body = r#"{"quota_snapshots":{"premium_interactions":{"entitlement":0.0,"remaining":0.0}}}"#;
+        let body =
+            r#"{"quota_snapshots":{"premium_interactions":{"entitlement":0.0,"remaining":0.0}}}"#;
         let status = parse_status("copilot", "Copilot", body, None).unwrap();
         assert!(status.windows.is_empty());
         assert!(status.error.is_some());
@@ -426,9 +519,25 @@ mod tests {
     #[test]
     fn budget_windows_filters_non_copilot_and_zero_amount() {
         let budgets = vec![
-            BudgetEntry { name: Some("Copilot Premium".into()), budget_amount: 50.0, current_amount: 25.0, ..Default::default() },
-            BudgetEntry { name: Some("Other Spend".into()), budget_amount: 100.0, current_amount: 10.0, ..Default::default() },
-            BudgetEntry { name: Some("Zero Budget".into()), budget_amount: 0.0, current_amount: 0.0, budget_product_skus: vec!["copilot".into()], ..Default::default() },
+            BudgetEntry {
+                name: Some("Copilot Premium".into()),
+                budget_amount: 50.0,
+                current_amount: 25.0,
+                ..Default::default()
+            },
+            BudgetEntry {
+                name: Some("Other Spend".into()),
+                budget_amount: 100.0,
+                current_amount: 10.0,
+                ..Default::default()
+            },
+            BudgetEntry {
+                name: Some("Zero Budget".into()),
+                budget_amount: 0.0,
+                current_amount: 0.0,
+                budget_product_skus: vec!["copilot".into()],
+                ..Default::default()
+            },
         ];
         let windows = budget_windows(&budgets);
         assert_eq!(windows.len(), 1);
@@ -444,13 +553,20 @@ mod tests {
 
     #[test]
     fn resolves_default_api_host() {
-        let cfg = crate::config::Provider { id: "copilot".to_string(), ..Default::default() };
+        let cfg = crate::config::Provider {
+            id: "copilot".to_string(),
+            ..Default::default()
+        };
         assert_eq!(resolve_api_host(&cfg), "api.github.com");
     }
 
     #[test]
     fn resolves_enterprise_api_host_from_base_url() {
-        let cfg = crate::config::Provider { id: "copilot".to_string(), base_url: Some("github.mycorp.com".to_string()), ..Default::default() };
+        let cfg = crate::config::Provider {
+            id: "copilot".to_string(),
+            base_url: Some("github.mycorp.com".to_string()),
+            ..Default::default()
+        };
         assert_eq!(resolve_api_host(&cfg), "api.github.mycorp.com");
     }
 }

@@ -98,9 +98,16 @@ pub fn classify(raw: Option<&str>) -> Option<ProviderErrorKind> {
     let s = raw.to_lowercase();
     let codes = http_codes(&s);
 
-    const COOKIE_MARKERS: &[&str] = &["cookie", "session cookie", "sessionkey", "__host-auth", "cần auth"];
+    const COOKIE_MARKERS: &[&str] = &[
+        "cookie",
+        "session cookie",
+        "sessionkey",
+        "__host-auth",
+        "cần auth",
+    ];
     const RATE_MARKERS: &[&str] = &["rate limit", "too many", "quá nhiều"];
-    const NETWORK_MARKERS: &[&str] = &["timeout", "network", "mạng", "offline", "could not connect"];
+    const NETWORK_MARKERS: &[&str] =
+        &["timeout", "network", "mạng", "offline", "could not connect"];
     // "Never configured/logged in" is distinct from "token present but
     // wrong": the former needs the user to CONNECT a source; the latter
     // needs them to RE-PASTE/refresh one. Checked before `TOKEN_MARKERS`
@@ -146,7 +153,9 @@ pub fn classify(raw: Option<&str>) -> Option<ProviderErrorKind> {
     if TOKEN_MARKERS.iter().any(|m| s.contains(m)) || codes.contains(&401) || codes.contains(&403) {
         return Some(ProviderErrorKind::TokenInvalidOrMissing);
     }
-    if SCHEMA_MARKERS.iter().any(|m| s.contains(m)) || codes.iter().any(|&c| (500..600).contains(&c)) {
+    if SCHEMA_MARKERS.iter().any(|m| s.contains(m))
+        || codes.iter().any(|&c| (500..600).contains(&c))
+    {
         return Some(ProviderErrorKind::ApiSchemaChanged);
     }
     Some(ProviderErrorKind::Unknown)
@@ -166,7 +175,8 @@ pub fn is_transient_for_last_good(raw: Option<&str>) -> bool {
         return false;
     }
     match classify(Some(raw)) {
-        Some(ProviderErrorKind::NetworkUnreachableOrTimeout) | Some(ProviderErrorKind::RateLimited) => true,
+        Some(ProviderErrorKind::NetworkUnreachableOrTimeout)
+        | Some(ProviderErrorKind::RateLimited) => true,
         Some(ProviderErrorKind::ApiSchemaChanged) => {
             let s = raw.to_lowercase();
             http_codes(&s).iter().any(|&c| (500..600).contains(&c))
@@ -198,8 +208,8 @@ fn http_codes(lowercased: &str) -> Vec<u32> {
             }
             let run_len = j - start;
 
-            let prev_is_word_or_dot = start > 0
-                && (bytes[start - 1] == b'.' || bytes[start - 1].is_ascii_alphanumeric());
+            let prev_is_word_or_dot =
+                start > 0 && (bytes[start - 1] == b'.' || bytes[start - 1].is_ascii_alphanumeric());
             let next_is_word_or_dot =
                 j < len && (bytes[j] == b'.' || bytes[j].is_ascii_alphanumeric());
             let standalone = run_len == 3 && !prev_is_word_or_dot && !next_is_word_or_dot;
@@ -245,19 +255,30 @@ mod tests {
 
     #[test]
     fn cookie_marker() {
-        assert_eq!(classify(Some("Session cookie expired")), Some(ProviderErrorKind::CookieExpiredOrMissing));
+        assert_eq!(
+            classify(Some("Session cookie expired")),
+            Some(ProviderErrorKind::CookieExpiredOrMissing)
+        );
     }
 
     #[test]
     fn token_marker() {
-        assert_eq!(classify(Some("Invalid token provided")), Some(ProviderErrorKind::TokenInvalidOrMissing));
+        assert_eq!(
+            classify(Some("Invalid token provided")),
+            Some(ProviderErrorKind::TokenInvalidOrMissing)
+        );
     }
 
     #[test]
     fn not_configured_marker() {
-        assert_eq!(classify(Some("Chưa cấu hình token")), Some(ProviderErrorKind::NotConfigured));
         assert_eq!(
-            classify(Some("xAI Management API key is not configured. Set XAI_MANAGEMENT_API_KEY.")),
+            classify(Some("Chưa cấu hình token")),
+            Some(ProviderErrorKind::NotConfigured)
+        );
+        assert_eq!(
+            classify(Some(
+                "xAI Management API key is not configured. Set XAI_MANAGEMENT_API_KEY."
+            )),
             Some(ProviderErrorKind::NotConfigured)
         );
         assert_eq!(
@@ -270,7 +291,9 @@ mod tests {
     fn not_configured_beats_token_marker() {
         // "API key" also matches TOKEN_MARKERS but not-configured must win.
         assert_eq!(
-            classify(Some("xAI team ID is not configured. Set XAI_TEAM_ID or enter it in Settings.")),
+            classify(Some(
+                "xAI team ID is not configured. Set XAI_TEAM_ID or enter it in Settings."
+            )),
             Some(ProviderErrorKind::NotConfigured)
         );
     }
@@ -324,22 +347,34 @@ mod tests {
 
     #[test]
     fn schema_marker() {
-        assert_eq!(classify(Some("failed to parse json response")), Some(ProviderErrorKind::ApiSchemaChanged));
+        assert_eq!(
+            classify(Some("failed to parse json response")),
+            Some(ProviderErrorKind::ApiSchemaChanged)
+        );
     }
 
     #[test]
     fn network_marker() {
-        assert_eq!(classify(Some("connection timeout")), Some(ProviderErrorKind::NetworkUnreachableOrTimeout));
+        assert_eq!(
+            classify(Some("connection timeout")),
+            Some(ProviderErrorKind::NetworkUnreachableOrTimeout)
+        );
     }
 
     #[test]
     fn rate_marker() {
-        assert_eq!(classify(Some("rate limit exceeded")), Some(ProviderErrorKind::RateLimited));
+        assert_eq!(
+            classify(Some("rate limit exceeded")),
+            Some(ProviderErrorKind::RateLimited)
+        );
     }
 
     #[test]
     fn unknown_fallback() {
-        assert_eq!(classify(Some("something weird happened")), Some(ProviderErrorKind::Unknown));
+        assert_eq!(
+            classify(Some("something weird happened")),
+            Some(ProviderErrorKind::Unknown)
+        );
     }
 
     #[test]
@@ -368,17 +403,26 @@ mod tests {
 
     #[test]
     fn code_429_infers_rate_limited() {
-        assert_eq!(classify(Some("request failed with status 429")), Some(ProviderErrorKind::RateLimited));
+        assert_eq!(
+            classify(Some("request failed with status 429")),
+            Some(ProviderErrorKind::RateLimited)
+        );
     }
 
     #[test]
     fn code_401_infers_token() {
-        assert_eq!(classify(Some("http 401 unauthorized-ish")), Some(ProviderErrorKind::TokenInvalidOrMissing));
+        assert_eq!(
+            classify(Some("http 401 unauthorized-ish")),
+            Some(ProviderErrorKind::TokenInvalidOrMissing)
+        );
     }
 
     #[test]
     fn code_5xx_infers_schema() {
-        assert_eq!(classify(Some("server responded (500)")), Some(ProviderErrorKind::ApiSchemaChanged));
+        assert_eq!(
+            classify(Some("server responded (500)")),
+            Some(ProviderErrorKind::ApiSchemaChanged)
+        );
     }
 
     #[test]
@@ -392,12 +436,18 @@ mod tests {
 
     #[test]
     fn digit_run_not_a_code_token_count() {
-        assert_ne!(classify(Some("5000 tokens used")), Some(ProviderErrorKind::ApiSchemaChanged));
+        assert_ne!(
+            classify(Some("5000 tokens used")),
+            Some(ProviderErrorKind::ApiSchemaChanged)
+        );
     }
 
     #[test]
     fn digit_run_not_a_code_account_id() {
-        assert_eq!(classify(Some("account id 140399")), Some(ProviderErrorKind::Unknown));
+        assert_eq!(
+            classify(Some("account id 140399")),
+            Some(ProviderErrorKind::Unknown)
+        );
     }
 
     #[test]
@@ -440,15 +490,21 @@ mod tests {
     #[test]
     fn transient_network_timeout_and_rate_limit() {
         assert!(is_transient_for_last_good(Some("Claude: timeout sau 12s")));
-        assert!(is_transient_for_last_good(Some("Network: could not connect to host")));
-        assert!(is_transient_for_last_good(Some("HTTP 429 rate limit exceeded")));
+        assert!(is_transient_for_last_good(Some(
+            "Network: could not connect to host"
+        )));
+        assert!(is_transient_for_last_good(Some(
+            "HTTP 429 rate limit exceeded"
+        )));
     }
 
     #[test]
     fn transient_server_5xx_but_not_generic_schema() {
         assert!(is_transient_for_last_good(Some("server responded (500)")));
         assert!(is_transient_for_last_good(Some("HTTP 503")));
-        assert!(!is_transient_for_last_good(Some("failed to parse json response")));
+        assert!(!is_transient_for_last_good(Some(
+            "failed to parse json response"
+        )));
     }
 
     #[test]
@@ -460,16 +516,33 @@ mod tests {
 
     #[test]
     fn not_transient_unknown() {
-        assert!(!is_transient_for_last_good(Some("something weird happened")));
+        assert!(!is_transient_for_last_good(Some(
+            "something weird happened"
+        )));
     }
 
     #[test]
     fn key_suffix_matches_camel_case() {
-        assert_eq!(ProviderErrorKind::CookieExpiredOrMissing.key_suffix(), "cookieExpiredOrMissing");
-        assert_eq!(ProviderErrorKind::NotConfigured.key_suffix(), "notConfigured");
-        assert_eq!(ProviderErrorKind::TokenInvalidOrMissing.key_suffix(), "tokenInvalidOrMissing");
-        assert_eq!(ProviderErrorKind::ApiSchemaChanged.key_suffix(), "apiSchemaChanged");
-        assert_eq!(ProviderErrorKind::NetworkUnreachableOrTimeout.key_suffix(), "networkUnreachableOrTimeout");
+        assert_eq!(
+            ProviderErrorKind::CookieExpiredOrMissing.key_suffix(),
+            "cookieExpiredOrMissing"
+        );
+        assert_eq!(
+            ProviderErrorKind::NotConfigured.key_suffix(),
+            "notConfigured"
+        );
+        assert_eq!(
+            ProviderErrorKind::TokenInvalidOrMissing.key_suffix(),
+            "tokenInvalidOrMissing"
+        );
+        assert_eq!(
+            ProviderErrorKind::ApiSchemaChanged.key_suffix(),
+            "apiSchemaChanged"
+        );
+        assert_eq!(
+            ProviderErrorKind::NetworkUnreachableOrTimeout.key_suffix(),
+            "networkUnreachableOrTimeout"
+        );
         assert_eq!(ProviderErrorKind::RateLimited.key_suffix(), "rateLimited");
         assert_eq!(ProviderErrorKind::Unknown.key_suffix(), "unknown");
     }

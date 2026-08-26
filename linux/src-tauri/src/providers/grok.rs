@@ -9,8 +9,7 @@ use std::path::PathBuf;
 use crate::config;
 use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
 
-const BILLING_URL: &str =
-    "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+const BILLING_URL: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
@@ -32,7 +31,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
             ProviderStatus {
                 id: cfg.id.clone(),
                 display_name: name,
-                windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+                windows: vec![QuotaWindow {
+                    semantic_key: None,
+                    semantic_kind: None,
                     label,
                     used_pct: used,
                     remaining_pct: 100 - used,
@@ -41,10 +42,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
                     window_seconds: None,
                 }],
                 last_updated: chrono::Utc::now().timestamp(),
-                account_label: cfg
-                    .account_label
-                    .clone()
-                    .or(creds.email),
+                account_label: cfg.account_label.clone().or(creds.email),
                 // macOS parity: planName = loginMethod, source "grok-web".
                 plan_name: creds.login_method,
                 source_label: Some("grok-web".to_string()),
@@ -97,9 +95,8 @@ fn dirs_home() -> PathBuf {
 
 fn load_credentials() -> Result<GrokCreds, String> {
     let path = grok_home().join("auth.json");
-    let data = std::fs::read_to_string(&path).map_err(|_| {
-        "Grok auth.json not found".to_string()
-    })?;
+    let data =
+        std::fs::read_to_string(&path).map_err(|_| "Grok auth.json not found".to_string())?;
     let root: Value = serde_json::from_str(&data).map_err(|e| format!("auth.json: {e}"))?;
     let obj = root.as_object().ok_or("auth.json invalid")?;
 
@@ -128,7 +125,11 @@ fn load_credentials() -> Result<GrokCreds, String> {
         .and_then(Value::as_str)
         .map(str::to_string);
     let login_method = Some(if is_oidc { "SuperGrok" } else { "session" }.to_string());
-    Ok(GrokCreds { token, email, login_method })
+    Ok(GrokCreds {
+        token,
+        email,
+        login_method,
+    })
 }
 
 async fn fetch_web_billing(token: &str) -> Result<(f64, Option<i64>), String> {
@@ -154,8 +155,12 @@ async fn fetch_web_billing(token: &str) -> Result<(f64, Option<i64>), String> {
     }
     // gRPC status can ride in the HTTP headers on trailers-only responses.
     if let Some(err) = grpc_status_error(
-        resp.headers().get("grpc-status").and_then(|v| v.to_str().ok()),
-        resp.headers().get("grpc-message").and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("grpc-status")
+            .and_then(|v| v.to_str().ok()),
+        resp.headers()
+            .get("grpc-message")
+            .and_then(|v| v.to_str().ok()),
     ) {
         return Err(err);
     }
@@ -204,7 +209,9 @@ fn grpc_trailer_error(data: &[u8]) -> Option<String> {
             let mut status = None;
             let mut message = None;
             for line in text.lines() {
-                let Some((k, v)) = line.split_once(':') else { continue };
+                let Some((k, v)) = line.split_once(':') else {
+                    continue;
+                };
                 match k.trim().to_lowercase().as_str() {
                     "grpc-status" => status = Some(v.trim().to_string()),
                     "grpc-message" => message = Some(v.trim().to_string()),
@@ -235,7 +242,13 @@ struct ProtobufScan {
     varints: Vec<(Vec<u64>, u64)>,
 }
 
-fn scan_protobuf(bytes: &[u8], depth: usize, path: &mut Vec<u64>, order: &mut usize, scan: &mut ProtobufScan) {
+fn scan_protobuf(
+    bytes: &[u8],
+    depth: usize,
+    path: &mut Vec<u64>,
+    order: &mut usize,
+    scan: &mut ProtobufScan,
+) {
     let mut i = 0usize;
     while i < bytes.len() {
         let field_start = i;
@@ -293,7 +306,8 @@ fn scan_protobuf(bytes: &[u8], depth: usize, path: &mut Vec<u64>, order: &mut us
                     return;
                 }
                 let bits = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-                scan.fixed32.push((path.clone(), f32::from_bits(bits), *order));
+                scan.fixed32
+                    .push((path.clone(), f32::from_bits(bits), *order));
                 *order += 1;
                 i += 4;
             }
@@ -317,7 +331,9 @@ fn grpc_web_data_frames(data: &[u8]) -> Vec<&[u8]> {
         let flags = data[i];
         let len = u32::from_be_bytes([data[i + 1], data[i + 2], data[i + 3], data[i + 4]]) as usize;
         let start = i + 5;
-        let Some(end) = start.checked_add(len) else { return Vec::new() };
+        let Some(end) = start.checked_add(len) else {
+            return Vec::new();
+        };
         if end > data.len() {
             return Vec::new();
         }
@@ -389,7 +405,8 @@ fn parse_grpc_web_usage(data: &[u8], now: i64) -> Result<(f64, Option<i64>), Str
     let has_usage_period = scan.varints.iter().any(|(path, value)| {
         path.starts_with(&[1, 6]) || (path.as_slice() == [1, 8, 1] && (*value == 1 || *value == 2))
     });
-    let no_usage_yet = percent.is_none() && scan.fixed32.is_empty() && reset.is_some() && has_usage_period;
+    let no_usage_yet =
+        percent.is_none() && scan.fixed32.is_empty() && reset.is_some() && has_usage_period;
 
     let pct = percent
         .or(if no_usage_yet { Some(0.0) } else { None })
@@ -469,7 +486,12 @@ mod tests {
     }
 
     fn len_delim(num: u64, inner: &[u8]) -> Vec<u8> {
-        [key(num, 2), varint_bytes(inner.len() as u64), inner.to_vec()].concat()
+        [
+            key(num, 2),
+            varint_bytes(inner.len() as u64),
+            inner.to_vec(),
+        ]
+        .concat()
     }
 
     fn grpc_frame(payload: &[u8]) -> Vec<u8> {

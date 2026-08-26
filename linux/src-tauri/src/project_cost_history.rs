@@ -88,7 +88,11 @@ fn safe_display_name(raw: &str) -> String {
         .collect::<String>()
         .trim()
         .to_string();
-    if safe.is_empty() || safe == "." || safe == ".." { "Unknown".into() } else { safe }
+    if safe.is_empty() || safe == "." || safe == ".." {
+        "Unknown".into()
+    } else {
+        safe
+    }
 }
 
 fn safe_model_name(raw: &str) -> String {
@@ -96,15 +100,27 @@ fn safe_model_name(raw: &str) -> String {
 }
 
 fn safe_capability(raw: &str) -> String {
-    if raw == "exact" { "exact".into() } else { "derivedPath".into() }
+    if raw == "exact" {
+        "exact".into()
+    } else {
+        "derivedPath".into()
+    }
 }
 
 fn safe_usd(value: f64) -> f64 {
-    if value.is_finite() && (0.0..=MAX_DAY_USD).contains(&value) { value } else { 0.0 }
+    if value.is_finite() && (0.0..=MAX_DAY_USD).contains(&value) {
+        value
+    } else {
+        0.0
+    }
 }
 
 fn safe_tokens(value: i64) -> i64 {
-    if (0..=MAX_DAY_TOKENS).contains(&value) { value } else { 0 }
+    if (0..=MAX_DAY_TOKENS).contains(&value) {
+        value
+    } else {
+        0
+    }
 }
 
 fn safe_models(models: &[ProjectModel]) -> Vec<ProjectModel> {
@@ -396,7 +412,11 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                fs::metadata(history_path().unwrap()).unwrap().permissions().mode() & 0o777,
+                fs::metadata(history_path().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
                 0o600
             );
         }
@@ -439,7 +459,10 @@ mod tests {
         let today = Local::now().date_naive().to_string();
 
         assert!(apply("claude", &[contribution(today, 20, 0.2)], false).is_err());
-        assert_eq!(fs::read_to_string(history_path().unwrap()).unwrap(), "{not-json");
+        assert_eq!(
+            fs::read_to_string(history_path().unwrap()).unwrap(),
+            "{not-json"
+        );
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = fs::remove_dir_all(base);
@@ -482,13 +505,8 @@ mod tests {
         };
 
         apply_with_retractions("codex", &[combined], &[], false).unwrap();
-        apply_with_retractions(
-            "codex",
-            &[remaining.clone()],
-            &[retraction.clone()],
-            false,
-        )
-        .unwrap();
+        apply_with_retractions("codex", &[remaining.clone()], &[retraction.clone()], false)
+            .unwrap();
         apply_with_retractions("codex", &[remaining], &[retraction], false).unwrap();
 
         let doc = read();
@@ -497,10 +515,7 @@ mod tests {
         assert!((day.usd - 0.4).abs() < 1e-12);
         assert_eq!(day.models[0].tokens, 40);
         assert!((day.models[0].usd - 0.4).abs() < 1e-12);
-        assert_eq!(
-            doc.applied_retraction_ids["codex"],
-            vec!["c".repeat(64)]
-        );
+        assert_eq!(doc.applied_retraction_ids["codex"], vec!["c".repeat(64)]);
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = fs::remove_dir_all(base);
@@ -525,10 +540,7 @@ mod tests {
         apply_with_retractions("codex", &[], &[retraction], false).unwrap();
         let doc = read();
         assert!(!doc.sources.contains_key("codex"));
-        assert_eq!(
-            doc.applied_retraction_ids["codex"],
-            vec!["d".repeat(64)]
-        );
+        assert_eq!(doc.applied_retraction_ids["codex"], vec!["d".repeat(64)]);
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = fs::remove_dir_all(base);
@@ -565,7 +577,11 @@ mod tests {
         let unsafe_day = format!("{today} /Users/private/secret");
         raw["sources"]["claude"][valid_key.as_str()]["days"][unsafe_day.as_str()] =
             serde_json::json!({ "usd": 99.0, "tokens": 99, "models": [] });
-        fs::write(history_path().unwrap(), serde_json::to_string(&raw).unwrap()).unwrap();
+        fs::write(
+            history_path().unwrap(),
+            serde_json::to_string(&raw).unwrap(),
+        )
+        .unwrap();
 
         apply("claude", &[], false).unwrap();
         let doc = read();
@@ -577,7 +593,9 @@ mod tests {
             "client-model"
         );
         assert_eq!(doc.sources["claude"][&valid_key].days.len(), 1);
-        assert!(!fs::read_to_string(history_path().unwrap()).unwrap().contains("/Users/private"));
+        assert!(!fs::read_to_string(history_path().unwrap())
+            .unwrap()
+            .contains("/Users/private"));
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = fs::remove_dir_all(base);
@@ -607,7 +625,9 @@ mod tests {
         assert_eq!(stored.days[&today].models[0].name, "grok-code-fast");
         assert_eq!(stored.days.len(), 1);
         assert!(doc.sources.contains_key("codex"));
-        assert!(!fs::read_to_string(history_path().unwrap()).unwrap().contains("/Users/alice"));
+        assert!(!fs::read_to_string(history_path().unwrap())
+            .unwrap()
+            .contains("/Users/alice"));
         assert!(apply("unsupported", &[], false).is_err());
 
         std::env::remove_var("BIRDNION_CONFIG");
@@ -622,11 +642,13 @@ mod tests {
         let today = Local::now().date_naive().to_string();
         let key = "e".repeat(64);
         let models: Vec<_> = (0..7)
-            .map(|index| serde_json::json!({
-                "name": format!("model-{index}"),
-                "usd": index as f64,
-                "tokens": index,
-            }))
+            .map(|index| {
+                serde_json::json!({
+                    "name": format!("model-{index}"),
+                    "usd": index as f64,
+                    "tokens": index,
+                })
+            })
             .chain(std::iter::once(serde_json::json!({
                 "name": "negative", "usd": -1.0, "tokens": -100,
             })))

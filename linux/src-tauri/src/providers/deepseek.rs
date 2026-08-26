@@ -57,8 +57,14 @@ pub fn parse_balance(id: &str, name: &str, account_label: &str, body: &Value) ->
         return ProviderStatus::failure(id, name, "Không có thông tin số dư");
     };
 
-    let currency = info.get("currency").and_then(Value::as_str).unwrap_or("USD");
-    let total_str = info.get("total_balance").and_then(Value::as_str).unwrap_or("0");
+    let currency = info
+        .get("currency")
+        .and_then(Value::as_str)
+        .unwrap_or("USD");
+    let total_str = info
+        .get("total_balance")
+        .and_then(Value::as_str)
+        .unwrap_or("0");
     let amount: f64 = total_str.parse().unwrap_or(0.0);
     let symbol = if currency == "CNY" { "¥" } else { "$" };
 
@@ -73,7 +79,9 @@ pub fn parse_balance(id: &str, name: &str, account_label: &str, body: &Value) ->
         format!("{symbol}{total_str}")
     };
 
-    let window = QuotaWindow { semantic_key: None, semantic_kind: None,
+    let window = QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Số dư".into(),
         used_pct: if low_balance { 100 } else { 0 },
         remaining_pct: if low_balance { 0 } else { 100 },
@@ -118,7 +126,10 @@ mod tests {
         let body = json!({"is_available": true, "balance_infos": [{"currency": "USD", "total_balance": "0.00"}]});
         let s = parse_balance("deepseek", "DeepSeek", "x", &body);
         assert_eq!(s.windows[0].used_pct, 100);
-        assert_eq!(s.windows[0].subtitle.as_deref(), Some("Hết số dư — cần nạp thêm"));
+        assert_eq!(
+            s.windows[0].subtitle.as_deref(),
+            Some("Hết số dư — cần nạp thêm")
+        );
     }
 
     #[test]

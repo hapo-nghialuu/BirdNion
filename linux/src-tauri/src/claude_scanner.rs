@@ -40,7 +40,12 @@ fn price_for(model: &str, input_side_tokens: i64) -> Option<Price> {
         return Some(p);
     }
     if m.contains("fable-5") {
-        return Some(Price { input: 10.0, cache_write: 12.5, cache_read: 1.0, output: 50.0 });
+        return Some(Price {
+            input: 10.0,
+            cache_write: 12.5,
+            cache_read: 1.0,
+            output: 50.0,
+        });
     }
     if m.contains("minimax-m3") {
         let over512k = input_side_tokens > 512_000;
@@ -54,13 +59,28 @@ fn price_for(model: &str, input_side_tokens: i64) -> Option<Price> {
     }
     // Opus 4.x — $5/$6.25/$0.50/$25 per-M (NOT the old Opus-3 $15/$75).
     if m.contains("opus") {
-        return Some(Price { input: 5.0, cache_write: 6.25, cache_read: 0.50, output: 25.0 });
+        return Some(Price {
+            input: 5.0,
+            cache_write: 6.25,
+            cache_read: 0.50,
+            output: 25.0,
+        });
     }
     if m.contains("haiku") {
-        return Some(Price { input: 1.0, cache_write: 1.25, cache_read: 0.10, output: 5.0 });
+        return Some(Price {
+            input: 1.0,
+            cache_write: 1.25,
+            cache_read: 0.10,
+            output: 5.0,
+        });
     }
     if m.contains("sonnet") {
-        return Some(Price { input: 3.0, cache_write: 3.75, cache_read: 0.30, output: 15.0 });
+        return Some(Price {
+            input: 3.0,
+            cache_write: 3.75,
+            cache_read: 0.30,
+            output: 15.0,
+        });
     }
     None // non-Claude model routed through Claude Code — tokens counted, $0
 }
@@ -422,7 +442,12 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Usa
             }
             None => (0.0, 0, Vec::new()),
         };
-        daily.push(DailyUsage { date: day.to_string(), usd, tokens, models });
+        daily.push(DailyUsage {
+            date: day.to_string(),
+            usd,
+            tokens,
+            models,
+        });
     }
 
     // Contiguous 24 hour buckets ending at the current clock hour.
@@ -512,10 +537,14 @@ fn reconciled_project(
         (Some(current), Some(incoming)) if current.key == incoming.key => {
             (Some(current.clone()), false)
         }
-        (Some(current), Some(incoming)) if current.capability == "exact" && incoming.capability != "exact" => {
+        (Some(current), Some(incoming))
+            if current.capability == "exact" && incoming.capability != "exact" =>
+        {
             (Some(current.clone()), false)
         }
-        (Some(current), Some(incoming)) if incoming.capability == "exact" && current.capability != "exact" => {
+        (Some(current), Some(incoming))
+            if incoming.capability == "exact" && current.capability != "exact" =>
+        {
             (Some(incoming.clone()), false)
         }
         (Some(_), Some(_)) => (None, true),
@@ -594,10 +623,7 @@ mod tests {
     use std::path::Path;
 
     fn temp_base(tag: &str) -> PathBuf {
-        let base = std::env::temp_dir().join(format!(
-            "birdnion-test-{tag}-{}",
-            std::process::id()
-        ));
+        let base = std::env::temp_dir().join(format!("birdnion-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         base
     }
@@ -740,11 +766,7 @@ mod tests {
         write_lines(&base.join("a/projects/enc"), "p.jsonl", &[l.clone()]);
         write_lines(&base.join("b/projects/enc"), "p.jsonl", &[l]);
 
-        let report = scan(
-            &[base.join("a/projects"), base.join("b/projects")],
-            now,
-        )
-        .unwrap();
+        let report = scan(&[base.join("a/projects"), base.join("b/projects")], now).unwrap();
         assert_eq!(report.last30_tokens, 150); // 100+50 deduped, not 300
         assert_eq!(report.today_tokens, 150);
         fs::remove_dir_all(&base).ok();

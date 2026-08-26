@@ -28,8 +28,10 @@ use crate::providers::{display_name, ProviderStatus, QuotaWindow};
 
 const BASE_URL: &str = "https://opencode.ai";
 const SERVER_URL: &str = "https://opencode.ai/_server";
-const WORKSPACES_SERVER_ID: &str = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
-const SUBSCRIPTION_SERVER_ID: &str = "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4";
+const WORKSPACES_SERVER_ID: &str =
+    "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
+const SUBSCRIPTION_SERVER_ID: &str =
+    "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4";
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 const ALLOWED_COOKIE_NAMES: &[&str] = &["auth", "__Host-auth"];
 
@@ -60,7 +62,9 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
 
     let workspace_id = match fetch_workspace_id(&client, &cookie_header).await {
         Ok(w) => w,
-        Err(e) => return ProviderStatus::failure(&id, &name, format!("Không lấy được workspace: {e}")),
+        Err(e) => {
+            return ProviderStatus::failure(&id, &name, format!("Không lấy được workspace: {e}"))
+        }
     };
 
     let text = match fetch_subscription(&client, &workspace_id, &cookie_header).await {
@@ -74,32 +78,73 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     }
 }
 
-async fn fetch_workspace_id(client: &reqwest::Client, cookie_header: &str) -> Result<String, String> {
-    let text = fetch_server_text(client, WORKSPACES_SERVER_ID, None, "GET", BASE_URL, cookie_header).await?;
+async fn fetch_workspace_id(
+    client: &reqwest::Client,
+    cookie_header: &str,
+) -> Result<String, String> {
+    let text = fetch_server_text(
+        client,
+        WORKSPACES_SERVER_ID,
+        None,
+        "GET",
+        BASE_URL,
+        cookie_header,
+    )
+    .await?;
     if looks_signed_out(&text) {
         return Err("chưa đăng nhập".to_string());
     }
     let mut ids = parse_workspace_ids(&text);
     if ids.is_empty() {
-        let fallback = fetch_server_text(client, WORKSPACES_SERVER_ID, Some("[]"), "POST", BASE_URL, cookie_header).await?;
+        let fallback = fetch_server_text(
+            client,
+            WORKSPACES_SERVER_ID,
+            Some("[]"),
+            "POST",
+            BASE_URL,
+            cookie_header,
+        )
+        .await?;
         if looks_signed_out(&fallback) {
             return Err("chưa đăng nhập".to_string());
         }
         ids = parse_workspace_ids(&fallback);
     }
-    ids.into_iter().next().ok_or_else(|| "không tìm thấy workspace".to_string())
+    ids.into_iter()
+        .next()
+        .ok_or_else(|| "không tìm thấy workspace".to_string())
 }
 
-async fn fetch_subscription(client: &reqwest::Client, workspace_id: &str, cookie_header: &str) -> Result<String, String> {
+async fn fetch_subscription(
+    client: &reqwest::Client,
+    workspace_id: &str,
+    cookie_header: &str,
+) -> Result<String, String> {
     let referer = format!("{BASE_URL}/workspace/{workspace_id}/billing");
     let args = serde_json::to_string(&[workspace_id]).unwrap_or_default();
 
-    let text = fetch_server_text(client, SUBSCRIPTION_SERVER_ID, Some(&args), "GET", &referer, cookie_header).await?;
+    let text = fetch_server_text(
+        client,
+        SUBSCRIPTION_SERVER_ID,
+        Some(&args),
+        "GET",
+        &referer,
+        cookie_header,
+    )
+    .await?;
     if looks_signed_out(&text) {
         return Err("chưa đăng nhập".to_string());
     }
     if !has_usage_fields(&text) {
-        let fallback = fetch_server_text(client, SUBSCRIPTION_SERVER_ID, Some(&args), "POST", &referer, cookie_header).await?;
+        let fallback = fetch_server_text(
+            client,
+            SUBSCRIPTION_SERVER_ID,
+            Some(&args),
+            "POST",
+            &referer,
+            cookie_header,
+        )
+        .await?;
         if looks_signed_out(&fallback) {
             return Err("chưa đăng nhập".to_string());
         }
@@ -131,10 +176,15 @@ async fn fetch_server_text(
         .header("User-Agent", USER_AGENT)
         .header("Origin", BASE_URL)
         .header("Referer", referer)
-        .header("Accept", "text/javascript, application/json;q=0.9, */*;q=0.8");
+        .header(
+            "Accept",
+            "text/javascript, application/json;q=0.9, */*;q=0.8",
+        );
     if !is_get {
         if let Some(a) = args {
-            builder = builder.header("Content-Type", "application/json").body(a.to_string());
+            builder = builder
+                .header("Content-Type", "application/json")
+                .body(a.to_string());
         }
     }
 
@@ -168,7 +218,9 @@ fn urlencoding_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -176,7 +228,11 @@ fn urlencoding_encode(s: &str) -> String {
 }
 
 fn uuid_like() -> String {
-    format!("{:x}-{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0), std::process::id())
+    format!(
+        "{:x}-{:x}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+        std::process::id()
+    )
 }
 
 fn looks_signed_out(text: &str) -> bool {
@@ -188,12 +244,18 @@ fn looks_signed_out(text: &str) -> bool {
 }
 
 fn has_usage_fields(text: &str) -> bool {
-    text.contains("rollingUsage") || text.contains("rolling_usage") || text.contains("weeklyUsage") || text.contains("weekly_usage")
+    text.contains("rollingUsage")
+        || text.contains("rolling_usage")
+        || text.contains("weeklyUsage")
+        || text.contains("weekly_usage")
 }
 
 fn parse_workspace_ids(text: &str) -> Vec<String> {
     let re = Regex::new(r#"id\s*:\s*"(wrk_[^"]+)""#).unwrap();
-    let mut ids: Vec<String> = re.captures_iter(text).filter_map(|c| c.get(1).map(|m| m.as_str().to_string())).collect();
+    let mut ids: Vec<String> = re
+        .captures_iter(text)
+        .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+        .collect();
     if ids.is_empty() {
         if let Ok(v) = serde_json::from_str::<Value>(text) {
             let mut collected = Vec::new();
@@ -250,8 +312,22 @@ struct Snapshot {
     renews_at: Option<i64>,
 }
 
-const PERCENT_KEYS: &[&str] = &["usagePercent", "usedPercent", "percentUsed", "percent", "usage_percent", "utilization"];
-const RESET_IN_KEYS: &[&str] = &["resetInSec", "resetInSeconds", "resetSec", "reset_sec", "resetsInSec", "resetIn"];
+const PERCENT_KEYS: &[&str] = &[
+    "usagePercent",
+    "usedPercent",
+    "percentUsed",
+    "percent",
+    "usage_percent",
+    "utilization",
+];
+const RESET_IN_KEYS: &[&str] = &[
+    "resetInSec",
+    "resetInSeconds",
+    "resetSec",
+    "reset_sec",
+    "resetsInSec",
+    "resetIn",
+];
 const RESET_AT_KEYS: &[&str] = &["resetAt", "resetsAt", "reset_at", "nextReset", "renewAt"];
 const RENEW_KEYS: &[&str] = &["renewAt", "renewsAt", "renew_at", "renews_at"];
 const ROLLING_KEYS: &[&str] = &["rollingUsage", "rolling", "rolling_usage", "rollingWindow"];
@@ -264,12 +340,18 @@ fn parse_subscription(text: &str) -> Result<Snapshot, String> {
         return Ok(snap);
     }
 
-    let rolling_pct = extract_double(text, r"rollingUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)")
-        .ok_or_else(|| "Không thể phân tích dữ liệu usage OpenCode".to_string())?;
+    let rolling_pct = extract_double(
+        text,
+        r"rollingUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)",
+    )
+    .ok_or_else(|| "Không thể phân tích dữ liệu usage OpenCode".to_string())?;
     let rolling_reset = extract_int(text, r"rollingUsage[^}]*?resetInSec\s*:\s*([0-9]+)")
         .ok_or_else(|| "Không thể phân tích dữ liệu usage OpenCode".to_string())?;
-    let weekly_pct = extract_double(text, r"weeklyUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)")
-        .ok_or_else(|| "Không thể phân tích dữ liệu usage OpenCode".to_string())?;
+    let weekly_pct = extract_double(
+        text,
+        r"weeklyUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)",
+    )
+    .ok_or_else(|| "Không thể phân tích dữ liệu usage OpenCode".to_string())?;
     let weekly_reset = extract_int(text, r"weeklyUsage[^}]*?resetInSec\s*:\s*([0-9]+)")
         .ok_or_else(|| "Không thể phân tích dữ liệu usage OpenCode".to_string())?;
 
@@ -303,7 +385,9 @@ fn parse_usage_dict(dict: &serde_json::Map<String, Value>) -> Option<Snapshot> {
     let weekly = first_dict(dict, WEEKLY_KEYS)?;
     let rolling_win = parse_window(rolling)?;
     let weekly_win = parse_window(weekly)?;
-    let renews_at = RENEW_KEYS.iter().find_map(|k| dict.get(*k).and_then(date_value));
+    let renews_at = RENEW_KEYS
+        .iter()
+        .find_map(|k| dict.get(*k).and_then(date_value));
     Some(Snapshot {
         rolling_percent: rolling_win.0,
         weekly_percent: weekly_win.0,
@@ -313,15 +397,27 @@ fn parse_usage_dict(dict: &serde_json::Map<String, Value>) -> Option<Snapshot> {
     })
 }
 
-fn first_dict<'a>(dict: &'a serde_json::Map<String, Value>, keys: &[&str]) -> Option<&'a serde_json::Map<String, Value>> {
-    keys.iter().find_map(|k| dict.get(*k).and_then(Value::as_object))
+fn first_dict<'a>(
+    dict: &'a serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<&'a serde_json::Map<String, Value>> {
+    keys.iter()
+        .find_map(|k| dict.get(*k).and_then(Value::as_object))
 }
 
 fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<(f64, i64)> {
-    let mut pct = PERCENT_KEYS.iter().find_map(|k| dict.get(*k).and_then(double_value));
+    let mut pct = PERCENT_KEYS
+        .iter()
+        .find_map(|k| dict.get(*k).and_then(double_value));
     if pct.is_none() {
-        let used = dict.get("used").or_else(|| dict.get("usage")).and_then(double_value);
-        let limit = dict.get("limit").or_else(|| dict.get("total")).and_then(double_value);
+        let used = dict
+            .get("used")
+            .or_else(|| dict.get("usage"))
+            .and_then(double_value);
+        let limit = dict
+            .get("limit")
+            .or_else(|| dict.get("total"))
+            .and_then(double_value);
         if let (Some(u), Some(l)) = (used, limit) {
             if l > 0.0 {
                 pct = Some(u / l * 100.0);
@@ -330,7 +426,9 @@ fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<(f64, i64)> {
     }
     let resolved_pct = normalize_percent(pct?);
 
-    let mut reset_sec = RESET_IN_KEYS.iter().find_map(|k| dict.get(*k).and_then(int_value));
+    let mut reset_sec = RESET_IN_KEYS
+        .iter()
+        .find_map(|k| dict.get(*k).and_then(int_value));
     if reset_sec.is_none() {
         reset_sec = RESET_AT_KEYS.iter().find_map(|k| {
             date_value(dict.get(*k)?).map(|d| (d - chrono::Utc::now().timestamp()).max(0))
@@ -340,7 +438,11 @@ fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<(f64, i64)> {
 }
 
 fn normalize_percent(v: f64) -> f64 {
-    let scaled = if (0.0..=1.0).contains(&v) { v * 100.0 } else { v };
+    let scaled = if (0.0..=1.0).contains(&v) {
+        v * 100.0
+    } else {
+        v
+    };
     scaled.clamp(0.0, 100.0)
 }
 
@@ -378,11 +480,23 @@ fn date_value(v: &Value) -> Option<i64> {
 }
 
 fn extract_double(text: &str, pattern: &str) -> Option<f64> {
-    Regex::new(pattern).ok()?.captures(text)?.get(1)?.as_str().parse().ok()
+    Regex::new(pattern)
+        .ok()?
+        .captures(text)?
+        .get(1)?
+        .as_str()
+        .parse()
+        .ok()
 }
 
 fn extract_int(text: &str, pattern: &str) -> Option<i64> {
-    Regex::new(pattern).ok()?.captures(text)?.get(1)?.as_str().parse().ok()
+    Regex::new(pattern)
+        .ok()?
+        .captures(text)?
+        .get(1)?
+        .as_str()
+        .parse()
+        .ok()
 }
 
 fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
@@ -391,7 +505,9 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
     let weekly_used = (snap.weekly_percent.round() as i32).clamp(0, 100);
 
     let mut windows = vec![
-        QuotaWindow { semantic_key: None, semantic_kind: None,
+        QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Rolling".into(),
             used_pct: rolling_used,
             remaining_pct: 100 - rolling_used,
@@ -399,7 +515,9 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
             resets_at: Some(now + snap.rolling_reset_sec),
             window_seconds: None,
         },
-        QuotaWindow { semantic_key: None, semantic_kind: None,
+        QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Tuần".into(),
             used_pct: weekly_used,
             remaining_pct: 100 - weekly_used,
@@ -410,7 +528,9 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
     ];
 
     if let Some(renew) = snap.renews_at {
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Gia hạn".into(),
             used_pct: 0,
             remaining_pct: 100,

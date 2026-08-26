@@ -66,7 +66,8 @@ const TOKEN_PLAN_COOKIE_DOMAIN: &str = "aliyun.com";
 const TOKEN_PLAN_GATEWAY: &str = "https://bailian.console.aliyun.com";
 const TOKEN_PLAN_REGION_ID: &str = "cn-beijing";
 const TOKEN_PLAN_PRODUCT_CODE: &str = "sfm_tokenplanteams_dp_cn";
-const TOKEN_PLAN_DASHBOARD_URL: &str = "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan";
+const TOKEN_PLAN_DASHBOARD_URL: &str =
+    "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan";
 
 pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
@@ -93,7 +94,11 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let token_cookie = token_cookie.filter(|c| !c.is_empty());
 
     if coding_cookie.is_none() && token_cookie.is_none() {
-        return ProviderStatus::failure(&id, &name, "Chưa đăng nhập Alibaba / Qwen trên trình duyệt");
+        return ProviderStatus::failure(
+            &id,
+            &name,
+            "Chưa đăng nhập Alibaba / Qwen trên trình duyệt",
+        );
     }
 
     let client = crate::providers::shared_client();
@@ -123,7 +128,11 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     }
 
     if windows.is_empty() {
-        return ProviderStatus::failure(&id, &name, last_error.unwrap_or_else(|| "Không lấy được dữ liệu quota".to_string()));
+        return ProviderStatus::failure(
+            &id,
+            &name,
+            last_error.unwrap_or_else(|| "Không lấy được dữ liệu quota".to_string()),
+        );
     }
 
     ProviderStatus {
@@ -135,7 +144,11 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     }
 }
 
-async fn fetch_coding_plan(client: &reqwest::Client, info: &RegionInfo, cookie_header: &str) -> Result<String, String> {
+async fn fetch_coding_plan(
+    client: &reqwest::Client,
+    info: &RegionInfo,
+    cookie_header: &str,
+) -> Result<String, String> {
     let sec_token = resolve_sec_token(client, info, cookie_header).await;
     let body = coding_plan_request_body(info, sec_token.as_deref());
     let url = format!(
@@ -153,8 +166,12 @@ async fn fetch_coding_plan(client: &reqwest::Client, info: &RegionInfo, cookie_h
         .header("Referer", info.referer_url)
         .header("X-Requested-With", "XMLHttpRequest")
         .body(body);
-    if let Some(csrf) = extract_cookie_value("login_aliyunid_csrf", cookie_header).or_else(|| extract_cookie_value("csrf", cookie_header)) {
-        req = req.header("x-xsrf-token", csrf.clone()).header("x-csrf-token", csrf);
+    if let Some(csrf) = extract_cookie_value("login_aliyunid_csrf", cookie_header)
+        .or_else(|| extract_cookie_value("csrf", cookie_header))
+    {
+        req = req
+            .header("x-xsrf-token", csrf.clone())
+            .header("x-csrf-token", csrf);
     }
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
@@ -168,7 +185,11 @@ async fn fetch_coding_plan(client: &reqwest::Client, info: &RegionInfo, cookie_h
     resp.text().await.map_err(|e| e.to_string())
 }
 
-async fn resolve_sec_token(client: &reqwest::Client, info: &RegionInfo, cookie_header: &str) -> Option<String> {
+async fn resolve_sec_token(
+    client: &reqwest::Client,
+    info: &RegionInfo,
+    cookie_header: &str,
+) -> Option<String> {
     if let Some(t) = extract_cookie_value("sec_token", cookie_header) {
         if !t.is_empty() {
             return Some(t);
@@ -179,7 +200,10 @@ async fn resolve_sec_token(client: &reqwest::Client, info: &RegionInfo, cookie_h
         .get(info.dashboard_url)
         .header("Cookie", cookie_header)
         .header("User-Agent", USER_AGENT)
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
         .send()
         .await
     {
@@ -266,8 +290,12 @@ async fn fetch_token_plan(client: &reqwest::Client, cookie_header: &str) -> Resu
         .header("Referer", TOKEN_PLAN_DASHBOARD_URL)
         .header("X-Requested-With", "XMLHttpRequest")
         .body(body);
-    if let Some(csrf) = extract_cookie_value("login_aliyunid_csrf", cookie_header).or_else(|| extract_cookie_value("csrf", cookie_header)) {
-        req = req.header("x-xsrf-token", csrf.clone()).header("x-csrf-token", csrf);
+    if let Some(csrf) = extract_cookie_value("login_aliyunid_csrf", cookie_header)
+        .or_else(|| extract_cookie_value("csrf", cookie_header))
+    {
+        req = req
+            .header("x-xsrf-token", csrf.clone())
+            .header("x-csrf-token", csrf);
     }
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
@@ -296,14 +324,20 @@ fn token_plan_request_body(sec_token: Option<&str>) -> String {
 }
 
 fn encode_form(pairs: &[(String, String)]) -> String {
-    pairs.iter().map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v))).collect::<Vec<_>>().join("&")
+    pairs
+        .iter()
+        .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -311,7 +345,11 @@ fn percent_encode(s: &str) -> String {
 }
 
 fn uuid_like() -> String {
-    format!("{:x}-{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0), std::process::id())
+    format!(
+        "{:x}-{:x}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+        std::process::id()
+    )
 }
 
 const SEC_TOKEN_PATTERNS: &[&str] = &[
@@ -355,20 +393,37 @@ fn extract_cookie_value(name: &str, header: &str) -> Option<String> {
 }
 
 const QUOTA_KEYS: &[&str] = &[
-    "per5HourUsedQuota", "per5HourTotalQuota", "perWeekUsedQuota", "perWeekTotalQuota", "perBillMonthUsedQuota", "perBillMonthTotalQuota",
+    "per5HourUsedQuota",
+    "per5HourTotalQuota",
+    "perWeekUsedQuota",
+    "perWeekTotalQuota",
+    "perBillMonthUsedQuota",
+    "perBillMonthTotalQuota",
 ];
 
 /// Pure parser for the (possibly double-JSON-encoded) coding-plan RPC body.
 fn parse_coding_plan_windows(text: &str) -> Vec<QuotaWindow> {
-    let Ok(raw) = serde_json::from_str::<Value>(text) else { return Vec::new() };
+    let Ok(raw) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
     let expanded = expanded_json(&raw);
-    let Some(quota) = find_first_dict_matching_any_key(QUOTA_KEYS, &expanded) else { return Vec::new() };
+    let Some(quota) = find_first_dict_matching_any_key(QUOTA_KEYS, &expanded) else {
+        return Vec::new();
+    };
 
     let mut windows = Vec::new();
 
-    if let Some(total) = any_int(&["per5HourTotalQuota", "perFiveHourTotalQuota"], quota).filter(|&t| t > 0) {
+    if let Some(total) =
+        any_int(&["per5HourTotalQuota", "perFiveHourTotalQuota"], quota).filter(|&t| t > 0)
+    {
         let used = any_int(&["per5HourUsedQuota", "perFiveHourUsedQuota"], quota).unwrap_or(0);
-        let reset = any_date(&["per5HourQuotaNextRefreshTime", "perFiveHourQuotaNextRefreshTime"], quota);
+        let reset = any_date(
+            &[
+                "per5HourQuotaNextRefreshTime",
+                "perFiveHourQuotaNextRefreshTime",
+            ],
+            quota,
+        );
         windows.push(quota_window("5 giờ", used, total, reset));
     }
 
@@ -378,9 +433,17 @@ fn parse_coding_plan_windows(text: &str) -> Vec<QuotaWindow> {
         windows.push(quota_window("Tuần", used, total, reset));
     }
 
-    if let Some(total) = any_int(&["perBillMonthTotalQuota", "perMonthTotalQuota"], quota).filter(|&t| t > 0) {
+    if let Some(total) =
+        any_int(&["perBillMonthTotalQuota", "perMonthTotalQuota"], quota).filter(|&t| t > 0)
+    {
         let used = any_int(&["perBillMonthUsedQuota", "perMonthUsedQuota"], quota).unwrap_or(0);
-        let reset = any_date(&["perBillMonthQuotaNextRefreshTime", "perMonthQuotaNextRefreshTime"], quota);
+        let reset = any_date(
+            &[
+                "perBillMonthQuotaNextRefreshTime",
+                "perMonthQuotaNextRefreshTime",
+            ],
+            quota,
+        );
         windows.push(quota_window("Tháng", used, total, reset));
     }
 
@@ -388,21 +451,61 @@ fn parse_coding_plan_windows(text: &str) -> Vec<QuotaWindow> {
 }
 
 fn quota_window(label: &str, used: i64, total: i64, reset: Option<i64>) -> QuotaWindow {
-    let used_pct = ((used as f64 / total as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
-    QuotaWindow { semantic_key: None, semantic_kind: None,
+    let used_pct = ((used as f64 / total as f64) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as i32;
+    QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: label.to_string(),
         used_pct,
         remaining_pct: 100 - used_pct,
-        subtitle: Some(format!("{} / {} requests còn lại", format_number((total - used).max(0) as f64), format_number(total as f64))),
+        subtitle: Some(format!(
+            "{} / {} requests còn lại",
+            format_number((total - used).max(0) as f64),
+            format_number(total as f64)
+        )),
         resets_at: reset,
         window_seconds: None,
     }
 }
 
-const TOTAL_QUOTA_KEYS: &[&str] = &["totalQuota", "total_quota", "totalCredits", "quota", "amount", "TotalValue", "monthlyTotalQuota"];
-const USED_QUOTA_KEYS: &[&str] = &["usedQuota", "used_quota", "usedCredits", "usage", "used", "consumeAmount", "UsedValue", "ConsumedValue"];
-const REMAINING_QUOTA_KEYS: &[&str] = &["remainingQuota", "remainQuota", "remainingCredits", "balance", "TotalSurplusValue", "SurplusValue"];
-const RESET_DATE_KEYS: &[&str] = &["nextRefreshTime", "resetTime", "periodEndTime", "billCycleEndTime", "expireTime", "endTime", "NearestExpireDate"];
+const TOTAL_QUOTA_KEYS: &[&str] = &[
+    "totalQuota",
+    "total_quota",
+    "totalCredits",
+    "quota",
+    "amount",
+    "TotalValue",
+    "monthlyTotalQuota",
+];
+const USED_QUOTA_KEYS: &[&str] = &[
+    "usedQuota",
+    "used_quota",
+    "usedCredits",
+    "usage",
+    "used",
+    "consumeAmount",
+    "UsedValue",
+    "ConsumedValue",
+];
+const REMAINING_QUOTA_KEYS: &[&str] = &[
+    "remainingQuota",
+    "remainQuota",
+    "remainingCredits",
+    "balance",
+    "TotalSurplusValue",
+    "SurplusValue",
+];
+const RESET_DATE_KEYS: &[&str] = &[
+    "nextRefreshTime",
+    "resetTime",
+    "periodEndTime",
+    "billCycleEndTime",
+    "expireTime",
+    "endTime",
+    "NearestExpireDate",
+];
 
 /// Pure parser for the Token Plan RPC body.
 fn parse_token_plan_window(text: &str) -> Option<QuotaWindow> {
@@ -433,17 +536,25 @@ fn parse_token_plan_window(text: &str) -> Option<QuotaWindow> {
     let used_pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32;
     let rem = remaining.unwrap_or((total - used).max(0.0));
 
-    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
+    Some(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Token Plan".to_string(),
         used_pct,
         remaining_pct: 100 - used_pct,
-        subtitle: Some(format!("{} / {} credits còn lại", format_number(rem), format_number(total))),
+        subtitle: Some(format!(
+            "{} / {} credits còn lại",
+            format_number(rem),
+            format_number(total)
+        )),
         resets_at,
         window_seconds: None,
     })
 }
 
-fn find_summary<'a>(dict: &'a serde_json::Map<String, Value>) -> Option<&'a serde_json::Map<String, Value>> {
+fn find_summary<'a>(
+    dict: &'a serde_json::Map<String, Value>,
+) -> Option<&'a serde_json::Map<String, Value>> {
     for key in ["Data", "data", "successResponse", "success_response"] {
         if let Some(nested) = dict.get(key).and_then(Value::as_object) {
             let all_keys = [TOTAL_QUOTA_KEYS, USED_QUOTA_KEYS, REMAINING_QUOTA_KEYS].concat();
@@ -461,11 +572,14 @@ fn find_summary<'a>(dict: &'a serde_json::Map<String, Value>) -> Option<&'a serd
 }
 
 fn any_double(keys: &[&str], dict: &serde_json::Map<String, Value>) -> Option<f64> {
-    keys.iter().find_map(|k| dict.get(*k).and_then(parse_double))
+    keys.iter()
+        .find_map(|k| dict.get(*k).and_then(parse_double))
 }
 
 fn any_int(keys: &[&str], dict: &serde_json::Map<String, Value>) -> Option<i64> {
-    keys.iter().find_map(|k| dict.get(*k).and_then(parse_double)).map(|d| d as i64)
+    keys.iter()
+        .find_map(|k| dict.get(*k).and_then(parse_double))
+        .map(|d| d as i64)
 }
 
 fn any_date(keys: &[&str], dict: &serde_json::Map<String, Value>) -> Option<i64> {
@@ -523,15 +637,21 @@ fn find_first_string(keys: &[&str], v: &Value) -> Option<String> {
     }
 }
 
-fn find_first_dict_matching_any_key<'a>(keys: &[&str], v: &'a Value) -> Option<&'a serde_json::Map<String, Value>> {
+fn find_first_dict_matching_any_key<'a>(
+    keys: &[&str],
+    v: &'a Value,
+) -> Option<&'a serde_json::Map<String, Value>> {
     match v {
         Value::Object(map) => {
             if keys.iter().any(|k| map.contains_key(*k)) {
                 return Some(map);
             }
-            map.values().find_map(|v| find_first_dict_matching_any_key(keys, v))
+            map.values()
+                .find_map(|v| find_first_dict_matching_any_key(keys, v))
         }
-        Value::Array(arr) => arr.iter().find_map(|v| find_first_dict_matching_any_key(keys, v)),
+        Value::Array(arr) => arr
+            .iter()
+            .find_map(|v| find_first_dict_matching_any_key(keys, v)),
         _ => None,
     }
 }
@@ -540,7 +660,11 @@ fn find_first_dict_matching_any_key<'a>(keys: &[&str], v: &'a Value) -> Option<&
 /// Swift's `expandedJSON`, which handles the API's double-encoding quirk).
 fn expanded_json(v: &Value) -> Value {
     match v {
-        Value::Object(map) => Value::Object(map.iter().map(|(k, val)| (k.clone(), expanded_json(val))).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, val)| (k.clone(), expanded_json(val)))
+                .collect(),
+        ),
         Value::Array(arr) => Value::Array(arr.iter().map(expanded_json).collect()),
         Value::String(s) => {
             if let Ok(nested) = serde_json::from_str::<Value>(s) {
@@ -600,7 +724,8 @@ mod tests {
 
     #[test]
     fn parses_coding_plan_windows_from_double_encoded_json() {
-        let inner = serde_json::json!({ "per5HourUsedQuota": 50, "per5HourTotalQuota": 100 }).to_string();
+        let inner =
+            serde_json::json!({ "per5HourUsedQuota": 50, "per5HourTotalQuota": 100 }).to_string();
         let outer = serde_json::json!({ "data": inner }).to_string();
         let windows = parse_coding_plan_windows(&outer);
         assert_eq!(windows.len(), 1);
@@ -639,7 +764,10 @@ mod tests {
     #[test]
     fn extracts_cookie_value_by_name() {
         let header = "foo=bar; sec_token=abc123; baz=qux";
-        assert_eq!(extract_cookie_value("sec_token", header), Some("abc123".to_string()));
+        assert_eq!(
+            extract_cookie_value("sec_token", header),
+            Some("abc123".to_string())
+        );
         assert_eq!(extract_cookie_value("missing", header), None);
     }
 }

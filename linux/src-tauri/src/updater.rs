@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-const RELEASES_URL: &str = "https://api.github.com/repos/hapo-nghialuu/BirdNion/releases?per_page=20";
+const RELEASES_URL: &str =
+    "https://api.github.com/repos/hapo-nghialuu/BirdNion/releases?per_page=20";
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 struct GitHubRelease {
@@ -29,7 +30,10 @@ pub struct UpdateInfo {
 /// Queries GitHub Releases and returns the newest applicable version newer
 /// than `current_version`, or `None` when already up to date / on error.
 #[tauri::command]
-pub async fn check_update(channel: String, current_version: String) -> Result<Option<UpdateInfo>, String> {
+pub async fn check_update(
+    channel: String,
+    current_version: String,
+) -> Result<Option<UpdateInfo>, String> {
     let client = crate::providers::shared_client();
     let resp = client
         .get(RELEASES_URL)
@@ -41,16 +45,22 @@ pub async fn check_update(channel: String, current_version: String) -> Result<Op
         return Err(format!("HTTP {}", resp.status().as_u16()));
     }
     let releases: Vec<GitHubRelease> = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(pick_latest(&releases, &channel, &current_version).map(|r| UpdateInfo {
-        version: r.tag_name.clone(),
-        url: r.html_url.clone(),
-    }))
+    Ok(
+        pick_latest(&releases, &channel, &current_version).map(|r| UpdateInfo {
+            version: r.tag_name.clone(),
+            url: r.html_url.clone(),
+        }),
+    )
 }
 
 /// Pure picker (unit-tested): drops drafts, drops prereleases on the stable
 /// channel, then returns the highest tag that is newer than `current` — None
 /// when up to date. `channel == "beta"` includes prereleases.
-fn pick_latest<'a>(releases: &'a [GitHubRelease], channel: &str, current: &str) -> Option<&'a GitHubRelease> {
+fn pick_latest<'a>(
+    releases: &'a [GitHubRelease],
+    channel: &str,
+    current: &str,
+) -> Option<&'a GitHubRelease> {
     releases
         .iter()
         .filter(|r| !r.draft && (channel == "beta" || !r.prerelease))
@@ -70,11 +80,17 @@ fn pick_latest<'a>(releases: &'a [GitHubRelease], channel: &str, current: &str) 
 /// prerelease suffix ("-beta.1" etc). Strips a leading "v".
 fn parse_version(raw: &str) -> (Vec<u64>, bool) {
     let s = raw.trim();
-    let s = s.strip_prefix('v').or_else(|| s.strip_prefix('V')).unwrap_or(s);
+    let s = s
+        .strip_prefix('v')
+        .or_else(|| s.strip_prefix('V'))
+        .unwrap_or(s);
     let mut parts = s.splitn(2, '-');
     let numeric = parts.next().unwrap_or("");
     let is_prerelease = parts.next().is_some();
-    let numbers = numeric.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect();
+    let numbers = numeric
+        .split('.')
+        .map(|p| p.parse::<u64>().unwrap_or(0))
+        .collect();
     (numbers, is_prerelease)
 }
 
@@ -155,7 +171,10 @@ mod tests {
 
     #[test]
     fn pick_latest_beta_includes_prerelease() {
-        let releases = vec![release("0.9.0-beta.1", true, false), release("0.8.6", false, false)];
+        let releases = vec![
+            release("0.9.0-beta.1", true, false),
+            release("0.8.6", false, false),
+        ];
         let picked = pick_latest(&releases, "beta", "0.8.5").unwrap();
         assert_eq!(picked.tag_name, "0.9.0-beta.1");
     }

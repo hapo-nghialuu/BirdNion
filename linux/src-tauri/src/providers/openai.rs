@@ -36,7 +36,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
             }
             match fetch_credit_grants(&token).await {
                 Ok(status) => status.with_account(account),
-                Err(e) => ProviderStatus::failure(&cfg.id, &name, format!("{admin_err}; fallback: {e}")),
+                Err(e) => {
+                    ProviderStatus::failure(&cfg.id, &name, format!("{admin_err}; fallback: {e}"))
+                }
             }
         }
     };
@@ -75,12 +77,10 @@ async fn fetch_admin_usage(token: &str, project: Option<&str>) -> Result<Provide
     let start = (now - Duration::days(30)).timestamp();
     let end = now.timestamp();
 
-    let mut costs_url = format!(
-        "{COSTS_URL}?start_time={start}&end_time={end}&bucket_width=1d&limit=31"
-    );
-    let mut comp_url = format!(
-        "{COMPLETIONS_URL}?start_time={start}&end_time={end}&bucket_width=1d&limit=31"
-    );
+    let mut costs_url =
+        format!("{COSTS_URL}?start_time={start}&end_time={end}&bucket_width=1d&limit=31");
+    let mut comp_url =
+        format!("{COMPLETIONS_URL}?start_time={start}&end_time={end}&bucket_width=1d&limit=31");
     if let Some(p) = project {
         costs_url.push_str(&format!("&project_ids={p}"));
         comp_url.push_str(&format!("&project_ids={p}"));
@@ -89,7 +89,9 @@ async fn fetch_admin_usage(token: &str, project: Option<&str>) -> Result<Provide
     let costs = get_json(&client, &costs_url, token).await?;
     let comps = get_json(&client, &comp_url, token).await?;
 
-    Ok(parse_admin_status("openai", "OpenAI", &costs, &comps, project))
+    Ok(parse_admin_status(
+        "openai", "OpenAI", &costs, &comps, project,
+    ))
 }
 
 async fn get_json(client: &reqwest::Client, url: &str, token: &str) -> Result<Value, String> {
@@ -129,7 +131,10 @@ pub fn parse_admin_status(
                 // amount.value is often in dollars as string/number
                 let amt = r
                     .pointer("/amount/value")
-                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .and_then(|v| {
+                        v.as_f64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    })
                     .unwrap_or(0.0);
                 day_cost += amt;
             }
@@ -176,7 +181,9 @@ pub fn parse_admin_status(
 }
 
 fn spend_window(label: &str, usd: f64) -> QuotaWindow {
-    QuotaWindow { semantic_key: None, semantic_kind: None,
+    QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: label.into(),
         used_pct: 0,
         remaining_pct: 100,
@@ -197,7 +204,10 @@ pub fn parse_credits(id: &str, name: &str, body: &Value) -> ProviderStatus {
         .get("total_granted")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
-    let used = body.get("total_used").and_then(Value::as_f64).unwrap_or(0.0);
+    let used = body
+        .get("total_used")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     let available = body
         .get("total_available")
         .and_then(Value::as_f64)
@@ -212,7 +222,9 @@ pub fn parse_credits(id: &str, name: &str, body: &Value) -> ProviderStatus {
     ProviderStatus {
         id: id.into(),
         display_name: name.into(),
-        windows: vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows: vec![QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Credits".into(),
             used_pct,
             remaining_pct: 100 - used_pct,

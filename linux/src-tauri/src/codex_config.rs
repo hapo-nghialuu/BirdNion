@@ -108,7 +108,8 @@ pub fn codex_cli_proxy_configuration_signature(profile: &CodexProfile) -> Option
     if !profile.uses_embedded_cli_proxy() {
         return None;
     }
-    let proxy_base = cli_proxy::normalized_cli_proxy_base_url(profile.cli_proxy_base_url.as_deref())?;
+    let proxy_base =
+        cli_proxy::normalized_cli_proxy_base_url(profile.cli_proxy_base_url.as_deref())?;
     let base = cleaned(&profile.base_url)?;
     let api_key = cleaned(&profile.api_key)?;
     let model = cleaned(&profile.model)?;
@@ -151,13 +152,16 @@ pub fn is_embedded_cli_proxy_ready(profile: &CodexProfile) -> bool {
         && cleaned_opt(profile.cli_proxy_management_key.as_deref()).is_some()
 }
 
-pub fn provider_configuration(profile: &CodexProfile) -> Result<CodexProviderConfiguration, String> {
+pub fn provider_configuration(
+    profile: &CodexProfile,
+) -> Result<CodexProviderConfiguration, String> {
     let model = cleaned(&profile.model).ok_or_else(|| incomplete_err())?;
     let signature = codex_configuration_signature(profile).ok_or_else(|| incomplete_err())?;
     let (endpoint, bearer) = if profile.uses_embedded_cli_proxy() {
         let base = cli_proxy::normalized_cli_proxy_base_url(profile.cli_proxy_base_url.as_deref())
             .ok_or_else(|| incomplete_err())?;
-        let key = cleaned_opt(profile.cli_proxy_api_key.as_deref()).ok_or_else(|| incomplete_err())?;
+        let key =
+            cleaned_opt(profile.cli_proxy_api_key.as_deref()).ok_or_else(|| incomplete_err())?;
         (format!("{base}/v1"), key)
     } else {
         let base = cleaned(&profile.base_url).ok_or_else(|| incomplete_err())?;
@@ -494,7 +498,12 @@ pub fn apply(profile: &CodexProfile, config_url: Option<&Path>) -> Result<(), St
     let clean = document::remove_managed_sections(&contents);
     let (orig_model, orig_provider) = previous
         .as_ref()
-        .map(|s| (s.original_model_line.clone(), s.original_model_provider_line.clone()))
+        .map(|s| {
+            (
+                s.original_model_line.clone(),
+                s.original_model_provider_line.clone(),
+            )
+        })
         .unwrap_or_else(|| {
             let (m, p) = document::root_assignments(&clean);
             (m, p)
@@ -549,13 +558,7 @@ pub fn profile_flag_name(profile: &CodexProfile) -> String {
         .name
         .to_lowercase()
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch
-            } else {
-                '-'
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect();
     let mut collapsed = String::new();
     for ch in slug.chars() {
@@ -566,7 +569,12 @@ pub fn profile_flag_name(profile: &CodexProfile) -> String {
     }
     let trimmed = collapsed.trim_matches('-');
     let base = if trimmed.is_empty() {
-        profile.id.chars().take(8).collect::<String>().to_lowercase()
+        profile
+            .id
+            .chars()
+            .take(8)
+            .collect::<String>()
+            .to_lowercase()
     } else {
         trimmed.to_string()
     };
@@ -574,7 +582,10 @@ pub fn profile_flag_name(profile: &CodexProfile) -> String {
 }
 
 /// Write/refresh `~/.codex/bn-<slug>.config.toml`. Returns the `--profile` flag.
-pub fn write_profile_file(profile: &CodexProfile, config_url: Option<&Path>) -> Result<String, String> {
+pub fn write_profile_file(
+    profile: &CodexProfile,
+    config_url: Option<&Path>,
+) -> Result<String, String> {
     let path = config_url
         .map(Path::to_path_buf)
         .unwrap_or_else(target_config_path);
@@ -589,7 +600,12 @@ pub fn write_profile_file(profile: &CodexProfile, config_url: Option<&Path>) -> 
         .iter()
         .any(|(k, v)| k != &profile.id && v == &file_candidate)
     {
-        let suffix: String = profile.id.chars().take(4).collect::<String>().to_lowercase();
+        let suffix: String = profile
+            .id
+            .chars()
+            .take(4)
+            .collect::<String>()
+            .to_lowercase();
         flag = format!("{flag}-{suffix}");
     }
     let file_name = format!("{flag}.config.toml");
@@ -612,7 +628,10 @@ pub fn profile_flag(profile_id: &str, config_url: Option<&Path>) -> Option<Strin
     let path = config_url
         .map(Path::to_path_buf)
         .unwrap_or_else(target_config_path);
-    let name = load_profile_files_state(&path).files.get(profile_id)?.clone();
+    let name = load_profile_files_state(&path)
+        .files
+        .get(profile_id)?
+        .clone();
     name.strip_suffix(".config.toml").map(|s| s.to_string())
 }
 
@@ -709,10 +728,7 @@ fn format_home_path(path: &Path) -> String {
 /// Delete a Codex profile. When `linked_claude_id` is set and `delete_claude`
 /// is true (custom dual-record), also remove the Claude profile. Deactivates
 /// Codex if this profile is active and removes the overlay file.
-pub fn delete_profile(
-    profile_id: &str,
-    delete_linked_claude: bool,
-) -> Result<(), String> {
+pub fn delete_profile(profile_id: &str, delete_linked_claude: bool) -> Result<(), String> {
     let settings = config::load();
     let profile = settings
         .codex_profiles
@@ -732,9 +748,7 @@ pub fn delete_profile(
         if delete_linked_claude {
             if let Some(ref p) = profile {
                 if let Some(claude_id) = cleaned_opt(p.claude_code_profile_id.as_deref()) {
-                    settings
-                        .claude_code_profiles
-                        .retain(|c| c.id != claude_id);
+                    settings.claude_code_profiles.retain(|c| c.id != claude_id);
                 }
             }
             for claude in &mut settings.claude_code_profiles {
@@ -749,7 +763,8 @@ pub fn delete_profile(
                 }
             }
             for provider in &mut settings.providers {
-                if cleaned_opt(provider.codex_profile_id.as_deref()).as_deref() == Some(profile_id) {
+                if cleaned_opt(provider.codex_profile_id.as_deref()).as_deref() == Some(profile_id)
+                {
                     provider.codex_profile_id = None;
                 }
             }
@@ -805,10 +820,7 @@ mod tests {
         let once = document::applying(&cfg, user);
         let twice = document::applying(&cfg, &document::remove_managed_sections(&once));
         // After remove + re-apply, selection+provider blocks present once each.
-        assert_eq!(
-            once.matches(SELECTION_START).count(),
-            1
-        );
+        assert_eq!(once.matches(SELECTION_START).count(), 1);
         let cleaned = document::remove_managed_sections(&once);
         let reapplied = document::applying(&cfg, &document::remove_root_assignments(&cleaned));
         assert!(document::contains_managed_configuration(&reapplied, &cfg));
@@ -820,10 +832,7 @@ mod tests {
     #[test]
     fn apply_deactivate_restores_user_root_lines() {
         let _g = TEST_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "birdnion-codex-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("birdnion-codex-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join("config.toml");
@@ -856,10 +865,7 @@ mod tests {
     #[test]
     fn managed_block_idempotent_on_disk() {
         let _g = TEST_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "birdnion-codex-idemp-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("birdnion-codex-idemp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join("config.toml");
@@ -877,10 +883,8 @@ mod tests {
     #[test]
     fn overlay_slug_avoids_collision() {
         let _g = TEST_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "birdnion-codex-overlay-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("birdnion-codex-overlay-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join("config.toml");
@@ -937,9 +941,8 @@ mod tests {
 
     #[test]
     fn damaged_marker_does_not_wipe_file() {
-        let contents = format!(
-            "{SELECTION_START}\nmodel = \"x\"\n# missing end marker\n[keep]\nv = 1\n"
-        );
+        let contents =
+            format!("{SELECTION_START}\nmodel = \"x\"\n# missing end marker\n[keep]\nv = 1\n");
         let cleaned = document::remove_managed_sections(&contents);
         assert!(cleaned.contains("[keep]"));
         assert!(cleaned.contains(SELECTION_START)); // left intact when end missing

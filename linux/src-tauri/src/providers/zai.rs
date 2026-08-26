@@ -13,7 +13,11 @@ use crate::config;
 use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
 
 fn endpoint(region: &str) -> String {
-    let host = if region == "cn" { "open.bigmodel.cn" } else { "api.z.ai" };
+    let host = if region == "cn" {
+        "open.bigmodel.cn"
+    } else {
+        "api.z.ai"
+    };
     format!("https://{host}/api/monitor/usage/quota/limit")
 }
 
@@ -100,8 +104,15 @@ fn window_minutes(unit: i64, number: i64) -> i64 {
 /// Derives used% from usage(limit)/remaining/current_value fields when
 /// available, falling back to the raw `percentage` field.
 fn computed_used_percent(entry: &Value) -> f64 {
-    let percentage = entry.get("percentage").and_then(Value::as_f64).unwrap_or(0.0);
-    let Some(limit) = entry.get("usage").and_then(Value::as_i64).filter(|l| *l > 0) else {
+    let percentage = entry
+        .get("percentage")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let Some(limit) = entry
+        .get("usage")
+        .and_then(Value::as_i64)
+        .filter(|l| *l > 0)
+    else {
         return percentage;
     };
     let remaining = entry.get("remaining").and_then(Value::as_i64);
@@ -112,14 +123,19 @@ fn computed_used_percent(entry: &Value) -> f64 {
         (None, Some(c)) => Some(c),
         (None, None) => None,
     };
-    let Some(used_raw) = used_raw else { return percentage };
+    let Some(used_raw) = used_raw else {
+        return percentage;
+    };
     let used = used_raw.clamp(0, limit);
     ((used as f64 / limit as f64) * 100.0).clamp(0.0, 100.0)
 }
 
 /// Pure payload → status mapping (unit-tested).
 pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> ProviderStatus {
-    let success = body.get("success").and_then(Value::as_bool).unwrap_or(false);
+    let success = body
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let code = body.get("code").and_then(Value::as_i64).unwrap_or(0);
     let msg = body.get("msg").and_then(Value::as_str).unwrap_or("");
     let limits = body
@@ -130,7 +146,11 @@ pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> P
         .unwrap_or_default();
 
     if !success || code != 200 || limits.is_empty() {
-        let err = if msg.is_empty() { "Không có dữ liệu quota" } else { msg };
+        let err = if msg.is_empty() {
+            "Không có dữ liệu quota"
+        } else {
+            msg
+        };
         return ProviderStatus::failure(id, name, err);
     }
 
@@ -159,8 +179,13 @@ pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> P
             let number = e.get("number").and_then(Value::as_i64).unwrap_or(0);
             let is_primary = kind == "TOKENS_LIMIT" && Some(i) == primary_idx;
             let used_pct = computed_used_percent(e).round().clamp(0.0, 100.0) as i32;
-            let resets_at = e.get("next_reset_time").and_then(Value::as_i64).map(|ms| ms / 1000);
-            QuotaWindow { semantic_key: None, semantic_kind: None,
+            let resets_at = e
+                .get("next_reset_time")
+                .and_then(Value::as_i64)
+                .map(|ms| ms / 1000);
+            QuotaWindow {
+                semantic_key: None,
+                semantic_kind: None,
                 label: label(kind, unit, number, is_primary),
                 used_pct,
                 remaining_pct: 100 - used_pct,

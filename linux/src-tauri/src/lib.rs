@@ -11,20 +11,20 @@ mod codex_scanner;
 mod config;
 mod cost_history;
 mod elevenlabs_keys;
+mod freemodel_accounts;
+mod grok_scanner;
 mod hiyo_keys;
 mod installed_agents;
-mod freemodel_accounts;
- mod grok_scanner;
 mod kiro_scanner;
 mod omp_scanner;
 mod pi_scanner;
- mod platform;
- mod providers;
- mod project_cost_history;
- mod project_insights;
- mod storage;
- mod updater;
- mod usage;
+mod platform;
+mod project_cost_history;
+mod project_insights;
+mod providers;
+mod storage;
+mod updater;
+mod usage;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,6 +44,7 @@ use tauri_plugin_notification::NotificationExt as _;
 const USAGE_REPORT_TTL: Duration = Duration::from_secs(300);
 static USAGE_REPORT_CACHE: LazyLock<Mutex<HashMap<&'static str, (Instant, usage::UsageReport)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static KIRO_USAGE_SCAN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Claude Code CLI usage rolled up from local session logs. The scan runs on
 /// a blocking thread — sync commands execute on the GTK main loop and froze
@@ -51,10 +52,11 @@ static USAGE_REPORT_CACHE: LazyLock<Mutex<HashMap<&'static str, (Instant, usage:
 /// detached off-main for the same reason).
 #[tauri::command]
 async fn claude_usage_report() -> Option<usage::UsageReport> {
-    if !local_usage_source_enabled("claude") {
+    let started_sources = enabled_usage_sources();
+    if !started_sources.contains("claude") {
         return None;
     }
-    tauri::async_runtime::spawn_blocking(|| {
+    let report = tauri::async_runtime::spawn_blocking(|| {
         if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("claude") {
             if at.elapsed() < USAGE_REPORT_TTL {
                 return report.clone();
@@ -75,25 +77,26 @@ async fn claude_usage_report() -> Option<usage::UsageReport> {
         merged
     })
     .await
-    .ok()
+    .ok();
+    authorize_usage_report("claude", report, &started_sources, &enabled_usage_sources())
 }
 
 /// Codex CLI usage rolled up from local rollout logs (blocking thread + cache,
 /// see `claude_usage_report`).
 #[tauri::command]
 async fn codex_usage_report() -> Option<usage::UsageReport> {
-    if !local_usage_source_enabled("codex") {
+    let started_sources = enabled_usage_sources();
+    if !started_sources.contains("codex") {
         return None;
     }
-    tauri::async_runtime::spawn_blocking(|| {
+    let report = tauri::async_runtime::spawn_blocking(|| {
         if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("codex") {
             if at.elapsed() < USAGE_REPORT_TTL {
                 return report.clone();
             }
         }
         let live = codex_scanner::usage_scan();
-        let merged =
-            cost_history::apply_and_report("codex", live.as_ref().map(|scan| &scan.usage));
+        let merged = cost_history::apply_and_report("codex", live.as_ref().map(|scan| &scan.usage));
         if let Some(scan) = &live {
             let _ = project_cost_history::apply_with_retractions(
                 "codex",
@@ -109,17 +112,27 @@ async fn codex_usage_report() -> Option<usage::UsageReport> {
         merged
     })
     .await
-    .ok()
+    .ok();
+    authorize_usage_report("codex", report, &started_sources, &enabled_usage_sources())
 }
 
 /// Grok Build local session cost (signals.json) + history merge (blocking
 /// thread + cache, see `claude_usage_report`).
+fn merge_grok_usage(live: Option<&usage::UsageReport>) -> usage::UsageReport {
+    cost_history::apply_and_report_at_counting_revision(
+        "grok",
+        live,
+        grok_scanner::COUNTING_REVISION,
+    )
+}
+
 #[tauri::command]
 async fn grok_usage_report() -> Option<usage::UsageReport> {
-    if !local_usage_source_enabled("grok") {
+    let started_sources = enabled_usage_sources();
+    if !started_sources.contains("grok") {
         return None;
     }
-    tauri::async_runtime::spawn_blocking(|| {
+    let report = tauri::async_runtime::spawn_blocking(|| {
         if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("grok") {
             if at.elapsed() < USAGE_REPORT_TTL {
                 return report.clone();
@@ -129,13 +142,9 @@ async fn grok_usage_report() -> Option<usage::UsageReport> {
         // Ngữ nghĩa đếm của Grok đổi ở rev 3 (chia theo dòng thời gian session
         // thay vì dồn vào ngày hoạt động cuối). Các ngày đã lưu theo công thức
         // cũ bị phồng vì cùng một session để lại bản sao ở mỗi ngày nó từng là
-        // "hoạt động cuối", nên phải ghi đè một lần rồi mới quay về gộp
-        // thường (macOS làm y hệt qua `countingRevision`).
-        let merged = if grok_scanner::take_counting_revision_upgrade() {
-            cost_history::apply_and_report_replacing("grok", live.as_ref().map(|scan| &scan.usage))
-        } else {
-            cost_history::apply_and_report("grok", live.as_ref().map(|scan| &scan.usage))
-        };
+        // "hoạt động cuối". History thay source và đóng dấu revision nguyên tử
+        // khi có live hợp lệ; thiếu/hỏng live phải giữ nguyên revision cũ.
+        let merged = merge_grok_usage(live.as_ref().map(|scan| &scan.usage));
         if let Some(scan) = &live {
             let _ = project_cost_history::apply("grok", &scan.projects, false);
         }
@@ -146,16 +155,18 @@ async fn grok_usage_report() -> Option<usage::UsageReport> {
         merged
     })
     .await
-    .ok()
- }
+    .ok();
+    authorize_usage_report("grok", report, &started_sources, &enabled_usage_sources())
+}
 
 /// Oh My Pi (`omp`) local session cost + history merge.
 #[tauri::command]
 async fn omp_usage_report() -> Option<usage::UsageReport> {
-    if !local_usage_source_enabled("omp") {
+    let started_sources = enabled_usage_sources();
+    if !started_sources.contains("omp") {
         return None;
     }
-    tauri::async_runtime::spawn_blocking(|| {
+    let report = tauri::async_runtime::spawn_blocking(|| {
         if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("omp") {
             if at.elapsed() < USAGE_REPORT_TTL {
                 return report.clone();
@@ -172,18 +183,34 @@ async fn omp_usage_report() -> Option<usage::UsageReport> {
         merged
     })
     .await
-    .ok()
+    .ok();
+    authorize_usage_report("omp", report, &started_sources, &enabled_usage_sources())
 }
 
 /// Kiro CLI local session cost (real billed credits) + history merge.
 /// Kiro sessions carry no `cwd`, so unlike omp/pi there is no per-project
 /// contribution to persist here.
+fn completed_kiro_usage(scan: &kiro_scanner::KiroUsageScan) -> Option<&usage::UsageReport> {
+    scan.completed.then_some(&scan.usage)
+}
+
 #[tauri::command]
 async fn kiro_usage_report() -> Option<usage::UsageReport> {
-    if !local_usage_source_enabled("kiro") {
+    let started_sources = enabled_usage_sources();
+    if !started_sources.contains("kiro") {
         return None;
     }
-    tauri::async_runtime::spawn_blocking(|| {
+    let report = tauri::async_runtime::spawn_blocking(|| {
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("kiro") {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return report.clone();
+            }
+        }
+        let _scan_guard = KIRO_USAGE_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Main, Insights and the digest can request Kiro during the same paint.
+        // Recheck after winning the source lock so only the first caller scans.
         if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("kiro") {
             if at.elapsed() < USAGE_REPORT_TTL {
                 return report.clone();
@@ -191,7 +218,13 @@ async fn kiro_usage_report() -> Option<usage::UsageReport> {
         }
         let now = chrono::Local::now();
         let scan = kiro_scanner::scan_kiro_usage(now);
-        let merged = cost_history::apply_and_report("kiro", Some(&scan.usage));
+        let merged = cost_history::apply_and_report_at_counting_revision(
+            "kiro",
+            completed_kiro_usage(&scan),
+            kiro_scanner::COUNTING_REVISION,
+        );
+        // Cache the fail-closed history projection too. Malformed local input
+        // must not make every waiter repeat the bounded full scan serially.
         USAGE_REPORT_CACHE
             .lock()
             .unwrap()
@@ -199,16 +232,18 @@ async fn kiro_usage_report() -> Option<usage::UsageReport> {
         merged
     })
     .await
-    .ok()
+    .ok();
+    authorize_usage_report("kiro", report, &started_sources, &enabled_usage_sources())
 }
 
 /// Pi Agent local session cost + history merge.
 #[tauri::command]
 async fn pi_usage_report() -> Option<usage::UsageReport> {
-    if !local_usage_source_enabled("pi") {
+    let started_sources = enabled_usage_sources();
+    if !started_sources.contains("pi") {
         return None;
     }
-    tauri::async_runtime::spawn_blocking(|| {
+    let report = tauri::async_runtime::spawn_blocking(|| {
         if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("pi") {
             if at.elapsed() < USAGE_REPORT_TTL {
                 return report.clone();
@@ -225,7 +260,8 @@ async fn pi_usage_report() -> Option<usage::UsageReport> {
         merged
     })
     .await
-    .ok()
+    .ok();
+    authorize_usage_report("pi", report, &started_sources, &enabled_usage_sources())
 }
 /// Read-only Insights projection. It reads the optional project store and
 /// existing aggregate history; it never starts a second scanner pass.
@@ -245,21 +281,47 @@ async fn project_insights_report(
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     });
-    let enabled_sources = enabled_usage_sources();
+    let started_sources = enabled_usage_sources();
     tauri::async_runtime::spawn_blocking(move || {
-        let current = {
-            let cache = USAGE_REPORT_CACHE
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+        let mut current = {
+            let cache = USAGE_REPORT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
             let mut reports = fresh_cached_usage_reports(&cache, Instant::now());
-            reports.retain(|source, _| enabled_sources.contains(source));
+            reports.retain(|source, _| started_sources.contains(source));
             reports
         };
-        project_insights::build_report(
-            days, project_key.as_deref(), &current, &enabled_sources)
+        let initial = project_insights::build_report(
+            days,
+            project_key.as_deref(),
+            &current,
+            &started_sources,
+        );
+
+        // Reading histories above can outlive a settings change. Intersect the
+        // start/final canonical sets and rebuild only when authorization
+        // narrowed, so no revoked source survives in aggregate totals either.
+        let final_sources = enabled_usage_sources();
+        let authorized_sources = intersect_usage_sources(&started_sources, &final_sources);
+        if authorized_sources == started_sources {
+            Ok(initial)
+        } else {
+            current.retain(|source, _| authorized_sources.contains(source));
+            let rebuilt = project_insights::build_report(
+                days,
+                project_key.as_deref(),
+                &current,
+                &authorized_sources,
+            );
+            let publish_sources =
+                intersect_usage_sources(&authorized_sources, &enabled_usage_sources());
+            if publish_sources == authorized_sources {
+                Ok(rebuilt)
+            } else {
+                Err("Nguồn dữ liệu Insights vừa thay đổi — thử lại".to_string())
+            }
+        }
     })
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?
 }
 
 /// Nguồn chi phí cục bộ quét được từ log trên máy.
@@ -306,8 +368,35 @@ fn enabled_usage_sources() -> HashSet<String> {
     usage_sources_for(&enabled, &detected_agent_ids())
 }
 
-fn local_usage_source_enabled(source: &str) -> bool {
-    enabled_usage_sources().contains(source)
+fn sorted_usage_source_ids(sources: &HashSet<String>) -> Vec<String> {
+    let mut ids: Vec<String> = sources.iter().cloned().collect();
+    ids.sort();
+    ids
+}
+
+/// Canonical local cost sources enabled by provider settings or detected
+/// agents. Read-only: reuses the existing detection cache and never scans
+/// session storage.
+#[tauri::command]
+fn enabled_local_usage_source_ids() -> Vec<String> {
+    sorted_usage_source_ids(&enabled_usage_sources())
+}
+
+fn intersect_usage_sources(
+    started: &HashSet<String>,
+    final_sources: &HashSet<String>,
+) -> HashSet<String> {
+    started.intersection(final_sources).cloned().collect()
+}
+
+fn authorize_usage_report(
+    source: &str,
+    report: Option<usage::UsageReport>,
+    started: &HashSet<String>,
+    final_sources: &HashSet<String>,
+) -> Option<usage::UsageReport> {
+    let authorized = intersect_usage_sources(started, final_sources);
+    report.filter(|_| authorized.contains(source))
 }
 
 fn fresh_cached_usage_reports(
@@ -359,6 +448,172 @@ mod usage_source_gating_tests {
         let sources = usage_sources_for(&ids(&["openai", "gemini", "claude"]), &HashSet::new());
         assert_eq!(sources, ids(&["claude"]));
     }
+
+    #[test]
+    fn local_usage_source_ids_are_canonical_and_sorted() {
+        let sources =
+            usage_sources_for(&ids(&["openai", "pi", "claude"]), &ids(&["kiro", "codex"]));
+
+        assert_eq!(
+            sorted_usage_source_ids(&sources),
+            vec!["claude", "codex", "kiro", "pi"]
+        );
+    }
+
+    #[test]
+    fn report_authorization_requires_source_at_start_and_finish() {
+        let report = usage::UsageReport::default();
+        let started = ids(&["claude", "kiro"]);
+        let revoked = ids(&["claude"]);
+
+        assert!(authorize_usage_report("kiro", Some(report.clone()), &started, &revoked).is_none());
+        assert!(authorize_usage_report("claude", Some(report), &started, &revoked).is_some());
+        assert_eq!(intersect_usage_sources(&started, &revoked), revoked);
+    }
+}
+
+#[cfg(test)]
+mod kiro_usage_completion_tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_kiro_scan_is_not_exposed_as_live_usage() {
+        let scan = kiro_scanner::KiroUsageScan {
+            usage: usage::UsageReport::default(),
+            completed: false,
+        };
+
+        assert!(completed_kiro_usage(&scan).is_none());
+    }
+
+    #[test]
+    fn completed_kiro_scan_is_exposed_as_live_usage() {
+        let scan = kiro_scanner::KiroUsageScan {
+            usage: usage::UsageReport::default(),
+            completed: true,
+        };
+
+        assert!(completed_kiro_usage(&scan).is_some());
+    }
+}
+
+#[cfg(test)]
+mod grok_counting_revision_tests {
+    use super::*;
+    use crate::config::TEST_ENV_LOCK as ENV_LOCK;
+    use chrono::Local;
+    use std::path::{Path, PathBuf};
+
+    fn temp_config(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "birdnion-grok-counting-revision-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn live_report(tokens: i64) -> usage::UsageReport {
+        usage::UsageReport {
+            daily: vec![usage::DailyUsage {
+                date: Local::now().date_naive().to_string(),
+                usd: 0.01,
+                tokens,
+                models: vec![],
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn stored_source_tokens(document: &cost_history::Document) -> i64 {
+        document.sources["grok"]
+            .values()
+            .map(|day| day.tokens)
+            .sum()
+    }
+
+    fn report_tokens(report: &usage::UsageReport) -> i64 {
+        report.daily.iter().map(|day| day.tokens).sum()
+    }
+
+    fn cleanup(base: &Path) {
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn grok_call_path_replaces_old_revision_and_stamps_revision_three() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base = temp_config("replace");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+        assert!(cost_history::apply_and_report("grok", Some(&live_report(999))).live);
+
+        let report = merge_grok_usage(Some(&live_report(25)));
+        let document = cost_history::read();
+        cleanup(&base);
+
+        assert!(report.live);
+        assert_eq!(report_tokens(&report), 25);
+        assert_eq!(stored_source_tokens(&document), 25);
+        assert_eq!(document.counting_revision.get("grok"), Some(&3));
+    }
+
+    #[test]
+    fn grok_call_path_does_not_stamp_without_valid_live_data() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base = temp_config("deferred");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+        assert!(cost_history::apply_and_report("grok", Some(&live_report(999))).live);
+        let path = cost_history::history_path().unwrap();
+        let original = std::fs::read(&path).unwrap();
+
+        let missing = merge_grok_usage(None);
+        let after_missing = cost_history::read();
+        let mut invalid = live_report(25);
+        invalid.daily[0].usd = -1.0;
+        let rejected = merge_grok_usage(Some(&invalid));
+        let after_invalid = cost_history::read();
+        let persisted = std::fs::read(path).unwrap();
+        cleanup(&base);
+
+        assert!(!missing.live);
+        assert_eq!(report_tokens(&missing), 999);
+        assert!(!rejected.live);
+        assert_eq!(report_tokens(&rejected), 999);
+        assert_eq!(after_missing.counting_revision.get("grok"), None);
+        assert_eq!(after_invalid.counting_revision.get("grok"), None);
+        assert_eq!(persisted, original);
+    }
+
+    #[test]
+    fn grok_call_path_does_not_downgrade_a_future_revision() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base = temp_config("future");
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+        let seeded =
+            cost_history::apply_and_report_at_counting_revision("grok", Some(&live_report(999)), 4);
+        assert!(seeded.live);
+        let path = cost_history::history_path().unwrap();
+        let original = std::fs::read(&path).unwrap();
+
+        let report = merge_grok_usage(Some(&live_report(25)));
+        let document = cost_history::read();
+        let persisted = std::fs::read(path).unwrap();
+        cleanup(&base);
+
+        assert!(!report.live);
+        assert_eq!(report_tokens(&report), 999);
+        assert_eq!(stored_source_tokens(&document), 999);
+        assert_eq!(document.counting_revision.get("grok"), Some(&4));
+        assert_eq!(persisted, original);
+    }
 }
 
 #[cfg(test)]
@@ -369,8 +624,17 @@ mod project_insights_cache_tests {
     fn stale_usage_cache_is_not_reported_as_live_insights() {
         let now = Instant::now();
         let cache = HashMap::from([
-            ("claude", (now - USAGE_REPORT_TTL - Duration::from_secs(1), usage::UsageReport::default())),
-            ("codex", (now - Duration::from_secs(1), usage::UsageReport::default())),
+            (
+                "claude",
+                (
+                    now - USAGE_REPORT_TTL - Duration::from_secs(1),
+                    usage::UsageReport::default(),
+                ),
+            ),
+            (
+                "codex",
+                (now - Duration::from_secs(1), usage::UsageReport::default()),
+            ),
         ]);
 
         let fresh = fresh_cached_usage_reports(&cache, now);
@@ -396,8 +660,7 @@ async fn provider_statuses(ids: Option<Vec<String>>) -> Vec<providers::ProviderS
 /// classification logic. `None` when there is nothing to classify.
 #[tauri::command]
 fn classify_provider_error(raw: Option<String>) -> Option<String> {
-    providers::error_classifier::classify(raw.as_deref())
-        .map(|kind| kind.key_suffix().to_string())
+    providers::error_classifier::classify(raw.as_deref()).map(|kind| kind.key_suffix().to_string())
 }
 
 /// Whether a raw provider error is transient enough that the JS poller
@@ -444,7 +707,14 @@ fn onboarding_detection_from_flags(
 ) -> ProviderOnboardingDetection {
     ProviderOnboardingDetection {
         is_ready: has_primary || has_secondary,
-        source: if has_primary { primary } else if has_secondary { secondary } else { fallback }.to_string(),
+        source: if has_primary {
+            primary
+        } else if has_secondary {
+            secondary
+        } else {
+            fallback
+        }
+        .to_string(),
     }
 }
 
@@ -459,26 +729,48 @@ fn provider_onboarding_detection(id: String) -> ProviderOnboardingDetection {
                 .into_iter()
                 .map(|path| {
                     if platform::paths::is_projects_dir(&path, current_platform) {
-                        path.parent().map(std::path::Path::to_path_buf).unwrap_or(path)
+                        path.parent()
+                            .map(std::path::Path::to_path_buf)
+                            .unwrap_or(path)
                     } else {
                         path
                     }
                 })
                 .any(|path| path.join(".credentials.json").is_file());
             let has_cli = platform::executable::resolve_executable("claude").is_some();
-            onboarding_detection_from_flags(has_file, "Claude Code", has_cli, "Claude CLI", "Claude Code / CLI")
+            onboarding_detection_from_flags(
+                has_file,
+                "Claude Code",
+                has_cli,
+                "Claude CLI",
+                "Claude Code / CLI",
+            )
         }
         "codex" => {
-            let has_file = platform::paths::codex_home()
-                .is_some_and(|path| path.join("auth.json").is_file());
+            let has_file =
+                platform::paths::codex_home().is_some_and(|path| path.join("auth.json").is_file());
             let has_cli = platform::executable::resolve_executable("codex").is_some();
-            onboarding_detection_from_flags(has_file, "Codex login", has_cli, "Codex CLI", "Codex login / CLI")
+            onboarding_detection_from_flags(
+                has_file,
+                "Codex login",
+                has_cli,
+                "Codex CLI",
+                "Codex login / CLI",
+            )
         }
         "grok" => {
             let root = platform::paths::grok_home();
-            let has_auth = root.as_ref().is_some_and(|path| path.join("auth.json").is_file());
+            let has_auth = root
+                .as_ref()
+                .is_some_and(|path| path.join("auth.json").is_file());
             let has_sessions = root.is_some_and(|path| path.join("sessions").is_dir());
-            onboarding_detection_from_flags(has_auth, "Grok login", has_sessions, "Grok sessions", "Grok login / sessions")
+            onboarding_detection_from_flags(
+                has_auth,
+                "Grok login",
+                has_sessions,
+                "Grok sessions",
+                "Grok login / sessions",
+            )
         }
         _ => onboarding_detection_from_flags(false, "", false, "", ""),
     }
@@ -492,13 +784,25 @@ mod onboarding_detection_tests {
     fn detection_prefers_primary_then_secondary() {
         assert_eq!(
             onboarding_detection_from_flags(true, "login", true, "cli", "none"),
-            ProviderOnboardingDetection { is_ready: true, source: "login".into() });
+            ProviderOnboardingDetection {
+                is_ready: true,
+                source: "login".into()
+            }
+        );
         assert_eq!(
             onboarding_detection_from_flags(false, "login", true, "cli", "none"),
-            ProviderOnboardingDetection { is_ready: true, source: "cli".into() });
+            ProviderOnboardingDetection {
+                is_ready: true,
+                source: "cli".into()
+            }
+        );
         assert_eq!(
             onboarding_detection_from_flags(false, "login", false, "cli", "none"),
-            ProviderOnboardingDetection { is_ready: false, source: "none".into() });
+            ProviderOnboardingDetection {
+                is_ready: false,
+                source: "none".into()
+            }
+        );
     }
 }
 
@@ -525,7 +829,10 @@ async fn claude_admin_usage() -> Option<providers::claude_admin::ClaudeAdminSnap
         .providers
         .into_iter()
         .find(|p| p.id == "claude")
-        .unwrap_or_else(|| config::Provider { id: "claude".to_string(), ..Default::default() });
+        .unwrap_or_else(|| config::Provider {
+            id: "claude".to_string(),
+            ..Default::default()
+        });
     providers::claude_admin::fetch_snapshot(&claude_cfg).await
 }
 
@@ -545,7 +852,10 @@ fn claude_code_state_for(provider_id: &str) -> ClaudeCodeState {
     let configured = scope.is_some() && claude_code::is_fully_configured(provider_id, &provider);
     let target = scope.as_ref().map(claude_code::target_path);
     if scope.is_some() && target.is_none() {
-        return ClaudeCodeState { state: "unavailable", target_path: None };
+        return ClaudeCodeState {
+            state: "unavailable",
+            target_path: None,
+        };
     }
     let sync = match (&scope, configured) {
         (Some(sc), true) => {
@@ -656,18 +966,22 @@ async fn claude_code_models(base_url: String, token: String) -> Result<Vec<Strin
 
 fn claude_code_profile_state_for(profile_id: &str) -> ClaudeCodeState {
     let Some(profile) = config::find_profile(profile_id) else {
-        return ClaudeCodeState { state: "needsSetup", target_path: None };
+        return ClaudeCodeState {
+            state: "needsSetup",
+            target_path: None,
+        };
     };
     let scope = claude_code::profile_scope(&profile);
     let configured = scope.is_some() && claude_code::profile_ready(&profile);
     let target = scope.as_ref().map(claude_code::target_path);
     if scope.is_some() && target.is_none() {
-        return ClaudeCodeState { state: "unavailable", target_path: None };
+        return ClaudeCodeState {
+            state: "unavailable",
+            target_path: None,
+        };
     }
     let sync = match (&scope, configured) {
-        (Some(sc), true) => {
-            claude_code::sync_state_for_profile(&profile, sc)
-        }
+        (Some(sc), true) => claude_code::sync_state_for_profile(&profile, sc),
         _ => claude_code::SyncState::Off,
     };
     let state = match claude_code::power_state(configured, sync) {
@@ -689,7 +1003,8 @@ fn claude_code_profile_state(profile_id: String) -> ClaudeCodeState {
 
 #[tauri::command]
 fn claude_code_profile_apply(profile_id: String) -> Result<ClaudeCodeState, String> {
-    let profile = config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
+    let profile =
+        config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
     let scope = claude_code::profile_scope(&profile)
         .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
     let spec = claude_code::spec_for_profile(&profile)
@@ -700,7 +1015,8 @@ fn claude_code_profile_apply(profile_id: String) -> Result<ClaudeCodeState, Stri
 
 #[tauri::command]
 fn claude_code_profile_deactivate(profile_id: String) -> Result<ClaudeCodeState, String> {
-    let profile = config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
+    let profile =
+        config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
     let scope = claude_code::profile_scope(&profile)
         .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
     claude_code::deactivate(&scope)?;
@@ -709,7 +1025,8 @@ fn claude_code_profile_deactivate(profile_id: String) -> Result<ClaudeCodeState,
 
 #[tauri::command]
 fn claude_code_profile_remove_env(profile_id: String) -> Result<bool, String> {
-    let profile = config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
+    let profile =
+        config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
     let scope = claude_code::profile_scope(&profile)
         .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
     claude_code::remove_env_settings(&scope)
@@ -723,6 +1040,7 @@ struct CodexAccountsState {
     accounts: Vec<codex_accounts::CodexAccount>,
     active_id: String,
     quota_snapshots: HashMap<String, codex_accounts::AccountQuotaSnapshot>,
+    settings: config::Settings,
 }
 
 #[tauri::command]
@@ -731,6 +1049,7 @@ fn codex_accounts_list() -> CodexAccountsState {
         accounts: codex_accounts::all_accounts(),
         active_id: codex_accounts::active_id(),
         quota_snapshots: codex_accounts::quota_snapshots(),
+        settings: config::load(),
     }
 }
 
@@ -766,6 +1085,7 @@ fn codex_account_remove(id: String) -> Result<CodexAccountsState, String> {
 struct FreemodelAccountsState {
     accounts: Vec<freemodel_accounts::FreemodelAccount>,
     active_id: String,
+    settings: config::Settings,
 }
 
 /// Per-browser email cache — a browser's signed-in FreeModel identity only
@@ -792,7 +1112,10 @@ async fn freemodel_detected_browsers() -> Vec<freemodel_accounts::FreemodelAccou
             Some(email) => email,
             None => {
                 let email = providers::freemodel::fetch_email(&client, &header).await;
-                FM_BROWSER_EMAILS.lock().unwrap().insert(browser.to_string(), email.clone());
+                FM_BROWSER_EMAILS
+                    .lock()
+                    .unwrap()
+                    .insert(browser.to_string(), email.clone());
                 email
             }
         };
@@ -811,7 +1134,11 @@ async fn freemodel_state() -> FreemodelAccountsState {
     // Splice per-browser sessions right after the "auto" entry (index 0).
     let detected = freemodel_detected_browsers().await;
     accounts.splice(1..1, detected);
-    FreemodelAccountsState { accounts, active_id: freemodel_accounts::active_id() }
+    FreemodelAccountsState {
+        accounts,
+        active_id: freemodel_accounts::active_id(),
+        settings: config::load(),
+    }
 }
 
 #[tauri::command]
@@ -823,7 +1150,10 @@ async fn freemodel_accounts_list() -> FreemodelAccountsState {
 /// is wrapped), resolves the account email best-effort, and stores it as a
 /// new managed account.
 #[tauri::command]
-async fn freemodel_account_add(cookie: String, label: Option<String>) -> Result<FreemodelAccountsState, String> {
+async fn freemodel_account_add(
+    cookie: String,
+    label: Option<String>,
+) -> Result<FreemodelAccountsState, String> {
     let Some(normalized) = providers::freemodel::filtered_cookie_header(&cookie) else {
         return Err("Cookie phải chứa bm_session".to_string());
     };
@@ -855,12 +1185,14 @@ async fn freemodel_account_remove(id: String) -> Result<FreemodelAccountsState, 
 struct ElevenLabsKeysState {
     keys: Vec<elevenlabs_keys::ElevenLabsKey>,
     active_id: Option<String>,
+    settings: config::Settings,
 }
 
 fn elevenlabs_keys_state() -> ElevenLabsKeysState {
     ElevenLabsKeysState {
         keys: elevenlabs_keys::all_keys(),
         active_id: elevenlabs_keys::active_id(),
+        settings: config::load(),
     }
 }
 
@@ -870,7 +1202,10 @@ fn elevenlabs_keys_list() -> ElevenLabsKeysState {
 }
 
 #[tauri::command]
-fn elevenlabs_key_add(api_key: String, label: Option<String>) -> Result<ElevenLabsKeysState, String> {
+fn elevenlabs_key_add(
+    api_key: String,
+    label: Option<String>,
+) -> Result<ElevenLabsKeysState, String> {
     elevenlabs_keys::add(&api_key, label.as_deref())?;
     Ok(elevenlabs_keys_state())
 }
@@ -893,12 +1228,14 @@ fn elevenlabs_key_remove(id: String) -> Result<ElevenLabsKeysState, String> {
 struct HiyoKeysState {
     keys: Vec<hiyo_keys::HiyoKey>,
     active_id: Option<String>,
+    settings: config::Settings,
 }
 
 fn hiyo_keys_state() -> HiyoKeysState {
     HiyoKeysState {
         keys: hiyo_keys::all_keys(),
         active_id: hiyo_keys::active_id(),
+        settings: config::load(),
     }
 }
 
@@ -935,25 +1272,28 @@ async fn copilot_login_start() -> Result<providers::copilot_oauth::DeviceCode, S
 /// Single poll tick against the device-flow token endpoint. The caller (JS)
 /// drives the retry loop, sleeping `interval` seconds between calls.
 #[tauri::command]
-async fn copilot_login_poll(device_code: String) -> Result<providers::copilot_oauth::PollResult, String> {
+async fn copilot_login_poll(
+    device_code: String,
+) -> Result<providers::copilot_oauth::PollResult, String> {
     providers::copilot_oauth::poll("github.com", &device_code).await
 }
 
 /// Full settings.json content for the Settings view (local app — keys stay
 /// on this machine, same plaintext-by-design store as macOS).
 #[tauri::command]
-fn get_settings() -> config::Settings {
-    config::load()
+fn get_settings() -> Result<config::Settings, String> {
+    config::load_checked()
 }
 
 /// Persist the whole settings document (atomic write, 0600).
 /// Runs Claude→Codex upstream mirror sync so linked records stay consistent
-/// even when the frontend bulk-saves the whole settings blob.
+/// even when the frontend bulk-saves the whole settings blob. Returns the new
+/// optimistic-concurrency revision for the caller's in-memory snapshot.
 #[tauri::command]
-fn save_settings(mut settings: config::Settings) -> Result<(), String> {
+fn save_settings(mut settings: config::Settings) -> Result<u64, String> {
     let _ = config::migrate_standalone_codex_profiles(&mut settings);
     config::mirror_claude_to_codex(&mut settings);
-    config::save(&settings)
+    config::save_frontend_snapshot(settings)
 }
 
 // --- Codex CLI profile activation (macOS CodexConfigWriter parity) -----------
@@ -969,7 +1309,10 @@ fn codex_active_id() -> Option<String> {
 }
 
 #[tauri::command]
-async fn codex_apply(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
+async fn codex_apply(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<codex_config::CodexProfileState, String> {
     let target = codex_config::target_config_path();
     let mut profile =
         config::find_codex_profile(&id).ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
@@ -999,7 +1342,10 @@ async fn codex_apply(app: tauri::AppHandle, id: String) -> Result<codex_config::
 }
 
 #[tauri::command]
-async fn codex_deactivate(app: tauri::AppHandle, id: String) -> Result<codex_config::CodexProfileState, String> {
+async fn codex_deactivate(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<codex_config::CodexProfileState, String> {
     let target = codex_config::target_config_path();
     let _ = codex_config::deactivate(Some(&target))?;
     if let Some(mut profile) = config::find_codex_profile(&id) {
@@ -1268,8 +1614,7 @@ fn set_tray_status(
                 Err(_) => false,
             },
             None => {
-                let fallback = tray_default_icon()
-                    .or_else(|| app.default_window_icon().cloned());
+                let fallback = tray_default_icon().or_else(|| app.default_window_icon().cloned());
                 match fallback {
                     Some(img) => {
                         let _ = tray.set_icon(Some(img));
@@ -1300,27 +1645,32 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-
 /// Catalog agent cài trên máy cho Settings → Agent (macOS parity).
 /// Quota lấy từ provider đang bật, chi phí 90 ngày lấy từ cost-history.
 #[tauri::command]
-async fn list_installed_agents() -> Vec<installed_agents::InstalledAgent> {
-    let statuses = provider_statuses(None).await;
-    let with_quota: Vec<String> = statuses
-        .iter()
-        .filter(|s| !s.windows.is_empty())
-        .map(|s| s.id.clone())
-        .collect();
+/// `provider_ids_with_quota`: id của provider đang có quota window, do phía
+/// giao diện truyền xuống.
+///
+/// Trước đây hàm này tự gọi `provider_statuses(None)` — một lượt fetch mạng
+/// TOÀN BỘ provider. Nó chạy song song với chính fan-out của `load()` nên mỗi
+/// lần nạp là gọi API provider hai lần, và `inFlightProviderIds` phía web
+/// không chặn được vì đây là lệnh khác. Caller đã có sẵn danh sách này rồi,
+/// nên chỉ cần truyền xuống.
+async fn list_installed_agents(
+    provider_ids_with_quota: Option<Vec<String>>,
+) -> Vec<installed_agents::InstalledAgent> {
+    let with_quota = provider_ids_with_quota.unwrap_or_default();
 
     // Tổng 90 ngày theo source, đọc thẳng từ history đã lưu.
     let doc = cost_history::read();
-    let cutoff = chrono::Local::now().date_naive() - chrono::Duration::days(89);
+    let today = chrono::Local::now().date_naive();
+    let cutoff = today - chrono::Duration::days(89);
     let mut totals: HashMap<String, f64> = HashMap::new();
     for (source, days) in &doc.sources {
         let mut sum = 0.0;
         for (day, entry) in days {
             if let Ok(parsed) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d") {
-                if parsed >= cutoff {
+                if parsed >= cutoff && parsed <= today {
                     sum += entry.usd;
                 }
             }
@@ -1330,7 +1680,6 @@ async fn list_installed_agents() -> Vec<installed_agents::InstalledAgent> {
 
     installed_agents::detect(&with_quota, &totals)
 }
-
 
 /// Mở (hoặc cập nhật) cửa sổ panel phụ cạnh popover — port của macOS
 /// `AgentDetailPanelCoordinator`. `pinned=false` là panel transient do hover,
@@ -1463,8 +1812,12 @@ const PANEL_SCREEN_MARGIN: f64 = 16.0;
 
 fn position_panel_beside_main(app: &tauri::AppHandle, panel: &tauri::WebviewWindow) {
     use tauri::Manager;
-    let Some(main) = app.get_webview_window("main") else { return };
-    let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) else { return };
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let (Ok(pos), Ok(size)) = (main.outer_position(), main.outer_size()) else {
+        return;
+    };
     let x = pos.x + size.width as i32 + 4;
     let _ = panel.set_position(tauri::PhysicalPosition::new(x, pos.y));
 }
@@ -1477,7 +1830,9 @@ fn position_panel_beside_main(app: &tauri::AppHandle, panel: &tauri::WebviewWind
 #[tauri::command]
 fn resize_side_panel(app: tauri::AppHandle, height: f64) -> Result<(), String> {
     use tauri::Manager;
-    let Some(panel) = app.get_webview_window("panel") else { return Ok(()) };
+    let Some(panel) = app.get_webview_window("panel") else {
+        return Ok(());
+    };
 
     let scale = panel.scale_factor().unwrap_or(1.0);
     let available = panel
@@ -1589,11 +1944,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             claude_usage_report,
             codex_usage_report,
-             grok_usage_report,
+            grok_usage_report,
             kiro_usage_report,
             omp_usage_report,
             pi_usage_report,
-             project_insights_report,
+            enabled_local_usage_source_ids,
+            project_insights_report,
             provider_statuses,
             list_installed_agents,
             panel_debug,

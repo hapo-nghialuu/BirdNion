@@ -22,6 +22,7 @@ fn home_relative_paths(id: &str, home: &std::path::Path) -> Vec<PathBuf> {
         "copilot" => vec![p(".config/github-copilot")],
         "opencode" | "opencodego" => vec![p(".config/opencode"), p(".local/share/opencode")],
         "cursor" => vec![p(".config/Cursor"), p(".cursor")],
+        "kiro" => vec![p(".kiro")],
         _ => vec![],
     }
 }
@@ -74,12 +75,9 @@ pub async fn provider_storage(id: String) -> Result<u64, String> {
         if candidates.is_empty() && has_storage_contract(&id) {
             return Err("Không xác định được thư mục dữ liệu provider".to_string());
         }
-        candidates
-            .into_iter()
-            .try_fold(0u64, |total, path| {
-                scan_dir_size(&path, Platform::current())
-                    .map(|bytes| total.saturating_add(bytes))
-            })
+        candidates.into_iter().try_fold(0u64, |total, path| {
+            scan_dir_size(&path, Platform::current()).map(|bytes| total.saturating_add(bytes))
+        })
     })
     .await
     .map_err(|_| "Không thể tính dung lượng provider".to_string())?
@@ -88,7 +86,15 @@ pub async fn provider_storage(id: String) -> Result<u64, String> {
 fn has_storage_contract(id: &str) -> bool {
     matches!(
         id,
-        "claude" | "codex" | "grok" | "gemini" | "copilot" | "opencode" | "opencodego" | "cursor"
+        "claude"
+            | "codex"
+            | "grok"
+            | "gemini"
+            | "copilot"
+            | "opencode"
+            | "opencodego"
+            | "cursor"
+            | "kiro"
     )
 }
 
@@ -212,8 +218,12 @@ fn is_filesystem_root(path: &std::path::Path, platform: Platform) -> bool {
             }
             if let Some(rest) = trimmed.strip_prefix(r"\\") {
                 let mut parts = rest.split('\\').filter(|part| !part.is_empty());
-                let Some(_server) = parts.next() else { return true };
-                let Some(_share) = parts.next() else { return true };
+                let Some(_server) = parts.next() else {
+                    return true;
+                };
+                let Some(_share) = parts.next() else {
+                    return true;
+                };
                 let mut depth = 0usize;
                 for part in parts {
                     if part == ".." {
@@ -327,10 +337,47 @@ mod tests {
     }
 
     #[test]
+    fn kiro_candidate_and_contract_use_dotkiro() {
+        let env = [("HOME".into(), "/home/x".into())].into_iter().collect();
+
+        assert_eq!(
+            candidate_paths_from("kiro", &env, Platform::Unix),
+            vec![PathBuf::from("/home/x/.kiro")]
+        );
+        assert!(has_storage_contract("kiro"));
+    }
+
+    #[test]
+    fn kiro_candidate_path_reports_its_bounded_size() {
+        let home =
+            std::env::temp_dir().join(format!("birdnion-test-kiro-storage-{}", std::process::id()));
+        let kiro = home.join(".kiro");
+        let nested = kiro.join("sessions").join("cli");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(kiro.join("config.json"), vec![0u8; 40]).unwrap();
+        std::fs::write(nested.join("session.json"), vec![0u8; 60]).unwrap();
+        let env = [("HOME".into(), home.as_os_str().to_os_string())]
+            .into_iter()
+            .collect();
+
+        let candidates = candidate_paths_from("kiro", &env, Platform::Unix);
+        assert_eq!(candidates, vec![kiro]);
+        assert_eq!(
+            scan_dir_size_with_limits(&candidates[0], Platform::Unix, 16, 100),
+            Ok(100)
+        );
+
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn windows_tier_zero_candidates_keep_explicit_overrides() {
         let env = [
             ("USERPROFILE".into(), r"C:\Users\me".into()),
-            ("CLAUDE_CONFIG_DIR".into(), r"D:\Claude One,D:\Claude Two".into()),
+            (
+                "CLAUDE_CONFIG_DIR".into(),
+                r"D:\Claude One,D:\Claude Two".into(),
+            ),
             ("CODEX_HOME".into(), r"D:\Codex".into()),
             ("GROK_HOME".into(), r"D:\Grok".into()),
         ]
@@ -338,7 +385,10 @@ mod tests {
         .collect();
         assert_eq!(
             candidate_paths_from("claude", &env, Platform::Windows),
-            vec![PathBuf::from(r"D:\Claude One"), PathBuf::from(r"D:\Claude Two")]
+            vec![
+                PathBuf::from(r"D:\Claude One"),
+                PathBuf::from(r"D:\Claude Two")
+            ]
         );
         assert_eq!(
             candidate_paths_from("codex", &env, Platform::Windows),
@@ -399,8 +449,14 @@ mod tests {
 
     #[test]
     fn storage_scan_rejects_unix_windows_and_unc_roots() {
-        assert!(is_filesystem_root(std::path::Path::new("/"), Platform::Unix));
-        assert!(is_filesystem_root(std::path::Path::new(r"C:\"), Platform::Windows));
+        assert!(is_filesystem_root(
+            std::path::Path::new("/"),
+            Platform::Unix
+        ));
+        assert!(is_filesystem_root(
+            std::path::Path::new(r"C:\"),
+            Platform::Windows
+        ));
         assert!(is_filesystem_root(
             std::path::Path::new(r"\\server\share"),
             Platform::Windows
@@ -429,10 +485,7 @@ mod tests {
 
     #[test]
     fn storage_scan_honors_entry_budget() {
-        let dir = std::env::temp_dir().join(format!(
-            "birdnion-test-budget-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("birdnion-test-budget-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for index in 0..3 {
             std::fs::write(dir.join(format!("{index}.txt")), vec![0u8; 10]).unwrap();

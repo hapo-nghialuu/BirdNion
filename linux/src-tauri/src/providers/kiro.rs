@@ -51,7 +51,13 @@ fn fetch_blocking(id: &str, name: &str) -> ProviderStatus {
     let whoami_thread = {
         let binary = binary.clone();
         std::thread::spawn(move || {
-            run_command(&binary, &["whoami"], Duration::from_secs(3), Duration::from_millis(1500)).ok()
+            run_command(
+                &binary,
+                &["whoami"],
+                Duration::from_secs(3),
+                Duration::from_millis(1500),
+            )
+            .ok()
         })
     };
     let version_thread = {
@@ -69,7 +75,12 @@ fn fetch_blocking(id: &str, name: &str) -> ProviderStatus {
         }
     };
 
-    let usage = match run_command(&binary, &["chat", "--no-interactive", "/usage"], Duration::from_secs(20), Duration::from_secs(4)) {
+    let usage = match run_command(
+        &binary,
+        &["chat", "--no-interactive", "/usage"],
+        Duration::from_secs(20),
+        Duration::from_secs(4),
+    ) {
         Ok(o) => o,
         Err(e) => {
             let (logged_out, _, _) = join_account(whoami_thread);
@@ -103,14 +114,25 @@ fn fetch_blocking(id: &str, name: &str) -> ProviderStatus {
     }
 
     // Context breakdown is best-effort; never fails the fetch.
-    let context_pct = run_command(&binary, &["chat", "--no-interactive", "/context"], Duration::from_secs(8), Duration::from_secs(3))
-        .ok()
-        .and_then(|res| parse_context_percent(&strip_ansi(&res.output)));
+    let context_pct = run_command(
+        &binary,
+        &["chat", "--no-interactive", "/context"],
+        Duration::from_secs(8),
+        Duration::from_secs(3),
+    )
+    .ok()
+    .and_then(|res| parse_context_percent(&strip_ansi(&res.output)));
 
     let (whoami_logged_out, email, auth_method) = join_account(whoami_thread);
     let version = version_thread.join().ok().flatten();
 
-    match parse_usage(&stripped, email.as_deref(), auth_method.as_deref(), context_pct, version.as_deref()) {
+    match parse_usage(
+        &stripped,
+        email.as_deref(),
+        auth_method.as_deref(),
+        context_pct,
+        version.as_deref(),
+    ) {
         Ok(status) => status,
         Err(_) if whoami_logged_out => not_logged_in(id, name),
         Err(msg) => ProviderStatus::failure(id, name, msg),
@@ -118,7 +140,11 @@ fn fetch_blocking(id: &str, name: &str) -> ProviderStatus {
 }
 
 fn not_logged_in(id: &str, name: &str) -> ProviderStatus {
-    ProviderStatus::failure(id, name, "Chưa đăng nhập Kiro. Chạy 'kiro-cli login' trong Terminal")
+    ProviderStatus::failure(
+        id,
+        name,
+        "Chưa đăng nhập Kiro. Chạy 'kiro-cli login' trong Terminal",
+    )
 }
 
 /// Resolves the Kiro usage CLI for both terminal and desktop launches.
@@ -188,13 +214,22 @@ fn cached_version(binary: &str) -> Option<String> {
         return hit.clone();
     }
     let detected = detect_version(binary);
-    cache.lock().unwrap().insert(binary.to_string(), detected.clone());
+    cache
+        .lock()
+        .unwrap()
+        .insert(binary.to_string(), detected.clone());
     detected
 }
 
 /// Runs `kiro-cli --version` (5s, best-effort); strips the "kiro-cli " prefix.
 fn detect_version(binary: &str) -> Option<String> {
-    let res = run_command(binary, &["--version"], Duration::from_secs(5), Duration::from_secs(2)).ok()?;
+    let res = run_command(
+        binary,
+        &["--version"],
+        Duration::from_secs(5),
+        Duration::from_secs(2),
+    )
+    .ok()?;
     if res.termination_status != 0 && !res.stopped_after_output {
         return None;
     }
@@ -215,7 +250,12 @@ struct KiroCliResult {
 /// reader threads drain stdout/stderr incrementally, and once output has
 /// started, `idle_timeout` of silence ends the read with the text kept
 /// (recent Kiro CLIs can keep their TUI alive after printing).
-fn run_command(binary: &str, args: &[&str], timeout: Duration, idle_timeout: Duration) -> Result<KiroCliResult, String> {
+fn run_command(
+    binary: &str,
+    args: &[&str],
+    timeout: Duration,
+    idle_timeout: Duration,
+) -> Result<KiroCliResult, String> {
     let mut child = Command::new(binary)
         .args(args)
         .env("TERM", "xterm-256color")
@@ -230,7 +270,11 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration, idle_timeout: Dur
         stderr: Vec<u8>,
         last_activity: Option<Instant>,
     }
-    let captured = Arc::new(Mutex::new(Captured { stdout: Vec::new(), stderr: Vec::new(), last_activity: None }));
+    let captured = Arc::new(Mutex::new(Captured {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        last_activity: None,
+    }));
 
     let mut readers = Vec::new();
     if let Some(mut out) = child.stdout.take() {
@@ -238,7 +282,9 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration, idle_timeout: Dur
         readers.push(std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             while let Ok(n) = out.read(&mut buf) {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 let mut c = cap.lock().unwrap();
                 c.stdout.extend_from_slice(&buf[..n]);
                 c.last_activity = Some(Instant::now());
@@ -250,7 +296,9 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration, idle_timeout: Dur
         readers.push(std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             while let Ok(n) = err.read(&mut buf) {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 let mut c = cap.lock().unwrap();
                 c.stderr.extend_from_slice(&buf[..n]);
                 c.last_activity = Some(Instant::now());
@@ -301,12 +349,20 @@ fn run_command(binary: &str, args: &[&str], timeout: Duration, idle_timeout: Dur
     let c = captured.lock().unwrap();
     let stdout = String::from_utf8_lossy(&c.stdout).to_string();
     let stderr = String::from_utf8_lossy(&c.stderr).to_string();
-    let combined = if stdout.trim().is_empty() { stderr } else { stdout };
+    let combined = if stdout.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
     let termination_status = exit_status.and_then(|s| s.code()).unwrap_or(0);
     if !stopped_after_output && termination_status != 0 && combined.trim().is_empty() {
         return Err(format!("kiro-cli thoát với code {termination_status}"));
     }
-    Ok(KiroCliResult { output: combined, termination_status, stopped_after_output })
+    Ok(KiroCliResult {
+        output: combined,
+        termination_status,
+        stopped_after_output,
+    })
 }
 
 /// Strips ANSI CSI and OSC escape sequences from CLI output.
@@ -335,12 +391,20 @@ fn parse_whoami(stripped: &str) -> (Option<String>, Option<String>) {
         }
         let lower = t.to_lowercase();
         if lower.contains("logged in with") {
-            let val = Regex::new(r"(?i)^\s*logged in with\s+").unwrap().replace(t, "").trim().to_string();
+            let val = Regex::new(r"(?i)^\s*logged in with\s+")
+                .unwrap()
+                .replace(t, "")
+                .trim()
+                .to_string();
             if !val.is_empty() {
                 auth_method = Some(val);
             }
         } else if lower.contains("email:") {
-            let val = Regex::new(r"(?i)^\s*email:\s*").unwrap().replace(t, "").trim().to_string();
+            let val = Regex::new(r"(?i)^\s*email:\s*")
+                .unwrap()
+                .replace(t, "")
+                .trim()
+                .to_string();
             if !val.is_empty() {
                 email = Some(val);
             }
@@ -353,17 +417,22 @@ fn parse_whoami(stripped: &str) -> (Option<String>, Option<String>) {
 
 /// "Context window: 12.5% used" from `/context` output.
 fn parse_context_percent(stripped: &str) -> Option<f64> {
-    first_capture(stripped, r"(?i)Context window:\s*(\d+\.?\d*)%\s+used").and_then(|s| s.parse().ok())
+    first_capture(stripped, r"(?i)Context window:\s*(\d+\.?\d*)%\s+used")
+        .and_then(|s| s.parse().ok())
 }
 
 fn first_capture(text: &str, pattern: &str) -> Option<String> {
     let re = Regex::new(pattern).ok()?;
-    re.captures(text)?.get(1).map(|m| m.as_str().trim().to_string())
+    re.captures(text)?
+        .get(1)
+        .map(|m| m.as_str().trim().to_string())
 }
 
 fn extract_numbers(text: &str) -> Vec<f64> {
     let re = Regex::new(r"\d+\.?\d*").unwrap();
-    re.find_iter(text).filter_map(|m| m.as_str().parse().ok()).collect()
+    re.find_iter(text)
+        .filter_map(|m| m.as_str().parse().ok())
+        .collect()
 }
 
 fn parse_plan_name(text: &str) -> String {
@@ -373,7 +442,10 @@ fn parse_plan_name(text: &str) -> String {
             return display_plan_name(line);
         }
     }
-    if let Some(m) = Regex::new(r"Estimated Usage[ \t]*\|[^\n|]*\|[ \t]*([A-Z][A-Z0-9 ]+)").unwrap().find(text) {
+    if let Some(m) = Regex::new(r"Estimated Usage[ \t]*\|[^\n|]*\|[ \t]*([A-Z][A-Z0-9 ]+)")
+        .unwrap()
+        .find(text)
+    {
         let line = m.as_str();
         if let Some(plan) = line.split('|').last() {
             let plan = plan.trim();
@@ -392,9 +464,16 @@ fn parse_plan_name(text: &str) -> String {
 /// Whitespace-collapsed display form; KIRO-branded names get title-cased
 /// ("KIRO  FREE" → "Kiro Free"), others pass through cleaned.
 fn display_plan_name(raw: &str) -> String {
-    let cleaned = Regex::new(r"\s+").unwrap().replace_all(raw.trim(), " ").to_string();
+    let cleaned = Regex::new(r"\s+")
+        .unwrap()
+        .replace_all(raw.trim(), " ")
+        .to_string();
     if !cleaned.to_lowercase().contains("kiro") {
-        return if cleaned.is_empty() { raw.to_string() } else { cleaned };
+        return if cleaned.is_empty() {
+            raw.to_string()
+        } else {
+            cleaned
+        };
     }
     cleaned
         .split(' ')
@@ -414,7 +493,9 @@ fn display_plan_name(raw: &str) -> String {
 }
 
 fn parse_reset_date(text: &str) -> Option<i64> {
-    let m = Regex::new(r"resets on (\d{4}-\d{2}-\d{2}|\d{2}/\d{2})").unwrap().find(text)?;
+    let m = Regex::new(r"resets on (\d{4}-\d{2}-\d{2}|\d{2}/\d{2})")
+        .unwrap()
+        .find(text)?;
     let seg = m.as_str();
     let date_re = Regex::new(r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}").unwrap();
     let date_str = date_re.find(seg)?.as_str();
@@ -445,7 +526,9 @@ fn parse_date_string(s: &str) -> Option<i64> {
 }
 
 fn parse_bonus_credits(text: &str) -> Option<(f64, f64, Option<i64>)> {
-    let m = Regex::new(r"Bonus credits:\s*(\d+\.?\d*)/(\d+)").unwrap().find(text)?;
+    let m = Regex::new(r"Bonus credits:\s*(\d+\.?\d*)/(\d+)")
+        .unwrap()
+        .find(text)?;
     let nums = extract_numbers(m.as_str());
     if nums.len() < 2 {
         return None;
@@ -459,9 +542,15 @@ fn parse_bonus_credits(text: &str) -> Option<(f64, f64, Option<i64>)> {
 
 fn bonus_window(bonus: Option<(f64, f64, Option<i64>)>) -> Option<QuotaWindow> {
     let (used, total, expiry_days) = bonus?;
-    let bonus_used_pct = if total > 0.0 { ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32 } else { 0 };
+    let bonus_used_pct = if total > 0.0 {
+        ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32
+    } else {
+        0
+    };
     let bonus_expiry = expiry_days.map(|d| chrono::Utc::now().timestamp() + d * 86_400);
-    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
+    Some(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Bonus Credits".into(),
         used_pct: bonus_used_pct,
         remaining_pct: 100 - bonus_used_pct,
@@ -473,7 +562,11 @@ fn bonus_window(bonus: Option<(f64, f64, Option<i64>)>) -> Option<QuotaWindow> {
 
 /// Overage window — shown when the plan reports pay-as-you-go usage or an
 /// explicit "Overages: …" status line (Enabled/Disabled).
-fn overage_window(status: Option<&str>, credits_used: Option<f64>, cost_usd: Option<f64>) -> Option<QuotaWindow> {
+fn overage_window(
+    status: Option<&str>,
+    credits_used: Option<f64>,
+    cost_usd: Option<f64>,
+) -> Option<QuotaWindow> {
     if status.is_none() && credits_used.is_none() && cost_usd.is_none() {
         return None;
     }
@@ -485,11 +578,15 @@ fn overage_window(status: Option<&str>, credits_used: Option<f64>, cost_usd: Opt
         parts.push(format!("~${c:.2}"));
     }
     let subtitle = if parts.is_empty() {
-        status.map(String::from).unwrap_or_else(|| "Đang bật".to_string())
+        status
+            .map(String::from)
+            .unwrap_or_else(|| "Đang bật".to_string())
     } else {
         parts.join(" · ")
     };
-    Some(QuotaWindow { semantic_key: None, semantic_kind: None,
+    Some(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Vượt hạn mức".into(),
         used_pct: 0,
         remaining_pct: 100,
@@ -512,7 +609,10 @@ pub fn parse_usage(
     if trimmed.is_empty() {
         return Err("Output trống từ kiro-cli".to_string());
     }
-    if trimmed.to_lowercase().contains("could not retrieve usage information") {
+    if trimmed
+        .to_lowercase()
+        .contains("could not retrieve usage information")
+    {
         return Err("kiro-cli không lấy được thông tin usage".to_string());
     }
 
@@ -531,7 +631,10 @@ pub fn parse_usage(
     let mut credits_used = 0.0;
     let mut credits_total = 50.0;
     let mut matched_credits = false;
-    if let Some(m) = Regex::new(r"\((\d+\.?\d*)\s+of\s+(\d+)\s+covered").unwrap().find(stripped) {
+    if let Some(m) = Regex::new(r"\((\d+\.?\d*)\s+of\s+(\d+)\s+covered")
+        .unwrap()
+        .find(stripped)
+    {
         let nums = extract_numbers(m.as_str());
         if nums.len() >= 2 {
             credits_used = nums[0];
@@ -548,17 +651,22 @@ pub fn parse_usage(
     let overages_status = first_capture(stripped, r"(?i)Overages:\s*([^\n]+)")
         .map(|s| strip_ansi(&s).trim().to_string())
         .filter(|s| !s.is_empty());
-    let overage_credits_used = first_capture(stripped, r"(?i)Credits used:\s*(\d+\.?\d*)").and_then(|s| s.parse::<f64>().ok());
-    let overage_cost_usd = first_capture(stripped, r"(?i)Est\.\s*cost:\s*\$?(\d+\.?\d*)\s*USD").and_then(|s| s.parse::<f64>().ok());
+    let overage_credits_used = first_capture(stripped, r"(?i)Credits used:\s*(\d+\.?\d*)")
+        .and_then(|s| s.parse::<f64>().ok());
+    let overage_cost_usd = first_capture(stripped, r"(?i)Est\.\s*cost:\s*\$?(\d+\.?\d*)\s*USD")
+        .and_then(|s| s.parse::<f64>().ok());
     let has_manage_url = stripped.contains("https://app.kiro.dev/account/usage");
 
     let lower = stripped.to_lowercase();
-    let is_managed_plan = lower.contains("managed by admin") || lower.contains("managed by organization");
+    let is_managed_plan =
+        lower.contains("managed by admin") || lower.contains("managed by organization");
     let is_new_format = first_capture(stripped, r"Plan:[ \t]*(.+)").is_some();
     if is_new_format && is_managed_plan && !matched_percent && !matched_credits {
         // Managed plans hide plan credits but may still report bonus and
         // overage — keep those windows instead of dropping them.
-        let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+        let mut windows = vec![QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Credits".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -569,7 +677,11 @@ pub fn parse_usage(
         if let Some(w) = bonus_window(bonus) {
             windows.push(w);
         }
-        if let Some(w) = overage_window(overages_status.as_deref(), overage_credits_used, overage_cost_usd) {
+        if let Some(w) = overage_window(
+            overages_status.as_deref(),
+            overage_credits_used,
+            overage_cost_usd,
+        ) {
             windows.push(w);
         }
         return Ok(ProviderStatus {
@@ -593,7 +705,11 @@ pub fn parse_usage(
     let used_pct = (credits_percent.round() as i32).clamp(0, 100);
     let remaining_pct = 100 - used_pct;
 
-    let mut subtitle = if matched_credits { Some(format!("{credits_used:.2} / {credits_total:.0} credits")) } else { None };
+    let mut subtitle = if matched_credits {
+        Some(format!("{credits_used:.2} / {credits_total:.0} credits"))
+    } else {
+        None
+    };
     if remaining_pct == 0 && has_manage_url {
         let hint = "Nâng cấp tại app.kiro.dev";
         subtitle = Some(match subtitle {
@@ -602,7 +718,9 @@ pub fn parse_usage(
         });
     }
 
-    let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+    let mut windows = vec![QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Credits".into(),
         used_pct,
         remaining_pct,
@@ -613,7 +731,11 @@ pub fn parse_usage(
     if let Some(w) = bonus_window(bonus) {
         windows.push(w);
     }
-    if let Some(w) = overage_window(overages_status.as_deref(), overage_credits_used, overage_cost_usd) {
+    if let Some(w) = overage_window(
+        overages_status.as_deref(),
+        overage_credits_used,
+        overage_cost_usd,
+    ) {
         windows.push(w);
     }
 
@@ -650,11 +772,21 @@ mod tests {
     #[test]
     fn full_output_with_auth_context_and_overage() {
         let output = "Plan: Q Developer Pro\n████████ 42%\n(21.00 of 50 covered in plan)\nBonus credits:\n10.00/100 credits used, expires in 88 days\nOverages: Enabled\nCredits used: 5.25\nEst. cost: $1.31 USD\n";
-        let s = parse_usage(output, Some("boss@example.com"), Some("AWS Builder ID"), Some(12.5), Some("1.23.1")).unwrap();
+        let s = parse_usage(
+            output,
+            Some("boss@example.com"),
+            Some("AWS Builder ID"),
+            Some(12.5),
+            Some("1.23.1"),
+        )
+        .unwrap();
         assert_eq!(s.windows.len(), 3);
         assert_eq!(s.windows[1].label, "Bonus Credits");
         assert_eq!(s.windows[1].used_pct, 10);
-        assert_eq!(s.windows[2].subtitle.as_deref(), Some("5.25 credits · ~$1.31"));
+        assert_eq!(
+            s.windows[2].subtitle.as_deref(),
+            Some("5.25 credits · ~$1.31")
+        );
         assert_eq!(s.source_label.as_deref(), Some("AWS Builder ID"));
         assert_eq!(s.version.as_deref(), Some("1.23.1"));
         assert_eq!(s.kiro_context_percent, Some(12.5));
@@ -673,14 +805,18 @@ mod tests {
 
     #[test]
     fn whoami_parses_email_and_auth_method() {
-        let (email, method) = parse_whoami("Logged in with AWS Builder ID\nEmail: boss@example.com\n");
+        let (email, method) =
+            parse_whoami("Logged in with AWS Builder ID\nEmail: boss@example.com\n");
         assert_eq!(email.as_deref(), Some("boss@example.com"));
         assert_eq!(method.as_deref(), Some("AWS Builder ID"));
     }
 
     #[test]
     fn context_percent_parses() {
-        assert_eq!(parse_context_percent("Context window: 12.5% used"), Some(12.5));
+        assert_eq!(
+            parse_context_percent("Context window: 12.5% used"),
+            Some(12.5)
+        );
         assert_eq!(parse_context_percent("no context"), None);
     }
 

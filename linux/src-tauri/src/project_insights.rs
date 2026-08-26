@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::cost_history;
 use crate::project_cost_history::{self, ProjectDay, ProjectModel};
 use crate::usage::UsageReport;
-const SOURCES: [&str; 5] = ["claude", "codex", "grok", "omp", "pi"];
+const SOURCES: [&str; 6] = ["claude", "codex", "grok", "kiro", "omp", "pi"];
 const PROJECT_RANKING_LIMIT: usize = 100;
 
 #[derive(Serialize, Clone, Debug)]
@@ -117,8 +117,7 @@ fn valid_project_key(key: &str) -> bool {
 }
 
 fn valid_day_key(key: &str) -> bool {
-    NaiveDate::parse_from_str(key, "%Y-%m-%d")
-        .is_ok_and(|date| date.to_string() == key)
+    NaiveDate::parse_from_str(key, "%Y-%m-%d").is_ok_and(|date| date.to_string() == key)
 }
 
 fn aggregate_days(
@@ -236,11 +235,7 @@ fn reconcile_named_days(
             .filter(|(_, project)| project.source == source && project.days.contains_key(&date))
             .map(|(index, _)| index)
             .collect();
-        indices.sort_by(|left, right| {
-            series[*left]
-                .project_key
-                .cmp(&series[*right].project_key)
-        });
+        indices.sort_by(|left, right| series[*left].project_key.cmp(&series[*right].project_key));
         let authoritative = aggregate.and_then(|days| days.get(&date));
 
         let target_usd = authoritative.map(|day| day.usd.max(0.0)).unwrap_or(0.0);
@@ -432,13 +427,11 @@ fn selected_detail(
         });
         for model in &day.models {
             let name = safe_name(&model.name);
-            let entry = models
-                .entry(name.clone())
-                .or_insert_with(|| ProjectModel {
-                    name,
-                    usd: 0.0,
-                    tokens: 0,
-                });
+            let entry = models.entry(name.clone()).or_insert_with(|| ProjectModel {
+                name,
+                usd: 0.0,
+                tokens: 0,
+            });
             entry.usd += model.usd;
             entry.tokens += model.tokens;
         }
@@ -487,6 +480,9 @@ fn overview(
                 total.usd += day.usd;
                 total.tokens += day.tokens;
                 for model in &day.models {
+                    if source == "kiro" && model.name == "Other" {
+                        continue;
+                    }
                     let key = (source.to_string(), model.name.clone());
                     let entry = models.entry(key).or_insert_with(|| ModelTotal {
                         source: source.into(),
@@ -589,8 +585,13 @@ pub fn build_report(
     Report {
         days,
         overview: overview(
-            today, &aggregate, current, &cost_doc.scanned_at, &series,
-            enabled_sources),
+            today,
+            &aggregate,
+            current,
+            &cost_doc.scanned_at,
+            &series,
+            enabled_sources,
+        ),
         projects,
         selected_project,
     }
@@ -601,9 +602,15 @@ fn retain_enabled_sources(
     project_doc: &mut project_cost_history::Document,
     enabled_sources: &HashSet<String>,
 ) {
-    cost_doc.sources.retain(|source, _| enabled_sources.contains(source));
-    cost_doc.scanned_at.retain(|source, _| enabled_sources.contains(source));
-    project_doc.sources.retain(|source, _| enabled_sources.contains(source));
+    cost_doc
+        .sources
+        .retain(|source, _| enabled_sources.contains(source));
+    cost_doc
+        .scanned_at
+        .retain(|source, _| enabled_sources.contains(source));
+    project_doc
+        .sources
+        .retain(|source, _| enabled_sources.contains(source));
 }
 
 #[cfg(test)]
@@ -701,9 +708,21 @@ mod tests {
                     usd: 4.0,
                     tokens: 2_500,
                     models: vec![
-                        ProjectModel { name: "model-b".into(), usd: 1.0, tokens: 1_000 },
-                        ProjectModel { name: "model-c".into(), usd: 2.0, tokens: 500 },
-                        ProjectModel { name: "model-a".into(), usd: 1.0, tokens: 1_000 },
+                        ProjectModel {
+                            name: "model-b".into(),
+                            usd: 1.0,
+                            tokens: 1_000,
+                        },
+                        ProjectModel {
+                            name: "model-c".into(),
+                            usd: 2.0,
+                            tokens: 500,
+                        },
+                        ProjectModel {
+                            name: "model-a".into(),
+                            usd: 1.0,
+                            tokens: 1_000,
+                        },
                     ],
                 },
             )]),
@@ -711,7 +730,11 @@ mod tests {
 
         let detail = selected_detail(&[project], Some(&"a".repeat(64)), &today, &today).unwrap();
         assert_eq!(
-            detail.models.iter().map(|model| model.name.as_str()).collect::<Vec<_>>(),
+            detail
+                .models
+                .iter()
+                .map(|model| model.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["model-c", "model-a", "model-b"]
         );
     }
@@ -730,13 +753,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(rank_projects(&projects, &today, &today).len(), PROJECT_RANKING_LIMIT);
+        assert_eq!(
+            rank_projects(&projects, &today, &today).len(),
+            PROJECT_RANKING_LIMIT
+        );
     }
 
     #[test]
     fn safe_name_uses_basename_after_long_private_parent() {
         let parent = "private-parent".repeat(20);
-        assert_eq!(safe_name(&format!("/Users/alice/{parent}/client-model")), "client-model");
+        assert_eq!(
+            safe_name(&format!("/Users/alice/{parent}/client-model")),
+            "client-model"
+        );
     }
 
     #[test]
@@ -755,6 +784,71 @@ mod tests {
         assert!(!project_doc.sources.contains_key("claude"));
         assert!(cost_doc.sources.contains_key("codex"));
         assert!(project_doc.sources.contains_key("codex"));
+    }
+
+    #[test]
+    fn kiro_only_usage_is_included_in_overview_projects_and_confidence() {
+        let today = Local::now().date_naive();
+        let date = today.to_string();
+        let aggregate = HashMap::from([(
+            "kiro".to_string(),
+            HashMap::from([(
+                date,
+                cost_history::HistoryDay {
+                    usd: 7.0,
+                    tokens: 700,
+                    models: vec![
+                        cost_history::HistoryModel {
+                            name: "kiro-model".into(),
+                            usd: 1.0,
+                            tokens: 100,
+                        },
+                        cost_history::HistoryModel {
+                            name: "Other".into(),
+                            usd: 6.0,
+                            tokens: 600,
+                        },
+                    ],
+                },
+            )]),
+        )]);
+        let mut live = UsageReport::default();
+        live.included = true;
+        live.live = true;
+        live.scanned_at = Some(123);
+        let current = HashMap::from([("kiro".to_string(), live)]);
+        let enabled = HashSet::from(["kiro".to_string()]);
+        let series = build_series(&project_cost_history::Document::default(), &aggregate);
+
+        let result = overview(
+            today,
+            &aggregate,
+            &current,
+            &HashMap::new(),
+            &series,
+            &enabled,
+        );
+
+        assert_eq!(result.current7_usd, 7.0);
+        assert_eq!(result.current7_tokens, 700);
+        assert_eq!(
+            result
+                .top_source
+                .as_ref()
+                .map(|value| value.source.as_str()),
+            Some("kiro")
+        );
+        assert_eq!(
+            result.top_model.as_ref().map(|value| value.name.as_str()),
+            Some("kiro-model")
+        );
+        assert!(series
+            .iter()
+            .any(|value| value.project_key == "unknown-kiro"));
+        assert_eq!(result.confidence.len(), 1);
+        assert_eq!(result.confidence[0].source, "kiro");
+        assert_eq!(result.confidence[0].state, "live");
+        assert_eq!(result.confidence[0].scanned_at, Some(123));
     }
 
     #[test]
@@ -817,7 +911,9 @@ mod tests {
 
         assert_eq!(rows.len(), 4);
         for source in ["codex", "grok"] {
-            assert!(rows.iter().any(|row| row.source == source && !row.is_unknown));
+            assert!(rows
+                .iter()
+                .any(|row| row.source == source && !row.is_unknown));
             assert!(rows.iter().any(|row| {
                 row.project_key == format!("unknown-{source}")
                     && row.is_unknown
@@ -935,8 +1031,22 @@ mod tests {
         assert_eq!(unknown.days[&today].tokens, 0);
         assert_eq!(unknown.days[&today].usd, 50.0);
         let models = &project_a.days[&today].models;
-        assert_eq!(models.iter().find(|model| model.name == "alpha").unwrap().tokens, 1);
-        assert_eq!(models.iter().find(|model| model.name == "zeta").unwrap().tokens, 0);
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.name == "alpha")
+                .unwrap()
+                .tokens,
+            1
+        );
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.name == "zeta")
+                .unwrap()
+                .tokens,
+            0
+        );
         let totals = rows
             .iter()
             .filter(|row| row.source == "codex")
@@ -977,15 +1087,9 @@ mod tests {
             contributions: vec![contribution.clone()],
         };
         project_cost_history::apply("codex", &[contribution], false).unwrap();
-        project_cost_history::apply_with_retractions(
-            "codex",
-            &[],
-            &[retraction.clone()],
-            false,
-        )
-        .unwrap();
-        project_cost_history::apply_with_retractions("codex", &[], &[retraction], false)
+        project_cost_history::apply_with_retractions("codex", &[], &[retraction.clone()], false)
             .unwrap();
+        project_cost_history::apply_with_retractions("codex", &[], &[retraction], false).unwrap();
         let aggregate = HashMap::from([(
             "codex".into(),
             HashMap::from([(
@@ -1075,18 +1179,9 @@ mod tests {
 
     #[test]
     fn token_largest_remainder_is_deterministic_by_privacy_key() {
-        let forward = proportional_token_targets(
-            &[("b".into(), 40), ("a".into(), 80)],
-            100,
-        );
-        let reverse = proportional_token_targets(
-            &[("a".into(), 80), ("b".into(), 40)],
-            100,
-        );
-        let tied = proportional_token_targets(
-            &[("b".into(), 1), ("a".into(), 1)],
-            1,
-        );
+        let forward = proportional_token_targets(&[("b".into(), 40), ("a".into(), 80)], 100);
+        let reverse = proportional_token_targets(&[("a".into(), 80), ("b".into(), 40)], 100);
+        let tied = proportional_token_targets(&[("b".into(), 1), ("a".into(), 1)], 1);
 
         assert_eq!(forward, vec![33, 67]);
         assert_eq!(reverse, vec![67, 33]);
@@ -1102,11 +1197,11 @@ mod tests {
                 "claude".into(),
                 HashMap::from([(
                     "/Users/private/repo".into(),
-                project_cost_history::ProjectRecord {
-                    display_name: "/Users/private/repo".into(),
-                    capability: "exact".into(),
-                    days: HashMap::new(),
-                },
+                    project_cost_history::ProjectRecord {
+                        display_name: "/Users/private/repo".into(),
+                        capability: "exact".into(),
+                        days: HashMap::new(),
+                    },
                 )]),
             )]),
         };

@@ -24,12 +24,12 @@ pub mod grok;
 pub mod groq;
 pub mod hapo;
 pub mod hiyo;
-pub mod ollama;
-pub mod openai;
 pub mod kilo;
 pub mod kiro;
 pub mod mimo;
 pub mod minimax;
+pub mod ollama;
+pub mod openai;
 pub mod opencode;
 pub mod opencodego;
 pub mod openrouter;
@@ -37,8 +37,8 @@ pub mod tryapi;
 pub mod xai;
 pub mod zai;
 
-use serde::{Deserialize, Serialize};
 use crate::config;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -194,7 +194,10 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 /// Races `dispatch(cfg)` against `deadline` via `with_deadline`. Extracted
 /// from `fetch()` so tests can pass a tiny deadline without waiting out the
 /// real `FETCH_DEADLINE`.
-async fn fetch_with_deadline(cfg: &config::Provider, deadline: std::time::Duration) -> ProviderStatus {
+async fn fetch_with_deadline(
+    cfg: &config::Provider,
+    deadline: std::time::Duration,
+) -> ProviderStatus {
     with_deadline(cfg, deadline, dispatch(cfg)).await
 }
 
@@ -206,7 +209,11 @@ async fn fetch_with_deadline(cfg: &config::Provider, deadline: std::time::Durati
 /// `NetworkUnreachableOrTimeout`. Split out from `fetch_with_deadline` so
 /// tests can race a deliberately slow fake future without depending on
 /// `dispatch`'s real provider modules.
-async fn with_deadline<F>(cfg: &config::Provider, deadline: std::time::Duration, fut: F) -> ProviderStatus
+async fn with_deadline<F>(
+    cfg: &config::Provider,
+    deadline: std::time::Duration,
+    fut: F,
+) -> ProviderStatus
 where
     F: std::future::Future<Output = ProviderStatus>,
 {
@@ -215,7 +222,10 @@ where
         Err(_) => ProviderStatus::failure(
             &cfg.id,
             &display_name(cfg),
-            format!("Timeout: provider did not respond within {}s", deadline.as_secs()),
+            format!(
+                "Timeout: provider did not respond within {}s",
+                deadline.as_secs()
+            ),
         ),
     }
 }
@@ -275,7 +285,10 @@ pub async fn fetch_filtered(ids: Option<&[String]>) -> Vec<ProviderStatus> {
 
 /// Keep only providers whose id is in `ids`, or all of them when `ids` is
 /// `None`. Extracted for unit testing without a network round-trip.
-fn filter_enabled(providers: Vec<config::Provider>, ids: Option<&[String]>) -> Vec<config::Provider> {
+fn filter_enabled(
+    providers: Vec<config::Provider>,
+    ids: Option<&[String]>,
+) -> Vec<config::Provider> {
     match ids {
         None => providers,
         Some(ids) => providers
@@ -290,7 +303,10 @@ mod tests {
     use super::*;
 
     fn provider(id: &str) -> config::Provider {
-        config::Provider { id: id.to_string(), ..Default::default() }
+        config::Provider {
+            id: id.to_string(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -335,7 +351,11 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             ProviderStatus::failure("slow", "Slow", "should never be seen")
         };
-        let status = block_on(with_deadline(&cfg, std::time::Duration::from_millis(20), slow));
+        let status = block_on(with_deadline(
+            &cfg,
+            std::time::Duration::from_millis(20),
+            slow,
+        ));
         let err = status.error.expect("timeout must set an error");
         assert!(err.contains("Timeout"), "unexpected error: {err}");
         assert!(status.windows.is_empty());
@@ -398,12 +418,12 @@ pub fn cli_version_blocking(
             let executable = crate::platform::executable::resolve_executable(binary)?;
             let mut command = if cfg!(windows)
                 && executable
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-                })
-            {
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        extension.eq_ignore_ascii_case("cmd")
+                            || extension.eq_ignore_ascii_case("bat")
+                    }) {
                 let script = executable.to_str()?;
                 if script.contains(['"', '&', '|', '<', '>', '^', '%', '!', '(', ')']) {
                     return None;

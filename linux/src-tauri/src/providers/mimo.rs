@@ -55,29 +55,55 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
 
     let client = crate::providers::shared_client();
 
-    let balance_resp = client.get(BALANCE_URL).header("Cookie", &cookie_header).send().await;
+    let balance_resp = client
+        .get(BALANCE_URL)
+        .header("Cookie", &cookie_header)
+        .send()
+        .await;
     let balance_body = match balance_resp {
         Ok(resp) if resp.status().is_success() => match resp.text().await {
             Ok(t) => t,
             Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
         },
-        Ok(resp) => return ProviderStatus::failure(&id, &name, format!("Network: HTTP {}", resp.status().as_u16())),
+        Ok(resp) => {
+            return ProviderStatus::failure(
+                &id,
+                &name,
+                format!("Network: HTTP {}", resp.status().as_u16()),
+            )
+        }
         Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
     };
 
-    let detail_body = client.get(PLAN_DETAIL_URL).header("Cookie", &cookie_header).send().await.ok();
+    let detail_body = client
+        .get(PLAN_DETAIL_URL)
+        .header("Cookie", &cookie_header)
+        .send()
+        .await
+        .ok();
     let detail_text = match detail_body {
         Some(resp) if resp.status().is_success() => resp.text().await.ok(),
         _ => None,
     };
 
-    let usage_body = client.get(PLAN_USAGE_URL).header("Cookie", &cookie_header).send().await.ok();
+    let usage_body = client
+        .get(PLAN_USAGE_URL)
+        .header("Cookie", &cookie_header)
+        .send()
+        .await
+        .ok();
     let usage_text = match usage_body {
         Some(resp) if resp.status().is_success() => resp.text().await.ok(),
         _ => None,
     };
 
-    match parse_status(&id, &name, &balance_body, detail_text.as_deref(), usage_text.as_deref()) {
+    match parse_status(
+        &id,
+        &name,
+        &balance_body,
+        detail_text.as_deref(),
+        usage_text.as_deref(),
+    ) {
         Ok(status) => status,
         Err(e) => ProviderStatus::failure(&id, &name, e),
     }
@@ -103,13 +129,21 @@ fn normalized_cookie_header(raw: &str) -> Option<String> {
         })
         .collect();
 
-    let has_all_required = REQUIRED_COOKIES.iter().all(|req| pairs.iter().any(|(n, _)| n == req));
+    let has_all_required = REQUIRED_COOKIES
+        .iter()
+        .all(|req| pairs.iter().any(|(n, _)| n == req));
     if !has_all_required {
         return None;
     }
 
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
-    Some(pairs.into_iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; "))
+    Some(
+        pairs
+            .into_iter()
+            .map(|(n, v)| format!("{n}={v}"))
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
 }
 
 fn parse_status(
@@ -119,11 +153,18 @@ fn parse_status(
     detail_body: Option<&str>,
     usage_body: Option<&str>,
 ) -> Result<ProviderStatus, String> {
-    let balance_json: Value = serde_json::from_str(balance_body).map_err(|_| "Không thể đọc dữ liệu số dư MiMo".to_string())?;
-    let data = balance_json.get("data").ok_or_else(|| "Không thể đọc dữ liệu số dư MiMo".to_string())?;
+    let balance_json: Value = serde_json::from_str(balance_body)
+        .map_err(|_| "Không thể đọc dữ liệu số dư MiMo".to_string())?;
+    let data = balance_json
+        .get("data")
+        .ok_or_else(|| "Không thể đọc dữ liệu số dư MiMo".to_string())?;
 
-    let balance = string_as_f64(data.get("balance")).ok_or_else(|| "Không thể đọc dữ liệu số dư MiMo".to_string())?;
-    let currency = data.get("currency").and_then(Value::as_str).unwrap_or("CNY");
+    let balance = string_as_f64(data.get("balance"))
+        .ok_or_else(|| "Không thể đọc dữ liệu số dư MiMo".to_string())?;
+    let currency = data
+        .get("currency")
+        .and_then(Value::as_str)
+        .unwrap_or("CNY");
     let cash_balance = string_as_f64(data.get("cashBalance"));
     let gift_balance = string_as_f64(data.get("giftBalance"));
 
@@ -135,10 +176,14 @@ fn parse_status(
 
     let mut subtitle = format!("{symbol}{balance:.2}");
     if let (Some(cash), Some(gift)) = (cash_balance, gift_balance) {
-        subtitle.push_str(&format!(" ({symbol}{cash:.2} tiền mặt + {symbol}{gift:.2} quà tặng)"));
+        subtitle.push_str(&format!(
+            " ({symbol}{cash:.2} tiền mặt + {symbol}{gift:.2} quà tặng)"
+        ));
     }
 
-    let mut windows = vec![QuotaWindow { semantic_key: None, semantic_kind: None,
+    let mut windows = vec![QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Số dư".to_string(),
         used_pct: 0,
         remaining_pct: 100,
@@ -149,7 +194,12 @@ fn parse_status(
 
     let plan_name = detail_body
         .and_then(|t| serde_json::from_str::<Value>(t).ok())
-        .and_then(|v| v.get("data").and_then(|d| d.get("planCode")).and_then(Value::as_str).map(capitalize));
+        .and_then(|v| {
+            v.get("data")
+                .and_then(|d| d.get("planCode"))
+                .and_then(Value::as_str)
+                .map(capitalize)
+        });
 
     if let Some(usage_text) = usage_body {
         if let Ok(usage_json) = serde_json::from_str::<Value>(usage_text) {
@@ -164,12 +214,21 @@ fn parse_status(
                 let limit = item.get("limit").and_then(Value::as_f64).unwrap_or(0.0);
                 if limit > 0.0 {
                     let pct = (used / limit * 100.0).round().clamp(0.0, 100.0) as i32;
-                    let label = plan_name.clone().map(|p| format!("Token Plan · {p}")).unwrap_or_else(|| "Token Plan".to_string());
-                    windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+                    let label = plan_name
+                        .clone()
+                        .map(|p| format!("Token Plan · {p}"))
+                        .unwrap_or_else(|| "Token Plan".to_string());
+                    windows.push(QuotaWindow {
+                        semantic_key: None,
+                        semantic_kind: None,
                         label,
                         used_pct: pct,
                         remaining_pct: 100 - pct,
-                        subtitle: Some(format!("{} / {} tokens", format_thousands(used), format_thousands(limit))),
+                        subtitle: Some(format!(
+                            "{} / {} tokens",
+                            format_thousands(used),
+                            format_thousands(limit)
+                        )),
                         resets_at: None,
                         window_seconds: None,
                     });
@@ -239,7 +298,8 @@ mod tests {
         let balance = r#"{"code":0,"data":{"balance":"12.50","currency":"CNY"}}"#;
         let detail = r#"{"code":0,"data":{"planCode":"pro","currentPeriodEnd":"2025-08-01 00:00:00","expired":false}}"#;
         let usage = r#"{"code":0,"data":{"monthUsage":{"percent":0.45,"items":[{"name":"x","used":450000,"limit":1000000,"percent":0.45}]}}}"#;
-        let status = parse_status("mimo", "Xiaomi MiMo", balance, Some(detail), Some(usage)).unwrap();
+        let status =
+            parse_status("mimo", "Xiaomi MiMo", balance, Some(detail), Some(usage)).unwrap();
         assert_eq!(status.windows.len(), 2);
         assert_eq!(status.windows[1].used_pct, 45);
         assert!(status.windows[1].label.contains("Pro"));
@@ -260,7 +320,9 @@ mod tests {
 
     #[test]
     fn drops_unrelated_cookies() {
-        let header = normalized_cookie_header("api-platform_serviceToken=abc; userId=123; unrelated=xyz").unwrap();
+        let header =
+            normalized_cookie_header("api-platform_serviceToken=abc; userId=123; unrelated=xyz")
+                .unwrap();
         assert!(!header.contains("unrelated"));
     }
 }

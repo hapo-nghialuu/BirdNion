@@ -17,7 +17,8 @@ pub struct DailyUsage {
     pub date: String,
     pub usd: f64,
     pub tokens: i64,
-    /// Per-model split for the day, highest token count first (top 5).
+    /// Bounded per-model split: top 5, the monthly top when needed, then an
+    /// aggregate `Other` bucket so the split still equals the daily total.
     pub models: Vec<DailyModel>,
 }
 

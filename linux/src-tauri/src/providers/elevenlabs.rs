@@ -13,7 +13,10 @@ const ENDPOINT: &str = "https://api.elevenlabs.io/v1/user/subscription";
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     // Resolution: env override → multi-key store active → legacy settings apiKey.
-    let envtok = std::env::var("ELEVENLABS_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let envtok = std::env::var("ELEVENLABS_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let token = envtok
         .or_else(crate::elevenlabs_keys::active_api_key)
         .or_else(|| config::api_key(cfg));
@@ -39,7 +42,9 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     };
     match resp.status().as_u16() {
         200..=299 => {}
-        401 | 403 => return ProviderStatus::failure(&cfg.id, &name, "API key ElevenLabs không hợp lệ"),
+        401 | 403 => {
+            return ProviderStatus::failure(&cfg.id, &name, "API key ElevenLabs không hợp lệ")
+        }
         code => return ProviderStatus::failure(&cfg.id, &name, format!("HTTP {code}")),
     }
     let body: Value = match resp.json().await {
@@ -93,20 +98,34 @@ fn display_tier(tier: Option<&str>, status: Option<&str>) -> Option<String> {
 }
 
 /// Pure payload → status mapping (unit-tested).
-pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Value) -> ProviderStatus {
+pub fn parse_subscription(
+    id: &str,
+    name: &str,
+    account_label: &str,
+    body: &Value,
+) -> ProviderStatus {
     let Some(char_limit) = body.get("character_limit").and_then(Value::as_i64) else {
         return ProviderStatus::failure(id, name, "Response thiếu trường");
     };
-    let char_count = body.get("character_count").and_then(Value::as_i64).unwrap_or(0);
+    let char_count = body
+        .get("character_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
 
     let mut windows = Vec::new();
     let used = if char_limit > 0 {
-        ((char_count as f64 / char_limit as f64) * 100.0).round().clamp(0.0, 100.0) as i32
+        ((char_count as f64 / char_limit as f64) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as i32
     } else {
         0
     };
-    let resets_at = body.get("next_character_count_reset_unix").and_then(Value::as_i64);
-    windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+    let resets_at = body
+        .get("next_character_count_reset_unix")
+        .and_then(Value::as_i64);
+    windows.push(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
         label: "Credits".into(),
         used_pct: used,
         remaining_pct: 100 - used,
@@ -117,10 +136,14 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
 
     if let (Some(u), Some(lim)) = (
         body.get("voice_slots_used").and_then(Value::as_i64),
-        body.get("voice_limit").and_then(Value::as_i64).filter(|l| *l > 0),
+        body.get("voice_limit")
+            .and_then(Value::as_i64)
+            .filter(|l| *l > 0),
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Voice slots".into(),
             used_pct: p,
             remaining_pct: 100 - p,
@@ -130,11 +153,16 @@ pub fn parse_subscription(id: &str, name: &str, account_label: &str, body: &Valu
         });
     }
     if let (Some(u), Some(lim)) = (
-        body.get("professional_voice_slots_used").and_then(Value::as_i64),
-        body.get("professional_voice_limit").and_then(Value::as_i64).filter(|l| *l > 0),
+        body.get("professional_voice_slots_used")
+            .and_then(Value::as_i64),
+        body.get("professional_voice_limit")
+            .and_then(Value::as_i64)
+            .filter(|l| *l > 0),
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Professional voices".into(),
             used_pct: p,
             remaining_pct: 100 - p,
@@ -183,8 +211,14 @@ mod tests {
 
     #[test]
     fn display_tier_appends_non_active_status() {
-        assert_eq!(display_tier(Some("free_tier"), Some("past_due")).unwrap(), "Free Tier · past_due");
-        assert_eq!(display_tier(Some("creator"), Some("active")).unwrap(), "Creator");
+        assert_eq!(
+            display_tier(Some("free_tier"), Some("past_due")).unwrap(),
+            "Free Tier · past_due"
+        );
+        assert_eq!(
+            display_tier(Some("creator"), Some("active")).unwrap(),
+            "Creator"
+        );
     }
 
     #[test]

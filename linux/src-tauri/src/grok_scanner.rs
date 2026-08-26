@@ -34,24 +34,13 @@ use walkdir::WalkDir;
 use crate::project_cost_history::{ProjectContribution, ProjectModel};
 use crate::usage::{DailyModel, DailyUsage, UsageReport};
 
-/// Bump khi ngữ nghĩa đếm đổi. Ngày đã lưu bằng công thức cũ phải được dựng
-/// lại một lần bằng `apply_and_report_replacing`, nếu không các giá trị
-/// high-water cũ sẽ sống mãi.
+/// Bump khi ngữ nghĩa đếm đổi. `cost_history` dùng revision này để thay thế
+/// source và đóng dấu revision trong cùng một transaction; nếu không các giá
+/// trị high-water cũ sẽ sống mãi.
 ///
 /// rev 3 (2026-08-25): chia theo dòng thời gian session thay vì dồn trọn vào
 /// ngày hoạt động cuối.
-const COUNTING_REVISION: i64 = 3;
-const COUNTING_REVISION_KEY: &str = "grok";
-
-/// `true` đúng MỘT lần sau khi ngữ nghĩa đếm đổi; ghi mốc mới xuống đĩa ngay
-/// để lần quét sau quay lại gộp thường.
-pub fn take_counting_revision_upgrade() -> bool {
-    if crate::cost_history::counting_revision(COUNTING_REVISION_KEY) >= COUNTING_REVISION {
-        return false;
-    }
-    crate::cost_history::set_counting_revision(COUNTING_REVISION_KEY, COUNTING_REVISION);
-    true
-}
+pub const COUNTING_REVISION: i64 = 3;
 
 /// Trailing daily window for charts / heatmap (macOS CombinedUsageReport 120d).
 pub const HISTORY_DAYS: i64 = 120;
@@ -88,7 +77,8 @@ fn inference_days(session_dir: &Path) -> HashMap<chrono::NaiveDate, i64> {
         };
         // `ts` là UTC; quy về ngày theo giờ máy để khớp các nguồn khác.
         if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-            *out.entry(dt.with_timezone(&Local).date_naive()).or_default() += 1;
+            *out.entry(dt.with_timezone(&Local).date_naive())
+                .or_default() += 1;
         }
     }
     out
@@ -99,7 +89,10 @@ fn inference_days(session_dir: &Path) -> HashMap<chrono::NaiveDate, i64> {
 /// Chia nguyên rồi rải phần dư cho những ngày có phần thập phân lớn nhất
 /// (largest remainder), nên tổng các phần luôn đúng bằng `total` — không hụt
 /// vài token do làm tròn.
-fn apportion(total: i64, weights: &HashMap<chrono::NaiveDate, i64>) -> Vec<(chrono::NaiveDate, i64)> {
+fn apportion(
+    total: i64,
+    weights: &HashMap<chrono::NaiveDate, i64>,
+) -> Vec<(chrono::NaiveDate, i64)> {
     let weight_sum: i64 = weights.values().sum();
     if total <= 0 || weight_sum <= 0 {
         return Vec::new();
@@ -427,29 +420,31 @@ pub fn scan_with_projects(now: DateTime<Local>) -> Option<GrokUsageScan> {
     let mut projects: Vec<ProjectContribution> = project_buckets
         .into_iter()
         .filter(|(_, (_, usd, tokens, _))| *usd > 0.0 || *tokens > 0)
-        .map(|((project_key, date), (display_name, usd, tokens, models))| {
-            let mut models: Vec<ProjectModel> = models
-                .into_iter()
-                .filter(|(_, (model_usd, model_tokens))| *model_usd > 0.0 || *model_tokens > 0)
-                .map(|(name, (usd, tokens))| ProjectModel { name, usd, tokens })
-                .collect();
-            models.sort_by(|a, b| {
-                b.usd
-                    .total_cmp(&a.usd)
-                    .then_with(|| b.tokens.cmp(&a.tokens))
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            models.truncate(5);
-            ProjectContribution {
-                project_key,
-                display_name,
-                capability: "derivedPath".into(),
-                date,
-                usd,
-                tokens,
-                models,
-            }
-        })
+        .map(
+            |((project_key, date), (display_name, usd, tokens, models))| {
+                let mut models: Vec<ProjectModel> = models
+                    .into_iter()
+                    .filter(|(_, (model_usd, model_tokens))| *model_usd > 0.0 || *model_tokens > 0)
+                    .map(|(name, (usd, tokens))| ProjectModel { name, usd, tokens })
+                    .collect();
+                models.sort_by(|a, b| {
+                    b.usd
+                        .total_cmp(&a.usd)
+                        .then_with(|| b.tokens.cmp(&a.tokens))
+                        .then_with(|| a.name.cmp(&b.name))
+                });
+                models.truncate(5);
+                ProjectContribution {
+                    project_key,
+                    display_name,
+                    capability: "derivedPath".into(),
+                    date,
+                    usd,
+                    tokens,
+                    models,
+                }
+            },
+        )
         .collect();
     projects.sort_by(|a, b| {
         a.date
@@ -499,7 +494,11 @@ mod tests {
         if let Some(root) = git_root_dir {
             summary["git_root_dir"] = Value::String(root.into());
         }
-        std::fs::write(dir.join("summary.json"), serde_json::to_string(&summary).unwrap()).unwrap();
+        std::fs::write(
+            dir.join("summary.json"),
+            serde_json::to_string(&summary).unwrap(),
+        )
+        .unwrap();
     }
 
     /// Ghi `events.jsonl` với số lượt `first_token` cho từng ngày.
@@ -527,7 +526,12 @@ mod tests {
         let now = Local.with_ymd_and_hms(2026, 8, 25, 12, 0, 0).unwrap();
         write_session(&home, "%2Fp", "s1", now, None);
         // 100k token, lượt chia 75/25 giữa hai ngày TRƯỚC đó, hôm nay không có.
-        write_events(&home, "%2Fp", "s1", &[("2026-08-20", 75), ("2026-08-21", 25)]);
+        write_events(
+            &home,
+            "%2Fp",
+            "s1",
+            &[("2026-08-20", 75), ("2026-08-21", 25)],
+        );
         std::env::set_var("GROK_HOME", &home);
 
         let report = scan(now).expect("có session thì phải có báo cáo");
@@ -548,7 +552,10 @@ mod tests {
         assert_eq!(day("2026-08-21"), 25_000);
         // Chia lại KHÔNG được làm hụt hay phồng tổng.
         let total: i64 = report.daily.iter().map(|d| d.tokens).sum();
-        assert_eq!(total, 100_000, "tổng sau khi chia phải đúng bằng tổng cả đời");
+        assert_eq!(
+            total, 100_000,
+            "tổng sau khi chia phải đúng bằng tổng cả đời"
+        );
     }
 
     #[test]
@@ -664,11 +671,7 @@ mod tests {
         assert_eq!(scan.usage.today_tokens, 300_000);
         assert!(scan.projects.is_empty());
         let root = PathBuf::from("/tmp/grok/sessions");
-        assert!(grok_project_identity(
-            &root,
-            &root.join("encoded/session/other.json")
-        )
-        .is_none());
+        assert!(grok_project_identity(&root, &root.join("encoded/session/other.json")).is_none());
     }
 
     #[test]
@@ -676,13 +679,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_grok_home("projects");
         let now = Local::now();
-        write_session(
-            &home,
-            "-Users-alice-repo",
-            "session-a",
-            now,
-            None,
-        );
+        write_session(&home, "-Users-alice-repo", "session-a", now, None);
         write_session(
             &home,
             "-Users-alice-repo",
@@ -718,13 +715,7 @@ mod tests {
             now,
             Some("relative/private/repo"),
         );
-        write_session(
-            &home,
-            "-Users-alice-missing",
-            "session-b",
-            now,
-            None,
-        );
+        write_session(&home, "-Users-alice-missing", "session-b", now, None);
         write_session(
             &home,
             "-Users-alice-malformed",

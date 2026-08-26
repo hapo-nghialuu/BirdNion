@@ -5,14 +5,143 @@
 //! Unix, followed by the legacy user-home location.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    ffi::OsString,
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 static SETTINGS_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+const MAX_SETTINGS_BYTES: usize = 8 * 1024 * 1024;
+
+/// Stable sibling lock file shared by every BirdNion backend process. The
+/// descriptor lock spans strict read, revision/content checks, and atomic
+/// replacement; keeping the file in place avoids split-lock inode races.
+struct SettingsInterprocessLock {
+    _file: File,
+}
+
+impl SettingsInterprocessLock {
+    fn acquire(settings: &BoundSettingsFile) -> Result<Self, String> {
+        let mut lock_name = OsString::from(&settings.name);
+        lock_name.push(".birdnion.lock");
+        let file = settings
+            .directory
+            .open_private_lock_file_at(&lock_name)
+            .map_err(|error| {
+                format!(
+                    "cannot open settings mutation lock at {}: {error}",
+                    settings.display_path.display()
+                )
+            })?;
+        file.lock().map_err(|error| {
+            format!(
+                "cannot acquire settings mutation lock at {}: {error}",
+                settings.display_path.display()
+            )
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// Stable parent-directory binding for one settings transaction. The config
+/// pathname is resolved once; every recovery/read/commit then stays relative
+/// to this descriptor even if an external process renames the parent path.
+struct BoundSettingsFile {
+    directory: crate::platform::atomic_file::BoundDirectory,
+    name: OsString,
+    display_path: PathBuf,
+    parent_path: PathBuf,
+}
+
+impl BoundSettingsFile {
+    fn open(path: &Path) -> Result<Self, String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "settings path has no parent directory".to_string())?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| "settings path has no file name".to_string())?
+            .to_os_string();
+        let directory =
+            crate::platform::atomic_file::BoundDirectory::open(parent).map_err(|error| {
+                format!(
+                    "cannot bind settings directory at {}: {error}",
+                    parent.display()
+                )
+            })?;
+        Ok(Self {
+            directory,
+            name,
+            display_path: path.to_path_buf(),
+            parent_path: parent.to_path_buf(),
+        })
+    }
+
+    fn ensure_current_route(&self) -> Result<(), String> {
+        let current = crate::platform::atomic_file::BoundDirectory::open(&self.parent_path)
+            .map_err(|error| {
+                format!(
+                    "settings directory route changed at {}: {error}",
+                    self.parent_path.display()
+                )
+            })?;
+        if current.identity() != self.directory.identity() {
+            return Err(
+                "settings directory route changed during operation; reload before saving"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+struct SettingsTransaction {
+    file: BoundSettingsFile,
+    _lock: SettingsInterprocessLock,
+}
+
+impl SettingsTransaction {
+    fn acquire(path: &Path) -> Result<Self, String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "settings path has no parent directory".to_string())?;
+        let parent_was_missing = match std::fs::symlink_metadata(parent) {
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err("settings parent is not a real directory".to_string())
+            }
+            Ok(_) => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(error) => return Err(error.to_string()),
+        };
+        if parent_was_missing {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut builder = std::fs::DirBuilder::new();
+                builder.recursive(true).mode(0o700);
+                builder.create(parent).map_err(|error| error.to_string())?;
+            }
+            #[cfg(not(unix))]
+            crate::platform::atomic_file::ensure_private_directory(parent)
+                .map_err(|error| error.to_string())?;
+        }
+        let file = BoundSettingsFile::open(path)?;
+        let lock = SettingsInterprocessLock::acquire(&file)?;
+        file.ensure_current_route()?;
+        Ok(Self { file, _lock: lock })
+    }
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct Settings {
     #[serde(default)]
     pub version: u32,
+    /// Optimistic-concurrency token for whole-document Settings saves.
+    /// Older macOS/Linux builds preserve this unknown top-level camelCase key;
+    /// files created before the token existed decode as revision zero.
+    #[serde(default, rename = "settingsRevision")]
+    pub settings_revision: u64,
     #[serde(default)]
     pub providers: Vec<Provider>,
     /// Active Codex account id ("system" or a managed account UUID). Linux
@@ -587,51 +716,209 @@ pub fn remove_codex_profile(id: &str) -> Result<(), String> {
 /// Persist settings atomically with owner-only permissions (0600), matching
 /// the macOS store — the file holds API keys in plaintext by design.
 ///
-/// Fail-closed: every write path starts from `load()`, which silently falls
-/// back to `Settings::default()` when the on-disk file can't be parsed. Left
-/// unchecked, that fallback would get written straight over a malformed-but-
-/// still-present file, destroying whatever the user (or a newer app version)
-/// had there. So if a file already exists on disk, it must still parse as
-/// valid `Settings` JSON or this call refuses to overwrite it.
+/// Fail-closed: every write path performs a strict read under the mutation
+/// lock. If an existing file cannot be read or decoded, no fallback/default
+/// document is allowed to overwrite it.
 pub fn save(settings: &Settings) -> Result<(), String> {
     let _guard = SETTINGS_MUTATION_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    save_unlocked(settings)
+    let path = config_path().ok_or_else(config_path_error)?;
+    let transaction = SettingsTransaction::acquire(&path)?;
+    save_snapshot_unlocked(&transaction.file, settings.clone()).map(|_| ())
 }
 
 pub fn update<R>(mutate: impl FnOnce(&mut Settings) -> Result<R, String>) -> Result<R, String> {
     let _guard = SETTINGS_MUTATION_LOCK
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let mut settings = load();
+    let path = config_path().ok_or_else(config_path_error)?;
+    let transaction = SettingsTransaction::acquire(&path)?;
+    let (mut settings, expected_bytes) = read_for_mutation_unlocked(&transaction.file)?;
+    let current_revision = settings.settings_revision;
     let result = mutate(&mut settings)?;
-    save_unlocked(&settings)?;
+    settings.settings_revision = next_settings_revision(current_revision)?;
+    write_unlocked(&transaction.file, &settings, expected_bytes.as_deref())?;
     Ok(result)
 }
 
-fn save_unlocked(settings: &Settings) -> Result<(), String> {
+/// Persist a whole-document snapshot received from the frontend. The snapshot
+/// must match the latest revision returned by `get_settings`; otherwise a
+/// newer frontend save or dedicated backend mutation happened while the pane
+/// was open, and the UI must reload instead of overwriting that newer state.
+pub fn save_frontend_snapshot(incoming: Settings) -> Result<u64, String> {
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let path = config_path().ok_or_else(config_path_error)?;
-    match std::fs::read_to_string(&path) {
-        Ok(existing) => {
-            if serde_json::from_str::<Settings>(&existing).is_err() {
-                return Err(format!(
-                    "refusing to overwrite unreadable config at {}: existing file is not valid JSON",
-                    path.display()
-                ));
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "refusing to overwrite unreadable config at {}: {error}",
-                path.display()
-            ));
+    let transaction = SettingsTransaction::acquire(&path)?;
+    save_snapshot_unlocked(&transaction.file, incoming)
+}
+
+fn save_snapshot_unlocked(file: &BoundSettingsFile, mut incoming: Settings) -> Result<u64, String> {
+    let (current, expected_bytes) = read_for_mutation_unlocked(file)?;
+    if incoming.settings_revision != current.settings_revision {
+        return Err(format!(
+            "stale settings snapshot: expected revision {}, received {}; reload settings before saving",
+            current.settings_revision, incoming.settings_revision
+        ));
+    }
+
+    preserve_unknown_fields(&mut incoming, &current);
+    incoming.settings_revision = next_settings_revision(current.settings_revision)?;
+    write_unlocked(file, &incoming, expected_bytes.as_deref())?;
+    Ok(incoming.settings_revision)
+}
+
+fn preserve_unknown_fields(incoming: &mut Settings, current: &Settings) {
+    for (key, value) in &current.extra {
+        incoming
+            .extra
+            .entry(key.clone())
+            .or_insert_with(|| value.clone());
+    }
+    for provider in &mut incoming.providers {
+        let Some(current_provider) = current.providers.iter().find(|item| item.id == provider.id)
+        else {
+            continue;
+        };
+        for (key, value) in &current_provider.extra {
+            provider
+                .extra
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
         }
     }
+}
+
+fn next_settings_revision(current: u64) -> Result<u64, String> {
+    current
+        .checked_add(1)
+        .ok_or_else(|| "settings revision overflow; refusing to overwrite config".to_string())
+}
+
+fn read_for_mutation_unlocked(
+    file: &BoundSettingsFile,
+) -> Result<(Settings, Option<Vec<u8>>), String> {
+    file.ensure_current_route()?;
+    crate::platform::atomic_file::recover_private_json_atomic_at::<Settings>(
+        &file.directory,
+        &file.name,
+    )
+    .map_err(|error| {
+        format!(
+            "refusing to recover unreadable config at {}: {error}",
+            file.display_path.display()
+        )
+    })?;
+    let existing = crate::platform::atomic_file::read_regular_file_bounded_at(
+        &file.directory,
+        &file.name,
+        MAX_SETTINGS_BYTES,
+    )
+    .map_err(|error| {
+        format!(
+            "refusing to overwrite unreadable config at {}: {error}",
+            file.display_path.display()
+        )
+    })?;
+    let settings = match existing.as_deref() {
+        Some(bytes) => serde_json::from_slice::<Settings>(bytes).map_err(|_| {
+            format!(
+                "refusing to overwrite unreadable config at {}: existing file is not valid JSON",
+                file.display_path.display()
+            )
+        })?,
+        None => Settings::default(),
+    };
+    file.ensure_current_route()?;
+    Ok((settings, existing))
+}
+
+fn read_settings_file(file: &BoundSettingsFile) -> Result<Option<Settings>, String> {
+    read_settings_file_with_hook(file, || {})
+}
+
+fn read_settings_file_with_hook(
+    file: &BoundSettingsFile,
+    after_route_check: impl FnOnce(),
+) -> Result<Option<Settings>, String> {
+    file.ensure_current_route()?;
+    crate::platform::atomic_file::recover_private_json_atomic_at::<Settings>(
+        &file.directory,
+        &file.name,
+    )
+    .map_err(|error| error.to_string())?;
+    after_route_check();
+    let existing = crate::platform::atomic_file::read_regular_file_bounded_at(
+        &file.directory,
+        &file.name,
+        MAX_SETTINGS_BYTES,
+    )
+    .map_err(|error| error.to_string())?;
+    let settings = existing
+        .as_deref()
+        .map(serde_json::from_slice::<Settings>)
+        .transpose()
+        .map_err(|_| "existing file is not valid JSON".to_string())?;
+    file.ensure_current_route()?;
+    Ok(settings)
+}
+
+fn write_unlocked(
+    file: &BoundSettingsFile,
+    settings: &Settings,
+    expected_bytes: Option<&[u8]>,
+) -> Result<(), String> {
+    file.ensure_current_route()?;
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    crate::platform::atomic_file::write_private_json_atomic::<Settings>(&path, json.as_bytes())
-        .map_err(|e| e.to_string())
+    if json.len() > MAX_SETTINGS_BYTES {
+        return Err(format!(
+            "settings document exceeds {MAX_SETTINGS_BYTES} byte limit; refusing to write"
+        ));
+    }
+    let outcome =
+        crate::platform::atomic_file::write_private_json_atomic_if_matches_at::<Settings>(
+            &file.directory,
+            &file.name,
+            json.as_bytes(),
+            expected_bytes,
+        )
+        .map_err(|error| error.to_string())?;
+    file.ensure_current_route()?;
+    match outcome {
+        crate::platform::atomic_file::ConditionalWriteOutcome::Written => Ok(()),
+        crate::platform::atomic_file::ConditionalWriteOutcome::Conflict => {
+            Err("settings changed outside this mutation; reload before saving".to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+fn write_unlocked_with_hook(
+    file: &BoundSettingsFile,
+    settings: &Settings,
+    expected_bytes: Option<&[u8]>,
+    before_claim: impl FnOnce(),
+) -> Result<(), String> {
+    file.ensure_current_route()?;
+    let json = serde_json::to_string_pretty(settings).map_err(|error| error.to_string())?;
+    let outcome =
+        crate::platform::atomic_file::write_private_json_atomic_if_matches_at_with_hook::<Settings>(
+            &file.directory,
+            &file.name,
+            json.as_bytes(),
+            expected_bytes,
+            before_claim,
+        )
+        .map_err(|error| error.to_string())?;
+    file.ensure_current_route()?;
+    match outcome {
+        crate::platform::atomic_file::ConditionalWriteOutcome::Written => Ok(()),
+        crate::platform::atomic_file::ConditionalWriteOutcome::Conflict => {
+            Err("settings changed outside this mutation; reload before saving".to_string())
+        }
+    }
 }
 
 pub fn config_path() -> Option<PathBuf> {
@@ -646,14 +933,21 @@ fn config_path_error() -> String {
     "BirdNion config path unavailable: no platform config or user-home root".to_string()
 }
 
+pub fn load_checked() -> Result<Settings, String> {
+    let path = config_path().ok_or_else(config_path_error)?;
+    let _guard = SETTINGS_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    SettingsTransaction::acquire(&path)
+        .and_then(|transaction| read_settings_file(&transaction.file))
+        .map(|settings| settings.unwrap_or_default())
+}
+
+/// Non-authoritative backend reads preserve historical fallback behavior.
+/// Frontend snapshots must use `load_checked()` so a transient read failure
+/// can never masquerade as an authoritative empty revision-zero document.
 pub fn load() -> Settings {
-    let Some(path) = config_path() else {
-        return Settings::default();
-    };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    load_checked().unwrap_or_default()
 }
 
 /// Enabled provider entries, in file order (drives the tab order).
@@ -873,6 +1167,125 @@ mod fail_closed_and_lossless_tests {
         dir
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn settings_transactions_preserve_existing_parent_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("existing-parent-mode");
+        let path = base.join("settings.json");
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o750)).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"version":1,"settingsRevision":0,"providers":[]}"#,
+        )
+        .unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        assert_eq!(load_checked().unwrap().version, 1);
+        assert_eq!(
+            std::fs::metadata(&base).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        update(|settings| {
+            settings.version = 2;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(&base).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn settings_file_lock_serializes_independent_descriptors() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let base = temp_config("interprocess-lock");
+        let path = base.join("settings.json");
+        let first_file = BoundSettingsFile::open(&path).unwrap();
+        let first = SettingsInterprocessLock::acquire(&first_file).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let second_path = path.clone();
+        let handle = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let second_file = BoundSettingsFile::open(&second_path).unwrap();
+            let result = SettingsInterprocessLock::acquire(&second_file);
+            acquired_tx.send(result.is_ok()).unwrap();
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            acquired_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(first);
+        assert_eq!(acquired_rx.recv_timeout(Duration::from_secs(2)), Ok(true));
+        handle.join().unwrap();
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn load_waits_for_claim_then_recovers_valid_settings() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("reader-claim-gap");
+        let path = base.join("settings.json");
+        let backup = base.join("settings.json.birdnion-cas-backup");
+        std::fs::write(
+            &path,
+            br#"{"version":7,"settingsRevision":3,"providers":[]}"#,
+        )
+        .unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let (claimed_tx, claimed_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_path = path.clone();
+        let writer_backup = backup.clone();
+        let writer = std::thread::spawn(move || {
+            let transaction = SettingsTransaction::acquire(&writer_path).unwrap();
+            std::fs::rename(&writer_path, &writer_backup).unwrap();
+            claimed_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            drop(transaction);
+        });
+        claimed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (loaded_tx, loaded_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            loaded_tx.send(load()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            loaded_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        release_tx.send(()).unwrap();
+        let loaded = loaded_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(loaded.version, 7);
+        assert_eq!(loaded.settings_revision, 3);
+        writer.join().unwrap();
+        reader.join().unwrap();
+        assert!(path.exists());
+        assert!(!backup.exists());
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
     #[test]
     fn save_refuses_to_overwrite_malformed_existing_file() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
@@ -921,6 +1334,101 @@ mod fail_closed_and_lossless_tests {
 
         assert!(save(&Settings::default()).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_settings_path_fails_without_blocking_or_replacement() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::FileTypeExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("fifo");
+        let path = base.join("settings.json");
+        let raw_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `raw_path` is NUL-terminated and valid for this call.
+        assert_eq!(unsafe { libc::mkfifo(raw_path.as_ptr(), 0o600) }, 0);
+        std::env::set_var("BIRDNION_CONFIG", &path);
+        let (sender, receiver) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let settings_path = config_path().unwrap();
+            let settings_file = BoundSettingsFile::open(&settings_path).unwrap();
+            let _ = sender.send((
+                load().version,
+                read_for_mutation_unlocked(&settings_file).is_err(),
+            ));
+        });
+
+        let result = receiver.recv_timeout(Duration::from_secs(2));
+        std::env::remove_var("BIRDNION_CONFIG");
+        if result != Ok((0, true)) {
+            let _ = std::fs::remove_dir_all(&base);
+            panic!("opening a FIFO must fail closed instead of waiting for a writer: {result:?}");
+        }
+        handle.join().unwrap();
+        assert!(std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_fifo());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_settings_path_is_not_followed_or_replaced() {
+        use std::os::unix::fs::symlink;
+
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("symlink");
+        let path = base.join("settings.json");
+        let target = base.join("target.json");
+        let original = br#"{"version":7,"providers":[]}"#;
+        std::fs::write(&target, original).unwrap();
+        symlink(&target, &path).unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        assert_eq!(load().version, 0);
+        assert!(save(&Settings {
+            version: 8,
+            ..Default::default()
+        })
+        .is_err());
+        assert!(std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn oversized_sparse_settings_is_not_read_or_overwritten() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("oversized-sparse");
+        let path = base.join("settings.json");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len((MAX_SETTINGS_BYTES + 1) as u64).unwrap();
+        drop(file);
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        assert_eq!(load().version, 0);
+        assert!(save(&Settings {
+            version: 9,
+            ..Default::default()
+        })
+        .is_err());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            (MAX_SETTINGS_BYTES + 1) as u64
+        );
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = std::fs::remove_dir_all(&base);
@@ -1052,6 +1560,324 @@ mod fail_closed_and_lossless_tests {
         // Cleared, not resurrected by the unknown-key merge (which only ever
         // applies to keys this build doesn't model).
         assert_eq!(provider.get("accountLabel"), Some(&serde_json::Value::Null));
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stale_frontend_snapshot_is_rejected_after_dedicated_update() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("frontend-snapshot-account-race");
+        let path = base.join("settings.json");
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let initial = Settings {
+            version: 1,
+            active_codex_account: Some("account-a".into()),
+            ..Default::default()
+        };
+        save(&initial).unwrap();
+        let mut stale_frontend = load();
+        assert_eq!(stale_frontend.settings_revision, 1);
+        update(|current| {
+            current.active_codex_account = Some("account-b".into());
+            Ok(())
+        })
+        .unwrap();
+        stale_frontend.version = 2;
+
+        let error = save_frontend_snapshot(stale_frontend).unwrap_err();
+        assert!(error.contains("stale settings snapshot"));
+        let stored = load();
+        assert_eq!(stored.version, 1);
+        assert_eq!(stored.settings_revision, 2);
+        assert_eq!(stored.active_codex_account.as_deref(), Some("account-b"));
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stale_frontend_snapshot_is_rejected_after_newer_frontend_save() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("frontend-snapshot-race");
+        let path = base.join("settings.json");
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        save(&Settings {
+            version: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut stale_a = load();
+        let mut fresh_b = stale_a.clone();
+        fresh_b.version = 2;
+        assert_eq!(save_frontend_snapshot(fresh_b).unwrap(), 2);
+
+        stale_a.version = 3;
+        let error = save_frontend_snapshot(stale_a).unwrap_err();
+        assert!(error.contains("expected revision 2, received 1"));
+        let stored = load();
+        assert_eq!(stored.version, 2);
+        assert_eq!(stored.settings_revision, 2);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fresh_frontend_snapshot_succeeds_and_returns_next_revision() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("fresh-frontend-snapshot");
+        let path = base.join("settings.json");
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        save(&Settings {
+            version: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut fresh = load();
+        assert_eq!(fresh.settings_revision, 1);
+        fresh.version = 2;
+
+        assert_eq!(save_frontend_snapshot(fresh).unwrap(), 2);
+        let stored = load();
+        assert_eq!(stored.version, 2);
+        assert_eq!(stored.settings_revision, 2);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn external_content_change_after_mutation_read_is_not_overwritten() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("external-content-cas");
+        let path = base.join("settings.json");
+        std::env::set_var("BIRDNION_CONFIG", &path);
+        save(&Settings {
+            version: 1,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let file = BoundSettingsFile::open(&path).unwrap();
+        let (mut local, expected_bytes) = read_for_mutation_unlocked(&file).unwrap();
+        let mut external = local.clone();
+        external.version = 9;
+        external.settings_revision = local.settings_revision + 1;
+        let external_bytes = serde_json::to_vec_pretty(&external).unwrap();
+        crate::platform::atomic_file::write_private_atomic(&path, &external_bytes).unwrap();
+
+        local.version = 2;
+        local.settings_revision += 1;
+        let error = write_unlocked(&file, &local, expected_bytes.as_deref()).unwrap_err();
+        assert!(error.contains("settings changed outside this mutation"));
+        assert_eq!(std::fs::read(&path).unwrap(), external_bytes);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn external_content_change_after_staging_is_not_overwritten() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("external-staging-cas");
+        let path = base.join("settings.json");
+        std::env::set_var("BIRDNION_CONFIG", &path);
+        save(&Settings {
+            version: 1,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let transaction = SettingsTransaction::acquire(&path).unwrap();
+        let (mut local, expected_bytes) = read_for_mutation_unlocked(&transaction.file).unwrap();
+        let mut external = local.clone();
+        external.version = 9;
+        external.settings_revision += 1;
+        let external_bytes = serde_json::to_vec_pretty(&external).unwrap();
+        local.version = 2;
+        local.settings_revision += 1;
+
+        let error =
+            write_unlocked_with_hook(&transaction.file, &local, expected_bytes.as_deref(), || {
+                crate::platform::atomic_file::write_private_atomic(&path, &external_bytes).unwrap();
+            })
+            .unwrap_err();
+        assert!(error.contains("settings changed outside this mutation"));
+        assert_eq!(std::fs::read(&path).unwrap(), external_bytes);
+        drop(transaction);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn parent_swap_after_binding_never_reports_write_success() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("settings-parent-swap-write");
+        let current = base.join("current");
+        let detached = base.join("detached");
+        std::fs::create_dir(&current).unwrap();
+        let path = current.join("settings.json");
+        std::env::set_var("BIRDNION_CONFIG", &path);
+        save(&Settings {
+            version: 1,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let transaction = SettingsTransaction::acquire(&path).unwrap();
+        let (mut local, expected_bytes) = read_for_mutation_unlocked(&transaction.file).unwrap();
+        local.version = 2;
+        local.settings_revision += 1;
+        let replacement = br#"{"version":9,"settingsRevision":9,"providers":[]}"#.to_vec();
+
+        let error =
+            write_unlocked_with_hook(&transaction.file, &local, expected_bytes.as_deref(), || {
+                std::fs::rename(&current, &detached).unwrap();
+                std::fs::create_dir(&current).unwrap();
+                std::fs::write(&path, &replacement).unwrap();
+            })
+            .unwrap_err();
+        assert!(error.contains("settings directory route changed"));
+        assert_eq!(std::fs::read(&path).unwrap(), replacement);
+        drop(transaction);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn parent_swap_after_read_precheck_never_returns_detached_default() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("settings-parent-swap-read");
+        let current = base.join("current");
+        let detached = base.join("detached");
+        std::fs::create_dir(&current).unwrap();
+        let path = current.join("settings.json");
+        let transaction = SettingsTransaction::acquire(&path).unwrap();
+        let replacement =
+            br#"{"version":9,"settingsRevision":0,"providers":[{"id":"claude","apiKey":"keep"}]}"#;
+
+        let result = read_settings_file_with_hook(&transaction.file, || {
+            std::fs::rename(&current, &detached).unwrap();
+            std::fs::create_dir(&current).unwrap();
+            std::fs::write(&path, replacement).unwrap();
+        });
+        assert!(result
+            .unwrap_err()
+            .contains("settings directory route changed"));
+        assert_eq!(std::fs::read(&path).unwrap(), replacement);
+        drop(transaction);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn revision_overflow_fails_without_mutating_existing_file() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("revision-overflow");
+        let path = base.join("settings.json");
+        let original = format!(
+            r#"{{"version":1,"settingsRevision":{},"providers":[]}}"#,
+            u64::MAX
+        );
+        std::fs::write(&path, &original).unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let error = save_frontend_snapshot(load()).unwrap_err();
+        assert!(error.contains("settings revision overflow"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn legacy_revision_zero_migrates_on_first_successful_update() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("legacy-revision-zero");
+        let path = base.join("settings.json");
+        std::fs::write(&path, r#"{"version":1,"providers":[]}"#).unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        assert_eq!(load().settings_revision, 0);
+        update(|settings| {
+            settings.version = 2;
+            Ok(())
+        })
+        .unwrap();
+
+        let stored = load();
+        assert_eq!(stored.version, 2);
+        assert_eq!(stored.settings_revision, 1);
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            raw.get("settingsRevision"),
+            Some(&serde_json::Value::from(1))
+        );
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn settings_revision_uses_frontend_camel_case_and_is_never_omitted() {
+        let raw = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(
+            raw.get("settingsRevision"),
+            Some(&serde_json::Value::from(0))
+        );
+        assert!(raw.get("settings_revision").is_none());
+    }
+
+    #[test]
+    fn frontend_snapshot_preserves_unknown_top_level_and_provider_keys() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("frontend-unknown-fields");
+        let path = base.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"providers":[{"id":"claude","enabled":true,"futureProviderField":"keep-provider"}],"futureFeatureFlag":"keep-top"}"#,
+        )
+        .unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let mut incoming = load();
+        incoming.version = 2;
+        // Frontend projections may omit fields they do not model. The backend
+        // still owns lossless preservation for keys from newer app versions.
+        incoming.extra.clear();
+        incoming.providers[0].extra.clear();
+        save_frontend_snapshot(incoming).unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["futureFeatureFlag"], "keep-top");
+        assert_eq!(raw["providers"][0]["futureProviderField"], "keep-provider");
+        assert_eq!(raw["settingsRevision"], 1);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn frontend_snapshot_refuses_malformed_existing_file_without_mutation() {
+        let _guard = TEST_ENV_LOCK.lock().unwrap();
+        let base = temp_config("frontend-malformed");
+        let path = base.join("settings.json");
+        let original = b"{ definitely not settings json";
+        std::fs::write(&path, original).unwrap();
+        std::env::set_var("BIRDNION_CONFIG", &path);
+
+        let error = save_frontend_snapshot(Settings::default()).unwrap_err();
+        assert!(error.contains("refusing to overwrite unreadable config"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = std::fs::remove_dir_all(&base);

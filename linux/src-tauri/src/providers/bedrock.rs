@@ -77,9 +77,21 @@ fn sign_request(
     }
     headers.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let signed_header_keys = headers.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(";");
-    let canonical_headers = headers.iter().map(|(k, v)| format!("{k}:{v}")).collect::<Vec<_>>().join("\n");
-    let canonical_path = if path.is_empty() { "/".to_string() } else { path.to_string() };
+    let signed_header_keys = headers
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect::<Vec<_>>()
+        .join(";");
+    let canonical_headers = headers
+        .iter()
+        .map(|(k, v)| format!("{k}:{v}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let canonical_path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    };
 
     let canonical_request = [
         method,
@@ -92,10 +104,18 @@ fn sign_request(
     .join("\n");
 
     let credential_scope = format!("{date_stamp_s}/{region}/{service}/aws4_request");
-    let string_to_sign =
-        ["AWS4-HMAC-SHA256", &amz_date_s, &credential_scope, &sha256_hex(canonical_request.as_bytes())].join("\n");
+    let string_to_sign = [
+        "AWS4-HMAC-SHA256",
+        &amz_date_s,
+        &credential_scope,
+        &sha256_hex(canonical_request.as_bytes()),
+    ]
+    .join("\n");
 
-    let k_date = hmac_bytes(format!("AWS4{}", credentials.secret_access_key).as_bytes(), date_stamp_s.as_bytes());
+    let k_date = hmac_bytes(
+        format!("AWS4{}", credentials.secret_access_key).as_bytes(),
+        date_stamp_s.as_bytes(),
+    );
     let k_region = hmac_bytes(&k_date, region.as_bytes());
     let k_service = hmac_bytes(&k_region, service.as_bytes());
     let k_signing = hmac_bytes(&k_service, b"aws4_request");
@@ -113,7 +133,9 @@ fn sign_request(
 
 /// Minimal INI parser: [section] -> {key: value}. Ignores comments/blank
 /// lines; good enough for `~/.aws/credentials` and `~/.aws/config`.
-fn parse_ini(content: &str) -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
+fn parse_ini(
+    content: &str,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
     let mut result = std::collections::HashMap::new();
     let mut section = String::new();
     for raw_line in content.lines() {
@@ -131,7 +153,10 @@ fn parse_ini(content: &str) -> std::collections::HashMap<String, std::collection
         if let Some(eq) = line.find('=') {
             let key = line[..eq].trim().to_lowercase();
             let value = line[eq + 1..].trim().to_string();
-            result.entry(section.clone()).or_insert_with(std::collections::HashMap::new).insert(key, value);
+            result
+                .entry(section.clone())
+                .or_insert_with(std::collections::HashMap::new)
+                .insert(key, value);
         }
     }
     result
@@ -144,7 +169,11 @@ fn cleaned(s: Option<&str>) -> Option<String> {
     }
     if (v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')) {
         let stripped = v[1..v.len() - 1].trim();
-        return if stripped.is_empty() { None } else { Some(stripped.to_string()) };
+        return if stripped.is_empty() {
+            None
+        } else {
+            Some(stripped.to_string())
+        };
     }
     Some(v.to_string())
 }
@@ -155,7 +184,8 @@ struct Resolved {
 }
 
 fn env_region() -> Option<String> {
-    cleaned(std::env::var("AWS_REGION").ok().as_deref()).or_else(|| cleaned(std::env::var("AWS_DEFAULT_REGION").ok().as_deref()))
+    cleaned(std::env::var("AWS_REGION").ok().as_deref())
+        .or_else(|| cleaned(std::env::var("AWS_DEFAULT_REGION").ok().as_deref()))
 }
 
 fn resolve_from_profile(profile: &str, config_region: Option<&str>) -> Result<Resolved, String> {
@@ -168,14 +198,30 @@ fn resolve_from_profile(profile: &str, config_region: Option<&str>) -> Result<Re
         .ok()
         .map(|s| parse_ini(&s))
         .unwrap_or_default();
-    let config_section = if profile == "default" { "default".to_string() } else { format!("profile {profile}") };
+    let config_section = if profile == "default" {
+        "default".to_string()
+    } else {
+        format!("profile {profile}")
+    };
     let empty = std::collections::HashMap::new();
     let cred = cred_map.get(profile).unwrap_or(&empty);
     let cfgm = config_map.get(&config_section).unwrap_or(&empty);
 
-    let key_id = cleaned(cred.get("aws_access_key_id").or_else(|| cfgm.get("aws_access_key_id")).map(|s| s.as_str()));
-    let secret = cleaned(cred.get("aws_secret_access_key").or_else(|| cfgm.get("aws_secret_access_key")).map(|s| s.as_str()));
-    let session_token = cleaned(cred.get("aws_session_token").or_else(|| cfgm.get("aws_session_token")).map(|s| s.as_str()));
+    let key_id = cleaned(
+        cred.get("aws_access_key_id")
+            .or_else(|| cfgm.get("aws_access_key_id"))
+            .map(|s| s.as_str()),
+    );
+    let secret = cleaned(
+        cred.get("aws_secret_access_key")
+            .or_else(|| cfgm.get("aws_secret_access_key"))
+            .map(|s| s.as_str()),
+    );
+    let session_token = cleaned(
+        cred.get("aws_session_token")
+            .or_else(|| cfgm.get("aws_session_token"))
+            .map(|s| s.as_str()),
+    );
     let region = config_region
         .map(String::from)
         .or_else(env_region)
@@ -183,9 +229,14 @@ fn resolve_from_profile(profile: &str, config_region: Option<&str>) -> Result<Re
         .unwrap_or_else(|| "us-east-1".to_string());
 
     match (key_id, secret) {
-        (Some(access_key_id), Some(secret_access_key)) => {
-            Ok(Resolved { credentials: Credentials { access_key_id, secret_access_key, session_token }, region })
-        }
+        (Some(access_key_id), Some(secret_access_key)) => Ok(Resolved {
+            credentials: Credentials {
+                access_key_id,
+                secret_access_key,
+                session_token,
+            },
+            region,
+        }),
         _ => Err("Chưa cấu hình AWS credentials (~/.aws/credentials)".to_string()),
     }
 }
@@ -201,16 +252,41 @@ fn resolve_credentials(cfg: &config::Provider) -> Result<Resolved, String> {
         return resolve_from_profile(&profile, config_region.as_deref());
     }
 
-    if let (Some(key_id), Some(secret)) = (cleaned(cfg.api_key.as_deref()), cleaned(cfg.secret_key.as_deref())) {
-        let region = config_region.or_else(env_region).unwrap_or_else(|| "us-east-1".to_string());
-        return Ok(Resolved { credentials: Credentials { access_key_id: key_id, secret_access_key: secret, session_token: None }, region });
+    if let (Some(key_id), Some(secret)) = (
+        cleaned(cfg.api_key.as_deref()),
+        cleaned(cfg.secret_key.as_deref()),
+    ) {
+        let region = config_region
+            .or_else(env_region)
+            .unwrap_or_else(|| "us-east-1".to_string());
+        return Ok(Resolved {
+            credentials: Credentials {
+                access_key_id: key_id,
+                secret_access_key: secret,
+                session_token: None,
+            },
+            region,
+        });
     }
-    if let (Ok(key_id), Ok(secret)) = (std::env::var("AWS_ACCESS_KEY_ID"), std::env::var("AWS_SECRET_ACCESS_KEY")) {
-        let region = config_region.or_else(env_region).unwrap_or_else(|| "us-east-1".to_string());
+    if let (Ok(key_id), Ok(secret)) = (
+        std::env::var("AWS_ACCESS_KEY_ID"),
+        std::env::var("AWS_SECRET_ACCESS_KEY"),
+    ) {
+        let region = config_region
+            .or_else(env_region)
+            .unwrap_or_else(|| "us-east-1".to_string());
         let session_token = cleaned(std::env::var("AWS_SESSION_TOKEN").ok().as_deref());
-        return Ok(Resolved { credentials: Credentials { access_key_id: key_id, secret_access_key: secret, session_token }, region });
+        return Ok(Resolved {
+            credentials: Credentials {
+                access_key_id: key_id,
+                secret_access_key: secret,
+                session_token,
+            },
+            region,
+        });
     }
-    let profile = cleaned(std::env::var("AWS_PROFILE").ok().as_deref()).unwrap_or_else(|| "default".to_string());
+    let profile = cleaned(std::env::var("AWS_PROFILE").ok().as_deref())
+        .unwrap_or_else(|| "default".to_string());
     resolve_from_profile(&profile, config_region.as_deref())
 }
 
@@ -240,9 +316,14 @@ fn regex_ok(region: &str) -> bool {
     if parts.len() < 3 {
         return false;
     }
-    let is_alnum_lower = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    let is_alnum_lower = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    };
     let last_is_digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    parts[..parts.len() - 1].iter().all(|p| is_alnum_lower(p)) && last_is_digits(parts[parts.len() - 1])
+    parts[..parts.len() - 1].iter().all(|p| is_alnum_lower(p))
+        && last_is_digits(parts[parts.len() - 1])
 }
 
 async fn fetch_cloudwatch_activity(
@@ -254,7 +335,11 @@ async fn fetch_cloudwatch_activity(
     let now = chrono::Utc::now();
     let start = now - chrono::Duration::days(14);
 
-    let metrics = [("inputTokens", "InputTokenCount"), ("outputTokens", "OutputTokenCount"), ("requests", "Invocations")];
+    let metrics = [
+        ("inputTokens", "InputTokenCount"),
+        ("outputTokens", "OutputTokenCount"),
+        ("requests", "Invocations"),
+    ];
     let queries: Vec<Value> = metrics
         .iter()
         .map(|(id, metric_name)| {
@@ -272,9 +357,21 @@ async fn fetch_cloudwatch_activity(
 
     let extra_headers = [
         ("content-type", "application/x-amz-json-1.0"),
-        ("x-amz-target", "GraniteServiceVersion20100801.GetMetricData"),
+        (
+            "x-amz-target",
+            "GraniteServiceVersion20100801.GetMetricData",
+        ),
     ];
-    let signed = sign_request("POST", &host, "/", &body, credentials, region, "monitoring", &extra_headers);
+    let signed = sign_request(
+        "POST",
+        &host,
+        "/",
+        &body,
+        credentials,
+        region,
+        "monitoring",
+        &extra_headers,
+    );
 
     let mut req = client.post(format!("https://{host}")).body(body);
     for (k, v) in &signed {
@@ -284,7 +381,10 @@ async fn fetch_cloudwatch_activity(
         req = req.header(k.as_str(), v.as_str());
     }
     req = req.header("Content-Type", "application/x-amz-json-1.0");
-    req = req.header("X-Amz-Target", "GraniteServiceVersion20100801.GetMetricData");
+    req = req.header(
+        "X-Amz-Target",
+        "GraniteServiceVersion20100801.GetMetricData",
+    );
 
     let resp = req.send().await.map_err(|e| format!("CloudWatch: {e}"))?;
     if resp.status().as_u16() != 200 {
@@ -296,13 +396,24 @@ async fn fetch_cloudwatch_activity(
 
 /// Pure CloudWatch GetMetricData response → (input, output, request) totals.
 pub fn parse_cloudwatch_page(json: &Value) -> Result<(i64, i64, i64), String> {
-    if json.get("Messages").and_then(Value::as_array).is_some_and(|m| !m.is_empty()) {
+    if json
+        .get("Messages")
+        .and_then(Value::as_array)
+        .is_some_and(|m| !m.is_empty())
+    {
         return Err("CloudWatch: incomplete results".to_string());
     }
-    let results = json.get("MetricDataResults").and_then(Value::as_array).cloned().unwrap_or_default();
+    let results = json
+        .get("MetricDataResults")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let mut totals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for r in &results {
-        let (Some(id), Some(values)) = (r.get("Id").and_then(Value::as_str), r.get("Values").and_then(Value::as_array)) else {
+        let (Some(id), Some(values)) = (
+            r.get("Id").and_then(Value::as_str),
+            r.get("Values").and_then(Value::as_array),
+        ) else {
             continue;
         };
         if r.get("StatusCode").and_then(Value::as_str) != Some("Complete") {
@@ -321,10 +432,16 @@ pub fn parse_cloudwatch_page(json: &Value) -> Result<(i64, i64, i64), String> {
 fn current_month_range(now: chrono::DateTime<chrono::Utc>) -> (String, String) {
     let start_of_month = now.date_naive().with_day(1).unwrap();
     let tomorrow = now.date_naive() + chrono::Duration::days(1);
-    (start_of_month.format("%Y-%m-%d").to_string(), tomorrow.format("%Y-%m-%d").to_string())
+    (
+        start_of_month.format("%Y-%m-%d").to_string(),
+        tomorrow.format("%Y-%m-%d").to_string(),
+    )
 }
 
-async fn fetch_monthly_cost(client: &reqwest::Client, credentials: &Credentials) -> Result<f64, String> {
+async fn fetch_monthly_cost(
+    client: &reqwest::Client,
+    credentials: &Credentials,
+) -> Result<f64, String> {
     let host = "ce.us-east-1.amazonaws.com";
     let (start, end) = current_month_range(chrono::Utc::now());
     let mut total = 0.0;
@@ -341,8 +458,20 @@ async fn fetch_monthly_cost(client: &reqwest::Client, credentials: &Credentials)
             body_val["NextPageToken"] = json!(t);
         }
         let body = serde_json::to_vec(&body_val).map_err(|e| e.to_string())?;
-        let extra_headers = [("content-type", "application/x-amz-json-1.1"), ("x-amz-target", "AWSInsightsIndexService.GetCostAndUsage")];
-        let signed = sign_request("POST", host, "/", &body, credentials, "us-east-1", "ce", &extra_headers);
+        let extra_headers = [
+            ("content-type", "application/x-amz-json-1.1"),
+            ("x-amz-target", "AWSInsightsIndexService.GetCostAndUsage"),
+        ];
+        let signed = sign_request(
+            "POST",
+            host,
+            "/",
+            &body,
+            credentials,
+            "us-east-1",
+            "ce",
+            &extra_headers,
+        );
         let mut req = client.post(format!("https://{host}")).body(body);
         for (k, v) in &signed {
             if k.eq_ignore_ascii_case("host") {
@@ -353,7 +482,10 @@ async fn fetch_monthly_cost(client: &reqwest::Client, credentials: &Credentials)
         req = req.header("Content-Type", "application/x-amz-json-1.1");
         req = req.header("X-Amz-Target", "AWSInsightsIndexService.GetCostAndUsage");
 
-        let resp = req.send().await.map_err(|e| format!("Cost Explorer: {e}"))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("Cost Explorer: {e}"))?;
         let status = resp.status().as_u16();
         let json: Value = resp.json().await.unwrap_or(Value::Null);
         if status == 400 && is_data_unavailable(&json) {
@@ -363,7 +495,11 @@ async fn fetch_monthly_cost(client: &reqwest::Client, credentials: &Credentials)
             return Err(format!("Cost Explorer: HTTP {status}"));
         }
         total += parse_total_cost(&json);
-        next_token = json.get("NextPageToken").and_then(Value::as_str).map(String::from).filter(|t| !t.trim().is_empty());
+        next_token = json
+            .get("NextPageToken")
+            .and_then(Value::as_str)
+            .map(String::from)
+            .filter(|t| !t.trim().is_empty());
         if let Some(t) = &next_token {
             if !seen.insert(t.clone()) {
                 return Err("Cost Explorer: Repeated NextPageToken".to_string());
@@ -380,23 +516,44 @@ fn is_data_unavailable(json: &Value) -> bool {
         json.get("__type").and_then(Value::as_str),
         json.get("code").and_then(Value::as_str),
         json.get("Code").and_then(Value::as_str),
-        json.get("Error").and_then(|e| e.get("Code")).and_then(Value::as_str),
+        json.get("Error")
+            .and_then(|e| e.get("Code"))
+            .and_then(Value::as_str),
     ];
-    candidates.iter().flatten().any(|c| c.split('#').last() == Some("DataUnavailableException"))
+    candidates
+        .iter()
+        .flatten()
+        .any(|c| c.split('#').last() == Some("DataUnavailableException"))
 }
 
 /// Pure Cost Explorer page → total Bedrock spend (unit-tested).
 pub fn parse_total_cost(json: &Value) -> f64 {
-    let Some(results) = json.get("ResultsByTime").and_then(Value::as_array) else { return 0.0 };
+    let Some(results) = json.get("ResultsByTime").and_then(Value::as_array) else {
+        return 0.0;
+    };
     let mut total = 0.0;
     for r in results {
-        let Some(groups) = r.get("Groups").and_then(Value::as_array) else { continue };
+        let Some(groups) = r.get("Groups").and_then(Value::as_array) else {
+            continue;
+        };
         for g in groups {
-            let Some(svc) = g.get("Keys").and_then(Value::as_array).and_then(|k| k.first()).and_then(Value::as_str) else { continue };
+            let Some(svc) = g
+                .get("Keys")
+                .and_then(Value::as_array)
+                .and_then(|k| k.first())
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
             if !svc.to_lowercase().contains("bedrock") {
                 continue;
             }
-            let Some(amount_str) = g.get("Metrics").and_then(|m| m.get("UnblendedCost")).and_then(|c| c.get("Amount")).and_then(Value::as_str) else {
+            let Some(amount_str) = g
+                .get("Metrics")
+                .and_then(|m| m.get("UnblendedCost"))
+                .and_then(|c| c.get("Amount"))
+                .and_then(Value::as_str)
+            else {
                 continue;
             };
             if let Ok(amount) = amount_str.parse::<f64>() {
@@ -410,7 +567,11 @@ pub fn parse_total_cost(json: &Value) -> f64 {
 fn end_of_current_month(now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
     let year = now.year();
     let month = now.month();
-    let (next_year, next_month) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
     let first_of_next = chrono::NaiveDate::from_ymd_opt(next_year, next_month, 1)?;
     Some(first_of_next.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }
@@ -425,25 +586,46 @@ fn compact_count(n: i64) -> String {
 }
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
-    let name = cfg.display_name.clone().unwrap_or_else(|| "AWS Bedrock".to_string());
+    let name = cfg
+        .display_name
+        .clone()
+        .unwrap_or_else(|| "AWS Bedrock".to_string());
     let resolved = match resolve_credentials(cfg) {
         Ok(r) => r,
         Err(e) => return ProviderStatus::failure(&cfg.id, &name, e),
     };
     let region = resolved.region.clone();
     let account_label = cfg.account_label.clone().unwrap_or_else(|| {
-        cfg.aws_profile.clone().unwrap_or_else(|| std::env::var("AWS_PROFILE").unwrap_or_else(|_| "default".to_string()))
+        cfg.aws_profile.clone().unwrap_or_else(|| {
+            std::env::var("AWS_PROFILE").unwrap_or_else(|_| "default".to_string())
+        })
     });
 
     let client = shared_client();
-    let monthly_spend = fetch_monthly_cost(&client, &resolved.credentials).await.ok();
-    let activity = fetch_cloudwatch_activity(&client, &resolved.credentials, &region).await.ok();
+    let monthly_spend = fetch_monthly_cost(&client, &resolved.credentials)
+        .await
+        .ok();
+    let activity = fetch_cloudwatch_activity(&client, &resolved.credentials, &region)
+        .await
+        .ok();
 
     if monthly_spend.is_none() && activity.is_none() {
-        return ProviderStatus::failure(&cfg.id, &name, "Không lấy được dữ liệu từ Cost Explorer và CloudWatch");
+        return ProviderStatus::failure(
+            &cfg.id,
+            &name,
+            "Không lấy được dữ liệu từ Cost Explorer và CloudWatch",
+        );
     }
 
-    build_status(&cfg.id, &name, &account_label, monthly_spend, cfg.budget, activity, &region)
+    build_status(
+        &cfg.id,
+        &name,
+        &account_label,
+        monthly_spend,
+        cfg.budget,
+        activity,
+        &region,
+    )
 }
 
 /// Pure spend/activity → status mapping (unit-tested).
@@ -463,7 +645,9 @@ fn build_status(
     if let Some(spend) = monthly_spend {
         if let Some(b) = budget.filter(|b| *b > 0.0) {
             let used_pct = ((spend / b) * 100.0).round().clamp(0.0, 100.0) as i32;
-            windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+            windows.push(QuotaWindow {
+                semantic_key: None,
+                semantic_kind: None,
                 label: "Ngân sách tháng".into(),
                 used_pct,
                 remaining_pct: 100 - used_pct,
@@ -472,7 +656,9 @@ fn build_status(
                 window_seconds: None,
             });
         } else {
-            windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+            windows.push(QuotaWindow {
+                semantic_key: None,
+                semantic_kind: None,
                 label: "Ngân sách tháng".into(),
                 used_pct: 0,
                 remaining_pct: 100,
@@ -491,7 +677,9 @@ fn build_status(
             compact_count(input_tokens),
             compact_count(output_tokens)
         );
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: format!("14 ngày ({region})"),
             used_pct: 0,
             remaining_pct: 100,
@@ -548,7 +736,15 @@ mod tests {
 
     #[test]
     fn build_status_with_budget_shows_used_pct() {
-        let s = build_status("bedrock", "AWS Bedrock", "default", Some(50.0), Some(100.0), Some((1000, 500, 10)), "us-east-1");
+        let s = build_status(
+            "bedrock",
+            "AWS Bedrock",
+            "default",
+            Some(50.0),
+            Some(100.0),
+            Some((1000, 500, 10)),
+            "us-east-1",
+        );
         assert_eq!(s.windows.len(), 2);
         assert_eq!(s.windows[0].used_pct, 50);
         assert_eq!(s.windows[1].label, "14 ngày (us-east-1)");
@@ -556,7 +752,15 @@ mod tests {
 
     #[test]
     fn build_status_without_budget_is_informational() {
-        let s = build_status("bedrock", "AWS Bedrock", "default", Some(50.0), None, None, "us-east-1");
+        let s = build_status(
+            "bedrock",
+            "AWS Bedrock",
+            "default",
+            Some(50.0),
+            None,
+            None,
+            "us-east-1",
+        );
         assert_eq!(s.windows.len(), 1);
         assert_eq!(s.windows[0].used_pct, 0);
     }

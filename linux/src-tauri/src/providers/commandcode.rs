@@ -54,7 +54,13 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
             Ok(t) => t,
             Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
         },
-        Ok(resp) => return ProviderStatus::failure(&id, &name, format!("Network: HTTP {}", resp.status().as_u16())),
+        Ok(resp) => {
+            return ProviderStatus::failure(
+                &id,
+                &name,
+                format!("Network: HTTP {}", resp.status().as_u16()),
+            )
+        }
         Err(e) => return ProviderStatus::failure(&id, &name, format!("Network: {e}")),
     };
 
@@ -83,7 +89,9 @@ fn filtered_cookie_header(raw: &str) -> Option<String> {
         return None;
     }
     if !trimmed.contains('=') {
-        return Some(format!("__Secure-commandcode_prod_.session_token={trimmed}"));
+        return Some(format!(
+            "__Secure-commandcode_prod_.session_token={trimmed}"
+        ));
     }
 
     let has_session = trimmed.split(';').any(|chunk| {
@@ -91,7 +99,9 @@ fn filtered_cookie_header(raw: &str) -> Option<String> {
         let Some(eq) = t.find('=') else { return false };
         let name = t[..eq].trim();
         name.to_lowercase().contains("session_token")
-            || SUPPORTED_SESSION_COOKIE_NAMES.iter().any(|n| n.eq_ignore_ascii_case(name))
+            || SUPPORTED_SESSION_COOKIE_NAMES
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(name))
     });
 
     if has_session {
@@ -108,25 +118,59 @@ struct PlanInfo {
 
 fn plan_catalog(plan_id: &str) -> Option<PlanInfo> {
     match plan_id {
-        "individual-go" => Some(PlanInfo { display_name: "Go", monthly_credits_usd: 10.0 }),
-        "individual-pro" => Some(PlanInfo { display_name: "Pro", monthly_credits_usd: 30.0 }),
-        "individual-max" => Some(PlanInfo { display_name: "Max", monthly_credits_usd: 150.0 }),
-        "individual-ultra" => Some(PlanInfo { display_name: "Ultra", monthly_credits_usd: 300.0 }),
+        "individual-go" => Some(PlanInfo {
+            display_name: "Go",
+            monthly_credits_usd: 10.0,
+        }),
+        "individual-pro" => Some(PlanInfo {
+            display_name: "Pro",
+            monthly_credits_usd: 30.0,
+        }),
+        "individual-max" => Some(PlanInfo {
+            display_name: "Max",
+            monthly_credits_usd: 150.0,
+        }),
+        "individual-ultra" => Some(PlanInfo {
+            display_name: "Ultra",
+            monthly_credits_usd: 300.0,
+        }),
         _ => None,
     }
 }
 
-fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Option<&str>) -> Result<ProviderStatus, String> {
-    let credits_json: Value = serde_json::from_str(credits_body).map_err(|e| format!("Network: {e}"))?;
-    let credits = credits_json.get("credits").ok_or_else(|| "Response thiếu trường credits".to_string())?;
+fn parse_status(
+    id: &str,
+    name: &str,
+    credits_body: &str,
+    subscription_body: Option<&str>,
+) -> Result<ProviderStatus, String> {
+    let credits_json: Value =
+        serde_json::from_str(credits_body).map_err(|e| format!("Network: {e}"))?;
+    let credits = credits_json
+        .get("credits")
+        .ok_or_else(|| "Response thiếu trường credits".to_string())?;
 
-    let monthly = credits.get("monthlyCredits").and_then(Value::as_f64).ok_or_else(|| "Thiếu monthlyCredits".to_string())?;
-    let purchased = credits.get("purchasedCredits").and_then(Value::as_f64).unwrap_or(0.0);
-    let premium = credits.get("premiumMonthlyCredits").and_then(Value::as_f64).unwrap_or(0.0);
+    let monthly = credits
+        .get("monthlyCredits")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "Thiếu monthlyCredits".to_string())?;
+    let purchased = credits
+        .get("purchasedCredits")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let premium = credits
+        .get("premiumMonthlyCredits")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
 
     let plan_id = subscription_body
         .and_then(|t| serde_json::from_str::<Value>(t).ok())
-        .and_then(|v| v.get("data").and_then(|d| d.get("planId")).and_then(Value::as_str).map(str::to_string));
+        .and_then(|v| {
+            v.get("data")
+                .and_then(|d| d.get("planId"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
 
     let plan = plan_id.as_deref().and_then(plan_catalog);
 
@@ -135,17 +179,28 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
     if let Some(p) = &plan {
         let total = p.monthly_credits_usd;
         let used = (total - monthly).max(0.0);
-        let used_pct = if total > 0.0 { ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32 } else { 0 };
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        let used_pct = if total > 0.0 {
+            ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32
+        } else {
+            0
+        };
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Tháng".to_string(),
             used_pct,
             remaining_pct: 100 - used_pct,
-            subtitle: Some(format!("{p_name} · ${monthly:.2} còn lại", p_name = p.display_name)),
+            subtitle: Some(format!(
+                "{p_name} · ${monthly:.2} còn lại",
+                p_name = p.display_name
+            )),
             resets_at: None,
             window_seconds: None,
         });
     } else {
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Số dư tháng".to_string(),
             used_pct: 0,
             remaining_pct: 100,
@@ -156,7 +211,9 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
     }
 
     if purchased > 0.0 {
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Credits mua thêm".to_string(),
             used_pct: 0,
             remaining_pct: 100,
@@ -167,7 +224,9 @@ fn parse_status(id: &str, name: &str, credits_body: &str, subscription_body: Opt
     }
 
     if premium > 0.0 {
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Premium".to_string(),
             used_pct: 0,
             remaining_pct: 100,
@@ -195,16 +254,22 @@ mod tests {
     fn parses_credits_with_known_plan() {
         let credits = r#"{"credits":{"monthlyCredits":25.0,"purchasedCredits":0.0,"premiumMonthlyCredits":0.0,"opensourceMonthlyCredits":0.0}}"#;
         let subscriptions = r#"{"success":true,"data":{"planId":"individual-pro","status":"active","currentPeriodEnd":"2025-08-01T00:00:00.000Z"}}"#;
-        let status = parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
+        let status =
+            parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
         assert_eq!(status.windows[0].label, "Tháng");
-        assert!(status.windows[0].subtitle.as_deref().unwrap().contains("Pro"));
+        assert!(status.windows[0]
+            .subtitle
+            .as_deref()
+            .unwrap()
+            .contains("Pro"));
     }
 
     #[test]
     fn parses_credits_without_plan_uses_balance_fallback() {
         let credits = r#"{"credits":{"monthlyCredits":5.0,"purchasedCredits":0.0,"premiumMonthlyCredits":0.0}}"#;
         let subscriptions = r#"{"success":true,"data":null}"#;
-        let status = parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
+        let status =
+            parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
         assert_eq!(status.windows[0].label, "Số dư tháng");
     }
 
@@ -228,7 +293,9 @@ mod tests {
 
     #[test]
     fn forwards_all_cookies_when_session_token_present() {
-        let header = filtered_cookie_header("foo=bar; __Secure-commandcode_prod_.session_token=xyz").unwrap();
+        let header =
+            filtered_cookie_header("foo=bar; __Secure-commandcode_prod_.session_token=xyz")
+                .unwrap();
         assert!(header.contains("foo=bar"));
         assert!(header.contains("session_token"));
     }

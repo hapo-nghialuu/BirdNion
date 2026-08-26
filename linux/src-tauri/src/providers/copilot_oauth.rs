@@ -25,11 +25,24 @@ pub struct DeviceCode {
 
 /// Pure parse of the `login/device/code` JSON response.
 fn parse_device_code(body: &str) -> Result<DeviceCode, String> {
-    let v: Value = serde_json::from_str(body).map_err(|_| "Phản hồi từ máy chủ không đúng định dạng.".to_string())?;
-    let user_code = v.get("user_code").and_then(Value::as_str).ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
-    let verification_uri = v.get("verification_uri").and_then(Value::as_str).ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
-    let device_code = v.get("device_code").and_then(Value::as_str).ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
-    let interval = v.get("interval").and_then(Value::as_i64).ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
+    let v: Value = serde_json::from_str(body)
+        .map_err(|_| "Phản hồi từ máy chủ không đúng định dạng.".to_string())?;
+    let user_code = v
+        .get("user_code")
+        .and_then(Value::as_str)
+        .ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
+    let verification_uri = v
+        .get("verification_uri")
+        .and_then(Value::as_str)
+        .ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
+    let device_code = v
+        .get("device_code")
+        .and_then(Value::as_str)
+        .ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
+    let interval = v
+        .get("interval")
+        .and_then(Value::as_i64)
+        .ok_or("Phản hồi từ máy chủ không đúng định dạng.")?;
     Ok(DeviceCode {
         user_code: user_code.to_string(),
         verification_uri: verification_uri.to_string(),
@@ -49,7 +62,10 @@ pub async fn start(host: &str) -> Result<DeviceCode, String> {
         .await
         .map_err(|e| format!("Network: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("Máy chủ trả về lỗi HTTP {}.", resp.status().as_u16()));
+        return Err(format!(
+            "Máy chủ trả về lỗi HTTP {}.",
+            resp.status().as_u16()
+        ));
     }
     let body = resp.text().await.map_err(|e| format!("Network: {e}"))?;
     parse_device_code(&body)
@@ -87,7 +103,9 @@ enum RawPollOutcome {
 }
 
 fn parse_poll_response(body: &str) -> RawPollOutcome {
-    let Ok(v) = serde_json::from_str::<Value>(body) else { return RawPollOutcome::Unexpected };
+    let Ok(v) = serde_json::from_str::<Value>(body) else {
+        return RawPollOutcome::Unexpected;
+    };
     if let Some(error) = v.get("error").and_then(Value::as_str) {
         return match error {
             "authorization_pending" => RawPollOutcome::Pending,
@@ -104,7 +122,11 @@ fn parse_poll_response(body: &str) -> RawPollOutcome {
 }
 
 async fn fetch_login(client: &reqwest::Client, host: &str, token: &str) -> Option<String> {
-    let api_host = if host == "github.com" { "api.github.com".to_string() } else { format!("api.{host}") };
+    let api_host = if host == "github.com" {
+        "api.github.com".to_string()
+    } else {
+        format!("api.{host}")
+    };
     let resp = client
         .get(format!("https://{api_host}/user"))
         .header("Authorization", format!("token {token}"))
@@ -139,7 +161,10 @@ pub async fn poll(host: &str, device_code: &str) -> Result<PollResult, String> {
         .await
         .map_err(|e| format!("Network: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("Máy chủ trả về lỗi HTTP {}.", resp.status().as_u16()));
+        return Err(format!(
+            "Máy chủ trả về lỗi HTTP {}.",
+            resp.status().as_u16()
+        ));
     }
     let body = resp.text().await.map_err(|e| format!("Network: {e}"))?;
 
@@ -151,7 +176,9 @@ pub async fn poll(host: &str, device_code: &str) -> Result<PollResult, String> {
         RawPollOutcome::Unexpected => Err("Phản hồi từ máy chủ không đúng định dạng.".to_string()),
         RawPollOutcome::Success(token) => {
             let login = fetch_login(&client, host, &token).await;
-            let label = login.clone().unwrap_or_else(|| token.chars().take(8).collect());
+            let label = login
+                .clone()
+                .unwrap_or_else(|| token.chars().take(8).collect());
             save_account(&label, login.as_deref(), &token)?;
             Ok(PollResult::Success { label })
         }
@@ -207,7 +234,11 @@ fn merge_account(store: &mut AccountStore, label: &str, login: Option<&str>, tok
         existing.token = token.to_string();
         existing.login = login.map(String::from);
     } else {
-        store.accounts.push(AccountEntry { label: label.to_string(), login: login.map(String::from), token: token.to_string() });
+        store.accounts.push(AccountEntry {
+            label: label.to_string(),
+            login: login.map(String::from),
+            token: token.to_string(),
+        });
     }
     if store.active_label.is_none() {
         store.active_label = Some(label.to_string());
@@ -235,14 +266,26 @@ mod tests {
 
     #[test]
     fn poll_response_pending_and_slow_down() {
-        assert!(matches!(parse_poll_response(r#"{"error":"authorization_pending"}"#), RawPollOutcome::Pending));
-        assert!(matches!(parse_poll_response(r#"{"error":"slow_down"}"#), RawPollOutcome::SlowDown));
+        assert!(matches!(
+            parse_poll_response(r#"{"error":"authorization_pending"}"#),
+            RawPollOutcome::Pending
+        ));
+        assert!(matches!(
+            parse_poll_response(r#"{"error":"slow_down"}"#),
+            RawPollOutcome::SlowDown
+        ));
     }
 
     #[test]
     fn poll_response_denied_and_expired() {
-        assert!(matches!(parse_poll_response(r#"{"error":"access_denied"}"#), RawPollOutcome::Denied));
-        assert!(matches!(parse_poll_response(r#"{"error":"expired_token"}"#), RawPollOutcome::Expired));
+        assert!(matches!(
+            parse_poll_response(r#"{"error":"access_denied"}"#),
+            RawPollOutcome::Denied
+        ));
+        assert!(matches!(
+            parse_poll_response(r#"{"error":"expired_token"}"#),
+            RawPollOutcome::Expired
+        ));
     }
 
     #[test]
@@ -255,8 +298,14 @@ mod tests {
 
     #[test]
     fn poll_response_unexpected_shape() {
-        assert!(matches!(parse_poll_response("not json"), RawPollOutcome::Unexpected));
-        assert!(matches!(parse_poll_response(r#"{"foo":"bar"}"#), RawPollOutcome::Unexpected));
+        assert!(matches!(
+            parse_poll_response("not json"),
+            RawPollOutcome::Unexpected
+        ));
+        assert!(matches!(
+            parse_poll_response(r#"{"foo":"bar"}"#),
+            RawPollOutcome::Unexpected
+        ));
     }
 
     #[test]
@@ -270,7 +319,14 @@ mod tests {
 
     #[test]
     fn merge_account_updates_existing_by_label_without_touching_active_label() {
-        let mut store = AccountStore { active_label: Some("other".into()), accounts: vec![AccountEntry { label: "octocat".into(), login: Some("octocat".into()), token: "old".into() }] };
+        let mut store = AccountStore {
+            active_label: Some("other".into()),
+            accounts: vec![AccountEntry {
+                label: "octocat".into(),
+                login: Some("octocat".into()),
+                token: "old".into(),
+            }],
+        };
         merge_account(&mut store, "octocat", Some("octocat"), "new");
         assert_eq!(store.accounts.len(), 1);
         assert_eq!(store.accounts[0].token, "new");

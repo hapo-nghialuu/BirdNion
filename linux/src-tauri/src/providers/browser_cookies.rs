@@ -89,11 +89,16 @@ fn auto_cookie_header(domains: &[&str], required_cookie: Option<&str>) -> Result
 /// Every browser (scan order) whose cookie set for `domains` contains
 /// `required_cookie`, as `(browser_id, header)` pairs — lets multi-account
 /// UIs surface "Chrome" and "Brave" sessions as separate accounts. Blocking.
-pub fn browsers_with_cookie(domains: &[&str], required_cookie: &str) -> Vec<(&'static str, String)> {
+pub fn browsers_with_cookie(
+    domains: &[&str],
+    required_cookie: &str,
+) -> Vec<(&'static str, String)> {
     let domain_list: Vec<String> = domains.iter().map(|d| d.to_string()).collect();
     let mut out = Vec::new();
     for browser in BROWSER_ORDER {
-        let Ok(cookies) = read_browser(browser, domain_list.clone()) else { continue };
+        let Ok(cookies) = read_browser(browser, domain_list.clone()) else {
+            continue;
+        };
         if cookies.is_empty() || !cookies.iter().any(|c| c.name == required_cookie) {
             continue;
         }

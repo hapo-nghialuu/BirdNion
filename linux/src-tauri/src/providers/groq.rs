@@ -21,16 +21,24 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         .unwrap_or_else(|| token.chars().take(8).collect());
 
     let client = shared_client();
-    let requests = scalar(&client, "sum(model_project_id_status_code:requests:rate5m)", &token);
+    let requests = scalar(
+        &client,
+        "sum(model_project_id_status_code:requests:rate5m)",
+        &token,
+    );
     let tokens_in = scalar(&client, "sum(model_project_id:tokens_in:rate5m)", &token);
     let tokens_out = scalar(&client, "sum(model_project_id:tokens_out:rate5m)", &token);
-    let cache_hits = scalar(&client, "sum(model_project_id:prompt_cache_hits:rate5m)", &token);
+    let cache_hits = scalar(
+        &client,
+        "sum(model_project_id:prompt_cache_hits:rate5m)",
+        &token,
+    );
 
-    let (req, tin, tout, hits) = match futures::future::try_join4(requests, tokens_in, tokens_out, cache_hits).await
-    {
-        Ok(v) => v,
-        Err(e) => return ProviderStatus::failure(&cfg.id, &name, format!("Groq: {e}")),
-    };
+    let (req, tin, tout, hits) =
+        match futures::future::try_join4(requests, tokens_in, tokens_out, cache_hits).await {
+            Ok(v) => v,
+            Err(e) => return ProviderStatus::failure(&cfg.id, &name, format!("Groq: {e}")),
+        };
 
     build_status(&cfg.id, &name, &account_label, req, tin, tout, hits)
 }
@@ -57,7 +65,11 @@ pub fn parse_scalar(body: &Value) -> f64 {
     if body.get("status").and_then(Value::as_str) != Some("success") {
         return 0.0;
     }
-    let Some(results) = body.get("data").and_then(|d| d.get("result")).and_then(Value::as_array) else {
+    let Some(results) = body
+        .get("data")
+        .and_then(|d| d.get("result"))
+        .and_then(Value::as_array)
+    else {
         return 0.0;
     };
     results
@@ -66,7 +78,9 @@ pub fn parse_scalar(body: &Value) -> f64 {
             let values = series.get("value").and_then(Value::as_array)?;
             let last = values.last()?;
             // Prometheus values are `[timestamp, "string-number"]` or plain numbers.
-            last.as_str().and_then(|s| s.parse().ok()).or_else(|| last.as_f64())
+            last.as_str()
+                .and_then(|s| s.parse().ok())
+                .or_else(|| last.as_f64())
         })
         .sum()
 }
@@ -96,7 +110,9 @@ fn build_status(
     let cache_per_min = hits * 60.0;
 
     let mut windows = vec![
-        QuotaWindow { semantic_key: None, semantic_kind: None,
+        QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Yêu cầu/phút".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -104,7 +120,9 @@ fn build_status(
             resets_at: None,
             window_seconds: None,
         },
-        QuotaWindow { semantic_key: None, semantic_kind: None,
+        QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Tokens/phút".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -114,7 +132,9 @@ fn build_status(
         },
     ];
     if cache_per_min > 0.0 {
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: "Cache hit/phút".into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -141,7 +161,8 @@ mod tests {
 
     #[test]
     fn parses_prometheus_scalar_result() {
-        let body = json!({"status": "success", "data": {"result": [{"value": [1700000000, "1.5"]}]}});
+        let body =
+            json!({"status": "success", "data": {"result": [{"value": [1700000000, "1.5"]}]}});
         assert!((parse_scalar(&body) - 1.5).abs() < 0.0001);
     }
 

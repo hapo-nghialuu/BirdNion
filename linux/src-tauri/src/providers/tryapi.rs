@@ -83,10 +83,7 @@ pub fn parse(id: &str, name: &str, account_label: &str, body: &Value) -> Provide
             .and_then(Value::as_f64)
             .or_else(|| today.get("cost").and_then(Value::as_f64))
             .unwrap_or(0.0);
-        let today_requests = today
-            .get("requests")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
+        let today_requests = today.get("requests").and_then(Value::as_i64).unwrap_or(0);
         if today_cost > 0.0 || today_requests > 0 {
             let subtitle = if today_requests > 0 {
                 format!("${today_cost:.2} · {today_requests} req")
@@ -206,10 +203,7 @@ mod tests {
         // used=10.14, remaining=290.6, total=300.74 → ~3%
         assert_eq!(s.windows[0].used_pct, 3);
         assert_eq!(s.windows[0].remaining_pct, 97);
-        assert_eq!(
-            s.windows[0].subtitle.as_deref(),
-            Some("$10.14 / $300.74")
-        );
+        assert_eq!(s.windows[0].subtitle.as_deref(), Some("$10.14 / $300.74"));
         assert!((s.credits_remaining.unwrap() - 290.6).abs() < 0.001);
         assert_eq!(s.plan_name.as_deref(), Some("钱包余额"));
         assert_eq!(s.account_label.as_deref(), Some("sk-try12"));
@@ -254,10 +248,7 @@ mod tests {
         let s = parse("tryapi", "TryAPI", "x", &body);
         assert_eq!(s.windows.len(), 2);
         assert_eq!(s.windows[1].label, "Hôm nay");
-        assert_eq!(
-            s.windows[1].subtitle.as_deref(),
-            Some("$1.25 · 3 req")
-        );
+        assert_eq!(s.windows[1].subtitle.as_deref(), Some("$1.25 · 3 req"));
     }
 
     #[test]

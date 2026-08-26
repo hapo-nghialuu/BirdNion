@@ -30,17 +30,28 @@ use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow}
 const EXCLUDED_MODELS: &[&str] = &["video"];
 
 fn api_host(region: &str) -> &'static str {
-    if region == "com" { "api.minimaxi.com" } else { "api.minimax.io" }
+    if region == "com" {
+        "api.minimaxi.com"
+    } else {
+        "api.minimax.io"
+    }
 }
 fn platform_host(region: &str) -> &'static str {
-    if region == "com" { "platform.minimaxi.com" } else { "platform.minimax.io" }
+    if region == "com" {
+        "platform.minimaxi.com"
+    } else {
+        "platform.minimax.io"
+    }
 }
 
 /// Endpoint candidates in try-order, mirroring CodexBar/Swift's per-region
 /// preference (platform endpoint first for `io` since it returns plan
 /// metadata there; API host first for `com` since platform 404s there).
 fn endpoint_candidates(region: &str) -> Vec<String> {
-    let platform_ep = format!("https://{}/v1/api/openplatform/coding_plan/remains", platform_host(region));
+    let platform_ep = format!(
+        "https://{}/v1/api/openplatform/coding_plan/remains",
+        platform_host(region)
+    );
     let api_host = api_host(region);
     let token_plan = format!("https://{api_host}/v1/token_plan/remains");
     let api_coding_plan = format!("https://{api_host}/v1/api/openplatform/coding_plan/remains");
@@ -51,7 +62,10 @@ fn endpoint_candidates(region: &str) -> Vec<String> {
         vec![platform_ep, token_plan, api_coding_plan]
     };
     let mut seen = std::collections::HashSet::new();
-    ordered.into_iter().filter(|u| seen.insert(u.clone())).collect()
+    ordered
+        .into_iter()
+        .filter(|u| seen.insert(u.clone()))
+        .collect()
 }
 
 fn should_try_next(status: u16) -> bool {
@@ -60,12 +74,17 @@ fn should_try_next(status: u16) -> bool {
 
 fn should_try_next_after_parse_error(error: &str) -> bool {
     let normalized = error.trim().to_lowercase();
-    normalized.contains("response thiếu trường") || normalized.contains("invalid api key") || normalized.contains("invalid credentials")
+    normalized.contains("response thiếu trường")
+        || normalized.contains("invalid api key")
+        || normalized.contains("invalid credentials")
 }
 
 fn is_credential_error(error: &str) -> bool {
     let normalized = error.trim().to_lowercase();
-    normalized.contains("invalid api key") || normalized.contains("invalid credentials") || normalized == "http 401" || normalized == "http 403"
+    normalized.contains("invalid api key")
+        || normalized.contains("invalid credentials")
+        || normalized == "http 401"
+        || normalized == "http 403"
 }
 
 /// Cookie-domain candidates in try-order, mirroring Swift's region-preference
@@ -80,7 +99,10 @@ fn cookie_domains(region: &str) -> Vec<&'static str> {
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
-    let envtok = std::env::var("MINIMAX_CODING_API_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let envtok = std::env::var("MINIMAX_CODING_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let token = envtok.or_else(|| config::api_key(cfg));
     let Some(token) = token else {
         return fetch_with_cookie(cfg, &name).await;
@@ -112,7 +134,11 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
             Err(e) => {
                 last_error = Some(format!("Network: {e}"));
                 if is_last {
-                    return ProviderStatus::failure(&cfg.id, &name, credential_error.or(last_error).unwrap());
+                    return ProviderStatus::failure(
+                        &cfg.id,
+                        &name,
+                        credential_error.or(last_error).unwrap(),
+                    );
                 }
                 continue;
             }
@@ -153,7 +179,13 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         return status_result;
     }
 
-    ProviderStatus::failure(&cfg.id, &name, credential_error.or(last_error).unwrap_or_else(|| "Không lấy được quota".to_string()))
+    ProviderStatus::failure(
+        &cfg.id,
+        &name,
+        credential_error
+            .or(last_error)
+            .unwrap_or_else(|| "Không lấy được quota".to_string()),
+    )
 }
 
 /// No API token configured → try a browser session cookie for the region's
@@ -164,9 +196,19 @@ async fn fetch_with_cookie(cfg: &config::Provider, name: &str) -> ProviderStatus
     let region = cfg.region.as_deref().unwrap_or("io").to_string();
     let domains = cookie_domains(&region);
     let cfg_clone = cfg.clone();
-    let cookie_header = match tauri::async_runtime::spawn_blocking(move || browser_cookies::cookie_header(&domains, &cfg_clone)).await {
+    let cookie_header = match tauri::async_runtime::spawn_blocking(move || {
+        browser_cookies::cookie_header(&domains, &cfg_clone)
+    })
+    .await
+    {
         Ok(Ok(h)) if !h.trim().is_empty() => h,
-        _ => return ProviderStatus::failure(&cfg.id, name, "Chưa cấu hình token và không tìm thấy cookie trình duyệt"),
+        _ => {
+            return ProviderStatus::failure(
+                &cfg.id,
+                name,
+                "Chưa cấu hình token và không tìm thấy cookie trình duyệt",
+            )
+        }
     };
 
     let url = endpoint_url(&region);
@@ -185,20 +227,30 @@ async fn fetch_with_cookie(cfg: &config::Provider, name: &str) -> ProviderStatus
         Err(e) => return ProviderStatus::failure(&cfg.id, name, format!("Network (cookie): {e}")),
     };
     if !resp.status().is_success() {
-        return ProviderStatus::failure(&cfg.id, name, format!("HTTP {} (cookie)", resp.status().as_u16()));
+        return ProviderStatus::failure(
+            &cfg.id,
+            name,
+            format!("HTTP {} (cookie)", resp.status().as_u16()),
+        );
     }
     let body: Value = match resp.json().await {
         Ok(v) => v,
         Err(_) => return ProviderStatus::failure(&cfg.id, name, "Response thiếu trường"),
     };
-    let label = cfg.account_label.clone().unwrap_or_else(|| "cookie".to_string());
+    let label = cfg
+        .account_label
+        .clone()
+        .unwrap_or_else(|| "cookie".to_string());
     parse_remains(&cfg.id, name, &label, &body)
 }
 
 /// Same endpoint the API-token path prefers first for the region — cookie
 /// auth only needs the one canonical `coding_plan/remains` URL.
 fn endpoint_url(region: &str) -> String {
-    format!("https://{}/v1/api/openplatform/coding_plan/remains", platform_host(region))
+    format!(
+        "https://{}/v1/api/openplatform/coding_plan/remains",
+        platform_host(region)
+    )
 }
 
 /// Pure payload → status mapping (unit-tested).
@@ -206,9 +258,15 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
     let Some(base_resp) = body.get("base_resp") else {
         return ProviderStatus::failure(id, name, "Response thiếu trường");
     };
-    let status_code = base_resp.get("status_code").and_then(Value::as_i64).unwrap_or(-1);
+    let status_code = base_resp
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or(-1);
     if status_code != 0 {
-        let msg = base_resp.get("status_msg").and_then(Value::as_str).unwrap_or("MiniMax error");
+        let msg = base_resp
+            .get("status_msg")
+            .and_then(Value::as_str)
+            .unwrap_or("MiniMax error");
         return ProviderStatus::failure(id, name, msg);
     }
     let Some(model_remains) = body.get("model_remains").and_then(Value::as_array) else {
@@ -220,7 +278,11 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
     let visible: Vec<&Value> = model_remains
         .iter()
         .filter(|m| {
-            let name = m.get("model_name").and_then(Value::as_str).unwrap_or("").to_lowercase();
+            let name = m
+                .get("model_name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_lowercase();
             !EXCLUDED_MODELS.contains(&name.as_str())
         })
         .collect();
@@ -232,12 +294,32 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
     let mut windows = Vec::new();
     for m in &visible {
         let model_name = m.get("model_name").and_then(Value::as_str).unwrap_or("");
-        let prefix = if multiple { format!("{model_name} ") } else { String::new() };
-        let interval_remaining = m.get("current_interval_remaining_percent").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let weekly_remaining = m.get("current_weekly_remaining_percent").and_then(Value::as_i64).unwrap_or(0) as i32;
-        let interval_reset = m.get("end_time").and_then(Value::as_i64).filter(|ms| *ms > 0).map(|ms| ms / 1000);
-        let weekly_reset = m.get("weekly_end_time").and_then(Value::as_i64).filter(|ms| *ms > 0).map(|ms| ms / 1000);
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        let prefix = if multiple {
+            format!("{model_name} ")
+        } else {
+            String::new()
+        };
+        let interval_remaining = m
+            .get("current_interval_remaining_percent")
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32;
+        let weekly_remaining = m
+            .get("current_weekly_remaining_percent")
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32;
+        let interval_reset = m
+            .get("end_time")
+            .and_then(Value::as_i64)
+            .filter(|ms| *ms > 0)
+            .map(|ms| ms / 1000);
+        let weekly_reset = m
+            .get("weekly_end_time")
+            .and_then(Value::as_i64)
+            .filter(|ms| *ms > 0)
+            .map(|ms| ms / 1000);
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: format!("{prefix}5 giờ"),
             used_pct: 100 - interval_remaining,
             remaining_pct: interval_remaining,
@@ -245,7 +327,9 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
             resets_at: interval_reset,
             window_seconds: None,
         });
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: format!("{prefix}Tuần"),
             used_pct: 100 - weekly_remaining,
             remaining_pct: weekly_remaining,
@@ -256,11 +340,24 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
     }
 
     // Best-effort subscription expiry/renewal window.
-    if let Some(expires_ms) = body.get("current_subscribe_end_time_ts").and_then(Value::as_i64).filter(|ms| *ms > 0) {
-        let renews_ms = body.get("renewal_trigger_time_ts").and_then(Value::as_i64).filter(|ms| *ms > 0);
-        let sub_label = if renews_ms.is_some() { "Gia hạn" } else { "Hết hạn" };
+    if let Some(expires_ms) = body
+        .get("current_subscribe_end_time_ts")
+        .and_then(Value::as_i64)
+        .filter(|ms| *ms > 0)
+    {
+        let renews_ms = body
+            .get("renewal_trigger_time_ts")
+            .and_then(Value::as_i64)
+            .filter(|ms| *ms > 0);
+        let sub_label = if renews_ms.is_some() {
+            "Gia hạn"
+        } else {
+            "Hết hạn"
+        };
         let resets_at = renews_ms.unwrap_or(expires_ms) / 1000;
-        windows.push(QuotaWindow { semantic_key: None, semantic_kind: None,
+        windows.push(QuotaWindow {
+            semantic_key: None,
+            semantic_kind: None,
             label: sub_label.into(),
             used_pct: 0,
             remaining_pct: 100,
@@ -341,13 +438,25 @@ mod tests {
 
     #[test]
     fn cookie_domains_prefers_region_specific_domain_first() {
-        assert_eq!(cookie_domains("io"), vec!["platform.minimax.io", "platform.minimaxi.com"]);
-        assert_eq!(cookie_domains("com"), vec!["platform.minimaxi.com", "platform.minimax.io"]);
+        assert_eq!(
+            cookie_domains("io"),
+            vec!["platform.minimax.io", "platform.minimaxi.com"]
+        );
+        assert_eq!(
+            cookie_domains("com"),
+            vec!["platform.minimaxi.com", "platform.minimax.io"]
+        );
     }
 
     #[test]
     fn endpoint_url_uses_platform_host_for_region() {
-        assert_eq!(endpoint_url("io"), "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains");
-        assert_eq!(endpoint_url("com"), "https://platform.minimaxi.com/v1/api/openplatform/coding_plan/remains");
+        assert_eq!(
+            endpoint_url("io"),
+            "https://platform.minimax.io/v1/api/openplatform/coding_plan/remains"
+        );
+        assert_eq!(
+            endpoint_url("com"),
+            "https://platform.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+        );
     }
 }
