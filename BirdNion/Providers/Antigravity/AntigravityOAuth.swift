@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Network
 import CryptoKit
+import CodexBarCore
 
 // MARK: - Errors
 
@@ -76,89 +77,68 @@ struct AntigravityOAuthStore {
     /// OAuth client embedded in an installed Antigravity.app, extracted once.
     /// This is how CodexBar avoids making users register their own client —
     /// it borrows Antigravity's. nil when the app isn't installed.
-    private static let discoveredClient: (id: String, secret: String)? = discoverClientFromInstalledApp()
+    private static let discoveredClient = discoveredClient(
+        from: AntigravityOAuthConfig.resolvedClient())
 
-    /// Resolves client ID: file → env → installed Antigravity.app. nil when missing.
+    /// Keeps BirdNion's OAuth resolver coupled to the canonical client pair as
+    /// one value, so the ID and secret cannot be selected independently.
+    static func discoveredClient(
+        from client: AntigravityOAuthClient?
+    ) -> (id: String, secret: String)? {
+        guard let client else { return nil }
+        return (client.clientID, client.clientSecret)
+    }
+
+    /// Resolves credentials as one atomic pair so a partial legacy override
+    /// cannot mix its ID or secret with the canonical fallback client.
+    static func resolvedClient(
+        store: Store,
+        fallbackClient: (id: String, secret: String)? = discoveredClient
+    ) -> (id: String, secret: String)? {
+        let storedID = store.clientId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedSecret = store.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let storedID, !storedID.isEmpty,
+           let storedSecret, !storedSecret.isEmpty
+        {
+            return (storedID, storedSecret)
+        }
+        return fallbackClient
+    }
+
+    /// Resolves client ID: complete file pair → env/installed pair. nil when missing.
     static func resolvedClientID(store: Store) -> String? {
-        if let v = store.clientId?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty { return v }
-        if let v = ProcessInfo.processInfo.environment["ANTIGRAVITY_OAUTH_CLIENT_ID"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty { return v }
-        return discoveredClient?.id
+        resolvedClient(store: store)?.id
     }
 
-    /// Resolves client secret: file → env → installed Antigravity.app. nil when missing.
+    /// Resolves client secret from the same atomic pair as the client ID.
     static func resolvedClientSecret(store: Store) -> String? {
-        if let v = store.clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty { return v }
-        if let v = ProcessInfo.processInfo.environment["ANTIGRAVITY_OAUTH_CLIENT_SECRET"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty { return v }
-        return discoveredClient?.secret
-    }
-
-    /// Scans installed Antigravity.app bundles for the embedded Google OAuth
-    /// client: `…apps.googleusercontent.com` (id) + `GOCSPX-…` (secret), read
-    /// from its language_server binary / main.js. Mirrors CodexBar.
-    private static func discoverClientFromInstalledApp() -> (id: String, secret: String)? {
-        let fm = FileManager.default
-        let roots = [
-            URL(fileURLWithPath: "/Applications", isDirectory: true),
-            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true),
-        ]
-        let relPaths = [
-            "Contents/Resources/app/extensions/antigravity/bin/language_server_macos_arm",
-            "Contents/Resources/app/extensions/antigravity/bin/language_server_macos_x64",
-            "Contents/Resources/app/extensions/antigravity/bin/language_server_macos",
-            "Contents/Resources/app/out/main.js",
-            "Contents/Resources/bin/language_server",
-            "Contents/Resources/bin/language_server_macos",
-        ]
-        var bundles: [URL] = []
-        for root in roots {
-            bundles.append(root.appendingPathComponent("Antigravity.app", isDirectory: true))
-            let apps = (try? fm.contentsOfDirectory(
-                at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
-            for app in apps where app.pathExtension == "app" {
-                let bid = Bundle(url: app)?.bundleIdentifier
-                if bid == "com.google.antigravity" || bid == "com.google.antigravity-ide" {
-                    bundles.append(app)
-                }
-            }
-        }
-        for bundle in bundles {
-            for rel in relPaths {
-                let url = bundle.appendingPathComponent(rel)
-                guard fm.fileExists(atPath: url.path), let data = try? Data(contentsOf: url) else { continue }
-                // Lossy UTF-8 decode keeps ASCII id/secret intact even in binaries.
-                let text = String(decoding: data, as: UTF8.self)
-                if let id = firstMatch(#"[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com"#, in: text),
-                   let secret = firstMatch(#"GOCSPX-[A-Za-z0-9_-]{28}"#, in: text) {
-                    return (id, secret)
-                }
-            }
-        }
-        return nil
-    }
-
-    private static func firstMatch(_ pattern: String, in text: String) -> String? {
-        guard let rx = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let m = rx.firstMatch(in: text, range: range),
-              let r = Range(m.range, in: text) else { return nil }
-        return String(text[r])
+        resolvedClient(store: store)?.secret
     }
 
     // MARK: - Load / Save
 
     private static let lock = NSLock()
 
-    static func load() -> Store {
-        lock.withLock {
-            guard FileManager.default.fileExists(atPath: fileURL.path),
-                  let data = try? Data(contentsOf: fileURL),
-                  let store = try? JSONDecoder().decode(Store.self, from: data)
-            else {
-                return Store()
-            }
-            return store
+    static func load(url: URL = fileURL) -> Store {
+        lock.withLock { loadUnlocked(url: url) }
+    }
+
+    private static func loadUnlocked(url: URL) -> Store {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let store = try? JSONDecoder().decode(Store.self, from: data)
+        else { return Store() }
+        return store
+    }
+
+    private static func loadForMutationUnlocked(url: URL) throws -> Store {
+        guard FileManager.default.fileExists(atPath: url.path) else { return Store() }
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(Store.self, from: data)
+        } catch {
+            throw AntigravityOAuthError.parseFailed(
+                "Không thể đọc OAuth store hiện có; file được giữ nguyên")
         }
     }
 
@@ -188,29 +168,195 @@ struct AntigravityOAuthStore {
         store.activeLabel = label
     }
 
-    /// Returns the currently active account, or the first account if activeLabel is unset.
+    /// Persists an account selection without changing credentials or exporting
+    /// them to any other agent store.
+    @discardableResult
+    static func persistActiveLabel(_ label: String, url: URL = fileURL) throws -> Bool {
+        try lock.withLock {
+            var store = try loadForMutationUnlocked(url: url)
+            guard store.accounts.contains(where: { $0.label == label }) else { return false }
+            store.activeLabel = label
+            try saveUnlocked(store, url: url)
+            return true
+        }
+    }
+
+    @discardableResult
+    static func persistAccount(
+        label: String,
+        refreshToken: String,
+        email: String?,
+        clientId: String? = nil,
+        clientSecret: String? = nil,
+        makeActive: Bool = false,
+        url: URL = fileURL
+    ) throws -> Store {
+        try lock.withLock {
+            var store = try loadForMutationUnlocked(url: url)
+            return try persistAccountUnlocked(
+                label: label,
+                refreshToken: refreshToken,
+                email: email,
+                clientId: clientId,
+                clientSecret: clientSecret,
+                makeActive: makeActive,
+                uniquifyLabel: false,
+                store: &store,
+                url: url)
+        }
+    }
+
+    /// Persists a fresh OAuth login. If Google omits the email claim, a unique
+    /// localized fallback label is generated atomically instead of replacing a
+    /// previous anonymous login that has the same fallback label.
+    @discardableResult
+    static func persistNewLoginAccount(
+        fallbackLabel: String,
+        refreshToken: String,
+        email: String?,
+        clientId: String? = nil,
+        clientSecret: String? = nil,
+        makeActive: Bool = false,
+        url: URL = fileURL
+    ) throws -> Store {
+        try lock.withLock {
+            var store = try loadForMutationUnlocked(url: url)
+            let normalizedEmail = email?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+            return try persistAccountUnlocked(
+                label: normalizedEmail ?? fallbackLabel,
+                refreshToken: refreshToken,
+                email: normalizedEmail,
+                clientId: clientId,
+                clientSecret: clientSecret,
+                makeActive: makeActive,
+                uniquifyLabel: normalizedEmail == nil,
+                store: &store,
+                url: url)
+        }
+    }
+
+    private static func persistAccountUnlocked(
+        label: String,
+        refreshToken: String,
+        email: String?,
+        clientId: String?,
+        clientSecret: String?,
+        makeActive: Bool,
+        uniquifyLabel: Bool,
+        store: inout Store,
+        url: URL
+    ) throws -> Store {
+        let normalizedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedToken = refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedLabel.isEmpty, !normalizedToken.isEmpty else {
+            throw AntigravityOAuthError.parseFailed(
+                "Nhãn và refresh_token không được để trống")
+        }
+        let normalizedEmail = email?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        let credentials = try validatedClientCredentials(
+            clientId: clientId,
+            clientSecret: clientSecret,
+            pairRequired: false)
+        if let clientId = credentials.clientId { store.clientId = clientId }
+        if let clientSecret = credentials.clientSecret { store.clientSecret = clientSecret }
+        let resolvedLabel = uniquifyLabel
+            ? nextAvailableLabel(normalizedLabel, in: store)
+            : normalizedLabel
+        addAccount(
+            to: &store,
+            label: resolvedLabel,
+            refreshToken: normalizedToken,
+            email: normalizedEmail)
+        if makeActive { store.activeLabel = resolvedLabel }
+        try saveUnlocked(store, url: url)
+        return store
+    }
+
+    private static func nextAvailableLabel(_ base: String, in store: Store) -> String {
+        let existingLabels = Set(store.accounts.map(\.label))
+        guard existingLabels.contains(base) else { return base }
+        var suffix = 2
+        while existingLabels.contains("\(base) \(suffix)") { suffix += 1 }
+        return "\(base) \(suffix)"
+    }
+
+    @discardableResult
+    static func persistClientCredentials(
+        clientId: String?,
+        clientSecret: String?,
+        url: URL = fileURL
+    ) throws -> Store {
+        try lock.withLock {
+            var store = try loadForMutationUnlocked(url: url)
+            let credentials = try validatedClientCredentials(
+                clientId: clientId,
+                clientSecret: clientSecret,
+                pairRequired: true)
+            store.clientId = credentials.clientId
+            store.clientSecret = credentials.clientSecret
+            try saveUnlocked(store, url: url)
+            return store
+        }
+    }
+
+    private static func validatedClientCredentials(
+        clientId: String?,
+        clientSecret: String?,
+        pairRequired: Bool
+    ) throws -> (clientId: String?, clientSecret: String?) {
+        let id = clientId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = clientSecret?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedID = id.flatMap { $0.isEmpty ? nil : $0 }
+        let normalizedSecret = secret.flatMap { $0.isEmpty ? nil : $0 }
+        guard (normalizedID == nil) == (normalizedSecret == nil),
+              !pairRequired || normalizedID != nil else {
+            throw AntigravityOAuthError.parseFailed(
+                "Cần cung cấp đầy đủ client_id và client_secret")
+        }
+        return (normalizedID, normalizedSecret)
+    }
+
+    @discardableResult
+    static func persistRemovingAccount(_ label: String, url: URL = fileURL) throws -> Store {
+        try lock.withLock {
+            var store = try loadForMutationUnlocked(url: url)
+            removeAccount(from: &store, label: label)
+            try saveUnlocked(store, url: url)
+            return store
+        }
+    }
+
+    /// Returns the currently active account, or the first account if the saved
+    /// selection is missing or no longer exists.
     static func activeAccount(in store: Store) -> Account? {
-        if let label = store.activeLabel {
-            return store.accounts.first { $0.label == label }
+        if let label = store.activeLabel,
+           let active = store.accounts.first(where: { $0.label == label }) {
+            return active
         }
         return store.accounts.first
     }
 
-    static func save(_ store: Store) throws {
-        try lock.withLock {
-            let dir = fileURL.deletingLastPathComponent()
-            if !FileManager.default.fileExists(atPath: dir.path) {
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            }
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(store)
-            try data.write(to: fileURL, options: [.atomic])
-            // Restrict file permissions to owner-read/write only
-            try FileManager.default.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o600))],
-                ofItemAtPath: fileURL.path)
+    static func save(_ store: Store, url: URL = fileURL) throws {
+        try lock.withLock { try saveUnlocked(store, url: url) }
+    }
+
+    private static func saveUnlocked(_ store: Store, url: URL) throws {
+        let dir = url.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(store)
+        try data.write(to: url, options: [.atomic])
+        // Restrict file permissions to owner-read/write only
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: url.path)
     }
 }
 

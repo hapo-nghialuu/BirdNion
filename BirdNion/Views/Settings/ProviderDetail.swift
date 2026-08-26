@@ -637,6 +637,7 @@ extension ProvidersPane {
                 }
                 if rows[idx].id == "antigravity" {
                     antigravityOAuthAccountsSection()
+                        .id(ProviderRemediationTarget.credential)
                 }
                 if rows[idx].id == "copilot" {
                     copilotOAuthAccountsSection(idx: idx)

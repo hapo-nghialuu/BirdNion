@@ -921,9 +921,21 @@ final class AntigravityProvider: QuotaProvider {
             return await fetchFromRunningProcess() ?? failure("Antigravity: cần IDE/app đang chạy")
         case .auto:
             // App/IDE running process → agy CLI → OAuth remote (signed-in account).
-            if let status = await fetchFromRunningProcess() { return status }
-            if let status = await fetchViaCLIWarmSession() { return status }
+            var accountMismatch: ProviderStatus?
+            if let status = await fetchFromRunningProcess() {
+                if !Self._shouldContinueAfterCandidateForTesting(error: status.error) {
+                    return status
+                }
+                accountMismatch = status
+            }
+            if let status = await fetchViaCLIWarmSession() {
+                if !Self._shouldContinueAfterCandidateForTesting(error: status.error) {
+                    return status
+                }
+                accountMismatch = status
+            }
             if let status = await fetchViaOAuth() { return status }
+            if let accountMismatch { return accountMismatch }
             return failure("Antigravity: cần IDE đang chạy, agy CLI, hoặc đăng nhập Google")
         }
     }
@@ -1155,20 +1167,38 @@ final class AntigravityProvider: QuotaProvider {
         }
     }
 
-    /// Returns a non-nil error string if `accountLabel` in config looks like an email
-    /// and does NOT match the email returned in the response.
-    /// Returns nil when no email guard is configured OR when emails match.
+    /// Prefer the selected OAuth account identity. The legacy config email is
+    /// only a guard when the selected account has no known email.
     private func accountMismatchError(responseEmail: String?) -> String? {
-        guard let configLabel = BirdNionConfigStore.accountLabel(provider: id),
-              configLabel.contains("@") else {
-            // No email configured → no guard
-            return nil
-        }
-        let expected = configLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let selectedEmail = AntigravityOAuthStore.activeAccount(
+            in: AntigravityOAuthStore.load()
+        )?.email
+        let configLabel = BirdNionConfigStore.accountLabel(provider: id)
+        return Self._accountMismatchErrorForTesting(
+            responseEmail: responseEmail,
+            selectedEmail: selectedEmail,
+            configLabel: configLabel
+        )
+    }
+
+    static func _accountMismatchErrorForTesting(
+        responseEmail: String?,
+        selectedEmail: String?,
+        configLabel: String?
+    ) -> String? {
+        guard let expectedRaw = Self._expectedAccountEmailForTesting(
+            selectedEmail: selectedEmail,
+            configLabel: configLabel
+        ) else { return nil }
+        let expected = expectedRaw.lowercased()
         let found = responseEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let found, found == expected else {
             let foundDesc = responseEmail ?? "(không xác định)"
-            return "Account không khớp: cấu hình \"\(configLabel)\" nhưng đang đăng nhập \"\(foundDesc)\""
+            let selected = selectedEmail?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let selected, !selected.isEmpty {
+                return "Account không khớp: đã chọn \"\(expectedRaw)\" nhưng đang đăng nhập \"\(foundDesc)\""
+            }
+            return "Account không khớp: cấu hình \"\(expectedRaw)\" nhưng đang đăng nhập \"\(foundDesc)\""
         }
         return nil
     }
@@ -1211,5 +1241,18 @@ final class AntigravityProvider: QuotaProvider {
 
     static func _shouldContinueAfterCandidateForTesting(error: String?) -> Bool {
         error?.hasPrefix("Account không khớp:") == true
+    }
+
+    static func _expectedAccountEmailForTesting(
+        selectedEmail: String?,
+        configLabel: String?
+    ) -> String? {
+        if let selected = selectedEmail?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !selected.isEmpty {
+            return selected
+        }
+        guard let configured = configLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+              configured.contains("@") else { return nil }
+        return configured
     }
 }

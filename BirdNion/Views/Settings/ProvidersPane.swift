@@ -65,6 +65,7 @@ struct ProvidersPane: View {
     @State var antigravityNewJSON: String = ""
     @State var antigravityLoginInProgress: Bool = false
     @State var antigravityLoginError: String? = nil
+    @State var antigravityAdvancedSetupExpanded: Bool = false
     @State var antigravityReloadTick: Int = 0
 
     // MARK: - Copilot OAuth state

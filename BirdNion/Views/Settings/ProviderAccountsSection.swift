@@ -353,11 +353,14 @@ extension ProvidersPane {
                         Spacer()
                         if !isActive {
                             Button(vi ? "Đặt mặc định" : "Set default") {
-                                var s = antigravityStore
-                                AntigravityOAuthStore.setActive(in: &s, label: acc.label)
                                 do {
-                                    try AntigravityOAuthStore.save(s)
-                                    antigravityStore = s
+                                    guard try AntigravityOAuthStore.persistActiveLabel(acc.label) else {
+                                        antigravityLoginError = vi
+                                            ? "Tài khoản không còn tồn tại."
+                                            : "The account no longer exists."
+                                        return
+                                    }
+                                    antigravityStore = AntigravityOAuthStore.load()
                                     antigravityLoginError = nil
                                     providerFetchIdentityDidChange("antigravity")
                                 } catch {
@@ -370,11 +373,8 @@ extension ProvidersPane {
                             .foregroundStyle(SettingsTheme.accent)
                         }
                         Button {
-                            var s = antigravityStore
-                            AntigravityOAuthStore.removeAccount(from: &s, label: acc.label)
                             do {
-                                try AntigravityOAuthStore.save(s)
-                                antigravityStore = s
+                                antigravityStore = try AntigravityOAuthStore.persistRemovingAccount(acc.label)
                                 antigravityLoginError = nil
                                 providerFetchIdentityDidChange("antigravity")
                             } catch {
@@ -384,6 +384,7 @@ extension ProvidersPane {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                             .instrumentIconTile(bordered: false)
                         }
+                        .accessibilityLabel(vi ? "Xoá \(acc.label)" : "Remove \(acc.label)")
                         .buttonStyle(.plain)
                         .pointingHandCursor()
                     }
@@ -391,36 +392,8 @@ extension ProvidersPane {
                 }
             }
 
-            // Add account via JSON paste
-            VStack(alignment: .leading, spacing: 6) {
-                Text(vi ? "Thêm tài khoản" : "Add account")
-                    .font(.plexSans(12, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
-                HStack(alignment: .center, spacing: 6) {
-                    TextField(vi ? "Nhãn" : "Label", text: $antigravityNewLabel)
-                        .font(.plexSans(11))
-                        .instrumentControlFieldStyle()
-                        .frame(width: 100)
-                    SecureField(vi ? "OAuth credentials JSON" : "OAuth credentials JSON", text: $antigravityNewJSON)
-                        .font(.plexSans(11))
-                        .instrumentControlFieldStyle()
-                    Button(vi ? "Thêm" : "Add") {
-                        antigravityAddFromJSON()
-                    }
-                    .buttonStyle(.instrumentInline)
-                    .pointingHandCursor()
-                    .disabled(antigravityNewJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                Text(vi
-                     ? "Dán JSON: {\"client_id\":\"…\",\"client_secret\":\"…\",\"refresh_token\":\"…\"}"
-                     : "Paste JSON: {\"client_id\":\"…\",\"client_secret\":\"…\",\"refresh_token\":\"…\"}")
-                    .font(.plexMono(10))
-                    .foregroundStyle(SettingsTheme.tertiary)
-            }
-            .padding(.vertical, 10)
-            .hairlineTop()
-
-            // Login with Google + utility buttons
+            // Keep the common path obvious; credential import remains available
+            // behind progressive disclosure for recovery and headless setups.
             VStack(alignment: .leading, spacing: 8) {
                 if let err = antigravityLoginError {
                     Text(L10n.providerText(err, preference: language))
@@ -428,63 +401,120 @@ extension ProvidersPane {
                         .foregroundStyle(SettingsTheme.critical)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                HStack(spacing: 8) {
-                    Button {
-                        antigravityLoginError = nil
-                        let s = antigravityStore
-                        guard let clientID = AntigravityOAuthStore.resolvedClientID(store: s),
-                              let clientSecret = AntigravityOAuthStore.resolvedClientSecret(store: s) else {
-                            antigravityLoginError = vi
-                                ? "Cần đặt ANTIGRAVITY_OAUTH_CLIENT_ID/SECRET hoặc dán credentials JSON trước."
-                                : "Set ANTIGRAVITY_OAUTH_CLIENT_ID/SECRET or paste credentials JSON first."
-                            return
+                Button {
+                    antigravityLoginWithGoogle(vi: vi)
+                } label: {
+                    HStack(spacing: 6) {
+                        if antigravityLoginInProgress {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "plus")
                         }
-                        antigravityLoginInProgress = true
-                        Task {
-                            do {
-                                let (refreshToken, email) = try await AntigravityOAuthLogin.login(
-                                    clientID: clientID, clientSecret: clientSecret)
-                                var store = AntigravityOAuthStore.load()
-                                let label = email ?? (vi ? "Tài khoản" : "Account")
-                                AntigravityOAuthStore.addAccount(to: &store, label: label,
-                                                                  refreshToken: refreshToken, email: email)
-                                try AntigravityOAuthStore.save(store)
-                                antigravityStore = store
-                                providerFetchIdentityDidChange("antigravity")
-                            } catch {
-                                antigravityLoginError = error.localizedDescription
-                            }
-                            antigravityLoginInProgress = false
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            if antigravityLoginInProgress {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text(vi ? "Đăng nhập Google" : "Login with Google")
-                        }
+                        Text(vi ? "Thêm tài khoản" : "Add account")
                     }
-                    .buttonStyle(.instrumentInline)
-                    .pointingHandCursor()
-                    .disabled(antigravityLoginInProgress)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(InstrumentInlineButtonStyle(prominent: true))
+                .pointingHandCursor()
+                .disabled(antigravityLoginInProgress)
+                .accessibilityHint(vi
+                    ? "Mở trình duyệt để đăng nhập Google"
+                    : "Opens the browser to sign in with Google")
 
-                    Button(vi ? "Mở file token" : "Open token file") {
-                        NSWorkspace.shared.open(AntigravityOAuthStore.fileURL)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        antigravityAdvancedSetupExpanded.toggle()
                     }
-                    .buttonStyle(.instrumentInline)
-                    .pointingHandCursor()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: antigravityAdvancedSetupExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text(vi ? "Cài đặt nâng cao" : "Advanced setup")
+                            .font(.plexSans(11, weight: .medium))
+                        Spacer()
+                    }
+                    .foregroundStyle(SettingsTheme.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .accessibilityValue(antigravityAdvancedSetupExpanded
+                    ? (vi ? "Đã mở" : "Expanded")
+                    : (vi ? "Đã đóng" : "Collapsed"))
 
-                    Button(vi ? "Tải lại" : "Reload") {
-                        antigravityReloadTick += 1
+                if antigravityAdvancedSetupExpanded {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .center, spacing: 6) {
+                            TextField(vi ? "Nhãn" : "Label", text: $antigravityNewLabel)
+                                .font(.plexSans(11))
+                                .instrumentControlFieldStyle()
+                                .frame(width: 100)
+                            SecureField("OAuth credentials JSON", text: $antigravityNewJSON)
+                                .font(.plexSans(11))
+                                .instrumentControlFieldStyle()
+                            Button(vi ? "Nhập" : "Import") {
+                                antigravityAddFromJSON()
+                            }
+                            .buttonStyle(.instrumentInline)
+                            .pointingHandCursor()
+                            .disabled(antigravityNewJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        Text(vi
+                             ? "Dùng khi đăng nhập Google không khả dụng. Dán JSON gồm client_id, client_secret và refresh_token."
+                             : "Use when Google sign-in is unavailable. Paste JSON with client_id, client_secret, and refresh_token.")
+                            .font(.plexSans(10))
+                            .foregroundStyle(SettingsTheme.tertiary)
+
+                        HStack(spacing: 8) {
+                            Button(vi ? "Mở file token" : "Open token file") {
+                                NSWorkspace.shared.open(AntigravityOAuthStore.fileURL)
+                            }
+                            .buttonStyle(.instrumentInline)
+                            .pointingHandCursor()
+
+                            Button(vi ? "Tải lại" : "Reload") {
+                                antigravityReloadTick += 1
+                            }
+                            .buttonStyle(.instrumentInline)
+                            .pointingHandCursor()
+                        }
                     }
-                    .buttonStyle(.instrumentInline)
-                    .pointingHandCursor()
+                    .padding(.top, 2)
                 }
             }
             .padding(.vertical, 10)
             .hairlineTop()
         }
         .padding(.horizontal, 14)
+    }
+
+    func antigravityLoginWithGoogle(vi: Bool) {
+        antigravityLoginError = nil
+        let store = antigravityStore
+        guard let clientID = AntigravityOAuthStore.resolvedClientID(store: store),
+              let clientSecret = AntigravityOAuthStore.resolvedClientSecret(store: store) else {
+            antigravityLoginError = vi
+                ? "Không thể mở đăng nhập Google. Hãy cài Antigravity.app hoặc dùng Cài đặt nâng cao."
+                : "Google sign-in is unavailable. Install Antigravity.app or use Advanced setup."
+            antigravityAdvancedSetupExpanded = true
+            return
+        }
+        antigravityLoginInProgress = true
+        Task {
+            do {
+                let (refreshToken, email) = try await AntigravityOAuthLogin.login(
+                    clientID: clientID, clientSecret: clientSecret)
+                antigravityStore = try AntigravityOAuthStore.persistNewLoginAccount(
+                    fallbackLabel: vi ? "Tài khoản" : "Account",
+                    refreshToken: refreshToken,
+                    email: email,
+                    makeActive: true)
+                providerFetchIdentityDidChange("antigravity")
+            } catch {
+                antigravityLoginError = error.localizedDescription
+            }
+            antigravityLoginInProgress = false
+        }
     }
 
     // MARK: - Copilot accounts
@@ -690,26 +720,44 @@ extension ProvidersPane {
 
     /// Parse best-effort OAuth credentials JSON and update the store.
     func antigravityAddFromJSON() {
+        let vi = L10n.languageCode(language) == "vi"
         let raw = antigravityNewJSON.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return }
         guard let data = raw.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return }
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+            antigravityLoginError = vi
+                ? "OAuth credentials JSON không hợp lệ."
+                : "Invalid OAuth credentials JSON."
+            return
+        }
 
-        var s = antigravityStore
-        // Update client credentials if present
-        if let cid = obj["client_id"], !cid.isEmpty { s.clientId = cid }
-        if let cs = obj["client_secret"], !cs.isEmpty { s.clientSecret = cs }
-        // Add account if refresh_token present
-        if let rt = obj["refresh_token"], !rt.isEmpty {
+        let clientId = obj["client_id"]
+        let clientSecret = obj["client_secret"]
+        let refreshToken = obj["refresh_token"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountLabel: String?
+        if let refreshToken, !refreshToken.isEmpty {
             let trimmedLabel = antigravityNewLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-            let label = trimmedLabel.isEmpty
-                ? (obj["email"] ?? (L10n.languageCode(language) == "vi" ? "Tài khoản" : "Account"))
+            let importedEmail = obj["email"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            accountLabel = trimmedLabel.isEmpty
+                ? (importedEmail?.isEmpty == false ? importedEmail : nil) ?? (vi ? "Tài khoản" : "Account")
                 : trimmedLabel
-            AntigravityOAuthStore.addAccount(to: &s, label: label, refreshToken: rt, email: obj["email"])
+        } else {
+            accountLabel = nil
         }
         do {
-            try AntigravityOAuthStore.save(s)
-            antigravityStore = s
+            if let refreshToken, !refreshToken.isEmpty, let accountLabel {
+                antigravityStore = try AntigravityOAuthStore.persistAccount(
+                    label: accountLabel,
+                    refreshToken: refreshToken,
+                    email: obj["email"],
+                    clientId: clientId,
+                    clientSecret: clientSecret)
+            } else {
+                antigravityStore = try AntigravityOAuthStore.persistClientCredentials(
+                    clientId: clientId,
+                    clientSecret: clientSecret)
+            }
             antigravityNewLabel = ""
             antigravityNewJSON = ""
             antigravityLoginError = nil

@@ -273,6 +273,11 @@ struct QuotaOverview: View {
             if s.id == "freemodel" {
                 FreemodelAccountsPopoverSection()
             }
+            // Antigravity OAuth account selection only. This never writes the
+            // selected credential into Antigravity, Gemini CLI, OMP or Keychain.
+            if s.id == "antigravity" {
+                AntigravityAccountsPopoverSection()
+            }
             // ElevenLabs: multi API-key switcher (same card pattern).
             if s.id == "elevenlabs" {
                 ElevenLabsKeysPopoverSection()
@@ -2815,6 +2820,315 @@ struct ElevenLabsKeysPopoverSection: View {
             try ElevenLabsKeyStore.remove(key.id)
             errorText = nil
             reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Antigravity accounts (popover)
+
+/// Compact OAuth account manager for the selected Antigravity quota context.
+/// Credentials stay in BirdNion's private store and are never exported to the
+/// Antigravity app, Gemini CLI, OMP, or Keychain.
+struct AntigravityAccountsPopoverSection: View {
+    @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+
+    @State private var store = AntigravityOAuthStore.Store()
+    @State private var revealed = false
+    @State private var busy = false
+    @State private var errorText: String?
+    @State private var accountPendingRemoval: AntigravityOAuthStore.Account?
+    @State private var showingRemoveConfirmation = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            collapsedRow
+            if revealed {
+                Divider()
+                    .overlay(VocabbyTheme.border)
+                    .padding(.vertical, 6)
+                if store.accounts.isEmpty {
+                    Text(L10n.t("antigravity.popover.noAccounts", settings.appLanguage))
+                        .font(.plexSans(11))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                        .padding(.vertical, 5)
+                } else {
+                    ForEach(store.accounts, id: \.label) { account in
+                        accountRow(account)
+                    }
+                }
+                if let errorText {
+                    Text(L10n.providerText(errorText, preference: settings.appLanguage))
+                        .font(.plexSans(10))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 4)
+                }
+                addAccountRow
+            }
+        }
+        .vocabbyCard()
+        .confirmationDialog(
+            removeConfirmationTitle,
+            isPresented: $showingRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.t("provider.removeAccount", settings.appLanguage), role: .destructive) {
+                removeConfirmedAccount()
+            }
+            Button(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage), role: .cancel) {
+                accountPendingRemoval = nil
+            }
+        } message: {
+            Text(L10n.t("provider.removeAccountMessage", settings.appLanguage))
+        }
+        .onAppear {
+            reload()
+            if store.accounts.isEmpty { revealed = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionRefresh)) { note in
+            guard note.object as? String == "antigravity" else { return }
+            reload()
+        }
+    }
+
+    private func accountName(_ account: AntigravityOAuthStore.Account) -> String {
+        account.email ?? account.label
+    }
+
+    private var activeAccount: AntigravityOAuthStore.Account? {
+        AntigravityOAuthStore.activeAccount(in: store)
+    }
+
+    private var collapsedRow: some View {
+        let lang = settings.appLanguage
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.blue)
+                .frame(width: 30, height: 30)
+                .background(VocabbyTheme.blue.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("popover.accounts", lang))
+                    .font(.plexSans(12, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(activeAccount.map {
+                    L10n.f("antigravity.popover.activeAccount", lang, accountName($0))
+                } ?? L10n.t("antigravity.popover.noAccounts", lang))
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            Text("\(store.accounts.count)")
+                .font(.plexMono(11, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(VocabbyTheme.segment)
+                )
+            Image(systemName: revealed ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.tertiary)
+        }
+        .contentShape(Rectangle())
+        .pointingHandCursor()
+        .onTapGesture { revealed.toggle() }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(L10n.t("popover.accounts", lang))
+        .accessibilityValue(activeAccount.map {
+            L10n.f("antigravity.popover.activeAccount", lang, accountName($0))
+        } ?? L10n.t("antigravity.popover.noAccounts", lang))
+        .accessibilityHint(revealed
+            ? L10n.t("popover.collapseAccounts", lang)
+            : L10n.t("popover.expandAccounts", lang))
+    }
+
+    private func accountRow(_ account: AntigravityOAuthStore.Account) -> some View {
+        let isActive = account.label == activeAccount?.label
+        let name = accountName(account)
+        return HStack(spacing: 8) {
+            Button {
+                guard !isActive else { return }
+                switchTo(account)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(isActive ? VocabbyTheme.blue : VocabbyTheme.tertiary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(name)
+                            .font(.plexSans(12, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if isActive {
+                            Text(L10n.t("elevenlabs.activeBadge", settings.appLanguage))
+                                .font(.plexMono(9, weight: .semibold))
+                                .foregroundStyle(VocabbyTheme.success)
+                        }
+                    }
+                    Spacer(minLength: 6)
+                    if !isActive {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.blue)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                RoundedRectangle(
+                                    cornerRadius: InstrumentShape.controlRadius,
+                                    style: .continuous
+                                )
+                                .fill(VocabbyTheme.blue.opacity(0.10))
+                            )
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isActive || busy)
+            .pointingHandCursor(enabled: !isActive && !busy)
+            .help(isActive
+                  ? L10n.t("popover.accountSelectedHelp", settings.appLanguage)
+                  : L10n.t("freemodel.switchAccount", settings.appLanguage))
+            .accessibilityLabel(name)
+            .accessibilityValue(L10n.t(
+                isActive ? "popover.accountSelected" : "popover.switchReady",
+                settings.appLanguage
+            ))
+
+            Button(role: .destructive) {
+                accountPendingRemoval = account
+                showingRemoveConfirmation = true
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.critical)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor(enabled: !busy)
+            .disabled(busy)
+            .help(L10n.t("provider.removeAccount", settings.appLanguage))
+            .accessibilityLabel(
+                L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var addAccountRow: some View {
+        Button {
+            addAccount()
+        } label: {
+            HStack(spacing: 6) {
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "plus")
+                }
+                Text(L10n.t("provider.addAccount", settings.appLanguage))
+                    .font(.plexSans(11, weight: .semibold))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(VocabbyTheme.blue)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor(enabled: !busy)
+        .disabled(busy)
+        .accessibilityHint(L10n.t("antigravity.popover.addAccountHint", settings.appLanguage))
+    }
+
+    private var removeConfirmationTitle: String {
+        guard let accountPendingRemoval else {
+            return L10n.t("provider.removeAccount", settings.appLanguage)
+        }
+        return L10n.f(
+            "provider.removeAccountTitle",
+            settings.appLanguage,
+            accountName(accountPendingRemoval)
+        )
+    }
+
+    private func reload() {
+        store = AntigravityOAuthStore.load()
+    }
+
+    private func switchTo(_ account: AntigravityOAuthStore.Account) {
+        busy = true
+        defer { busy = false }
+        do {
+            guard try AntigravityOAuthStore.persistActiveLabel(account.label) else {
+                reload()
+                errorText = L10n.languageCode(settings.appLanguage) == "vi"
+                    ? "Tài khoản không còn tồn tại."
+                    : "The account no longer exists."
+                return
+            }
+            reload()
+            errorText = nil
+            quota.refreshFromSettings("antigravity")
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func addAccount() {
+        let currentStore = AntigravityOAuthStore.load()
+        guard let client = AntigravityOAuthStore.resolvedClient(store: currentStore) else {
+            errorText = L10n.languageCode(settings.appLanguage) == "vi"
+                ? "Không thể mở đăng nhập Google. Hãy cài Antigravity.app hoặc mở Cài đặt nâng cao."
+                : "Google sign-in is unavailable. Install Antigravity.app or use Advanced setup."
+            return
+        }
+        busy = true
+        errorText = nil
+        Task {
+            do {
+                let (refreshToken, email) = try await AntigravityOAuthLogin.login(
+                    clientID: client.id,
+                    clientSecret: client.secret
+                )
+                store = try AntigravityOAuthStore.persistNewLoginAccount(
+                    fallbackLabel: L10n.languageCode(settings.appLanguage) == "vi"
+                        ? "Tài khoản"
+                        : "Account",
+                    refreshToken: refreshToken,
+                    email: email,
+                    makeActive: true
+                )
+                errorText = nil
+                revealed = true
+                quota.refreshFromSettings("antigravity")
+            } catch {
+                errorText = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func removeConfirmedAccount() {
+        guard let accountPendingRemoval else { return }
+        busy = true
+        defer {
+            busy = false
+            self.accountPendingRemoval = nil
+        }
+        do {
+            store = try AntigravityOAuthStore.persistRemovingAccount(accountPendingRemoval.label)
+            errorText = nil
+            quota.refreshFromSettings("antigravity")
         } catch {
             errorText = error.localizedDescription
         }
