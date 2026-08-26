@@ -35,8 +35,27 @@ enum InstalledAgentDetectors {
             }
             for marker in descriptor.markers {
                 let url = context.homeURL.appendingPathComponent(marker.relativePath)
-                if fileManager.fileExists(atPath: url.path) {
-                    evidence.append(.init(kind: marker.kind, token: "~/\(marker.relativePath)"))
+                if markerExists(marker.relativePath, url: url, fileManager: fileManager) {
+                    let kind = descriptor.id == .kiro
+                        && marker.relativePath == ".kiro_sessions"
+                        && !containsRegularJSONFile(url, fileManager: fileManager)
+                        ? InstalledAgentEvidenceKind.configuration
+                        : marker.kind
+                    evidence.append(.init(kind: kind, token: "~/\(marker.relativePath)"))
+                }
+            }
+            if descriptor.id == .kiro,
+               let xdg = context.environment["XDG_DATA_HOME"]?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+               !xdg.isEmpty,
+               (xdg as NSString).isAbsolutePath
+            {
+                let database = URL(fileURLWithPath: xdg)
+                    .appendingPathComponent("kiro-cli/data.sqlite3")
+                if regularFileExists(at: database) {
+                    evidence.append(.init(
+                        kind: .applicationState,
+                        token: "$XDG_DATA_HOME/kiro-cli/data.sqlite3"))
                 }
             }
             guard !evidence.isEmpty else { return nil }
@@ -48,6 +67,20 @@ enum InstalledAgentDetectors {
                     evidence: evidence),
                 providerIDs: descriptor.providerIDs
             )
+        }
+    }
+
+    private static func containsRegularJSONFile(
+        _ directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let files = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles])) ?? []
+        return files.contains { url in
+            url.pathExtension == "json"
+                && (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
         }
     }
 
@@ -76,6 +109,31 @@ enum InstalledAgentDetectors {
             if fileManager.isExecutableFile(atPath: path) { return true }
         }
         return false
+    }
+
+    private static let fileOnlyMarkers: Set<String> = [
+        "Library/Application Support/kiro-cli/data.sqlite3",
+        ".local/share/kiro-cli/data.sqlite3",
+    ]
+
+    private static func markerExists(
+        _ relativePath: String,
+        url: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        guard fileOnlyMarkers.contains(relativePath) else {
+            return fileManager.fileExists(atPath: url.path)
+        }
+        return regularFileExists(at: url)
+    }
+
+    /// Checks the concrete directory entry rather than following symlinks.
+    /// Kiro's detector and scanner share this exact evidence predicate.
+    static func regularFileExists(at url: URL) -> Bool {
+        guard let values = try? url.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        else { return false }
+        return values.isRegularFile == true && values.isSymbolicLink != true
     }
 
     private static let descriptors: [Descriptor] = [
@@ -150,7 +208,10 @@ enum InstalledAgentDetectors {
             binaries: ["kiro-cli", "kiro"],
             markers: [
                 (".kiro", .configuration),
-                ("Library/Application Support/Kiro", .applicationState)
+                ("Library/Application Support/Kiro", .applicationState),
+                ("Library/Application Support/kiro-cli/data.sqlite3", .applicationState),
+                (".local/share/kiro-cli/data.sqlite3", .applicationState),
+                (".kiro_sessions", .applicationState)
             ],
             providerIDs: ["kiro"]
         ),

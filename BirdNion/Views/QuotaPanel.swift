@@ -39,6 +39,7 @@ struct QuotaOverview: View {
     @State private var ompReportTaskId: String?
     @State private var piReport: PiUsageReport?
     @State private var piReportTaskId: String?
+    @State private var loadingCostSources: Set<CostHistoryStore.Source> = []
     @State private var claudeCodeTargetRevision = 0
     var body: some View {
         ZStack {
@@ -110,14 +111,8 @@ struct QuotaOverview: View {
                                     userInfo: ["items": items, "mode": mode])
                             },
                             onHoverEnd: { endHoverPanel() },
-                            claudeEnabled: quota.displayStatuses.contains { $0.id == "claude" }
-                                || claudeReport != nil,
-                            codexEnabled: quota.displayStatuses.contains { $0.id == "codex" }
-                                || codexReport != nil,
-                            grokEnabled: quota.displayStatuses.contains { $0.id == "grok" }
-                                || grokReport != nil,
-                            kiroEnabled: quota.displayStatuses.contains { $0.id == "kiro" }
-                                || kiroReport != nil)
+                            authorizedSources: authorizedCostSources,
+                            loadingSources: loadingCostSources)
                     } else if let s = quota.displayStatuses.first(where: { $0.id == selected })
                         ?? quota.displayStatuses.first {
                         providerDetailStack(s)
@@ -154,12 +149,11 @@ struct QuotaOverview: View {
             if !selectionValid {
                 selectedProviderId = ids.first
             }
-            // (Re)kick the scans for the now-effective tab regardless: on
-            // first open the provider list can arrive AFTER the `.task`
-            // trigger ran against an empty list — the guards inside the
-            // trigger functions then skipped every scan and the All tab sat
-            // on its skeleton until the user switched tabs. Re-running here
-            // is cheap (scanners cache for 5 min).
+        }
+        .onChange(of: authorizedCostSources) { _, sources in
+            if selectedProviderId == "all", sources.isEmpty {
+                selectedProviderId = quota.displayStatuses.first?.id
+            }
             triggerReportsIfNeeded(providerId: effectiveSelectedId())
         }
         .task {
@@ -167,6 +161,17 @@ struct QuotaOverview: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .claudeCodeTargetChanged)) { _ in
             claudeCodeTargetRevision += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            // QuotaOverview stays mounted while the popover is hidden, so this
+            // refreshes raw detector evidence whenever a BirdNion window opens
+            // (popover or Settings/Insights) without coupling provider refresh.
+            installedAgents.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionAllTabWillOpen)) { _ in
+            // Switching into All does not change the key window; refresh here
+            // too, then `authorizedCostSources` onChange retriggers all scans.
+            installedAgents.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: .birdnionInvalidateAgentPanelRequests)) { _ in
             panelRequestTaskId = UUID().uuidString
@@ -302,6 +307,22 @@ struct QuotaOverview: View {
                !report.isEmpty {
                 KiroUsageChartCard(report: report)
             }
+            if s.id == "kiro", settings.kiroMonthlyBudgetUSD.isFinite,
+               settings.kiroMonthlyBudgetUSD > 0 {
+                let kiroBudgetCombined = kiroReport.map {
+                    CombinedUsageReport.build(
+                        claude: nil, codex: nil, grok: nil, kiro: $0,
+                        includeClaude: false, includeCodex: false, includeGrok: false,
+                        includeKiro: true, includeOMP: false, includePi: false)
+                }
+                ProviderBudgetCard(
+                    providerId: "kiro", providerName: "Kiro",
+                    color: VocabbyTheme.chartKiro,
+                    budgetUSD: settings.kiroMonthlyBudgetUSD,
+                    confidence: kiroBudgetCombined?.kiroConfidence,
+                    daily: kiroBudgetCombined?.daily ?? [],
+                    source: .kiro)
+            }
             // Status page at the bottom of the provider stack
             // (flat row, same instrument language as credits/meta).
             ServiceStatusStrip(status: s)
@@ -314,10 +335,8 @@ struct QuotaOverview: View {
         triggerCodexReportIfNeeded(providerId: providerId)
         triggerGrokReportIfNeeded(providerId: providerId)
         triggerKiroReportIfNeeded(providerId: providerId)
-        if providerId == "all" {
-            triggerOMPReportIfNeeded(providerId: providerId)
-            triggerPiReportIfNeeded(providerId: providerId)
-        }
+        triggerOMPReportIfNeeded(providerId: providerId)
+        triggerPiReportIfNeeded(providerId: providerId)
     }
 
     /// Trigger the Claude 30-day scan only when the user actually views the
@@ -326,29 +345,45 @@ struct QuotaOverview: View {
     /// user switches away so the chart is still visible while the next scan
     /// refreshes it.
     private func triggerClaudeReportIfNeeded(providerId: String) {
-        // The All tab needs the Claude scan too — but only when the Claude
-        // provider is actually enabled (disabled sources stay out of the mix).
-        // Cost path độc lập provider: agent detected là đủ để scan.
-        let wantsClaude = providerId == "claude"
-            || (providerId == "all"
-                && (quota.displayStatuses.contains(where: { $0.id == "claude" })
-                    || projectedAgentRecords.contains { $0.id == .claude }))
-        guard wantsClaude else { return }
         let taskId = UUID().uuidString
         claudeReportTaskId = taskId
+        guard AllUsageSourceAuthorization.requestAction(
+            for: .claude,
+            providerID: providerId,
+            authorizedSources: authorizedCostSources) == .scan
+        else {
+            loadingCostSources.remove(.claude)
+            claudeReport = nil
+            return
+        }
+        loadingCostSources.insert(.claude)
         let needsSeed = claudeReport == nil
         Task {
             // Seed instantly from persisted history; the live scan overwrites.
             if needsSeed, let seed = await ClaudeCostScanner.seededReport() {
                 await MainActor.run {
-                    guard claudeReportTaskId == taskId, claudeReport == nil else { return }
+                    guard AllUsageSourceAuthorization.acceptsCompletion(
+                        for: .claude,
+                        providerID: effectiveSelectedId(),
+                        taskID: taskId,
+                        currentTaskID: claudeReportTaskId,
+                        authorizedSources: authorizedCostSources),
+                        claudeReport == nil
+                    else { return }
                     claudeReport = seed
                 }
             }
             let report = await ClaudeCostScanner.usageReport()
             await MainActor.run {
-                guard claudeReportTaskId == taskId else { return }
+                guard AllUsageSourceAuthorization.acceptsCompletion(
+                    for: .claude,
+                    providerID: effectiveSelectedId(),
+                    taskID: taskId,
+                    currentTaskID: claudeReportTaskId,
+                    authorizedSources: authorizedCostSources)
+                else { return }
                 claudeReport = report
+                loadingCostSources.remove(.claude)
             }
         }
     }
@@ -356,29 +391,45 @@ struct QuotaOverview: View {
     /// Trigger the Codex 30-day scan only when the user views the Codex tab.
     /// Cached 5 min by `CodexCostScanner`; switching tabs cancels via taskId.
     private func triggerCodexReportIfNeeded(providerId: String) {
-        let wantsCodex = providerId == "codex"
-            || (providerId == "all"
-                && (quota.displayStatuses.contains(where: { $0.id == "codex" })
-                    || projectedAgentRecords.contains { $0.id == .codex }))
-        guard wantsCodex else {
+        let taskId = UUID().uuidString
+        codexReportTaskId = taskId
+        guard AllUsageSourceAuthorization.requestAction(
+            for: .codex,
+            providerID: providerId,
+            authorizedSources: authorizedCostSources) == .scan
+        else {
+            loadingCostSources.remove(.codex)
             codexReport = nil
             return
         }
-        let taskId = UUID().uuidString
-        codexReportTaskId = taskId
+        loadingCostSources.insert(.codex)
         let needsSeed = codexReport == nil
         Task {
             // Seed instantly from persisted history; the live scan overwrites.
             if needsSeed, let seed = await CodexCostScanner.seededReport() {
                 await MainActor.run {
-                    guard codexReportTaskId == taskId, codexReport == nil else { return }
+                    guard AllUsageSourceAuthorization.acceptsCompletion(
+                        for: .codex,
+                        providerID: effectiveSelectedId(),
+                        taskID: taskId,
+                        currentTaskID: codexReportTaskId,
+                        authorizedSources: authorizedCostSources),
+                        codexReport == nil
+                    else { return }
                     codexReport = seed
                 }
             }
             let report = await CodexCostScanner.usageReport()
             await MainActor.run {
-                guard codexReportTaskId == taskId else { return }
+                guard AllUsageSourceAuthorization.acceptsCompletion(
+                    for: .codex,
+                    providerID: effectiveSelectedId(),
+                    taskID: taskId,
+                    currentTaskID: codexReportTaskId,
+                    authorizedSources: authorizedCostSources)
+                else { return }
                 codexReport = report
+                loadingCostSources.remove(.codex)
             }
         }
     }
@@ -386,29 +437,45 @@ struct QuotaOverview: View {
     /// Trigger the Grok session-signal scan when the user views Grok or All.
     /// Cached 5 min by `GrokCostScanner`.
     private func triggerGrokReportIfNeeded(providerId: String) {
-        // Cost đi theo AGENT: provider (quota) tắt nhưng agent detected và có
-        // history thật thì tab All vẫn scan/hiện; detection suông (không
-        // history) thì im lặng bỏ qua — không "Scanning..." vô nghĩa.
-        let wantsGrok = providerId == "grok"
-            || (providerId == "all"
-                && (quota.displayStatuses.contains(where: { $0.id == "grok" })
-                    || projectedAgentRecords.contains { $0.id == .grok }))
-        guard wantsGrok else { return }
         let taskId = UUID().uuidString
         grokReportTaskId = taskId
+        guard AllUsageSourceAuthorization.requestAction(
+            for: .grok,
+            providerID: providerId,
+            authorizedSources: authorizedCostSources) == .scan
+        else {
+            loadingCostSources.remove(.grok)
+            grokReport = nil
+            return
+        }
+        loadingCostSources.insert(.grok)
         let needsSeed = grokReport == nil
         Task {
             // Seed instantly from persisted history; the live scan overwrites.
             if needsSeed, let seed = await GrokCostScanner.seededReport() {
                 await MainActor.run {
-                    guard grokReportTaskId == taskId, grokReport == nil else { return }
+                    guard AllUsageSourceAuthorization.acceptsCompletion(
+                        for: .grok,
+                        providerID: effectiveSelectedId(),
+                        taskID: taskId,
+                        currentTaskID: grokReportTaskId,
+                        authorizedSources: authorizedCostSources),
+                        grokReport == nil
+                    else { return }
                     grokReport = seed
                 }
             }
             let report = await GrokCostScanner.usageReport()
             await MainActor.run {
-                guard grokReportTaskId == taskId else { return }
+                guard AllUsageSourceAuthorization.acceptsCompletion(
+                    for: .grok,
+                    providerID: effectiveSelectedId(),
+                    taskID: taskId,
+                    currentTaskID: grokReportTaskId,
+                    authorizedSources: authorizedCostSources)
+                else { return }
                 grokReport = report
+                loadingCostSources.remove(.grok)
             }
         }
     }
@@ -416,40 +483,73 @@ struct QuotaOverview: View {
     /// Trigger the Kiro CLI session scan when the user views the Kiro tab.
     /// Cached 5 min by `KiroCostScanner`.
     private func triggerKiroReportIfNeeded(providerId: String) {
-        // Cost đi theo AGENT (như Grok): provider tắt nhưng có history thật
-        // thì vẫn hiện; ~/.kiro rỗng (detection suông) thì bỏ qua im lặng.
-        let wantsKiro = providerId == "kiro"
-            || (providerId == "all"
-                && (quota.displayStatuses.contains(where: { $0.id == "kiro" })
-                    || projectedAgentRecords.contains { $0.id == .kiro }))
-        guard wantsKiro else { return }
         let taskId = UUID().uuidString
         kiroReportTaskId = taskId
+        guard AllUsageSourceAuthorization.requestAction(
+            for: .kiro,
+            providerID: providerId,
+            authorizedSources: authorizedCostSources) == .scan
+        else {
+            loadingCostSources.remove(.kiro)
+            kiroReport = nil
+            return
+        }
+        loadingCostSources.insert(.kiro)
         let needsSeed = kiroReport == nil
         Task {
             if needsSeed, let seed = await KiroCostScanner.seededReport() {
                 await MainActor.run {
-                    guard kiroReportTaskId == taskId, kiroReport == nil else { return }
+                    guard AllUsageSourceAuthorization.acceptsCompletion(
+                        for: .kiro,
+                        providerID: effectiveSelectedId(),
+                        taskID: taskId,
+                        currentTaskID: kiroReportTaskId,
+                        authorizedSources: authorizedCostSources),
+                        kiroReport == nil
+                    else { return }
                     kiroReport = seed
                 }
             }
             let report = await KiroCostScanner.usageReport()
             await MainActor.run {
-                guard kiroReportTaskId == taskId else { return }
+                guard AllUsageSourceAuthorization.acceptsCompletion(
+                    for: .kiro,
+                    providerID: effectiveSelectedId(),
+                    taskID: taskId,
+                    currentTaskID: kiroReportTaskId,
+                    authorizedSources: authorizedCostSources)
+                else { return }
                 kiroReport = report
+                loadingCostSources.remove(.kiro)
             }
         }
     }
 
     private func triggerOMPReportIfNeeded(providerId: String) {
-        guard providerId == "all" else { return }
         let taskId = UUID().uuidString
         ompReportTaskId = taskId
+        guard AllUsageSourceAuthorization.requestAction(
+            for: .omp,
+            providerID: providerId,
+            authorizedSources: authorizedCostSources) == .scan
+        else {
+            loadingCostSources.remove(.omp)
+            ompReport = nil
+            return
+        }
+        loadingCostSources.insert(.omp)
         Task {
             let report = await OMPCostScanner.loadReport()
             await MainActor.run {
-                guard ompReportTaskId == taskId else { return }
+                guard AllUsageSourceAuthorization.acceptsCompletion(
+                    for: .omp,
+                    providerID: effectiveSelectedId(),
+                    taskID: taskId,
+                    currentTaskID: ompReportTaskId,
+                    authorizedSources: authorizedCostSources)
+                else { return }
                 ompReport = report
+                loadingCostSources.remove(.omp)
             }
         }
     }
@@ -458,11 +558,21 @@ struct QuotaOverview: View {
         installedAgents.records.map {
             $0.projected(
                 providerStatuses: quota.displayStatuses,
-                availableCostSources: availableCostSources)
+                availableCostSources: reportedCostSources)
         }
     }
 
-    private var availableCostSources: Set<CostHistoryStore.Source> {
+    /// Sole authorization boundary for All-tab local-cost work. Report state
+    /// never enters this set, so stale data cannot keep its own source alive.
+    private var authorizedCostSources: Set<CostHistoryStore.Source> {
+        AllUsageSourceAuthorization.sources(
+            enabledProviderIDs: quota.displayStatuses.map(\.id),
+            detectedAgentRecords: installedAgents.records)
+    }
+
+    /// Presentation-only capability projection after a report has evidence.
+    /// Never use this set to authorize scans, inclusion, or empty-state UI.
+    private var reportedCostSources: Set<CostHistoryStore.Source> {
         var sources: Set<CostHistoryStore.Source> = []
         if claudeReport?.scanConfidence.included == true { sources.insert(.claude) }
         if codexReport?.scanConfidence.included == true { sources.insert(.codex) }
@@ -496,19 +606,34 @@ struct QuotaOverview: View {
 
     /// The All tab exists for enabled local providers or detected local-cost agents.
     private var hasLocalCostSources: Bool {
-        quota.displayStatuses.contains { $0.id == "claude" || $0.id == "codex" || $0.id == "grok" }
-            || projectedAgentRecords.contains { $0.capabilities.contains(.localCost) }
+        !authorizedCostSources.isEmpty
     }
 
     private func triggerPiReportIfNeeded(providerId: String) {
-        guard providerId == "all" else { return }
         let taskId = UUID().uuidString
         piReportTaskId = taskId
+        guard AllUsageSourceAuthorization.requestAction(
+            for: .pi,
+            providerID: providerId,
+            authorizedSources: authorizedCostSources) == .scan
+        else {
+            loadingCostSources.remove(.pi)
+            piReport = nil
+            return
+        }
+        loadingCostSources.insert(.pi)
         Task {
             let report = await PiCostScanner.loadReport()
             await MainActor.run {
-                guard piReportTaskId == taskId else { return }
+                guard AllUsageSourceAuthorization.acceptsCompletion(
+                    for: .pi,
+                    providerID: effectiveSelectedId(),
+                    taskID: taskId,
+                    currentTaskID: piReportTaskId,
+                    authorizedSources: authorizedCostSources)
+                else { return }
                 piReport = report
+                loadingCostSources.remove(.pi)
             }
         }
     }
@@ -530,16 +655,12 @@ struct QuotaOverview: View {
             kiro: kiroReport,
             omp: ompReport,
             pi: piReport,
-            includeClaude: quota.displayStatuses.contains { $0.id == "claude" }
-                || claudeReport != nil,
-            includeCodex: quota.displayStatuses.contains { $0.id == "codex" }
-                || codexReport != nil,
-            includeGrok: quota.displayStatuses.contains { $0.id == "grok" }
-                || grokReport != nil,
-            includeKiro: quota.displayStatuses.contains { $0.id == "kiro" }
-                || kiroReport != nil,
-            includeOMP: projectedAgentRecords.contains { $0.id == .omp },
-            includePi: projectedAgentRecords.contains { $0.id == .pi })
+            includeClaude: authorizedCostSources.contains(.claude),
+            includeCodex: authorizedCostSources.contains(.codex),
+            includeGrok: authorizedCostSources.contains(.grok),
+            includeKiro: authorizedCostSources.contains(.kiro),
+            includeOMP: authorizedCostSources.contains(.omp),
+            includePi: authorizedCostSources.contains(.pi))
     }
 
     private func openAgentDetail(_ record: InstalledAgentRecord, pinned: Bool = true, tab: String? = nil) {
@@ -4364,6 +4485,8 @@ extension Notification.Name {
     /// changes. QuotaService swaps in that account's cached snapshot for an
     /// instant card update, then refreshes.
     static let birdnionCodexAccountChanged = Notification.Name("com.local.birdnion.codexAccountChanged")
+    static let birdnionClaudeAccountChanged = Notification.Name(
+        "com.local.birdnion.claudeAccountChanged")
     /// Posted by the Settings sidebar when the provider list changes
     /// (reorder, toggle, add, remove). AppDelegate listens and rebuilds
     /// QuotaService.providers from disk so the popover + menu-bar pick up

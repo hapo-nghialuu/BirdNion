@@ -2,6 +2,88 @@ import XCTest
 @testable import BirdNion
 
 final class ProjectInsightsTests: XCTestCase {
+    func testInsightsSourcesBootstrapDetectedKiroWithoutProviderOrHistory() {
+        let detected = InstalledAgentRecord(
+            id: .kiro,
+            evidence: [.init(kind: .configuration, token: "~/.kiro")],
+            capabilities: [.nativeConfig],
+            providerIDs: ["kiro"])
+        let projected = detected.projected(
+            providerStatuses: [],
+            availableCostSources: [.kiro])
+
+        XCTAssertEqual(
+            InsightsPane.localProjectSources(
+                enabledProviderIDs: [],
+                agentRecords: [detected]),
+            [.kiro])
+        XCTAssertFalse(InsightsPane.localProjectSources(
+            enabledProviderIDs: [],
+            agentRecords: []).contains(.kiro))
+        XCTAssertEqual(
+            InsightsPane.localProjectSources(
+                enabledProviderIDs: [],
+                agentRecords: [projected]),
+            [.kiro])
+    }
+
+    func testInsightsCurrentLoadClearsOldKiroReportWhenSourcesDisappear() throws {
+        let generation = UUID()
+        let oldKiro = makeReport(source: .kiro, projectKey: "old-kiro")
+        XCTAssertTrue(InsightsPane.localProjectSources(
+            enabledProviderIDs: [], agentRecords: []).isEmpty)
+
+        var displayedReport: ProjectInsightsReport? = oldKiro
+        var loading = true
+        let completion = try XCTUnwrap(InsightsPane.loadCompletion(
+            generation: generation,
+            currentGeneration: generation,
+            seeded: nil,
+            live: nil))
+        displayedReport = completion.report
+        loading = completion.loading
+
+        XCTAssertNil(displayedReport)
+        XCTAssertFalse(loading)
+    }
+
+    func testInsightsCurrentLoadPrefersLiveThenSeeded() throws {
+        let generation = UUID()
+        let seeded = makeReport(source: .kiro, projectKey: "seeded-kiro")
+        let live = makeReport(source: .codex, projectKey: "live-codex")
+
+        XCTAssertEqual(try XCTUnwrap(InsightsPane.loadCompletion(
+            generation: generation,
+            currentGeneration: generation,
+            seeded: seeded,
+            live: live)).report, live)
+        XCTAssertEqual(try XCTUnwrap(InsightsPane.loadCompletion(
+            generation: generation,
+            currentGeneration: generation,
+            seeded: seeded,
+            live: nil)).report, seeded)
+    }
+
+    func testInsightsStaleLoadCannotClearNewerReport() {
+        let staleGeneration = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let currentGeneration = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let newerReport = makeReport(source: .codex, projectKey: "newer-codex")
+        var displayedReport: ProjectInsightsReport? = newerReport
+        var loading = true
+
+        if let stale = InsightsPane.loadCompletion(
+            generation: staleGeneration,
+            currentGeneration: currentGeneration,
+            seeded: nil,
+            live: nil) {
+            displayedReport = stale.report
+            loading = stale.loading
+        }
+
+        XCTAssertEqual(displayedReport, newerReport)
+        XCTAssertTrue(loading)
+    }
+
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
         value.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -309,6 +391,39 @@ final class ProjectInsightsTests: XCTestCase {
         XCTAssertTrue(ranking.contains { $0.source == .claude && $0.displayName == "birdnion" })
         let copied = ProjectInsightsBuilder.copySummary(report, language: "en")
         XCTAssertFalse(copied.contains("/Users/"))
+    }
+
+    func testBuilderIncludesKiroInOverviewUnknownProjectAndConfidence() throws {
+        let daily = [CombinedDailyUsage(
+            date: date(20), claudeUSD: 0, claudeTokens: 0,
+            codexUSD: 0, codexTokens: 0,
+            kiroUSD: 7, kiroTokens: 700,
+            models: [
+                .init(name: "real-model", usd: 1, tokens: 100, source: "kiro"),
+                .init(name: KiroCostScanner.aggregateModelName,
+                      usd: 6, tokens: 600, source: "kiro"),
+            ])]
+        let combined = makeCombined(daily: daily, enabledSources: [.kiro])
+
+        let report = ProjectInsightsBuilder.build(
+            combined: combined,
+            history: .init(version: 1, sources: [:]),
+            enabledSources: [.kiro],
+            now: date(20),
+            calendar: calendar)
+
+        XCTAssertEqual(report.overview.topSource, .kiro)
+        XCTAssertEqual(report.overview.topModel?.name, "real-model")
+        XCTAssertEqual(report.overview.topModel?.source, "kiro")
+        let unknown = try XCTUnwrap(report.projects.first { $0.source == .kiro })
+        XCTAssertEqual(unknown.projectKey, "unknown-kiro")
+        XCTAssertEqual(unknown.daily.first?.usd ?? 0, 7, accuracy: 0.0001)
+        XCTAssertEqual(unknown.daily.first?.tokens, 700)
+        XCTAssertEqual(unknown.daily.first?.models.map(\.name), ["real-model"])
+        XCTAssertEqual(report.overview.confidence.live, [.kiro])
+        XCTAssertTrue(report.overview.confidence.historyOnly.isEmpty)
+        XCTAssertTrue(report.overview.confidence.unavailable.isEmpty)
+        XCTAssertEqual(ProjectUsageSource.kiro.displayName, "Kiro")
     }
 
     func testBuilderSubtractsKnownCodexAndGrokPerDayWithoutDoubleCounting() throws {
@@ -626,6 +741,22 @@ final class ProjectInsightsTests: XCTestCase {
         XCTAssertEqual(rows.map(\.name), ["model-c", "model-a", "model-b"])
     }
 
+    private func makeReport(
+        source: ProjectUsageSource,
+        projectKey: String
+    ) -> ProjectInsightsReport {
+        ProjectInsightsReport(
+            overview: .init(
+                currentUSD: 1, currentTokens: 1,
+                priorUSD: 0, priorTokens: 0,
+                changePercent: nil, topSource: nil, topModel: nil,
+                confidence: .init(live: [source], historyOnly: [], unavailable: [])),
+            projects: [.init(
+                source: source, projectKey: projectKey,
+                displayName: projectKey, attribution: .unknown,
+                daily: [])])
+    }
+
     private func makeCombined(
         daily: [CombinedDailyUsage],
         confidence: CostHistoryStore.UsageScanConfidence? = nil,
@@ -643,6 +774,7 @@ final class ProjectInsightsTests: XCTestCase {
             avgPerActiveDayUSD: 0, activeDays: daily.count, streakDays: daily.count,
             claudeConfidence: enabledSources.contains(.claude) ? live : nil,
             codexConfidence: enabledSources.contains(.codex) ? live : nil,
-            grokConfidence: enabledSources.contains(.grok) ? live : nil)
+            grokConfidence: enabledSources.contains(.grok) ? live : nil,
+            kiroConfidence: enabledSources.contains(.kiro) ? live : nil)
     }
 }

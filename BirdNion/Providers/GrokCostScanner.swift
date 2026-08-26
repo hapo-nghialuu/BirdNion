@@ -196,7 +196,9 @@ enum GrokCostScanner {
             // the full chart window once so `replacingSource` can rebuild
             // every day from clean full-T last-active attribution.
             let incrementalDays = CostHistoryStore.scanBackDays(source: .grok, now: now)
-            let storedRevision = UserDefaults.standard.integer(forKey: countingRevisionKey)
+            let storedRevision = max(
+                UserDefaults.standard.integer(forKey: countingRevisionKey),
+                CostHistoryStore.storedCountingRevision(source: .grok))
             let replacing = storedRevision < countingRevision
             let needsProjectBootstrap = ProjectCostHistoryStore.read()
                 .sources?[ProjectUsageSource.grok.rawValue]?.isEmpty != false
@@ -214,7 +216,8 @@ enum GrokCostScanner {
                 now: now,
                 windowDays: chartWindowDays,
                 replacingSource: replacing,
-                liveScanSucceeded: true)
+                liveScanSucceeded: true,
+                countingRevision: countingRevision)
             _ = ProjectCostHistoryStore.apply(
                 source: .grok,
                 liveProjects: live.projects,

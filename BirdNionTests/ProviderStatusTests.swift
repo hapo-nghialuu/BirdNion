@@ -290,40 +290,95 @@ final class ProviderStatusTests: XCTestCase {
         XCTAssertEqual(missing, .init(isReady: false, source: "None"))
     }
 
-    func testOnboardingPhaseRequiresRealQuotaOrPassingSelfTestForLive() {
+    func testOnboardingPhaseRequiresCurrentExplicitSelfTestForLive() {
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .idle, statusHasError: false,
-            statusHasQuota: false, detectionReady: false), .needsSource)
+            detectionReady: false), .needsSource)
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .idle, statusHasError: false,
-            statusHasQuota: false, detectionReady: true), .readyToTest)
+            detectionReady: true), .readyToTest)
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .running, statusHasError: false,
-            statusHasQuota: false, detectionReady: true), .testing)
+            detectionReady: true), .testing)
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .idle, statusHasError: true,
-            statusHasQuota: false, detectionReady: true), .failed)
+            detectionReady: true), .failed)
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .pass, statusHasError: false,
-            statusHasQuota: false, detectionReady: true), .live)
+            detectionReady: true,
+            passEligibleForFirstLive: true), .live)
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .pass, statusHasError: false,
+            detectionReady: true,
+            passEligibleForFirstLive: false), .readyToTest)
 
-        // Running is immediate UI state, then the latest runtime status wins
-        // over an older explicit pass/fail result.
+        // Running is immediate UI state; a runtime error can invalidate a
+        // prior pass, but cached/background quota is never enough to enter
+        // `.live` because it is deliberately absent from this contract.
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .running, statusHasError: true,
-            statusHasQuota: true, detectionReady: false), .testing)
+            detectionReady: false), .testing)
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .pass, statusHasError: true,
-            statusHasQuota: false, detectionReady: false), .failed)
+            detectionReady: false), .failed)
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .fail(kind: .rateLimited, raw: "HTTP 429"), statusHasError: false,
-            statusHasQuota: true, detectionReady: true), .live)
+            detectionReady: true), .failed)
         XCTAssertEqual(ProvidersPane.onboardingPhase(
             testState: .idle, statusHasError: false,
-            statusHasQuota: true, detectionReady: false), .live)
+            detectionReady: false), .needsSource)
+        XCTAssertTrue(ProvidersPane.shouldRetainPendingFirstLiveAppearance(
+            testState: .pass, statusHasError: false))
+        XCTAssertFalse(ProvidersPane.shouldRetainPendingFirstLiveAppearance(
+            testState: .pass, statusHasError: true))
+        XCTAssertFalse(ProvidersPane.shouldRetainPendingFirstLiveAppearance(
+            testState: .idle, statusHasError: false))
+        XCTAssertFalse(ProvidersPane.statusHasError(nil))
+        XCTAssertFalse(ProvidersPane.statusHasError(""))
+        XCTAssertTrue(ProvidersPane.statusHasError("HTTP 500"))
+    }
+
+    func testAbandonedFirstLivePassCannotReturnLiveAfterBackgroundRecovery() {
         XCTAssertEqual(ProvidersPane.onboardingPhase(
-            testState: .idle, statusHasError: true,
-            statusHasQuota: true, detectionReady: true), .failed)
+            testState: .pass,
+            statusHasError: true,
+            detectionReady: true,
+            passEligibleForFirstLive: true), .failed)
+
+        // Abandoning the pending paint clears First Live eligibility. A later
+        // background success may restore Ready, but cannot mint Live without
+        // a new explicit Guided Setup attempt and durable receipt.
+        XCTAssertEqual(ProvidersPane.onboardingPhase(
+            testState: .pass,
+            statusHasError: false,
+            detectionReady: true,
+            passEligibleForFirstLive: false), .readyToTest)
+    }
+
+    func testOnlyMatchingGuidedAttemptCanMakeAReceiptCurrent() {
+        let checkpoint = FirstLiveCheckpoint(
+            attemptId: "123e4567-e89b-42d3-a456-426614174000",
+            providerId: "claude",
+            source: "Claude Code",
+            setupSavedAtMs: 1,
+            probeStartedAtMs: 2,
+            freshResultReceivedAtMs: 3,
+            liveRenderedAtMs: 4,
+            appVersion: "1.0.0",
+            platform: "macos")
+
+        XCTAssertTrue(ProvidersPane.isCurrentFirstLiveCheckpoint(
+            checkpoint,
+            phase: .live,
+            activeAttemptID: checkpoint.attemptId))
+        XCTAssertFalse(ProvidersPane.isCurrentFirstLiveCheckpoint(
+            checkpoint,
+            phase: .live,
+            activeAttemptID: "223e4567-e89b-42d3-a456-426614174000"))
+        XCTAssertFalse(ProvidersPane.isCurrentFirstLiveCheckpoint(
+            checkpoint,
+            phase: .readyToTest,
+            activeAttemptID: checkpoint.attemptId))
     }
 
     func testSelfTestTaskGuardAndGenerationRejectOverlapAndStaleCompletion() {
@@ -333,6 +388,17 @@ final class ProviderStatusTests: XCTestCase {
             providerID: "claude", activeProviderIDs: ["claude"]))
         XCTAssertTrue(ProvidersPane.canStartSelfTest(
             providerID: "codex", activeProviderIDs: ["claude"]))
+        XCTAssertTrue(ProvidersPane.isExpectedSelfTestStatus(
+            ProviderStatus(
+                id: "claude", displayName: "Claude", windows: [],
+                lastUpdated: Date(), error: nil),
+            providerID: "claude"))
+        XCTAssertFalse(ProvidersPane.isExpectedSelfTestStatus(
+            ProviderStatus(
+                id: "codex", displayName: "Codex", windows: [
+                    QuotaWindow(label: "Tuần", usedPct: 10, remainingPct: 90),
+                ], lastUpdated: Date(), error: nil),
+            providerID: "claude"))
 
         XCTAssertEqual(ProvidersPane.nextSelfTestGeneration(after: nil), 1)
         XCTAssertEqual(ProvidersPane.nextSelfTestGeneration(after: 7), 8)

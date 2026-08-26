@@ -70,8 +70,8 @@ enum WeeklyDigest {
         return raw.flatMap(BudgetPeriod.init(rawValue:)) ?? .week
     }
 
-    /// Per-provider budgets — same keys `SettingsStore`'s `@AppStorage`
-    /// writes (`claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD`), same "0 =
+    /// Per-source budgets — same keys `SettingsStore`'s `@AppStorage` writes,
+    /// same "0 =
     /// not configured" convention as `budgetUSD` above. Used as `evaluate`'s
     /// default arguments (mirrors the existing `now: Date = Date()` pattern)
     /// so the real `QuotaService` call site — which only ever passes the
@@ -85,6 +85,15 @@ enum WeeklyDigest {
     }
     static var grokBudgetUSD: Double {
         UserDefaults.standard.double(forKey: "grokBudgetUSD")
+    }
+    static var kiroBudgetUSD: Double {
+        UserDefaults.standard.double(forKey: "kiroBudgetUSD")
+    }
+    static var ompBudgetUSD: Double {
+        UserDefaults.standard.double(forKey: "ompBudgetUSD")
+    }
+    static var piBudgetUSD: Double {
+        UserDefaults.standard.double(forKey: "piBudgetUSD")
     }
 
     /// Pure cadence gate — no ambient `Date()`, so it is directly testable.
@@ -229,6 +238,8 @@ enum WeeklyDigest {
         var folded: [ModelKey: (usd: Double, tokens: Int)] = [:]
         for day in window {
             for m in day.models {
+                if m.source == SourceID.kiro.rawValue,
+                   m.name == KiroCostScanner.aggregateModelName { continue }
                 let key = ModelKey(source: m.source, name: m.name)
                 var v = folded[key] ?? (0, 0)
                 v.usd += m.usd
@@ -285,6 +296,9 @@ enum WeeklyDigest {
         claudeBudgetUSD: Double? = WeeklyDigest.claudeBudgetUSD,
         codexBudgetUSD: Double? = WeeklyDigest.codexBudgetUSD,
         grokBudgetUSD: Double? = WeeklyDigest.grokBudgetUSD,
+        kiroBudgetUSD: Double? = WeeklyDigest.kiroBudgetUSD,
+        ompBudgetUSD: Double? = WeeklyDigest.ompBudgetUSD,
+        piBudgetUSD: Double? = WeeklyDigest.piBudgetUSD,
         now: Date = Date(),
         calendar: Calendar = .current,
         language: String? = nil
@@ -322,13 +336,16 @@ enum WeeklyDigest {
         // Trust rule: a provider whose confidence is `nil` or `included ==
         // false` (disabled, or never landed a scan) never contributes a risk
         // line from an implicit-zero forecast — only `.claude`/`.codex`/
-        // `.grok` confidence with `included == true` (live OR history-only)
+        // source confidence with `included == true` (live OR history-only)
         // may calculate. `.onTrack` is intentionally excluded too — the
         // digest only calls out risk.
         let providerBudgetInputs: [(SourceID, CostHistoryStore.UsageScanConfidence?, Double?, CombinedUsageSource)] = [
             (.claude, combined.claudeConfidence, claudeBudgetUSD, .claude),
             (.codex, combined.codexConfidence, codexBudgetUSD, .codex),
             (.grok, combined.grokConfidence, grokBudgetUSD, .grok),
+            (.kiro, combined.kiroConfidence, kiroBudgetUSD, .kiro),
+            (.omp, combined.ompConfidence, ompBudgetUSD, .omp),
+            (.pi, combined.piConfidence, piBudgetUSD, .pi),
         ]
         let providerBudgetRisks: [ProviderBudgetRisk] = providerBudgetInputs.compactMap { source, confidence, budget, usageSource in
             guard let confidence, confidence.included else { return nil }

@@ -110,14 +110,17 @@ final class SettingsStore: ObservableObject {
     /// All-tab budget (USD) for the local estimated Claude+Codex+Grok+Kiro+OMP+Pi
     /// cost — 0 means "not configured" (the budget card stays hidden).
     @AppStorage("monthlyBudgetUSD") var monthlyBudgetUSD: Double = 0
-    /// Per-provider monthly budgets (USD) — independent of `monthlyBudgetUSD`
-    /// above. Each 0 means "not configured" for that provider (its budget
-    /// card on that provider's own tab stays hidden). Same UserDefaults-only,
+    /// Per-source budgets (USD) — independent of `monthlyBudgetUSD` above.
+    /// Each 0 means "not configured"; provider-backed sources can show a card
+    /// on their own tab. Same UserDefaults-only,
     /// non-`BirdNionConfigStore` convention as the total budget: a local UI
     /// preference, never a credential and never persisted to settings.json.
     @AppStorage("claudeBudgetUSD") var claudeMonthlyBudgetUSD: Double = 0
     @AppStorage("codexBudgetUSD") var codexMonthlyBudgetUSD: Double = 0
     @AppStorage("grokBudgetUSD") var grokMonthlyBudgetUSD: Double = 0
+    @AppStorage("kiroBudgetUSD") var kiroMonthlyBudgetUSD: Double = 0
+    @AppStorage("ompBudgetUSD") var ompMonthlyBudgetUSD: Double = 0
+    @AppStorage("piBudgetUSD") var piMonthlyBudgetUSD: Double = 0
     /// Refresh every provider each time the menu-bar popover opens (CodexBar's
     /// `refreshAllProvidersOnMenuOpen`). `AppDelegate.showPanel()` reads this.
     @AppStorage("refreshOnMenuOpen") var refreshOnMenuOpen: Bool = false

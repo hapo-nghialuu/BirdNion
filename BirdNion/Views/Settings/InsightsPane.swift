@@ -18,6 +18,7 @@ struct InsightsPane: View {
     @AppStorage(InsightsSegmentBar.daysDefaultsKey) private var days = 7
     @State private var report: ProjectInsightsReport?
     @State private var activity: AgentActivitySnapshot?
+    @State private var historyCostSources: Set<CostHistoryStore.Source> = []
     @State private var loading = false
     @State private var loadGeneration = UUID()
 
@@ -33,13 +34,10 @@ struct InsightsPane: View {
     }
     private var enabledIDs: Set<String> { Set(quota.displayStatuses.map(\.id)) }
     private var agentRecords: [InstalledAgentRecord] {
-        let sources = Set((activity?.byAgent ?? [:]).compactMap { id, window in
-            window.hasData ? id.costHistorySource : nil
-        })
         return installedAgents.records.map {
             $0.projected(
                 providerStatuses: quota.displayStatuses,
-                availableCostSources: sources)
+                availableCostSources: historyCostSources)
         }
     }
     private var reloadKey: String {
@@ -110,36 +108,50 @@ struct InsightsPane: View {
         let generation = UUID()
         loadGeneration = generation
         loading = true
-        let activityIDs = agentRecords.compactMap { record in
+        let history = await Task.detached(priority: .utility) {
+            let document = CostHistoryStore.read()
+            let sources = Set(CostHistoryStore.Source.allCases.filter { source in
+                document.sources?[source.rawValue]?.values.contains {
+                    $0.usd > 0 || $0.tokens > 0
+                } == true
+            })
+            return (document: document, sources: sources)
+        }.value
+        guard !Task.isCancelled, loadGeneration == generation else { return }
+        historyCostSources = history.sources
+        let projectedRecords = agentRecords
+        let activityIDs = projectedRecords.compactMap { record in
             record.capabilities.contains(.localCost) ? record.id : nil
         }
         let activitySnapshot = await Task.detached(priority: .utility) {
             WeeklyActivityBucketBuilder.buildSnapshot(
-                document: CostHistoryStore.read(),
+                document: history.document,
                 agentIDs: activityIDs)
         }.value
         guard !Task.isCancelled, loadGeneration == generation else { return }
         activity = activitySnapshot
-        let includeClaude = enabledIDs.contains("claude")
-        let includeCodex = enabledIDs.contains("codex")
-        let includeGrok = enabledIDs.contains("grok")
-        let includeOMP = true
-        let includePi = true
-        let enabledSources = Set([
-            includeClaude ? ProjectUsageSource.claude : nil,
-            includeCodex ? ProjectUsageSource.codex : nil,
-            includeGrok ? ProjectUsageSource.grok : nil,
-        ].compactMap { $0 } + [.omp, .pi])
+        let enabledSources = Self.localProjectSources(
+            enabledProviderIDs: enabledIDs,
+            agentRecords: projectedRecords)
+        let includeClaude = enabledSources.contains(.claude)
+        let includeCodex = enabledSources.contains(.codex)
+        let includeGrok = enabledSources.contains(.grok)
+        let includeKiro = enabledSources.contains(.kiro)
+        let includeOMP = enabledSources.contains(.omp)
+        let includePi = enabledSources.contains(.pi)
 
         let seededClaude = includeClaude ? await ClaudeCostScanner.seededReport() : nil
         let seededCodex = includeCodex ? await CodexCostScanner.seededReport() : nil
         let seededGrok = includeGrok ? await GrokCostScanner.seededReport() : nil
-        let ompReport = await OMPCostScanner.loadReport()
-        let piReport = await PiCostScanner.loadReport()
+        let seededKiro = includeKiro ? await KiroCostScanner.seededReport() : nil
+        let ompReport = includeOMP ? await OMPCostScanner.loadReport() : nil
+        let piReport = includePi ? await PiCostScanner.loadReport() : nil
         guard !Task.isCancelled, loadGeneration == generation else { return }
         let seeded = await buildReport(
-            claude: seededClaude, codex: seededCodex, grok: seededGrok, omp: ompReport, pi: piReport,
-            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            claude: seededClaude, codex: seededCodex, grok: seededGrok,
+            kiro: seededKiro, omp: ompReport, pi: piReport,
+            includeClaude: includeClaude, includeCodex: includeCodex,
+            includeGrok: includeGrok, includeKiro: includeKiro,
             includeOMP: includeOMP, includePi: includePi,
             enabledSources: enabledSources)
         guard !Task.isCancelled, loadGeneration == generation else { return }
@@ -148,29 +160,75 @@ struct InsightsPane: View {
         let liveClaude = includeClaude ? await ClaudeCostScanner.usageReport() : nil
         let liveCodex = includeCodex ? await CodexCostScanner.usageReport() : nil
         let liveGrok = includeGrok ? await GrokCostScanner.usageReport() : nil
+        let liveKiro = includeKiro ? await KiroCostScanner.usageReport() : nil
         guard !Task.isCancelled, loadGeneration == generation else { return }
         let live = await buildReport(
             claude: liveClaude ?? seededClaude, codex: liveCodex ?? seededCodex,
-            grok: liveGrok ?? seededGrok, omp: ompReport, pi: piReport,
-            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            grok: liveGrok ?? seededGrok, kiro: liveKiro ?? seededKiro,
+            omp: ompReport, pi: piReport,
+            includeClaude: includeClaude, includeCodex: includeCodex,
+            includeGrok: includeGrok, includeKiro: includeKiro,
             includeOMP: includeOMP, includePi: includePi,
             enabledSources: enabledSources)
-        guard !Task.isCancelled, loadGeneration == generation else { return }
-        if let live { report = live }
-        if loadGeneration == generation { loading = false }
+        guard !Task.isCancelled,
+              let completion = Self.loadCompletion(
+                  generation: generation,
+                  currentGeneration: loadGeneration,
+                  seeded: seeded,
+                  live: live)
+        else { return }
+        report = completion.report
+        loading = completion.loading
+    }
+
+    struct LoadCompletion {
+        let report: ProjectInsightsReport?
+        let loading: Bool
+    }
+
+    static func loadCompletion(
+        generation: UUID,
+        currentGeneration: UUID,
+        seeded: ProjectInsightsReport?,
+        live: ProjectInsightsReport?
+    ) -> LoadCompletion? {
+        // The wrapper distinguishes a current load that completed empty from a
+        // stale load that must not mutate the newer view state.
+        guard generation == currentGeneration else { return nil }
+        return LoadCompletion(report: live ?? seeded, loading: false)
+    }
+
+    /// Local cost follows the safely detected agent, not only its quota-provider
+    /// toggle. Detection must bootstrap the first scan even before aggregate
+    /// history exists; requiring `.localCost` here creates a circular gate for
+    /// a fresh Kiro/Grok/Claude/Codex installation.
+    static func localProjectSources(
+        enabledProviderIDs: Set<String>,
+        agentRecords: [InstalledAgentRecord]
+    ) -> Set<ProjectUsageSource> {
+        let localAgentIDs = Set(agentRecords.compactMap { record in
+            record.costHistorySource != nil ? record.id.rawValue : nil
+        })
+        return Set(ProjectUsageSource.allCases.filter { source in
+            enabledProviderIDs.contains(source.rawValue)
+                || localAgentIDs.contains(source.rawValue)
+        })
     }
 
     private func buildReport(
         claude: ClaudeUsageReport?, codex: CodexUsageReport?, grok: GrokUsageReport?,
+        kiro: KiroUsageReport?,
         omp: OMPUsageReport? = nil, pi: PiUsageReport? = nil,
-        includeClaude: Bool, includeCodex: Bool, includeGrok: Bool,
+        includeClaude: Bool, includeCodex: Bool, includeGrok: Bool, includeKiro: Bool,
         includeOMP: Bool = true, includePi: Bool = true,
         enabledSources: Set<ProjectUsageSource>
     ) async -> ProjectInsightsReport? {
-        guard claude != nil || codex != nil || grok != nil || omp != nil || pi != nil else { return nil }
+        guard claude != nil || codex != nil || grok != nil || kiro != nil
+                || omp != nil || pi != nil else { return nil }
         let combined = CombinedUsageReport.build(
-            claude: claude, codex: codex, grok: grok, omp: omp, pi: pi,
-            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
+            claude: claude, codex: codex, grok: grok, kiro: kiro, omp: omp, pi: pi,
+            includeClaude: includeClaude, includeCodex: includeCodex,
+            includeGrok: includeGrok, includeKiro: includeKiro,
             includeOMP: includeOMP, includePi: includePi)
         return await Task.detached(priority: .utility) {
             ProjectInsightsBuilder.build(

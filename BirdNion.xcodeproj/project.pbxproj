@@ -135,6 +135,8 @@
 		IAGD0001000000000000B001 /* InstalledAgentDetectors.swift in Sources */ = {isa = PBXBuildFile; fileRef = IAGD0002000000000000F001 /* InstalledAgentDetectors.swift */; };
 		IAGC0001000000000000B001 /* InstalledAgentCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = IAGC0002000000000000F001 /* InstalledAgentCatalog.swift */; };
 		IAGV0001000000000000B001 /* InstalledAgentVisibilityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = IAGV0002000000000000F001 /* InstalledAgentVisibilityStore.swift */; };
+		FLCP0001000000000000B001 /* first-live-checkpoint-store.swift in Sources */ = {isa = PBXBuildFile; fileRef = FLCP0002000000000000F001 /* first-live-checkpoint-store.swift */; };
+		FLCT0001000000000000B001 /* first-live-checkpoint-tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FLCT0002000000000000F001 /* first-live-checkpoint-tests.swift */; };
 		AGVT0001000000000000B001 /* AgentVisibilityStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGVT0002000000000000F001 /* AgentVisibilityStoreTests.swift */; };
 		AGCT0001000000000000B001 /* InstalledAgentCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCT0002000000000000F001 /* InstalledAgentCatalogTests.swift */; };
 		AGDS0001000000000000B001 /* AgentDetailSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGDS0002000000000000F001 /* AgentDetailSnapshot.swift */; };
@@ -345,6 +347,8 @@
 		IAGD0002000000000000F001 /* InstalledAgentDetectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/InstalledAgentDetectors.swift; sourceTree = "<group>"; };
 		IAGC0002000000000000F001 /* InstalledAgentCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/InstalledAgentCatalog.swift; sourceTree = "<group>"; };
 		IAGV0002000000000000F001 /* InstalledAgentVisibilityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/InstalledAgentVisibilityStore.swift; sourceTree = "<group>"; };
+		FLCP0002000000000000F001 /* first-live-checkpoint-store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/first-live-checkpoint-store.swift; sourceTree = "<group>"; };
+		FLCT0002000000000000F001 /* first-live-checkpoint-tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/first-live-checkpoint-tests.swift; sourceTree = "<group>"; };
 		AGVT0002000000000000F001 /* AgentVisibilityStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/AgentVisibilityStoreTests.swift; sourceTree = "<group>"; };
 		AGCT0002000000000000F001 /* InstalledAgentCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/InstalledAgentCatalogTests.swift; sourceTree = "<group>"; };
 		AGDS0002000000000000F001 /* AgentDetailSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/AgentDetailSnapshot.swift; sourceTree = "<group>"; };
@@ -460,6 +464,7 @@
 				AGVT0001000000000000B001 /* AgentVisibilityStoreTests.swift in Sources */,
 				AGCT0001000000000000B001 /* InstalledAgentCatalogTests.swift in Sources */,
 				WABT0001000000000000B001 /* WeeklyActivityBucketBuilderTests.swift in Sources */,
+				FLCT0001000000000000B001 /* first-live-checkpoint-tests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -849,6 +854,7 @@
 				IAGD0001000000000000B001 /* InstalledAgentDetectors.swift in Sources */,
 				IAGC0001000000000000B001 /* InstalledAgentCatalog.swift in Sources */,
 				IAGV0001000000000000B001 /* InstalledAgentVisibilityStore.swift in Sources */,
+				FLCP0001000000000000B001 /* first-live-checkpoint-store.swift in Sources */,
 				AGDS0001000000000000B001 /* AgentDetailSnapshot.swift in Sources */,
 				AGDC0001000000000000B001 /* AgentDetailPanelCoordinator.swift in Sources */,
 				AGAW0001000000000000B001 /* AgentActivityWindow.swift in Sources */,

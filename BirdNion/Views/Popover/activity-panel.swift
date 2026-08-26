@@ -207,7 +207,9 @@ struct ActivityPanelRoot: View {
     /// Model đã dùng trong ngày được chọn: tên + tokens + tiền.
     @ViewBuilder
     private func selectedDayModels(_ day: AgentActivityDay) -> some View {
-        let models = (dayModels[day.date] ?? []).sorted { $0.tokens > $1.tokens }
+        let models = (dayModels[day.date] ?? [])
+            .filter { !$0.isKiroSyntheticAggregate }
+            .sorted { $0.tokens > $1.tokens }
         if !models.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(models.prefix(6))) { model in

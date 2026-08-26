@@ -14,6 +14,12 @@ import UniformTypeIdentifiers
 /// P4: view modules live in ProvidersSidebar / ProviderDetail /
 /// ProviderAccountsSection / ProviderCostSection (extensions of this type).
 struct ProvidersPane: View {
+    struct PendingFirstLiveAppearance: Equatable {
+        let attempt: FirstLiveAttempt
+        let freshResultReceivedAt: Date
+        let generation: UInt
+    }
+
     /// Drag payload type for provider reordering. Uses the system plain-text
     /// type: a custom UTType would need a UTExportedTypeDeclarations entry in
     /// Info.plist or macOS silently rejects the drop (validateDrop /
@@ -38,6 +44,7 @@ struct ProvidersPane: View {
     @Binding var searchText: String
 
     @State var rows: [BirdNionConfigStore.Provider] = []
+    @State var rowsSettingsRevision: UInt64 = 0
     @State var selectedID: String?
     /// Codex token cost (today / 30d), scanned lazily when Codex is selected.
     @State var codexCost: CodexCostSummary?
@@ -50,6 +57,7 @@ struct ProvidersPane: View {
     @State var newAccountToken: String = ""
     @State var newAccountLabel: String = ""
     @State var newAccountKind: ClaudeTokenAccount.Kind = .web
+    @State var claudeAccountError: String? = nil
 
     // MARK: - Antigravity OAuth state
     @State var antigravityStore: AntigravityOAuthStore.Store = AntigravityOAuthStore.load()
@@ -125,7 +133,8 @@ struct ProvidersPane: View {
             // the user created the file via Settings — `allProviders()` now
             // falls back to the canonical 7-provider list, but we still
             // want a fresh read so toggles from another pane propagate.
-            rows = BirdNionConfigStore.allProviders()
+            reloadProviderRows()
+            firstLiveCheckpoints = FirstLiveCheckpointStore.load()
             if let routed = UserDefaults.standard.string(forKey: "birdnion.selectedProvider"),
                rows.contains(where: { $0.id == routed }) {
                 selectedID = routed
@@ -144,6 +153,28 @@ struct ProvidersPane: View {
             selectedID = id
             pendingRemediationTarget = route?.target
             UserDefaults.standard.removeObject(forKey: "birdnion.providerRemediationTarget")
+        }
+        .onReceive(quota.$statuses) { statuses in
+            for providerID in Array(pendingFirstLiveAppearances.keys) {
+                let statusHasError = Self.statusHasError(
+                    statuses.first(where: { $0.id == providerID })?.error)
+                if !Self.shouldRetainPendingFirstLiveAppearance(
+                    testState: selfTestState[providerID] ?? .idle,
+                    statusHasError: statusHasError)
+                {
+                    abandonPendingFirstLiveAppearance(for: providerID)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionRefresh)) { note in
+            guard let providerID = note.object as? String else { return }
+            invalidateSelfTestEvidenceIfNeeded(for: providerID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionCodexAccountChanged)) { _ in
+            invalidateSelfTest(for: "codex")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionClaudeAccountChanged)) { _ in
+            invalidateSelfTest(for: "claude")
         }
         .task(id: selectedID) {
             // UI state is reset on provider switches, while the independent
@@ -255,22 +286,40 @@ struct ProvidersPane: View {
     static func onboardingPhase(
         testState: SelfTestState,
         statusHasError: Bool,
-        statusHasQuota: Bool,
-        detectionReady: Bool
+        detectionReady: Bool,
+        passEligibleForFirstLive: Bool = false
     ) -> OnboardingPhase {
         if testState == .running { return .testing }
-        // Runtime status is canonical once a probe/background refresh has
-        // published it. Explicit results are only a fallback while no newer
-        // status exists, preventing stale pass/fail UI from disagreeing with
-        // Action Center.
+        // A background/cached quota status is intentionally not an input:
+        // Guided Setup can claim Live only from this generation's explicit
+        // user-initiated probe. Runtime errors may still surface remediation.
         if statusHasError { return .failed }
-        if statusHasQuota { return .live }
         switch testState {
-        case .pass: return .live
+        case .pass where passEligibleForFirstLive: return .live
+        case .pass: break
         case .fail: return .failed
         case .idle, .running: break
         }
         return detectionReady ? .readyToTest : .needsSource
+    }
+
+    static func shouldRetainPendingFirstLiveAppearance(
+        testState: SelfTestState,
+        statusHasError: Bool
+    ) -> Bool {
+        testState == .pass && !statusHasError
+    }
+
+    static func statusHasError(_ error: String?) -> Bool {
+        error?.isEmpty == false
+    }
+
+    static func isCurrentFirstLiveCheckpoint(
+        _ checkpoint: FirstLiveCheckpoint,
+        phase: OnboardingPhase,
+        activeAttemptID: String?
+    ) -> Bool {
+        phase == .live && checkpoint.attemptId == activeAttemptID
     }
 
     static let onboardingProviderIDs: Set<String> = ["claude", "codex", "grok"]
@@ -278,6 +327,13 @@ struct ProvidersPane: View {
     @State var selfTestState: [String: SelfTestState] = [:]
     @State var selfTestTasks: [String: Task<Void, Never>] = [:]
     @State var selfTestGenerations: [String: UInt] = [:]
+    /// Generation that originated from Guided Setup's Connect & test action.
+    /// Header self-tests share the fetch machinery but cannot mint or refresh
+    /// a First Live receipt, so their `.pass` must not claim Guided Setup Live.
+    @State var firstLiveSelfTestGenerations: [String: UInt] = [:]
+    @State var firstLiveSelfTestAttemptIDs: [String: String] = [:]
+    @State var firstLiveCheckpoints: [String: FirstLiveCheckpoint] = FirstLiveCheckpointStore.load()
+    @State var pendingFirstLiveAppearances: [String: PendingFirstLiveAppearance] = [:]
     @State var pendingRemediationTarget: ProviderRemediationTarget?
     @State var saveErrorProviderID: String?
 
@@ -294,6 +350,12 @@ struct ProvidersPane: View {
 // MARK: - Bindings & helpers (P4 module split)
 
 extension ProvidersPane {
+    func reloadProviderRows() {
+        let snapshot = BirdNionConfigStore.providersSnapshot()
+        rows = snapshot.providers
+        rowsSettingsRevision = snapshot.settingsRevision
+    }
+
     func enabledBinding(_ idx: Int) -> Binding<Bool> {
         Binding(
             get: { rows[idx].enabled == true },
@@ -425,7 +487,9 @@ extension ProvidersPane {
     }
 
     func codexLoginStatus() -> String {
-        guard let creds = try? CodexAuthStore.load() else {
+        guard let creds = try? CodexAuthStore.load(
+            url: CodexAccountStore.systemAuthURL())
+        else {
             return L10n.languageCode(language) == "vi" ? "Chưa đăng nhập" : "Not signed in"
         }
         if let email = CodexAuthStore.emailFromIDToken(creds.idToken) {
@@ -457,13 +521,20 @@ extension ProvidersPane {
             return copy
         }
         do {
-            try BirdNionConfigStore.saveProviders(persistedRows)
+            rowsSettingsRevision = try BirdNionConfigStore.saveProviders(
+                persistedRows,
+                expectedRevision: rowsSettingsRevision)
             saveErrorProviderID = nil
             for row in persistedRows where row.enabled != true {
                 quota.remove(id: row.id)
             }
             return true
         } catch {
+            // Another BirdNion process or settings pane committed after these
+            // rows were loaded. Never overwrite its newer fields with this
+            // stale whole-pane snapshot; reload and let the user retry.
+            reloadProviderRows()
+            saveErrorProviderID = selectedID
             return false
         }
     }

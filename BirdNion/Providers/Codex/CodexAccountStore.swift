@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// One Codex login the app knows about.
 /// - `system` is the default `~/.codex` login written by `codex login` in a
@@ -17,25 +18,185 @@ struct CodexAccount: Identifiable, Equatable {
 /// `auth.json` the provider reads. The system `~/.codex` stays untouched.
 enum CodexAccountStore {
     static let activeKey = "activeCodexAccount"
+    private static let maxMetadataBytes = 2 * 1024 * 1024
+    private static let metadataMutationLock = NSLock()
+    private static let accountOperationFence = AccountOperationFence()
+
+    /// Short per-account state transitions only. Login and filesystem work
+    /// always happen after this lock is released.
+    final class AccountOperationFence {
+        private struct State {
+            var reauthCount = 0
+            var removalInProgress = false
+            var exclusiveMutationInProgress = false
+        }
+
+        private let lock = NSLock()
+        private var states: [String: State] = [:]
+
+        func beginReauthentication(id: String) throws {
+            lock.lock()
+            defer { lock.unlock() }
+            var state = states[id] ?? State()
+            guard state.reauthCount == 0,
+                  !state.removalInProgress,
+                  !state.exclusiveMutationInProgress
+            else {
+                throw AccountError.persistenceFailed
+            }
+            state.reauthCount += 1
+            states[id] = state
+        }
+
+        func finishReauthentication(id: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            if var state = states[id] {
+                state.reauthCount = max(0, state.reauthCount - 1)
+                if state.reauthCount == 0,
+                   !state.removalInProgress,
+                   !state.exclusiveMutationInProgress {
+                    states.removeValue(forKey: id)
+                } else {
+                    states[id] = state
+                }
+            }
+        }
+
+        func performRemoval<T>(id: String, operation: () throws -> T) throws -> T {
+            try performRemoval(ids: [id], operation: operation)
+        }
+
+        func performRemoval<T>(ids: [String], operation: () throws -> T) throws -> T {
+            let uniqueIDs = Array(Set(ids)).sorted()
+            lock.lock()
+            for id in uniqueIDs {
+                let state = states[id] ?? State()
+                guard !state.exclusiveMutationInProgress,
+                      !state.removalInProgress,
+                      state.reauthCount == 0
+                else {
+                    lock.unlock()
+                    throw AccountError.persistenceFailed
+                }
+            }
+            for id in uniqueIDs {
+                var state = states[id] ?? State()
+                state.removalInProgress = true
+                states[id] = state
+            }
+            lock.unlock()
+            defer {
+                lock.lock()
+                for id in uniqueIDs {
+                    guard var latest = states[id] else { continue }
+                    latest.removalInProgress = false
+                    if latest.reauthCount == 0, !latest.exclusiveMutationInProgress {
+                        states.removeValue(forKey: id)
+                    } else {
+                        states[id] = latest
+                    }
+                }
+                lock.unlock()
+            }
+            return try operation()
+        }
+
+        func performExclusiveMutation<T>(ids: [String], operation: () throws -> T) throws -> T {
+            let uniqueIDs = Array(Set(ids)).sorted()
+            lock.lock()
+            for id in uniqueIDs {
+                let state = states[id] ?? State()
+                guard state.reauthCount == 0,
+                      !state.removalInProgress,
+                      !state.exclusiveMutationInProgress
+                else {
+                    lock.unlock()
+                    throw AccountError.persistenceFailed
+                }
+            }
+            for id in uniqueIDs {
+                var state = states[id] ?? State()
+                state.exclusiveMutationInProgress = true
+                states[id] = state
+            }
+            lock.unlock()
+            defer {
+                lock.lock()
+                for id in uniqueIDs {
+                    guard var state = states[id] else { continue }
+                    state.exclusiveMutationInProgress = false
+                    if state.reauthCount == 0, !state.removalInProgress {
+                        states.removeValue(forKey: id)
+                    } else {
+                        states[id] = state
+                    }
+                }
+                lock.unlock()
+            }
+            return try operation()
+        }
+    }
+
+    /// Immutable account identity used by one provider fetch. The descriptor
+    /// binding is captured with the id/URL and held across every provider await.
+    struct ActiveSelection: Equatable {
+        let id: String
+        let authURL: URL
+        let authBinding: CodexAuthStore.CredentialFileBinding?
+
+        init(id: String, authURL: URL) {
+            self.id = id
+            self.authURL = authURL
+            if id == "system" {
+                self.authBinding = try? CodexAuthStore.bindSystemCredential(at: authURL)
+            } else {
+                self.authBinding = try? CodexAuthStore.bindCredentialFile(
+                    at: authURL,
+                    role: "managed:\(id):auth.json")
+            }
+        }
+
+        init(
+            id: String,
+            authURL: URL,
+            authBinding: CodexAuthStore.CredentialFileBinding?
+        ) {
+            self.id = id
+            self.authURL = authURL
+            self.authBinding = authBinding
+        }
+
+        static func == (lhs: ActiveSelection, rhs: ActiveSelection) -> Bool {
+            lhs.id == rhs.id && lhs.authURL == rhs.authURL
+        }
+    }
 
     enum AccountError: LocalizedError {
         case codexNotFound
         case loginFailed
         case noSystemLogin
+        case persistenceFailed
         var errorDescription: String? {
             switch self {
             case .codexNotFound: "Không tìm thấy lệnh `codex`. Cài Codex CLI trước."
             case .loginFailed: "Đăng nhập không hoàn tất."
             case .noSystemLogin: "Chưa có đăng nhập hệ thống (~/.codex) để chuyển thành managed."
+            case .persistenceFailed: "Không thể lưu thay đổi tài khoản an toàn."
             }
         }
     }
 
     // MARK: - Paths
 
-    static func systemAuthURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/auth.json")
+    static func systemAuthURL(
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        let configured = CodexAuthStore.authFileURL(env: env)
+        guard systemAuthPathIsDisjoint(
+            configured, managedAccountsRoot: accountsRootDir())
+        else { return disabledSystemAuthURL() }
+        return configured
     }
 
     private static func supportDir() -> URL {
@@ -47,12 +208,215 @@ enum CodexAccountStore {
         supportDir().appendingPathComponent("codex-accounts", isDirectory: true)
     }
 
+    /// The CLI-owned home and BirdNion's managed-account tree must never
+    /// contain one another. Resolving symlinks closes the common alias where
+    /// `CODEX_HOME` points at one managed account and both roles become the
+    /// same credential file.
+    static func systemAuthPathIsDisjoint(
+        _ systemAuthURL: URL,
+        managedAccountsRoot: URL
+    ) -> Bool {
+        let systemHome = systemAuthURL.deletingLastPathComponent()
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let managedRoot = managedAccountsRoot
+            .standardizedFileURL.resolvingSymlinksInPath()
+        if path(systemHome, contains: managedRoot, caseSensitive: true)
+            || path(managedRoot, contains: systemHome, caseSensitive: true) {
+            return false
+        }
+
+        let overlapsIgnoringCase = path(
+            systemHome, contains: managedRoot, caseSensitive: false)
+            || path(managedRoot, contains: systemHome, caseSensitive: false)
+        guard overlapsIgnoringCase else { return true }
+
+        // A nonexistent suffix keeps its caller-provided casing after symlink
+        // resolution. Only treat that spelling as distinct when both backing
+        // volumes explicitly confirm case-sensitive names; uncertainty fails closed.
+        return volumeSupportsCaseSensitiveNames(at: systemHome) == true
+            && volumeSupportsCaseSensitiveNames(at: managedRoot) == true
+    }
+
+    private static func path(
+        _ parent: URL,
+        contains child: URL,
+        caseSensitive: Bool
+    ) -> Bool {
+        let parentComponents = parent.pathComponents
+        let childComponents = child.pathComponents
+        guard parentComponents.count <= childComponents.count else { return false }
+        return zip(parentComponents, childComponents).allSatisfy { components in
+            let (parentComponent, childComponent) = components
+            return caseSensitive
+                ? parentComponent == childComponent
+                : parentComponent.caseInsensitiveCompare(childComponent) == .orderedSame
+        }
+    }
+
+    private static func volumeSupportsCaseSensitiveNames(at url: URL) -> Bool? {
+        var candidate = url
+        while !FileManager.default.fileExists(atPath: candidate.path) {
+            let parent = candidate.deletingLastPathComponent()
+            guard parent.path != candidate.path else { return nil }
+            candidate = parent
+        }
+        guard let values = try? candidate.resourceValues(
+            forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+        else { return nil }
+        return values.volumeSupportsCaseSensitiveNames
+    }
+
+    /// Read-only callers receive a deterministic nonexistent path when the
+    /// configured system home aliases app-managed storage. Every mutating
+    /// caller additionally uses `validatedSystemAuthURL()` and fails closed.
+    private static func disabledSystemAuthURL() -> URL {
+        supportDir()
+            .appendingPathComponent("codex-system-auth-disabled", isDirectory: true)
+            .appendingPathComponent("auth.json")
+    }
+
+    private static func validatedSystemAuthURL(
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> URL {
+        let configured = CodexAuthStore.authFileURL(env: env)
+        guard systemAuthPathIsDisjoint(
+            configured, managedAccountsRoot: accountsRootDir())
+        else { throw AccountError.persistenceFailed }
+        return configured
+    }
+
     private static func metadataURL() -> URL {
         supportDir().appendingPathComponent("codex-accounts.json")
     }
 
     static func homeDir(forAccount id: String) -> URL {
         accountsRootDir().appendingPathComponent(id, isDirectory: true)
+    }
+
+    private static func fileInfo(at url: URL) throws -> stat? {
+        var info = stat()
+        let result = url.path.withCString { lstat($0, &info) }
+        if result == 0 { return info }
+        if errno == ENOENT { return nil }
+        throw NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(errno),
+            userInfo: [NSFilePathErrorKey: url.path])
+    }
+
+    /// Validate each mutable directory entry itself rather than following it.
+    /// `createIfMissing` is used only for new managed homes; existing symlink
+    /// roots are rejected even when their target is a directory.
+    private struct ValidatedAccountsRoot {
+        let url: URL
+        let identity: CodexAuthStore.FileIdentity
+    }
+
+    private struct ValidatedManagedHome {
+        let url: URL
+        let rootIdentity: CodexAuthStore.FileIdentity
+        let identity: CodexAuthStore.FileIdentity
+    }
+
+    private static func validatedAccountsRoot(
+        createIfMissing: Bool
+    ) throws -> ValidatedAccountsRoot? {
+        let support = supportDir()
+        if try fileInfo(at: support) == nil, createIfMissing {
+            try FileManager.default.createDirectory(
+                at: support, withIntermediateDirectories: true)
+        }
+        guard let supportInfo = try fileInfo(at: support) else { return nil }
+        guard supportInfo.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+            throw AccountError.persistenceFailed
+        }
+
+        let root = accountsRootDir()
+        if try fileInfo(at: root) == nil, createIfMissing {
+            try FileManager.default.createDirectory(
+                at: root, withIntermediateDirectories: false)
+        }
+        guard let rootInfo = try fileInfo(at: root) else { return nil }
+        guard rootInfo.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+            throw AccountError.persistenceFailed
+        }
+        return ValidatedAccountsRoot(
+            url: root,
+            identity: CodexAuthStore.FileIdentity(rootInfo))
+    }
+
+    /// Derive the home from the UUID, reject root/home links, and (for
+    /// deletion) reject links/special files anywhere below it before staging.
+    private static func validatedManagedHome(
+        id: String,
+        inspectContents: Bool = false
+    ) throws -> ValidatedManagedHome? {
+        guard UUID(uuidString: id) != nil else { throw AccountError.persistenceFailed }
+        guard let root = try validatedAccountsRoot(createIfMissing: false) else { return nil }
+        let home = root.url.appendingPathComponent(id, isDirectory: true)
+        guard let homeInfo = try fileInfo(at: home) else { return nil }
+        guard homeInfo.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+              home.deletingLastPathComponent().standardizedFileURL == root.url.standardizedFileURL,
+              home.resolvingSymlinksInPath().standardizedFileURL
+                .deletingLastPathComponent() == root.url.resolvingSymlinksInPath().standardizedFileURL
+        else { throw AccountError.persistenceFailed }
+        let validated = ValidatedManagedHome(
+            url: home,
+            rootIdentity: root.identity,
+            identity: CodexAuthStore.FileIdentity(homeInfo))
+        guard inspectContents else { return validated }
+
+        var traversalFailed = false
+        guard let enumerator = FileManager.default.enumerator(
+            at: home,
+            includingPropertiesForKeys: nil,
+            options: [],
+            errorHandler: { _, _ in
+                traversalFailed = true
+                return false
+            })
+        else { throw AccountError.persistenceFailed }
+        for case let item as URL in enumerator {
+            guard let info = try fileInfo(at: item) else {
+                throw AccountError.persistenceFailed
+            }
+            let kind = info.st_mode & mode_t(S_IFMT)
+            guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFDIR) else {
+                throw AccountError.persistenceFailed
+            }
+        }
+        guard !traversalFailed else { throw AccountError.persistenceFailed }
+        return validated
+    }
+
+    private static func safeManagedHome(id: String) -> URL? {
+        do { return try validatedManagedHome(id: id)?.url }
+        catch { return nil }
+    }
+
+    private static func boundSystemCredential() throws
+        -> (url: URL, binding: CodexAuthStore.CredentialFileBinding)
+    {
+        let url = try validatedSystemAuthURL()
+        return (url, try CodexAuthStore.bindSystemCredential(at: url))
+    }
+
+    private static func boundManagedCredential(
+        id: String,
+        inspectContents: Bool = false
+    ) throws -> (home: URL, binding: CodexAuthStore.CredentialFileBinding)? {
+        guard let home = try validatedManagedHome(
+            id: id, inspectContents: inspectContents)
+        else { return nil }
+        let authURL = home.url.appendingPathComponent("auth.json")
+        let binding = try CodexAuthStore.bindManagedCredential(
+            accountsRoot: accountsRootDir(),
+            accountID: id,
+            authURL: authURL,
+            expectedAccountsRootIdentity: home.rootIdentity,
+            expectedAccountIdentity: home.identity)
+        guard binding.isLive else { throw AccountError.persistenceFailed }
+        return (home.url, binding)
     }
 
     // MARK: - Active selection
@@ -65,18 +429,110 @@ enum CodexAccountStore {
         UserDefaults.standard.set(id, forKey: activeKey)
         // QuotaService swaps in this account's cached snapshot (instant), then
         // refreshes — see its `.birdnionCodexAccountChanged` observer.
+        notifyAccountChanged()
+    }
+
+    private static func notifyAccountChanged() {
         NotificationCenter.default.post(name: .birdnionCodexAccountChanged, object: nil)
+    }
+
+    /// Credential mutations that can change the provider's current auth file
+    /// emit before and after the synchronous filesystem work. The first pulse
+    /// invalidates any in-flight result for the old bytes; the second queues a
+    /// refresh against the identity that actually reached disk.
+    static func performRemovalIdentityBoundary(
+        removedID: String,
+        activeID: String,
+        cliSwitchedID: String?,
+        purgeSnapshot: (String) throws -> Void = {
+            guard CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: $0) else {
+                throw AccountError.persistenceFailed
+            }
+        },
+        mutation: () throws -> Void
+    ) rethrows {
+        let affectsCurrentIdentity = activeID == removedID || cliSwitchedID == removedID
+        guard affectsCurrentIdentity else {
+            try mutation()
+            return
+        }
+        try purgeSnapshot(activeID)
+        notifyAccountChanged()
+        defer { notifyAccountChanged() }
+        try mutation()
+    }
+
+    /// Orders the destructive parts of managed-account removal. A failed CLI
+    /// restore stops before credentials or metadata move; any later failure
+    /// invokes the caller's rollback while the original error propagates to
+    /// the UI instead of reporting a false success.
+    static func performManagedRemovalSteps(
+        requiresCLIRestore: Bool,
+        restoreCLI: () throws -> Void,
+        stageCredentialHome: () throws -> Void,
+        persistRemoval: () throws -> Void,
+        deleteStagedHome: () throws -> Void,
+        rollback: () -> Void
+    ) throws {
+        if requiresCLIRestore { try restoreCLI() }
+        do {
+            try stageCredentialHome()
+            try persistRemoval()
+        } catch {
+            rollback()
+            throw error
+        }
+        // Metadata removal is the commit point. Recursive deletion may fail
+        // after deleting only part of the staged tree; rolling that partial
+        // tree back would resurrect a broken account. Surface cleanup failure
+        // while leaving the account removed and the tombstone recoverable.
+        try deleteStagedHome()
+    }
+
+    /// Resolve the active account id and auth file as one immutable value.
+    /// Only an explicit system selection may route to the system credential.
+    /// A broken/stale managed selection remains managed but unavailable so a
+    /// provider poll cannot silently rotate or report the system identity.
+    static func activeSelection() -> ActiveSelection {
+        activeSelection(id: activeID(), loadManagedAccounts: managedAccountsForMutation)
+    }
+
+    static func activeSelection(
+        id: String,
+        loadManagedAccounts: () throws -> [CodexAccount]
+    ) -> ActiveSelection {
+        if id == "system" {
+            let authURL = systemAuthURL()
+            return ActiveSelection(
+                id: "system",
+                authURL: authURL,
+                authBinding: try? CodexAuthStore.bindSystemCredential(at: authURL))
+        }
+        do {
+            guard try loadManagedAccounts().contains(where: { $0.id == id }),
+                  let managed = try boundManagedCredential(id: id)
+            else { throw AccountError.persistenceFailed }
+            return ActiveSelection(
+                id: id,
+                authURL: managed.home.appendingPathComponent("auth.json"),
+                authBinding: managed.binding)
+        } catch {
+            return ActiveSelection(
+                id: id,
+                authURL: unavailableActiveAuthURL(),
+                authBinding: nil)
+        }
     }
 
     /// The auth.json the provider should read for the active account.
     static func activeAuthURL() -> URL {
-        let id = activeID()
-        if id == "system" { return systemAuthURL() }
-        if let account = managedAccounts().first(where: { $0.id == id }),
-           let home = account.homePath {
-            return URL(fileURLWithPath: home).appendingPathComponent("auth.json")
-        }
-        return systemAuthURL() // active account vanished → fall back to system
+        activeSelection().authURL
+    }
+
+    private static func unavailableActiveAuthURL() -> URL {
+        supportDir()
+            .appendingPathComponent("codex-active-auth-unavailable", isDirectory: true)
+            .appendingPathComponent("auth.json")
     }
 
     // MARK: - Listing
@@ -84,12 +540,109 @@ enum CodexAccountStore {
     private struct Stored: Codable { var accounts: [Entry] }
     private struct Entry: Codable { var id: String; var email: String?; var homePath: String }
 
+    enum MetadataMutation {
+        case add(CodexAccount)
+        case remove(String)
+        case replace(CodexAccount)
+    }
+
+    /// Every app-owned metadata write goes through this short critical
+    /// section. Long login awaits happen before it; the commit then reloads
+    /// the latest document and applies only its add/remove/replace delta, so
+    /// overlapping account operations cannot overwrite or resurrect entries.
+    @discardableResult
+    static func commitMetadataMutation(
+        _ mutation: MetadataMutation,
+        load: () throws -> [CodexAccount],
+        persist: ([CodexAccount]) throws -> Void
+    ) throws -> Bool {
+        metadataMutationLock.lock()
+        defer { metadataMutationLock.unlock() }
+        var latest = try load()
+        let changed: Bool
+        switch mutation {
+        case let .add(account):
+            guard !latest.contains(where: { $0.id == account.id }) else {
+                throw AccountError.persistenceFailed
+            }
+            latest.append(account)
+            changed = true
+        case let .remove(id):
+            let previousCount = latest.count
+            latest.removeAll { $0.id == id }
+            changed = latest.count != previousCount
+        case let .replace(account):
+            guard let index = latest.firstIndex(where: { $0.id == account.id }) else {
+                return false
+            }
+            changed = latest[index] != account
+            latest[index] = account
+        }
+        if changed { try persist(latest) }
+        return changed
+    }
+
+    @discardableResult
+    private static func commitMetadataMutation(
+        _ mutation: MetadataMutation
+    ) throws -> Bool {
+        try commitMetadataMutation(
+            mutation,
+            load: managedAccountsForMutation,
+            persist: persistUnlocked)
+    }
+
     static func managedAccounts() -> [CodexAccount] {
-        guard let data = try? Data(contentsOf: metadataURL()),
-              let stored = try? JSONDecoder().decode(Stored.self, from: data) else { return [] }
+        do {
+            return accounts(from: try loadStored() ?? Stored(accounts: []))
+        } catch {
+            return []
+        }
+    }
+
+    /// Mutation callers distinguish genuinely missing metadata from an
+    /// existing malformed/link/special/oversized object. Only the former may
+    /// start from an empty list; every other condition fails closed.
+    private static func managedAccountsForMutation() throws -> [CodexAccount] {
+        accounts(from: try loadStored() ?? Stored(accounts: []))
+    }
+
+    private static func loadStored() throws -> Stored? {
+        guard let data = try CodexAuthStore.readPrivateFile(
+            metadataURL(), maximumBytes: maxMetadataBytes)
+        else { return nil }
+        let stored = try JSONDecoder().decode(Stored.self, from: data)
+        guard validateStoredLocations(stored) else { throw AccountError.persistenceFailed }
+        return stored
+    }
+
+    private static func accounts(from stored: Stored) -> [CodexAccount] {
         return stored.accounts.map {
             CodexAccount(id: $0.id, email: $0.email, isSystem: false, homePath: $0.homePath)
         }
+    }
+
+    /// Persisted paths are display metadata, never deletion authority. Every
+    /// managed id must be a UUID and its path must equal the one derived under
+    /// BirdNion's account root; duplicates are rejected as ambiguous state.
+    private static func validateStoredLocations(_ stored: Stored) -> Bool {
+        var ids = Set<String>()
+        return stored.accounts.allSatisfy { entry in
+            ids.insert(entry.id).inserted
+                && isManagedHomePath(
+                    id: entry.id,
+                    homePath: entry.homePath,
+                    accountsRoot: accountsRootDir())
+        }
+    }
+
+    static func isManagedHomePath(id: String, homePath: String, accountsRoot: URL) -> Bool {
+        guard UUID(uuidString: id) != nil else { return false }
+        let expected = accountsRoot
+            .appendingPathComponent(id, isDirectory: true)
+            .standardizedFileURL.path
+        return URL(fileURLWithPath: homePath, isDirectory: true)
+            .standardizedFileURL.path == expected
     }
 
     /// `preferManagedID`: pass `cliSwitchedID()` so that, after a CLI switch,
@@ -118,34 +671,45 @@ enum CodexAccountStore {
         fallbackActiveID(afterRemoving: removedID, from: allAccounts())
     }
 
-    private static func removedSystemAuthBackupURL(now: Date = Date()) -> URL {
+    private static func removedSystemAuthBackupURL(
+        for authURL: URL,
+        now: Date = Date()
+    ) -> URL {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         let stamp = formatter.string(from: now).replacingOccurrences(of: ":", with: "-")
-        return systemAuthURL().deletingLastPathComponent()
+        return authURL.deletingLastPathComponent()
             .appendingPathComponent("auth.json.birdnion-removed-\(stamp)")
     }
 
     private static func removeSystemLogin() throws {
-        let auth = systemAuthURL()
-        let fallback = selectedFallback(afterRemoving: "system")
-        if FileManager.default.fileExists(atPath: auth.path) {
-            var backup = removedSystemAuthBackupURL()
-            if FileManager.default.fileExists(atPath: backup.path) {
-                backup = auth.deletingLastPathComponent()
-                    .appendingPathComponent("auth.json.birdnion-removed-\(UUID().uuidString)")
+        try accountOperationFence.performRemoval(id: "system") {
+            let system = try boundSystemCredential()
+            let fallback = selectedFallback(afterRemoving: "system")
+            let existingAuth = try CodexAuthStore.readPrivateFile(system.binding)
+            CodexAuthStore.invalidateCredential(binding: system.binding)
+            if existingAuth != nil {
+                var backupName = removedSystemAuthBackupURL(
+                    for: system.url).lastPathComponent
+                if try !CodexAuthStore.movePrivateFile(
+                    system.binding, toSiblingName: backupName)
+                {
+                    backupName = "auth.json.birdnion-removed-\(UUID().uuidString)"
+                    guard try CodexAuthStore.movePrivateFile(
+                        system.binding, toSiblingName: backupName)
+                    else { throw AccountError.persistenceFailed }
+                }
             }
-            try FileManager.default.moveItem(at: auth, to: backup)
+            setCLISwitchedID(nil)
+            if activeID() == "system" { setActive(fallback) }
         }
-        setCLISwitchedID(nil)
-        if activeID() == "system" { setActive(fallback) }
     }
 
     static func remove(account: CodexAccount, from visibleAccounts: [CodexAccount]) throws {
         if account.isSystem {
             try removeSystemLogin()
         } else {
-            remove(id: account.id, visibleAccounts: visibleAccounts)
+            try remove(id: account.id, visibleAccounts: visibleAccounts)
         }
     }
 
@@ -181,23 +745,61 @@ enum CodexAccountStore {
     /// CodexBar's account promotion. Throws when no system login exists.
     @discardableResult
     static func promoteSystem() throws -> CodexAccount {
-        let systemAuth = systemAuthURL()
-        guard FileManager.default.fileExists(atPath: systemAuth.path) else {
+        try accountOperationFence.performExclusiveMutation(ids: ["system"]) {
+            let system = try boundSystemCredential()
+            let expectation = try CodexAuthStore.captureFileExpectation(
+                binding: system.binding)
+            return try promoteSystemUnfenced(
+                systemBinding: system.binding,
+                expectation: expectation)
+        }
+    }
+
+    private static func promoteSystemUnfenced(
+        systemBinding: CodexAuthStore.CredentialFileBinding,
+        expectation: CodexAuthStore.FileExpectation
+    ) throws -> CodexAccount {
+        // Fail before creating a credential home when metadata is corrupt.
+        _ = try managedAccountsForMutation()
+        guard let sourceData = expectation.data else {
             throw AccountError.noSystemLogin
         }
+        guard let sourceCredentials = try? CodexAuthStore.parse(sourceData) else {
+            throw AccountError.persistenceFailed
+        }
         let id = UUID().uuidString
-        let home = homeDir(forAccount: id)
-        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        let dest = home.appendingPathComponent("auth.json")
-        // Read + atomic 0600 write (not `copyItem`) so the managed copy's
-        // permissions never depend on whatever the external `codex` CLI left
-        // on the source file — every managed credential stays owner-only,
-        // matching the contract every other write path in this file follows.
-        let data = try Data(contentsOf: systemAuth)
-        try CodexAuthStore.writePrivateFile(data, to: dest)
-        let account = CodexAccount(id: id, email: emailOf(url: dest),
+        guard let root = try validatedAccountsRoot(createIfMissing: true) else {
+            throw AccountError.persistenceFailed
+        }
+        let home = root.url.appendingPathComponent(id, isDirectory: true)
+        let destination = try CodexAuthStore.createManagedCredentialBinding(
+            accountsRoot: root.url,
+            accountID: id,
+            expectedAccountsRootIdentity: root.identity)
+        do {
+            guard try CodexAuthStore.replacePrivateFileIfUnchanged(
+                sourceData, to: destination, replacing: nil),
+                  CodexAuthStore.documentIsCurrent(
+                    binding: systemBinding,
+                    expectedData: sourceData,
+                    expectedRevision: expectation.revision)
+            else {
+                throw AccountError.noSystemLogin
+            }
+        } catch {
+            try? destination.removeContainingDirectory()
+            throw error
+        }
+        let account = CodexAccount(
+            id: id,
+            email: CodexAuthStore.emailFromIDToken(sourceCredentials.idToken),
                                    isSystem: false, homePath: home.path)
-        persist(managedAccounts() + [account])
+        do {
+            try commitMetadataMutation(.add(account))
+        } catch {
+            try? destination.removeContainingDirectory()
+            throw error
+        }
         return account
     }
 
@@ -206,14 +808,34 @@ enum CodexAccountStore {
         return CodexAuthStore.emailFromIDToken(credentials.idToken)
     }
 
-    private static func persist(_ accounts: [CodexAccount]) {
+    private static func emailOf(
+        binding: CodexAuthStore.CredentialFileBinding
+    ) -> String? {
+        guard let credentials = try? CodexAuthStore.loadDocument(binding: binding).credentials
+        else { return nil }
+        return CodexAuthStore.emailFromIDToken(credentials.idToken)
+    }
+
+    private static func persistUnlocked(_ accounts: [CodexAccount]) throws {
         let entries = accounts.compactMap { account -> Entry? in
             guard let home = account.homePath else { return nil }
             return Entry(id: account.id, email: account.email, homePath: home)
         }
-        try? FileManager.default.createDirectory(at: supportDir(), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(Stored(accounts: entries)) {
-            try? data.write(to: metadataURL())
+        do {
+            // Validate any existing credential-routing document before an
+            // atomic replacement. Corruption must never be treated as an
+            // empty account list by a subsequent mutation.
+            _ = try loadStored()
+            try FileManager.default.createDirectory(
+                at: supportDir(), withIntermediateDirectories: true)
+            let stored = Stored(accounts: entries)
+            guard validateStoredLocations(stored) else { throw AccountError.persistenceFailed }
+            let data = try JSONEncoder().encode(stored)
+            guard data.count <= maxMetadataBytes else { throw AccountError.persistenceFailed }
+            try CodexAuthStore.writePrivateFile(
+                data, to: metadataURL(), maximumBytes: maxMetadataBytes)
+        } catch {
+            throw AccountError.persistenceFailed
         }
     }
 
@@ -222,64 +844,185 @@ enum CodexAccountStore {
     /// Creates a fresh managed home and runs `codex login` scoped to it. Blocks
     /// (off-main) until the browser login finishes, then records the account.
     static func addAccount() async throws -> CodexAccount {
+        // Strict preflight avoids launching login when metadata is already
+        // corrupt. The post-login commit reloads instead of using this view.
+        _ = try managedAccountsForMutation()
         let id = UUID().uuidString
-        let home = homeDir(forAccount: id)
-        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        guard let root = try validatedAccountsRoot(createIfMissing: true) else {
+            throw AccountError.persistenceFailed
+        }
+        let home = root.url.appendingPathComponent(id, isDirectory: true)
+        let binding = try CodexAuthStore.createManagedCredentialBinding(
+            accountsRoot: root.url,
+            accountID: id,
+            expectedAccountsRootIdentity: root.identity)
 
-        let result = await runLogin(homePath: home.path)
-        let authURL = home.appendingPathComponent("auth.json")
-        guard result == .success, FileManager.default.fileExists(atPath: authURL.path) else {
-            try? FileManager.default.removeItem(at: home)
+        let result = await runLogin(binding: binding)
+        let authExists = (try? CodexAuthStore.readPrivateFile(binding)) != nil
+        guard result == .success, binding.isLive, authExists else {
+            if binding.isLive { try? binding.removeContainingDirectory() }
             if result == .codexNotFound { throw AccountError.codexNotFound }
             throw AccountError.loginFailed
         }
-        let account = CodexAccount(id: id, email: emailOf(url: authURL),
+        let account = CodexAccount(id: id, email: emailOf(binding: binding),
                                    isSystem: false, homePath: home.path)
-        persist(managedAccounts() + [account])
+        do {
+            try commitMetadataMutation(.add(account))
+        } catch {
+            if binding.isLive { try? binding.removeContainingDirectory() }
+            throw error
+        }
         return account
     }
 
     /// Re-runs `codex login` for an existing account's home (or the system home).
     static func reauth(id: String) async throws {
-        let homePath: String
-        if id == "system" {
-            homePath = systemAuthURL().deletingLastPathComponent().path
-        } else if let account = managedAccounts().first(where: { $0.id == id }), let home = account.homePath {
-            homePath = home
-        } else {
-            throw AccountError.loginFailed
-        }
-        let result = await runLogin(homePath: homePath)
-        guard result == .success else {
-            throw result == .codexNotFound ? AccountError.codexNotFound : AccountError.loginFailed
-        }
-        // Refresh the cached email for managed accounts.
-        if id != "system" {
-            var accounts = managedAccounts()
-            if let i = accounts.firstIndex(where: { $0.id == id }), let home = accounts[i].homePath {
-                let email = emailOf(url: URL(fileURLWithPath: home).appendingPathComponent("auth.json"))
-                accounts[i] = CodexAccount(id: id, email: email, isSystem: false, homePath: home)
-                persist(accounts)
+        try await reauthBound(id: id) { binding in
+            let result = await runLogin(binding: binding)
+            guard result == .success else {
+                throw result == .codexNotFound ? AccountError.codexNotFound : AccountError.loginFailed
             }
         }
     }
 
-    static func remove(id: String) {
-        remove(id: id, visibleAccounts: allAccounts())
+    static func reauth(
+        id: String,
+        login: (String) async throws -> Void
+    ) async throws {
+        try await reauthBound(id: id) { binding in
+            // Test/in-process callers receive the same descriptor path used by
+            // the production child, never a swappable managed-home pathname.
+            try await login(binding.directoryDescriptorPath)
+        }
     }
 
-    private static func remove(id: String, visibleAccounts: [CodexAccount]) {
+    private static func reauthBound(
+        id: String,
+        login: (CodexAuthStore.CredentialFileBinding) async throws -> Void
+    ) async throws {
+        try accountOperationFence.beginReauthentication(id: id)
+        defer { accountOperationFence.finishReauthentication(id: id) }
+        let mirrorsSystemCredential = id == "system" || cliSwitchedID() == id
+        let system = mirrorsSystemCredential ? try boundSystemCredential() : nil
+        let installedSystemDocument: CodexAuthStore.LoadedDocument?
+        if id != "system", cliSwitchedID() == id {
+            installedSystemDocument = system.flatMap {
+                try? CodexAuthStore.loadDocument(binding: $0.binding)
+            }
+        } else {
+            installedSystemDocument = nil
+        }
+        let home: URL
+        let binding: CodexAuthStore.CredentialFileBinding
+        if id == "system" {
+            guard let system else { throw AccountError.persistenceFailed }
+            home = system.url.deletingLastPathComponent()
+            binding = system.binding
+        } else if try managedAccountsForMutation().contains(where: { $0.id == id }),
+                  let managed = try boundManagedCredential(id: id) {
+            home = managed.home
+            binding = managed.binding
+        } else {
+            throw AccountError.loginFailed
+        }
+        CodexAuthStore.invalidateCredential(binding: binding)
+        guard CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: id) else {
+            throw AccountError.persistenceFailed
+        }
+        notifyAccountChanged()
+        defer { notifyAccountChanged() }
+        try await login(binding)
+        guard binding.isLive,
+              (try? CodexAuthStore.readPrivateFile(binding)) != nil
+        else { throw AccountError.loginFailed }
+        if id != "system" {
+            guard let current = try boundManagedCredential(id: id),
+                  current.binding.representsSameEntry(as: binding)
+            else { throw AccountError.loginFailed }
+            let email = emailOf(binding: binding)
+            let refreshedAccount = CodexAccount(
+                id: id, email: email, isSystem: false, homePath: home.path)
+            try commitMetadataMutation(.replace(refreshedAccount))
+            if cliSwitchedID() == id {
+                try accountOperationFence.performExclusiveMutation(ids: ["system"]) {
+                    guard cliSwitchedID() == id else { return }
+                    guard let installedSystemDocument, let system else {
+                        clearCLITrackingIfCurrent(id)
+                        return
+                    }
+                    do {
+                        let copied = try CodexAuthStore.copyCredentialIfDestinationUnchanged(
+                            from: binding,
+                            to: system.binding,
+                            expectedDestinationData: installedSystemDocument.rawData,
+                            expectedDestinationRevision: installedSystemDocument.revision)
+                        if !copied { clearCLITrackingIfCurrent(id) }
+                    } catch {
+                        clearCLITrackingIfCurrent(id)
+                        throw error
+                    }
+                }
+            }
+        }
+    }
+
+    static func remove(id: String) throws {
+        try remove(id: id, visibleAccounts: allAccounts())
+    }
+
+    private static func remove(id: String, visibleAccounts: [CodexAccount]) throws {
         guard id != "system" else { return }
-        let fallback = fallbackActiveID(afterRemoving: id, from: visibleAccounts)
-        if cliSwitchedID() == id {
-            try? restoreSystemCLI()
-            if cliSwitchedID() == id { setCLISwitchedID(nil) }
+        try accountOperationFence.performRemoval(ids: [id, "system"]) {
+            let fallback = fallbackActiveID(afterRemoving: id, from: visibleAccounts)
+            let selectedID = activeID()
+            let installedCLIAccountID = cliSwitchedID()
+            let accounts = try managedAccountsForMutation()
+            let account = accounts.first { $0.id == id }
+            let managed = account == nil
+                ? nil
+                : try boundManagedCredential(id: id, inspectContents: true)
+            if let managed {
+                CodexAuthStore.invalidateCredential(binding: managed.binding)
+            }
+            try performRemovalIdentityBoundary(
+                removedID: id,
+                activeID: selectedID,
+                cliSwitchedID: installedCLIAccountID
+            ) {
+                let stagedName = managed.map { _ in
+                    ".birdnion-delete-\(UUID().uuidString)"
+                }
+                var didStageHome = false
+                try performManagedRemovalSteps(
+                    requiresCLIRestore: installedCLIAccountID == id,
+                    restoreCLI: { try restoreSystemCLIUnfenced() },
+                    stageCredentialHome: {
+                        if let managed, let stagedName {
+                            try managed.binding.stageContainingDirectory(as: stagedName)
+                            didStageHome = true
+                        }
+                    },
+                    persistRemoval: {
+                        try commitMetadataMutation(.remove(id))
+                        if selectedID == id {
+                            UserDefaults.standard.set(fallback, forKey: activeKey)
+                        }
+                    },
+                    deleteStagedHome: {
+                        if didStageHome, let managed, let stagedName {
+                            try managed.binding.removeContainingDirectory(
+                                detachedName: stagedName)
+                            didStageHome = false
+                        }
+                    },
+                    rollback: {
+                        if didStageHome, let managed, let stagedName {
+                            try? managed.binding.restoreContainingDirectory(
+                                from: stagedName)
+                        }
+                    })
+            }
         }
-        if let account = managedAccounts().first(where: { $0.id == id }), let home = account.homePath {
-            try? FileManager.default.removeItem(at: URL(fileURLWithPath: home))
-        }
-        persist(managedAccounts().filter { $0.id != id })
-        if activeID() == id { setActive(fallback) }
     }
 
     // MARK: - codex login
@@ -403,12 +1146,25 @@ enum CodexAccountStore {
         return env
     }
 
+    /// Environment for commands that must target the CLI-owned system login.
+    /// An inherited CODEX_HOME that aliases BirdNion-managed storage disables
+    /// the command instead of bypassing the path-role gate.
+    static func systemCLIEnvironment(binaryPath: String) -> [String: String]? {
+        guard let authURL = try? validatedSystemAuthURL() else { return nil }
+        return loginEnvironment(
+            homePath: authURL.deletingLastPathComponent().path,
+            binaryPath: binaryPath)
+    }
+
     private static func isUsableCodexBinary(_ path: String) -> Bool {
+        guard let environment = systemCLIEnvironment(binaryPath: path) else {
+            return false
+        }
         guard FileManager.default.isExecutableFile(atPath: path) else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = ["--version"]
-        process.environment = loginEnvironment(homePath: nil, binaryPath: path)
+        process.environment = environment
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         do {
@@ -420,27 +1176,66 @@ enum CodexAccountStore {
         }
     }
 
-    /// Runs `codex login` with `CODEX_HOME` pointed at `homePath`. The CLI
-    /// opens a browser; this awaits its completion off the main thread.
+    /// Runs `codex login` with its cwd installed from the bound directory FD.
+    /// macOS cannot traverse `/dev/fd/<dir>/auth.json`, so CODEX_HOME is `.`;
+    /// the child cwd itself holds the vnode even if the lexical home is swapped.
     private enum LoginResult: Equatable { case success, codexNotFound, failed }
 
-    private static func runLogin(homePath: String) async -> LoginResult {
+    private static func runLogin(
+        binding: CodexAuthStore.CredentialFileBinding
+    ) async -> LoginResult {
         return await Task.detached(priority: .userInitiated) {
             guard let binary = codexBinary() else { return .codexNotFound }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: binary)
-            process.arguments = ["login"]
-            process.environment = loginEnvironment(homePath: homePath, binaryPath: binary)
-            process.standardOutput = Pipe()
-            process.standardError = Pipe()
-            do {
-                try process.run()
-            } catch {
-                return .failed
-            }
-            process.waitUntilExit()
-            return process.terminationStatus == 0 ? .success : .failed
+            return runDescriptorBoundProcess(
+                executable: binary,
+                arguments: ["login"],
+                binding: binding)
+                ? .success
+                : .failed
         }.value
+    }
+
+    /// Synchronous test seam and production primitive for a child that must
+    /// keep using one bound home even if its lexical account entry is replaced.
+    static func runDescriptorBoundProcess(
+        executable: String,
+        arguments: [String],
+        binding: CodexAuthStore.CredentialFileBinding
+    ) -> Bool {
+        guard binding.isLive else { return false }
+        var actions: posix_spawn_file_actions_t? = nil
+        guard posix_spawn_file_actions_init(&actions) == 0 else { return false }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        guard posix_spawn_file_actions_addfchdir_np(
+            &actions, binding.directoryDescriptor) == 0
+        else { return false }
+
+        let argumentStorage: [UnsafeMutablePointer<CChar>?] =
+            ([executable] + arguments).map { strdup($0) } + [nil]
+        defer { for case let pointer? in argumentStorage { free(pointer) } }
+        var argv = argumentStorage
+
+        let environment = loginEnvironment(
+            homePath: ".", binaryPath: executable)
+        let environmentStrings = environment
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+        let environmentStorage: [UnsafeMutablePointer<CChar>?] =
+            environmentStrings.map { strdup($0) } + [nil]
+        defer { for case let pointer? in environmentStorage { free(pointer) } }
+        var envp = environmentStorage
+
+        var pid: pid_t = 0
+        let spawnResult = posix_spawn(
+            &pid, executable, &actions, nil, &argv, &envp)
+        guard spawnResult == 0 else { return false }
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1 {
+            if errno != EINTR { return false }
+        }
+        let exitedNormally = status & 0x7f == 0
+        let exitCode = (status >> 8) & 0xff
+        return exitedNormally && exitCode == 0 && binding.isLive
     }
 
     // MARK: - CLI switch (install a managed account into ~/.codex)
@@ -471,14 +1266,47 @@ enum CodexAccountStore {
         }
     }
 
+    private static func clearCLITrackingIfCurrent(_ id: String) {
+        guard cliSwitchedID() == id else { return }
+        setCLISwitchedID(nil)
+        notifyAccountChanged()
+    }
+
+    private static func verifiedCopyMaintainingCLITracking(
+        installedID: String,
+        from source: CodexAuthStore.CredentialFileBinding,
+        to destination: CodexAuthStore.CredentialFileBinding,
+        onlyIfSourceNewer: Bool = false
+    ) throws -> Bool {
+        do {
+            switch try CodexAuthStore.copyCredentialIfSameIdentity(
+                from: source,
+                to: destination,
+                onlyIfSourceNewer: onlyIfSourceNewer)
+            {
+            case .copied:
+                return true
+            case .unchanged, .notNewer:
+                return false
+            case .identityMismatch, .unavailable:
+                clearCLITrackingIfCurrent(installedID)
+                return false
+            }
+        } catch {
+            clearCLITrackingIfCurrent(installedID)
+            throw error
+        }
+    }
+
     /// One-time pristine backup of the original `~/.codex/auth.json`, written
     /// only on the very first CLI overwrite.
     static func systemBackupURL() -> URL {
-        systemAuthURL().deletingLastPathComponent().appendingPathComponent("auth.json.birdnion-orig")
+        systemBackupURL(for: systemAuthURL())
     }
 
-    private static func modificationDate(of url: URL) -> Date? {
-        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    private static func systemBackupURL(for systemAuthURL: URL) -> URL {
+        systemAuthURL.deletingLastPathComponent()
+            .appendingPathComponent("auth.json.birdnion-orig")
     }
 
     // MARK: Pure decisions (no file I/O — unit-testable)
@@ -514,44 +1342,117 @@ enum CodexAccountStore {
     /// system login once and promotes it to a managed account if its email
     /// isn't already managed, per the canonical promote-before-overwrite rule.
     static func switchCLI(to id: String) throws {
-        guard !isAlreadyCLIIdentity(selectedID: id, trackedID: cliSwitchedID()) else { return }
-        guard let account = managedAccounts().first(where: { $0.id == id }),
-              let home = account.homePath
+        try accountOperationFence.performExclusiveMutation(ids: [id, "system"]) {
+            guard !isAlreadyCLIIdentity(selectedID: id, trackedID: cliSwitchedID()) else { return }
+            try switchCLIUnfenced(to: id)
+        }
+    }
+
+    private static func switchCLIUnfenced(to id: String) throws {
+        let system = try boundSystemCredential()
+        let systemExpectation = try CodexAuthStore.captureFileExpectation(
+            binding: system.binding)
+        let backup = systemBackupURL(for: system.url)
+        let backupBinding = try system.binding.sibling(
+            fileName: backup.lastPathComponent,
+            role: "system:auth-backup")
+        let managedAccounts = try managedAccountsForMutation()
+        guard managedAccounts.contains(where: { $0.id == id }),
+              let managed = try boundManagedCredential(id: id)
         else {
             throw CLISwitchError.accountNotFound
         }
-        let managedAuthURL = URL(fileURLWithPath: home).appendingPathComponent("auth.json")
 
         // No original system login to preserve (e.g. a machine that only
         // ever used app-managed accounts, never `codex login` in a
         // terminal) — nothing to back up or promote, just install.
-        let hasSystemLogin = FileManager.default.fileExists(atPath: systemAuthURL().path)
+        let hasSystemLogin = systemExpectation.data != nil
         if hasSystemLogin, cliSwitchedID() == nil {
-            if !FileManager.default.fileExists(atPath: systemBackupURL().path) {
-                let original = try Data(contentsOf: systemAuthURL())
-                try CodexAuthStore.writePrivateFile(original, to: systemBackupURL())
+            if try CodexAuthStore.readPrivateFile(backupBinding) == nil {
+                guard let originalData = systemExpectation.data,
+                      try CodexAuthStore.replacePrivateFileIfUnchanged(
+                        originalData, to: backupBinding, replacing: nil)
+                else {
+                    throw AccountError.noSystemLogin
+                }
             }
-            let systemEmail = emailOf(url: systemAuthURL())
-            let managedEmails = managedAccounts().compactMap(\.email)
+            let systemEmail = systemExpectation.data
+                .flatMap { try? CodexAuthStore.parse($0) }
+                .flatMap { CodexAuthStore.emailFromIDToken($0.idToken) }
+            let managedEmails = managedAccounts.compactMap(\.email)
             if needsPromoteBeforeOverwrite(systemEmail: systemEmail, managedEmails: managedEmails) {
-                _ = try? promoteSystem()
+                _ = try? promoteSystemUnfenced(
+                    systemBinding: system.binding,
+                    expectation: systemExpectation)
             }
         }
 
-        let managedData = try Data(contentsOf: managedAuthURL)
-        try FileManager.default.createDirectory(
-            at: systemAuthURL().deletingLastPathComponent(), withIntermediateDirectories: true)
-        try CodexAuthStore.writePrivateFile(managedData, to: systemAuthURL())
+        guard try CodexAuthStore.copyCredential(
+            from: managed.binding,
+            to: system.binding,
+            ifDestinationMatches: systemExpectation)
+        else {
+            throw AccountError.loginFailed
+        }
         setCLISwitchedID(id)
     }
 
     /// Restores `~/.codex/auth.json` from the pristine backup and clears the
     /// tracked id. No-op when no switch has ever happened (no backup exists).
     static func restoreSystemCLI() throws {
-        let backup = systemBackupURL()
-        guard FileManager.default.fileExists(atPath: backup.path) else { return }
-        let data = try Data(contentsOf: backup)
-        try CodexAuthStore.writePrivateFile(data, to: systemAuthURL())
+        try accountOperationFence.performExclusiveMutation(ids: ["system"]) {
+            try restoreSystemCLIUnfenced()
+        }
+    }
+
+    /// Mirrors an app-refreshed managed token into the still-tracked CLI
+    /// copy. The account id, metadata path, and system identity are all
+    /// revalidated under the same per-account fence before any overwrite.
+    @discardableResult
+    static func syncRefreshedCredentialToCLI(
+        accountID id: String,
+        sourceBinding: CodexAuthStore.CredentialFileBinding
+    ) -> Bool {
+        guard id != "system", cliSwitchedID() == id else { return false }
+        do {
+            return try accountOperationFence.performExclusiveMutation(ids: [id, "system"]) {
+                let system = try boundSystemCredential()
+                guard cliSwitchedID() == id,
+                      let accounts = try? managedAccountsForMutation(),
+                      accounts.contains(where: { $0.id == id }),
+                      let managed = try boundManagedCredential(id: id),
+                      managed.binding.representsSameEntry(as: sourceBinding),
+                      sourceBinding.isLive
+                else {
+                    clearCLITrackingIfCurrent(id)
+                    return false
+                }
+                return try verifiedCopyMaintainingCLITracking(
+                    installedID: id,
+                    from: sourceBinding,
+                    to: system.binding)
+            }
+        } catch {
+            // Another fenced operation owns this identity; it will either
+            // install its own bytes or invalidate this refresh snapshot.
+            return false
+        }
+    }
+
+    private static func restoreSystemCLIUnfenced() throws {
+        let system = try boundSystemCredential()
+        let backup = systemBackupURL(for: system.url)
+        let backupBinding = try system.binding.sibling(
+            fileName: backup.lastPathComponent,
+            role: "system:auth-backup")
+        guard try CodexAuthStore.readPrivateFile(backupBinding) != nil else {
+            throw AccountError.noSystemLogin
+        }
+        guard try CodexAuthStore.copyCredential(
+            from: backupBinding, to: system.binding)
+        else {
+            throw AccountError.noSystemLogin
+        }
         setCLISwitchedID(nil)
     }
 
@@ -561,17 +1462,30 @@ enum CodexAccountStore {
     @discardableResult
     static func reconcileCLISyncBack() -> Bool {
         guard let id = cliSwitchedID(), id != "system" else { return false }
-        guard let account = managedAccounts().first(where: { $0.id == id }),
-              let home = account.homePath
-        else { return false }
-        let managedAuthURL = URL(fileURLWithPath: home).appendingPathComponent("auth.json")
-        let cliModified = modificationDate(of: systemAuthURL())
-        let managedModified = modificationDate(of: managedAuthURL)
-        guard shouldSyncBack(cliModifiedAt: cliModified, managedModifiedAt: managedModified) else { return false }
-        guard let data = try? Data(contentsOf: systemAuthURL()) else { return false }
         do {
-            try CodexAuthStore.writePrivateFile(data, to: managedAuthURL)
-            return true
+            return try accountOperationFence.performExclusiveMutation(ids: [id, "system"]) {
+                let system = try boundSystemCredential()
+                guard cliSwitchedID() == id else { return false }
+                guard let accounts = try? managedAccountsForMutation(),
+                      accounts.contains(where: { $0.id == id }),
+                      let managed = try boundManagedCredential(id: id)
+                else {
+                    clearCLITrackingIfCurrent(id)
+                    return false
+                }
+                switch try CodexAuthStore.reconcileCredentialPair(
+                    first: system.binding,
+                    second: managed.binding)
+                {
+                case .copiedFirstToSecond, .copiedSecondToFirst:
+                    return true
+                case .unchanged:
+                    return false
+                case .identityMismatch, .ambiguous, .unavailable:
+                    clearCLITrackingIfCurrent(id)
+                    return false
+                }
+            }
         } catch {
             return false
         }
@@ -630,12 +1544,14 @@ enum CodexQuotaPrimer {
     /// whether to surface the "primed" notification.
     @discardableResult
     static func prime(now: Date) async -> Bool {
-        guard let binary = CodexAccountStore.codexBinary() else { return false }
+        guard let binary = CodexAccountStore.codexBinary(),
+              let environment = CodexAccountStore.systemCLIEnvironment(binaryPath: binary)
+        else { return false }
         let succeeded = await Task.detached(priority: .userInitiated) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: binary)
             process.arguments = ["exec", "-s", "read-only", "--skip-git-repo-check", "say ok"]
-            process.environment = CodexAccountStore.loginEnvironment(homePath: nil, binaryPath: binary)
+            process.environment = environment
             process.standardOutput = Pipe()
             process.standardError = Pipe()
             do {

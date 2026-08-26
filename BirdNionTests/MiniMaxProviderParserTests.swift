@@ -1,6 +1,9 @@
 import XCTest
 @testable import BirdNion
 
+@_silgen_name("mkfifo")
+private func birdNionTestMkfifo(_ path: UnsafePointer<CChar>, _ mode: mode_t) -> Int32
+
 /// Tests for `MiniMaxProvider` parser + the providers that share its
 /// Keychain-less architecture. Uses `BirdNionConfigStore` (via an isolated
 /// `BIRDNION_CONFIG` env override) to inject tokens without touching the
@@ -417,6 +420,20 @@ final class BirdNionConfigStoreTests: XCTestCase {
         XCTAssertEqual(BirdNionConfigStore.apiKey(provider: "minimax", url: testConfigURL), "second")
     }
 
+    func testMacMutationsIncrementSharedSettingsRevision() throws {
+        try BirdNionConfigStore.save(.init(id: "minimax", enabled: true), url: testConfigURL)
+        var raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: testConfigURL)) as? [String: Any]
+        )
+        XCTAssertEqual(raw["settingsRevision"] as? Int, 1)
+
+        try BirdNionConfigStore.save(.init(id: "codex", enabled: true), url: testConfigURL)
+        raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: testConfigURL)) as? [String: Any]
+        )
+        XCTAssertEqual(raw["settingsRevision"] as? Int, 2)
+    }
+
     func testPreservesOtherProviders() throws {
         try BirdNionConfigStore.save(BirdNionConfigStore.Provider(id: "codex", apiKey: "codex-key"), url: testConfigURL)
         try BirdNionConfigStore.save(BirdNionConfigStore.Provider(id: "minimax", apiKey: "minimax-key"), url: testConfigURL)
@@ -441,6 +458,50 @@ final class BirdNionConfigStoreTests: XCTestCase {
 
         XCTAssertEqual(BirdNionConfigStore.allProviders(url: testConfigURL).prefix(3).map(\.id),
                        ["codex", "minimax", "hapo"])
+        let raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: testConfigURL)) as? [String: Any]
+        )
+        XCTAssertEqual(raw["settingsRevision"] as? Int, 2)
+    }
+
+    func testSaveProvidersRejectsStaleSettingsSnapshotWithoutRevertingNewFields() throws {
+        try BirdNionConfigStore.saveProviders([
+            .init(id: "claude", apiKey: "old-token", enabled: true),
+        ], url: testConfigURL)
+        let stale = BirdNionConfigStore.providersSnapshot(url: testConfigURL)
+
+        try BirdNionConfigStore.save(
+            .init(id: "claude", apiKey: "rotated-token", enabled: true),
+            url: testConfigURL)
+        var staleRows = stale.providers
+        staleRows[0].enabled = false
+
+        XCTAssertThrowsError(try BirdNionConfigStore.saveProviders(
+            staleRows,
+            expectedRevision: stale.settingsRevision,
+            url: testConfigURL)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("reload before saving"))
+        }
+        let current = try XCTUnwrap(BirdNionConfigStore.provider(
+            id: "claude", url: testConfigURL))
+        XCTAssertEqual(current.apiKey, "rotated-token")
+        XCTAssertEqual(current.enabled, true)
+        XCTAssertEqual(BirdNionConfigStore.read(url: testConfigURL)?.settingsRevision, 2)
+    }
+
+    func testProvidersSnapshotCarriesRevisionWhenProviderArrayIsAbsent() throws {
+        try writeRaw(#"{"version":1,"settingsRevision":7,"claudeCodeProfiles":[]}"#)
+
+        let snapshot = BirdNionConfigStore.providersSnapshot(url: testConfigURL)
+
+        XCTAssertEqual(snapshot.settingsRevision, 7)
+        XCTAssertFalse(snapshot.providers.isEmpty)
+        let savedRevision = try BirdNionConfigStore.saveProviders(
+            snapshot.providers,
+            expectedRevision: snapshot.settingsRevision,
+            url: testConfigURL)
+        XCTAssertEqual(savedRevision, 8)
+        XCTAssertEqual(BirdNionConfigStore.read(url: testConfigURL)?.settingsRevision, 8)
     }
 
     func testDefaultIsEnabledFalse() throws {
@@ -486,6 +547,11 @@ final class BirdNionConfigStoreTests: XCTestCase {
         try raw.data(using: .utf8)!.write(to: testConfigURL)
     }
 
+    private var casBackupURL: URL {
+        testConfigURL.deletingLastPathComponent().appendingPathComponent(
+            testConfigURL.lastPathComponent + ".birdnion-cas-backup")
+    }
+
     func testSaveRefusesToOverwriteMalformedExistingFile() throws {
         let raw = "{ this is not valid json"
         try writeRaw(raw)
@@ -505,20 +571,113 @@ final class BirdNionConfigStoreTests: XCTestCase {
         )
     }
 
+    func testSaveRejectsSymlinkWithoutChangingTarget() throws {
+        let target = testConfigURL.deletingLastPathComponent().appendingPathComponent("target.json")
+        try FileManager.default.createDirectory(
+            at: testConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let original = #"{"version":1,"settingsRevision":9,"providers":[]}"#
+        try original.data(using: .utf8)!.write(to: target)
+        try FileManager.default.createSymbolicLink(at: testConfigURL, withDestinationURL: target)
+
+        XCTAssertNil(BirdNionConfigStore.read(url: testConfigURL))
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        )
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), original)
+    }
+
+    func testSaveRejectsFIFOWithoutBlocking() throws {
+        try FileManager.default.createDirectory(
+            at: testConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let result = testConfigURL.path.withCString { birdNionTestMkfifo($0, mode_t(0o600)) }
+        XCTAssertEqual(result, 0)
+
+        XCTAssertNil(BirdNionConfigStore.read(url: testConfigURL))
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        )
+    }
+
+    func testSaveRejectsOversizedSettingsWithoutChangingBytes() throws {
+        let oversized = Data(repeating: 0x20, count: 8 * 1024 * 1024 + 1)
+        try FileManager.default.createDirectory(
+            at: testConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try oversized.write(to: testConfigURL)
+
+        XCTAssertNil(BirdNionConfigStore.read(url: testConfigURL))
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        )
+        XCTAssertEqual(try Data(contentsOf: testConfigURL).count, oversized.count)
+    }
+
+    func testSaveRejectsSymlinkedMutationLock() throws {
+        let parent = testConfigURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let target = parent.appendingPathComponent("lock-target")
+        let original = Data("do-not-touch".utf8)
+        try original.write(to: target)
+        let lock = parent.appendingPathComponent(testConfigURL.lastPathComponent + ".birdnion.lock")
+        try FileManager.default.createSymbolicLink(at: lock, withDestinationURL: target)
+
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        )
+        XCTAssertEqual(try Data(contentsOf: target), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: testConfigURL.path))
+    }
+
+    func testAtomicSaveCreatesOwnerOnlyRegularFile() throws {
+        try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+
+        let parentAttributes = try FileManager.default.attributesOfItem(
+            atPath: testConfigURL.deletingLastPathComponent().path)
+        XCTAssertEqual((parentAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+        let attributes = try FileManager.default.attributesOfItem(atPath: testConfigURL.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertEqual(attributes[.type] as? FileAttributeType, .typeRegular)
+
+        let lockURL = testConfigURL.deletingLastPathComponent()
+            .appendingPathComponent(testConfigURL.lastPathComponent + ".birdnion.lock")
+        let lockAttributes = try FileManager.default.attributesOfItem(atPath: lockURL.path)
+        XCTAssertEqual((lockAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertEqual(lockAttributes[.type] as? FileAttributeType, .typeRegular)
+    }
+
+    func testExistingConfigParentModeRemainsUnchanged() throws {
+        let parent = testConfigURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: parent.path)
+
+        try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: parent.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o755)
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: testConfigURL.path)
+        XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
     func testSavePreservesUnknownTopLevelKey() throws {
-        try writeRaw(#"{"version":1,"providers":[],"futureFeatureFlag":true}"#)
+        try writeRaw(#"{"version":1,"settingsRevision":7,"providers":[],"activeCodexAccount":"linux-account","futureFeatureFlag":true}"#)
 
         try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
 
         let raw = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: testConfigURL)) as? [String: Any]
         )
+        XCTAssertEqual(raw["settingsRevision"] as? Int, 8)
+        XCTAssertEqual(raw["activeCodexAccount"] as? String, "linux-account")
         XCTAssertEqual(raw["futureFeatureFlag"] as? Bool, true)
         XCTAssertNotNil(raw["providers"])
     }
 
     func testSavePreservesUnknownPerProviderKey() throws {
-        try writeRaw(#"{"version":1,"providers":[{"id":"claude","enabled":true,"futureProviderField":"keep-me"}]}"#)
+        try writeRaw(#"{"version":1,"providers":[{"id":"claude","enabled":true,"refreshInterval":120,"showInTray":false,"futureProviderField":"keep-me"}]}"#)
 
         var provider = try XCTUnwrap(BirdNionConfigStore.provider(id: "claude", url: testConfigURL))
         provider.accountLabel = "My Account"
@@ -529,8 +688,213 @@ final class BirdNionConfigStoreTests: XCTestCase {
         )
         let providers = try XCTUnwrap(raw["providers"] as? [[String: Any]])
         let claude = try XCTUnwrap(providers.first { $0["id"] as? String == "claude" })
+        XCTAssertEqual(claude["refreshInterval"] as? Int, 120)
+        XCTAssertEqual(claude["showInTray"] as? Bool, false)
         XCTAssertEqual(claude["futureProviderField"] as? String, "keep-me")
         XCTAssertEqual(claude["accountLabel"] as? String, "My Account")
+    }
+
+    func testConcurrentExternalMutationFailsClosedWithoutOverwritingNewBytes() throws {
+        try writeRaw(#"{"version":1,"settingsRevision":4,"providers":[{"id":"claude","enabled":true}]}"#)
+        let external = Data(
+            #"{"version":1,"settingsRevision":5,"providers":[{"id":"claude","enabled":false,"showInTray":false}],"activeCodexAccount":"linux-new"}"#.utf8
+        )
+
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.performMutationForTesting(
+                url: testConfigURL,
+                beforeClaim: { try external.write(to: self.testConfigURL, options: .atomic) },
+                { config in config.version = 2 }
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("changed outside this mutation"))
+        }
+        XCTAssertEqual(try Data(contentsOf: testConfigURL), external)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: casBackupURL.path))
+    }
+
+    func testReaderWaitsUntilClaimedSettingsAreInstalled() throws {
+        try writeRaw(
+            #"{"version":1,"settingsRevision":3,"providers":[{"id":"claude","apiKey":"before","enabled":true}]}"#)
+        let claimed = DispatchSemaphore(value: 0)
+        let releaseWriter = DispatchSemaphore(value: 0)
+        let writerFinished = DispatchSemaphore(value: 0)
+        let readerStarted = DispatchSemaphore(value: 0)
+        let readerFinished = DispatchSemaphore(value: 0)
+        let resultLock = NSLock()
+        var writerError: Error?
+        var loaded: BirdNionConfigStore.Config?
+
+        DispatchQueue.global().async {
+            do {
+                try BirdNionConfigStore.performMutationAfterClaimForTesting(
+                    url: self.testConfigURL,
+                    afterClaim: {
+                        claimed.signal()
+                        guard releaseWriter.wait(timeout: .now() + 2) == .success else {
+                            throw NSError(domain: "BirdNionConfigStoreTests", code: 1)
+                        }
+                    },
+                    { config in config.providers?[0].apiKey = "after" })
+            } catch {
+                resultLock.lock()
+                writerError = error
+                resultLock.unlock()
+            }
+            writerFinished.signal()
+        }
+
+        XCTAssertEqual(claimed.wait(timeout: .now() + 1), .success)
+        DispatchQueue.global().async {
+            readerStarted.signal()
+            let value = BirdNionConfigStore.read(url: self.testConfigURL)
+            resultLock.lock()
+            loaded = value
+            resultLock.unlock()
+            readerFinished.signal()
+        }
+        XCTAssertEqual(readerStarted.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(readerFinished.wait(timeout: .now() + .milliseconds(100)), .timedOut)
+
+        releaseWriter.signal()
+        XCTAssertEqual(writerFinished.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(readerFinished.wait(timeout: .now() + 2), .success)
+        resultLock.lock()
+        let capturedError = writerError
+        let capturedLoaded = loaded
+        resultLock.unlock()
+        XCTAssertNil(capturedError)
+        XCTAssertEqual(capturedLoaded?.providers?.first?.apiKey, "after")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: casBackupURL.path))
+    }
+
+    func testParentSwapAfterLockBeforeReadCannotOverwriteReplacementRoute() throws {
+        let base = testConfigURL.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let current = base.appendingPathComponent("current")
+        let detached = base.appendingPathComponent("detached")
+        testConfigURL = current.appendingPathComponent("settings.json")
+        let original = Data(
+            #"{"version":1,"settingsRevision":0,"providers":[{"id":"claude","apiKey":"route-a","enabled":true}]}"#.utf8)
+        let replacement = Data(
+            #"{"version":1,"settingsRevision":0,"providers":[{"id":"claude","apiKey":"route-b","enabled":true}]}"#.utf8)
+        try writeRaw(String(decoding: original, as: UTF8.self))
+
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.performMutationAfterLockForTesting(
+                url: testConfigURL,
+                afterLock: {
+                    try FileManager.default.moveItem(at: current, to: detached)
+                    try FileManager.default.createDirectory(at: current, withIntermediateDirectories: false)
+                    try replacement.write(to: self.testConfigURL)
+                },
+                { config in
+                    config.providers = [
+                        .init(id: "claude", apiKey: "stale-route-a", enabled: false),
+                    ]
+                }
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("directory route changed"))
+        }
+        XCTAssertEqual(try Data(contentsOf: testConfigURL), replacement)
+        XCTAssertEqual(
+            try Data(contentsOf: detached.appendingPathComponent("settings.json")),
+            original)
+    }
+
+    func testFailedProviderSnapshotCannotOverwriteRestoredLegacyRevisionZeroConfig() throws {
+        try writeRaw("{ transient read failure")
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.providersSnapshotChecked(url: testConfigURL))
+        let failedSnapshot = BirdNionConfigStore.providersSnapshot(url: testConfigURL)
+        XCTAssertFalse(failedSnapshot.isAuthoritative)
+        XCTAssertEqual(failedSnapshot.settingsRevision, UInt64.max)
+        let restored = Data(
+            #"{"version":1,"providers":[{"id":"claude","apiKey":"restored-legacy","enabled":true}]}"#.utf8)
+        try restored.write(to: testConfigURL)
+        var staleRows = failedSnapshot.providers
+        let claudeIndex = try XCTUnwrap(staleRows.firstIndex { $0.id == "claude" })
+        staleRows[claudeIndex].enabled = false
+
+        XCTAssertThrowsError(try BirdNionConfigStore.saveProviders(
+            staleRows,
+            expectedRevision: failedSnapshot.settingsRevision,
+            url: testConfigURL))
+        XCTAssertEqual(try Data(contentsOf: testConfigURL), restored)
+    }
+
+    func testBackupOnlyCrashStateRecoversBeforeLoadAndMutation() throws {
+        let original = Data(
+            #"{"version":1,"settingsRevision":9,"providers":[{"id":"claude","apiKey":"keep-me","enabled":true}]}"#.utf8
+        )
+        try FileManager.default.createDirectory(
+            at: testConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try original.write(to: casBackupURL)
+
+        let loaded = try XCTUnwrap(BirdNionConfigStore.read(url: testConfigURL))
+        XCTAssertEqual(loaded.settingsRevision, 9)
+        XCTAssertEqual(loaded.providers?.first?.apiKey, "keep-me")
+        XCTAssertEqual(try Data(contentsOf: testConfigURL), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: casBackupURL.path))
+
+        try FileManager.default.moveItem(at: testConfigURL, to: casBackupURL)
+        try BirdNionConfigStore.save(
+            .init(id: "minimax", apiKey: "new-key", enabled: true),
+            url: testConfigURL)
+
+        let saved = try XCTUnwrap(BirdNionConfigStore.read(url: testConfigURL))
+        XCTAssertEqual(saved.settingsRevision, 10)
+        XCTAssertEqual(saved.providers?.first { $0.id == "claude" }?.apiKey, "keep-me")
+        XCTAssertEqual(saved.providers?.first { $0.id == "minimax" }?.apiKey, "new-key")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: casBackupURL.path))
+    }
+
+    func testMalformedBackupOnlyStateFailsClosedWithoutCreatingDefaults() throws {
+        let malformed = Data("{ broken recovery json".utf8)
+        try FileManager.default.createDirectory(
+            at: testConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try malformed.write(to: casBackupURL)
+
+        XCTAssertNil(BirdNionConfigStore.read(url: testConfigURL))
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: testConfigURL.path))
+        XCTAssertEqual(try Data(contentsOf: casBackupURL), malformed)
+    }
+
+    func testMalformedExternalDestinationKeepsValidRecoveryBackup() throws {
+        let backup = Data(
+            #"{"version":1,"settingsRevision":3,"providers":[{"id":"claude","enabled":true}]}"#.utf8
+        )
+        let external = Data("external partial write".utf8)
+        try FileManager.default.createDirectory(
+            at: testConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try backup.write(to: casBackupURL)
+        try external.write(to: testConfigURL)
+
+        XCTAssertNil(BirdNionConfigStore.read(url: testConfigURL))
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "minimax", enabled: true), url: testConfigURL)
+        )
+        XCTAssertEqual(try Data(contentsOf: testConfigURL), external)
+        XCTAssertEqual(try Data(contentsOf: casBackupURL), backup)
+    }
+
+    func testRevisionOverflowFailsWithoutChangingExistingBytes() throws {
+        let original = #"{"version":1,"settingsRevision":18446744073709551615,"providers":[]}"#
+        try writeRaw(original)
+
+        XCTAssertThrowsError(
+            try BirdNionConfigStore.save(.init(id: "claude", enabled: true), url: testConfigURL)
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("revision overflow"))
+        }
+        XCTAssertEqual(try String(contentsOf: testConfigURL, encoding: .utf8), original)
     }
 
     func testSaveClearsKnownOptionalFieldWithoutResurrectingIt() throws {

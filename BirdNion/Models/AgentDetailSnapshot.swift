@@ -118,7 +118,7 @@ extension AgentDetailSnapshot {
         let days = combined.daily.map { day -> ActivityDay in
             let values = sourceValues(for: record.id, day: day)
             let dayModels = day.models
-                .filter { $0.source == sourceID }
+                .filter { $0.source == sourceID && !$0.isKiroSyntheticAggregate }
                 .map { ModelDayCost(name: $0.name, usd: $0.usd, tokens: $0.tokens) }
             let topModel = dayModels.max { $0.tokens < $1.tokens }?.name
             return ActivityDay(
@@ -133,7 +133,9 @@ extension AgentDetailSnapshot {
         let today = days.last
 
         var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
-        for model in combined.daily.flatMap(\.models).filter({ $0.source == sourceID }) {
+        for model in combined.daily.flatMap(\.models)
+            .filter({ $0.source == sourceID && !$0.isKiroSyntheticAggregate })
+        {
             var total = modelTotals[model.name] ?? (0, 0)
             total.usd += model.usd
             total.tokens += model.tokens

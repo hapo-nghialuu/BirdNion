@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import os
 
 // MARK: - FreemodelAccountStore
@@ -39,20 +40,26 @@ enum FreemodelAccountStore {
 
     static func setActive(_ id: String) {
         UserDefaults.standard.set(id, forKey: activeKey)
-        NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+        NotificationCenter.default.post(name: .birdnionRefresh, object: "freemodel")
     }
 
     /// The stored cookie header for the ACTIVE account — nil for browser
     /// entries (live scan) or when the managed account vanished.
     static func activeCookieHeader() -> String? {
-        let id = activeID()
+        cookieHeader(for: activeID())
+    }
+
+    static func cookieHeader(for id: String) -> String? {
         guard id != browserID, !id.hasPrefix(browserPrefix) else { return nil }
         return storedEntries().first(where: { $0.id == id })?.cookie
     }
 
     /// The pinned browser id when the active account is `browser:<id>`.
     static func activeBrowserID() -> String? {
-        let id = activeID()
+        pinnedBrowserID(for: activeID())
+    }
+
+    static func pinnedBrowserID(for id: String) -> String? {
         guard id.hasPrefix(browserPrefix) else { return nil }
         return String(id.dropFirst(browserPrefix.count))
     }
@@ -188,6 +195,7 @@ final class FreemodelProvider: QuotaProvider {
     private static let bonusTimeout: TimeInterval = 10
 
     private let session: URLSession
+    private let balanceDefaults: UserDefaults
     private static let log = Logger(subsystem: "com.local.birdnion", category: "provider.freemodel")
 
     /// Account email cached after the first successful `/api/auth/me`; later polls
@@ -196,14 +204,14 @@ final class FreemodelProvider: QuotaProvider {
     private var cachedEmail: String?
     private var cachedEmailCookie: String?
 
-    /// Last successfully built "Số dư" window. The referral/billing endpoints
-    /// are best-effort with a short timeout and freemodel.dev is flaky — reuse
-    /// the last-known balance instead of dropping the bar for one bad cycle
-    /// (bonus balances change rarely). Cleared implicitly on process restart.
-    private var cachedBalanceWindow: QuotaWindow?
+    /// Last successfully built "Số dư" window. The cookie identity is retained
+    /// only in memory so a transient enrichment failure can reuse a balance for
+    /// the same account without ever crossing an A → B switch.
+    private var cachedBalanceWindow: (identity: String, window: QuotaWindow)?
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared, balanceDefaults: UserDefaults = .standard) {
         self.session = session
+        self.balanceDefaults = balanceDefaults
     }
 
     // MARK: - QuotaProvider
@@ -214,10 +222,12 @@ final class FreemodelProvider: QuotaProvider {
         // default scan across all browsers. `bm_session` as the required
         // cookie makes every browser path skip stores that only hold stale
         // analytics/Stripe cookies.
+        let activeAccountID = FreemodelAccountStore.activeID()
         let rawHeader: String?
-        if let stored = FreemodelAccountStore.activeCookieHeader() {
-            rawHeader = stored
-        } else if let browserID = FreemodelAccountStore.activeBrowserID() {
+        if activeAccountID != FreemodelAccountStore.browserID,
+           !activeAccountID.hasPrefix(FreemodelAccountStore.browserPrefix) {
+            rawHeader = FreemodelAccountStore.cookieHeader(for: activeAccountID)
+        } else if let browserID = FreemodelAccountStore.pinnedBrowserID(for: activeAccountID) {
             rawHeader = ProviderCookieReader.cookieHeader(
                 browserID: browserID, domain: Self.cookieDomain, requiredCookie: Self.sessionCookieName)
         } else {
@@ -261,8 +271,10 @@ final class FreemodelProvider: QuotaProvider {
         }
         #endif
 
-        return parse(usageData: usageData, accountLabel: accountLabel,
-                     referralData: referralData, billingData: billingData)
+        return parse(
+            usageData: usageData, accountLabel: accountLabel,
+            referralData: referralData, billingData: billingData,
+            balanceCacheIdentity: "\(activeAccountID)\u{0}\(cookieHeader)")
     }
 
     // MARK: - Parsing (static entry point for unit tests — no network I/O)
@@ -270,17 +282,21 @@ final class FreemodelProvider: QuotaProvider {
     static func _parseForTesting(usageData: Data, accountLabel: String?,
                                  referralData: Data? = nil,
                                  billingData: Data? = nil,
-                                 provider: FreemodelProvider? = nil) -> ProviderStatus {
+                                 provider: FreemodelProvider? = nil,
+                                 balanceCacheIdentity: String = "test",
+                                 usePersistentBalanceCache: Bool = false) -> ProviderStatus {
         (provider ?? FreemodelProvider()).parse(
             usageData: usageData, accountLabel: accountLabel,
             referralData: referralData, billingData: billingData,
-            usePersistentBalanceCache: false)
+            balanceCacheIdentity: balanceCacheIdentity,
+            usePersistentBalanceCache: usePersistentBalanceCache)
     }
 
-    /// `usePersistentBalanceCache` = false in unit tests so canned parses never
-    /// read or write the real UserDefaults sticky entry.
+    /// Tests default persistence off; identity regressions opt in with an
+    /// isolated UserDefaults suite so canned parses never touch app state.
     private func parse(usageData: Data, accountLabel: String?,
                        referralData: Data?, billingData: Data?,
+                       balanceCacheIdentity: String,
                        usePersistentBalanceCache: Bool = true) -> ProviderStatus {
         guard let usage = try? JSONDecoder().decode(UsageResponse.self, from: usageData) else {
             // Never log the raw body — it may carry account/billing/auth data.
@@ -293,22 +309,25 @@ final class FreemodelProvider: QuotaProvider {
             Self.window(label: "Tuần", from: usage.windowWeek, windowSeconds: 7 * 24 * 3600),
         ]
         if let balance = Self.balanceWindow(referralData: referralData, billingData: billingData) {
-            cachedBalanceWindow = balance
+            cachedBalanceWindow = (balanceCacheIdentity, balance)
             // Persist only complete readings (remaining known): a billing-less
             // cycle renders live as used/used but must not overwrite the last
             // full $used/$total snapshot used after restarts.
             if usePersistentBalanceCache, balance.remainingPct > 0 {
-                Self.persistBalanceWindow(balance)
+                persistBalanceWindow(balance, identity: balanceCacheIdentity)
             }
             windows.append(balance)
-        } else if let cached = cachedBalanceWindow
-            ?? (usePersistentBalanceCache ? Self.persistedBalanceWindow() : nil) {
+        } else if let cached = cachedBalanceWindow.flatMap({
+            $0.identity == balanceCacheIdentity ? $0.window : nil
+        }) ?? (usePersistentBalanceCache
+            ? persistedBalanceWindow(identity: balanceCacheIdentity)
+            : nil) {
             // Sticky: a transient referral/billing failure keeps the last-known
             // balance bar instead of silently dropping it for this cycle. The
             // persisted copy survives app restarts — freemodel's /api/billing
             // times out often enough that a fresh launch could otherwise sit
             // bar-less until the first good cycle.
-            cachedBalanceWindow = cached
+            cachedBalanceWindow = (balanceCacheIdentity, cached)
             windows.append(Self.staleBalanceWindow(from: cached))
         } else {
             // Byte counts only (never bodies — they carry account data): enough
@@ -494,26 +513,32 @@ final class FreemodelProvider: QuotaProvider {
 
     // MARK: - Persistent balance sticky (survives app restarts)
 
-    /// Stored per active account so switching accounts never shows the other
-    /// account's balance; entries older than 48h are treated as gone (bonus
-    /// balances move slowly, but not THAT slowly).
+    /// Stored per privacy-safe credential fingerprint so even a browser slot
+    /// re-used by a new login cannot show the prior account's balance. Entries
+    /// older than 48h are treated as gone (bonus balances move slowly).
     private struct PersistedBalance: Codable {
         let window: QuotaWindow
         let savedAt: Date
     }
 
-    private static var persistedBalanceKey: String {
-        "freemodelCachedBalanceWindow.\(FreemodelAccountStore.activeID())"
+    private static func persistedBalanceKey(identity: String) -> String {
+        let digest = SHA256.hash(data: Data(identity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "freemodelCachedBalanceWindow.v2.\(digest)"
     }
 
-    private static func persistBalanceWindow(_ window: QuotaWindow) {
+    private func persistBalanceWindow(_ window: QuotaWindow, identity: String) {
         let entry = PersistedBalance(window: window, savedAt: Date())
         guard let data = try? JSONEncoder().encode(entry) else { return }
-        UserDefaults.standard.set(data, forKey: persistedBalanceKey)
+        balanceDefaults.set(data, forKey: Self.persistedBalanceKey(identity: identity))
     }
 
-    private static func persistedBalanceWindow(now: Date = Date()) -> QuotaWindow? {
-        guard let data = UserDefaults.standard.data(forKey: persistedBalanceKey),
+    private func persistedBalanceWindow(
+        identity: String, now: Date = Date()
+    ) -> QuotaWindow? {
+        guard let data = balanceDefaults.data(
+                  forKey: Self.persistedBalanceKey(identity: identity)),
               let entry = try? JSONDecoder().decode(PersistedBalance.self, from: data),
               now.timeIntervalSince(entry.savedAt) < 48 * 3600
         else { return nil }

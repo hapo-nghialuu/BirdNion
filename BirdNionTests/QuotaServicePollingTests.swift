@@ -1,4 +1,6 @@
 import XCTest
+import Darwin
+import Combine
 @testable import BirdNion
 
 final class QuotaServicePollingTests: XCTestCase {
@@ -349,6 +351,137 @@ final class QuotaServicePollingTests: XCTestCase {
         XCTAssertEqual(second.fetchCount, 1)
     }
 
+    func testStatusCachePersistsAuthoritativeEmptyArrayAsPrivateRegularFile() throws {
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        ProviderStatusCache.write([], url: cacheURL)
+
+        let data = try Data(contentsOf: cacheURL)
+        XCTAssertTrue(try JSONDecoder().decode([ProviderStatus].self, from: data).isEmpty)
+        let attributes = try FileManager.default.attributesOfItem(atPath: cacheURL.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+        var metadata = stat()
+        XCTAssertEqual(cacheURL.path.withCString { lstat($0, &metadata) }, 0)
+        XCTAssertEqual(metadata.st_mode & mode_t(S_IFMT), mode_t(S_IFREG))
+    }
+
+    func testStatusCacheRejectsSymlinkAndDoesNotOverwriteItsTarget() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString)", isDirectory: true)
+        let targetURL = directory.appendingPathComponent("target.json")
+        let linkURL = directory.appendingPathComponent("status-cache.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let targetStatus = ProviderStatus(
+            id: "codex", displayName: "Codex",
+            windows: [QuotaWindow(label: "Session", usedPct: 12, remainingPct: 88)],
+            lastUpdated: Date(), accountLabel: "target-account")
+        ProviderStatusCache.write([targetStatus], url: targetURL)
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: targetURL)
+
+        XCTAssertTrue(ProviderStatusCache.read(url: linkURL).isEmpty)
+        ProviderStatusCache.write([], url: linkURL)
+        XCTAssertEqual(
+            ProviderStatusCache.read(url: targetURL).first?.accountLabel,
+            "target-account")
+        XCTAssertNoThrow(try FileManager.default.destinationOfSymbolicLink(atPath: linkURL.path))
+    }
+
+    func testStatusCacheRejectsFIFOWithoutConsumingStreamData() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString)", isDirectory: true)
+        let fifoURL = directory.appendingPathComponent("status-cache.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        XCTAssertEqual(fifoURL.path.withCString { mkfifo($0, mode_t(0o600)) }, 0)
+
+        let streamStatus = ProviderStatus(
+            id: "codex", displayName: "Codex",
+            windows: [QuotaWindow(label: "Session", usedPct: 12, remainingPct: 88)],
+            lastUpdated: Date(), accountLabel: "fifo-account")
+        let payload = try JSONEncoder().encode([streamStatus])
+        let streamDescriptor = fifoURL.path.withCString {
+            Darwin.open($0, O_RDWR | O_NONBLOCK | O_CLOEXEC)
+        }
+        XCTAssertGreaterThanOrEqual(streamDescriptor, 0)
+        let written = payload.withUnsafeBytes { bytes in
+            Darwin.write(streamDescriptor, bytes.baseAddress, bytes.count)
+        }
+        XCTAssertEqual(written, payload.count)
+        let closed = DispatchSemaphore(value: 0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            _ = Darwin.close(streamDescriptor)
+            closed.signal()
+        }
+
+        let startedAt = Date()
+        XCTAssertTrue(ProviderStatusCache.read(url: fifoURL).isEmpty)
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.5)
+        XCTAssertEqual(closed.wait(timeout: .now() + 1), .success)
+    }
+
+    func testStatusCacheRejectsOversizedFileAndEncodedSnapshot() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString)", isDirectory: true)
+        let oversizedURL = directory.appendingPathComponent("oversized.json")
+        let cacheURL = directory.appendingPathComponent("status-cache.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        XCTAssertTrue(FileManager.default.createFile(atPath: oversizedURL.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: oversizedURL)
+        try handle.truncate(atOffset: UInt64(ProviderStatusCache.maxStoredBytes + 1))
+        try handle.close()
+        XCTAssertTrue(ProviderStatusCache.read(url: oversizedURL).isEmpty)
+
+        let baseline = ProviderStatus(
+            id: "codex", displayName: "Codex",
+            windows: [QuotaWindow(label: "Session", usedPct: 12, remainingPct: 88)],
+            lastUpdated: Date(), accountLabel: "baseline")
+        ProviderStatusCache.write([baseline], url: cacheURL)
+        let oversizedSnapshot = ProviderStatus(
+            id: "codex", displayName: "Codex", windows: [],
+            lastUpdated: Date(),
+            accountLabel: String(repeating: "x", count: ProviderStatusCache.maxStoredBytes))
+        XCTAssertGreaterThan(
+            try JSONEncoder().encode([oversizedSnapshot]).count,
+            ProviderStatusCache.maxStoredBytes)
+        ProviderStatusCache.write([oversizedSnapshot], url: cacheURL)
+        XCTAssertEqual(ProviderStatusCache.read(url: cacheURL).first?.accountLabel, "baseline")
+    }
+
+    @MainActor
+    func testContextInvalidationPersistsEmptyStatusCacheAcrossRelaunch() {
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("status-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        ProviderStatusCache.write([
+            ProviderStatus(
+                id: "codex", displayName: "Codex",
+                windows: [QuotaWindow(label: "Session", usedPct: 12, remainingPct: 88)],
+                lastUpdated: Date(), accountLabel: "account-a"),
+        ], url: cacheURL)
+
+        let provider = CountingProvider(id: "codex", displayName: "Codex")
+        let service = QuotaService(
+            providers: [provider], interval: 3_600, statusCacheURL: cacheURL)
+        service.restorePersistedStatuses()
+        XCTAssertEqual(service.statuses.first?.accountLabel, "account-a")
+
+        service.invalidateProviderContext(for: "codex")
+        XCTAssertTrue(ProviderStatusCache.read(url: cacheURL).isEmpty)
+
+        let relaunched = QuotaService(
+            providers: [provider], interval: 3_600, statusCacheURL: cacheURL)
+        relaunched.restorePersistedStatuses()
+        XCTAssertTrue(relaunched.statuses.isEmpty)
+    }
+
     @MainActor
     func testStatusCacheNeverRestoresErrorSnapshots() async {
         let cacheURL = FileManager.default.temporaryDirectory
@@ -461,6 +594,170 @@ final class QuotaServicePollingTests: XCTestCase {
         let state = svc.adaptiveBackoffState(for: "slow")
         XCTAssertEqual(state.consecutiveFailures, 1)
         XCTAssertEqual(state.multiplier, 1)
+    }
+
+    @MainActor
+    func testContextChangeDiscardsOldSuccessAndCannotConsumeQueuedForcedRefresh() async {
+        let provider = GatedProvider(id: "codex", displayName: "Codex")
+        let expectedAccountID = CodexAccountStore.activeSelection().id
+        var savedStatuses: [ProviderStatus] = []
+        var savedAccountIDs: [String] = []
+        let svc = QuotaService(
+            providers: [provider],
+            interval: 3_600,
+            failureNotificationPost: { _, _, _ in },
+            failureNotificationRemove: { _ in },
+            legacyFailureNotificationCleanup: { _ in },
+            codexSnapshotSave: { status, accountID in
+                savedStatuses.append(status)
+                savedAccountIDs.append(accountID)
+            })
+
+        let oldAccountRefresh = Task { @MainActor in
+            await svc.refresh()
+        }
+        await provider.waitUntilFirstFetchStarts()
+
+        svc.invalidateProviderContext(for: "codex")
+        let newAccountRefresh = Task { @MainActor in
+            await svc.refresh(forceProviderIDs: ["codex"])
+        }
+        for _ in 0..<100 where !svc.refreshCoordinatorState().pending {
+            await Task.yield()
+        }
+
+        await provider.releaseFirstFetch()
+        await oldAccountRefresh.value
+        await newAccountRefresh.value
+
+        let fetchCount = await provider.fetchCount()
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertEqual(svc.statuses.first?.windows.first?.usedPct, 2)
+        XCTAssertEqual(savedStatuses.count, 1)
+        XCTAssertEqual(savedStatuses.first?.windows.first?.usedPct, 2)
+        XCTAssertEqual(savedAccountIDs, [expectedAccountID])
+        XCTAssertFalse(svc.refreshCoordinatorState().running)
+    }
+
+    @MainActor
+    func testProviderScopedRefreshInvalidatesImmediatelyDebouncesAndFetchesNewContext() async {
+        let provider = GatedSuccessThenTransientProvider(
+            id: "codex", displayName: "Codex")
+        var removedSnapshotAccountIDs: [String] = []
+        let svc = QuotaService(
+            providers: [provider],
+            interval: 3_600,
+            failureNotificationPost: { _, _, _ in },
+            failureNotificationRemove: { _ in },
+            legacyFailureNotificationCleanup: { _ in },
+            settingsRefreshDebounceNanoseconds: 0,
+            codexSnapshotRemove: { removedSnapshotAccountIDs.append($0) })
+        svc.applySelfTestStatus(ProviderStatus(
+            id: "codex", displayName: "Codex",
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 41, remainingPct: 59)],
+            lastUpdated: Date()))
+        svc.start()
+        defer { svc.stop() }
+        // `applySelfTestStatus` intentionally seeds the provider throttle, so
+        // the loop's initial background pass is not due. Start an explicit
+        // user refresh to model the old credential context being in flight.
+        let oldContextRefresh = Task { @MainActor in
+            await svc.refresh(forceProviderIDs: ["codex"])
+        }
+        await provider.waitUntilFirstFetchStarts()
+
+        NotificationCenter.default.post(name: .birdnionRefresh, object: "codex")
+        NotificationCenter.default.post(name: .birdnionRefresh, object: "codex")
+        NotificationCenter.default.post(name: .birdnionRefresh, object: "codex")
+
+        XCTAssertNil(svc.statuses.first(where: { $0.id == "codex" }))
+        XCTAssertEqual(
+            svc.settingsRefreshCoordinatorState().providerIDs,
+            ["codex"])
+        XCTAssertTrue(svc.settingsRefreshCoordinatorState().scheduled)
+        XCTAssertEqual(removedSnapshotAccountIDs.count, 3)
+        var postMutationSuccessfulUsedPercentages: [Int] = []
+        var didPublishNewContext = false
+        let statusObserver = svc.$statuses.sink { statuses in
+            if let status = statuses.first(where: { $0.id == "codex" }),
+               status.error == nil,
+               let usedPct = status.windows.first?.usedPct
+            {
+                postMutationSuccessfulUsedPercentages.append(usedPct)
+            }
+            if statuses.first(where: { $0.id == "codex" })?.error == "timeout" {
+                didPublishNewContext = true
+            }
+        }
+        await provider.releaseFirstFetch()
+        await oldContextRefresh.value
+
+        let fetchCount = await provider.fetchCount()
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertTrue(didPublishNewContext)
+        XCTAssertFalse(postMutationSuccessfulUsedPercentages.contains(1))
+        let current = svc.statuses.first(where: { $0.id == "codex" })
+        XCTAssertEqual(current?.error, "timeout")
+        XCTAssertTrue(current?.windows.isEmpty == true)
+        withExtendedLifetime(statusObserver) {}
+    }
+
+    @MainActor
+    func testStopRemovesScopedNotificationObserversBeforeRestart() {
+        var removedSnapshotAccountIDs: [String] = []
+        let svc = QuotaService(
+            providers: [], interval: 3_600,
+            failureNotificationPost: { _, _, _ in },
+            failureNotificationRemove: { _ in },
+            legacyFailureNotificationCleanup: { _ in },
+            codexSnapshotRemove: { removedSnapshotAccountIDs.append($0) })
+
+        svc.start()
+        svc.stop()
+        svc.start()
+        NotificationCenter.default.post(name: .birdnionRefresh, object: "codex")
+        svc.stop()
+
+        XCTAssertEqual(removedSnapshotAccountIDs.count, 1)
+    }
+
+    @MainActor
+    func testOtherProviderCompletionCannotResurrectOldContextPendingStatus() async {
+        let codex = GatedProvider(id: "codex", displayName: "Codex")
+        let claude = GatedProvider(id: "claude", displayName: "Claude")
+        let svc = QuotaService(
+            providers: [codex, claude],
+            interval: 3_600,
+            failureNotificationPost: { _, _, _ in },
+            failureNotificationRemove: { _ in },
+            legacyFailureNotificationCleanup: { _ in })
+        svc.applySelfTestStatus(ProviderStatus(
+            id: "codex", displayName: "Codex",
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 10, remainingPct: 90)],
+            lastUpdated: Date()))
+
+        let refresh = Task { @MainActor in await svc.refresh(forceProviderIDs: ["codex", "claude"]) }
+        await codex.waitUntilFirstFetchStarts()
+        await claude.waitUntilFirstFetchStarts()
+
+        svc.invalidateProviderContext(for: "codex")
+        svc.applySelfTestStatus(ProviderStatus(
+            id: "codex", displayName: "Codex",
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
+            lastUpdated: Date()))
+        await claude.releaseFirstFetch()
+        for _ in 0..<100 where !svc.statuses.contains(where: { $0.id == "claude" }) {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(
+            svc.statuses.first(where: { $0.id == "codex" })?.windows.first?.usedPct,
+            20)
+        await codex.releaseFirstFetch()
+        await refresh.value
+        XCTAssertEqual(
+            svc.statuses.first(where: { $0.id == "codex" })?.windows.first?.usedPct,
+            20)
     }
 
     @MainActor
@@ -935,6 +1232,42 @@ private final class GatedProvider: QuotaProvider {
     }
 }
 
+private final class GatedSuccessThenTransientProvider: QuotaProvider {
+    let id: String
+    let displayName: String
+    private let gate = FetchGate()
+
+    init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func fetch() async throws -> ProviderStatus {
+        let count = await gate.beginFetch()
+        if count == 1 {
+            return ProviderStatus(
+                id: id, displayName: displayName,
+                windows: [QuotaWindow(label: "5 giờ", usedPct: 1, remainingPct: 99)],
+                lastUpdated: Date())
+        }
+        return ProviderStatus(
+            id: id, displayName: displayName, windows: [],
+            lastUpdated: Date(), error: "timeout")
+    }
+
+    func waitUntilFirstFetchStarts() async {
+        await gate.waitUntilFirstFetchStarts()
+    }
+
+    func releaseFirstFetch() async {
+        await gate.releaseFirstFetch()
+    }
+
+    func fetchCount() async -> Int {
+        await gate.fetchCount
+    }
+}
+
 final class OrderedAsyncOperationQueueTests: XCTestCase {
     @MainActor
     func testLaterRemoveWaitsForDelayedPostOperation() async {
@@ -956,6 +1289,33 @@ final class OrderedAsyncOperationQueueTests: XCTestCase {
         await queue.drain()
 
         XCTAssertEqual(events, ["post", "remove"])
+    }
+
+    @MainActor
+    func testNotificationGateRevalidatesAfterAuthorizationReturns() async {
+        var stillAuthorized = true
+        let mayPost = await QuotaNotifier.authorizationAndRevalidationAllowPost(
+            requestAuthorization: {
+                stillAuthorized = false
+                return true
+            },
+            revalidate: { stillAuthorized })
+
+        XCTAssertFalse(mayPost)
+    }
+
+    @MainActor
+    func testNotificationGateSkipsRevalidationWhenPermissionDenied() async {
+        var didRevalidate = false
+        let mayPost = await QuotaNotifier.authorizationAndRevalidationAllowPost(
+            requestAuthorization: { false },
+            revalidate: {
+                didRevalidate = true
+                return true
+            })
+
+        XCTAssertFalse(mayPost)
+        XCTAssertFalse(didRevalidate)
     }
 }
 
@@ -1220,6 +1580,7 @@ final class ProviderUserActionInteractionTests: XCTestCase {
         _ = await provider.fetchAsUserAction()
 
         XCTAssertEqual(provider.observedInteraction, .userInitiated)
+        XCTAssertEqual(provider.observedManualRefresh, true)
     }
 
     /// Guards the regression itself: the bare deadline fetch stays `.background`
@@ -1230,6 +1591,7 @@ final class ProviderUserActionInteractionTests: XCTestCase {
         _ = await provider.fetchWithDeadline()
 
         XCTAssertEqual(provider.observedInteraction, .background)
+        XCTAssertEqual(provider.observedManualRefresh, false)
     }
 }
 
@@ -1334,6 +1696,7 @@ private final class InteractionRecordingProvider: QuotaProvider, @unchecked Send
     let id: String
     let displayName: String
     private(set) var observedInteraction: ProviderInteraction?
+    private(set) var observedManualRefresh: Bool?
 
     init(id: String, displayName: String) {
         self.id = id
@@ -1342,6 +1705,7 @@ private final class InteractionRecordingProvider: QuotaProvider, @unchecked Send
 
     func fetch() async throws -> ProviderStatus {
         observedInteraction = ProviderInteractionContext.current
+        observedManualRefresh = RefreshInteraction.isManual
         return ProviderStatus(id: id, displayName: displayName,
                               windows: [QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)],
                               lastUpdated: Date())

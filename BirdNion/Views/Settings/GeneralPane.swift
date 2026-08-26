@@ -161,6 +161,18 @@ struct GeneralPane: View {
                 perProviderBudgetRow(
                     title: L10n.t("settings.grokBudget.title", settings.appLanguage),
                     value: $settings.grokMonthlyBudgetUSD)
+                SettingsRowDivider()
+                perProviderBudgetRow(
+                    title: L10n.t("settings.kiroBudget.title", settings.appLanguage),
+                    value: $settings.kiroMonthlyBudgetUSD)
+                SettingsRowDivider()
+                perProviderBudgetRow(
+                    title: L10n.t("settings.ompBudget.title", settings.appLanguage),
+                    value: $settings.ompMonthlyBudgetUSD)
+                SettingsRowDivider()
+                perProviderBudgetRow(
+                    title: L10n.t("settings.piBudget.title", settings.appLanguage),
+                    value: $settings.piMonthlyBudgetUSD)
             }
 
             SettingsCard(header: L10n.t("settings.section.notifications", settings.appLanguage)) {

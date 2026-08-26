@@ -234,6 +234,8 @@ struct AgentDetailPanelRoot: View {
     private func windowModels(_ days: [AgentDetailSnapshot.ActivityDay]) -> [AgentDetailSnapshot.ModelItem] {
         var totals: [String: (usd: Double, tokens: Int)] = [:]
         for m in days.flatMap(\.models) {
+            if snapshot.record.id == .kiro,
+               m.name == KiroCostScanner.aggregateModelName { continue }
             var t = totals[m.name] ?? (0, 0)
             t.usd += m.usd
             t.tokens += m.tokens

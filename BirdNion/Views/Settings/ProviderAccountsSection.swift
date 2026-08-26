@@ -23,8 +23,14 @@ extension ProvidersPane {
                         .foregroundStyle(idx == claudeAccounts.clampedActiveIndex()
                                          ? SettingsTheme.accent : SettingsTheme.tertiary)
                         .onTapGesture {
-                            claudeAccounts = ClaudeTokenAccountStore.setActive(id: acc.id)
-                            quota.refreshFromSettings("claude")
+                            switch ClaudeTokenAccountStore.setActive(id: acc.id) {
+                            case .success(let persisted):
+                                claudeAccounts = persisted
+                                claudeAccountError = nil
+                                providerFetchIdentityDidChange("claude")
+                            case .failure(let error):
+                                claudeAccountError = error.localizedDescription
+                            }
                         }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(acc.displayName)
@@ -36,8 +42,14 @@ extension ProvidersPane {
                     }
                     Spacer()
                     Button {
-                        claudeAccounts = ClaudeTokenAccountStore.remove(id: acc.id)
-                        quota.refreshFromSettings("claude")
+                        switch ClaudeTokenAccountStore.remove(id: acc.id) {
+                        case .success(let persisted):
+                            claudeAccounts = persisted
+                            claudeAccountError = nil
+                            providerFetchIdentityDidChange("claude")
+                        case .failure(let error):
+                            claudeAccountError = error.localizedDescription
+                        }
                     } label: {
                         Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                             .instrumentIconTile(bordered: false)
@@ -70,14 +82,26 @@ extension ProvidersPane {
                 Button(L10n.languageCode(language) == "vi" ? "Thêm" : "Add") {
                     let token = newAccountToken.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !token.isEmpty else { return }
-                    claudeAccounts = ClaudeTokenAccountStore.add(ClaudeTokenAccount(
+                    switch ClaudeTokenAccountStore.add(ClaudeTokenAccount(
                         label: newAccountLabel, token: token, kind: newAccountKind))
-                    newAccountToken = ""; newAccountLabel = ""
-                    quota.refreshFromSettings("claude")
+                    {
+                    case .success(let persisted):
+                        claudeAccounts = persisted
+                        claudeAccountError = nil
+                        newAccountToken = ""; newAccountLabel = ""
+                        providerFetchIdentityDidChange("claude")
+                    case .failure(let error):
+                        claudeAccountError = error.localizedDescription
+                    }
                 }
                 .buttonStyle(.instrumentInline)
                 .pointingHandCursor()
                 .disabled(newAccountToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if let claudeAccountError {
+                Text(claudeAccountError)
+                    .font(.plexSans(10))
+                    .foregroundStyle(SettingsTheme.critical)
             }
         }
         .padding(.horizontal, 14)
@@ -124,7 +148,10 @@ extension ProvidersPane {
                     },
                     selection: Binding(
                         get: { settings.kiloUsageDataSource },
-                        set: { settings.kiloUsageDataSource = $0; quota.refreshFromSettings("kilo") }
+                        set: {
+                            settings.kiloUsageDataSource = $0
+                            providerFetchIdentityDidChange("kilo")
+                        }
                     )
                 )
                 .frame(width: InstrumentMetrics.selectWidth)
@@ -177,7 +204,7 @@ extension ProvidersPane {
                         set: { newID in
                             settings.kiloOrgID = newID
                             settings.kiloOrgName = kiloKnownOrgs.first(where: { $0.id == newID })?.name ?? ""
-                            quota.refreshFromSettings("kilo")
+                            providerFetchIdentityDidChange("kilo")
                         }
                     )
                 )
@@ -264,7 +291,10 @@ extension ProvidersPane {
                     },
                     selection: Binding(
                         get: { settings.antigravityUsageSource },
-                        set: { settings.antigravityUsageSource = $0; quota.refreshFromSettings("antigravity") }
+                        set: {
+                            settings.antigravityUsageSource = $0
+                            providerFetchIdentityDidChange("antigravity")
+                        }
                     )
                 )
                 .frame(width: InstrumentMetrics.selectWidth)
@@ -325,9 +355,14 @@ extension ProvidersPane {
                             Button(vi ? "Đặt mặc định" : "Set default") {
                                 var s = antigravityStore
                                 AntigravityOAuthStore.setActive(in: &s, label: acc.label)
-                                try? AntigravityOAuthStore.save(s)
-                                antigravityStore = s
-                                quota.refreshFromSettings("antigravity")
+                                do {
+                                    try AntigravityOAuthStore.save(s)
+                                    antigravityStore = s
+                                    antigravityLoginError = nil
+                                    providerFetchIdentityDidChange("antigravity")
+                                } catch {
+                                    antigravityLoginError = error.localizedDescription
+                                }
                             }
                             .buttonStyle(.plain)
                             .pointingHandCursor()
@@ -337,9 +372,14 @@ extension ProvidersPane {
                         Button {
                             var s = antigravityStore
                             AntigravityOAuthStore.removeAccount(from: &s, label: acc.label)
-                            try? AntigravityOAuthStore.save(s)
-                            antigravityStore = s
-                            quota.refreshFromSettings("antigravity")
+                            do {
+                                try AntigravityOAuthStore.save(s)
+                                antigravityStore = s
+                                antigravityLoginError = nil
+                                providerFetchIdentityDidChange("antigravity")
+                            } catch {
+                                antigravityLoginError = error.localizedDescription
+                            }
                         } label: {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                             .instrumentIconTile(bordered: false)
@@ -408,9 +448,9 @@ extension ProvidersPane {
                                 let label = email ?? (vi ? "Tài khoản" : "Account")
                                 AntigravityOAuthStore.addAccount(to: &store, label: label,
                                                                   refreshToken: refreshToken, email: email)
-                                try? AntigravityOAuthStore.save(store)
+                                try AntigravityOAuthStore.save(store)
                                 antigravityStore = store
-                                quota.refreshFromSettings("antigravity")
+                                providerFetchIdentityDidChange("antigravity")
                             } catch {
                                 antigravityLoginError = error.localizedDescription
                             }
@@ -496,9 +536,15 @@ extension ProvidersPane {
                             Button(vi ? "Đặt mặc định" : "Set default") {
                                 var s = copilotStore
                                 CopilotAccountStore.setActive(in: &s, label: acc.label)
-                                try? CopilotAccountStore.save(s)
-                                copilotStore = s
-                                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                                do {
+                                    try CopilotAccountStore.save(s)
+                                    copilotStore = s
+                                    copilotLoginError = nil
+                                    NotificationCenter.default.post(
+                                        name: .birdnionRefresh, object: "copilot")
+                                } catch {
+                                    copilotLoginError = error.localizedDescription
+                                }
                             }
                             .buttonStyle(.plain)
                             .pointingHandCursor()
@@ -508,9 +554,15 @@ extension ProvidersPane {
                         Button {
                             var s = copilotStore
                             CopilotAccountStore.removeAccount(from: &s, label: acc.label)
-                            try? CopilotAccountStore.save(s)
-                            copilotStore = s
-                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                            do {
+                                try CopilotAccountStore.save(s)
+                                copilotStore = s
+                                copilotLoginError = nil
+                                NotificationCenter.default.post(
+                                    name: .birdnionRefresh, object: "copilot")
+                            } catch {
+                                copilotLoginError = error.localizedDescription
+                            }
                         } label: {
                             Image(systemName: "trash").foregroundStyle(SettingsTheme.critical)
                             .instrumentIconTile(bordered: false)
@@ -578,11 +630,18 @@ extension ProvidersPane {
                                     CopilotAccountStore.addAccount(
                                         to: &s, label: loginLabel, token: res.token, login: res.login)
                                     CopilotAccountStore.setActive(in: &s, label: loginLabel)
-                                    try? CopilotAccountStore.save(s)
-                                    copilotStore = s
-                                    copilotDeviceUserCode = nil
-                                    copilotLoginInProgress = false
-                                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                                    do {
+                                        try CopilotAccountStore.save(s)
+                                        copilotStore = s
+                                        copilotDeviceUserCode = nil
+                                        copilotLoginInProgress = false
+                                        NotificationCenter.default.post(
+                                            name: .birdnionRefresh, object: "copilot")
+                                    } catch {
+                                        copilotDeviceUserCode = nil
+                                        copilotLoginError = error.localizedDescription
+                                        copilotLoginInProgress = false
+                                    }
                                 }
                             } catch is CancellationError {
                                 await MainActor.run {
@@ -648,10 +707,15 @@ extension ProvidersPane {
                 : trimmedLabel
             AntigravityOAuthStore.addAccount(to: &s, label: label, refreshToken: rt, email: obj["email"])
         }
-        try? AntigravityOAuthStore.save(s)
-        antigravityStore = s
-        antigravityNewLabel = ""
-        antigravityNewJSON = ""
-        quota.refreshFromSettings("antigravity")
+        do {
+            try AntigravityOAuthStore.save(s)
+            antigravityStore = s
+            antigravityNewLabel = ""
+            antigravityNewJSON = ""
+            antigravityLoginError = nil
+            providerFetchIdentityDidChange("antigravity")
+        } catch {
+            antigravityLoginError = error.localizedDescription
+        }
     }
 }

@@ -229,6 +229,7 @@ struct InsightsProjectsContent: View {
         case .claude: return VocabbyTheme.chartClaude
         case .codex: return VocabbyTheme.chartCodex
         case .grok: return VocabbyTheme.chartGrok
+        case .kiro: return VocabbyTheme.chartKiro
         case .omp: return VocabbyTheme.chartOMP
         case .pi: return VocabbyTheme.chartPi
         }

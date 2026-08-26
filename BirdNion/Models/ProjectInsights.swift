@@ -2,13 +2,14 @@ import CryptoKit
 import Foundation
 
 enum ProjectUsageSource: String, Codable, CaseIterable, Sendable {
-    case claude, codex, grok, omp, pi
+    case claude, codex, grok, kiro, omp, pi
 
     var displayName: String {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
         case .grok: return "Grok"
+        case .kiro: return "Kiro"
         case .omp: return "Oh My Pi"
         case .pi: return "Pi"
         }

@@ -74,6 +74,56 @@ final class InstalledAgentCatalogTests: XCTestCase {
         XCTAssertTrue(detected[0].capabilities.contains(.nativeConfig))
         XCTAssertFalse(detected[0].capabilities.contains(.localCost))
         XCTAssertFalse(detected[0].capabilities.contains(.quota))
+
+        try? FileManager.default.removeItem(at: tempDirectory.appendingPathComponent(".kiro"))
+        createDirectory(".kiro_sessions")
+        let legacyDetected = InstalledAgentDetectors.detect(context: context)
+        XCTAssertEqual(legacyDetected.map(\.id), [.kiro])
+        XCTAssertTrue(legacyDetected[0].capabilities.contains(.nativeConfig))
+        XCTAssertFalse(legacyDetected[0].capabilities.contains(.localCost))
+    }
+
+    func testKiroSQLiteMarkersRequireRegularFiles() {
+        let markers = [
+            "Library/Application Support/kiro-cli/data.sqlite3",
+            ".local/share/kiro-cli/data.sqlite3",
+        ]
+        let context = InstalledAgentDetectionContext(
+            homeURL: tempDirectory,
+            environment: [:]
+        )
+
+        for marker in markers { createDirectory(marker) }
+        XCTAssertTrue(InstalledAgentDetectors.detect(context: context).isEmpty)
+
+        for marker in markers {
+            let url = tempDirectory.appendingPathComponent(marker)
+            try? FileManager.default.removeItem(at: url)
+            XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: Data()))
+        }
+        XCTAssertEqual(InstalledAgentDetectors.detect(context: context).map(\.id), [.kiro])
+        XCTAssertEqual(
+            KiroCostScanner.defaultCLIDatabaseURL(home: tempDirectory, environment: [:]).path,
+            tempDirectory.appendingPathComponent(
+                "Library/Application Support/kiro-cli/data.sqlite3").path)
+    }
+
+    func testKiroCustomXDGDatabaseUsesSameDetectorAndScannerPredicate() {
+        let xdg = tempDirectory.appendingPathComponent("custom-xdg", isDirectory: true)
+        let database = xdg.appendingPathComponent("kiro-cli/data.sqlite3")
+        try? FileManager.default.createDirectory(
+            at: database.deletingLastPathComponent(), withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: database.path, contents: Data()))
+        let context = InstalledAgentDetectionContext(
+            homeURL: tempDirectory,
+            environment: ["XDG_DATA_HOME": xdg.path, "PATH": ""])
+
+        XCTAssertEqual(InstalledAgentDetectors.detect(context: context).map(\.id), [.kiro])
+        XCTAssertEqual(
+            KiroCostScanner.defaultCLIDatabaseURL(
+                home: tempDirectory,
+                environment: context.environment).path,
+            database.path)
     }
 
     func testQuotaCapabilityIsProjectedFromRealProviderWindow() {
@@ -192,8 +242,99 @@ final class InstalledAgentCatalogTests: XCTestCase {
         XCTAssertTrue(snapshot.hasLocalCost, "capability stays observable without fabricating numeric evidence")
     }
 
+    func testKiroAgentDetailKeepsTotalsButHidesSyntheticOtherModel() {
+        let now = Calendar.current.startOfDay(for: Date())
+        let record = InstalledAgentRecord(
+            id: .kiro,
+            evidence: [.init(kind: .applicationState, token: "~/.kiro/sessions/cli")],
+            capabilities: [.localCost, .activityDetail],
+            providerIDs: ["kiro"])
+        let combined = CombinedUsageReport(
+            todayUSD: 5.5, todayTokens: 550,
+            last30USD: 5.5, last30Tokens: 550,
+            totalUSD: 5.5, totalTokens: 550,
+            daily: [CombinedDailyUsage(
+                date: now,
+                claudeUSD: 0, claudeTokens: 0,
+                codexUSD: 0, codexTokens: 0,
+                kiroUSD: 5.5, kiroTokens: 550,
+                models: [
+                    CombinedModelCost(name: "real-model", usd: 1, tokens: 100, source: "kiro"),
+                    CombinedModelCost(
+                        name: KiroCostScanner.aggregateModelName,
+                        usd: 4.5, tokens: 450, source: "kiro"),
+                ])],
+            topModels: [], peakDayUSD: 5.5, peakDayDate: now,
+            avgPerActiveDayUSD: 5.5, activeDays: 1, streakDays: 1,
+            kiroConfidence: .init(included: true, live: true, scannedAt: now))
+
+        let snapshot = AgentDetailSnapshot.build(
+            record: record, providerStatuses: [], combined: combined, now: now)
+
+        XCTAssertEqual(snapshot.costSummary?.periodTokens, 550)
+        XCTAssertEqual(snapshot.models.map(\.name), ["real-model"])
+        XCTAssertEqual(snapshot.recentActivity.last?.models.map(\.name), ["real-model"])
+    }
+
+    @MainActor
+    func testNewestCatalogRefreshWinsAfterDetectedAgentIsRemoved() async {
+        createDirectory(".kiro")
+        let context = InstalledAgentDetectionContext(
+            homeURL: tempDirectory,
+            environment: [:])
+        let gate = InstalledAgentRefreshGate()
+        let catalog = InstalledAgentCatalog(context: context) { context in
+            let snapshot = InstalledAgentDetectors.detect(context: context)
+            let call = await gate.registerCall()
+            if call == 2 { await gate.pauseSecondCall() }
+            return snapshot
+        }
+
+        await catalog.refresh().value
+        XCTAssertEqual(catalog.records.map(\.id), [.kiro])
+
+        let staleRefresh = catalog.refresh()
+        await gate.waitForCallCount(2)
+        try? FileManager.default.removeItem(
+            at: tempDirectory.appendingPathComponent(".kiro"))
+
+        let currentRefresh = catalog.refresh()
+        await currentRefresh.value
+        XCTAssertTrue(catalog.records.isEmpty)
+
+        await gate.releaseSecondCall()
+        await staleRefresh.value
+        XCTAssertTrue(catalog.records.isEmpty)
+        XCTAssertFalse(catalog.isRefreshing)
+    }
+
     private func createDirectory(_ path: String) {
         let target = tempDirectory.appendingPathComponent(path)
         try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    }
+}
+
+private actor InstalledAgentRefreshGate {
+    private var callCount = 0
+    private var secondCallContinuation: CheckedContinuation<Void, Never>?
+
+    func registerCall() -> Int {
+        callCount += 1
+        return callCount
+    }
+
+    func pauseSecondCall() async {
+        await withCheckedContinuation { continuation in
+            secondCallContinuation = continuation
+        }
+    }
+
+    func waitForCallCount(_ expected: Int) async {
+        while callCount < expected { await Task.yield() }
+    }
+
+    func releaseSecondCall() {
+        secondCallContinuation?.resume()
+        secondCallContinuation = nil
     }
 }

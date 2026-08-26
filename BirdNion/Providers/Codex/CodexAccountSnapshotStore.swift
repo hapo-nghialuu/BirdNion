@@ -10,6 +10,7 @@ import Foundation
 /// a source of truth.
 final class CodexAccountSnapshotStore: @unchecked Sendable {
     static let shared = CodexAccountSnapshotStore()
+    private static let maxStoredBytes = 2 * 1024 * 1024
 
     private let lock = NSLock()
     private var loaded = false
@@ -36,7 +37,7 @@ final class CodexAccountSnapshotStore: @unchecked Sendable {
 
     /// Snapshot for the currently active account.
     func currentSnapshot() -> ProviderStatus? {
-        snapshot(forAccount: CodexAccountStore.activeID())
+        snapshot(forAccount: CodexAccountStore.activeSelection().id)
     }
 
     /// Store a successful status for `id` and persist to disk. Error statuses
@@ -47,7 +48,24 @@ final class CodexAccountSnapshotStore: @unchecked Sendable {
         defer { lock.unlock() }
         loadIfNeeded()
         cache[id] = status
-        persist()
+        _ = persist()
+    }
+
+    /// Credential mutation invalidates the previous successful snapshot even
+    /// when the logical account id stays the same (for example re-auth from
+    /// Alice to Bob). Removing it before the mutation's first notification
+    /// prevents an observer from immediately re-applying stale quota.
+    @discardableResult
+    func removeSnapshot(forAccount id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        loadIfNeeded()
+        guard let previous = cache.removeValue(forKey: id) else { return true }
+        guard persist() else {
+            cache[id] = previous
+            return false
+        }
+        return true
     }
 
     // MARK: - Disk
@@ -55,16 +73,24 @@ final class CodexAccountSnapshotStore: @unchecked Sendable {
     private func loadIfNeeded() {
         guard !loaded else { return }
         loaded = true
-        guard let data = try? Data(contentsOf: fileURL),
+        guard let data = try? CodexAuthStore.readPrivateFile(
+                  fileURL, maximumBytes: Self.maxStoredBytes),
               let decoded = try? JSONDecoder().decode([String: ProviderStatus].self, from: data)
         else { return }
         cache = decoded
     }
 
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(cache) else { return }
-        try? FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: fileURL)
+    private func persist() -> Bool {
+        do {
+            let data = try JSONEncoder().encode(cache)
+            guard data.count <= Self.maxStoredBytes else { return false }
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try CodexAuthStore.writePrivateFile(
+                data, to: fileURL, maximumBytes: Self.maxStoredBytes)
+            return true
+        } catch {
+            return false
+        }
     }
 }

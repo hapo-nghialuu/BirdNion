@@ -1,22 +1,21 @@
 import Foundation
 
-/// Watches the system Codex home (`~/.codex`) and posts `.birdnionRefresh` when
-/// its contents change — e.g. the user runs `codex login` in a terminal, which
-/// rewrites `auth.json`. Mirrors CodexBar's `CodexSystemAccountObserver` so the
-/// menu updates without a manual refresh.
+/// Watches the system Codex home (`~/.codex`) and invalidates the system auth
+/// context when its contents change — e.g. the user runs `codex login` in a
+/// terminal, which rewrites `auth.json`. Mirrors CodexBar's
+/// `CodexSystemAccountObserver` so the menu updates without a manual refresh.
 ///
-/// Best-effort: silently no-ops if the directory can't be opened. Changes are
-/// debounced (codex login writes several files in quick succession) and the
-/// watch re-arms itself if the directory is replaced (atomic rename/delete).
+/// Best-effort: silently no-ops if the directory can't be opened. QuotaService
+/// debounces the resulting refreshes (codex login writes several files in quick
+/// succession), and the watch re-arms if the directory is atomically replaced.
 @MainActor
 final class CodexSystemAccountObserver {
     private var source: DispatchSourceFileSystemObject?
     private var fd: Int32 = -1
-    private var debounce: Task<Void, Never>?
+    private var rearmTask: Task<Void, Never>?
 
     private var watchedDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex", isDirectory: true)
+        CodexAccountStore.systemAuthURL().deletingLastPathComponent()
     }
 
     func start() {
@@ -46,18 +45,24 @@ final class CodexSystemAccountObserver {
     func stop() {
         source?.cancel()
         source = nil
-        debounce?.cancel()
-        debounce = nil
+        rearmTask?.cancel()
+        rearmTask = nil
     }
 
     private func handleChange(rearm: Bool) {
-        debounce?.cancel()
-        debounce = Task { @MainActor [weak self] in
+        // Fence an in-flight fetch before any delayed refresh can observe the
+        // replacement credential. The system snapshot is identity-bound too.
+        CodexAuthStore.invalidateCredential(at: CodexAccountStore.systemAuthURL())
+        _ = CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: "system")
+        NotificationCenter.default.post(name: .birdnionRefresh, object: "codex")
+
+        guard rearm else { return }
+        rearmTask?.cancel()
+        rearmTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled else { return }
-            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
             // The directory was swapped out from under us → re-open the watch.
-            if rearm { self?.start() }
+            self?.start()
         }
     }
 }

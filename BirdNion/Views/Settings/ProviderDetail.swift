@@ -1,4 +1,77 @@
+import AppKit
 import SwiftUI
+
+private struct FirstLivePaintObserver: NSViewRepresentable {
+    let attemptID: String
+    let onPaint: () -> Void
+
+    func makeNSView(context: Context) -> FirstLivePaintView {
+        let view = FirstLivePaintView()
+        view.arm(attemptID: attemptID, onPaint: onPaint)
+        return view
+    }
+
+    func updateNSView(_ view: FirstLivePaintView, context: Context) {
+        view.arm(attemptID: attemptID, onPaint: onPaint)
+    }
+}
+
+private final class FirstLivePaintView: NSView {
+    private var attemptID: String?
+    private var delivered = false
+    private var onPaint: (() -> Void)?
+    private var windowObservers: [NSObjectProtocol] = []
+
+    override var isOpaque: Bool { false }
+
+    func arm(attemptID: String, onPaint: @escaping () -> Void) {
+        if self.attemptID != attemptID {
+            self.attemptID = attemptID
+            delivered = false
+        }
+        self.onPaint = onPaint
+        needsDisplay = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        windowObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        windowObservers = []
+        guard let window else { return }
+        for name in [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didDeminiaturizeNotification,
+            NSWindow.didChangeOcclusionStateNotification,
+        ] {
+            windowObservers.append(NotificationCenter.default.addObserver(
+                forName: name,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.needsDisplay = true
+            })
+        }
+        needsDisplay = true
+    }
+
+    deinit {
+        windowObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let window,
+              window.isVisible,
+              !window.isMiniaturized,
+              window.occlusionState.contains(.visible),
+              !isHidden, !delivered,
+              bounds.width > 0, bounds.height > 0,
+              let onPaint
+        else { return }
+        delivered = true
+        DispatchQueue.main.async(execute: onPaint)
+    }
+}
 
 // MARK: - Instrument redesign — local helpers (this file only)
 //
@@ -47,6 +120,34 @@ private extension View {
 // MARK: - Provider detail shell (P4 module split)
 
 extension ProvidersPane {
+    struct FirstLiveSaveDisposition: Equatable {
+        let publishesReceipt: Bool
+        let marksSelfTestFailed: Bool
+        let showsRecoveryWarning: Bool
+    }
+
+    static func firstLiveSaveDisposition(
+        for outcome: FirstLiveCheckpointStore.SaveOutcome
+    ) -> FirstLiveSaveDisposition {
+        switch outcome {
+        case .committed:
+            return .init(
+                publishesReceipt: true,
+                marksSelfTestFailed: false,
+                showsRecoveryWarning: false)
+        case .rejected:
+            return .init(
+                publishesReceipt: false,
+                marksSelfTestFailed: true,
+                showsRecoveryWarning: false)
+        case .indeterminate:
+            return .init(
+                publishesReceipt: false,
+                marksSelfTestFailed: false,
+                showsRecoveryWarning: true)
+        }
+    }
+
     /// Chỉ đọc cache — KHÔNG dò trực tiếp: `detectOnboardingSource` spawn
     /// process nên gọi trong view body sẽ gây AttributeGraph cycle.
     func onboardingDetection(for id: String) -> OnboardingDetection {
@@ -69,7 +170,8 @@ extension ProvidersPane {
                 hasSecondary: hasCLI, secondaryLabel: "Claude CLI",
                 fallbackLabel: "Claude Code / CLI")
         case "codex":
-            let hasFile = fm.fileExists(atPath: CodexAuthStore.authFileURL(env: env).path)
+            let hasFile = fm.fileExists(
+                atPath: CodexAccountStore.systemAuthURL(env: env).path)
             let hasCLI = CodexAccountStore.codexBinary() != nil
             return Self.onboardingDetection(
                 hasPrimary: hasFile, primaryLabel: "Codex login",
@@ -98,29 +200,38 @@ extension ProvidersPane {
 
     func onboardingPhase(for row: BirdNionConfigStore.Provider) -> OnboardingPhase {
         let current = status(for: row.id)
+        let activeGeneration = selfTestGenerations[row.id]
         return Self.onboardingPhase(
             testState: selfTestState[row.id] ?? .idle,
-            statusHasError: current?.error != nil,
-            statusHasQuota: !(current?.windows.isEmpty ?? true),
-            detectionReady: onboardingDetection(for: row.id).isReady)
+            statusHasError: Self.statusHasError(current?.error),
+            detectionReady: onboardingDetection(for: row.id).isReady,
+            passEligibleForFirstLive: activeGeneration != nil
+                && firstLiveSelfTestGenerations[row.id] == activeGeneration)
     }
 
     func connectAndTest(_ idx: Int) {
         let id = rows[idx].id
-        let wasEnabled = rows[idx].enabled == true
         rows[idx].enabled = true
         saveErrorProviderID = nil
         guard saveAll() else {
-            rows[idx].enabled = wasEnabled
+            // saveAll reloads the canonical provider snapshot on failure.
+            // Do not mutate the old index afterward: an external writer may
+            // also have reordered rows while advancing settingsRevision.
             saveErrorProviderID = id
             return
         }
+        let setupSavedAt = Date()
         // NotificationCenter delivers this synchronously; AppDelegate rebuilds
         // QuotaService before runSelfTest resolves the provider.
         NotificationCenter.default.post(
             name: .birdnionProvidersChanged,
             object: "onboardingSelfTest")
-        runSelfTest(id: id)
+        let attempt = FirstLiveAttempt.begin(
+            providerId: id,
+            detectedSource: onboardingDetection(for: id).source,
+            setupSavedAt: setupSavedAt,
+            probeStartedAt: Date())
+        runSelfTest(id: id, firstLiveAttempt: attempt)
     }
 
     func onboardingRemediationTarget(for row: BirdNionConfigStore.Provider) -> ProviderRemediationTarget? {
@@ -160,19 +271,39 @@ extension ProvidersPane {
                             case .needsSource: onboardingCopy("Chưa phát hiện nguồn đăng nhập", "No sign-in source detected")
                             case .readyToTest: onboardingCopy("Đã phát hiện \(detection.source)", "Detected \(detection.source)")
                             case .testing: onboardingCopy("Đang kiểm tra kết nối thật…", "Testing the real connection…")
-                            case .live: onboardingCopy("Quota đang live", "Quota is live")
+                            case .live: onboardingCopy("Đã xác minh ngay bây giờ", "Verified just now")
                             case .failed: onboardingCopy("Kết nối cần được sửa", "Connection needs attention")
                             }
                         }())
                         .font(.plexSans(12, weight: .semibold))
                         Spacer()
                     }
+                    .background {
+                        if phase == .live,
+                           let pending = pendingFirstLiveAppearances[row.id] {
+                            FirstLivePaintObserver(attemptID: pending.attempt.attemptId) {
+                                commitFirstLiveAppearance(
+                                    providerID: row.id,
+                                    attemptID: pending.attempt.attemptId)
+                            }
+                        }
+                    }
 
                     Text(onboardingCopy(
-                        "BirdNion chỉ đánh dấu Live sau khi provider trả quota thật. Không sao chép hoặc hiển thị token.",
-                        "BirdNion marks Live only after the provider returns real quota. Tokens are never copied or displayed."))
+                        "BirdNion chỉ xác minh sau khi attempt hiện tại trả quota thật. Receipt nằm trên máy và không lưu token hoặc tài khoản.",
+                        "BirdNion verifies only after the current attempt returns real quota. The on-device receipt stores no token or account."))
                         .font(.plexSans(11))
                         .foregroundStyle(SettingsTheme.secondary)
+
+                    if let checkpoint = firstLiveCheckpoints[row.id] {
+                        let isCurrent = Self.isCurrentFirstLiveCheckpoint(
+                            checkpoint,
+                            phase: phase,
+                            activeAttemptID: firstLiveSelfTestAttemptIDs[row.id])
+                        Text(firstLiveCheckpointCopy(checkpoint, isCurrent: isCurrent))
+                            .font(.plexMono(10, weight: .medium))
+                            .foregroundStyle(isCurrent ? SettingsTheme.success : SettingsTheme.secondary)
+                    }
 
                     HStack(spacing: 8) {
                         Button(phase == .failed ? onboardingCopy("Thử lại", "Retry") : onboardingCopy("Kết nối & kiểm tra", "Connect & test")) {
@@ -192,9 +323,18 @@ extension ProvidersPane {
                         }
                     }
                     if saveErrorProviderID == row.id {
-                        Text(L10n.t("provider.guidedSetup.saveFailed", language))
+                        let storageOutcomeIsUncertain =
+                            firstLiveSelfTestAttemptIDs[row.id] != nil
+                            && firstLiveSelfTestGenerations[row.id] == nil
+                        Text(storageOutcomeIsUncertain
+                            ? onboardingCopy(
+                                "Chưa xác định receipt đã được lưu. Mở lại Settings để khôi phục trước khi thử lại.",
+                                "Receipt storage is uncertain. Reopen Settings to recover before retrying.")
+                            : L10n.t("provider.guidedSetup.saveFailed", language))
                             .font(.plexSans(11))
-                            .foregroundStyle(SettingsTheme.critical)
+                            .foregroundStyle(storageOutcomeIsUncertain
+                                ? SettingsTheme.warning
+                                : SettingsTheme.critical)
                     }
                 }
                 .padding(12)
@@ -205,7 +345,7 @@ extension ProvidersPane {
     /// One fetch through the provider's real path (R2.5) — never
     /// QuotaService.refresh(). A disabled provider has no live instance in
     /// `quota.providers`; fail fast instead of entering `.running` (R2.9).
-    func runSelfTest(id: String) {
+    func runSelfTest(id: String, firstLiveAttempt: FirstLiveAttempt? = nil) {
         guard let provider = quota.providers.first(where: { $0.id == id }) else {
             selfTestState[id] = .fail(kind: .unknown, raw: L10n.t("provider.selfTest.disabled", language))
             return
@@ -215,6 +355,14 @@ extension ProvidersPane {
         }
         let generation = Self.nextSelfTestGeneration(after: selfTestGenerations[id])
         selfTestGenerations[id] = generation
+        if firstLiveAttempt == nil {
+            firstLiveSelfTestGenerations[id] = nil
+            firstLiveSelfTestAttemptIDs[id] = nil
+        } else {
+            firstLiveSelfTestGenerations[id] = generation
+            firstLiveSelfTestAttemptIDs[id] = firstLiveAttempt?.attemptId
+        }
+        pendingFirstLiveAppearances[id] = nil
         selfTestState[id] = .running
         selfTestTasks[id] = Task {
             // Same shared deadline as the background refresh loop
@@ -225,6 +373,7 @@ extension ProvidersPane {
             // for a user-initiated fetch), so probing as `.background` reported
             // "not configured" for providers that were actually signed in.
             let status = await provider.fetchAsUserAction()
+            let freshResultReceivedAt = Date()
             guard Self.shouldApplySelfTestCompletion(
                 providerID: id,
                 generation: generation,
@@ -234,6 +383,15 @@ extension ProvidersPane {
             ) else {
                 selfTestTasks[id] = nil
                 if selectedID == id { selfTestState[id] = .idle }
+                return
+            }
+            guard Self.isExpectedSelfTestStatus(status, providerID: id) else {
+                selfTestState[id] = .fail(
+                    kind: .unknown,
+                    raw: onboardingCopy(
+                        "Provider trả về định danh không khớp.",
+                        "Provider returned a mismatched identity."))
+                selfTestTasks[id] = nil
                 return
             }
             quota.applySelfTestStatus(status)
@@ -246,13 +404,101 @@ extension ProvidersPane {
                 selfTestState[id] = .fail(kind: .unknown, raw: raw)
             } else {
                 selfTestState[id] = .pass
+                if let firstLiveAttempt {
+                    pendingFirstLiveAppearances[id] = PendingFirstLiveAppearance(
+                        attempt: firstLiveAttempt,
+                        freshResultReceivedAt: freshResultReceivedAt,
+                        generation: generation)
+                }
             }
             selfTestTasks[id] = nil
         }
     }
 
+    func commitFirstLiveAppearance(providerID: String, attemptID: String) {
+        guard let pending = pendingFirstLiveAppearances[providerID],
+              pending.attempt.attemptId == attemptID
+        else { return }
+        let statusHasError = Self.statusHasError(status(for: providerID)?.error)
+        guard Self.shouldRetainPendingFirstLiveAppearance(
+                  testState: selfTestState[providerID] ?? .idle,
+                  statusHasError: statusHasError),
+              Self.shouldApplySelfTestCompletion(
+                providerID: providerID,
+                generation: pending.generation,
+                activeGeneration: selfTestGenerations[providerID],
+                selectedProviderID: selectedID,
+                isProviderEnabled: rows.first(where: { $0.id == providerID })?.enabled == true)
+        else {
+            abandonPendingFirstLiveAppearance(for: providerID)
+            return
+        }
+        pendingFirstLiveAppearances[providerID] = nil
+        let checkpoint = pending.attempt.completed(
+            freshResultReceivedAt: pending.freshResultReceivedAt,
+            liveRenderedAt: Date())
+        let disposition = Self.firstLiveSaveDisposition(
+            for: FirstLiveCheckpointStore.save(checkpoint))
+        if disposition.publishesReceipt {
+            firstLiveCheckpoints[providerID] = checkpoint
+        } else if disposition.marksSelfTestFailed {
+            firstLiveSelfTestGenerations[providerID] = nil
+            firstLiveSelfTestAttemptIDs[providerID] = nil
+            selfTestState[providerID] = .fail(
+                kind: .unknown,
+                raw: onboardingCopy(
+                    "Không thể lưu receipt xác minh trên máy.",
+                    "Could not save the on-device verification receipt."))
+        } else if disposition.showsRecoveryWarning {
+            firstLiveSelfTestGenerations[providerID] = nil
+            // Keep the attempt identity only to render the explicit neutral
+            // recovery warning. Clearing its generation makes First Live
+            // ineligible, while `.idle` avoids misreporting an unknown
+            // durability outcome as either a probe failure or a success.
+            selfTestState[providerID] = .idle
+            saveErrorProviderID = providerID
+        }
+    }
+
+    /// A Guided Setup pass is only eligible for `.live` while its pending
+    /// paint can still mint the matching durable receipt. Once that paint is
+    /// abandoned, clear both identity fields so a later background recovery
+    /// cannot resurrect an unrecorded First Live state.
+    func abandonPendingFirstLiveAppearance(for providerID: String) {
+        pendingFirstLiveAppearances[providerID] = nil
+        firstLiveSelfTestGenerations[providerID] = nil
+        firstLiveSelfTestAttemptIDs[providerID] = nil
+    }
+
+    func firstLiveCheckpointCopy(
+        _ checkpoint: FirstLiveCheckpoint,
+        isCurrent: Bool,
+        now: Date = Date()
+    ) -> String {
+        let seconds = Double(checkpoint.durationMilliseconds) / 1_000
+        let duration = seconds < 10
+            ? String(format: "%.1fs", seconds)
+            : String(format: "%.0fs", seconds)
+        let detail = "\(checkpoint.source) · \(duration)"
+        if isCurrent { return detail }
+        let relative = SourceConfidenceFormat.freshnessLabel(
+            scannedAt: checkpoint.verifiedAt,
+            now: now,
+            preference: language) ?? "—"
+        return onboardingCopy(
+            "Xác minh lần cuối \(relative) · \(detail)",
+            "Last verified \(relative) · \(detail)")
+    }
+
     static func canStartSelfTest(providerID: String, activeProviderIDs: Set<String>) -> Bool {
         !activeProviderIDs.contains(providerID)
+    }
+
+    static func isExpectedSelfTestStatus(
+        _ status: ProviderStatus,
+        providerID: String
+    ) -> Bool {
+        status.id == providerID
     }
 
     static func nextSelfTestGeneration(after current: UInt?) -> UInt {
@@ -271,14 +517,42 @@ extension ProvidersPane {
 
     func invalidateSelfTest(for providerID: String) {
         selfTestGenerations[providerID] = Self.nextSelfTestGeneration(after: selfTestGenerations[providerID])
+        firstLiveSelfTestGenerations[providerID] = nil
+        firstLiveSelfTestAttemptIDs[providerID] = nil
         selfTestTasks[providerID]?.cancel()
+        pendingFirstLiveAppearances[providerID] = nil
         selfTestState[providerID] = .idle
+    }
+
+    func invalidateSelfTestEvidenceIfNeeded(for providerID: String) {
+        let hasSelfTestEvidence = selfTestGenerations[providerID] != nil
+            || selfTestState[providerID] != nil
+            || selfTestTasks[providerID] != nil
+            || pendingFirstLiveAppearances[providerID] != nil
+        if FirstLiveCheckpoint.supportedProviderIds.contains(providerID)
+            || hasSelfTestEvidence
+        {
+            invalidateSelfTest(for: providerID)
+        }
+    }
+
+    /// Shared contract for a credential or provider-scope mutation that has
+    /// already been persisted. First Live evidence and quota context are both
+    /// fenced synchronously; QuotaService debounces the follow-up fetch.
+    func providerFetchIdentityDidChange(_ providerID: String) {
+        invalidateSelfTestEvidenceIfNeeded(for: providerID)
+        quota.refreshFromSettings(providerID)
     }
 
     func invalidateSelfTests(except selectedProviderID: String?) {
         for (id, task) in selfTestTasks where id != selectedProviderID {
             selfTestGenerations[id] = Self.nextSelfTestGeneration(after: selfTestGenerations[id])
+            firstLiveSelfTestGenerations[id] = nil
+            firstLiveSelfTestAttemptIDs[id] = nil
             task.cancel()
+        }
+        for id in Array(pendingFirstLiveAppearances.keys) where id != selectedProviderID {
+            abandonPendingFirstLiveAppearance(for: id)
         }
     }
 
@@ -418,7 +692,7 @@ extension ProvidersPane {
                     // and refreshing from the detail header could show stale
                     // data because the in-memory provider list still pointed at
                     // the pre-save providers.json state.
-                    rows = BirdNionConfigStore.allProviders()
+                    reloadProviderRows()
                     NotificationCenter.default.post(name: .birdnionProvidersChanged, object: nil)
                 } label: {
                     // Swap the reload glyph for a spinner while a refresh is in
@@ -750,8 +1024,8 @@ extension ProvidersPane {
                         // drag reorder, label edit — all write the whole rows
                         // array) doesn't clobber the just-saved token with the
                         // stale in-memory entry.
-                        rows = BirdNionConfigStore.allProviders()
-                        quota.refreshFromSettings(row.id)
+                        reloadProviderRows()
+                        providerFetchIdentityDidChange(row.id)
                     }
                 )
                 .id(ProviderRemediationTarget.credential)
@@ -778,7 +1052,10 @@ extension ProvidersPane {
                             },
                             selection: Binding(
                                 get: { settings.codexUsageSource },
-                                set: { settings.codexUsageSource = $0; quota.refreshFromSettings("codex") }
+                                set: {
+                                    settings.codexUsageSource = $0
+                                    providerFetchIdentityDidChange("codex")
+                                }
                             )
                         )
                         .frame(width: InstrumentMetrics.selectWidth)
@@ -809,7 +1086,10 @@ extension ProvidersPane {
                         },
                         selection: Binding(
                             get: { settings.minimaxRegion },
-                            set: { settings.minimaxRegion = $0; quota.refreshFromSettings("minimax") }
+                            set: {
+                                settings.minimaxRegion = $0
+                                providerFetchIdentityDidChange("minimax")
+                            }
                         )
                     )
                     .frame(width: InstrumentMetrics.selectWidth)
@@ -831,7 +1111,10 @@ extension ProvidersPane {
                         },
                         selection: Binding(
                             get: { settings.zaiRegion },
-                            set: { settings.zaiRegion = $0; quota.refreshFromSettings("zai") }
+                            set: {
+                                settings.zaiRegion = $0
+                                providerFetchIdentityDidChange("zai")
+                            }
                         )
                     )
                     .frame(width: InstrumentMetrics.selectWidth)
@@ -853,7 +1136,10 @@ extension ProvidersPane {
                         },
                         selection: Binding(
                             get: { settings.alibabaRegion },
-                            set: { settings.alibabaRegion = $0; quota.refreshFromSettings("alibaba") }
+                            set: {
+                                settings.alibabaRegion = $0
+                                providerFetchIdentityDidChange("alibaba")
+                            }
                         )
                     )
                     .frame(width: InstrumentMetrics.selectWidth)
@@ -904,8 +1190,9 @@ extension ProvidersPane {
                         set: { raw in
                             let v = raw.trimmingCharacters(in: .whitespaces)
                             rows[idx].projectID = v.isEmpty ? nil : v
-                            saveAll()
-                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                            if saveAll() {
+                                providerFetchIdentityDidChange("deepgram")
+                            }
                         }
                     ))
                     .instrumentFieldStyle()
@@ -932,8 +1219,9 @@ extension ProvidersPane {
                         set: { raw in
                             let v = raw.trimmingCharacters(in: .whitespaces)
                             rows[idx].projectID = v.isEmpty ? nil : v
-                            saveAll()
-                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                            if saveAll() {
+                                providerFetchIdentityDidChange("openai")
+                            }
                         }
                     ))
                     .instrumentFieldStyle()
@@ -959,8 +1247,9 @@ extension ProvidersPane {
                         set: { raw in
                             let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                             rows[idx].baseURL = v.isEmpty ? nil : v
-                            saveAll()
-                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                            if saveAll() {
+                                providerFetchIdentityDidChange("copilot")
+                            }
                         }
                     ))
                     .instrumentFieldStyle()
@@ -1144,7 +1433,10 @@ extension ProvidersPane {
                     },
                     selection: Binding(
                         get: { UserDefaults.standard.string(forKey: sourceKey) ?? "auto" },
-                        set: { UserDefaults.standard.set($0, forKey: sourceKey); quota.refreshFromSettings(id) }
+                        set: {
+                            UserDefaults.standard.set($0, forKey: sourceKey)
+                            providerFetchIdentityDidChange(id)
+                        }
                     )
                 )
                 .frame(width: InstrumentMetrics.selectWidth)
@@ -1157,7 +1449,10 @@ extension ProvidersPane {
                 .fixedSize(horizontal: false, vertical: true)
             SecureField("Cookie: name=value; name2=value2 …", text: Binding(
                 get: { UserDefaults.standard.string(forKey: manualKey) ?? "" },
-                set: { UserDefaults.standard.set($0, forKey: manualKey) }
+                set: {
+                    UserDefaults.standard.set($0, forKey: manualKey)
+                    providerFetchIdentityDidChange(id)
+                }
             ))
             .instrumentFieldStyle()
             .font(.plexSans(11))
@@ -1197,8 +1492,10 @@ extension ProvidersPane {
                         // Forced: bypasses the per-provider throttle (Claude may
                         // poll every 30m) and marks the fetch user-initiated so
                         // rate-limit/Keychain gates don't suppress it.
-                        set: { settings.claudeUsageDataSource = $0
-                               quota.refreshFromSettings("claude") }
+                        set: {
+                            settings.claudeUsageDataSource = $0
+                            providerFetchIdentityDidChange("claude")
+                        }
                     )
                 )
                 .frame(width: InstrumentMetrics.selectWidth)
@@ -1284,8 +1581,10 @@ extension ProvidersPane {
                 helpKey: "provider.openAIWebExtrasHelp",
                 isOn: Binding(
                     get: { settings.codexOpenAIWebEnabled },
-                    set: { settings.codexOpenAIWebEnabled = $0
-                           quota.refreshFromSettings("codex") }))
+                    set: {
+                        settings.codexOpenAIWebEnabled = $0
+                        providerFetchIdentityDidChange("codex")
+                    }))
 
             if settings.codexOpenAIWebEnabled {
                 HStack(spacing: 12) {
@@ -1299,7 +1598,10 @@ extension ProvidersPane {
                         },
                         selection: Binding(
                             get: { settings.codexCookieSource },
-                            set: { settings.codexCookieSource = $0; quota.refreshFromSettings("codex") }
+                            set: {
+                                settings.codexCookieSource = $0
+                                providerFetchIdentityDidChange("codex")
+                            }
                         )
                     )
                     .frame(width: InstrumentMetrics.selectWidthCompact)
@@ -1307,7 +1609,10 @@ extension ProvidersPane {
                 if settings.codexCookieSource == "manual" {
                     TextField(L10n.t("provider.cookiePlaceholder", language), text: Binding(
                         get: { settings.codexManualCookieHeader },
-                        set: { settings.codexManualCookieHeader = $0 }
+                        set: {
+                            settings.codexManualCookieHeader = $0
+                            providerFetchIdentityDidChange("codex")
+                        }
                     ))
                     .instrumentFieldStyle()
                     .font(.plexSans(11))
@@ -1334,8 +1639,10 @@ extension ProvidersPane {
                 },
                 selection: Binding(
                     get: { settings.claudeCookieSource },
-                    set: { settings.claudeCookieSource = $0
-                           quota.refreshFromSettings("claude") }
+                    set: {
+                        settings.claudeCookieSource = $0
+                        providerFetchIdentityDidChange("claude")
+                    }
                 )
             )
             .frame(width: InstrumentMetrics.selectWidthCompact)
@@ -1356,7 +1663,10 @@ extension ProvidersPane {
                 .foregroundStyle(SettingsTheme.primary)
             SecureField("sessionKey=...; cf_clearance=...", text: Binding(
                 get: { settings.claudeManualCookieHeader },
-                set: { settings.claudeManualCookieHeader = $0 }
+                set: {
+                    settings.claudeManualCookieHeader = $0
+                    providerFetchIdentityDidChange("claude")
+                }
             ))
             .instrumentFieldStyle()
             .font(.plexSans(11))
@@ -1377,8 +1687,7 @@ extension ProvidersPane {
             helpKey: "provider.claudeShowFableHelp",
             isOn: Binding(
                 get: { settings.claudeShowFableInPopover },
-                set: { settings.claudeShowFableInPopover = $0
-                       quota.refreshFromSettings("claude") }))
+                set: { settings.claudeShowFableInPopover = $0 }))
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
@@ -1403,8 +1712,10 @@ extension ProvidersPane {
                 ],
                 selection: Binding(
                     get: { settings.claudeOAuthKeychainPromptMode },
-                    set: { settings.claudeOAuthKeychainPromptMode = $0
-                           quota.refreshFromSettings("claude") }
+                    set: {
+                        settings.claudeOAuthKeychainPromptMode = $0
+                        providerFetchIdentityDidChange("claude")
+                    }
                 )
             )
             .frame(width: InstrumentMetrics.selectWidth)
@@ -1653,8 +1964,9 @@ extension ProvidersPane {
             set: { raw in
                 let v = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 rows[idx][keyPath: keyPath] = v.isEmpty ? nil : v
-                saveAll()
-                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                if saveAll() {
+                    providerFetchIdentityDidChange("bedrock")
+                }
             })
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
@@ -1685,8 +1997,9 @@ extension ProvidersPane {
                 set: { raw in
                     let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     rows[idx].region = value.isEmpty ? nil : value
-                    saveAll()
-                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                    if saveAll() {
+                        providerFetchIdentityDidChange("xai")
+                    }
                 }
             ))
             .instrumentFieldStyle()
@@ -1744,8 +2057,9 @@ extension ProvidersPane {
                         get: { rows[idx].awsAuthMode ?? "keys" },
                         set: {
                             rows[idx].awsAuthMode = $0
-                            saveAll()
-                            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                            if saveAll() {
+                                providerFetchIdentityDidChange("bedrock")
+                            }
                         }
                     )
                 )

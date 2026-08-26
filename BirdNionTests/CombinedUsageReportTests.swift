@@ -68,6 +68,36 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertFalse(r.isEmpty)
     }
 
+    func testKiroSyntheticOtherIsKeptForConservationButNeverRankedAsModel() {
+        let kiro = KiroUsageReport(
+            todayUSD: 5.5,
+            todayTokens: 550,
+            last30USD: 5.5,
+            last30Tokens: 550,
+            daily: [KiroDailyUsage(
+                date: day(0),
+                usd: 5.5,
+                tokens: 550,
+                models: [
+                    KiroDailyModel(name: "real-model", usd: 1, tokens: 100),
+                    KiroDailyModel(
+                        name: KiroCostScanner.aggregateModelName, usd: 4.5, tokens: 450),
+                ])],
+            topModel: "real-model",
+            scanConfidence: .unavailable)
+
+        let report = CombinedUsageReport.build(
+            claude: nil, codex: nil, kiro: kiro,
+            calendar: calendar, now: now)
+
+        XCTAssertEqual(report.topModels.map(\.name), ["real-model"])
+        XCTAssertEqual(report.topModels(lastDays: 30).models.map(\.name), ["real-model"])
+        XCTAssertTrue(report.daily.last?.models.contains {
+            $0.source == "kiro" && $0.name == KiroCostScanner.aggregateModelName
+        } == true)
+        XCTAssertEqual(report.daily.last?.tokens, 550)
+    }
+
     /// "Today" must come from today's calendar bucket — Codex's own
     /// `todayUSD` is the most recent *active* day, which may be older.
     func testTodayFromCalendarBucketNotCodexTodayField() {
@@ -690,5 +720,148 @@ final class CombinedUsageReportTests: XCTestCase {
         // rule that only enabled sources are scanned and counted.
         let r = CombinedUsageReport.build(claude: claude, codex: nil, includeClaude: false)
         XCTAssertEqual(r.includedSourceCount, 0)
+    }
+
+    func testAllUsageAuthorizationUsesOnlyEnabledProvidersAndRawDetectedAgents() {
+        let records = [
+            InstalledAgentRecord(
+                id: .kiro,
+                evidence: [.init(kind: .configuration, token: "~/.kiro")],
+                capabilities: [],
+                providerIDs: ["kiro"]),
+            InstalledAgentRecord(
+                id: .omp,
+                evidence: [.init(kind: .executable, token: "/opt/homebrew/bin/omp")],
+                capabilities: [],
+                providerIDs: []),
+            InstalledAgentRecord(
+                id: .pi,
+                evidence: [.init(kind: .configuration, token: "~/.pi/agent/settings.json")],
+                capabilities: [],
+                providerIDs: []),
+        ]
+
+        let sources = AllUsageSourceAuthorization.sources(
+            enabledProviderIDs: ["claude", "codex", "grok", "gemini"],
+            detectedAgentRecords: records)
+
+        XCTAssertEqual(sources, Set(CostHistoryStore.Source.allCases))
+    }
+
+    func testAllUsageAuthorizationRejectsRemovedAndStaleCompletions() {
+        let initialSources: Set<CostHistoryStore.Source> = [.claude, .kiro, .omp, .pi]
+        XCTAssertEqual(
+            AllUsageSourceAuthorization.requestAction(
+                for: .kiro, providerID: "all", authorizedSources: initialSources),
+            .scan)
+
+        // Kiro disappears while Claude keeps All open. The current request
+        // must clear Kiro, and even its current-generation completion cannot
+        // restore the stale report after authorization was removed.
+        let afterRemoval: Set<CostHistoryStore.Source> = [.claude]
+        XCTAssertEqual(
+            AllUsageSourceAuthorization.requestAction(
+                for: .kiro, providerID: "all", authorizedSources: afterRemoval),
+            .clear)
+        XCTAssertFalse(AllUsageSourceAuthorization.acceptsCompletion(
+            for: .kiro,
+            providerID: "all",
+            taskID: "kiro-generation-1",
+            currentTaskID: "kiro-generation-1",
+            authorizedSources: afterRemoval))
+
+        let confidence = CostHistoryStore.UsageScanConfidence(
+            included: true, live: false, scannedAt: nil)
+        let claude = claudeReport(
+            daily: [claudeDay(0, usd: 2, tokens: 200)],
+            confidence: confidence)
+        let staleKiro = KiroUsageReport(
+            todayUSD: 5,
+            todayTokens: 500,
+            last30USD: 5,
+            last30Tokens: 500,
+            daily: [KiroDailyUsage(
+                date: day(0),
+                usd: 5,
+                tokens: 500,
+                models: [])],
+            topModel: nil,
+            scanConfidence: confidence)
+        let combined = CombinedUsageReport.build(
+            claude: claude,
+            codex: nil,
+            kiro: staleKiro,
+            includeClaude: afterRemoval.contains(.claude),
+            includeCodex: afterRemoval.contains(.codex),
+            includeGrok: afterRemoval.contains(.grok),
+            includeKiro: afterRemoval.contains(.kiro),
+            includeOMP: afterRemoval.contains(.omp),
+            includePi: afterRemoval.contains(.pi),
+            calendar: calendar,
+            now: now)
+        XCTAssertEqual(combined.todayUSD, 2, accuracy: 0.001)
+        XCTAssertEqual(combined.daily.last?.kiroUSD ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(combined.includedSourceCount, 1)
+
+        // A superseded completion is rejected even if the source is still
+        // authorized. OMP/Pi reports cannot self-authorize after removal.
+        XCTAssertFalse(AllUsageSourceAuthorization.acceptsCompletion(
+            for: .kiro,
+            providerID: "all",
+            taskID: "kiro-generation-1",
+            currentTaskID: "kiro-generation-2",
+            authorizedSources: initialSources))
+        for source in [CostHistoryStore.Source.omp, .pi] {
+            XCTAssertEqual(
+                AllUsageSourceAuthorization.requestAction(
+                    for: source, providerID: "all", authorizedSources: afterRemoval),
+                .clear)
+            XCTAssertFalse(AllUsageSourceAuthorization.acceptsCompletion(
+                for: source,
+                providerID: "all",
+                taskID: "generation-1",
+                currentTaskID: "generation-1",
+                authorizedSources: afterRemoval))
+        }
+    }
+
+    func testAllUsageLoadingStopsSkeletonAfterAuthorizedEmptyScanSettles() {
+        let authorized: Set<CostHistoryStore.Source> = [.kiro]
+
+        XCTAssertEqual(
+            AllUsageSourceAuthorization.pendingSources(
+                authorizedSources: authorized,
+                loadingSources: [.kiro]),
+            [.kiro])
+        XCTAssertTrue(AllUsageSourceAuthorization.shouldShowSkeleton(
+            authorizedSources: authorized,
+            loadingSources: [.kiro],
+            readySources: []))
+
+        // Kiro is still authorized/configured, but its scan found zero
+        // sessions and therefore settled with a nil report.
+        XCTAssertEqual(
+            AllUsageSourceAuthorization.pendingSources(
+                authorizedSources: authorized,
+                loadingSources: []),
+            [])
+        XCTAssertFalse(AllUsageSourceAuthorization.shouldShowSkeleton(
+            authorizedSources: authorized,
+            loadingSources: [],
+            readySources: []))
+    }
+
+    func testAllUsageLoadingDropsUnauthorizedPendingSource() {
+        let afterKiroRemoval: Set<CostHistoryStore.Source> = [.claude]
+
+        XCTAssertEqual(
+            AllUsageSourceAuthorization.pendingSources(
+                authorizedSources: afterKiroRemoval,
+                loadingSources: [.kiro]),
+            [])
+        XCTAssertFalse(AllUsageSourceAuthorization.shouldShowSkeleton(
+            authorizedSources: afterKiroRemoval,
+            loadingSources: [.kiro],
+            readySources: [.claude]))
     }
 }

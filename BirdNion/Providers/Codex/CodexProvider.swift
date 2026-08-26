@@ -20,7 +20,7 @@ final class CodexProvider: QuotaProvider {
     /// Explicit auth file (tests). When nil, resolved per fetch from the active
     /// account so switching accounts takes effect without rebuilding the provider.
     private let authURLOverride: URL?
-    private var authURL: URL { authURLOverride ?? CodexAccountStore.activeAuthURL() }
+    private let accountSelection: () -> CodexAccountStore.ActiveSelection
     /// Best-effort side data, injectable so tests stay pure (no network/process).
     /// The status probe deliberately uses its own session (a public endpoint,
     /// unrelated to the authenticated usage session).
@@ -35,36 +35,103 @@ final class CodexProvider: QuotaProvider {
     /// user's `codexUsageSource` preference so switching sources takes effect
     /// without rebuilding the provider.
     private let sourceOverride: CodexUsageSource?
-    private var source: CodexUsageSource { sourceOverride ?? .current }
+    private let webExtrasProbe: (String?) async -> CodexWebExtras?
+    private let refreshedCredentialSync: (
+        String, CodexAuthStore.CredentialFileBinding
+    ) -> Void
+
+    private struct FetchContext {
+        let accountID: String?
+        let authURL: URL
+        let authBinding: CodexAuthStore.CredentialFileBinding?
+        let source: CodexUsageSource
+    }
 
     init(session: URLSession = .shared,
          authURL: URL? = nil,
          source: CodexUsageSource? = nil,
          statusProbe: @escaping () async -> OpenAIServiceStatus? = { await OpenAIStatusProbe.fetch() },
          versionProbe: @escaping () async -> String? = { await CodexCLI.shared.version() },
-         cliUsageProbe: @escaping () async -> CodexCLIUsage? = { await CodexAppServerRPC.fetch() }) {
+         cliUsageProbe: @escaping () async -> CodexCLIUsage? = { await CodexAppServerRPC.fetch() },
+         accountSelection: @escaping () -> CodexAccountStore.ActiveSelection = {
+             CodexAccountStore.activeSelection()
+         },
+         webExtrasProbe: @escaping (String?) async -> CodexWebExtras? = {
+             await CodexWebDashboard.extras(
+                 email: $0, forceRefresh: RefreshInteraction.isManual)
+         },
+         refreshedCredentialSync: @escaping (
+             String, CodexAuthStore.CredentialFileBinding
+         ) -> Void = { accountID, binding in
+             _ = CodexAccountStore.syncRefreshedCredentialToCLI(
+                 accountID: accountID, sourceBinding: binding)
+         }) {
         self.session = session
         self.authURLOverride = authURL
         self.sourceOverride = source
         self.statusProbe = statusProbe
         self.versionProbe = versionProbe
         self.cliUsageProbe = cliUsageProbe
+        self.accountSelection = accountSelection
+        self.webExtrasProbe = webExtrasProbe
+        self.refreshedCredentialSync = refreshedCredentialSync
     }
 
     func fetch() async throws -> ProviderStatus {
+        let context = fetchContext()
+        // A managed selection is never allowed to degrade into a system/CLI
+        // route when its metadata or descriptor binding cannot be established.
+        if let accountID = context.accountID,
+           accountID != "system",
+           context.authBinding == nil
+        {
+            return failure("Không đọc được auth.json")
+        }
         // CLI-only source: skip OAuth entirely and read from `codex app-server`.
         // Credentials are still loaded best-effort for the account label / id.
-        if source == .cli {
-            let credentials = try? CodexAuthStore.load(url: authURL)
+        if context.source == .cli {
+            let document = context.authBinding.flatMap {
+                try? CodexAuthStore.loadDocument(binding: $0)
+            }
+            let credentials = document?.credentials
+            if let document {
+                guard credentialDocumentIsCurrent(
+                    context, data: document.rawData, revision: document.revision)
+                else { return staleCredentialFailure() }
+            }
             if let cli = await cliUsageProbe() {
-                return await cliRPCSuccess(cli, credentials: credentials)
+                if let document {
+                    guard credentialDocumentIsCurrent(
+                        context, data: document.rawData, revision: document.revision)
+                    else { return staleCredentialFailure() }
+                }
+                let status = await cliRPCSuccess(cli, credentials: credentials)
+                if let document {
+                    guard credentialDocumentIsCurrent(
+                        context, data: document.rawData, revision: document.revision)
+                    else { return staleCredentialFailure() }
+                }
+                return status
             }
             return failure("Codex CLI không trả dữ liệu — kiểm tra `codex`")
         }
 
         var credentials: CodexCredentials
+        var expectedAuthData: Data
+        var expectedAuthRevision: CodexAuthStore.CredentialRevision
+        guard let authBinding = context.authBinding else {
+            if !FileManager.default.fileExists(
+                atPath: context.authURL.deletingLastPathComponent().path)
+            {
+                return failure("Chưa đăng nhập Codex — chạy `codex` để đăng nhập")
+            }
+            return failure("Không đọc được auth.json")
+        }
         do {
-            credentials = try CodexAuthStore.load(url: authURL)
+            let document = try CodexAuthStore.loadDocument(binding: authBinding)
+            credentials = document.credentials
+            expectedAuthData = document.rawData
+            expectedAuthRevision = document.revision
         } catch CodexAuthError.notFound, CodexAuthError.missingTokens {
             return failure("Chưa đăng nhập Codex — chạy `codex` để đăng nhập")
         } catch {
@@ -75,8 +142,17 @@ final class CodexProvider: QuotaProvider {
         if credentials.needsRefresh, !credentials.refreshToken.isEmpty,
            let refreshed = try? await CodexTokenRefresher.refresh(credentials, session: session)
         {
+            guard let written = try? CodexAuthStore.saveIfUnchanged(
+                refreshed,
+                binding: authBinding,
+                expectedData: expectedAuthData,
+                expectedRevision: expectedAuthRevision)
+            else { return staleCredentialFailure() }
+            guard let rebound = synchronizeCommittedCredential(written, context: context)
+            else { return staleCredentialFailure() }
             credentials = refreshed
-            try? CodexAuthStore.save(refreshed, url: authURL)
+            expectedAuthData = rebound.rawData
+            expectedAuthRevision = rebound.revision
         }
 
         do {
@@ -84,7 +160,14 @@ final class CodexProvider: QuotaProvider {
                 accessToken: credentials.accessToken,
                 accountId: credentials.accountId,
                 session: session)
-            return await success(usage, credentials: credentials)
+            guard credentialDocumentIsCurrent(
+                context, data: expectedAuthData, revision: expectedAuthRevision)
+            else { return staleCredentialFailure() }
+            let status = await success(usage, credentials: credentials)
+            guard credentialDocumentIsCurrent(
+                context, data: expectedAuthData, revision: expectedAuthRevision)
+            else { return staleCredentialFailure() }
+            return status
         } catch CodexUsageError.unauthorized {
             // Reactive refresh + single retry. If still unauthorized, fall back
             // to the local Codex CLI RPC (CodexBar's "auto" fallback chain)
@@ -92,24 +175,65 @@ final class CodexProvider: QuotaProvider {
             if !credentials.refreshToken.isEmpty,
                let refreshed = try? await CodexTokenRefresher.refresh(credentials, session: session)
             {
-                try? CodexAuthStore.save(refreshed, url: authURL)
+                guard let written = try? CodexAuthStore.saveIfUnchanged(
+                    refreshed,
+                    binding: authBinding,
+                    expectedData: expectedAuthData,
+                    expectedRevision: expectedAuthRevision)
+                else { return staleCredentialFailure() }
+                guard let rebound = synchronizeCommittedCredential(written, context: context)
+                else { return staleCredentialFailure() }
+                credentials = refreshed
+                expectedAuthData = rebound.rawData
+                expectedAuthRevision = rebound.revision
                 if let usage = try? await CodexUsageAPI.fetchUsage(
                     accessToken: refreshed.accessToken,
                     accountId: refreshed.accountId,
                     session: session)
                 {
-                    return await success(usage, credentials: refreshed)
+                    guard credentialDocumentIsCurrent(
+                        context, data: expectedAuthData, revision: expectedAuthRevision)
+                    else { return staleCredentialFailure() }
+                    let status = await success(usage, credentials: refreshed)
+                    guard credentialDocumentIsCurrent(
+                        context, data: expectedAuthData, revision: expectedAuthRevision)
+                    else { return staleCredentialFailure() }
+                    return status
                 }
             }
-            if source == .auto, let cli = await cliUsageProbe() {
-                return await cliRPCSuccess(cli, credentials: credentials)
+            if context.source == .auto {
+                guard credentialDocumentIsCurrent(
+                    context, data: expectedAuthData, revision: expectedAuthRevision)
+                else { return staleCredentialFailure() }
+                if let cli = await cliUsageProbe() {
+                    guard credentialDocumentIsCurrent(
+                        context, data: expectedAuthData, revision: expectedAuthRevision)
+                    else { return staleCredentialFailure() }
+                    let status = await cliRPCSuccess(cli, credentials: credentials)
+                    guard credentialDocumentIsCurrent(
+                        context, data: expectedAuthData, revision: expectedAuthRevision)
+                    else { return staleCredentialFailure() }
+                    return status
+                }
             }
             return failure("Token Codex hết hạn — chạy `codex` để đăng nhập lại")
         } catch CodexUsageError.serverError(let code) {
             // Server down/5xx — in auto mode try the CLI RPC so the user still
             // sees something rather than a hard failure.
-            if source == .auto, let cli = await cliUsageProbe() {
-                return await cliRPCSuccess(cli, credentials: credentials)
+            if context.source == .auto {
+                guard credentialDocumentIsCurrent(
+                    context, data: expectedAuthData, revision: expectedAuthRevision)
+                else { return staleCredentialFailure() }
+                if let cli = await cliUsageProbe() {
+                    guard credentialDocumentIsCurrent(
+                        context, data: expectedAuthData, revision: expectedAuthRevision)
+                    else { return staleCredentialFailure() }
+                    let status = await cliRPCSuccess(cli, credentials: credentials)
+                    guard credentialDocumentIsCurrent(
+                        context, data: expectedAuthData, revision: expectedAuthRevision)
+                    else { return staleCredentialFailure() }
+                    return status
+                }
             }
             return failure("HTTP \(code)")
         } catch CodexUsageError.invalidResponse {
@@ -145,7 +269,6 @@ final class CodexProvider: QuotaProvider {
             accountID: credentials?.accountId,
             sourceLabel: "CLI",
             codexWeb: web)
-        cacheSnapshot(status)
         return status
     }
 
@@ -242,7 +365,8 @@ final class CodexProvider: QuotaProvider {
             windowSeconds: w.limitWindowSeconds)
     }
 
-    private func success(_ usage: CodexUsageResponse, credentials: CodexCredentials) async -> ProviderStatus {
+    private func success(_ usage: CodexUsageResponse,
+                         credentials: CodexCredentials) async -> ProviderStatus {
         let windows = Self.map(usage)
         guard !windows.isEmpty else {
             return failure("Codex chưa có dữ liệu quota")
@@ -281,7 +405,6 @@ final class CodexProvider: QuotaProvider {
             resetCreditsAvailable: reset,
             sourceLabel: "OAuth",
             codexWeb: web)
-        cacheSnapshot(status)
         return status
     }
 
@@ -290,16 +413,56 @@ final class CodexProvider: QuotaProvider {
     /// tests never spawn a WKWebView. A manual refresh forces a re-scrape.
     private func webExtrasIfEnabled(emailHint: String?) async -> CodexWebExtras? {
         guard authURLOverride == nil else { return nil }
-        return await CodexWebDashboard.extras(
-            email: emailHint, forceRefresh: RefreshInteraction.isManual)
+        return await webExtrasProbe(emailHint)
     }
 
-    /// Persist the status for the active account so switching accounts shows it
-    /// immediately. Only in production (tests inject `authURL`, which would
-    /// otherwise pollute the on-disk store with the "system" key).
-    private func cacheSnapshot(_ status: ProviderStatus) {
-        guard authURLOverride == nil else { return }
-        CodexAccountSnapshotStore.shared.save(status, forAccount: CodexAccountStore.activeID())
+    /// Capture every user-selectable routing input before the first suspension.
+    /// Later account/source changes apply to the next fetch, never this one.
+    private func fetchContext() -> FetchContext {
+        let source = sourceOverride ?? .current
+        if let authURLOverride {
+            return FetchContext(
+                accountID: nil,
+                authURL: authURLOverride,
+                authBinding: try? CodexAuthStore.bindCredentialFile(at: authURLOverride),
+                source: source)
+        }
+        let selection = accountSelection()
+        return FetchContext(
+            accountID: selection.id,
+            authURL: selection.authURL,
+            authBinding: selection.authBinding,
+            source: source)
+    }
+
+    private func synchronizeCommittedCredential(
+        _ written: CodexAuthStore.LoadedDocument,
+        context: FetchContext
+    ) -> CodexAuthStore.LoadedDocument? {
+        guard let binding = context.authBinding else { return nil }
+        if let accountID = context.accountID {
+            refreshedCredentialSync(accountID, binding)
+        }
+        guard let rebound = try? CodexAuthStore.loadDocument(binding: binding),
+              rebound.rawData == written.rawData
+        else { return nil }
+        return rebound
+    }
+
+    private func credentialDocumentIsCurrent(
+        _ context: FetchContext,
+        data: Data,
+        revision: CodexAuthStore.CredentialRevision
+    ) -> Bool {
+        guard let binding = context.authBinding else { return false }
+        return CodexAuthStore.documentIsCurrent(
+            binding: binding,
+            expectedData: data,
+            expectedRevision: revision)
+    }
+
+    private func staleCredentialFailure() -> ProviderStatus {
+        failure("Tài khoản Codex vừa thay đổi — thử lại")
     }
 
     /// Thin wrapper so the async-let call site stays tidy. Never throws —

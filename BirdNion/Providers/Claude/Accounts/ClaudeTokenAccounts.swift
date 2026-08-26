@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // Native multi-account store for Claude, mirroring the Claude slice of
 // CodexBarCore's TokenAccounts. Stores a list of accounts (each carries a token
@@ -82,6 +83,16 @@ struct ClaudeTokenAccountData: Codable, Equatable, Sendable {
 
 /// File-backed CRUD for the Claude account list.
 enum ClaudeTokenAccountStore {
+    static let maxStoredBytes = 1 * 1024 * 1024
+
+    enum MutationError: LocalizedError, Equatable {
+        case persistenceFailed
+
+        var errorDescription: String? {
+            "Không thể lưu thay đổi tài khoản Claude."
+        }
+    }
+
     static func defaultURL() -> URL {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -90,10 +101,56 @@ enum ClaudeTokenAccountStore {
     }
 
     static func load(url: URL = defaultURL()) -> ClaudeTokenAccountData {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(ClaudeTokenAccountData.self, from: data)
-        else { return ClaudeTokenAccountData() }
-        return decoded
+        do {
+            guard let data = try readBoundedData(url: url) else {
+                return ClaudeTokenAccountData()
+            }
+            return try JSONDecoder().decode(ClaudeTokenAccountData.self, from: data)
+        } catch {
+            return ClaudeTokenAccountData()
+        }
+    }
+
+    /// Mutations may initialize a genuinely missing store, but must never
+    /// reinterpret an unreadable or malformed existing credential file as an
+    /// empty account list. Doing so would let the next write erase accounts.
+    private static func loadForMutation(
+        url: URL
+    ) -> Result<ClaudeTokenAccountData, MutationError> {
+        do {
+            guard let data = try readBoundedData(url: url) else {
+                return .success(ClaudeTokenAccountData())
+            }
+            return .success(try JSONDecoder().decode(ClaudeTokenAccountData.self, from: data))
+        } catch {
+            return .failure(.persistenceFailed)
+        }
+    }
+
+    /// Open the exact filesystem object without following links, reject
+    /// non-regular files before reading, and cap allocation. This keeps a
+    /// dangling symlink, FIFO, directory, or oversized existing credential
+    /// store from being reinterpreted as a genuinely missing empty store.
+    private static func readBoundedData(url: URL) throws -> Data? {
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+        }
+        if descriptor < 0 {
+            if errno == ENOENT { return nil }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              info.st_size >= 0,
+              info.st_size <= maxStoredBytes,
+              let data = try handle.read(upToCount: maxStoredBytes + 1),
+              data.count <= maxStoredBytes
+        else { throw MutationError.persistenceFailed }
+        return data
     }
 
     @discardableResult
@@ -104,10 +161,12 @@ enum ClaudeTokenAccountStore {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let blob = try encoder.encode(data)
-            try blob.write(to: url, options: .atomic)
-            // Tokens are sensitive — restrict to the owner.
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: url.path)
+            guard blob.count <= maxStoredBytes else { return false }
+            // Reuse the app's staged O_EXCL + fchmod(0600) + fsync + atomic
+            // rename writer. Permission failure is a persistence failure, not
+            // a best-effort warning for a file containing credentials.
+            try CodexAuthStore.writePrivateFile(blob, to: url)
+            NotificationCenter.default.post(name: .birdnionClaudeAccountChanged, object: nil)
             return true
         } catch {
             return false
@@ -117,32 +176,51 @@ enum ClaudeTokenAccountStore {
     // MARK: - Mutations
 
     @discardableResult
-    static func add(_ account: ClaudeTokenAccount, url: URL = defaultURL()) -> ClaudeTokenAccountData {
-        var data = load(url: url)
+    static func add(
+        _ account: ClaudeTokenAccount,
+        url: URL = defaultURL()
+    ) -> Result<ClaudeTokenAccountData, MutationError> {
+        guard case .success(var data) = loadForMutation(url: url) else {
+            return .failure(.persistenceFailed)
+        }
         data.accounts.append(account)
         data.activeIndex = data.accounts.count - 1   // newly added becomes active
-        save(data, url: url)
-        return data
+        guard save(data, url: url) else { return .failure(.persistenceFailed) }
+        return .success(data)
     }
 
     @discardableResult
-    static func remove(id: UUID, url: URL = defaultURL()) -> ClaudeTokenAccountData {
-        var data = load(url: url)
-        guard let idx = data.accounts.firstIndex(where: { $0.id == id }) else { return data }
+    static func remove(
+        id: UUID,
+        url: URL = defaultURL()
+    ) -> Result<ClaudeTokenAccountData, MutationError> {
+        guard case .success(var data) = loadForMutation(url: url) else {
+            return .failure(.persistenceFailed)
+        }
+        guard let idx = data.accounts.firstIndex(where: { $0.id == id }) else {
+            return .success(data)
+        }
         data.accounts.remove(at: idx)
         if data.activeIndex >= data.accounts.count { data.activeIndex = max(0, data.accounts.count - 1) }
-        save(data, url: url)
-        return data
+        guard save(data, url: url) else { return .failure(.persistenceFailed) }
+        return .success(data)
     }
 
     @discardableResult
-    static func setActive(id: UUID, url: URL = defaultURL()) -> ClaudeTokenAccountData {
-        var data = load(url: url)
-        guard let idx = data.accounts.firstIndex(where: { $0.id == id }) else { return data }
+    static func setActive(
+        id: UUID,
+        url: URL = defaultURL()
+    ) -> Result<ClaudeTokenAccountData, MutationError> {
+        guard case .success(var data) = loadForMutation(url: url) else {
+            return .failure(.persistenceFailed)
+        }
+        guard let idx = data.accounts.firstIndex(where: { $0.id == id }) else {
+            return .success(data)
+        }
         data.activeIndex = idx
         data.accounts[idx].lastUsed = Date()
-        save(data, url: url)
-        return data
+        guard save(data, url: url) else { return .failure(.persistenceFailed) }
+        return .success(data)
     }
 
     static func active(url: URL = defaultURL()) -> ClaudeTokenAccount? {

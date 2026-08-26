@@ -52,7 +52,11 @@ enum HiyoKeyStore {
         var stored = loadStored(url: url)
         guard stored.accounts.contains(where: { $0.id == id }) else { return }
         stored.activeId = id
-        try? write(stored, url: url)
+        do {
+            try write(stored, url: url)
+        } catch {
+            return
+        }
         defaults.set(id, forKey: activeKey)
         notifyChanged(refreshQuota: true)
     }
@@ -117,7 +121,7 @@ enum HiyoKeyStore {
     private static func notifyChanged(refreshQuota: Bool) {
         NotificationCenter.default.post(name: .birdnionHiyoKeysChanged, object: nil)
         if refreshQuota {
-            NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+            NotificationCenter.default.post(name: .birdnionRefresh, object: "hiyo")
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Persisted per-day cost history for the All-tab chart/heatmap.
 ///
@@ -17,6 +18,16 @@ enum CostHistoryStore {
     /// Drop days older than this so the file cannot grow forever.
     static let retainDays = 400
     private static let ioLock = NSLock()
+    private static let maxModelNameScalars = 128
+    /// Shared macOS/Linux schema cap. Kiro currently emits at most seven,
+    /// while Claude/Codex histories may legitimately contain more models.
+    private static let maxModelsPerDay = 32
+    private static let maxHistoryBytes = 8 * 1024 * 1024
+    private static let maxScannedAtFutureSkew: TimeInterval = 5 * 60
+
+    private enum ValidationError: Error {
+        case invalidDocument
+    }
 
     enum Source: String, CaseIterable {
         case claude, codex, grok, kiro, omp, pi
@@ -44,7 +55,13 @@ enum CostHistoryStore {
         /// (Data Confidence Pass, mirrors the Linux Tauri port's
         /// `cost-history.json` schema). Optional so older documents without
         /// this key decode unchanged — missing entries read back as `nil`.
-        var scannedAt: [String: Double]?
+        var scannedAt: [String: Int64]?
+        /// source id → revision of the counting semantics used to build its
+        /// persisted days. Shared with Linux `counting_revision`.
+        var countingRevision: [String: Int]? = nil
+        /// Canonical trailing-window top model per source. This preserves the
+        /// real winner when daily chart payloads contain an aggregate bucket.
+        var topModels: [String: String]? = nil
     }
 
     // MARK: - Data Confidence Pass
@@ -85,7 +102,9 @@ enum CostHistoryStore {
         let doc = read(url: url)
         let byDay = doc.sources?[source.rawValue] ?? [:]
         let historyHasData = byDay.values.contains { $0.tokens > 0 || $0.usd > 0 }
-        let scannedAt = doc.scannedAt?[source.rawValue].map { Date(timeIntervalSince1970: $0 / 1000) }
+        let scannedAt = doc.scannedAt?[source.rawValue].map {
+            Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
+        }
         return UsageScanConfidence(
             included: liveScanSucceeded || historyHasData,
             live: liveScanSucceeded,
@@ -99,27 +118,41 @@ enum CostHistoryStore {
         configURL.deletingLastPathComponent().appendingPathComponent("cost-history.json")
     }
 
+    /// Persisted day keys are always proleptic Gregorian, matching Rust's
+    /// `NaiveDate`, while retaining the caller's local timezone boundary.
+    /// User-selected Buddhist/Islamic calendars must never change the shared
+    /// on-disk schema.
+    private static func storageCalendar(for calendar: Calendar) -> Calendar {
+        var storage = Calendar(identifier: .gregorian)
+        storage.locale = Locale(identifier: "en_US_POSIX")
+        storage.timeZone = calendar.timeZone
+        return storage
+    }
+
     static func dayKey(_ date: Date, calendar: Calendar = .current) -> String {
-        let d = calendar.startOfDay(for: date)
-        let c = calendar.dateComponents([.year, .month, .day], from: d)
+        let storage = storageCalendar(for: calendar)
+        let d = storage.startOfDay(for: date)
+        let c = storage.dateComponents([.year, .month, .day], from: d)
         return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
     static func parseDayKey(_ key: String, calendar: Calendar = .current) -> Date? {
+        let storage = storageCalendar(for: calendar)
         let parts = key.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
         var comp = DateComponents()
         comp.year = parts[0]
         comp.month = parts[1]
         comp.day = parts[2]
-        return calendar.date(from: comp).map { calendar.startOfDay(for: $0) }
+        return storage.date(from: comp).map { storage.startOfDay(for: $0) }
     }
 
     // MARK: - Read / write
 
     static func read(url: URL = historyURL()) -> Document {
-        guard let data = try? Data(contentsOf: url),
-              let doc = try? JSONDecoder().decode(Document.self, from: data)
+        guard let data = try? readBoundedData(url: url),
+              let doc = try? JSONDecoder().decode(Document.self, from: data),
+              validateDocument(doc)
         else {
             return Document(version: version, sources: [:])
         }
@@ -130,25 +163,153 @@ enum CostHistoryStore {
     /// document. An unreadable or malformed existing file must never be
     /// replaced with an empty document because that would erase other sources.
     private static func readForMutation(url: URL) throws -> Document {
-        guard FileManager.default.fileExists(atPath: url.path) else {
+        guard let data = try readBoundedData(url: url) else {
             return Document(version: version, sources: [:])
         }
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(Document.self, from: data)
+        let document = try JSONDecoder().decode(Document.self, from: data)
+        guard validateDocument(document) else { throw ValidationError.invalidDocument }
+        return document
     }
 
     static func write(_ doc: Document, url: URL = historyURL()) throws {
+        guard validateDocument(doc) else { throw ValidationError.invalidDocument }
+        _ = try mutationPathExistsAsRegularFile(url)
         var out = doc
         out.version = version
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(out)
+        guard data.count <= maxHistoryBytes else { throw ValidationError.invalidDocument }
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic])
         try? FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    /// `fileExists` follows symlinks, so a dangling link looks absent and an
+    /// atomic rename can replace it. `lstat` distinguishes genuinely missing
+    /// history from every non-regular path and keeps mutation fail-closed.
+    private static func mutationPathExistsAsRegularFile(_ url: URL) throws -> Bool {
+        var info = stat()
+        let result = url.path.withCString { lstat($0, &info) }
+        if result == 0 {
+            guard (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+                throw ValidationError.invalidDocument
+            }
+            return true
+        }
+        guard errno == ENOENT else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        return false
+    }
+
+    /// Bounded descriptor read keeps malformed/sparse history from forcing a
+    /// multi-gigabyte allocation. `O_NOFOLLOW` also keeps dangling and live
+    /// symlinks fail-closed instead of treating them as a new store.
+    private static func readBoundedData(url: URL) throws -> Data? {
+        let descriptor = url.path.withCString {
+            Darwin.open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+        }
+        if descriptor < 0 {
+            if errno == ENOENT { return nil }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              info.st_size >= 0,
+              info.st_size <= maxHistoryBytes
+        else { throw ValidationError.invalidDocument }
+        guard let data = try handle.read(upToCount: maxHistoryBytes + 1),
+              data.count <= maxHistoryBytes
+        else { throw ValidationError.invalidDocument }
+        return data
+    }
+
+    static func validateDocument(
+        _ document: Document,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Bool {
+        guard document.version == nil || document.version == 0 || document.version == version
+        else { return false }
+        let knownSources = Set(Source.allCases.map(\.rawValue))
+        let sources = document.sources ?? [:]
+        guard sources.count <= knownSources.count,
+              sources.keys.allSatisfy(knownSources.contains),
+              document.scannedAt?.count ?? 0 <= knownSources.count,
+              document.scannedAt?.keys.allSatisfy(knownSources.contains) ?? true,
+              document.countingRevision?.count ?? 0 <= knownSources.count,
+              document.countingRevision?.keys.allSatisfy(knownSources.contains) ?? true,
+              document.topModels?.count ?? 0 <= knownSources.count,
+              document.topModels?.keys.allSatisfy(knownSources.contains) ?? true
+        else { return false }
+        let latestSafeScan = Int64(
+            ((now.timeIntervalSince1970 + maxScannedAtFutureSkew) * 1_000)
+                .rounded(.towardZero))
+        let today = storageCalendar(for: calendar).startOfDay(for: now)
+        if document.scannedAt?.values.contains(where: { $0 < 0 || $0 > latestSafeScan }) == true {
+            return false
+        }
+        if document.topModels?.values.contains(where: { !validModelName($0) }) == true {
+            return false
+        }
+        if document.countingRevision?.values.contains(where: { $0 < 0 }) == true {
+            return false
+        }
+
+        var totalDayUSD = 0.0
+        var totalDayTokens = 0
+        var totalModelUSD = 0.0
+        var totalModelTokens = 0
+        for days in sources.values {
+            guard days.count <= retainDays else { return false }
+            for (key, day) in days {
+                guard let parsed = parseDayKey(key, calendar: calendar),
+                      dayKey(parsed, calendar: calendar) == key,
+                      parsed <= today,
+                      day.models.count <= maxModelsPerDay,
+                      accumulateUSD(day.usd, into: &totalDayUSD),
+                      accumulateTokens(day.tokens, into: &totalDayTokens)
+                else { return false }
+                for model in day.models {
+                    guard validModelName(model.name),
+                          accumulateUSD(model.usd, into: &totalModelUSD),
+                          accumulateTokens(model.tokens, into: &totalModelTokens)
+                    else { return false }
+                }
+            }
+        }
+        return true
+    }
+
+    private static func validModelName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty
+            && name.unicodeScalars.count <= maxModelNameScalars
+            && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    private static func accumulateUSD(_ value: Double, into total: inout Double) -> Bool {
+        guard value.isFinite, value >= 0 else { return false }
+        let next = total + value
+        guard next.isFinite else { return false }
+        total = next
+        return true
+    }
+
+    private static func accumulateTokens(_ value: Int, into total: inout Int) -> Bool {
+        guard value >= 0 else { return false }
+        let (next, overflow) = total.addingReportingOverflow(value)
+        guard !overflow else { return false }
+        total = next
+        return true
     }
 
     // MARK: - Merge (pure)
@@ -210,7 +371,12 @@ enum CostHistoryStore {
         // Preserve the confidence-pass timestamp map untouched — `apply`
         // stamps it separately, based on `liveScanSucceeded`, not on
         // whether `liveDays` merged anything.
-        let updated = Document(version: version, sources: sources, scannedAt: document.scannedAt)
+        let updated = Document(
+            version: version,
+            sources: sources,
+            scannedAt: document.scannedAt,
+            countingRevision: document.countingRevision,
+            topModels: document.topModels)
         let window = buildWindow(
             byDay: byDay, now: now, calendar: calendar, windowDays: windowDays)
         return (updated, window)
@@ -294,7 +460,10 @@ enum CostHistoryStore {
         windowDays: Int = 90,
         url: URL = historyURL(),
         replacingSource: Bool = false,
-        liveScanSucceeded: Bool = false) -> ApplyReceipt
+        liveScanSucceeded: Bool = false,
+        updateTopModel: Bool = false,
+        topModel: String? = nil,
+        countingRevision: Int? = nil) -> ApplyReceipt
     {
         ioLock.lock()
         defer { ioLock.unlock() }
@@ -304,6 +473,22 @@ enum CostHistoryStore {
             doc = try readForMutation(url: url)
         } catch {
             return ApplyReceipt(window: [], persisted: false)
+        }
+        if let countingRevision,
+           let storedRevision = doc.countingRevision?[source.rawValue],
+           storedRevision > countingRevision
+        {
+            // Fail closed on downgrade: days written with newer counting
+            // semantics cannot be merged, restamped, or otherwise rewritten
+            // by an older build. Return the durable history projection only.
+            let previous = doc.sources?[source.rawValue] ?? [:]
+            return ApplyReceipt(
+                window: buildWindow(
+                    byDay: previous,
+                    now: now,
+                    calendar: calendar,
+                    windowDays: windowDays),
+                persisted: false)
         }
         var (updated, window) = merge(
             document: doc,
@@ -315,8 +500,29 @@ enum CostHistoryStore {
             replacingSource: replacingSource)
         if liveScanSucceeded {
             var scannedAt = updated.scannedAt ?? [:]
-            scannedAt[source.rawValue] = now.timeIntervalSince1970 * 1000
+            scannedAt[source.rawValue] = Int64(
+                (now.timeIntervalSince1970 * 1_000).rounded(.towardZero))
             updated.scannedAt = scannedAt
+            if let countingRevision, countingRevision >= 0 {
+                var revisions = updated.countingRevision ?? [:]
+                revisions[source.rawValue] = countingRevision
+                updated.countingRevision = revisions
+            }
+        }
+        if updateTopModel {
+            var topModels = updated.topModels ?? [:]
+            if let mergedTopModel = trailingTopModel(
+                sourceDays: updated.sources?[source.rawValue] ?? [:],
+                now: now,
+                calendar: calendar) ?? topModel
+            {
+                topModels[source.rawValue] = mergedTopModel
+            } else if replacingSource || !(updated.sources?[source.rawValue] ?? [:]).values.contains(
+                where: { $0.tokens > 0 || $0.usd > 0 })
+            {
+                topModels.removeValue(forKey: source.rawValue)
+            }
+            updated.topModels = topModels
         }
         do {
             try write(updated, url: url)
@@ -331,6 +537,62 @@ enum CostHistoryStore {
                     windowDays: windowDays),
                 persisted: false)
         }
+    }
+
+    static func storedCountingRevision(
+        source: Source,
+        url: URL = historyURL()) -> Int
+    {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        return read(url: url).countingRevision?[source.rawValue] ?? 0
+    }
+
+    static func storedTopModel(
+        source: Source,
+        url: URL = historyURL()
+    ) -> String? {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        let stored = read(url: url).topModels?[source.rawValue]
+        if source == .kiro, stored == KiroCostScanner.aggregateModelName { return nil }
+        return stored
+    }
+
+    /// Canonical Kiro winner comes from the merged trailing window, not just
+    /// the newest incremental scan. `Other` is a chart aggregation bucket and
+    /// must never win against a real model.
+    private static func trailingTopModel(
+        sourceDays: [String: Day],
+        now: Date,
+        calendar: Calendar
+    ) -> String? {
+        let today = calendar.startOfDay(for: now)
+        let start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        var totals: [String: (usd: Double, tokens: Int)] = [:]
+        for (key, day) in sourceDays {
+            guard let date = parseDayKey(key, calendar: calendar),
+                  date >= start, date <= today
+            else { continue }
+            for model in day.models where model.name != KiroCostScanner.aggregateModelName {
+                var total = totals[model.name] ?? (0, 0)
+                let (tokens, overflow) = total.tokens.addingReportingOverflow(model.tokens)
+                let usd = total.usd + model.usd
+                guard !overflow, usd.isFinite else { continue }
+                total.tokens = tokens
+                total.usd = usd
+                totals[model.name] = total
+            }
+        }
+        return totals.max { lhs, rhs in
+            if lhs.value.tokens != rhs.value.tokens {
+                return lhs.value.tokens < rhs.value.tokens
+            }
+            if lhs.value.usd != rhs.value.usd {
+                return lhs.value.usd < rhs.value.usd
+            }
+            return lhs.key > rhs.key
+        }?.key
     }
 
     // MARK: - Read-only views
@@ -480,20 +742,21 @@ enum CostHistoryStore {
 
     static func makeKiroReport(
         window: [DayBucket],
+        persistedTopModel: String? = nil,
         confidence: UsageScanConfidence = .unavailable
     ) -> KiroUsageReport {
         let last30 = window.suffix(30)
         let today = window.last
         var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
         for d in last30 {
-            for m in d.models {
+            for m in d.models where m.name != KiroCostScanner.aggregateModelName {
                 var t = modelTotals[m.name] ?? (0, 0)
                 t.usd += m.usd
                 t.tokens += m.tokens
                 modelTotals[m.name] = t
             }
         }
-        let top = modelTotals.max {
+        let reconstructedTop = modelTotals.max {
             $0.value.tokens == $1.value.tokens
                 ? $0.value.usd < $1.value.usd
                 : $0.value.tokens < $1.value.tokens
@@ -510,7 +773,9 @@ enum CostHistoryStore {
                         KiroDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
-            topModel: top,
+            topModel: persistedTopModel == KiroCostScanner.aggregateModelName
+                ? reconstructedTop
+                : persistedTopModel ?? reconstructedTop,
             scanConfidence: confidence)
     }
 
@@ -584,5 +849,99 @@ enum CostHistoryStore {
             },
             topModel: top,
             scanConfidence: confidence)
+    }
+}
+
+extension CostHistoryStore.Document {
+    private enum CodingKeys: String, CodingKey {
+        case version, sources
+        case scannedAt = "scanned_at"
+        case countingRevision = "counting_revision"
+        case topModels = "top_models"
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case scannedAt, countingRevision, topModels
+    }
+
+    /// macOS builds before the shared schema fix encoded epoch milliseconds as
+    /// JSON doubles (for example `1787651040100.229`). Normalize those values
+    /// toward zero once, then always encode canonical integer milliseconds so
+    /// the same document is readable by Rust's `i64` representation.
+    private static func decodeMilliseconds<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key
+    ) throws -> [String: Int64]? {
+        guard container.contains(key), try !container.decodeNil(forKey: key) else { return nil }
+        if let exact = try? container.decode([String: Int64].self, forKey: key) {
+            return exact
+        }
+        let legacy = try container.decode([String: Double].self, forKey: key)
+        var normalized: [String: Int64] = [:]
+        normalized.reserveCapacity(legacy.count)
+        for (source, value) in legacy {
+            guard value.isFinite,
+                  value >= 0,
+                  value < Double(Int64.max)
+            else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "Invalid epoch-millisecond value")
+            }
+            normalized[source] = Int64(value.rounded(.towardZero))
+        }
+        return normalized
+    }
+
+    init(from decoder: Decoder) throws {
+        let canonical = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        version = try canonical.decodeIfPresent(Int.self, forKey: .version)
+        sources = try canonical.decodeIfPresent(
+            [String: [String: CostHistoryStore.Day]].self,
+            forKey: .sources)
+
+        let canonicalScannedAt = try Self.decodeMilliseconds(
+            from: canonical, forKey: .scannedAt)
+        let legacyScannedAt = try Self.decodeMilliseconds(
+            from: legacy, forKey: .scannedAt)
+        guard canonicalScannedAt == nil || legacyScannedAt == nil
+                || canonicalScannedAt == legacyScannedAt
+        else { throw DecodingError.dataCorruptedError(
+            forKey: .scannedAt, in: canonical,
+            debugDescription: "Conflicting scanned_at and scannedAt values") }
+        scannedAt = canonicalScannedAt ?? legacyScannedAt
+
+        let canonicalRevision = try canonical.decodeIfPresent(
+            [String: Int].self, forKey: .countingRevision)
+        let legacyRevision = try legacy.decodeIfPresent(
+            [String: Int].self, forKey: .countingRevision)
+        guard canonicalRevision == nil || legacyRevision == nil
+                || canonicalRevision == legacyRevision
+        else { throw DecodingError.dataCorruptedError(
+            forKey: .countingRevision, in: canonical,
+            debugDescription: "Conflicting counting_revision and countingRevision values") }
+        countingRevision = canonicalRevision ?? legacyRevision
+
+        let canonicalTopModels = try canonical.decodeIfPresent(
+            [String: String].self, forKey: .topModels)
+        let legacyTopModels = try legacy.decodeIfPresent(
+            [String: String].self, forKey: .topModels)
+        guard canonicalTopModels == nil || legacyTopModels == nil
+                || canonicalTopModels == legacyTopModels
+        else { throw DecodingError.dataCorruptedError(
+            forKey: .topModels, in: canonical,
+            debugDescription: "Conflicting top_models and topModels values") }
+        topModels = canonicalTopModels ?? legacyTopModels
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(version, forKey: .version)
+        try container.encodeIfPresent(sources, forKey: .sources)
+        try container.encodeIfPresent(scannedAt, forKey: .scannedAt)
+        try container.encodeIfPresent(countingRevision, forKey: .countingRevision)
+        try container.encodeIfPresent(topModels, forKey: .topModels)
     }
 }

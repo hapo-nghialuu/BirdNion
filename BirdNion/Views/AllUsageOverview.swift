@@ -61,6 +61,12 @@ struct CombinedModelCost: Equatable, Identifiable, Sendable {
     /// "claude" | "codex" | "grok" | "kiro" | "omp" | "pi"
     let source: String
     var id: String { "\(source):\(name)" }
+
+    /// Kiro's `Other` row is a conservation bucket, not a real model. Keep it
+    /// in per-source totals/charts, but never expose it as a ranked model.
+    var isKiroSyntheticAggregate: Bool {
+        source == "kiro" && name == KiroCostScanner.aggregateModelName
+    }
 }
 
 /// Cross-provider aggregation of the local usage reports across all 6 sources.
@@ -208,7 +214,8 @@ struct CombinedUsageReport: Equatable, Sendable {
                     grok: grokDays.models[day] ?? [:],
                     kiro: kiroDays.models[day] ?? [:],
                     omp: ompDays.models[day] ?? [:],
-                    pi: piDays.models[day] ?? [:])))
+                    pi: piDays.models[day] ?? [:],
+                    includeKiroAggregate: true)))
         }
 
         let today = daily.last
@@ -311,13 +318,19 @@ struct CombinedUsageReport: Equatable, Sendable {
         grok: [String: (usd: Double, tokens: Int)] = [:],
         kiro: [String: (usd: Double, tokens: Int)] = [:],
         omp: [String: (usd: Double, tokens: Int)] = [:],
-        pi: [String: (usd: Double, tokens: Int)] = [:]
+        pi: [String: (usd: Double, tokens: Int)] = [:],
+        includeKiroAggregate: Bool = false
     ) -> [CombinedModelCost] {
         var items: [CombinedModelCost] = []
         items.append(contentsOf: claude.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "claude") })
         items.append(contentsOf: codex.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "codex") })
         items.append(contentsOf: grok.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "grok") })
-        items.append(contentsOf: kiro.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "kiro") })
+        items.append(contentsOf: kiro.compactMap {
+            guard includeKiroAggregate || $0.key != KiroCostScanner.aggregateModelName
+            else { return nil }
+            return CombinedModelCost(
+                name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "kiro")
+        })
         items.append(contentsOf: omp.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "omp") })
         items.append(contentsOf: pi.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "pi") })
         items.sort {
@@ -389,7 +402,7 @@ extension CombinedUsageReport {
         var windowTokens = 0
         for day in window {
             windowTokens += day.tokens
-            for m in day.models {
+            for m in day.models where !m.isKiroSyntheticAggregate {
                 let key = "\(m.source):\(m.name)"
                 if metaByKey[key] == nil {
                     metaByKey[key] = (m.name, m.source)
@@ -542,6 +555,67 @@ typealias MonthlyForecast = BudgetForecast
 
 // MARK: - All tab root
 
+enum AllUsageSourceAuthorization {
+    enum RequestAction: Equatable {
+        case scan
+        case clear
+    }
+
+    static func sources(
+        enabledProviderIDs: [String],
+        detectedAgentRecords: [InstalledAgentRecord]
+    ) -> Set<CostHistoryStore.Source> {
+        var sources = Set(enabledProviderIDs.compactMap {
+            CostHistoryStore.Source(rawValue: $0)
+        })
+        sources.formUnion(detectedAgentRecords.compactMap(\.costHistorySource))
+        return sources
+    }
+
+    static func requestAction(
+        for source: CostHistoryStore.Source,
+        providerID: String,
+        authorizedSources: Set<CostHistoryStore.Source>
+    ) -> RequestAction {
+        guard authorizedSources.contains(source),
+              providerID == "all" || providerID == source.rawValue
+        else { return .clear }
+        return .scan
+    }
+
+    static func acceptsCompletion(
+        for source: CostHistoryStore.Source,
+        providerID: String,
+        taskID: String,
+        currentTaskID: String?,
+        authorizedSources: Set<CostHistoryStore.Source>
+    ) -> Bool {
+        currentTaskID == taskID
+            && requestAction(
+                for: source,
+                providerID: providerID,
+                authorizedSources: authorizedSources) == .scan
+    }
+
+    static func pendingSources(
+        authorizedSources: Set<CostHistoryStore.Source>,
+        loadingSources: Set<CostHistoryStore.Source>
+    ) -> Set<CostHistoryStore.Source> {
+        authorizedSources.intersection(loadingSources)
+    }
+
+    static func shouldShowSkeleton(
+        authorizedSources: Set<CostHistoryStore.Source>,
+        loadingSources: Set<CostHistoryStore.Source>,
+        readySources: Set<CostHistoryStore.Source>
+    ) -> Bool {
+        readySources.isDisjoint(with: authorizedSources)
+            && !pendingSources(
+                authorizedSources: authorizedSources,
+                loadingSources: loadingSources).isEmpty
+    }
+}
+
 struct AllUsageOverview: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -561,10 +635,8 @@ struct AllUsageOverview: View {
     let onHoverActivity: () -> Void
     let onHoverModels: ([AgentModelRow], String) -> Void
     let onHoverEnd: () -> Void
-    var claudeEnabled: Bool = true
-    var codexEnabled: Bool = true
-    var grokEnabled: Bool = true
-    var kiroEnabled: Bool = true
+    let authorizedSources: Set<CostHistoryStore.Source>
+    let loadingSources: Set<CostHistoryStore.Source>
 
     init(
         claude: ClaudeUsageReport?,
@@ -582,10 +654,8 @@ struct AllUsageOverview: View {
         onHoverActivity: @escaping () -> Void = {},
         onHoverModels: @escaping ([AgentModelRow], String) -> Void = { _, _ in },
         onHoverEnd: @escaping () -> Void = {},
-        claudeEnabled: Bool = true,
-        codexEnabled: Bool = true,
-        grokEnabled: Bool = true,
-        kiroEnabled: Bool = true
+        authorizedSources: Set<CostHistoryStore.Source>,
+        loadingSources: Set<CostHistoryStore.Source>
     ) {
         self.claude = claude
         self.codex = codex
@@ -602,31 +672,44 @@ struct AllUsageOverview: View {
         self.onHoverActivity = onHoverActivity
         self.onHoverModels = onHoverModels
         self.onHoverEnd = onHoverEnd
-        self.claudeEnabled = claudeEnabled
-        self.codexEnabled = codexEnabled
-        self.grokEnabled = grokEnabled
-        self.kiroEnabled = kiroEnabled
+        self.authorizedSources = authorizedSources
+        self.loadingSources = loadingSources
     }
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
     private var pendingSources: [String] {
-        var pending: [String] = []
-        if claudeEnabled, claude == nil { pending.append("Claude") }
-        if codexEnabled, codex == nil { pending.append("Codex") }
-        if grokEnabled, grok == nil { pending.append("Grok") }
-        if kiroEnabled, kiro == nil { pending.append("Kiro") }
-        if allAgentRecords.contains(where: { $0.id == .omp }), omp == nil { pending.append("Oh My Pi") }
-        if allAgentRecords.contains(where: { $0.id == .pi }), pi == nil { pending.append("Pi") }
-        return pending
+        let sources = AllUsageSourceAuthorization.pendingSources(
+            authorizedSources: authorizedSources,
+            loadingSources: loadingSources)
+        let labels: [(CostHistoryStore.Source, String)] = [
+            (.claude, "Claude"),
+            (.codex, "Codex"),
+            (.grok, "Grok"),
+            (.kiro, "Kiro"),
+            (.omp, "Oh My Pi"),
+            (.pi, "Pi"),
+        ]
+        return labels.compactMap { sources.contains($0.0) ? $0.1 : nil }
     }
 
-    private var anyReportReady: Bool {
-        claude != nil || codex != nil || grok != nil || kiro != nil || omp != nil || pi != nil
+    private var readySources: Set<CostHistoryStore.Source> {
+        var sources: Set<CostHistoryStore.Source> = []
+        if claude != nil { sources.insert(.claude) }
+        if codex != nil { sources.insert(.codex) }
+        if grok != nil { sources.insert(.grok) }
+        if kiro != nil { sources.insert(.kiro) }
+        if omp != nil { sources.insert(.omp) }
+        if pi != nil { sources.insert(.pi) }
+        return sources
     }
 
     var body: some View {
-        if !anyReportReady {
+        if AllUsageSourceAuthorization.shouldShowSkeleton(
+            authorizedSources: authorizedSources,
+            loadingSources: loadingSources,
+            readySources: readySources)
+        {
             VStack(alignment: .leading, spacing: 9) { LoadingQuotaSkeleton() }
                 .popoverContentInset()
                 .padding(.vertical, 16)
@@ -638,12 +721,12 @@ struct AllUsageOverview: View {
                 kiro: kiro,
                 omp: omp,
                 pi: pi,
-                includeClaude: claudeEnabled,
-                includeCodex: codexEnabled,
-                includeGrok: grokEnabled,
-                includeKiro: kiroEnabled,
-                includeOMP: omp != nil || allAgentRecords.contains(where: { $0.id == .omp }),
-                includePi: pi != nil || allAgentRecords.contains(where: { $0.id == .pi }))
+                includeClaude: authorizedSources.contains(.claude),
+                includeCodex: authorizedSources.contains(.codex),
+                includeGrok: authorizedSources.contains(.grok),
+                includeKiro: authorizedSources.contains(.kiro),
+                includeOMP: authorizedSources.contains(.omp),
+                includePi: authorizedSources.contains(.pi))
             let rows = costRows(daily: report.daily)
 
             AllAgentsOverview(
@@ -741,7 +824,7 @@ struct AllUsageOverview: View {
     private func modelRows(daily: [CombinedDailyUsage]) -> [AgentModelRow] {
         let window = Array(daily.suffix(max(allChartDays, 1)))
         var totals: [String: (usd: Double, tokens: Int, sourceTokens: [String: Int])] = [:]
-        for model in window.flatMap(\.models) {
+        for model in window.flatMap(\.models) where !model.isKiroSyntheticAggregate {
             var entry = totals[model.name] ?? (0, 0, [:])
             entry.usd += model.usd
             entry.tokens += model.tokens
@@ -1465,7 +1548,9 @@ struct DayDetailPanelRoot: View {
         .sorted { $0.usd > $1.usd }
     }
 
-    private var models: [CombinedModelCost] { day.models.sorted { $0.usd > $1.usd } }
+    private var models: [CombinedModelCost] {
+        day.models.filter { !$0.isKiroSyntheticAggregate }.sorted { $0.usd > $1.usd }
+    }
     private static let maxModelRows = 10
 
     private func pct(_ usd: Double, of total: Double) -> Int {

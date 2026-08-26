@@ -93,10 +93,18 @@ final class QuotaService: ObservableObject {
     private(set) var providers: [QuotaProvider] = []
     private var interval: TimeInterval
     private var loopTask: Task<Void, Never>?
+    private var notificationObservers: [NSObjectProtocol] = []
     private var refreshPassIsRunning = false
     private var pendingRefreshRequested = false
     private var pendingForceProviderIDs: Set<String> = []
     private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
+    private var settingsRefreshTask: Task<Void, Never>?
+    private var pendingSettingsRefreshProviderIDs: Set<String> = []
+    private var settingsRefreshGeneration: UInt = 0
+    /// Monotonic identity/config token for each provider. Provider object
+    /// identity is insufficient when an account or credential changes inside
+    /// the same provider instance while its previous fetch is still running.
+    private var providerContextGenerations: [String: UInt] = [:]
 
     typealias FailureNotificationPost = @MainActor (
         _ id: String, _ title: String, _ body: String
@@ -104,11 +112,16 @@ final class QuotaService: ObservableObject {
     typealias FailureNotificationRemove = @MainActor (_ id: String) -> Void
     typealias LegacyFailureNotificationCleanup = @MainActor (_ providerID: String) -> Void
     typealias AllFailureNotificationCleanup = @MainActor () -> Void
+    typealias CodexSnapshotSave = (_ status: ProviderStatus, _ accountID: String) -> Void
+    typealias CodexSnapshotRemove = (_ accountID: String) -> Void
     private let failureNotificationPost: FailureNotificationPost
     private let failureNotificationRemove: FailureNotificationRemove
     private let legacyFailureNotificationCleanup: LegacyFailureNotificationCleanup
     private let allFailureNotificationCleanup: AllFailureNotificationCleanup
+    private let codexSnapshotSave: CodexSnapshotSave
+    private let codexSnapshotRemove: CodexSnapshotRemove
     private let failureNotificationNow: () -> Date
+    private let settingsRefreshDebounceNanoseconds: UInt64
     private var didSweepFailureNotifications = false
 
     /// HH:mm formatter for the Codex auto-prime notification body.
@@ -134,7 +147,14 @@ final class QuotaService: ObservableObject {
             QuotaNotifier.removeAllFailureNotifications()
         },
         failureNotificationNow: @escaping () -> Date = Date.init,
-        statusCacheURL: URL? = nil
+        statusCacheURL: URL? = nil,
+        settingsRefreshDebounceNanoseconds: UInt64 = 350_000_000,
+        codexSnapshotRemove: @escaping CodexSnapshotRemove = {
+            _ = CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: $0)
+        },
+        codexSnapshotSave: @escaping CodexSnapshotSave = {
+            CodexAccountSnapshotStore.shared.save($0, forAccount: $1)
+        }
     ) {
         self.providers = providers
         self.interval = interval
@@ -143,7 +163,10 @@ final class QuotaService: ObservableObject {
         self.failureNotificationRemove = failureNotificationRemove
         self.legacyFailureNotificationCleanup = legacyFailureNotificationCleanup
         self.allFailureNotificationCleanup = allFailureNotificationCleanup
+        self.codexSnapshotSave = codexSnapshotSave
+        self.codexSnapshotRemove = codexSnapshotRemove
         self.failureNotificationNow = failureNotificationNow
+        self.settingsRefreshDebounceNanoseconds = settingsRefreshDebounceNanoseconds
     }
 
     /// Update the polling interval. The running loop reads `self.interval`
@@ -229,6 +252,7 @@ final class QuotaService: ObservableObject {
         adaptiveFailureCounts.removeValue(forKey: id)
         errorSurfaceGates.removeValue(forKey: id)
         providerLastFetched.removeValue(forKey: id)
+        providerContextGenerations.removeValue(forKey: id)
         warnState.removeValue(forKey: id)
         staleWarnings.removeValue(forKey: id)
     }
@@ -266,10 +290,14 @@ final class QuotaService: ObservableObject {
             allFailureNotificationCleanup()
         }
         // Manual refresh hook from footer button (.birdnionRefresh)
-        NotificationCenter.default.addObserver(
+        notificationObservers.append(NotificationCenter.default.addObserver(
             forName: .birdnionRefresh, object: nil, queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
             guard let self else { return }
+            if let providerID = notification.object as? String {
+                self.refreshFromSettings(providerID)
+                return
+            }
             // Mark this as a user-initiated refresh so background-only throttles
             // (e.g. the Codex CLI launch gate) let the retry through. Manual
             // refreshes also bypass per-provider interval throttles so the
@@ -279,20 +307,19 @@ final class QuotaService: ObservableObject {
                     await self.refresh(forceProviderIDs: Set(self.providers.map(\.id)))
                 }
             }
-        }
+        })
         // Codex account switch: show that account's cached snapshot instantly,
         // then refetch (also counts as a manual interaction).
-        NotificationCenter.default.addObserver(
+        notificationObservers.append(NotificationCenter.default.addObserver(
             forName: .birdnionCodexAccountChanged, object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in
+            MainActor.assumeIsolated {
+                self.invalidateProviderContext(for: "codex")
                 self.applyCachedCodexStatus()
-                await RefreshInteraction.$isManual.withValue(true) {
-                    await self.refresh(forceProviderIDs: ["codex"])
-                }
+                self.scheduleSettingsRefresh(for: "codex")
             }
-        }
+        })
         loopTask = Task { [weak self] in
             guard let self else { return }
             await self.refresh()
@@ -314,6 +341,11 @@ final class QuotaService: ObservableObject {
     func stop() {
         loopTask?.cancel()
         loopTask = nil
+        settingsRefreshTask?.cancel()
+        settingsRefreshTask = nil
+        pendingSettingsRefreshProviderIDs.removeAll()
+        notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        notificationObservers.removeAll()
     }
 
     /// Per-provider refresh override (in seconds). 0 or absent means "use the
@@ -360,7 +392,7 @@ final class QuotaService: ObservableObject {
     }
 
     private func persistStatuses() {
-        guard let url = statusCacheURL, !statuses.isEmpty else { return }
+        guard let url = statusCacheURL else { return }
         ProviderStatusCache.write(statuses, url: url)
     }
 
@@ -438,7 +470,8 @@ final class QuotaService: ObservableObject {
         rebuildDisplayStatuses()
     }
 
-    /// Fire-and-forget refresh for a control the user just changed in Settings
+    /// Invalidate immediately, then debounce a forced refresh for a durable
+    /// provider identity/configuration change made in Settings.
     /// (source picker, region, token save, account switch). Every such control
     /// must use this instead of a bare `refresh()`: an unforced pass fetches at
     /// `.background`, which makes providers skip user-gated sources — the same
@@ -447,16 +480,60 @@ final class QuotaService: ObservableObject {
     /// adaptive backoff, so the click always produces a real fetch.
     /// Mirrors CodexBar's `ProviderSettingsRefreshInteraction.perform`.
     ///
-    /// `nonisolated` so it can be called straight from a `Binding` setter or a
-    /// button action regardless of that closure's isolation, the way the
-    /// `Task { await quota.refresh() }` it replaces could be; the hop to the
-    /// main actor happens inside.
+    /// Binding setters are not actor-annotated in the SwiftUI API, but every
+    /// production callsite is a main-queue UI or NotificationCenter callback.
+    /// Keeping this entry nonisolated avoids forcing those synchronous setters
+    /// to spawn a Task, while `assumeIsolated` enforces the main-actor contract.
     nonisolated func refreshFromSettings(_ providerID: String) {
-        Task { @MainActor in
+        MainActor.assumeIsolated {
+            if providerID == "codex" {
+                codexSnapshotRemove(CodexAccountStore.activeSelection().id)
+            }
+            invalidateProviderContext(for: providerID)
+            scheduleSettingsRefresh(for: providerID)
+        }
+    }
+
+    private func scheduleSettingsRefresh(for providerID: String) {
+        pendingSettingsRefreshProviderIDs.insert(providerID)
+        settingsRefreshGeneration &+= 1
+        let generation = settingsRefreshGeneration
+        settingsRefreshTask?.cancel()
+        settingsRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.settingsRefreshDebounceNanoseconds > 0 {
+                try? await Task.sleep(
+                    nanoseconds: self.settingsRefreshDebounceNanoseconds
+                )
+            }
+            guard !Task.isCancelled,
+                  self.settingsRefreshGeneration == generation else { return }
+            let providerIDs = self.pendingSettingsRefreshProviderIDs
+            self.pendingSettingsRefreshProviderIDs.removeAll()
+            self.settingsRefreshTask = nil
             await RefreshInteraction.$isManual.withValue(true) {
-                await self.refresh(forceProviderIDs: [providerID])
+                await self.refresh(forceProviderIDs: providerIDs)
             }
         }
+    }
+
+    /// Invalidates every in-flight completion that captured the provider's
+    /// prior account/configuration. Runtime and persisted status from that
+    /// context are cleared so last-good data never crosses identities.
+    func invalidateProviderContext(for providerID: String) {
+        providerContextGenerations[providerID] =
+            (providerContextGenerations[providerID] ?? 0) &+ 1
+        providerLastFetched.removeValue(forKey: providerID)
+        adaptiveFailureCounts.removeValue(forKey: providerID)
+        errorSurfaceGates.removeValue(forKey: providerID)
+        warnState.removeValue(forKey: providerID)
+        staleWarnings.removeValue(forKey: providerID)
+        failureEpisode.removeValue(forKey: providerID)
+        failureNotificationRemove(Self.failureNotificationID(for: providerID))
+        legacyFailureNotificationCleanup(providerID)
+        statuses.removeAll { $0.id == providerID }
+        rebuildDisplayStatuses()
+        persistStatuses()
     }
 
     func refresh(forceProviderIDs: Set<String> = []) async {
@@ -473,7 +550,7 @@ final class QuotaService: ObservableObject {
         isRefreshing = true
         var nextForceProviderIDs = forceProviderIDs
         repeat {
-            let successfulProviderIDs = await runRefreshPass(
+            let successfulProviderGenerations = await runRefreshPass(
                 forceProviderIDs: nextForceProviderIDs
             )
             guard pendingRefreshRequested else { break }
@@ -482,7 +559,10 @@ final class QuotaService: ObservableObject {
             // succeeded. A failed or skipped background fetch still gets the
             // promised user-initiated retry, which resets adaptive backoff and
             // bypasses provider cooldowns without duplicating successful work.
-            nextForceProviderIDs = pendingForceProviderIDs.subtracting(successfulProviderIDs)
+            nextForceProviderIDs = Set(pendingForceProviderIDs.filter { providerID in
+                successfulProviderGenerations[providerID]
+                    != (providerContextGenerations[providerID] ?? 0)
+            })
             pendingForceProviderIDs.removeAll()
             pendingRefreshRequested = false
         } while true
@@ -499,7 +579,12 @@ final class QuotaService: ObservableObject {
         (refreshPassIsRunning, pendingRefreshRequested, pendingForceProviderIDs)
     }
 
-    private func runRefreshPass(forceProviderIDs: Set<String>) async -> Set<String> {
+    /// Test seam for deterministic provider-identity debounce assertions.
+    func settingsRefreshCoordinatorState() -> (scheduled: Bool, providerIDs: Set<String>) {
+        (settingsRefreshTask != nil, pendingSettingsRefreshProviderIDs)
+    }
+
+    private func runRefreshPass(forceProviderIDs: Set<String>) async -> [String: UInt] {
         let snapshot = providers
         let startedAt = Date()
         let log = Logger(subsystem: "com.local.birdnion", category: "quota.refresh")
@@ -564,10 +649,37 @@ final class QuotaService: ObservableObject {
         var pending: [String: ProviderStatus] = Dictionary(
             uniqueKeysWithValues: statuses.map { ($0.id, $0) }
         )
+        var pendingContextGenerations = Dictionary(
+            uniqueKeysWithValues: pending.keys.map {
+                ($0, providerContextGenerations[$0] ?? 0)
+            })
+        /// A pass-local last-good snapshot must not outlive an account/config
+        /// invalidation. Replace stale entries with any status explicitly
+        /// published in the new context (cached account/self-test), or remove
+        /// them when the new context has no status yet.
+        func reconcilePendingWithCurrentContexts() {
+            for id in Array(pending.keys) {
+                let currentGeneration = providerContextGenerations[id] ?? 0
+                guard pendingContextGenerations[id] != currentGeneration else { continue }
+                pending.removeValue(forKey: id)
+                pendingContextGenerations.removeValue(forKey: id)
+                if let current = statuses.first(where: { $0.id == id }) {
+                    pending[id] = current
+                    pendingContextGenerations[id] = currentGeneration
+                }
+            }
+            // Preserve a current-context status that arrived outside this pass
+            // (for example the newly selected account's cached snapshot).
+            for current in statuses where pending[current.id] == nil {
+                pending[current.id] = current
+                pendingContextGenerations[current.id] =
+                    providerContextGenerations[current.id] ?? 0
+            }
+        }
         let isFirstRefresh = statuses.isEmpty
-        var successfulProviderIDs: Set<String> = []
+        var successfulProviderGenerations: [String: UInt] = [:]
         await withTaskGroup(
-            of: (String, ObjectIdentifier, ProviderStatus, TimeInterval).self
+            of: (String, ObjectIdentifier, UInt, String?, ProviderStatus, TimeInterval).self
         ) { group in
             for p in due {
                 // Forced providers (user clicked Refresh / changed a source in
@@ -575,23 +687,39 @@ final class QuotaService: ObservableObject {
                 // bypass rate-limit cooldowns and allow Keychain prompts.
                 let interaction: ProviderInteraction =
                     forceProviderIDs.contains(p.id) ? .userInitiated : .background
+                let contextGeneration = providerContextGenerations[p.id] ?? 0
+                let codexSnapshotAccountID = p.id == "codex"
+                    ? CodexAccountStore.activeSelection().id
+                    : nil
                 group.addTask {
                     let t0 = Date()
                     let providerIdentity = ObjectIdentifier(p)
                     let status = await ProviderInteractionContext.$current
                         .withValue(interaction) { await p.fetchWithDeadline() }
-                    return (p.id, providerIdentity, status, Date().timeIntervalSince(t0))
+                    return (
+                        p.id, providerIdentity, contextGeneration, codexSnapshotAccountID,
+                        status, Date().timeIntervalSince(t0))
                 }
             }
             var timings: [(String, TimeInterval)] = []
             var firstCompletionAt: Date?
-            for await (id, providerIdentity, status, elapsed) in group {
+            for await (
+                id, providerIdentity, contextGeneration,
+                codexSnapshotAccountID, status, elapsed
+            ) in group {
                 guard providers.contains(where: {
                     $0.id == id && ObjectIdentifier($0) == providerIdentity
-                }) else {
-                    log.info("discard removed or replaced provider result: \(id, privacy: .public)")
+                }), providerContextGenerations[id] ?? 0 == contextGeneration else {
+                    log.info("discard removed, replaced, or stale-context provider result: \(id, privacy: .public)")
                     continue
                 }
+                if let codexSnapshotAccountID,
+                   status.error == nil,
+                   status.isRenderableSnapshot
+                {
+                    codexSnapshotSave(status, codexSnapshotAccountID)
+                }
+                reconcilePendingWithCurrentContexts()
                 let previous = pending[id]
                 // Failure-episode bookkeeping reads the AWAITED status only —
                 // `pending`/`statuses` may keep a preserved stale good
@@ -600,7 +728,7 @@ final class QuotaService: ObservableObject {
                                        error: status.error)
                 recordAdaptiveOutcome(providerID: id, error: status.error)
                 if status.error == nil {
-                    successfulProviderIDs.insert(id)
+                    successfulProviderGenerations[id] = contextGeneration
                 }
                 // `.notConfigured` reached during a poll is the one ambiguous
                 // kind: it usually means the provider was never set up, but it
@@ -642,6 +770,7 @@ final class QuotaService: ObservableObject {
                     staleWarnings.removeValue(forKey: id)
                     pending[id] = Self.preservingLastGoodServiceStatus(status, previous: previous)
                 }
+                pendingContextGenerations[id] = contextGeneration
                 providerLastFetched[id] = Date()
                 timings.append((id, elapsed))
                 if firstCompletionAt == nil { firstCompletionAt = Date() }
@@ -664,9 +793,12 @@ final class QuotaService: ObservableObject {
             }
             log.info("refresh done — total=\(String(format: "%.2f", total), privacy: .public)s slow=\(sortedByDuration.filter { $0.1 > 2.0 }.count, privacy: .public)")
         }
+        reconcilePendingWithCurrentContexts()
+        statuses = providers.compactMap { pending[$0.id] }
+        rebuildDisplayStatuses()
         persistStatuses()
         await runWeeklyDigestIfDue()
-        return successfulProviderIDs
+        return successfulProviderGenerations
     }
 
     // MARK: - Weekly Digest (rolling 7-day cost/token summary notification)
@@ -676,28 +808,53 @@ final class QuotaService: ObservableObject {
     /// read) and `WeeklyDigest.isDue` (a 7-day cadence, so an enabled toggle
     /// still only scans once a week). `refreshPassIsRunning` already
     /// serializes every call into `runRefreshPass`, so no separate overlap
-    /// flag is needed here. Reuses the same three local cost scanners the
-    /// All tab already calls — no new Timer/daemon/polling loop.
+    /// flag is needed here. Reuses the same six local cost scanners the All
+    /// tab already calls — no new Timer/daemon/polling loop.
     private func runWeeklyDigestIfDue() async {
         guard WeeklyDigest.isEnabled else { return }
         let now = Date()
         guard WeeklyDigest.isDue(now: now, lastEvaluatedAt: WeeklyDigest.lastEvaluatedAt) else { return }
 
         let enabledIDs = Set(providers.map(\.id))
-        let includeClaude = enabledIDs.contains("claude")
-        let includeCodex = enabledIDs.contains("codex")
-        let includeGrok = enabledIDs.contains("grok")
+        let detectedAgentRecords = await Task.detached(priority: .utility) {
+            InstalledAgentDetectors.detect()
+        }.value
+        let authorizedSources = Self.authorizedWeeklyDigestSources(
+            enabledProviderIDs: enabledIDs,
+            detectedAgentRecords: detectedAgentRecords)
+        guard !authorizedSources.isEmpty else {
+            WeeklyDigest.lastEvaluatedAt = now
+            return
+        }
 
-        let claudeReport = includeClaude ? await ClaudeCostScanner.usageReport(now: now) : nil
-        let codexReport = includeCodex ? await CodexCostScanner.usageReport(now: now) : nil
-        let grokReport = includeGrok ? await GrokCostScanner.usageReport(now: now) : nil
-        let kiroReport = await KiroCostScanner.usageReport(now: now)
-        let ompReport = await OMPCostScanner.loadReport(now: now)
-        let piReport = await PiCostScanner.loadReport(now: now)
-        let includeKiro = kiroReport?.scanConfidence.included == true
-        let includeOMP = ompReport.scanConfidence.included
-        let includePi = piReport.scanConfidence.included
-        guard includeClaude || includeCodex || includeGrok || includeKiro || includeOMP || includePi else {
+        let claudeReport = authorizedSources.contains(.claude)
+            ? await ClaudeCostScanner.usageReport(now: now) : nil
+        let codexReport = authorizedSources.contains(.codex)
+            ? await CodexCostScanner.usageReport(now: now) : nil
+        let grokReport = authorizedSources.contains(.grok)
+            ? await GrokCostScanner.usageReport(now: now) : nil
+        let kiroReport = authorizedSources.contains(.kiro)
+            ? await KiroCostScanner.usageReport(now: now) : nil
+        let ompReport = authorizedSources.contains(.omp)
+            ? await OMPCostScanner.loadReport(now: now) : nil
+        let piReport = authorizedSources.contains(.pi)
+            ? await PiCostScanner.loadReport(now: now) : nil
+
+        // Scanner calls can take long enough for a provider to be disabled or
+        // an agent to be removed. Re-read both sources of authority at the
+        // evaluation boundary, and never add a newly-authorized source whose
+        // report was not scanned in this pass.
+        let currentDetectedAgentRecords = await Task.detached(priority: .utility) {
+            InstalledAgentDetectors.detect()
+        }.value
+        // The user may opt out while the asynchronous scanners are running.
+        // Do not stamp or notify after consent has been withdrawn.
+        guard WeeklyDigest.isEnabled else { return }
+        let revalidatedSources = Self.revalidatedWeeklyDigestSources(
+            scannedSources: authorizedSources,
+            enabledProviderIDs: Set(providers.map(\.id)),
+            detectedAgentRecords: currentDetectedAgentRecords)
+        guard !revalidatedSources.isEmpty else {
             WeeklyDigest.lastEvaluatedAt = now
             return
         }
@@ -705,8 +862,12 @@ final class QuotaService: ObservableObject {
         let evaluation = WeeklyDigest.evaluate(
             claude: claudeReport, codex: codexReport, grok: grokReport,
             kiro: kiroReport, omp: ompReport, pi: piReport,
-            includeClaude: includeClaude, includeCodex: includeCodex, includeGrok: includeGrok,
-            includeKiro: includeKiro, includeOMP: includeOMP, includePi: includePi,
+            includeClaude: revalidatedSources.contains(.claude),
+            includeCodex: revalidatedSources.contains(.codex),
+            includeGrok: revalidatedSources.contains(.grok),
+            includeKiro: revalidatedSources.contains(.kiro),
+            includeOMP: revalidatedSources.contains(.omp),
+            includePi: revalidatedSources.contains(.pi),
             budgetUSD: WeeklyDigest.budgetUSD,
             budgetPeriod: WeeklyDigest.budgetPeriod,
             now: now)
@@ -718,10 +879,65 @@ final class QuotaService: ObservableObject {
         guard evaluation.shouldSend else { return }
 
         let posted = await QuotaNotifier.postAndWait(
-            id: WeeklyDigest.notificationID, title: evaluation.title, body: evaluation.body)
+            id: WeeklyDigest.notificationID,
+            title: evaluation.title,
+            body: evaluation.body,
+            revalidate: { [weak self] in
+                guard let self else { return false }
+                let detectedAgentRecords = await Task.detached(priority: .utility) {
+                    InstalledAgentDetectors.detect()
+                }.value
+                guard WeeklyDigest.isEnabled else { return false }
+                return Self.weeklyDigestSourcesRemainAuthorized(
+                    evaluatedSources: revalidatedSources,
+                    enabledProviderIDs: Set(self.providers.map(\.id)),
+                    detectedAgentRecords: detectedAgentRecords)
+            })
         if posted {
             WeeklyDigest.lastSentAt = now
         }
+    }
+
+    /// Canonical local-cost authorization shared by digest scanner and build
+    /// gates. Provider enablement or a current safe detector record is enough;
+    /// retained reports/history never grant access on their own.
+    nonisolated static func authorizedWeeklyDigestSources(
+        enabledProviderIDs: Set<String>,
+        detectedAgentRecords: [InstalledAgentRecord]
+    ) -> Set<WeeklyDigest.SourceID> {
+        let detectedIDs = Set(detectedAgentRecords.compactMap { record in
+            record.evidence.isEmpty ? nil : record.id.rawValue
+        })
+        return Set(WeeklyDigest.SourceID.allCases.filter { source in
+            enabledProviderIDs.contains(source.rawValue)
+                || detectedIDs.contains(source.rawValue)
+        })
+    }
+
+    /// Keeps only sources that were scanned and remain authorized after the
+    /// asynchronous scan phase. A newly enabled source waits for the next pass.
+    nonisolated static func revalidatedWeeklyDigestSources(
+        scannedSources: Set<WeeklyDigest.SourceID>,
+        enabledProviderIDs: Set<String>,
+        detectedAgentRecords: [InstalledAgentRecord]
+    ) -> Set<WeeklyDigest.SourceID> {
+        scannedSources.intersection(authorizedWeeklyDigestSources(
+            enabledProviderIDs: enabledProviderIDs,
+            detectedAgentRecords: detectedAgentRecords))
+    }
+
+    /// A digest body is valid only while every source used to construct it
+    /// remains authorized. Newly authorized sources wait for the next scan;
+    /// losing even one evaluated source suppresses the already-built body.
+    nonisolated static func weeklyDigestSourcesRemainAuthorized(
+        evaluatedSources: Set<WeeklyDigest.SourceID>,
+        enabledProviderIDs: Set<String>,
+        detectedAgentRecords: [InstalledAgentRecord]
+    ) -> Bool {
+        revalidatedWeeklyDigestSources(
+            scannedSources: evaluatedSources,
+            enabledProviderIDs: enabledProviderIDs,
+            detectedAgentRecords: detectedAgentRecords) == evaluatedSources
     }
 
     // MARK: - Quota warnings
@@ -973,10 +1189,14 @@ extension QuotaProvider {
     /// (prompt mode `.onlyOnUserAction`), so on a machine where the Keychain is
     /// the ONLY credential source — no `~/.claude/.credentials.json`, no env
     /// token — a `.background` self-test resolved no credentials and reported
-    /// "not configured" for a provider that was actually signed in.
+    /// "not configured" for a provider that was actually signed in. Codex's
+    /// CLI launch cooldown uses the older `RefreshInteraction` task-local, so
+    /// a Guided Setup retry must set both interaction seams consistently.
     func fetchAsUserAction(deadline: TimeInterval = ProviderFetchDeadline.seconds) async -> ProviderStatus {
-        await ProviderInteractionContext.$current.withValue(.userInitiated) {
-            await fetchWithDeadline(deadline: deadline)
+        await RefreshInteraction.$isManual.withValue(true) {
+            await ProviderInteractionContext.$current.withValue(.userInitiated) {
+                await fetchWithDeadline(deadline: deadline)
+            }
         }
     }
 
@@ -1032,12 +1252,15 @@ extension QuotaProvider {
 /// written after every completed refresh pass. Best-effort — a missing or
 /// corrupt file just means the popover starts empty like before.
 enum ProviderStatusCache {
+    static let maxStoredBytes = 2 * 1024 * 1024
+
     static func cacheURL(configURL: URL = BirdNionConfigStore.configURL()) -> URL {
         configURL.deletingLastPathComponent().appendingPathComponent("status-cache.json")
     }
 
     static func read(url: URL = cacheURL()) -> [ProviderStatus] {
-        guard let data = try? Data(contentsOf: url),
+        guard let data = try? CodexAuthStore.readPrivateFile(
+                  url, maximumBytes: maxStoredBytes),
               let list = try? JSONDecoder().decode([ProviderStatus].self, from: data)
         else { return [] }
         return list
@@ -1047,12 +1270,18 @@ enum ProviderStatusCache {
         // Error statuses may contain provider-returned details. They are useful
         // for the current in-memory UI, but must never cross the disk boundary.
         let snapshots = statuses.filter(\.isRenderableSnapshot)
-        guard let data = try? JSONEncoder().encode(snapshots) else { return }
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: [.atomic])
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o600], ofItemAtPath: url.path)
+        guard let data = try? JSONEncoder().encode(snapshots),
+              data.count <= maxStoredBytes
+        else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try CodexAuthStore.writePrivateFile(
+                data, to: url, maximumBytes: maxStoredBytes)
+        } catch {
+            // Best-effort cache only. A failed secure write leaves runtime
+            // state untouched and restore fails closed on the next launch.
+        }
     }
 }
 
@@ -1201,13 +1430,20 @@ enum QuotaNotifier {
     /// only advances on confirmed delivery; every other call site keeps
     /// using the fire-and-forget `post` above, which this does not replace.
     @discardableResult
-    static func postAndWait(id: String, title: String, body: String) async -> Bool {
+    static func postAndWait(
+        id: String,
+        title: String,
+        body: String,
+        revalidate: @escaping @MainActor () async -> Bool = { true }
+    ) async -> Bool {
         let center = UNUserNotificationCenter.current()
         let soundEnabled = QuotaWarnConfig.soundEnabled
         let posted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             operations.enqueue {
-                let granted = await requestAuthorization(center)
-                guard granted else {
+                let mayPost = await authorizationAndRevalidationAllowPost(
+                    requestAuthorization: { await requestAuthorization(center) },
+                    revalidate: revalidate)
+                guard mayPost else {
                     continuation.resume(returning: false)
                     return
                 }
@@ -1224,6 +1460,16 @@ enum QuotaNotifier {
             QuotaAlertOverlay.shared.show(title: title, message: body)
         }
         return posted
+    }
+
+    /// Keeps the consent/source check causally after the potentially blocking
+    /// OS permission prompt and immediately before the notification is added.
+    static func authorizationAndRevalidationAllowPost(
+        requestAuthorization: @escaping @MainActor () async -> Bool,
+        revalidate: @escaping @MainActor () async -> Bool
+    ) async -> Bool {
+        guard await requestAuthorization() else { return false }
+        return await revalidate()
     }
 
     static func remove(id: String) {

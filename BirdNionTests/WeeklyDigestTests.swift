@@ -57,6 +57,13 @@ final class WeeklyDigestTests: XCTestCase {
                         daily: daily, topModel: nil, scanConfidence: confidence)
     }
 
+    private func kiroReport(daily: [KiroDailyUsage],
+                            confidence: CostHistoryStore.UsageScanConfidence = .unavailable
+    ) -> KiroUsageReport {
+        KiroUsageReport(todayUSD: 0, todayTokens: 0, last30USD: 0, last30Tokens: 0,
+                        daily: daily, topModel: nil, scanConfidence: confidence)
+    }
+
     /// Fixed calendar date — for forecast-status assertions that depend on
     /// `daysElapsed`/`daysInMonth` (e.g. `.forecastOver` vs `.onTrack`), the
     /// class's live `now`/`day(offset)` would make the expected status
@@ -141,6 +148,104 @@ final class WeeklyDigestTests: XCTestCase {
         XCTAssertEqual(evaluation.topSource, .omp)
         XCTAssertEqual(evaluation.currentUSD, 3, accuracy: 0.001)
         XCTAssertEqual(evaluation.currentTokens, 3_000)
+    }
+
+    func testDigestAuthorizationExcludesStaleKiroHistoryWithoutProviderOrDetection() {
+        let authorized = QuotaService.authorizedWeeklyDigestSources(
+            enabledProviderIDs: ["claude"], detectedAgentRecords: [])
+        let claude = claudeReport(
+            daily: [claudeDay(-1, usd: 2, tokens: 200)],
+            confidence: liveConfidence())
+        let staleKiro = kiroReport(
+            daily: [KiroDailyUsage(
+                date: day(-1), usd: 500, tokens: 50_000, models: [])],
+            confidence: historyOnlyConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claude, codex: nil, grok: nil, kiro: staleKiro,
+            includeClaude: authorized.contains(.claude),
+            includeCodex: authorized.contains(.codex),
+            includeGrok: authorized.contains(.grok),
+            includeKiro: authorized.contains(.kiro),
+            budgetUSD: nil, now: now, calendar: calendar)
+
+        XCTAssertEqual(authorized, [.claude])
+        XCTAssertTrue(evaluation.shouldSend)
+        XCTAssertEqual(evaluation.topSource, .claude)
+        XCTAssertEqual(evaluation.currentUSD, 2, accuracy: 0.001)
+        XCTAssertFalse(evaluation.nonLiveSources.contains(.kiro))
+    }
+
+    func testDigestAuthorizationIncludesKiroFromProviderOrSafeDetectionOnly() {
+        let providerAuthorized = QuotaService.authorizedWeeklyDigestSources(
+            enabledProviderIDs: ["kiro"], detectedAgentRecords: [])
+        XCTAssertTrue(providerAuthorized.contains(.kiro))
+
+        // A projected local-cost capability can come from retained history;
+        // without detector evidence it must not authorize a digest source.
+        let historyOnlyProjection = InstalledAgentRecord(
+            id: .kiro, evidence: [], capabilities: [.localCost], providerIDs: ["kiro"])
+        let historyAuthorized = QuotaService.authorizedWeeklyDigestSources(
+            enabledProviderIDs: [], detectedAgentRecords: [historyOnlyProjection])
+        XCTAssertFalse(historyAuthorized.contains(.kiro))
+
+        let detectedKiro = InstalledAgentRecord(
+            id: .kiro,
+            evidence: [InstalledAgentEvidence(
+                kind: .applicationState,
+                token: "~/Library/Application Support/kiro-cli/data.sqlite3")],
+            capabilities: [.localCost],
+            providerIDs: ["kiro"])
+        let detectedAuthorized = QuotaService.authorizedWeeklyDigestSources(
+            enabledProviderIDs: [], detectedAgentRecords: [detectedKiro])
+        XCTAssertTrue(detectedAuthorized.contains(.kiro))
+    }
+
+    func testDigestAuthorizationRevalidationDropsSourceRevokedDuringScan() {
+        let scannedSources: Set<WeeklyDigest.SourceID> = [.claude, .kiro]
+        let revalidated = QuotaService.revalidatedWeeklyDigestSources(
+            scannedSources: scannedSources,
+            enabledProviderIDs: ["claude"],
+            detectedAgentRecords: [])
+        let claude = claudeReport(
+            daily: [claudeDay(-1, usd: 2, tokens: 200)],
+            confidence: liveConfidence())
+        let kiro = kiroReport(
+            daily: [KiroDailyUsage(
+                date: day(-1), usd: 500, tokens: 50_000, models: [])],
+            confidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: claude, codex: nil, grok: nil, kiro: kiro,
+            includeClaude: revalidated.contains(.claude),
+            includeCodex: revalidated.contains(.codex),
+            includeGrok: revalidated.contains(.grok),
+            includeKiro: revalidated.contains(.kiro),
+            budgetUSD: nil, now: now, calendar: calendar)
+
+        XCTAssertEqual(revalidated, [.claude])
+        XCTAssertTrue(evaluation.shouldSend)
+        XCTAssertEqual(evaluation.topSource, .claude)
+        XCTAssertEqual(evaluation.currentUSD, 2, accuracy: 0.001)
+
+        let newlyAuthorized = QuotaService.revalidatedWeeklyDigestSources(
+            scannedSources: [.claude],
+            enabledProviderIDs: ["claude", "kiro"],
+            detectedAgentRecords: [])
+        XCTAssertEqual(newlyAuthorized, [.claude])
+    }
+
+    func testDigestFinalAuthorizationRejectsAnyRevokedEvaluatedSource() {
+        let evaluatedSources: Set<WeeklyDigest.SourceID> = [.claude, .kiro]
+
+        XCTAssertFalse(QuotaService.weeklyDigestSourcesRemainAuthorized(
+            evaluatedSources: evaluatedSources,
+            enabledProviderIDs: ["claude"],
+            detectedAgentRecords: []))
+        XCTAssertTrue(QuotaService.weeklyDigestSourcesRemainAuthorized(
+            evaluatedSources: evaluatedSources,
+            enabledProviderIDs: ["claude", "kiro"],
+            detectedAgentRecords: []))
     }
 
     // MARK: - Suppression (contract #3 / #4)
@@ -271,6 +376,30 @@ final class WeeklyDigestTests: XCTestCase {
         XCTAssertEqual(evaluation.topModel?.source, "codex")
     }
 
+    func testKiroSyntheticOtherNeverWinsDigestTopModel() {
+        let kiro = kiroReport(
+            daily: [KiroDailyUsage(
+                date: day(-1),
+                usd: 5.5,
+                tokens: 550,
+                models: [
+                    KiroDailyModel(name: "real-model", usd: 1, tokens: 100),
+                    KiroDailyModel(
+                        name: KiroCostScanner.aggregateModelName, usd: 4.5, tokens: 450),
+                ])],
+            confidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: nil, codex: nil, grok: nil, kiro: kiro,
+            includeClaude: false, includeCodex: false, includeGrok: false,
+            includeKiro: true,
+            budgetUSD: nil, now: now, calendar: calendar)
+
+        XCTAssertEqual(evaluation.topModel?.name, "real-model")
+        XCTAssertEqual(evaluation.topModel?.source, "kiro")
+        XCTAssertEqual(evaluation.currentTokens, 550)
+    }
+
     func testTopModelUsesSourceAsFinalTieBreak() {
         let claude = claudeReport(
             daily: [claudeDay(0, usd: 1, tokens: 50,
@@ -373,6 +502,24 @@ final class WeeklyDigestTests: XCTestCase {
         XCTAssertEqual(evaluation.providerBudgetRisks.first?.status, .alreadyOver)
         XCTAssertTrue(evaluation.body.contains("Claude"))
         XCTAssertTrue(evaluation.body.contains("already over budget"))
+    }
+
+    func testKiroBudgetUsesKiroConfidenceAndSpend() {
+        let kiro = kiroReport(
+            daily: [KiroDailyUsage(date: day(0), usd: 50, tokens: 100, models: [])],
+            confidence: liveConfidence())
+
+        let evaluation = WeeklyDigest.evaluate(
+            claude: nil, codex: nil, grok: nil, kiro: kiro,
+            includeClaude: false, includeCodex: false, includeGrok: false,
+            includeKiro: true,
+            budgetUSD: nil, claudeBudgetUSD: nil, codexBudgetUSD: nil,
+            grokBudgetUSD: nil, kiroBudgetUSD: 10,
+            now: now, calendar: calendar, language: "en")
+
+        XCTAssertEqual(evaluation.providerBudgetRisks.map(\.source), [.kiro])
+        XCTAssertEqual(evaluation.providerBudgetRisks.first?.status, .alreadyOver)
+        XCTAssertTrue(evaluation.body.contains("Kiro"))
     }
 
     /// A provider on track against its own budget contributes no risk line

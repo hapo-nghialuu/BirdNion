@@ -1,12 +1,61 @@
 import AppKit
+import SQLite3
 import XCTest
 @testable import BirdNion
+
+private actor KiroScanInvocationCounter {
+    private var count = 0
+    func increment() { count += 1 }
+    func current() -> Int { count }
+}
 
 /// Parser tests for the natively-authored new providers (fixture-driven, no
 /// network). Cookie/OAuth/CLI providers expose their own `_parseForTesting`
 /// hooks; these cover the three hand-written API-key parsers.
 @MainActor
 final class NewProviderTests: XCTestCase {
+
+    func testKiroReportCacheCoalescesConcurrentLoads() async {
+        let cache = KiroCostScanner.Cache()
+        let counter = KiroScanInvocationCounter()
+        let now = Date()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<12 {
+                group.addTask {
+                    _ = await cache.report(now: now, ttl: 300) {
+                        await counter.increment()
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        return nil
+                    }
+                }
+            }
+        }
+        let invocationCount = await counter.current()
+        XCTAssertEqual(invocationCount, 1)
+    }
+
+    func testKiroReportCacheRetainsFailClosedProjectionWithinTTL() async {
+        let cache = KiroCostScanner.Cache()
+        let counter = KiroScanInvocationCounter()
+        let now = Date()
+        let unavailable = KiroUsageReport(
+            todayUSD: 0,
+            todayTokens: 0,
+            last30USD: 0,
+            last30Tokens: 0,
+            daily: [],
+            topModel: nil)
+
+        for _ in 0..<2 {
+            _ = await cache.report(now: now, ttl: 300) {
+                await counter.increment()
+                return unavailable
+            }
+        }
+
+        let invocationCount = await counter.current()
+        XCTAssertEqual(invocationCount, 1)
+    }
 
     func testElevenLabsParse() {
         let json = """
@@ -202,6 +251,331 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), malformed)
     }
 
+    func testCostHistorySemanticPoisonIsNotPublishedOrOverwritten() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-semantic-poison-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let day = CostHistoryStore.dayKey(Date())
+        let poison: [String: Any] = [
+            "version": 1,
+            "sources": [
+                "claude": [day: ["usd": -1.0, "tokens": -10, "models": []]],
+                "codex": [day: ["usd": 2.0, "tokens": 200, "models": []]],
+            ],
+        ]
+        let original = try JSONSerialization.data(
+            withJSONObject: poison, options: [.prettyPrinted, .sortedKeys])
+        try original.write(to: url)
+
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .omp,
+            liveDays: [(Date(), 9.0, 900, [("model", 9.0, 900)])],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+
+        XCTAssertFalse(receipt.persisted)
+        XCTAssertTrue(receipt.window.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        XCTAssertFalse(CostHistoryStore.confidence(
+            source: .codex, liveScanSucceeded: false, url: url).included)
+        XCTAssertTrue(CostHistoryStore.window(
+            source: .codex, windowDays: 7, url: url).allSatisfy {
+                $0.tokens == 0 && $0.usd == 0
+            })
+    }
+
+    func testCostHistoryDanglingSymlinkIsNotTreatedAsMissing() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-dangling-link-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let missingTarget = root.appendingPathComponent("missing-target.json")
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: missingTarget)
+
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [(Date(), 1.0, 100, [("model", 1.0, 100)])],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+
+        XCTAssertFalse(receipt.persisted)
+        XCTAssertTrue(receipt.window.isEmpty)
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: url.path),
+            missingTarget.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missingTarget.path))
+    }
+
+    func testCostHistoryOversizedSparseFileFailsClosedWithoutOverwrite() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-oversized-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(8 * 1024 * 1024 + 1))
+        try handle.close()
+
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [(Date(), 1.0, 100, [("model", 1.0, 100)])],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+
+        XCTAssertFalse(receipt.persisted)
+        XCTAssertTrue(receipt.window.isEmpty)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        XCTAssertEqual(attributes[.size] as? UInt64, UInt64(8 * 1024 * 1024 + 1))
+    }
+
+    func testCostHistoryFutureVersionAndOversizedCardinalityRemainUnchanged() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-forward-version-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let today = CostHistoryStore.dayKey(Date())
+
+        let futureVersion = Data(
+            #"{"version":2,"sources":{},"newCriticalMetadata":{"keep":true}}"#.utf8)
+        try futureVersion.write(to: url)
+        var receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [(Date(), 1.0, 100, [("model", 1.0, 100)])],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+        XCTAssertFalse(receipt.persisted)
+        XCTAssertEqual(try Data(contentsOf: url), futureVersion)
+
+        let models = (0..<33).map {
+            ["name": "model-\($0)", "usd": 0.0, "tokens": 1] as [String: Any]
+        }
+        let excessive: [String: Any] = [
+            "version": 1,
+            "sources": [
+                "kiro": [today: ["usd": 0.0, "tokens": 33, "models": models]],
+            ],
+        ]
+        let excessiveData = try JSONSerialization.data(
+            withJSONObject: excessive, options: [.sortedKeys])
+        try excessiveData.write(to: url)
+        receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [(Date(), 1.0, 100, [("model", 1.0, 100)])],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+        XCTAssertFalse(receipt.persisted)
+        XCTAssertEqual(try Data(contentsOf: url), excessiveData)
+    }
+
+    func testCostHistoryAcceptsAndPersistsNineRealModels() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-nine-models-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let models = (0..<9).map { index in
+            (name: "model-\(index)", usd: Double(index), tokens: index + 1)
+        }
+
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .codex,
+            liveDays: [(Date(), 36, 45, models)],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+
+        XCTAssertTrue(receipt.persisted)
+        let stored = CostHistoryStore.read(url: url)
+        XCTAssertEqual(stored.sources?["codex"]?.values.first?.models.count, 9)
+    }
+
+    func testCostHistoryFIFOFailsClosedWithoutBlocking() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-fifo-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        XCTAssertEqual(url.path.withCString { Darwin.mkfifo($0, 0o600) }, 0)
+
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [(Date(), 1, 100, [("model", 1, 100)])],
+            windowDays: 7,
+            url: url,
+            liveScanSucceeded: true)
+
+        XCTAssertFalse(receipt.persisted)
+        var info = stat()
+        XCTAssertEqual(url.path.withCString { lstat($0, &info) }, 0)
+        XCTAssertEqual(info.st_mode & mode_t(S_IFMT), mode_t(S_IFIFO))
+    }
+
+    func testCostHistoryWriterRejectsDocumentItsBoundedReaderCannotRead() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-writer-bound-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let original = Data(#"{"version":1,"sources":{}}"#.utf8)
+        try original.write(to: url)
+        let now = Date()
+        let cal = Calendar.current
+        let models = (0..<8).map { index in
+            CostHistoryStore.Model(
+                name: String(repeating: "😀", count: 127) + "\(index)",
+                usd: 0,
+                tokens: 1)
+        }
+        var days: [String: CostHistoryStore.Day] = [:]
+        for offset in 0..<400 {
+            let date = cal.date(byAdding: .day, value: -offset, to: now)!
+            days[CostHistoryStore.dayKey(date, calendar: cal)] = .init(
+                usd: 0,
+                tokens: 8,
+                models: models)
+        }
+        let sources = Dictionary(uniqueKeysWithValues: CostHistoryStore.Source.allCases.map {
+            ($0.rawValue, days)
+        })
+        let document = CostHistoryStore.Document(version: 1, sources: sources)
+        XCTAssertTrue(CostHistoryStore.validateDocument(document, now: now))
+
+        XCTAssertThrowsError(try CostHistoryStore.write(document, url: url))
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
+    func testCostHistoryTopModelUsesMergedTrailingWindowAndSurvivesEmptyScan() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-top-model-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let now = Date()
+        let cal = Calendar.current
+        let historical = (1...29).map { offset in
+            let date = cal.date(byAdding: .day, value: -offset, to: now)!
+            return (date, 1.0, 100, [("model-a", 1.0, 100)])
+        }
+        var receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: historical,
+            now: now,
+            calendar: cal,
+            windowDays: 120,
+            url: url,
+            liveScanSucceeded: true,
+            updateTopModel: true,
+            topModel: "model-a")
+        XCTAssertTrue(receipt.persisted)
+
+        receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [(now, 1.0, 10, [("model-b", 1.0, 10)])],
+            now: now,
+            calendar: cal,
+            windowDays: 120,
+            url: url,
+            liveScanSucceeded: true,
+            updateTopModel: true,
+            topModel: "model-b")
+        XCTAssertTrue(receipt.persisted)
+        XCTAssertEqual(CostHistoryStore.storedTopModel(source: .kiro, url: url), "model-a")
+
+        receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [],
+            now: now,
+            calendar: cal,
+            windowDays: 120,
+            url: url,
+            liveScanSucceeded: true,
+            updateTopModel: true,
+            topModel: nil)
+        XCTAssertTrue(receipt.persisted)
+        XCTAssertEqual(CostHistoryStore.storedTopModel(source: .kiro, url: url), "model-a")
+    }
+
+    func testCostHistorySemanticValidatorRejectsEveryPersistedPoisonClass() {
+        let now = Date()
+        let cal = Calendar.current
+        let today = CostHistoryStore.dayKey(now, calendar: cal)
+        let yesterday = CostHistoryStore.dayKey(
+            cal.date(byAdding: .day, value: -1, to: now)!, calendar: cal)
+        let validDay = CostHistoryStore.Day(
+            usd: 1,
+            tokens: 10,
+            models: [.init(name: "model", usd: 1, tokens: 10)])
+        let valid = CostHistoryStore.Document(
+            version: 1,
+            sources: ["kiro": [today: validDay]],
+            scannedAt: ["kiro": Int64((now.timeIntervalSince1970 * 1_000).rounded(.towardZero))])
+        XCTAssertTrue(CostHistoryStore.validateDocument(valid, now: now))
+
+        var badDayKey = valid
+        badDayKey.sources = ["kiro": ["2026-8-1": validDay]]
+        XCTAssertFalse(CostHistoryStore.validateDocument(badDayKey, now: now))
+
+        var futureDay = valid
+        futureDay.sources = ["kiro": ["9999-01-01": validDay]]
+        XCTAssertFalse(CostHistoryStore.validateDocument(futureDay, now: now))
+
+        var badModel = valid
+        badModel.sources?["kiro"]?[today]?.models[0].name = "bad\nmodel"
+        XCTAssertFalse(CostHistoryStore.validateDocument(badModel, now: now))
+
+        var trailingControlModel = valid
+        trailingControlModel.sources?["kiro"]?[today]?.models[0].name = "model\n"
+        XCTAssertFalse(CostHistoryStore.validateDocument(trailingControlModel, now: now))
+
+        var oversizedDecomposedModel = valid
+        let decomposedName = String(repeating: "e\u{0301}", count: 128)
+        XCTAssertEqual(decomposedName.count, 128)
+        XCTAssertEqual(decomposedName.unicodeScalars.count, 256)
+        oversizedDecomposedModel.sources?["kiro"]?[today]?.models[0].name = decomposedName
+        XCTAssertFalse(CostHistoryStore.validateDocument(oversizedDecomposedModel, now: now))
+
+        var futureScan = valid
+        futureScan.scannedAt?["kiro"] = Int64(
+            (now.addingTimeInterval(301).timeIntervalSince1970 * 1_000).rounded(.towardZero))
+        XCTAssertFalse(CostHistoryStore.validateDocument(futureScan, now: now))
+
+        var tokenOverflow = valid
+        tokenOverflow.sources = [
+            "kiro": [
+                today: .init(usd: 0, tokens: Int.max, models: []),
+                yesterday: .init(usd: 0, tokens: 1, models: []),
+            ],
+        ]
+        XCTAssertFalse(CostHistoryStore.validateDocument(tokenOverflow, now: now))
+
+        var usdOverflow = valid
+        usdOverflow.sources = [
+            "kiro": [
+                today: .init(usd: Double.greatestFiniteMagnitude, tokens: 0, models: []),
+                yesterday: .init(usd: Double.greatestFiniteMagnitude, tokens: 0, models: []),
+            ],
+        ]
+        XCTAssertFalse(CostHistoryStore.validateDocument(usdOverflow, now: now))
+    }
+
     // MARK: - Data Confidence Pass
 
     /// Legacy `cost-history.json` files (written before the Data Confidence
@@ -219,11 +593,249 @@ final class NewProviderTests: XCTestCase {
     /// `scannedAt` persists as epoch millis (matches the Linux Tauri port's
     /// `cost-history.json` schema) and round-trips exactly through encode/decode.
     func testCostHistoryDocumentScannedAtEpochMillisRoundtrip() throws {
-        let millis = 1_755_555_555_123.0
+        let millis: Int64 = 1_755_555_555_123
         let doc = CostHistoryStore.Document(version: 1, sources: [:], scannedAt: ["claude": millis])
         let data = try JSONEncoder().encode(doc)
         let decoded = try JSONDecoder().decode(CostHistoryStore.Document.self, from: data)
         XCTAssertEqual(decoded.scannedAt?["claude"], millis)
+    }
+
+    func testCostHistoryMigratesFractionalMacTimestampToSharedIntegerSchema() throws {
+        let legacyJSON = """
+        {"version":1,"sources":{},"scanned_at":{"kiro":1787651040100.229}}
+        """
+        let migrated = try JSONDecoder().decode(
+            CostHistoryStore.Document.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(migrated.scannedAt?["kiro"], 1_787_651_040_100)
+
+        let canonical = try JSONEncoder().encode(migrated)
+        let canonicalText = try XCTUnwrap(String(data: canonical, encoding: .utf8))
+        XCTAssertTrue(canonicalText.contains("1787651040100"))
+        XCTAssertFalse(canonicalText.contains("1787651040100.229"))
+        XCTAssertEqual(
+            try JSONDecoder().decode(CostHistoryStore.Document.self, from: canonical),
+            migrated)
+    }
+
+    func testCostHistoryDaySchemaStaysGregorianUnderNonGregorianUserCalendars() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Ho_Chi_Minh"))
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = zone
+        let now = try XCTUnwrap(gregorian.date(
+            from: DateComponents(year: 2026, month: 8, day: 25, hour: 12)))
+        let day = CostHistoryStore.Day(
+            usd: 1, tokens: 10,
+            models: [.init(name: "kiro-model", usd: 1, tokens: 10)])
+
+        for identifier in [Calendar.Identifier.buddhist, .islamicCivil] {
+            var userCalendar = Calendar(identifier: identifier)
+            userCalendar.timeZone = zone
+            XCTAssertEqual(
+                CostHistoryStore.dayKey(now, calendar: userCalendar),
+                "2026-08-25")
+            let parsed = try XCTUnwrap(
+                CostHistoryStore.parseDayKey("2026-08-25", calendar: userCalendar))
+            XCTAssertEqual(
+                CostHistoryStore.dayKey(parsed, calendar: userCalendar),
+                "2026-08-25")
+            let document = CostHistoryStore.Document(
+                version: 1,
+                sources: ["kiro": ["2026-08-25": day]],
+                scannedAt: nil)
+            XCTAssertTrue(CostHistoryStore.validateDocument(
+                document, now: now, calendar: userCalendar))
+        }
+    }
+
+    func testClaudeAccountMutationDoesNotPublishUndurableState() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-account-denied-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blockingFile = root.appendingPathComponent("not-a-directory")
+        try Data("block".utf8).write(to: blockingFile)
+        let impossibleURL = blockingFile.appendingPathComponent("claude-accounts.json")
+        let account = ClaudeTokenAccount(
+            label: "B", token: "sk-ant-test", kind: .admin)
+
+        switch ClaudeTokenAccountStore.add(account, url: impossibleURL) {
+        case .success:
+            XCTFail("undurable mutation must not publish success state")
+        case .failure(let error):
+            XCTAssertEqual(error, .persistenceFailed)
+        }
+        XCTAssertTrue(ClaudeTokenAccountStore.load(url: impossibleURL).accounts.isEmpty)
+    }
+
+    func testClaudeAccountMutationRefusesMalformedExistingStoreWithoutOverwritingIt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-account-corrupt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("claude-accounts.json")
+        let malformed = Data("{ truncated credential store".utf8)
+        try malformed.write(to: url)
+
+        let result = ClaudeTokenAccountStore.add(
+            ClaudeTokenAccount(label: "B", token: "sk-ant-test", kind: .admin),
+            url: url)
+
+        XCTAssertEqual(result, .failure(.persistenceFailed))
+        XCTAssertEqual(try Data(contentsOf: url), malformed)
+    }
+
+    func testClaudeAccountMutationRefusesDanglingSymlinkStore() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-account-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("claude-accounts.json")
+        let missingTarget = root.appendingPathComponent("missing-target.json")
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: missingTarget)
+
+        let result = ClaudeTokenAccountStore.add(
+            ClaudeTokenAccount(label: "B", token: "sk-ant-test", kind: .admin),
+            url: url)
+
+        XCTAssertEqual(result, .failure(.persistenceFailed))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: url.path),
+                       missingTarget.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missingTarget.path))
+    }
+
+    func testClaudeAccountMutationRefusesFIFOStoreWithoutBlocking() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-account-fifo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("claude-accounts.json")
+        XCTAssertEqual(url.path.withCString { Darwin.mkfifo($0, 0o600) }, 0)
+
+        let startedAt = Date()
+        let result = ClaudeTokenAccountStore.add(
+            ClaudeTokenAccount(label: "B", token: "sk-ant-test", kind: .admin),
+            url: url)
+
+        XCTAssertEqual(result, .failure(.persistenceFailed))
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1)
+        var info = stat()
+        XCTAssertEqual(url.path.withCString { Darwin.lstat($0, &info) }, 0)
+        XCTAssertEqual(info.st_mode & mode_t(S_IFMT), mode_t(S_IFIFO))
+    }
+
+    func testClaudeAccountMutationRefusesOversizedStoreWithoutOverwritingIt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-account-oversized-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("claude-accounts.json")
+        let oversized = Data(repeating: 0x7b, count: ClaudeTokenAccountStore.maxStoredBytes + 1)
+        try oversized.write(to: url)
+
+        let result = ClaudeTokenAccountStore.add(
+            ClaudeTokenAccount(label: "B", token: "sk-ant-test", kind: .admin),
+            url: url)
+
+        XCTAssertEqual(result, .failure(.persistenceFailed))
+        XCTAssertEqual(try Data(contentsOf: url), oversized)
+    }
+
+    func testClaudeAccountMutationRejectsOversizedEncodedStoreWithoutOverwritingValidStore() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-account-oversized-write-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("claude-accounts.json")
+        let originalAccount = ClaudeTokenAccount(
+            label: "Existing", token: "sk-ant-existing", kind: .admin)
+
+        let initialResult = ClaudeTokenAccountStore.add(originalAccount, url: url)
+        guard case .success(let initialStore) = initialResult else {
+            return XCTFail("valid credential store should save successfully")
+        }
+        let originalBytes = try Data(contentsOf: url)
+
+        let result = ClaudeTokenAccountStore.add(
+            ClaudeTokenAccount(
+                label: "Oversized",
+                token: String(repeating: "x", count: ClaudeTokenAccountStore.maxStoredBytes),
+                kind: .admin),
+            url: url)
+
+        XCTAssertEqual(result, .failure(.persistenceFailed))
+        XCTAssertEqual(try Data(contentsOf: url), originalBytes)
+        XCTAssertEqual(ClaudeTokenAccountStore.load(url: url), initialStore)
+    }
+
+    func testClaudeAccountStorePersistsCredentialsWithOwnerOnlyPermissions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-claude-account-mode-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("claude-accounts.json")
+
+        let result = ClaudeTokenAccountStore.add(
+            ClaudeTokenAccount(label: "B", token: "sk-ant-test", kind: .admin),
+            url: url)
+
+        guard case .success = result else {
+            return XCTFail("credential store should save successfully")
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(permissions.intValue, 0o600)
+    }
+
+    func testCostHistoryMetadataUsesSharedSnakeCaseAndPreservesLinuxMarkers() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-history-linux-metadata-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("cost-history.json")
+        let now = Date()
+        let millis = Int64((now.timeIntervalSince1970 * 1_000).rounded(.towardZero))
+        let linuxJSON = """
+        {"version":1,"sources":{"kiro":{}},"scanned_at":{"kiro":\(millis)},
+         "counting_revision":{"kiro":2},"top_models":{"kiro":"real-model"}}
+        """
+        try Data(linuxJSON.utf8).write(to: url)
+
+        let decoded = CostHistoryStore.read(url: url)
+        XCTAssertEqual(decoded.scannedAt?["kiro"], millis)
+        XCTAssertEqual(decoded.countingRevision?["kiro"], 2)
+        XCTAssertEqual(decoded.topModels?["kiro"], "real-model")
+
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .claude,
+            liveDays: [(now, 1, 10, [("claude-model", 1, 10)])],
+            now: now,
+            url: url,
+            liveScanSucceeded: true)
+        XCTAssertTrue(receipt.persisted)
+        let rootObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        XCTAssertNotNil(rootObject["scanned_at"])
+        XCTAssertNotNil(rootObject["counting_revision"])
+        XCTAssertNotNil(rootObject["top_models"])
+        XCTAssertNil(rootObject["scannedAt"])
+        XCTAssertNil(rootObject["countingRevision"])
+        XCTAssertNil(rootObject["topModels"])
+        XCTAssertEqual(
+            (rootObject["counting_revision"] as? [String: Int])?["kiro"], 2)
+
+        let legacyJSON = """
+        {"version":1,"sources":{},"scannedAt":{"grok":1},
+         "countingRevision":{"grok":3},"topModels":{"grok":"grok-model"}}
+        """
+        let legacy = try JSONDecoder().decode(
+            CostHistoryStore.Document.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(legacy.scannedAt?["grok"], 1)
+        XCTAssertEqual(legacy.countingRevision?["grok"], 3)
+        XCTAssertEqual(legacy.topModels?["grok"], "grok-model")
+        let canonical = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        XCTAssertNotNil(canonical["scanned_at"])
+        XCTAssertNotNil(canonical["counting_revision"])
+        XCTAssertNotNil(canonical["top_models"])
     }
 
     /// `apply(liveScanSucceeded: true)` stamps `scannedAt`; a later
@@ -981,8 +1593,9 @@ final class NewProviderTests: XCTestCase {
             .init(day: today, tokens: 50_000, usd: 0.15, model: "claude-sonnet-4"),
             .init(day: yesterday, tokens: 200_000, usd: 0.60, model: "claude-opus-4.5"),
         ]
-        let report = KiroCostScanner.buildReport(sessions: sessions, now: now, windowDays: 90, calendar: cal)
-        XCTAssertEqual(report.daily.count, 90)
+        let report = KiroCostScanner.buildReport(sessions: sessions, now: now, calendar: cal)
+        XCTAssertEqual(KiroCostScanner.chartWindowDays, 120)
+        XCTAssertEqual(report.daily.count, 120)
         XCTAssertEqual(report.todayTokens, 150_000)
         XCTAssertEqual(report.todayUSD, 0.45, accuracy: 0.001)
         XCTAssertEqual(report.last30Tokens, 350_000)
@@ -992,6 +1605,202 @@ final class NewProviderTests: XCTestCase {
         let y = report.daily[report.daily.count - 2]
         XCTAssertEqual(y.tokens, 200_000)
         XCTAssertEqual(y.usd, 0.60, accuracy: 0.001)
+    }
+
+    func testKiroBuildReportPreservesGlobalTopAndDailyModelTotals() {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let now = cal.date(byAdding: .hour, value: 9, to: today)!
+        var sessions: [KiroCostScanner.SessionPoint] = []
+        for offset in 0..<30 {
+            let day = cal.date(byAdding: .day, value: -offset, to: today)!
+            for rank in 0..<7 {
+                sessions.append(.init(
+                    day: day,
+                    tokens: 100,
+                    usd: 0.01,
+                    model: "burst-\(offset)-\(rank)"))
+            }
+            sessions.append(.init(day: day, tokens: 90, usd: 0.009, model: "steady"))
+        }
+
+        let report = KiroCostScanner.buildReport(
+            sessions: sessions, now: now, windowDays: 120, calendar: cal)
+
+        XCTAssertEqual(report.topModel, "steady")
+        for day in report.daily.suffix(30) {
+            XCTAssertEqual(day.tokens, 790)
+            XCTAssertEqual(day.models.map(\.tokens).reduce(0, +), day.tokens)
+            XCTAssertEqual(day.models.map(\.usd).reduce(0, +), day.usd, accuracy: 0.000_001)
+            XCTAssertTrue(day.models.contains(where: { $0.name == "steady" }))
+            XCTAssertTrue(day.models.contains(where: { $0.name == "Other" }))
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-top-model-\(UUID().uuidString)",
+            isDirectory: true)
+        let historyURL = root.appendingPathComponent("cost-history.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let merged = KiroCostScanner.mergeLiveReport(
+            report, now: now, historyURL: historyURL)
+        XCTAssertEqual(merged.topModel, "steady")
+        XCTAssertEqual(CostHistoryStore.storedTopModel(
+            source: .kiro, url: historyURL), "steady")
+    }
+
+    func testKiroRejectsUsageBeyondClockSkewOnSameCalendarDay() throws {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let now = try XCTUnwrap(cal.date(byAdding: .hour, value: 9, to: today))
+        let future = try XCTUnwrap(cal.date(byAdding: .hour, value: 2, to: now))
+        XCTAssertTrue(cal.isDate(future, inSameDayAs: now))
+        let iso = ISO8601DateFormatter()
+        let nowISO = iso.string(from: now)
+        let futureISO = iso.string(from: future)
+        let sidecar: [String: Any] = [
+            "session_id": "same-day-future",
+            "created_at": nowISO,
+            "session_state": [
+                "rts_model_state": ["model_info": ["model_id": "claude-sonnet-4-5"]],
+                "conversation_metadata": ["user_turn_metadatas": [[
+                    "metering_usage": [["unit": "credit", "value": 1.0]],
+                    "input_token_count": 10,
+                    "output_token_count": 5,
+                    "end_timestamp": futureISO,
+                ]]],
+            ],
+        ]
+        XCTAssertTrue(KiroCostScanner.parseCLISessionSidecar(
+            sidecar, cutoff: today, now: now, calendar: cal).isEmpty)
+
+        let futureMs = Int64(future.timeIntervalSince1970 * 1_000)
+        let conversation: [String: Any] = [
+            "history": [[
+                "user": "future request",
+                "request_metadata": [
+                    "model_id": "claude-sonnet-4-5",
+                    "request_start_timestamp_ms": futureMs,
+                ],
+            ]],
+        ]
+        XCTAssertNil(KiroCostScanner.parseConversation(
+            data: conversation,
+            fallbackCreatedMs: Int64(now.timeIntervalSince1970 * 1_000),
+            cutoff: today,
+            now: now,
+            calendar: cal))
+    }
+
+    func testKiroRejectsSQLiteStorageBeyondGlobalScanBudgetBeforeQuery() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-sqlite-budget-\(UUID().uuidString)",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dbURL = root.appendingPathComponent("data.sqlite3")
+        XCTAssertTrue(FileManager.default.createFile(atPath: dbURL.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: dbURL)
+        try handle.truncate(atOffset: UInt64(256 * 1024 * 1024 + 1))
+        try handle.close()
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: dbURL,
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: Date())
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.failures, ["sqlite"])
+        XCTAssertEqual(result.report.last30Tokens, 0)
+    }
+
+    func testKiroRejectsSymlinkedSQLiteDatabase() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-sqlite-symlink-\(UUID().uuidString)",
+                                   isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("outside.sqlite3")
+        let dbURL = root.appendingPathComponent("data.sqlite3")
+        let now = Date()
+        let nowMs = Int64(now.timeIntervalSince1970 * 1_000)
+        let payload = """
+        {"conversation_id":"redirected-sqlite","history":[{"user":"redirected usage","request_metadata":{"request_start_timestamp_ms":\(nowMs)}}]}
+        """
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(target.path, &db), SQLITE_OK)
+        let opened = try XCTUnwrap(db)
+        for statement in [
+            "CREATE TABLE conversations (value TEXT NOT NULL)",
+            "INSERT INTO conversations (value) VALUES ('\(payload)')",
+        ] {
+            XCTAssertEqual(sqlite3_exec(opened, statement, nil, nil, nil), SQLITE_OK)
+        }
+        sqlite3_close(opened)
+        try FileManager.default.createSymbolicLink(at: dbURL, withDestinationURL: target)
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: dbURL,
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.failures, ["sqlite"])
+        XCTAssertEqual(result.report.last30Tokens, 0)
+    }
+
+    func testKiroRejectsSymlinkedArchiveAndCLIRoots() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-root-symlinks-\(UUID().uuidString)",
+                                   isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveTarget = root.appendingPathComponent("outside-archive", isDirectory: true)
+        let cliTarget = root.appendingPathComponent("outside-cli", isDirectory: true)
+        let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cliTarget, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let now = Date()
+        let nowMs = Int64(now.timeIntervalSince1970 * 1_000)
+        try JSONSerialization.data(withJSONObject: [
+            "conversation_id": "redirected-archive",
+            "created_at": nowMs,
+            "updated_at": nowMs,
+            "history": [[
+                "user": "redirected archive usage",
+                "request_metadata": ["request_start_timestamp_ms": nowMs],
+            ]],
+        ]).write(to: archiveTarget.appendingPathComponent("redirected.json"))
+        let timestamp = ISO8601DateFormatter().string(from: now)
+        try JSONSerialization.data(withJSONObject: [
+            "session_id": "redirected-cli",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "session_state": [
+                "conversation_metadata": ["user_turn_metadatas": [[
+                    "metering_usage": [["unit": "credit", "value": 1.0]],
+                    "input_token_count": 10,
+                    "output_token_count": 5,
+                    "end_timestamp": timestamp,
+                ]]],
+            ],
+        ]).write(to: cliTarget.appendingPathComponent("redirected.json"))
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: archive, withDestinationURL: archiveTarget)
+        try FileManager.default.createSymbolicLink(
+            at: sessions.appendingPathComponent("cli", isDirectory: true),
+            withDestinationURL: cliTarget)
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: sessions,
+            now: now)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.failures, ["archive", "cli"])
+        XCTAssertEqual(result.report.last30Tokens, 0)
     }
 
     func testKiroLiveMergePersistsFreshnessTimestamp() throws {
@@ -1018,23 +1827,392 @@ final class NewProviderTests: XCTestCase {
                        accuracy: 0.001)
     }
 
-    func testKiroScanCompletionIsIndependentOfUsageAmount() throws {
+    func testKiroCountingMigrationRescans120DaysAndReplacesLegacyTokenMath() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("birdnion-kiro-empty-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("birdnion-kiro-counting-migration-\(UUID().uuidString)",
+                                   isDirectory: true)
         let archive = root.appendingPathComponent("archive", isDirectory: true)
         try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let historyURL = root.appendingPathComponent("cost-history.json")
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+        let oldDay = calendar.date(byAdding: .day, value: -100, to: today)!
+        let oldActivity = calendar.date(byAdding: .hour, value: 12, to: oldDay)!
+        let oldMs = Int64(oldActivity.timeIntervalSince1970 * 1_000)
 
+        _ = CostHistoryStore.apply(
+            source: .kiro,
+            liveDays: [(today, 1, 999, [("legacy", 1, 999)])],
+            now: now,
+            calendar: calendar,
+            windowDays: KiroCostScanner.chartWindowDays,
+            url: historyURL,
+            liveScanSucceeded: true)
+        let incrementalDays = CostHistoryStore.scanBackDays(
+            source: .kiro,
+            now: now,
+            calendar: calendar,
+            maxDays: KiroCostScanner.chartWindowDays,
+            url: historyURL)
+        XCTAssertEqual(incrementalDays, 7)
+        let plan = KiroCostScanner.countingScanPlan(
+            storedRevision: KiroCostScanner.countingRevision - 1,
+            incrementalDays: incrementalDays)
+        XCTAssertTrue(plan.replacing)
+        XCTAssertFalse(plan.historyOnly)
+        XCTAssertEqual(plan.windowDays, 120)
+
+        try JSONSerialization.data(withJSONObject: [
+            "conversation_id": "old-utf8-session",
+            "created_at": oldMs,
+            "updated_at": oldMs,
+            "history": [[
+                "user": String(repeating: "👨‍👩‍👧‍👦", count: 4),
+                "request_metadata": ["request_start_timestamp_ms": oldMs],
+            ]],
+        ]).write(to: archive.appendingPathComponent("old-utf8-session.json"))
+        let scan = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now,
+            windowDays: plan.windowDays,
+            calendar: calendar)
+        XCTAssertTrue(scan.completed)
+
+        let merged = KiroCostScanner.mergeLiveReport(
+            scan.report,
+            now: now,
+            historyURL: historyURL,
+            replacingSource: plan.replacing,
+            liveScanSucceeded: scan.completed)
+        let migratedDay = try XCTUnwrap(merged.daily.first {
+            calendar.isDate($0.date, inSameDayAs: oldDay)
+        })
+        XCTAssertEqual(migratedDay.tokens, 25)
+        XCTAssertEqual(merged.todayTokens, 0)
+        let stored = CostHistoryStore.read(url: historyURL).sources?["kiro"] ?? [:]
+        XCTAssertNil(stored[CostHistoryStore.dayKey(today, calendar: calendar)])
+        XCTAssertEqual(stored[CostHistoryStore.dayKey(oldDay, calendar: calendar)]?.tokens, 25)
+    }
+
+    func testKiroFutureCountingRevisionIsHistoryOnlyAndNeverDowngraded() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-future-revision-\(UUID().uuidString)",
+                                   isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let historyURL = root.appendingPathComponent("cost-history.json")
+        let now = Date()
+        let futureRevision = KiroCostScanner.countingRevision + 1
+
+        let seeded = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: [(now, 9, 900, [("future-model", 9, 900)])],
+            now: now,
+            windowDays: KiroCostScanner.chartWindowDays,
+            url: historyURL,
+            replacingSource: true,
+            liveScanSucceeded: true,
+            updateTopModel: true,
+            topModel: "future-model",
+            countingRevision: futureRevision)
+        XCTAssertTrue(seeded.persisted)
+
+        let plan = KiroCostScanner.countingScanPlan(
+            storedRevision: futureRevision,
+            incrementalDays: 7)
+        XCTAssertTrue(plan.historyOnly)
+        XCTAssertFalse(plan.replacing)
+        XCTAssertEqual(plan.windowDays, 7)
+
+        let olderLive = KiroCostScanner.buildReport(
+            sessions: [.init(day: now, tokens: 1, usd: 0.01, model: "older-model")],
+            now: now,
+            windowDays: KiroCostScanner.chartWindowDays,
+            calendar: .current)
+        let merged = KiroCostScanner.mergeLiveReport(
+            olderLive,
+            now: now,
+            historyURL: historyURL,
+            replacingSource: false,
+            liveScanSucceeded: true)
+
+        XCTAssertEqual(merged.todayTokens, 900)
+        XCTAssertEqual(merged.topModel, "future-model")
+        XCTAssertFalse(merged.scanConfidence.live)
+        XCTAssertEqual(
+            CostHistoryStore.storedCountingRevision(source: .kiro, url: historyURL),
+            futureRevision)
+        let stored = CostHistoryStore.read(url: historyURL)
+        XCTAssertFalse(stored.sources?["kiro"]?.values.contains {
+            $0.models.contains(where: { $0.name == "older-model" })
+        } ?? false)
+    }
+
+    func testKiroHistoryOnlyIgnoresSyntheticOtherTopModelMetadata() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-other-metadata-\(UUID().uuidString)",
+                                   isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let dayKey = CostHistoryStore.dayKey(now, calendar: .current)
+
+        for metadataKey in ["top_models", "topModels"] {
+            let historyURL = root.appendingPathComponent("\(metadataKey).json")
+            let document: [String: Any] = [
+                "version": 1,
+                "sources": [
+                    "kiro": [
+                        dayKey: [
+                            "usd": 2.8,
+                            "tokens": 280,
+                            "models": [
+                                ["name": "real-model", "usd": 1.0, "tokens": 100],
+                                ["name": "Other", "usd": 1.8, "tokens": 180],
+                            ],
+                        ],
+                    ],
+                ],
+                metadataKey: ["kiro": "Other"],
+            ]
+            try JSONSerialization.data(withJSONObject: document).write(to: historyURL)
+
+            let seeded = await KiroCostScanner.seededReport(now: now, url: historyURL)
+            let report = try XCTUnwrap(seeded)
+            XCTAssertEqual(report.topModel, "real-model", metadataKey)
+            XCTAssertFalse(report.scanConfidence.live)
+        }
+    }
+
+    func testNonKiroOtherModelRemainsEligibleForTopModel() {
+        let day = Date()
+        let window = [CostHistoryStore.DayBucket(
+            date: day,
+            usd: 2,
+            tokens: 200,
+            models: [
+                .init(name: "Other", usd: 1.8, tokens: 180),
+                .init(name: "named-model", usd: 0.2, tokens: 20),
+            ])]
+
+        XCTAssertEqual(CostHistoryStore.makeCodexReport(window: window).topModel, "Other")
+        XCTAssertEqual(CostHistoryStore.makeGrokReport(window: window).topModel, "Other")
+        XCTAssertEqual(CostHistoryStore.makeKiroReport(window: window).topModel, "named-model")
+    }
+
+    func testKiroReadableEmptyRecordsAreNotLiveEvidence() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-empty-\(UUID().uuidString)", isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+        let cli = sessions.appendingPathComponent("cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cli, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let emptyConversation: [String: Any] = [
+            "conversation_id": "empty-archive",
+            "updated_at": Int64(now.timeIntervalSince1970 * 1_000),
+            "history": [Any](),
+        ]
+        try JSONSerialization.data(withJSONObject: emptyConversation)
+            .write(to: archive.appendingPathComponent("empty.json"))
+        let emptySidecar: [String: Any] = [
+            "session_id": "empty-cli",
+            "session_state": [
+                "conversation_metadata": ["user_turn_metadatas": [Any]()],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: emptySidecar)
+            .write(to: cli.appendingPathComponent("empty.json"))
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: sessions,
+            now: now)
+
+        XCTAssertTrue(result.report.isEmpty)
+        XCTAssertTrue(result.report.daily.allSatisfy { $0.tokens == 0 && $0.usd == 0 })
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.availableSources, ["archive", "cli"])
+        XCTAssertEqual(result.failures, ["archive", "cli"])
+    }
+
+    func testKiroFIFOJSONFailsClosedWithoutBlocking() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-fifo-\(UUID().uuidString)", isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = archive.appendingPathComponent("hang.json")
+        XCTAssertEqual(fifo.path.withCString { Darwin.mkfifo($0, 0o600) }, 0)
+
+        let started = Date()
         let result = KiroCostScanner.scanFullResult(
             cliDBURL: root.appendingPathComponent("missing.sqlite3"),
             archiveURL: archive,
             sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
             now: Date())
 
-        XCTAssertTrue(result.report.isEmpty)
-        XCTAssertTrue(result.completed)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        XCTAssertFalse(result.completed)
         XCTAssertEqual(result.availableSources, ["archive"])
-        XCTAssertTrue(result.failures.isEmpty)
+        XCTAssertEqual(result.failures, ["archive"])
+    }
+
+    func testKiroEmptyContainersCannotMintCompletedLiveScan() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-empty-evidence-\(UUID().uuidString)",
+            isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        let sessions = root.appendingPathComponent("sessions/cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let now = Date()
+
+        var result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.availableSources.isEmpty)
+
+        let emptyConversation: [String: Any] = [
+            "conversation_id": "empty-history",
+            "created_at": Int64(now.timeIntervalSince1970 * 1_000),
+            "updated_at": Int64(now.timeIntervalSince1970 * 1_000),
+            "history": [],
+        ]
+        try JSONSerialization.data(withJSONObject: emptyConversation)
+            .write(to: archive.appendingPathComponent("empty.json"))
+        result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.failures, ["archive"])
+    }
+
+    func testKiroLargeValidTurnWorkloadStaysWithinStructureBudget() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-valid-large-workload-\(UUID().uuidString)",
+            isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appendingPathComponent("sessions/cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: cli, withIntermediateDirectories: true)
+        let now = Date()
+        let timestamp = ISO8601DateFormatter().string(from: now)
+        let turns: [[String: Any]] = (0..<5_000).map { _ in
+            [
+                "end_timestamp": timestamp,
+                "input_token_count": 1,
+                "output_token_count": 0,
+            ]
+        }
+        let sidecar: [String: Any] = [
+            "session_id": "large-valid-workload",
+            "session_state": [
+                "conversation_metadata": ["user_turn_metadatas": turns],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: sidecar)
+            .write(to: cli.appendingPathComponent("large.json"))
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.report.todayTokens, 5_000)
+    }
+
+    func testKiroReservesSyntheticOtherModelIdentity() {
+        let now = Date()
+        let timestamp = ISO8601DateFormatter().string(from: now)
+        let sidecar: [String: Any] = [
+            "session_id": "reserved-other",
+            "session_state": [
+                "rts_model_state": [
+                    "model_info": ["model_id": KiroCostScanner.aggregateModelName],
+                ],
+                "conversation_metadata": [
+                    "user_turn_metadatas": [[
+                        "end_timestamp": timestamp,
+                        "input_token_count": 1,
+                    ]],
+                ],
+            ],
+        ]
+        XCTAssertTrue(KiroCostScanner.parseCLISessionSidecar(
+            sidecar,
+            cutoff: Calendar.current.startOfDay(for: now),
+            now: now).isEmpty)
+    }
+
+    func testKiroCurrentCLISessionWithoutUpdatedAtWinsLegacyDuplicate() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-cross-generation-\(UUID().uuidString)",
+                                   isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+        let cli = sessions.appendingPathComponent("cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cli, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date()
+        let legacyDate = Calendar.current.date(byAdding: .day, value: -1, to: now)!
+        let legacyMs = Int64(legacyDate.timeIntervalSince1970 * 1_000)
+        try JSONSerialization.data(withJSONObject: [
+            "conversation_id": "shared-session",
+            "created_at": legacyMs,
+            "updated_at": legacyMs,
+            "history": [[
+                "user": "stale legacy estimate",
+                "request_metadata": ["request_start_timestamp_ms": legacyMs],
+            ]],
+        ]).write(to: archive.appendingPathComponent("shared-session.json"))
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let currentTimestamp = iso.string(from: now.addingTimeInterval(-1))
+        try JSONSerialization.data(withJSONObject: [
+            "session_id": "shared-session",
+            "created_at": currentTimestamp,
+            "session_state": [
+                "rts_model_state": [
+                    "model_info": ["model_id": "claude-sonnet-4-5"],
+                ],
+                "conversation_metadata": [
+                    "user_turn_metadatas": [[
+                        "metering_usage": [["unit": "credit", "value": 10.0]],
+                        "input_token_count": 100,
+                        "output_token_count": 50,
+                        "end_timestamp": currentTimestamp,
+                    ]],
+                ],
+            ],
+        ]).write(to: cli.appendingPathComponent("shared-session.json"))
+
+        let result = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: sessions,
+            now: now)
+
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.report.todayTokens, 150)
+        XCTAssertEqual(result.report.todayUSD, 0.4, accuracy: 0.000_001)
     }
 
     func testKiroMalformedAvailableSourceDowngradesCompletion() throws {
@@ -1060,17 +2238,35 @@ final class NewProviderTests: XCTestCase {
             .appendingPathComponent("birdnion-kiro-schema-invalid-\(UUID().uuidString)", isDirectory: true)
         let archive = root.appendingPathComponent("archive", isDirectory: true)
         try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-        try Data("{}".utf8).write(to: archive.appendingPathComponent("bad.json"))
         defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let invalidConversation: [String: Any] = [
+            "conversation_id": "empty-turn",
+            "updated_at": Int64(now.timeIntervalSince1970 * 1_000),
+            "history": [[String: Any]()],
+        ]
+        try JSONSerialization.data(withJSONObject: invalidConversation)
+            .write(to: archive.appendingPathComponent("bad.json"))
 
         let result = KiroCostScanner.scanFullResult(
             cliDBURL: root.appendingPathComponent("missing.sqlite3"),
             archiveURL: archive,
             sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
-            now: Date())
+            now: now)
+        let historyURL = root.appendingPathComponent("cost-history.json")
+        let merged = KiroCostScanner.mergeLiveReport(
+            result.report,
+            now: now,
+            historyURL: historyURL,
+            liveScanSucceeded: result.completed)
 
         XCTAssertFalse(result.completed)
         XCTAssertEqual(result.failures, ["archive"])
+        XCTAssertTrue(result.report.isEmpty)
+        XCTAssertTrue(result.report.daily.allSatisfy { $0.tokens == 0 && $0.usd == 0 })
+        XCTAssertTrue(merged.isEmpty)
+        XCTAssertFalse(merged.scanConfidence.live)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: historyURL.path))
     }
 
     func testKiroSchemaInvalidCLISidecarDowngradesCompletion() throws {
@@ -1078,17 +2274,603 @@ final class NewProviderTests: XCTestCase {
             .appendingPathComponent("birdnion-kiro-cli-schema-invalid-\(UUID().uuidString)", isDirectory: true)
         let cli = root.appendingPathComponent("sessions/cli", isDirectory: true)
         try FileManager.default.createDirectory(at: cli, withIntermediateDirectories: true)
-        try Data("{}".utf8).write(to: cli.appendingPathComponent("bad.json"))
         defer { try? FileManager.default.removeItem(at: root) }
+        let invalidSidecar: [String: Any] = [
+            "session_id": "empty-session-state",
+            "session_state": [String: Any](),
+        ]
+        try JSONSerialization.data(withJSONObject: invalidSidecar)
+            .write(to: cli.appendingPathComponent("bad.json"))
+        let now = Date()
 
         let result = KiroCostScanner.scanFullResult(
             cliDBURL: root.appendingPathComponent("missing.sqlite3"),
             archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
             sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
-            now: Date())
+            now: now)
+        let historyURL = root.appendingPathComponent("cost-history.json")
+        let merged = KiroCostScanner.mergeLiveReport(
+            result.report,
+            now: now,
+            historyURL: historyURL,
+            liveScanSucceeded: result.completed)
 
         XCTAssertFalse(result.completed)
         XCTAssertEqual(result.failures, ["cli"])
+        XCTAssertTrue(result.report.isEmpty)
+        XCTAssertTrue(result.report.daily.allSatisfy { $0.tokens == 0 && $0.usd == 0 })
+        XCTAssertTrue(merged.isEmpty)
+        XCTAssertFalse(merged.scanConfidence.live)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: historyURL.path))
+    }
+
+    func testKiroSemanticFieldTypesMatchParserContract() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-wrong-types-\(UUID().uuidString)", isDirectory: true)
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        try JSONSerialization.data(withJSONObject: [
+            "conversation_id": "wrong-metadata-type",
+            "updated_at": Int64(now.timeIntervalSince1970 * 1_000),
+            "history": [["request_metadata": 1]],
+        ]).write(to: archive.appendingPathComponent("bad.json"))
+
+        let archiveResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(archiveResult.completed)
+        XCTAssertEqual(archiveResult.failures, ["archive"])
+
+        try FileManager.default.removeItem(at: archive)
+        let cli = root.appendingPathComponent("sessions/cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: cli, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [
+            "session_id": "wrong-timestamp-type",
+            "session_state": [
+                "conversation_metadata": [
+                    "user_turn_metadatas": [["end_timestamp": 123]],
+                ],
+            ],
+        ]).write(to: cli.appendingPathComponent("bad.json"))
+
+        let cliResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(cliResult.completed)
+        XCTAssertEqual(cliResult.failures, ["cli"])
+
+        try FileManager.default.removeItem(at: cli.appendingPathComponent("bad.json"))
+        let timestamp = ISO8601DateFormatter().string(from: now)
+        let validIntegralFloat = """
+        {
+          "session_id": "integral-float",
+          "session_state": {
+            "conversation_metadata": {
+              "user_turn_metadatas": [{
+                "end_timestamp": "\(timestamp)",
+                "input_token_count": 1.0,
+                "output_token_count": 0
+              }]
+            },
+            "rts_model_state": {
+              "model_info": { "context_window_tokens": 0 }
+            }
+          }
+        }
+        """
+        try Data(validIntegralFloat.utf8).write(to: cli.appendingPathComponent("valid.json"))
+        let validResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertTrue(validResult.completed)
+        XCTAssertEqual(validResult.report.todayTokens, 1)
+
+        var consumedBytes = 0
+        XCTAssertTrue(KiroCostScanner.admitSourceBytes(3, consumed: &consumedBytes, maximum: 5))
+        XCTAssertTrue(KiroCostScanner.admitSourceBytes(2, consumed: &consumedBytes, maximum: 5))
+        XCTAssertFalse(KiroCostScanner.admitSourceBytes(1, consumed: &consumedBytes, maximum: 5))
+
+        try FileManager.default.removeItem(at: cli.appendingPathComponent("valid.json"))
+        let oversizedModel: [String: Any] = [
+            "session_id": "oversized-model",
+            "session_state": [
+                "rts_model_state": [
+                    "model_info": ["model_id": String(repeating: "x", count: 513)],
+                ],
+                "conversation_metadata": [
+                    "user_turn_metadatas": [[
+                        "end_timestamp": timestamp,
+                        "input_token_count": 1,
+                    ]],
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: oversizedModel)
+            .write(to: cli.appendingPathComponent("oversized-model.json"))
+        let oversizedModelResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(oversizedModelResult.completed)
+        XCTAssertEqual(oversizedModelResult.failures, ["cli"])
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("sessions"))
+        let semanticArchive = root.appendingPathComponent("semantic-archive", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: semanticArchive, withIntermediateDirectories: true)
+        let nowMs = Int64(now.timeIntervalSince1970 * 1_000)
+        let emptyTurns: [[String: Any]] = [
+            ["request_metadata": [:]],
+            ["request_metadata": ["time_between_chunks": [Any]()]],
+            ["request_metadata": ["model_id": ""]],
+            ["request_metadata": ["request_start_timestamp_ms": nowMs]],
+            ["user": ""],
+            ["assistant": []],
+            ["user": [:]],
+        ]
+        for (index, turn) in emptyTurns.enumerated() {
+            let archiveValue: [String: Any] = [
+                "conversation_id": "empty-semantic-\(index)",
+                "created_at": nowMs,
+                "updated_at": nowMs,
+                "history": [turn],
+            ]
+            try JSONSerialization.data(withJSONObject: archiveValue)
+                .write(to: semanticArchive.appendingPathComponent("fixture.json"))
+            let result = KiroCostScanner.scanFullResult(
+                cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+                archiveURL: semanticArchive,
+                sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+                now: now)
+            XCTAssertFalse(result.completed, "empty semantic turn \(index)")
+            XCTAssertEqual(result.failures, ["archive"], "empty semantic turn \(index)")
+        }
+        let validMixedTurns: [[String: Any]] = [
+            [
+                "user": "meaningful user request",
+                "assistant": [Any](),
+                "request_metadata": ["request_start_timestamp_ms": nowMs],
+            ],
+            [
+                "user": [Any](),
+                "assistant": "meaningful assistant response",
+                "request_metadata": ["request_start_timestamp_ms": nowMs],
+            ],
+        ]
+        for (index, turn) in validMixedTurns.enumerated() {
+            let archiveValue: [String: Any] = [
+                "conversation_id": "mixed-semantic-\(index)",
+                "created_at": nowMs,
+                "updated_at": nowMs,
+                "history": [turn],
+            ]
+            try JSONSerialization.data(withJSONObject: archiveValue)
+                .write(to: semanticArchive.appendingPathComponent("fixture.json"))
+            let result = KiroCostScanner.scanFullResult(
+                cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+                archiveURL: semanticArchive,
+                sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+                now: now)
+            XCTAssertTrue(result.completed, "mixed semantic turn \(index)")
+            XCTAssertGreaterThan(result.report.last30Tokens, 0, "mixed semantic turn \(index)")
+        }
+    }
+
+    func testKiroRejectsCorruptCLISidecarsAndLegacyTimestamps() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-numeric-corruption-\(UUID().uuidString)",
+                                   isDirectory: true)
+        let cli = root.appendingPathComponent("sessions/cli", isDirectory: true)
+        try FileManager.default.createDirectory(at: cli, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date()
+        let timestamp = ISO8601DateFormatter().string(from: now)
+        let future = ISO8601DateFormatter().string(
+            from: Calendar.current.date(byAdding: .day, value: 2, to: now)!)
+        let fixtures: [(String, [String: Any], [String: Any]?)] = [
+            (
+                "token-overflow",
+                [
+                    "end_timestamp": timestamp,
+                    "input_token_count": 5.0e18,
+                    "output_token_count": 5.0e18,
+                ],
+                nil
+            ),
+            (
+                "percentage-overflow",
+                [
+                    "end_timestamp": timestamp,
+                    "input_token_count": 0,
+                    "output_token_count": 0,
+                    "context_usage_percentage": 1.0e308,
+                ],
+                ["context_window_tokens": 10_000_000_000]
+            ),
+            (
+                "context-window-overflow",
+                [
+                    "end_timestamp": timestamp,
+                    "input_token_count": 0,
+                    "output_token_count": 0,
+                    "context_usage_percentage": 1,
+                ],
+                ["context_window_tokens": 10_000_000_001]
+            ),
+            (
+                "credit-aggregate-overflow",
+                [
+                    "end_timestamp": timestamp,
+                    "metering_usage": [
+                        ["value": 750_000_000, "unit": "credit"],
+                        ["value": 750_000_000, "unit": "credit"],
+                    ],
+                ],
+                nil
+            ),
+            (
+                "unsupported-token-aliases",
+                [
+                    "end_timestamp": timestamp,
+                    "input_tokens_count": 100,
+                    "output_tokens_count": 50,
+                ],
+                nil
+            ),
+            (
+                "usage-without-timestamp",
+                ["input_token_count": 100, "output_token_count": 0],
+                nil
+            ),
+            (
+                "future-usage-timestamp",
+                [
+                    "end_timestamp": future,
+                    "input_token_count": 100,
+                    "output_token_count": 0,
+                ],
+                nil
+            ),
+        ]
+
+        for (name, turn, modelInfo) in fixtures {
+            var state: [String: Any] = [
+                "conversation_metadata": ["user_turn_metadatas": [turn]],
+            ]
+            if let modelInfo {
+                state["rts_model_state"] = ["model_info": modelInfo]
+            }
+            let sidecar: [String: Any] = [
+                "session_id": name,
+                "session_state": state,
+            ]
+            let file = cli.appendingPathComponent("bad.json")
+            try JSONSerialization.data(withJSONObject: sidecar).write(to: file)
+
+            XCTAssertTrue(
+                KiroCostScanner.parseCLISessionSidecar(sidecar, cutoff: now).isEmpty,
+                name)
+            let result = KiroCostScanner.scanFullResult(
+                cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+                archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+                sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+                now: now)
+            XCTAssertFalse(result.completed, name)
+            XCTAssertEqual(result.failures, ["cli"], name)
+            try FileManager.default.removeItem(at: file)
+        }
+
+        let fallbackSidecar: [String: Any] = [
+            "session_id": "valid-created-at-fallback",
+            "created_at": timestamp,
+            "session_state": [
+                "conversation_metadata": [
+                    "user_turn_metadatas": [[
+                        "input_token_count": 7,
+                        "output_token_count": 0,
+                    ]],
+                ],
+            ],
+        ]
+        let fallbackFile = cli.appendingPathComponent("fallback.json")
+        try JSONSerialization.data(withJSONObject: fallbackSidecar).write(to: fallbackFile)
+        let fallbackResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertTrue(fallbackResult.completed)
+        XCTAssertEqual(fallbackResult.report.todayTokens, 7)
+
+        try FileManager.default.removeItem(at: fallbackFile)
+        for (name, invalidUpdatedAt) in [
+            ("malformed-cli-updated-at", "broken"),
+            ("future-cli-updated-at", future),
+        ] {
+            var invalidUpdated = fallbackSidecar
+            invalidUpdated["session_id"] = name
+            invalidUpdated["updated_at"] = invalidUpdatedAt
+            let invalidFile = cli.appendingPathComponent("invalid-updated.json")
+            try JSONSerialization.data(withJSONObject: invalidUpdated).write(to: invalidFile)
+            let result = KiroCostScanner.scanFullResult(
+                cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+                archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+                sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+                now: now)
+            XCTAssertFalse(result.completed, name)
+            XCTAssertEqual(result.failures, ["cli"], name)
+            try FileManager.default.removeItem(at: invalidFile)
+        }
+
+        let oversizedCLI = cli.appendingPathComponent("oversized.json")
+        XCTAssertTrue(FileManager.default.createFile(atPath: oversizedCLI.path, contents: nil))
+        let oversizedCLIHandle = try FileHandle(forWritingTo: oversizedCLI)
+        try oversizedCLIHandle.truncate(atOffset: UInt64(64 * 1024 * 1024 + 1))
+        try oversizedCLIHandle.close()
+        let oversizedCLIResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(oversizedCLIResult.completed)
+        XCTAssertEqual(oversizedCLIResult.failures, ["cli"])
+
+        try FileManager.default.removeItem(at: oversizedCLI)
+        let excessiveTurns: [[String: Any]] = (0..<30_001).map { _ in
+            [
+                "end_timestamp": timestamp,
+                "input_token_count": 1,
+                "output_token_count": 0,
+            ]
+        }
+        let excessiveStructure: [String: Any] = [
+            "session_id": "excessive-structure",
+            "session_state": [
+                "conversation_metadata": ["user_turn_metadatas": excessiveTurns],
+            ],
+        ]
+        let excessiveStructureURL = cli.appendingPathComponent("excessive-structure.json")
+        try JSONSerialization.data(withJSONObject: excessiveStructure)
+            .write(to: excessiveStructureURL)
+        let excessiveStructureResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(excessiveStructureResult.completed)
+        XCTAssertEqual(excessiveStructureResult.failures, ["cli"])
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("sessions"))
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        let archiveFile = archive.appendingPathComponent("legacy.json")
+        let nowMs = Int64(now.timeIntervalSince1970 * 1_000)
+        let missingArchiveUpdatedAt: [String: Any] = [
+            "conversation_id": "missing-archive-updated-at",
+            "created_at": nowMs,
+            "history": [[
+                "user": "usage with request time",
+                "request_metadata": ["request_start_timestamp_ms": nowMs],
+            ]],
+        ]
+        try JSONSerialization.data(withJSONObject: missingArchiveUpdatedAt).write(to: archiveFile)
+        let missingArchiveUpdatedResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(missingArchiveUpdatedResult.completed)
+        XCTAssertEqual(missingArchiveUpdatedResult.failures, ["archive"])
+
+        let invalidArchiveUpdatedAt: [String: Any] = [
+            "conversation_id": "invalid-archive-updated-at",
+            "created_at": nowMs,
+            "updated_at": "broken",
+            "history": [[
+                "user": "usage with request time",
+                "request_metadata": ["request_start_timestamp_ms": nowMs],
+            ]],
+        ]
+        try JSONSerialization.data(withJSONObject: invalidArchiveUpdatedAt).write(to: archiveFile)
+        let invalidArchiveUpdatedResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(invalidArchiveUpdatedResult.completed)
+        XCTAssertEqual(invalidArchiveUpdatedResult.failures, ["archive"])
+
+        let futureLegacyMs = Int64(
+            Calendar.current.date(byAdding: .day, value: 2, to: now)!.timeIntervalSince1970
+                * 1_000)
+        for (name, timestampValue) in [
+            ("invalid-zero-usage-timestamp", "broken" as Any),
+            ("future-zero-usage-timestamp", futureLegacyMs as Any),
+        ] {
+            let invalidZeroUsageTimestamp: [String: Any] = [
+                "conversation_id": name,
+                "updated_at": nowMs,
+                "history": [[
+                    "user": "",
+                    "request_metadata": ["request_start_timestamp_ms": timestampValue],
+                ]],
+            ]
+            try JSONSerialization.data(withJSONObject: invalidZeroUsageTimestamp)
+                .write(to: archiveFile)
+            let result = KiroCostScanner.scanFullResult(
+                cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+                archiveURL: archive,
+                sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+                now: now)
+            XCTAssertFalse(result.completed, name)
+            XCTAssertEqual(result.failures, ["archive"], name)
+        }
+
+        let missingLegacyTimestamp: [String: Any] = [
+            "conversation_id": "missing-legacy-timestamp",
+            "updated_at": nowMs,
+            "history": [["user": "usage without time"]],
+        ]
+        try JSONSerialization.data(withJSONObject: missingLegacyTimestamp).write(to: archiveFile)
+        let missingLegacyResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(missingLegacyResult.completed)
+        XCTAssertEqual(missingLegacyResult.failures, ["archive"])
+
+        try FileManager.default.removeItem(at: archiveFile)
+        XCTAssertTrue(FileManager.default.createFile(atPath: archiveFile.path, contents: nil))
+        let oversizedArchiveHandle = try FileHandle(forWritingTo: archiveFile)
+        try oversizedArchiveHandle.truncate(atOffset: UInt64(64 * 1024 * 1024 + 1))
+        try oversizedArchiveHandle.close()
+        let oversizedArchiveResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(oversizedArchiveResult.completed)
+        XCTAssertEqual(oversizedArchiveResult.failures, ["archive"])
+
+        let invalidLegacyTimestamp: [String: Any] = [
+            "conversation_id": "invalid-legacy-request-timestamp",
+            "created_at": nowMs,
+            "updated_at": nowMs,
+            "history": [[
+                "user": "usage with invalid request time",
+                "request_metadata": ["request_start_timestamp_ms": "broken"],
+            ]],
+        ]
+        try JSONSerialization.data(withJSONObject: invalidLegacyTimestamp).write(to: archiveFile)
+        let invalidLegacyResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(invalidLegacyResult.completed)
+        XCTAssertEqual(invalidLegacyResult.failures, ["archive"])
+
+        let validLegacyFallback: [String: Any] = [
+            "conversation_id": "valid-legacy-fallback",
+            "created_at": nowMs,
+            "updated_at": nowMs,
+            "history": [["user": "usage with outer time"]],
+        ]
+        try JSONSerialization.data(withJSONObject: validLegacyFallback).write(to: archiveFile)
+        let validLegacyResult = KiroCostScanner.scanFullResult(
+            cliDBURL: root.appendingPathComponent("missing.sqlite3"),
+            archiveURL: archive,
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertTrue(validLegacyResult.completed)
+        XCTAssertGreaterThan(validLegacyResult.report.todayTokens, 0)
+    }
+
+    func testKiroSQLiteV2MetadataAndSchemaDriftFailClosed() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-kiro-sqlite-v2-\(UUID().uuidString)",
+                                   isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dbURL = root.appendingPathComponent("data.sqlite3")
+        let now = Date()
+        let nowMs = Int64(now.timeIntervalSince1970 * 1_000)
+        let futureMs = Int64(now.addingTimeInterval(86_400 * 2).timeIntervalSince1970 * 1_000)
+        let payload = """
+        {"history":[{"user":"usage","request_metadata":{"request_start_timestamp_ms":\(nowMs)}}]}
+        """
+
+        func writeDatabase(_ statements: [String]) throws {
+            try? FileManager.default.removeItem(at: dbURL)
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(dbURL.path, &db), SQLITE_OK)
+            let opened = try XCTUnwrap(db)
+            defer { sqlite3_close(opened) }
+            for statement in statements {
+                var error: UnsafeMutablePointer<CChar>?
+                let code = sqlite3_exec(opened, statement, nil, nil, &error)
+                let message = error.map { String(cString: $0) } ?? ""
+                if let error { sqlite3_free(error) }
+                XCTAssertEqual(code, SQLITE_OK, message)
+            }
+        }
+
+        let tableSQL = """
+        CREATE TABLE conversations_v2 (
+          conversation_id TEXT, created_at INTEGER, updated_at INTEGER, value TEXT
+        )
+        """
+        for (name, created, updated) in [
+            ("future-updated", nowMs, futureMs),
+            ("future-created", futureMs, nowMs),
+        ] {
+            try writeDatabase([
+                tableSQL,
+                "INSERT INTO conversations_v2 VALUES ('\(name)', \(created), \(updated), '\(payload)')",
+            ])
+            let result = KiroCostScanner.scanFullResult(
+                cliDBURL: dbURL,
+                archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+                sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+                now: now)
+            XCTAssertFalse(result.completed, name)
+            XCTAssertEqual(result.failures, ["sqlite"], name)
+        }
+
+        try writeDatabase([
+            "CREATE TABLE conversations (value TEXT NOT NULL)",
+            "CREATE TABLE conversations_v2 (conversation_id TEXT, created_at INTEGER, value TEXT)",
+        ])
+        let drifted = KiroCostScanner.scanFullResult(
+            cliDBURL: dbURL,
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertFalse(drifted.completed)
+        XCTAssertEqual(drifted.failures, ["sqlite"])
+
+        for suffix in ["", "-wal", "-shm"] {
+            try? FileManager.default.removeItem(atPath: dbURL.path + suffix)
+        }
+        var walDB: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &walDB), SQLITE_OK)
+        let openedWAL = try XCTUnwrap(walDB)
+        defer { sqlite3_close(openedWAL) }
+        let walPayload = """
+        {"conversation_id":"wal-row","history":[{"user":"usage from committed WAL","request_metadata":{"request_start_timestamp_ms":\(nowMs)}}]}
+        """
+        for statement in [
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA wal_autocheckpoint=0",
+            "CREATE TABLE conversations (value TEXT NOT NULL)",
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+            "INSERT INTO conversations (value) VALUES ('\(walPayload)')",
+        ] {
+            var error: UnsafeMutablePointer<CChar>?
+            let code = sqlite3_exec(openedWAL, statement, nil, nil, &error)
+            let message = error.map { String(cString: $0) } ?? ""
+            if let error { sqlite3_free(error) }
+            XCTAssertEqual(code, SQLITE_OK, message)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dbURL.path + "-wal"))
+        let walResult = KiroCostScanner.scanFullResult(
+            cliDBURL: dbURL,
+            archiveURL: root.appendingPathComponent("missing-archive", isDirectory: true),
+            sessionsURL: root.appendingPathComponent("missing-sessions", isDirectory: true),
+            now: now)
+        XCTAssertTrue(walResult.completed)
+        XCTAssertGreaterThan(walResult.report.todayTokens, 0)
     }
 
     func testKiroIncompleteScanDoesNotMergePartialUsage() throws {
@@ -1122,7 +2904,7 @@ final class NewProviderTests: XCTestCase {
     }
 
     /// Parse a conversation history fixture into daily session points.
-    func testKiroCostScannerParseConversationFixture() {
+    func testKiroCostScannerParseConversationFixture() throws {
         let cal = Calendar.current
         let now = Date()
         let today = cal.startOfDay(for: now)
@@ -1141,8 +2923,8 @@ final class NewProviderTests: XCTestCase {
                 ] as [String: Any],
             ],
         ]
-        let points = KiroCostScanner.parseConversation(
-            data: data, fallbackCreatedMs: tsMs, cutoff: today, calendar: cal)
+        let points = try XCTUnwrap(KiroCostScanner.parseConversation(
+            data: data, fallbackCreatedMs: tsMs, cutoff: today, now: now, calendar: cal))
         XCTAssertFalse(points.isEmpty)
         let totalTokens = points.reduce(0) { $0 + $1.tokens }
         XCTAssertGreaterThan(totalTokens, 0)
@@ -1150,6 +2932,9 @@ final class NewProviderTests: XCTestCase {
         let report = KiroCostScanner.buildReport(sessions: points, now: now, windowDays: 30, calendar: cal)
         XCTAssertFalse(report.isEmpty)
         XCTAssertEqual(report.todayTokens, totalTokens)
+        XCTAssertEqual(
+            KiroCostScanner.textTokenEstimate(String(repeating: "👨‍👩‍👧‍👦", count: 4)),
+            25)
     }
 
     /// Parse a TUI kiro-cli session sidecar (~/.kiro/sessions/cli/<id>.json):
@@ -1903,6 +3688,58 @@ final class NewProviderTests: XCTestCase {
                 usageData: usage, accountLabel: nil, provider: provider)
             XCTAssertEqual(stale.windows[2].subtitle, "$189.79 / $323.52 · 8 giới thiệu · số cũ")
         }
+    }
+
+    func testFreemodelBalanceCachesDoNotCrossSameBrowserAccountIdentity() throws {
+        let usage = """
+        {"window5h":{"usedCents":100,"limitCents":20000,"resetsAt":0},
+         "windowWeek":{"usedCents":100,"limitCents":132000,"resetsAt":0}}
+        """.data(using: .utf8)!
+        let referral = Data(#"{"code":"x","count":8,"credits":0,"used":189.79}"#.utf8)
+        let billing = Data(#"{"creditCents":13373,"signupCreditCents":13373}"#.utf8)
+        let suiteName = "FreemodelBalanceIdentityTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let accountAIdentity = "browser:chrome\u{0}bm_session=account-a"
+        let accountBIdentity = "browser:chrome\u{0}bm_session=account-b"
+        let provider = FreemodelProvider(balanceDefaults: defaults)
+
+        let accountA = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            referralData: referral, billingData: billing,
+            provider: provider, balanceCacheIdentity: accountAIdentity,
+            usePersistentBalanceCache: true)
+        XCTAssertEqual(accountA.windows.count, 3)
+
+        let accountBInMemory = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            provider: provider, balanceCacheIdentity: accountBIdentity,
+            usePersistentBalanceCache: true)
+        XCTAssertEqual(accountBInMemory.windows.count, 2)
+        XCTAssertFalse(accountBInMemory.windows.contains(where: { $0.label == "Số dư" }))
+
+        let restartedForB = FreemodelProvider(balanceDefaults: defaults)
+        let accountBAfterRestart = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            provider: restartedForB, balanceCacheIdentity: accountBIdentity,
+            usePersistentBalanceCache: true)
+        XCTAssertEqual(accountBAfterRestart.windows.count, 2)
+        XCTAssertFalse(accountBAfterRestart.windows.contains(where: { $0.label == "Số dư" }))
+
+        let restartedForA = FreemodelProvider(balanceDefaults: defaults)
+        let accountAAfterRestart = FreemodelProvider._parseForTesting(
+            usageData: usage, accountLabel: nil,
+            provider: restartedForA, balanceCacheIdentity: accountAIdentity,
+            usePersistentBalanceCache: true)
+        XCTAssertTrue(accountAAfterRestart.windows[2].subtitle?.contains("số cũ") == true)
+        let persistedKeys = defaults.persistentDomain(forName: suiteName)
+            .map { Array($0.keys) } ?? []
+        XCTAssertEqual(persistedKeys.filter {
+            $0.hasPrefix("freemodelCachedBalanceWindow.v2.")
+        }.count, 1)
+        XCTAssertFalse(persistedKeys.contains(where: {
+            $0.contains("bm_session") || $0.contains("account-a")
+        }))
     }
 
     /// The cookie filter forwards every pair but only proceeds when `bm_session`

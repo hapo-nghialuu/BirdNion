@@ -90,7 +90,7 @@ enum ProjectInsightsBuilder {
         includedSources: Set<ProjectUsageSource>,
         calendar: Calendar
     ) {
-        let sources: [ProjectUsageSource] = [.claude, .codex, .grok, .omp, .pi]
+        let sources: [ProjectUsageSource] = [.claude, .codex, .grok, .kiro, .omp, .pi]
         for source in sources where includedSources.contains(source) {
             let knownByDay = knownDailyTotals(
                 projects.filter { $0.source == source }, calendar: calendar)
@@ -101,7 +101,11 @@ enum ProjectInsightsBuilder {
                 let tokens = max(0, aggregate.tokens - known.tokens)
                 guard usd > 0 || tokens > 0 else { return nil }
                 let models = known.usd == 0 && known.tokens == 0
-                    ? day.models.filter { $0.source == source.rawValue }.map {
+                    ? day.models.filter {
+                        $0.source == source.rawValue
+                            && (source != .kiro
+                                || $0.name != KiroCostScanner.aggregateModelName)
+                    }.map {
                         ProjectModelUsage(
                             name: ProjectIdentity.safeModelName($0.name),
                             usd: $0.usd, tokens: $0.tokens)
@@ -319,6 +323,7 @@ enum ProjectInsightsBuilder {
         case .claude: return (day.claudeUSD, day.claudeTokens)
         case .codex: return (day.codexUSD, day.codexTokens)
         case .grok: return (day.grokUSD, day.grokTokens)
+        case .kiro: return (day.kiroUSD, day.kiroTokens)
         case .omp: return (day.ompUSD, day.ompTokens)
         case .pi: return (day.piUSD, day.piTokens)
         }
@@ -330,7 +335,8 @@ enum ProjectInsightsBuilder {
     ) -> ProjectInsightsConfidence {
         let entries: [(ProjectUsageSource, CostHistoryStore.UsageScanConfidence?)] = [
             (.claude, combined.claudeConfidence), (.codex, combined.codexConfidence),
-            (.grok, combined.grokConfidence), (.omp, combined.ompConfidence),
+            (.grok, combined.grokConfidence), (.kiro, combined.kiroConfidence),
+            (.omp, combined.ompConfidence),
             (.pi, combined.piConfidence),
         ].filter { enabledSources.contains($0.0) }
         return ProjectInsightsConfidence(
