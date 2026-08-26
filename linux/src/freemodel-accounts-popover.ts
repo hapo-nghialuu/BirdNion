@@ -8,13 +8,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { t } from "./i18n";
 import { settingsIcon } from "./settings-icons";
+import type { Settings } from "./settings-provider-detail";
+import {
+  SETTINGS_SNAPSHOT_CHANGED_EVENT,
+  type SettingsSnapshotState,
+} from "./settings-persistence";
 
 /** Same name as settings-tab's PROVIDERS_CHANGED_EVENT (avoid circular import). */
 const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 const EXPAND_KEY = "birdnion.freemodelAccountsExpanded";
 
 type FreemodelAccount = { id: string; email?: string | null; label?: string | null; isBrowser: boolean };
-type FreemodelAccountsState = { accounts: FreemodelAccount[]; activeId: string };
+type FreemodelAccountsState = SettingsSnapshotState<Settings> & {
+  accounts: FreemodelAccount[];
+  activeId: string;
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -86,6 +94,7 @@ export function freemodelAccountsPopoverCard(onResize: () => void, onSwitched: (
           let didSwitch = false;
           try {
             state = await invoke<FreemodelAccountsState>("freemodel_account_switch", { id: account.id });
+            await emit(SETTINGS_SNAPSHOT_CHANGED_EVENT, state.settings);
             didSwitch = true;
             await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
           } catch { /* keep old state */ }

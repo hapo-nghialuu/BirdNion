@@ -4,12 +4,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { t } from "./i18n";
+import type { Settings } from "./settings-provider-detail";
+import {
+  SETTINGS_SNAPSHOT_CHANGED_EVENT,
+  type SettingsSnapshotState,
+} from "./settings-persistence";
 
 /** Same name as settings-tab's PROVIDERS_CHANGED_EVENT (avoid circular import). */
 const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 
 type HiyoKey = { id: string; label?: string | null; preview: string };
-type HiyoKeysState = { keys: HiyoKey[]; activeId: string | null };
+type HiyoKeysState = SettingsSnapshotState<Settings> & {
+  keys: HiyoKey[];
+  activeId: string | null;
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -29,7 +37,10 @@ export function hiyoKeysSection(): HTMLElement {
   const status = el("div", "pp-accounts-status");
   wrap.append(list, status);
 
-  const notifyChanged = () => emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
+  const notifyChanged = async (state: HiyoKeysState) => {
+    await emit(SETTINGS_SNAPSHOT_CHANGED_EVENT, state.settings);
+    await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
+  };
 
   const render = async () => {
     list.textContent = "";
@@ -57,8 +68,8 @@ export function hiyoKeysSection(): HTMLElement {
         useBtn.type = "button";
         useBtn.addEventListener("click", async () => {
           try {
-            await invoke("hiyo_key_switch", { id: key.id });
-            await notifyChanged();
+            const next = await invoke<HiyoKeysState>("hiyo_key_switch", { id: key.id });
+            await notifyChanged(next);
             await render();
           } catch (err) {
             status.textContent = `${t("loadError")}: ${err}`;
@@ -70,8 +81,8 @@ export function hiyoKeysSection(): HTMLElement {
       removeBtn.type = "button";
       removeBtn.addEventListener("click", async () => {
         try {
-          await invoke("hiyo_key_remove", { id: key.id });
-          await notifyChanged();
+          const next = await invoke<HiyoKeysState>("hiyo_key_remove", { id: key.id });
+          await notifyChanged(next);
           await render();
         } catch (err) {
           status.textContent = `${t("loadError")}: ${err}`;
@@ -101,13 +112,13 @@ export function hiyoKeysSection(): HTMLElement {
     addBtn.setAttribute("disabled", "true");
     addBtn.textContent = "…";
     try {
-      await invoke("hiyo_key_add", {
+      const next = await invoke<HiyoKeysState>("hiyo_key_add", {
         apiKey,
         label: labelInput.value.trim() || null,
       });
       keyInput.value = "";
       labelInput.value = "";
-      await notifyChanged();
+      await notifyChanged(next);
       await render();
     } catch (err) {
       status.textContent = String(err);

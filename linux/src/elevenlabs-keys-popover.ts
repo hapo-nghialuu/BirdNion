@@ -7,12 +7,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { t } from "./i18n";
 import { settingsIcon } from "./settings-icons";
+import type { Settings } from "./settings-provider-detail";
+import {
+  SETTINGS_SNAPSHOT_CHANGED_EVENT,
+  type SettingsSnapshotState,
+} from "./settings-persistence";
 
 const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 const EXPAND_KEY = "birdnion.elevenlabsKeysExpanded";
 
 type ElevenLabsKey = { id: string; label?: string | null; preview: string };
-type ElevenLabsKeysState = { keys: ElevenLabsKey[]; activeId: string | null };
+type ElevenLabsKeysState = SettingsSnapshotState<Settings> & {
+  keys: ElevenLabsKey[];
+  activeId: string | null;
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -81,6 +89,7 @@ export function elevenlabsKeysPopoverCard(onResize: () => void, onSwitched: () =
           let didSwitch = false;
           try {
             state = await invoke<ElevenLabsKeysState>("elevenlabs_key_switch", { id: key.id });
+            await emit(SETTINGS_SNAPSHOT_CHANGED_EVENT, state.settings);
             didSwitch = true;
             await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
           } catch { /* keep old state */ }

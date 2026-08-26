@@ -45,17 +45,17 @@ function clearDetail(detail: HTMLElement) {
 
 export function sourceChartCard(
   report: UsageReport,
-  source: "claude" | "codex" | "grok",
+  source: "claude" | "codex" | "grok" | "kiro",
 ): HTMLElement {
   const card = el("section", "card");
   const daily30 = report.daily.slice(-30);
   const latestActive = [...daily30].reverse().find((d) => d.tokens > 0);
   const barClass = source === "claude" ? "claude"
     : source === "codex" ? "codex"
-    : "grok";
+    : source === "grok" ? "grok" : "kiro";
   const footnoteKey = source === "claude" ? "claudeFootnote"
     : source === "codex" ? "codexFootnote"
-    : "grokFootnote";
+    : source === "grok" ? "grokFootnote" : "kiroFootnote";
 
   const summary = el("div", "summary-row");
   summary.append(summaryColumn(t("today"), report.todayUsd, report.todayTokens));

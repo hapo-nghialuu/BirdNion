@@ -10,8 +10,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { t } from "./i18n";
 import { logoMark } from "./logos";
-import { usd, tokens as tokensLabel, tokensShort, dayLabel } from "./usage";
-import type { CombinedDay, CombinedModel } from "./usage";
+import {
+  USAGE_SOURCE_IDS, combinedDaySourceUsage, isKiroSyntheticAggregate,
+  usd, tokens as tokensLabel, tokensShort, dayLabel,
+} from "./usage";
+import type { CombinedDay, CombinedModel, UsageSourceId } from "./usage";
 import type { AgentCostDay, AgentPanelPayload, AgentQuotaWindow, AgentTabId } from "./agent-panel-payload";
 
 export const PANEL_PAYLOAD_EVENT = "birdnion-panel-payload";
@@ -79,6 +82,15 @@ function shortModelName(name: string): string {
   return slash >= 0 ? name.slice(slash + 1) : name;
 }
 
+const DAY_AGENT_LABELS: Record<UsageSourceId, string> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  grok: "Grok CLI",
+  kiro: "Kiro",
+  omp: "Oh My Pi",
+  pi: "Pi Agent",
+};
+
 /** Chi tiết một ngày: hero + phân bổ theo agent + danh sách model. */
 function dayPanel(payload: Extract<PanelPayload, { kind: "day" }>): HTMLElement {
   const wrap = el("div", "panel-content");
@@ -91,13 +103,12 @@ function dayPanel(payload: Extract<PanelPayload, { kind: "day" }>): HTMLElement 
   const hero = el("div", "panel-hero", usd(payload.day.usd));
   wrap.append(hero);
 
-  const agents: { id: string; label: string; usd: number; tokens: number }[] = [
-    { id: "claude", label: "Claude Code", usd: payload.day.claudeUsd, tokens: payload.day.claudeTokens },
-    { id: "codex", label: "Codex CLI", usd: payload.day.codexUsd, tokens: payload.day.codexTokens },
-    { id: "grok", label: "Grok CLI", usd: payload.day.grokUsd, tokens: payload.day.grokTokens },
-    { id: "omp", label: "Oh My Pi", usd: payload.day.ompUsd, tokens: payload.day.ompTokens },
-    { id: "pi", label: "Pi Agent", usd: payload.day.piUsd, tokens: payload.day.piTokens },
-  ].filter((a) => a.usd > 0 || a.tokens > 0).sort((a, b) => b.usd - a.usd);
+  const agents = USAGE_SOURCE_IDS.map((id) => ({
+    id,
+    label: DAY_AGENT_LABELS[id],
+    ...combinedDaySourceUsage(payload.day, id),
+  })).filter((agent) => agent.usd > 0 || agent.tokens > 0)
+    .sort((a, b) => b.usd - a.usd);
 
   if (agents.length > 0) {
     wrap.append(el("div", "panel-section-title", t("costByAgent").toUpperCase()));
@@ -112,7 +123,9 @@ function dayPanel(payload: Extract<PanelPayload, { kind: "day" }>): HTMLElement 
     }
   }
 
-  const models = [...payload.day.models].sort((a, b) => b.usd - a.usd);
+  const models = payload.day.models
+    .filter((model) => !isKiroSyntheticAggregate(model))
+    .sort((a, b) => b.usd - a.usd);
   if (models.length > 0) {
     wrap.append(el("div", "panel-section-title",
       `${t("costByModel").toUpperCase()} (${models.length})`));
@@ -124,7 +137,7 @@ function dayPanel(payload: Extract<PanelPayload, { kind: "day" }>): HTMLElement 
 function modelsPanel(payload: Extract<PanelPayload, { kind: "models" }>): HTMLElement {
   const wrap = el("div", "panel-content");
   wrap.append(header(t("moreModels", { n: payload.models.length }), "", false));
-  const sorted = [...payload.models].sort((a, b) =>
+  const sorted = payload.models.filter((model) => !isKiroSyntheticAggregate(model)).sort((a, b) =>
     payload.mode === "token" ? b.tokens - a.tokens : b.usd - a.usd);
   for (const model of sorted) wrap.append(modelRow(model, "usd"));
   return wrap;
@@ -359,6 +372,7 @@ function aggregateModels(days: AgentCostDay[]): CombinedModel[] {
   const totals = new Map<string, CombinedModel>();
   for (const day of days) {
     for (const model of day.models) {
+      if (isKiroSyntheticAggregate(model)) continue;
       const existing = totals.get(model.name);
       if (existing) { existing.usd += model.usd; existing.tokens += model.tokens; }
       else totals.set(model.name, { ...model });
@@ -420,7 +434,9 @@ function activityPanel(payload: Extract<PanelPayload, { kind: "activity" }>): HT
         bodyEl.append(heatmapSelectedDayRow(day));
         // Click ô còn liệt kê model của đúng ngày đó (macOS parity), tối đa 6
         // dòng rồi gộp phần dư — panel cao tự động nên không được dài vô hạn.
-        const models = [...(day.models ?? [])].sort((a, b) => b.tokens - a.tokens);
+        const models = (day.models ?? [])
+          .filter((model) => !isKiroSyntheticAggregate(model))
+          .sort((a, b) => b.tokens - a.tokens);
         for (const model of models.slice(0, 6)) bodyEl.append(modelRow(model, "usd"));
         if (models.length > 6) {
           bodyEl.append(el("div", "panel-row-more",

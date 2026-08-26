@@ -3,8 +3,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "./i18n";
-import { tokens, usd, combine } from "./usage";
-import type { UsageReport } from "./usage";
+import { tokens, usd, combine, USAGE_SOURCE_IDS } from "./usage";
+import type { UsageReport, UsageSourceId } from "./usage";
 import { activityContent } from "./insights-activity";
 
 export type InsightConfidence = {
@@ -57,6 +57,15 @@ export type InsightsSegment = "overview" | "activity" | "projects";
 const SEGMENT_KEY = "birdnion.insightsSegment";
 const DAYS_KEY = "birdnion.insightsDays";
 const PROJECT_KEY = "birdnion.insightsProjectKey";
+const USAGE_SOURCES: readonly UsageSourceId[] = USAGE_SOURCE_IDS;
+const SOURCE_NAMES: Readonly<Record<string, string>> = {
+  claude: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+  kiro: "Kiro",
+  omp: "Oh My Pi",
+  pi: "Pi",
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -65,11 +74,8 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   return node;
 }
 
-function sourceName(source: string): string {
-  if (source === "claude") return "Claude";
-  if (source === "codex") return "Codex";
-  if (source === "grok") return "Grok";
-  return source;
+export function sourceName(source: string): string {
+  return SOURCE_NAMES[source] ?? source;
 }
 
 function projectName(project: ProjectRanking | null): string {
@@ -102,6 +108,126 @@ export function fetchProjectInsightsReport(
 ): Promise<ProjectInsightsReport | null> {
   return invoke<ProjectInsightsReport>("project_insights_report", { days, projectKey })
     .catch(() => null);
+}
+
+type AuthorizedRequestResult<T> = {
+  current: boolean;
+  value: T | null;
+};
+
+type UsageReports = Record<UsageSourceId, UsageReport | null>;
+
+type SourceAuthorizationDependencies = {
+  readCanonicalSources: () => Promise<ReadonlySet<UsageSourceId> | null>;
+};
+
+function intersectSources(
+  started: ReadonlySet<UsageSourceId>,
+  final: ReadonlySet<UsageSourceId>,
+): ReadonlySet<UsageSourceId> {
+  return new Set(USAGE_SOURCES.filter((source) => started.has(source) && final.has(source)));
+}
+
+/** Every Insights request owns a generation and two authorization snapshots.
+ * Unknown authorization fails closed; a newer request invalidates all older
+ * completions before they can reach the DOM. */
+function createSourceAuthorizedRequestCoordinator(
+  dependencies: SourceAuthorizationDependencies,
+) {
+  let activeGeneration = 0;
+  const readSources = () => dependencies.readCanonicalSources().catch(() => null);
+
+  return {
+    invalidate(): void {
+      activeGeneration += 1;
+    },
+    async run<T>(
+      request: (started: ReadonlySet<UsageSourceId>) => Promise<T | null>,
+      restrict: (value: T, allowed: ReadonlySet<UsageSourceId>) => T | null,
+    ): Promise<AuthorizedRequestResult<T>> {
+      const generation = ++activeGeneration;
+      const started = await readSources();
+      if (generation !== activeGeneration) return { current: false, value: null };
+      if (!started) return { current: true, value: null };
+
+      const value = await request(started).catch(() => null);
+      const final = await readSources();
+      if (generation !== activeGeneration) return { current: false, value: null };
+      if (value == null || !final) return { current: true, value: null };
+      return { current: true, value: restrict(value, intersectSources(started, final)) };
+    },
+  };
+}
+
+async function readCanonicalUsageSources(): Promise<ReadonlySet<UsageSourceId> | null> {
+  try {
+    const sourceIds = await invoke<unknown>("enabled_local_usage_source_ids");
+    if (!Array.isArray(sourceIds)) return null;
+    return new Set(USAGE_SOURCES.filter((source) => sourceIds.includes(source)));
+  } catch {
+    return null;
+  }
+}
+
+type ActivityRequestDependencies = SourceAuthorizationDependencies & {
+  scanSource: (source: UsageSourceId) => Promise<UsageReport | null>;
+};
+
+export function createInsightsActivityRequestCoordinator(
+  dependencies: ActivityRequestDependencies,
+) {
+  const authorization = createSourceAuthorizedRequestCoordinator(dependencies);
+  return {
+    invalidate: () => authorization.invalidate(),
+    load: () => authorization.run(
+      async (started) => {
+        const entries = await Promise.all(USAGE_SOURCES.map(async (source) => [
+          source,
+          started.has(source) ? await dependencies.scanSource(source).catch(() => null) : null,
+        ] as const));
+        return Object.fromEntries(entries) as UsageReports;
+      },
+      (reports, allowed) => Object.fromEntries(USAGE_SOURCES.map((source) => [
+        source,
+        allowed.has(source) ? reports[source] : null,
+      ])) as UsageReports,
+    ),
+  };
+}
+
+function reportUsesOnlySources(
+  report: ProjectInsightsReport,
+  allowed: ReadonlySet<UsageSourceId>,
+): boolean {
+  const sources = [
+    ...report.overview.confidence.map((item) => item.source),
+    report.overview.topSource?.source,
+    report.overview.topModel?.source,
+    report.overview.topProject?.source,
+    ...report.projects.map((project) => project.source),
+    report.selectedProject?.project.source,
+  ].filter((source): source is string => source != null);
+  return sources.every((source) => allowed.has(source as UsageSourceId));
+}
+
+type HistoryRequestDependencies = SourceAuthorizationDependencies & {
+  fetchReport: (
+    days: InsightsPeriodDays,
+    projectKey: string | null,
+  ) => Promise<ProjectInsightsReport | null>;
+};
+
+export function createInsightsHistoryRequestCoordinator(
+  dependencies: HistoryRequestDependencies,
+) {
+  const authorization = createSourceAuthorizedRequestCoordinator(dependencies);
+  return {
+    invalidate: () => authorization.invalidate(),
+    load: (days: InsightsPeriodDays, projectKey: string | null) => authorization.run(
+      () => dependencies.fetchReport(days, projectKey),
+      (report, allowed) => reportUsesOnlySources(report, allowed) ? report : null,
+    ),
+  };
 }
 
 /** Exactly one compact All-tab card. Layout mirrors budget card (title · hero · foot). */
@@ -315,25 +441,28 @@ function projectDetail(detail: NonNullable<ProjectInsightsReport["selectedProjec
 }
 
 /** Segment "Hoạt động": heatmap 52 tuần dựng từ báo cáo cost đã quét. */
-function activityView(): HTMLElement {
+function activityView(
+  requests: ReturnType<typeof createInsightsActivityRequestCoordinator>,
+): HTMLElement {
   const host = el("div", "insights-activity-host");
   host.append(el("div", "loading", "…"));
   void (async () => {
-    try {
-      const [claude, codex, grok, omp, pi, kiro] = await Promise.all([
-        invoke<UsageReport | null>("claude_usage_report").catch(() => null),
-        invoke<UsageReport | null>("codex_usage_report").catch(() => null),
-        invoke<UsageReport | null>("grok_usage_report").catch(() => null),
-        invoke<UsageReport | null>("omp_usage_report").catch(() => null),
-        invoke<UsageReport | null>("pi_usage_report").catch(() => null),
-        invoke<UsageReport | null>("kiro_usage_report").catch(() => null),
-      ]);
-      host.textContent = "";
-      host.append(activityContent(combine(claude, codex, grok, omp, pi, kiro)));
-    } catch {
-      host.textContent = "";
+    const result = await requests.load();
+    if (!result.current) return;
+    host.textContent = "";
+    if (!result.value) {
       host.append(el("div", "empty", t("insightsLoadError")));
+      return;
     }
+    const reports = result.value;
+    host.append(activityContent(combine(
+      reports.claude,
+      reports.codex,
+      reports.grok,
+      reports.omp,
+      reports.pi,
+      reports.kiro,
+    )));
   })();
   return host;
 }
@@ -341,6 +470,14 @@ function activityView(): HTMLElement {
 
 export async function insightsPane(): Promise<HTMLElement> {
   const page = el("div", "settings-page insights-page");
+  const activityRequests = createInsightsActivityRequestCoordinator({
+    readCanonicalSources: readCanonicalUsageSources,
+    scanSource: (source) => invoke<UsageReport | null>(`${source}_usage_report`),
+  });
+  const historyRequests = createInsightsHistoryRequestCoordinator({
+    readCanonicalSources: readCanonicalUsageSources,
+    fetchReport: fetchProjectInsightsReport,
+  });
   const savedSegment = localStorage.getItem(SEGMENT_KEY);
   let segment: InsightsSegment = savedSegment === "projects" ? "projects"
     : savedSegment === "activity" ? "activity" : "overview";
@@ -350,16 +487,21 @@ export async function insightsPane(): Promise<HTMLElement> {
   let selectedKey = localStorage.getItem(PROJECT_KEY);
   const loadReport = async (requestedDays: InsightsPeriodDays, requestedKey: string | null) => {
     let resolvedKey = requestedKey;
-    let next = await fetchProjectInsightsReport(requestedDays, resolvedKey);
-    if (!next) return { report: null, selectedKey: resolvedKey };
+    const first = await historyRequests.load(requestedDays, resolvedKey);
+    if (!first.current) return { current: false, report: null, selectedKey: resolvedKey };
+    let next = first.value;
+    if (!next) return { current: true, report: null, selectedKey: resolvedKey };
     const selectedIsVisible = next.projects.some((project) => project.projectKey === resolvedKey);
     if (next.projects.length === 0) {
       resolvedKey = null;
     } else if (!selectedIsVisible) {
       resolvedKey = next.projects[0].projectKey;
-      next = await fetchProjectInsightsReport(requestedDays, resolvedKey) ?? next;
+      const selected = await historyRequests.load(requestedDays, resolvedKey);
+      if (!selected.current) return { current: false, report: null, selectedKey: resolvedKey };
+      if (!selected.value) return { current: true, report: null, selectedKey: resolvedKey };
+      next = selected.value;
     }
-    return { report: next, selectedKey: resolvedKey };
+    return { current: true, report: next, selectedKey: resolvedKey };
   };
   const persistSelection = (key: string | null) => {
     if (key) localStorage.setItem(PROJECT_KEY, key);
@@ -385,12 +527,19 @@ export async function insightsPane(): Promise<HTMLElement> {
       changeDays,
     ));
     if (!report) {
+      activityRequests.invalidate();
       page.append(el("div", "empty", t("insightsLoadError")));
       return;
     }
-    if (segment === "overview") page.append(overviewView(report));
-    else if (segment === "activity") page.append(activityView());
-    else page.append(projectsView(report, selectProject));
+    if (segment === "overview") {
+      activityRequests.invalidate();
+      page.append(overviewView(report));
+    } else if (segment === "activity") {
+      page.append(activityView(activityRequests));
+    } else {
+      activityRequests.invalidate();
+      page.append(projectsView(report, selectProject));
+    }
   };
 
   const refresh = async () => {
@@ -398,7 +547,7 @@ export async function insightsPane(): Promise<HTMLElement> {
     const requestedDays = days;
     const requestedKey = selectedKey;
     const next = await loadReport(requestedDays, requestedKey);
-    if (seq !== reportSeq) return;
+    if (seq !== reportSeq || !next.current) return;
     report = next.report;
     selectedKey = next.selectedKey;
     persistSelection(selectedKey);

@@ -348,9 +348,9 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
     isManualRefresh() ? t("settingsGlobalPollingManualHint") : undefined,
   );
 
-  // Per-provider budgets (USD) — independent of the combined budget above,
+  // Per-source budgets (USD) — independent of the combined budget above,
   // same localStorage-only/"off" normalization, one input per source
-  // (`providerBudgetInput` shares the validation path across all three).
+  // (`providerBudgetInput` shares one validation path across all six).
   const providerBudgetTitleKeys: Record<UsageSourceId, string> = {
     claude: "settingsClaudeBudget", codex: "settingsCodexBudget", grok: "settingsGrokBudget",
     omp: "settingsOMPBudget", pi: "settingsPiBudget", kiro: "settingsKiroBudget",

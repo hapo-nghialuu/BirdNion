@@ -11,6 +11,12 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { t } from "./i18n";
 import { quotaTone } from "./provider-tab";
 import { settingsIcon } from "./settings-icons";
+import { CODEX_ACCOUNT_CHANGED_EVENT } from "./settings-codex-accounts";
+import type { Settings } from "./settings-provider-detail";
+import {
+  SETTINGS_SNAPSHOT_CHANGED_EVENT,
+  type SettingsSnapshotState,
+} from "./settings-persistence";
 
 /** Same name as settings-tab's PROVIDERS_CHANGED_EVENT (avoid circular import). */
 const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
@@ -23,11 +29,28 @@ type AccountQuotaSnapshot = {
   lastChecked: number;
   errorKind?: string | null;
 };
-type CodexAccountsState = {
+type CodexAccountsState = SettingsSnapshotState<Settings> & {
   accounts: CodexAccount[];
   activeId: string;
   quotaSnapshots: Record<string, AccountQuotaSnapshot>;
 };
+
+async function notifySettingsChanged(state: CodexAccountsState): Promise<void> {
+  await emit(SETTINGS_SNAPSHOT_CHANGED_EVENT, state.settings);
+}
+
+async function notifyCodexAccountChanged(): Promise<void> {
+  await emit(CODEX_ACCOUNT_CHANGED_EVENT);
+}
+
+async function performCodexAccountMutation<T>(operation: () => Promise<T>): Promise<T> {
+  await notifyCodexAccountChanged();
+  try {
+    return await operation();
+  } finally {
+    await notifyCodexAccountChanged().catch(() => {});
+  }
+}
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -63,7 +86,9 @@ export function codexAccountsPopoverCard(onResize: () => void, onSwitched: () =>
     let didSwitch = false;
     try {
       // Backend command is singular: codex_account_switch (not codex_accounts_*).
-      state = await invoke<CodexAccountsState>("codex_account_switch", { id });
+      state = await performCodexAccountMutation(() =>
+        invoke<CodexAccountsState>("codex_account_switch", { id }));
+      await notifySettingsChanged(state);
       didSwitch = true;
       await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
     } catch { /* keep old state */ }
@@ -175,7 +200,9 @@ export function codexAccountsPopoverCard(onResize: () => void, onSwitched: () =>
           busy = true;
           render();
           try {
-            state = await invoke<CodexAccountsState>("codex_account_remove", { id: account.id });
+            state = await performCodexAccountMutation(() =>
+              invoke<CodexAccountsState>("codex_account_remove", { id: account.id }));
+            await notifySettingsChanged(state);
             await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
             onSwitched();
           } catch { /* keep old state */ }
@@ -205,7 +232,9 @@ export function codexAccountsPopoverCard(onResize: () => void, onSwitched: () =>
       busy = true;
       render();
       try {
-        state = await invoke<CodexAccountsState>("codex_account_save_current");
+        state = await performCodexAccountMutation(() =>
+          invoke<CodexAccountsState>("codex_account_save_current"));
+        await notifySettingsChanged(state);
         await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
       } catch { /* keep old state; errors also surface in Settings */ }
       busy = false;

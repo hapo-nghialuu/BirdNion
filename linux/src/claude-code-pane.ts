@@ -8,6 +8,7 @@
 // profiles autosave per keystroke (debounced here).
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, ask } from "@tauri-apps/plugin-dialog";
 import { t, currentLang } from "./i18n";
 import { logoMark } from "./logos";
@@ -15,6 +16,10 @@ import { settingsIcon } from "./settings-icons";
 import { isClaudeCodeSupported, type ClaudeCodePowerState, type ClaudeCodeState } from "./claude-code";
 import { NAME_BY_ID } from "./settings-tab";
 import type { ProviderCfg, Settings } from "./settings-provider-detail";
+import {
+  SETTINGS_SNAPSHOT_CHANGED_EVENT,
+  saveRevisionedSettings,
+} from "./settings-persistence";
 
 type ProfileEnvRow = { id: string; key: string; value: string };
 type ClaudeCodeProfile = {
@@ -221,7 +226,11 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
   const vi = currentLang() === "vi";
   void vi;
   const settings = await invoke<CCSettings>("get_settings")
-    .catch(() => ({ version: 1, providers: [] as ProviderCfg[] }) as CCSettings);
+    .catch(() => ({
+      version: 1,
+      settingsRevision: Number.NaN,
+      providers: [] as ProviderCfg[],
+    }) as CCSettings);
   settings.claudeCodeProfiles ??= [];
   settings.codexProfiles ??= [];
   const profiles = settings.claudeCodeProfiles;
@@ -231,11 +240,38 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
     settings.providers.filter((p) => isClaudeCodeSupported(p.id) && !!clean(p.apiKey));
 
   // --- persistence -------------------------------------------------------
-  const persist = () => invoke("save_settings", { settings }).catch(() => {});
+  let persistenceInFlight: Promise<number> | null = null;
+  const persist = () => {
+    const request = saveRevisionedSettings(
+      settings,
+      (snapshot) => invoke<number>("save_settings", { settings: snapshot }),
+    );
+    persistenceInFlight = request;
+    void request.then(
+      () => { if (persistenceInFlight === request) persistenceInFlight = null; },
+      () => { if (persistenceInFlight === request) persistenceInFlight = null; },
+    );
+    return request;
+  };
+  const persistInBackground = () => {
+    void persist().catch((error) => {
+      statusMsg = { text: String(error), isError: true };
+      renderDetail();
+    });
+  };
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   const persistDebounced = () => {
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { saveTimer = null; void persist(); }, 400);
+    saveTimer = setTimeout(() => { saveTimer = null; persistInBackground(); }, 400);
+  };
+  const flushPendingPersistence = async () => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      await persist();
+      return;
+    }
+    if (persistenceInFlight) await persistenceInFlight;
   };
 
   // --- selection + per-selection model cache -----------------------------
@@ -257,20 +293,38 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
   const sideStatusCache = new Map<string, SideStatus>();
   let sideStatusSeq = 0;
 
+  const replaceSettingsFromDisk = (fresh: CCSettings) => {
+    const selectedProviderId = selected?.kind === "provider" ? selected.cfg.id : null;
+    const selectedProfileId = selected?.kind === "profile" ? selected.profile.id : null;
+    const workingCodexId = workingCodex?.id ?? null;
+    const freshProfiles = fresh.claudeCodeProfiles ?? [];
+    const freshCodexProfiles = fresh.codexProfiles ?? [];
+
+    Object.assign(settings, fresh);
+    profiles.splice(0, profiles.length, ...freshProfiles);
+    codexProfiles.splice(0, codexProfiles.length, ...freshCodexProfiles);
+    settings.claudeCodeProfiles = profiles;
+    settings.codexProfiles = codexProfiles;
+
+    if (selectedProviderId) {
+      const cfg = settings.providers.find((provider) => provider.id === selectedProviderId);
+      selected = cfg ? { kind: "provider", cfg } : null;
+    } else if (selectedProfileId) {
+      const profile = profiles.find((item) => item.id === selectedProfileId);
+      selected = profile ? { kind: "profile", profile } : null;
+    }
+    if (workingCodexId) {
+      const profile = codexProfiles.find((item) => item.id === workingCodexId);
+      workingCodex = profile ? { ...profile } : null;
+    }
+  };
+
   const selKey = () => (selected?.kind === "provider" ? `p:${selected.cfg.id}` : `c:${selected?.profile.id}`);
 
   const reloadCodexFromDisk = async (id: string) => {
     const fresh = await invoke<CCSettings>("get_settings").catch(() => null);
-    if (!fresh?.codexProfiles) return;
-    settings.codexProfiles = fresh.codexProfiles;
-    codexProfiles.length = 0;
-    codexProfiles.push(...fresh.codexProfiles);
-    if (fresh.claudeCodeProfiles) {
-      settings.claudeCodeProfiles = fresh.claudeCodeProfiles;
-      profiles.length = 0;
-      profiles.push(...fresh.claudeCodeProfiles);
-    }
-    if (fresh.providers) settings.providers = fresh.providers;
+    if (!fresh) return;
+    replaceSettingsFromDisk(fresh);
     const updated = codexProfiles.find((p) => p.id === id);
     if (updated) workingCodex = { ...updated };
   };
@@ -281,6 +335,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
     proxyFeedback = null;
     if (agent === "codex") {
       try {
+        await flushPendingPersistence();
         if (selected?.kind === "profile") {
           const created = await invoke<CodexProfile>("codex_ensure_counterpart", {
             claudeProfileId: selected.profile.id,
@@ -309,10 +364,10 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
     // Persist preferred agent so reopening/switching entries restores it (macOS parity).
     if (selected?.kind === "profile") {
       selected.profile.preferredAgent = agent;
-      void persist();
+      persistInBackground();
     } else if (selected?.kind === "provider") {
       selected.cfg.preferredAgent = agent;
-      void persist();
+      persistInBackground();
     }
     renderDetail();
   };
@@ -381,11 +436,11 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
   /** Pull a profile's cliProxy* fields back from disk after prepare. */
   const reloadProfileFromDisk = async (profile: ClaudeCodeProfile) => {
     const fresh = await invoke<CCSettings>("get_settings").catch(() => null);
-    const updated = fresh?.claudeCodeProfiles?.find((p) => p.id === profile.id);
+    if (!fresh) return;
+    const updated = fresh.claudeCodeProfiles?.find((p) => p.id === profile.id);
     if (!updated) return;
     Object.assign(profile, updated);
-    const idx = profiles.findIndex((p) => p.id === profile.id);
-    if (idx >= 0) profiles[idx] = profile;
+    replaceSettingsFromDisk(fresh);
   };
 
   // --- sidebar dual status (macOS CC: · CX:) --------------------------------
@@ -523,7 +578,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
         extraEnv: [],
       };
       profiles.push(profile);
-      void persist();
+      persistInBackground();
       selectProfile(profile);
     });
     head.append(add);
@@ -707,7 +762,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
       const b = el("button", `ccp-seg-btn${getScope() === value ? " active" : ""}`, label);
       b.addEventListener("click", () => {
         setScope(value);
-        void persist();
+        persistInBackground();
         renderAll();
       });
       return b;
@@ -727,7 +782,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
         const dir = await openDialog({ directory: true, multiple: false }).catch(() => null);
         if (typeof dir === "string" && dir) {
           setPath(dir);
-          void persist();
+          persistInBackground();
           renderAll();
         }
       });
@@ -1288,21 +1343,31 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
         // Dual-record delete when linked Codex exists.
         if (clean(profile.codexProfileID)) {
           try {
+            await flushPendingPersistence();
             await invoke("codex_delete", {
               id: profile.codexProfileID,
               deleteLinkedClaude: true,
             });
-          } catch { /* fall through to local remove */ }
+            await reloadCodexFromDisk(profile.codexProfileID!);
+          } catch (err) {
+            statusMsg = { text: String(err), isError: true };
+            renderDetail();
+            return;
+          }
+        } else {
+          settings.claudeCodeProfiles = profiles.filter((p) => p.id !== profile.id);
+          profiles.length = 0;
+          profiles.push(...(settings.claudeCodeProfiles ?? []));
+          try {
+            await persist();
+          } catch (err) {
+            const fresh = await invoke<CCSettings>("get_settings").catch(() => null);
+            if (fresh) replaceSettingsFromDisk(fresh);
+            statusMsg = { text: String(err), isError: true };
+            renderAll();
+            return;
+          }
         }
-        settings.claudeCodeProfiles = profiles.filter((p) => p.id !== profile.id);
-        profiles.length = 0;
-        profiles.push(...(settings.claudeCodeProfiles ?? []));
-        if (profile.codexProfileID) {
-          settings.codexProfiles = codexProfiles.filter((p) => p.id !== profile.codexProfileID);
-          codexProfiles.length = 0;
-          codexProfiles.push(...(settings.codexProfiles ?? []));
-        }
-        void persist();
         selected = null;
         const first = eligibleProviders()[0];
         if (first) selectProvider(first);
@@ -1334,7 +1399,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
     imp.addEventListener("click", () => {
       try {
         importProfileJson(profile, ta.value);
-        void persist();
+        persistInBackground();
         overlay.remove();
         statusMsg = { text: t("ccxImported"), isError: false };
         renderAll();
@@ -1714,29 +1779,19 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
       if (!ok) return;
       busy = true;
       try {
+        await flushPendingPersistence();
         await invoke("codex_delete", {
           id: profile.id,
           deleteLinkedClaude: isCustom,
         });
-        if (isCustom && selected && selected.kind === "profile") {
-          const deletedClaudeId = selected.profile.id;
-          settings.claudeCodeProfiles = profiles.filter((p) => p.id !== deletedClaudeId);
-          profiles.length = 0;
-          profiles.push(...(settings.claudeCodeProfiles ?? []));
-        }
-        settings.codexProfiles = codexProfiles.filter((p) => p.id !== profile.id);
-        codexProfiles.length = 0;
-        codexProfiles.push(...(settings.codexProfiles ?? []));
-        // Clear provider link for preset.
-        if (selected?.kind === "provider") {
-          selected.cfg.codexProfileID = null;
-        }
+        await reloadCodexFromDisk(profile.id);
         detailAgent = "claudeCode";
         workingCodex = null;
         statusMsg = null;
         if (isCustom) {
           selected = null;
           const first = eligibleProviders()[0];
+          busy = false;
           if (first) selectProvider(first);
           else renderAll();
           return;
@@ -1832,7 +1887,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
         tokenEnvKey: "ANTHROPIC_AUTH_TOKEN", extraEnv: [],
       };
       profiles.push(profile);
-      void persist();
+      persistInBackground();
       selectProfile(profile);
     });
     const openProviders = el("button", "sw-pill-btn", t("ccxOpenProviders"));
@@ -1944,6 +1999,7 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
       if (detailAgent === "codex") {
         if (!workingCodex) {
           try {
+            await flushPendingPersistence();
             if (sel.kind === "profile") {
               workingCodex = await invoke<CodexProfile>("codex_ensure_counterpart", {
                 claudeProfileId: sel.profile.id,
@@ -2112,6 +2168,45 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
     void seedModels(first);
   }
   renderAll();
+
+  const unlistenSettingsSnapshots = await listen<CCSettings>(
+    SETTINGS_SNAPSHOT_CHANGED_EVENT,
+    ({ payload: fresh }) => {
+      if (!Number.isSafeInteger(fresh.settingsRevision) || fresh.settingsRevision < 0) return;
+      const currentRevision = settings.settingsRevision;
+      if (Number.isSafeInteger(currentRevision) && fresh.settingsRevision <= currentRevision) return;
+
+      // This event is emitted only by account/key commands. Merge their full
+      // canonical top-level state and revision while preserving Claude/Codex
+      // drafts owned by this pane, including a debounced edit not yet saved.
+      const ownedKeys = new Set(["providers", "claudeCodeProfiles", "codexProfiles"]);
+      const target = settings as unknown as Record<string, unknown>;
+      const source = fresh as unknown as Record<string, unknown>;
+      for (const key of Object.keys(target)) {
+        if (!ownedKeys.has(key)) delete target[key];
+      }
+      for (const [key, value] of Object.entries(source)) {
+        if (!ownedKeys.has(key)) target[key] = value;
+      }
+    },
+  );
+  let wasConnected = false;
+  const listenerObserver = new MutationObserver(() => {
+    if (root.isConnected) {
+      wasConnected = true;
+    } else if (wasConnected) {
+      listenerObserver.disconnect();
+      unlistenSettingsSnapshots();
+    }
+  });
+  listenerObserver.observe(document.documentElement, { childList: true, subtree: true });
+  requestAnimationFrame(() => {
+    if (root.isConnected) wasConnected = true;
+    else {
+      listenerObserver.disconnect();
+      unlistenSettingsSnapshots();
+    }
+  });
 
   return root;
 }

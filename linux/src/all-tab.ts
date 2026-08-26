@@ -5,6 +5,7 @@
 
 import {
   Combined, CombinedDay, HourlyUsage, UsageReport, UsageSourceId, BudgetStatus,
+  USAGE_SOURCE_IDS, combinedDaySourceUsage, isKiroSyntheticAggregate,
   usd, usdWhole, tokens, tokensAndUsd, dayLabel, scanConfidence, monthlyForecast,
 } from "./usage";
 import { t, currentLang } from "./i18n";
@@ -22,6 +23,14 @@ const PERIODS = [1, 7, 30, 90, 120]; // 1 = the 24h hourly view
 const PERIOD_CHANGE_EVENT = "birdnion-all-period";
 /** Cap model rows in day-detail so the breakdown stays shorter than the chart. */
 const MAX_DETAIL_MODELS = 6;
+const SOURCE_LABELS: Record<UsageSourceId, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+  kiro: "Kiro",
+  omp: "Oh My Pi",
+  pi: "Pi",
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -161,11 +170,18 @@ export function chartCard(
     const claude24Tokens = claudeHourly.reduce((s, h) => s + h.tokens, 0);
     const today = combined.daily[combined.daily.length - 1];
 
+    const nonHourlySources = USAGE_SOURCE_IDS.filter((source) => source !== "claude");
     const periodUsd = is24h
-      ? claude24Usd + (today?.codexUsd ?? 0) + (today?.grokUsd ?? 0) + (today?.ompUsd ?? 0) + (today?.piUsd ?? 0)
+      ? claude24Usd + nonHourlySources.reduce(
+        (sum, source) => sum + (today ? combinedDaySourceUsage(today, source).usd : 0),
+        0,
+      )
       : wUsd;
     const periodTokens = is24h
-      ? claude24Tokens + (today?.codexTokens ?? 0) + (today?.grokTokens ?? 0) + (today?.ompTokens ?? 0) + (today?.piTokens ?? 0)
+      ? claude24Tokens + nonHourlySources.reduce(
+        (sum, source) => sum + (today ? combinedDaySourceUsage(today, source).tokens : 0),
+        0,
+      )
       : wTokens;
 
     // Total-cost hero: eyebrow + square period chips on one row (top-right),
@@ -308,23 +324,16 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
   detail.append(el("div", "day-detail-head",
     `${dayLabel(day.date)} · ${tokens(day.tokens)} · ${usd(day.usd)}`));
   // Compact: merge all models by cost (no per-source headers) — macOS 986f49a8.
-  const models = [...day.models].sort((a, b) => (b.usd - a.usd) || (b.tokens - a.tokens));
+  const models = day.models
+    .filter((model) => !isKiroSyntheticAggregate(model))
+    .sort((a, b) => (b.usd - a.usd) || (b.tokens - a.tokens));
   if (models.length === 0) {
     // Fallback: source totals when model detail missing.
-    if (day.claudeUsd > 0 || day.claudeTokens > 0) {
-      detail.append(compactModelRow("claude", "Claude", day.claudeTokens, day.claudeUsd));
-    }
-    if (day.codexUsd > 0 || day.codexTokens > 0) {
-      detail.append(compactModelRow("codex", "Codex", day.codexTokens, day.codexUsd));
-    }
-    if (day.grokUsd > 0 || day.grokTokens > 0) {
-      detail.append(compactModelRow("grok", "Grok", day.grokTokens, day.grokUsd));
-    }
-    if (day.ompUsd > 0 || day.ompTokens > 0) {
-      detail.append(compactModelRow("omp", "Oh My Pi", day.ompTokens, day.ompUsd));
-    }
-    if (day.piUsd > 0 || day.piTokens > 0) {
-      detail.append(compactModelRow("pi", "Pi", day.piTokens, day.piUsd));
+    for (const source of USAGE_SOURCE_IDS) {
+      const usage = combinedDaySourceUsage(day, source);
+      if (usage.usd > 0 || usage.tokens > 0) {
+        detail.append(compactModelRow(source, SOURCE_LABELS[source], usage.tokens, usage.usd));
+      }
     }
     return;
   }
@@ -363,7 +372,7 @@ type PinApi = {
   setPinned: (d: CombinedDay | null) => void;
 };
 
-/** Stacked per-source bars: Claude → Codex → Grok; height by tokens.
+/** Stacked per-source bars: all local-cost sources; height by tokens.
  * Click toggles pin/detail; hover only highlights (never opens detail). */
 function stackedBarChart(days: CombinedDay[], pin: PinApi): HTMLElement {
   const max = Math.max(...days.map((d) => d.tokens), 1);
@@ -393,17 +402,13 @@ function stackedBarChart(days: CombinedDay[], pin: PinApi): HTMLElement {
       const heightPct = Math.max((day.tokens / max) * 100, 5);
       const stack = el("div", "bar-stack");
       stack.style.height = `${heightPct}%`;
-      const claude = el("div", "bar-seg claude");
-      claude.style.flexGrow = String(Math.max(day.claudeTokens, 0.0001));
-      const codex = el("div", "bar-seg codex");
-      codex.style.flexGrow = String(Math.max(day.codexTokens, 0.0001));
-      const grok = el("div", "bar-seg grok");
-      grok.style.flexGrow = String(Math.max(day.grokTokens, 0.0001));
-      const omp = el("div", "bar-seg omp");
-      omp.style.flexGrow = String(Math.max(day.ompTokens, 0.0001));
-      const pi = el("div", "bar-seg pi");
-      pi.style.flexGrow = String(Math.max(day.piTokens, 0.0001));
-      stack.append(claude, codex, grok, omp, pi);
+      for (const source of USAGE_SOURCE_IDS) {
+        const segment = el("div", `bar-seg ${source}`);
+        segment.style.flexGrow = String(
+          Math.max(combinedDaySourceUsage(day, source).tokens, 0.0001),
+        );
+        stack.append(segment);
+      }
       col.append(stack);
     } else {
       col.append(el("div", "bar-idle"));
@@ -688,6 +693,7 @@ export function topModelsCard(combined: Combined): HTMLElement {
     const modelMap = new Map<string, { name: string; usd: number; tokens: number; source: string }>();
     for (const d of windowDays) {
       for (const m of d.models) {
+        if (isKiroSyntheticAggregate(m)) continue;
         const k = `${m.source}:${m.name}`;
         const cur = modelMap.get(k) ?? { name: m.name, usd: 0, tokens: 0, source: m.source };
         cur.usd += m.usd;

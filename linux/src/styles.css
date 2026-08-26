@@ -457,6 +457,7 @@ html.popover-capped .app-body {
 .share-seg.claude { background: var(--claude); }
 .share-seg.codex { background: var(--codex); }
   .share-seg.grok { background: var(--grok); }
+  .share-seg.kiro { background: var(--kiro); }
   .share-seg.omp { background: var(--omp); }
   .share-seg.pi { background: var(--pi); }
 
@@ -1376,6 +1377,7 @@ html.popover-capped .app-body {
 .bar-seg.claude { background: var(--claude); }
 .bar-seg.codex { background: var(--codex); }
   .bar-seg.grok { background: var(--grok); }
+  .bar-seg.kiro { background: var(--kiro); }
   .bar-seg.omp { background: var(--omp); }
   .bar-seg.pi { background: var(--pi); }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
@@ -1388,6 +1390,7 @@ html.popover-capped .app-body {
 .dot.claude { background: var(--claude); }
 .dot.codex { background: var(--codex); }
 .dot.grok { background: var(--grok); }
+.dot.kiro { background: var(--kiro); }
 .dot.omp { background: var(--omp); }
 .dot.pi { background: var(--pi); }
 
@@ -1862,6 +1865,7 @@ html.popover-capped .app-body {
 .model-fill.claude { background: var(--claude); }
 .model-fill.codex { background: var(--codex); }
   .model-fill.grok { background: var(--grok); }
+  .model-fill.kiro { background: var(--kiro); }
   .model-fill.omp { background: var(--omp); }
   .model-fill.pi { background: var(--pi); }
 
@@ -2673,6 +2677,13 @@ body.settings-body-root {
 .pp-onboarding-status.live { color: var(--success); }
 .pp-onboarding-status.failed { color: var(--critical); }
 .pp-onboarding-status.testing { color: var(--text2); }
+.pp-onboarding-receipt {
+  color: var(--text2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+}
+.pp-onboarding-receipt.current { color: var(--success); }
 .pp-onboarding-actions { display: flex; align-items: center; gap: 8px; }
 .pp-onboarding-actions .save-button { margin: 0; width: auto; }
 @keyframes guided-remediation-pulse {

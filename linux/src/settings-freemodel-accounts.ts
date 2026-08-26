@@ -5,12 +5,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { t } from "./i18n";
+import type { Settings } from "./settings-provider-detail";
+import {
+  SETTINGS_SNAPSHOT_CHANGED_EVENT,
+  type SettingsSnapshotState,
+} from "./settings-persistence";
 
 /** Same name as settings-tab's PROVIDERS_CHANGED_EVENT (avoid circular import). */
 const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 
 type FreemodelAccount = { id: string; email?: string | null; label?: string | null; isBrowser: boolean };
-type FreemodelAccountsState = { accounts: FreemodelAccount[]; activeId: string };
+type FreemodelAccountsState = SettingsSnapshotState<Settings> & {
+  accounts: FreemodelAccount[];
+  activeId: string;
+};
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -36,7 +44,10 @@ export function freemodelAccountsSection(): HTMLElement {
   const status = el("div", "pp-accounts-status");
   wrap.append(list, status);
 
-  const notifyChanged = () => emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
+  const notifyChanged = async (state: FreemodelAccountsState) => {
+    await emit(SETTINGS_SNAPSHOT_CHANGED_EVENT, state.settings);
+    await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
+  };
 
   const render = async () => {
     list.textContent = "";
@@ -62,8 +73,8 @@ export function freemodelAccountsSection(): HTMLElement {
         useBtn.type = "button";
         useBtn.addEventListener("click", async () => {
           try {
-            await invoke("freemodel_account_switch", { id: account.id });
-            await notifyChanged();
+            const next = await invoke<FreemodelAccountsState>("freemodel_account_switch", { id: account.id });
+            await notifyChanged(next);
             await render();
           } catch (err) {
             status.textContent = `${t("loadError")}: ${err}`;
@@ -76,8 +87,8 @@ export function freemodelAccountsSection(): HTMLElement {
         removeBtn.type = "button";
         removeBtn.addEventListener("click", async () => {
           try {
-            await invoke("freemodel_account_remove", { id: account.id });
-            await notifyChanged();
+            const next = await invoke<FreemodelAccountsState>("freemodel_account_remove", { id: account.id });
+            await notifyChanged(next);
             await render();
           } catch (err) {
             status.textContent = `${t("loadError")}: ${err}`;
@@ -108,12 +119,13 @@ export function freemodelAccountsSection(): HTMLElement {
     addBtn.setAttribute("disabled", "true");
     addBtn.textContent = "…";
     try {
-      await invoke("freemodel_account_add", {
+      const next = await invoke<FreemodelAccountsState>("freemodel_account_add", {
         cookie,
         label: labelInput.value.trim() || null,
       });
       cookieInput.value = "";
       labelInput.value = "";
+      await notifyChanged(next);
       await render();
     } catch (err) {
       status.textContent = String(err);

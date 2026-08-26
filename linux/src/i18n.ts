@@ -41,8 +41,8 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   totalCostPeriod: { vi: "Tổng chi phí {period}", en: "Total cost {period}" },
   estTotal: { vi: "Ước tính {n} ngày", en: "Est. {n}-day total" },
   estFootnote: {
-    vi: "Ước tính từ log cục bộ Claude Code CLI, Codex và Grok.",
-    en: "Estimated from local Claude Code CLI, Codex, and Grok logs.",
+    vi: "Ước tính từ sáu nguồn log chi phí cục bộ.",
+    en: "Estimated from six local cost-log sources.",
   },
   hourBarsNote: {
     vi: "Cột giờ chỉ gồm Claude — Codex/Grok chỉ có độ phân giải theo ngày.",
@@ -63,13 +63,17 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   latestTokens: { vi: "Token mới nhất", en: "Latest tokens" },
   lastUpdated: { vi: "Cập nhật {time}", en: "Updated {time}" },
   noLogs: {
-    vi: "Không tìm thấy log Claude (~/.claude), Codex (~/.codex) hoặc Grok (~/.grok).",
-    en: "No Claude (~/.claude), Codex (~/.codex), or Grok (~/.grok) logs found.",
+    vi: "Không tìm thấy log chi phí Claude, Codex, Grok, Kiro, Oh My Pi hoặc Pi.",
+    en: "No Claude, Codex, Grok, Kiro, Oh My Pi, or Pi cost logs found.",
   },
   scanningSources: { vi: "Đang quét {names}…", en: "Scanning {names}…" },
   grokFootnote: {
     vi: "Ước tính từ log Grok Build cục bộ (~/.grok/sessions).",
     en: "Estimated from local Grok Build logs (~/.grok/sessions).",
+  },
+  kiroFootnote: {
+    vi: "Credit bị tính phí thật từ log Kiro CLI; token của storage cũ là ước tính.",
+    en: "Real billed credits from Kiro CLI logs; tokens from legacy storage are estimated.",
   },
   noQuota: { vi: "Không có dữ liệu quota.", en: "No quota data." },
   creditsHistoryCount: { vi: "{n} giao dịch credit", en: "{n} credit events" },
@@ -293,14 +297,14 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   },
   settingsMonthlyBudget: { vi: "Ngân sách tuần (USD)", en: "Weekly budget (USD)" },
   settingsMonthlyBudgetSub: {
-    vi: "Ngân sách theo tuần lịch — ước tính từ log cục bộ Claude, Codex, Grok trên tab All.",
-    en: "Calendar-week budget from local Claude, Codex, Grok logs on the All tab.",
+    vi: "Ngân sách theo tuần lịch — ước tính từ sáu nguồn chi phí cục bộ trên tab All.",
+    en: "Calendar-week budget from all six local cost sources on the All tab.",
   },
   settingsMonthlyBudgetPlaceholder: { vi: "Tắt", en: "Off" },
-  budgetPerProviderTitle: { vi: "Ngân sách tuần theo nhà cung cấp", en: "Per-provider weekly budgets" },
+  budgetPerProviderTitle: { vi: "Ngân sách tuần theo nguồn", en: "Per-source weekly budgets" },
   settingsPerProviderBudgetSub: {
-    vi: "Ngân sách tuần riêng cho từng nhà cung cấp — độc lập với ngân sách tổng ở trên.",
-    en: "A separate weekly budget per provider — independent of the total budget above.",
+    vi: "Ngân sách tuần riêng cho từng nguồn chi phí — độc lập với ngân sách tổng ở trên.",
+    en: "A separate weekly budget per cost source — independent of the total budget above.",
   },
   settingsClaudeBudget: { vi: "Ngân sách tuần Claude (USD)", en: "Claude weekly budget (USD)" },
   settingsCodexBudget: { vi: "Ngân sách tuần Codex (USD)", en: "Codex weekly budget (USD)" },
@@ -584,6 +588,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "provider.secondsAgo": { vi: "{n} giây trước", en: "{n}s ago" },
   "provider.minutesAgo": { vi: "{n} phút trước", en: "{n}m ago" },
   "provider.hoursAgo": { vi: "{n} giờ trước", en: "{n}h ago" },
+  "provider.daysAgo": { vi: "{n} ngày trước", en: "{n}d ago" },
 
   // Settings setup section
   settingsSectionSetup: { vi: "THIẾT LẬP", en: "SETUP" },
@@ -607,14 +612,18 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     vi: "Đang kiểm tra kết nối thật…",
     en: "Testing the real connection…",
   },
-  "guidedSetup.live": { vi: "Quota đang live", en: "Quota is live" },
+  "guidedSetup.live": { vi: "Đã xác minh ngay bây giờ", en: "Verified just now" },
   "guidedSetup.failed": {
     vi: "Kết nối cần được sửa",
     en: "Connection needs attention",
   },
   guidedSetupPrivacyNote: {
-    vi: "BirdNion chỉ đánh dấu Live sau khi provider trả quota thật. Không sao chép hoặc hiển thị token.",
-    en: "BirdNion marks Live only after the provider returns real quota. Tokens are never copied or displayed.",
+    vi: "BirdNion chỉ xác minh sau khi attempt hiện tại trả quota thật. Receipt nằm trên máy và không lưu token hoặc tài khoản.",
+    en: "BirdNion verifies only after the current attempt returns real quota. The on-device receipt stores no token or account.",
+  },
+  guidedSetupLastVerified: {
+    vi: "Xác minh lần cuối {time} · {detail}",
+    en: "Last verified {time} · {detail}",
   },
   guidedSetupConnect: { vi: "Kết nối & kiểm tra", en: "Connect & test" },
   guidedSetupRetry: { vi: "Thử lại", en: "Retry" },
@@ -622,6 +631,10 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   guidedSetupSaveFailed: {
     vi: "Không thể lưu thiết lập. Kết nối chưa được kiểm tra.",
     en: "Settings could not be saved. The connection was not tested.",
+  },
+  guidedSetupReceiptSaveFailed: {
+    vi: "Đã kiểm tra kết nối nhưng chưa thể xác nhận và lưu receipt trên máy. Hãy giữ cửa sổ ở phía trước rồi thử lại.",
+    en: "The connection passed, but its on-device receipt could not be confirmed and saved. Keep this window in front and retry.",
   },
   guidedSetupTestFailed: {
     vi: "Không thể hoàn tất kiểm tra kết nối. Hãy thử lại.",

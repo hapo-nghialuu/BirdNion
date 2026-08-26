@@ -5,16 +5,20 @@
 // liệu, mỗi khối cắt ở N dòng rồi gộp phần còn lại vào một dòng "+N", khối
 // rỗng thì ẩn hẳn.
 
-import { Combined, CombinedDay, CombinedModel, UsageSourceId, usd, tokensShort } from "./usage";
+import {
+  Combined, CombinedDay, CombinedModel, UsageSourceId,
+  USAGE_SOURCE_IDS,
+  activeUsageSourceIds, combinedWindowSourceTotals, isKiroSyntheticAggregate,
+  usd, tokensShort,
+} from "./usage";
 import { t } from "./i18n";
 import { logoMark, logoUrl } from "./logos";
 import { showModelsPanel, showAgentPanel, bindHoverPanel } from "./side-panel";
 import { buildAgentPanelPayload } from "./agent-panel-payload";
 import type { ProviderStatus } from "./provider-tab";
 
-/** 5 nguồn có log chi phí thật (khớp `UsageSourceId`) — agent khác (kiro,
- *  cursor, gemini…) chỉ có quota hoặc config, không có tab Activity. */
-const USAGE_SOURCE_IDS: readonly UsageSourceId[] = ["claude", "codex", "grok", "omp", "pi"];
+/** Nguồn có log chi phí thật (khớp `UsageSourceId`) — agent khác như cursor
+ * hoặc gemini chỉ có quota/config, không có tab Activity. */
 function isUsageSourceId(id: string): id is UsageSourceId {
   return (USAGE_SOURCE_IDS as readonly string[]).includes(id);
 }
@@ -258,6 +262,7 @@ function overflowModels(window: CombinedDay[], names: string[]): CombinedModel[]
   const merged = new Map<string, CombinedModel>();
   for (const day of window) {
     for (const model of day.models) {
+      if (isKiroSyntheticAggregate(model)) continue;
       if (!wanted.has(model.name)) continue;
       const existing = merged.get(model.name);
       if (existing) {
@@ -272,23 +277,13 @@ function overflowModels(window: CombinedDay[], names: string[]): CombinedModel[]
 }
 
 function agentRows(window: CombinedDay[]): CostRow[] {
-  const totals: Record<UsageSourceId, number> = {
-    claude: 0, codex: 0, grok: 0, omp: 0, pi: 0, kiro: 0,
-  };
-  for (const day of window) {
-    totals.claude += day.claudeUsd;
-    totals.codex += day.codexUsd;
-    totals.grok += day.grokUsd;
-    totals.omp += day.ompUsd;
-    totals.pi += day.piUsd;
-  }
-  return (Object.keys(totals) as UsageSourceId[])
-    .filter((id) => totals[id] > 0)
+  const totals = combinedWindowSourceTotals(window);
+  return activeUsageSourceIds(window)
     .map((id) => ({
       id,
       name: SOURCE_LABEL[id],
-      amount: totals[id],
-      display: usd(totals[id]),
+      amount: totals[id].usd,
+      display: usd(totals[id].usd),
       css: id,
     }))
     .sort((a, b) => b.amount - a.amount);
@@ -299,6 +294,7 @@ function modelRows(window: CombinedDay[], mode: CostBreakdownMode): CostRow[] {
   const byName = new Map<string, { usd: number; tokens: number; sources: Map<string, number> }>();
   for (const day of window) {
     for (const model of day.models) {
+      if (isKiroSyntheticAggregate(model)) continue;
       const entry = byName.get(model.name)
         ?? { usd: 0, tokens: 0, sources: new Map<string, number>() };
       entry.usd += model.usd;

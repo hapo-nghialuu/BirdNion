@@ -7,9 +7,9 @@
 // rồi tới agent có chi phí thật, còn lại theo A→Z (parity macOS).
 
 import { invoke } from "@tauri-apps/api/core";
-import { t } from "./i18n";
-import { logoMark } from "./logos";
-import { usd } from "./usage";
+import { t } from "./i18n.ts";
+import { logoMark } from "./logos.ts";
+import { usd } from "./usage.ts";
 
 export type InstalledAgent = {
   id: string;
@@ -22,8 +22,22 @@ export type InstalledAgent = {
   cost90dUsd: number | null;
 };
 
+export function configOnlyAgents<T extends InstalledAgent>(
+  agents: T[],
+  visibleAgentIds: Iterable<string>,
+): T[] {
+  const visible = new Set(visibleAgentIds);
+  return agents.filter((agent) =>
+    visible.has(agent.id) && agent.hasConfig && !agent.hasQuota && !agent.hasCost);
+}
+
 const VISIBILITY_KEY = "birdnion.agentVisibility";
 type Filter = "all" | "quota" | "cost" | "config";
+type AgentCounts = Record<Filter, number>;
+type ProviderCfgLike = { id: string; enabled?: boolean | null };
+type SettingsLike = { providers?: ProviderCfgLike[] | null };
+type ProviderStatusLike = { id: string; windows?: unknown[] | null };
+type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -54,6 +68,65 @@ export function visibleAgentIds(all: InstalledAgent[]): string[] {
   return all.map((a) => a.id).filter((id) => !hidden.has(id));
 }
 
+export function enabledProviderIds(settings: SettingsLike | null | undefined): string[] {
+  return (settings?.providers ?? [])
+    .filter((provider): provider is ProviderCfgLike =>
+      typeof provider?.id === "string" && provider.id.length > 0)
+    .filter((provider) => provider.enabled === true)
+    .map((provider) => provider.id);
+}
+
+export function quotaProviderIds(statuses: ProviderStatusLike[] | null | undefined): string[] {
+  return (statuses ?? [])
+    .filter((status): status is ProviderStatusLike =>
+      typeof status?.id === "string" && status.id.length > 0)
+    .filter((status) => Array.isArray(status.windows) && status.windows.length > 0)
+    .map((status) => status.id);
+}
+
+async function fetchQuotaProviderIds(invokeFn: InvokeFn = invoke): Promise<string[]> {
+  const settings = await invokeFn<SettingsLike>("get_settings").catch(() => null);
+  if (settings) {
+    const enabledIds = enabledProviderIds(settings);
+    if (enabledIds.length === 0) return [];
+    const statuses = await invokeFn<ProviderStatusLike[]>("provider_statuses", {
+      ids: enabledIds,
+    }).catch(() => [] as ProviderStatusLike[]);
+    return quotaProviderIds(statuses);
+  }
+  const statuses = await invokeFn<ProviderStatusLike[]>("provider_statuses", {
+    ids: null,
+  }).catch(() => [] as ProviderStatusLike[]);
+  return quotaProviderIds(statuses);
+}
+
+export async function loadInstalledAgents(invokeFn: InvokeFn = invoke): Promise<InstalledAgent[]> {
+  const providerIdsWithQuota = await fetchQuotaProviderIds(invokeFn);
+  return invokeFn<InstalledAgent[]>("list_installed_agents", {
+    providerIdsWithQuota,
+  }).catch(() => [] as InstalledAgent[]);
+}
+
+export function countAgentsByFilter(agents: InstalledAgent[]): AgentCounts {
+  return {
+    all: agents.length,
+    quota: agents.filter((agent) => agent.hasQuota).length,
+    cost: agents.filter((agent) => agent.hasCost).length,
+    config: agents.filter((agent) => !agent.hasQuota && !agent.hasCost).length,
+  };
+}
+
+export function matchesAgentFilter(agent: InstalledAgent, filter: Filter, query = ""): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle
+    && !agent.displayName.toLowerCase().includes(needle)
+    && !agent.id.toLowerCase().includes(needle)) return false;
+  if (filter === "quota") return agent.hasQuota;
+  if (filter === "cost") return agent.hasCost;
+  if (filter === "config") return !agent.hasQuota && !agent.hasCost;
+  return true;
+}
+
 export async function agentsPane(): Promise<HTMLElement> {
   const page = el("div", "settings-page");
   const header = el("div", "sw-pane-header");
@@ -65,7 +138,7 @@ export async function agentsPane(): Promise<HTMLElement> {
 
   let agents: InstalledAgent[] = [];
   try {
-    agents = await invoke<InstalledAgent[]>("list_installed_agents");
+    agents = await loadInstalledAgents();
   } catch {
     agents = [];
   }
@@ -88,24 +161,6 @@ export async function agentsPane(): Promise<HTMLElement> {
   const table = el("div", "agents-table");
   page.append(table);
 
-  function counts() {
-    return {
-      all: agents.length,
-      quota: agents.filter((a) => a.hasQuota).length,
-      cost: agents.filter((a) => a.hasCost).length,
-      config: agents.filter((a) => !a.hasQuota && !a.hasCost).length,
-    };
-  }
-
-  function matches(agent: InstalledAgent): boolean {
-    if (query && !agent.displayName.toLowerCase().includes(query)
-      && !agent.id.toLowerCase().includes(query)) return false;
-    if (filter === "quota") return agent.hasQuota;
-    if (filter === "cost") return agent.hasCost;
-    if (filter === "config") return !agent.hasQuota && !agent.hasCost;
-    return true;
-  }
-
   /** Agent đang bật lên trước, rồi agent có chi phí thật, còn lại A→Z. */
   function sorted(list: InstalledAgent[]): InstalledAgent[] {
     const hidden = hiddenIds();
@@ -121,7 +176,7 @@ export async function agentsPane(): Promise<HTMLElement> {
   }
 
   function paint(): void {
-    const c = counts();
+    const c = countAgentsByFilter(agents);
     filterRow.textContent = "";
     const options: { id: Filter; label: string }[] = [
       { id: "all", label: t("agentsFilterAll", { n: c.all }) },
@@ -139,7 +194,7 @@ export async function agentsPane(): Promise<HTMLElement> {
 
     table.textContent = "";
     table.append(tableHead());
-    const rows = sorted(agents.filter(matches));
+    const rows = sorted(agents.filter((agent) => matchesAgentFilter(agent, filter, query)));
     if (rows.length === 0) {
       table.append(el("div", "empty", t("agentsEmpty")));
       return;

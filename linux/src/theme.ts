@@ -3,6 +3,7 @@
 // (`appearance` field) for cross-session durability with the Rust config.
 
 import { invoke } from "@tauri-apps/api/core";
+import { saveRevisionedSettings, type RevisionedSettings } from "./settings-persistence";
 
 const APPEARANCE_KEY = "birdnion.appearance";
 
@@ -88,10 +89,13 @@ async function hydrateFromConfig(): Promise<void> {
 
 async function persistAppearanceToConfig(mode: Appearance): Promise<void> {
   try {
-    const settings = await invoke<Record<string, unknown>>("get_settings");
+    const settings = await invoke<Record<string, unknown> & RevisionedSettings>("get_settings");
     if (!settings || typeof settings !== "object") return;
     if (settings.appearance === mode) return;
     settings.appearance = mode;
-    await invoke("save_settings", { settings });
+    await saveRevisionedSettings(
+      settings,
+      (snapshot) => invoke<number>("save_settings", { settings: snapshot }),
+    );
   } catch { /* ignore */ }
 }

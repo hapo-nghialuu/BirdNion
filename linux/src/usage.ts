@@ -2,7 +2,7 @@
 // combined-report math ported from the macOS `CombinedUsageReport.build`
 // (Claude + Codex + Grok).
 
-import { t } from "./i18n";
+import { t } from "./i18n.ts";
 
 export type DailyModel = { name: string; usd: number; tokens: number };
 export type DailyUsage = { date: string; usd: number; tokens: number; models: DailyModel[] };
@@ -23,9 +23,35 @@ export type UsageReport = {
   scannedAt?: number | null;
 };
 
+/** Resolve one streamed local-cost refresh without confusing two different
+ * `null` cases. A source absent from the canonical enabled set is removed;
+ * an enabled source whose scan failed keeps its last-good report. */
+export function resolveRefreshedUsageReport(
+  previous: UsageReport | null,
+  fresh: UsageReport | null,
+  canonicalEnabled: boolean | null,
+): UsageReport | null {
+  // Unknown authorization must fail closed: a transient config/IPC failure
+  // cannot authorize scanning or keep previously-visible private usage.
+  if (canonicalEnabled !== true) return null;
+  return fresh ?? previous;
+}
+
 /** Cost sources for confidence badges and spend attribution. */
 export type UsageSourceId = "claude" | "codex" | "grok" | "omp" | "pi" | "kiro";
+export const USAGE_SOURCE_IDS: readonly UsageSourceId[] = [
+  "claude", "codex", "grok", "kiro", "omp", "pi",
+];
+export const KIRO_AGGREGATE_MODEL_NAME = "Other";
 export type ScanConfidence = "live" | "history" | "unavailable";
+
+/** Kiro's residual conservation bucket is not a model. Source scoping keeps a
+ * real model named `Other` from Claude/Codex/etc. visible. */
+export function isKiroSyntheticAggregate(
+  model: Pick<CombinedModel, "source" | "name">,
+): boolean {
+  return model.source === "kiro" && model.name === KIRO_AGGREGATE_MODEL_NAME;
+}
 
 /** Data Confidence Pass: classify a source's report into the compact
  * All-tab badge state. Pure function of the report's own fields — no
@@ -83,6 +109,46 @@ export type CombinedDay = {
   active: boolean;
   models: CombinedModel[];
 };
+
+export type SourceUsageTotals = { usd: number; tokens: number };
+
+/** Canonical field mapping for every local-cost source. Keeping this in one
+ * place prevents a newly supported source from silently disappearing from
+ * cards, digests, or provider budgets. */
+export function combinedDaySourceUsage(
+  day: CombinedDay,
+  source: UsageSourceId,
+): SourceUsageTotals {
+  switch (source) {
+    case "claude": return { usd: day.claudeUsd, tokens: day.claudeTokens };
+    case "codex": return { usd: day.codexUsd, tokens: day.codexTokens };
+    case "grok": return { usd: day.grokUsd, tokens: day.grokTokens };
+    case "kiro": return { usd: day.kiroUsd, tokens: day.kiroTokens };
+    case "omp": return { usd: day.ompUsd, tokens: day.ompTokens };
+    case "pi": return { usd: day.piUsd, tokens: day.piTokens };
+  }
+}
+
+export function combinedWindowSourceTotals(
+  days: readonly CombinedDay[],
+): Record<UsageSourceId, SourceUsageTotals> {
+  const totals = Object.fromEntries(
+    USAGE_SOURCE_IDS.map((source) => [source, { usd: 0, tokens: 0 }]),
+  ) as Record<UsageSourceId, SourceUsageTotals>;
+  for (const day of days) {
+    for (const source of USAGE_SOURCE_IDS) {
+      const usage = combinedDaySourceUsage(day, source);
+      totals[source].usd += usage.usd;
+      totals[source].tokens += usage.tokens;
+    }
+  }
+  return totals;
+}
+
+export function activeUsageSourceIds(days: readonly CombinedDay[]): UsageSourceId[] {
+  const totals = combinedWindowSourceTotals(days);
+  return USAGE_SOURCE_IDS.filter((id) => totals[id].usd > 0 || totals[id].tokens > 0);
+}
 
 export type Combined = {
   daily: CombinedDay[];
@@ -165,13 +231,18 @@ export function combine(
   while (i >= 0 && daily[i].active) { streak++; i--; }
 
   const last30 = daily.slice(-30);
-  const last30Usd = (claude?.last30Usd ?? 0) + (codex?.last30Usd ?? 0) + (grok?.last30Usd ?? 0) + (omp?.last30Usd ?? 0) + (pi?.last30Usd ?? 0);
-  const last30Tokens = (claude?.last30Tokens ?? 0) + (codex?.last30Tokens ?? 0) + (grok?.last30Tokens ?? 0) + (omp?.last30Tokens ?? 0) + (pi?.last30Tokens ?? 0);
+  const sourceReports = [claude, codex, grok, kiro, omp, pi];
+  const last30Usd = sourceReports.reduce((sum, report) => sum + (report?.last30Usd ?? 0), 0);
+  const last30Tokens = sourceReports.reduce(
+    (sum, report) => sum + (report?.last30Tokens ?? 0),
+    0,
+  );
 
   // Top models across window
   const modelMap = new Map<string, CombinedModel>();
   for (const d of daily) {
     for (const m of d.models) {
+      if (isKiroSyntheticAggregate(m)) continue;
       const k = `${m.source}:${m.name}`;
       const e = modelMap.get(k);
       if (e) { e.usd += m.usd; e.tokens += m.tokens; }
@@ -238,14 +309,15 @@ export function digestWindowStats(
   const modelMap = new Map<string, CombinedModel>();
   for (const d of daily) {
     if (d.date < startDate || d.date > endDate) continue;
-    if (enabledSources.has("claude")) { bySource.claude.usd += d.claudeUsd; bySource.claude.tokens += d.claudeTokens; }
-    if (enabledSources.has("codex")) { bySource.codex.usd += d.codexUsd; bySource.codex.tokens += d.codexTokens; }
-    if (enabledSources.has("grok")) { bySource.grok.usd += d.grokUsd; bySource.grok.tokens += d.grokTokens; }
-    if (enabledSources.has("omp")) { bySource.omp.usd += d.ompUsd; bySource.omp.tokens += d.ompTokens; }
-    if (enabledSources.has("kiro")) { bySource.kiro.usd += d.kiroUsd; bySource.kiro.tokens += d.kiroTokens; }
-    if (enabledSources.has("pi")) { bySource.pi.usd += d.piUsd; bySource.pi.tokens += d.piTokens; }
+    for (const source of USAGE_SOURCE_IDS) {
+      if (!enabledSources.has(source)) continue;
+      const usage = combinedDaySourceUsage(d, source);
+      bySource[source].usd += usage.usd;
+      bySource[source].tokens += usage.tokens;
+    }
     for (const m of d.models) {
       if (!enabledSources.has(m.source)) continue;
+      if (m.source === "kiro" && m.name === KIRO_AGGREGATE_MODEL_NAME) continue;
       const key = `${m.source}:${m.name}`;
       const existing = modelMap.get(key);
       if (existing) { existing.usd += m.usd; existing.tokens += m.tokens; }
@@ -254,7 +326,7 @@ export function digestWindowStats(
   }
 
   let topSource: UsageSourceId | null = null;
-  for (const s of ["claude", "codex", "grok", "omp", "pi"] as const) {
+  for (const s of USAGE_SOURCE_IDS) {
     if (!enabledSources.has(s)) continue;
     const cand = bySource[s];
     if (cand.usd === 0 && cand.tokens === 0) continue;
@@ -270,8 +342,8 @@ export function digestWindowStats(
   )[0] ?? null;
 
   return {
-    usd: (bySource.claude?.usd ?? 0) + (bySource.codex?.usd ?? 0) + (bySource.grok?.usd ?? 0) + (bySource.omp?.usd ?? 0) + (bySource.pi?.usd ?? 0),
-    tokens: (bySource.claude?.tokens ?? 0) + (bySource.codex?.tokens ?? 0) + (bySource.grok?.tokens ?? 0) + (bySource.omp?.tokens ?? 0) + (bySource.pi?.tokens ?? 0),
+    usd: USAGE_SOURCE_IDS.reduce((sum, source) => sum + bySource[source].usd, 0),
+    tokens: USAGE_SOURCE_IDS.reduce((sum, source) => sum + bySource[source].tokens, 0),
     bySource,
     topSource,
     topModel,
@@ -304,29 +376,20 @@ export type MonthlyForecast = {
   status: BudgetStatus;
 };
 
-/** Which `CombinedDay` field `monthlyForecast` sums per day. `"total"` (the
- * default) preserves the pre-existing combined-budget behavior; the
- * per-source variants isolate one provider's own daily USD so a
 /** Which `CombinedDay` field `monthlyForecast` sums per day.
  * `.total` (the default) preserves the combined-budget behavior that
- * predates this case; `.claude`/`.codex`/`.grok`/`.omp`/`.pi` isolate one provider's own
- * daily USD so a per-provider budget never mixes in the other sources' spend. */
+ * predates this case; every source variant isolates one provider's own daily
+ * USD so a per-provider budget never mixes in the other sources' spend. */
 export type MonthlyForecastSource = "total" | UsageSourceId;
 
 function monthlyForecastDayUsd(d: CombinedDay, source: MonthlyForecastSource): number {
-  switch (source) {
-    case "claude": return d.claudeUsd;
-    case "codex": return d.codexUsd;
-    case "grok": return d.grokUsd;
-    case "omp": return d.ompUsd;
-    case "pi": return d.piUsd;
-    default: return d.usd;
-  }
+  return source === "total" ? d.usd : combinedDaySourceUsage(d, source).usd;
 }
-/** Local calendar-week start (Sunday, matching JS `Date#getDay()` = 0). */
+/** ISO local calendar-week start (Monday 00:00). */
 function startOfLocalWeek(now: Date): Date {
   const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  d.setDate(d.getDate() - d.getDay());
+  const daysSinceMonday = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - daysSinceMonday);
   return d;
 }
 
@@ -337,8 +400,20 @@ function ymdLocal(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/** Calendar-day distance using local date increments, independent of DST. */
+function localCalendarDayOffset(start: Date, end: Date): number {
+  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const endKey = ymdLocal(end);
+  let offset = 0;
+  while (ymdLocal(cursor) < endKey) {
+    cursor.setDate(cursor.getDate() + 1);
+    offset += 1;
+  }
+  return offset;
+}
+
 /** Pure week-to-date + linear-projection forecast for budget cards.
- * Filters `daily` to the CURRENT local calendar week only (Sun–Sat, not a
+ * Filters `daily` to the CURRENT local ISO calendar week only (Mon–Sun, not a
  * rolling 7-day window), through today, then projects a full-week total
  * assuming the same daily average holds for the rest of the week. `now` is
  * injectable for deterministic testing.
@@ -384,11 +459,8 @@ export function monthlyForecast(
   const daysInMonth = isMonth
     ? new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
     : 7;
-  const msPerDay = 24 * 60 * 60 * 1000;
-  const dayOffset = Math.floor(
-    (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - periodStart.getTime())
-      / msPerDay,
-  );
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayOffset = localCalendarDayOffset(periodStart, startOfToday);
   const daysElapsed = Math.min(Math.max(dayOffset + 1, 1), daysInMonth);
   const projectedUsd = (monthToDateUsd / daysElapsed) * daysInMonth;
 

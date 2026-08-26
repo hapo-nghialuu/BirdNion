@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { currentLang, t } from "./i18n";
+import { saveRevisionedSettings } from "./settings-persistence";
 import { claudeCodeCard, shouldShowClaudeCode } from "./claude-code";
 import {
   isProviderStorageEnabled,
@@ -240,6 +241,7 @@ function menuBarVisibilityToggle(providerId: string, hasError: boolean): HTMLEle
 
   type SettingsShape = {
     version?: number;
+    settingsRevision: number;
     providers: { id: string; showInTray?: boolean | null; [k: string]: unknown }[];
   };
 
@@ -266,7 +268,10 @@ function menuBarVisibilityToggle(providerId: string, hasError: boolean): HTMLEle
         } else {
           row.showInTray = isOn;
         }
-        await invoke("save_settings", { settings: s });
+        await saveRevisionedSettings(
+          s,
+          (snapshot) => invoke<number>("save_settings", { settings: snapshot }),
+        );
         // Rebuild tray frames (and keep tab order) like macOS menuBarVisibilityChanged.
         await emit(PROVIDERS_CHANGED_EVENT).catch(() => {});
       } catch {

@@ -9,16 +9,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   combine, monthlyForecast, scanConfidence, usd, tokens as tokensLabel,
-  digestWindowStats, type UsageReport, type UsageSourceId, type DigestWindowStats,
+  digestWindowStats, USAGE_SOURCE_IDS, type UsageReport, type UsageSourceId, type DigestWindowStats,
   type MonthlyForecast, type Combined,
 } from "./usage";
 import { getMonthlyBudgetUsd, getProviderBudgetUsd } from "./settings-about";
-import { NAME_BY_ID } from "./settings-tab";
 import { t } from "./i18n";
 
-const SOURCES: UsageSourceId[] = ["claude", "codex", "grok", "omp", "pi", "kiro"];
-type ProviderCfg = { id: string; enabled?: boolean | null };
-type Settings = { providers: ProviderCfg[] };
+const SOURCES: readonly UsageSourceId[] = USAGE_SOURCE_IDS;
+const SOURCE_NAMES: Record<UsageSourceId, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+  kiro: "Kiro",
+  omp: "Oh My Pi",
+  pi: "Pi",
+};
 
 const ENABLED_KEY = "birdnion.weeklyDigestEnabled";
 const LAST_EVALUATED_KEY = "birdnion.weeklyDigestLastEvaluatedAt";
@@ -70,15 +75,20 @@ function addDays(d: Date, n: number): Date {
   return copy;
 }
 
+async function readEnabledSources(): Promise<Set<UsageSourceId>> {
+  const sourceIds: string[] = await invoke<string[]>("enabled_local_usage_source_ids")
+    .catch((): string[] => []);
+  return new Set(SOURCES.filter((source) => sourceIds.includes(source)));
+}
+
 async function fetchEnabledReports(): Promise<{
   enabled: Set<UsageSourceId>;
   reports: Record<UsageSourceId, UsageReport | null>;
 }> {
-  const settings = await invoke<Settings>("get_settings").catch(() => null);
-  const enabled = new Set<UsageSourceId>();
-  for (const s of SOURCES) {
-    if (settings?.providers.find((p) => p.id === s)?.enabled === true) enabled.add(s);
-  }
+  // Use the backend's canonical provider-enabled OR installed-agent
+  // predicate. This is the same set that gates All/Insights scanner commands,
+  // so disabling a provider cannot hide cost from a detected local agent.
+  const enabled = await readEnabledSources();
   const reports: Record<UsageSourceId, UsageReport | null> =
     { claude: null, codex: null, grok: null, omp: null, pi: null, kiro: null };
   for (const s of enabled) {
@@ -113,7 +123,7 @@ function providerBudgetRiskLines(
     const isAlreadyOver = forecast.status === "already-over";
     const key = isAlreadyOver ? "weeklyDigestProviderBudgetOver" : "weeklyDigestProviderBudgetForecast";
     lines.push(t(key, {
-      source: NAME_BY_ID.get(s) ?? s,
+      source: SOURCE_NAMES[s],
       usd: usd(isAlreadyOver ? forecast.monthToDateUsd : forecast.projectedUsd),
       budget: usd(forecast.budgetUsd),
     }));
@@ -136,7 +146,7 @@ function buildBody(
     lines.push(t("weeklyDigestChange", { sign: pct >= 0 ? "+" : "", pct }));
   }
   if (current.topSource) {
-    lines.push(t("weeklyDigestTopSource", { source: NAME_BY_ID.get(current.topSource) ?? current.topSource }));
+    lines.push(t("weeklyDigestTopSource", { source: SOURCE_NAMES[current.topSource] }));
   }
   if (current.topModel) {
     lines.push(t("weeklyDigestTopModel", { model: sanitizeLabel(current.topModel.name) }));
@@ -146,7 +156,7 @@ function buildBody(
     lines.push(budgetStatusLabel(forecast.status));
   }
   if (nonLive.length > 0) {
-    const names = nonLive.map((s) => NAME_BY_ID.get(s) ?? s).join(", ");
+    const names = nonLive.map((s) => SOURCE_NAMES[s]).join(", ");
     lines.push(t("weeklyDigestCaveat", { sources: names }));
   }
   lines.push(...providerRiskLines);
@@ -158,7 +168,26 @@ async function evaluateAndMaybeNotify(): Promise<void> {
     const { enabled, reports } = await fetchEnabledReports();
     if (enabled.size === 0) return; // nothing to report — still marks evaluated below
 
-    const combined = combine(reports.claude, reports.codex, reports.grok, reports.omp, reports.pi);
+    // Scans can outlive a settings change. Revalidate at the final async
+    // boundary, then remove every report that is no longer canonically
+    // authorized before any digest total, model, or forecast is derived.
+    const currentEnabled = await readEnabledSources();
+    if (!isWeeklyDigestEnabled()) return;
+    for (const source of SOURCES) {
+      if (currentEnabled.has(source)) continue;
+      enabled.delete(source);
+      reports[source] = null;
+    }
+    if (enabled.size === 0) return;
+
+    const combined = combine(
+      reports.claude,
+      reports.codex,
+      reports.grok,
+      reports.omp,
+      reports.pi,
+      reports.kiro,
+    );
     const now = new Date();
     const todayKey = dateKey(now);
     const currentStart = dateKey(addDays(now, -6));

@@ -55,7 +55,12 @@ export type ProviderCfg = {
 
 export type Settings = {
   version: number;
+  settingsRevision: number;
   providers: ProviderCfg[];
+  active_codex_account?: string | null;
+  active_freemodel_account?: string | null;
+  active_elevenlabs_key?: string | null;
+  active_hiyo_key?: string | null;
   claudeCodeProfiles?: ClaudeCodeProfileLite[];
   codexProfiles?: CodexProfileLite[];
 };
@@ -95,7 +100,7 @@ export const COOKIED = new Set([
 ]);
 /** Providers with a local data dir the storage scanner knows about. */
 const STORAGE_IDS = new Set([
-  "claude", "codex", "grok", "gemini", "copilot", "opencode", "opencodego", "cursor",
+  "claude", "codex", "grok", "gemini", "copilot", "opencode", "opencodego", "cursor", "kiro",
 ]);
 
 function el(tag: string, className: string, text?: string): HTMLElement {

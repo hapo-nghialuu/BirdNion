@@ -4,7 +4,28 @@
 // tại"), and remove managed accounts.
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { t } from "./i18n";
+import type { Settings } from "./settings-provider-detail";
+import {
+  SETTINGS_SNAPSHOT_CHANGED_EVENT,
+  type SettingsSnapshotState,
+} from "./settings-persistence";
+
+export const CODEX_ACCOUNT_CHANGED_EVENT = "birdnion-codex-account-changed";
+
+async function notifyCodexAccountChanged(): Promise<void> {
+  await emit(CODEX_ACCOUNT_CHANGED_EVENT);
+}
+
+async function performCodexAccountMutation<T>(operation: () => Promise<T>): Promise<T> {
+  await notifyCodexAccountChanged();
+  try {
+    return await operation();
+  } finally {
+    await notifyCodexAccountChanged().catch(() => {});
+  }
+}
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -14,7 +35,14 @@ function el(tag: string, className: string, text?: string): HTMLElement {
 }
 
 type CodexAccount = { id: string; email?: string | null; isSystem: boolean; homePath?: string | null };
-type CodexAccountsState = { accounts: CodexAccount[]; activeId: string };
+type CodexAccountsState = SettingsSnapshotState<Settings> & {
+  accounts: CodexAccount[];
+  activeId: string;
+};
+
+async function notifySettingsChanged(state: CodexAccountsState): Promise<void> {
+  await emit(SETTINGS_SNAPSHOT_CHANGED_EVENT, state.settings);
+}
 
 function accountLabel(account: CodexAccount): string {
   if (account.isSystem) return t("codexAccountSystem");
@@ -52,7 +80,9 @@ export function codexAccountsSection(): HTMLElement {
         useBtn.type = "button";
         useBtn.addEventListener("click", async () => {
           try {
-            await invoke("codex_account_switch", { id: account.id });
+            const next = await performCodexAccountMutation(() =>
+              invoke<CodexAccountsState>("codex_account_switch", { id: account.id }));
+            await notifySettingsChanged(next);
             await render();
           } catch (err) {
             status.textContent = `${t("loadError")}: ${err}`;
@@ -65,7 +95,9 @@ export function codexAccountsSection(): HTMLElement {
         removeBtn.type = "button";
         removeBtn.addEventListener("click", async () => {
           try {
-            await invoke("codex_account_remove", { id: account.id });
+            const next = await performCodexAccountMutation(() =>
+              invoke<CodexAccountsState>("codex_account_remove", { id: account.id }));
+            await notifySettingsChanged(next);
             await render();
           } catch (err) {
             status.textContent = `${t("loadError")}: ${err}`;
@@ -84,7 +116,9 @@ export function codexAccountsSection(): HTMLElement {
   saveBtn.addEventListener("click", async () => {
     saveBtn.setAttribute("disabled", "true");
     try {
-      await invoke("codex_account_save_current");
+      const next = await performCodexAccountMutation(() =>
+        invoke<CodexAccountsState>("codex_account_save_current"));
+      await notifySettingsChanged(next);
       await render();
     } catch (err) {
       status.textContent = `${t("loadError")}: ${err}`;

@@ -6,8 +6,9 @@
 // đã có sẵn report từ scanner (Combined + ProviderStatus) nên panel chỉ NHẬN
 // dữ liệu qua payload này — không tự gọi lại scanner.
 
-import { CombinedDay, CombinedModel, UsageSourceId, scanFreshness } from "./usage";
-import { t } from "./i18n";
+import { isKiroSyntheticAggregate, scanFreshness } from "./usage.ts";
+import type { CombinedDay, CombinedModel, UsageSourceId } from "./usage.ts";
+import { t } from "./i18n.ts";
 
 export type AgentTabId = "quota" | "cost" | "config";
 
@@ -46,6 +47,7 @@ const LOCAL_LOG_PATH: Partial<Record<UsageSourceId, string>> = {
   claude: "~/.claude",
   codex: "~/.codex",
   grok: "~/.grok/sessions",
+  kiro: "~/.kiro/sessions/cli",
   omp: "~/.omp/agent/sessions",
   pi: "~/.pi/agent/sessions",
 };
@@ -55,6 +57,7 @@ function dayUsd(day: CombinedDay, source: UsageSourceId): number {
     case "claude": return day.claudeUsd;
     case "codex": return day.codexUsd;
     case "grok": return day.grokUsd;
+    case "kiro": return day.kiroUsd;
     case "omp": return day.ompUsd;
     case "pi": return day.piUsd;
     default: return 0;
@@ -66,6 +69,7 @@ function dayTokens(day: CombinedDay, source: UsageSourceId): number {
     case "claude": return day.claudeTokens;
     case "codex": return day.codexTokens;
     case "grok": return day.grokTokens;
+    case "kiro": return day.kiroTokens;
     case "omp": return day.ompTokens;
     case "pi": return day.piTokens;
     default: return 0;
@@ -85,7 +89,7 @@ export type BuildAgentPanelPayloadOptions = {
   /** Cửa sổ quota còn lại (nếu agent này có quota trực tiếp). */
   quotaWindows?: { label: string; remainingPct: number }[];
   /** Toàn bộ `combined.daily` (không windowed) — chỉ cần khi agent có log
-   *  chi phí thật (`source` khớp một trong 5 `UsageSourceId`). */
+   *  chi phí thật (`source` khớp một trong 6 `UsageSourceId`). */
   daily?: CombinedDay[];
   source?: UsageSourceId;
   /** Nhãn nguồn hiển thị ở tab Config (ví dụ path binary/provider bridge). */
@@ -115,7 +119,8 @@ export function buildAgentPanelPayload(opts: BuildAgentPanelPayloadOptions): Age
         usd: usdVal,
         tokens: tokensVal,
         hasEvidence: usdVal > 0 || tokensVal > 0,
-        models: d.models.filter((m) => m.source === source),
+        models: d.models.filter(
+          (m) => m.source === source && !isKiroSyntheticAggregate(m)),
       };
     });
     if (days.some((d) => d.hasEvidence)) costDays = days;

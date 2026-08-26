@@ -7,7 +7,13 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { combine, scanFreshness, UsageReport, UsageSourceId } from "./usage";
+import {
+  combine,
+  resolveRefreshedUsageReport,
+  scanFreshness,
+  UsageReport,
+  UsageSourceId,
+} from "./usage";
 import {
   chartCard, budgetForecastCard, providerBudgetCard, allChartDays,
 } from "./all-tab";
@@ -24,13 +30,14 @@ import {
 import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
 import { codexAccountsPopoverCard } from "./codex-accounts-popover";
+import { CODEX_ACCOUNT_CHANGED_EVENT } from "./settings-codex-accounts";
 import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
 import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
 import { closeTransientPanel, PANEL_OWNER_ATTR } from "./side-panel";
-import { InstalledAgent, visibleAgentIds } from "./settings-agents";
+import { configOnlyAgents, InstalledAgent, visibleAgentIds } from "./settings-agents";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
@@ -54,7 +61,6 @@ import {
 } from "./action-center";
 import { initTheme, setAppearance, resolveTheme } from "./theme";
 import { checkWeeklyDigest } from "./weekly-digest";
-import { fetchProjectInsightsReport, type ProjectInsightsReport } from "./insights-pane";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
 const POPOVER_WIDTH = 420;
@@ -75,17 +81,248 @@ type ProviderCfg = {
   id: string; enabled?: boolean | null; refreshInterval?: number | null;
   showInTray?: boolean | null; displayName?: string | null;
   menuBarMetric?: string | null;
+  [key: string]: unknown;
 };
-type Settings = { version: number; providers: ProviderCfg[] };
+type Settings = {
+  version: number;
+  settingsRevision?: number | null;
+  active_codex_account?: string | null;
+  active_freemodel_account?: string | null;
+  active_elevenlabs_key?: string | null;
+  active_hiyo_key?: string | null;
+  providers: ProviderCfg[];
+};
+
+const NON_FETCH_PROVIDER_CONFIG_KEYS = new Set([
+  "id", "enabled", "refreshInterval", "showInTray", "displayName", "menuBarMetric", "budget",
+]);
+const ACTIVE_PROVIDER_IDENTITY_KEYS = new Map<string, keyof Settings>([
+  ["codex", "active_codex_account"],
+  ["freemodel", "active_freemodel_account"],
+  ["elevenlabs", "active_elevenlabs_key"],
+  ["hiyo", "active_hiyo_key"],
+]);
+
+function stableConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableConfigValue);
+  if (value === null || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record).sort().map((key) => [key, stableConfigValue(record[key])]),
+  );
+}
+
+/** Canonical fetch identity for each enabled provider. Presentation, polling,
+ * and budget-only fields are excluded; credentials/endpoints/provider-specific
+ * fetch options remain, so a meaningful configuration change advances its
+ * result generation without retaining an extra structured settings snapshot. */
+export function canonicalProviderFetchIdentities(settings: Settings): Map<string, string> {
+  return new Map(settings.providers
+    .filter((provider) => provider.enabled === true)
+    .map((provider) => {
+      const fetchConfig = Object.fromEntries(Object.entries(provider)
+        .filter(([key]) => !NON_FETCH_PROVIDER_CONFIG_KEYS.has(key)));
+      const activeIdentityKey = ACTIVE_PROVIDER_IDENTITY_KEYS.get(provider.id);
+      if (activeIdentityKey) {
+        fetchConfig.$activeIdentity = settings[activeIdentityKey] ?? null;
+      }
+      return [provider.id, JSON.stringify(stableConfigValue(fetchConfig)) ?? "{}"];
+    }));
+}
+
+/** Rejects async settings snapshots that arrive older than one already
+ * applied. Missing revisions remain accepted for backward compatibility, but
+ * current backends always provide the persisted monotonic settingsRevision. */
+export function createMonotonicProviderSettingsGate() {
+  let latestRevision = Number.NEGATIVE_INFINITY;
+  return {
+    accept: (settings: Settings) => {
+      const revision = settings.settingsRevision;
+      if (typeof revision !== "number" || !Number.isFinite(revision)) return true;
+      if (revision < latestRevision) return false;
+      latestRevision = revision;
+      return true;
+    },
+  };
+}
+
+/** Use at asynchronous result-derived side-effect boundaries. The generation
+ * is checked after the await and immediately before applying the value. */
+export async function applyAfterProviderIdentityAwait<T>(
+  pending: Promise<T>,
+  isCurrent: () => boolean,
+  apply: (value: T) => void,
+): Promise<boolean> {
+  const value = await pending;
+  if (!isCurrent()) return false;
+  apply(value);
+  return true;
+}
+
+/** Initial provider reads cannot start until account/config event listeners
+ * are actually subscribed; otherwise a switch during async listen setup is
+ * missed and the startup request can publish the old identity. */
+export async function awaitProviderCoordinatorListeners(
+  registrations: readonly Promise<unknown>[],
+): Promise<void> {
+  await Promise.all(registrations);
+}
 
 /** Footer luân phiên caption ↔ trạng thái nguồn, 5 giây một lượt (macOS parity). */
 const FOOTER_ROTATE_MS = 5000;
 let footerShowingSources = false;
 let footerRotateTimer: number | null = null;
 
-/** Local usage-report sources scanned from disk (Claude → Codex → Grok → OMP → Pi). */
+/** Local usage-report sources scanned from disk. */
 const SCAN_SOURCES = ["claude", "codex", "grok", "omp", "pi", "kiro"] as const;
 type ScanSource = (typeof SCAN_SOURCES)[number];
+
+type LocalUsageRefreshDependencies = {
+  sources: readonly ScanSource[];
+  readCanonicalSources: () => Promise<ReadonlySet<ScanSource> | null>;
+  scanSource: (source: ScanSource) => Promise<UsageReport | null>;
+  previousReport: (source: ScanSource) => UsageReport | null;
+  beginRefresh: () => void;
+  publishSource: (source: ScanSource, report: UsageReport | null) => void;
+};
+
+/** Owns local-usage refresh generations. Starting a refresh invalidates every
+ * older completion; each current completion also resolves the canonical set
+ * again immediately before publish so a settings change always wins. */
+export function createLocalUsageRefreshCoordinator(
+  dependencies: LocalUsageRefreshDependencies,
+): () => Promise<void> {
+  let activeGeneration = 0;
+  const readCanonicalSources = () => dependencies.readCanonicalSources().catch(() => null);
+
+  return async () => {
+    const generation = ++activeGeneration;
+    dependencies.beginRefresh();
+    const enabledBeforeScan = await readCanonicalSources();
+    if (generation !== activeGeneration) return;
+
+    if (!enabledBeforeScan) {
+      for (const source of dependencies.sources) {
+        dependencies.publishSource(source, null);
+      }
+      return;
+    }
+
+    await Promise.all(dependencies.sources.map(async (source) => {
+      const report = !enabledBeforeScan.has(source)
+        ? null
+        : await dependencies.scanSource(source).catch(() => null);
+      const enabledAtPublish = await readCanonicalSources();
+      if (generation !== activeGeneration) return;
+      dependencies.publishSource(
+        source,
+        resolveRefreshedUsageReport(
+          dependencies.previousReport(source),
+          report,
+          enabledAtPublish?.has(source) ?? null,
+        ),
+      );
+    }));
+  };
+}
+
+type ProviderIdentityRefreshDependencies = {
+  isInFlight: (providerId: string) => boolean;
+  forceFetch: (providerId: string) => Promise<void>;
+  onIdentityInvalidated?: (providerId: string) => void;
+};
+
+/** Coordinates provider fetches whose credential identity can change while a
+ * request is running. Invalidations advance a generation and coalesce a forced
+ * fetch behind the provider's existing in-flight owner. */
+export function createProviderIdentityRefreshCoordinator(
+  dependencies: ProviderIdentityRefreshDependencies,
+) {
+  const generations = new Map<string, number>();
+  const queued = new Set<string>();
+  const draining = new Set<string>();
+  const pendingCanonicalInvalidations = new Set<string>();
+  let canonicalProviderIdentities: Map<string, string> | null = null;
+  const snapshot = (providerId: string) => generations.get(providerId) ?? 0;
+
+  const drain = (providerId: string) => {
+    if (!queued.has(providerId)
+        || draining.has(providerId)
+        || dependencies.isInFlight(providerId)) return;
+    queued.delete(providerId);
+    draining.add(providerId);
+    void Promise.resolve()
+      .then(() => dependencies.forceFetch(providerId))
+      .catch(() => {})
+      .finally(() => {
+        draining.delete(providerId);
+        drain(providerId);
+      });
+  };
+
+  const invalidate = (providerId: string, refresh: boolean) => {
+    generations.set(providerId, snapshot(providerId) + 1);
+    dependencies.onIdentityInvalidated?.(providerId);
+    if (refresh) queued.add(providerId);
+    else queued.delete(providerId);
+    drain(providerId);
+  };
+
+  return {
+    snapshot,
+    isCurrent: (providerId: string, generation: number) =>
+      snapshot(providerId) === generation,
+    invalidateAndRefresh: (providerId: string) => {
+      invalidate(
+        providerId,
+        canonicalProviderIdentities === null || canonicalProviderIdentities.has(providerId),
+      );
+    },
+    ensureRefresh: (providerId: string) => {
+      if (canonicalProviderIdentities !== null
+          && !canonicalProviderIdentities.has(providerId)) return;
+      if (draining.has(providerId)) return;
+      queued.add(providerId);
+      drain(providerId);
+    },
+    invalidateForCanonicalReconciliation: (providerIds: Iterable<string>) => {
+      for (const providerId of providerIds) {
+        pendingCanonicalInvalidations.add(providerId);
+        invalidate(providerId, false);
+      }
+    },
+    initializeCanonicalProviders: (next: ReadonlyMap<string, string>) => {
+      if (canonicalProviderIdentities !== null || pendingCanonicalInvalidations.size > 0) return false;
+      canonicalProviderIdentities = new Map(next);
+      return true;
+    },
+    reconcileCanonicalProviders: (
+      next: ReadonlyMap<string, string>,
+      previouslyObservedProviderIds: Iterable<string> = [],
+    ) => {
+      const previous = canonicalProviderIdentities;
+      canonicalProviderIdentities = new Map(next);
+      const candidateIds = new Set<string>(previouslyObservedProviderIds);
+      if (previous) for (const providerId of previous.keys()) candidateIds.add(providerId);
+      for (const providerId of next.keys()) candidateIds.add(providerId);
+      for (const providerId of pendingCanonicalInvalidations) candidateIds.add(providerId);
+
+      const disabledProviderIds: string[] = [];
+      const refreshedProviderIds: string[] = [];
+      for (const providerId of candidateIds) {
+        const nextIdentity = next.get(providerId);
+        const wasInvalidated = pendingCanonicalInvalidations.delete(providerId);
+        if (!wasInvalidated && previous && previous.get(providerId) === nextIdentity) continue;
+        const enabled = nextIdentity !== undefined;
+        invalidate(providerId, enabled);
+        if (enabled) refreshedProviderIds.push(providerId);
+        else disabledProviderIds.push(providerId);
+      }
+      return { disabledProviderIds, refreshedProviderIds };
+    },
+    onFetchReleased: drain,
+  };
+}
 
 type State = {
   claude: UsageReport | null;
@@ -99,7 +336,6 @@ type State = {
    *  cấu hình" và cho visibility. Null khi chưa nạp xong. */
   agents: InstalledAgent[] | null;
   claudeAdmin: ClaudeAdminSnapshot | null;
-  insights: ProjectInsightsReport | null;
   tab: string; // "all" | provider id
   refreshing: boolean;
   loadedOnce: boolean;
@@ -118,7 +354,6 @@ const state: State = {
   statuses: [],
   agents: null,
   claudeAdmin: null,
-  insights: null,
   tab: (() => {
     const t0 = localStorage.getItem(TAB_KEY) || "all";
     return t0 === "settings" ? "all" : t0;
@@ -127,6 +362,29 @@ const state: State = {
   loadedOnce: false,
   scanning: new Set<ScanSource>(),
 };
+
+let providerStatusStateRevision = 0;
+
+function replaceProviderStatuses(statuses: ProviderStatus[]) {
+  state.statuses = statuses;
+  providerStatusStateRevision += 1;
+}
+
+/** Any unrelated provider can be invalidated while an async merge classifies
+ * an error. Retry against the latest full status array before committing so a
+ * captured cache cannot resurrect a provider cleared during that await. */
+export async function commitAgainstLatestProviderState<T>(
+  readRevision: () => number,
+  resolve: () => Promise<T>,
+  commit: (value: T) => boolean | void,
+): Promise<boolean> {
+  while (true) {
+    const revision = readRevision();
+    const value = await resolve();
+    if (revision !== readRevision()) continue;
+    return commit(value) !== false;
+  }
+}
 
 let currentActionCenterIssues: ActionCenterIssue[] = [];
 let actionCenterProjectionSeq = 0;
@@ -218,6 +476,17 @@ const lastFetched = new Map<string, number>();
  * order, letting a stale completion clobber a fresher one. */
 const inFlightProviderIds = new Set<string>();
 
+const providerIdentityRefreshCoordinator = createProviderIdentityRefreshCoordinator({
+  isInFlight: (providerId) => inFlightProviderIds.has(providerId),
+  forceFetch: (providerId) => refetchProvider(providerId),
+  onIdentityInvalidated: (providerId) => clearProviderIdentityState(providerId),
+});
+const providerSettingsRevisionGate = createMonotonicProviderSettingsGate();
+
+function onCodexAccountChanged() {
+  providerIdentityRefreshCoordinator.invalidateAndRefresh("codex");
+}
+
 /** Pure filter: which of `dueIds` are actually fetchable right now, i.e. not
  * already in flight from ANY caller (`load`, `refetchProvider`, or an
  * earlier still-unresolved `tick`) — see `inFlightProviderIds`. Kept
@@ -244,6 +513,7 @@ async function withProviderInFlightGuard(id: string, fetchAndApply: () => Promis
     await fetchAndApply();
   } finally {
     inFlightProviderIds.delete(id);
+    providerIdentityRefreshCoordinator.onFetchReleased(id);
   }
 }
 /** Consecutive awaited failures per provider. The existing 10-second tick
@@ -376,14 +646,18 @@ function appHeader(): HTMLElement {
 }
 
 function actionCenterHeaderButton(): HTMLButtonElement | null {
-  if (currentActionCenterIssues.length === 0) return null;
+  if (currentActionCenterIssues.length === 0 && !actionCenterSnapshotError) return null;
   const button = document.createElement("button");
   button.type = "button";
   button.className = "header-refresh header-action-center";
-  button.title = t("actionCenterOpen");
+  button.title = actionCenterSnapshotError ? t("loadError") : t("actionCenterOpen");
   button.setAttribute("aria-label", t("actionCenterOpen"));
   button.append(settingsIcon("exclamationmark.circle", "header-refresh-icon"));
-  button.append(el("span", "header-action-count", String(currentActionCenterIssues.length)));
+  button.append(el(
+    "span",
+    "header-action-count",
+    actionCenterSnapshotError ? "!" : String(currentActionCenterIssues.length),
+  ));
   button.addEventListener("click", () => openSettings("actionCenter"));
   return button;
 }
@@ -406,6 +680,7 @@ async function refreshActionCenterIssues() {
       actionCenterProviders,
     );
   } catch {
+    if (seq !== actionCenterProjectionSeq) return;
     actionCenterSnapshotError = true;
     const snapshot: ActionCenterSnapshot = {
       issues: currentActionCenterIssues,
@@ -622,11 +897,9 @@ function relativeTime(ts: number): string | null {
 function configuredAgents(): InstalledAgent[] {
   const all = state.agents;
   if (!all) return [];
-  const visible = new Set(visibleAgentIds(all));
-  // Chỉ agent KHÔNG quota và KHÔNG log chi phí mới thuộc hàng gộp này; ẩn
-  // agent trong Settings chỉ giấu nó khỏi đây, tổng chi phí giữ nguyên.
-  return all.filter((agent) =>
-    visible.has(agent.id) && !agent.hasQuota && !agent.hasCost);
+  // Chỉ agent có config nhưng KHÔNG quota và KHÔNG log chi phí thuộc hàng
+  // gộp này; ẩn agent trong Settings chỉ giấu nó khỏi đây, tổng chi phí giữ nguyên.
+  return configOnlyAgents(all, visibleAgentIds(all));
 }
 
 /** Số nguồn chi phí thật sự được tính vào tổng — hiện sau token ở hero
@@ -638,6 +911,18 @@ function includedSourceCount(): number {
 
 function pendingScanSources(): ScanSource[] {
   return SCAN_SOURCES.filter((s) => state.scanning.has(s) && !state[s]);
+}
+
+export function shouldShowFirstProviderCTA(
+  loadedOnce: boolean,
+  providerStatusCount: number,
+  includedLocalSourceCount: number,
+  localAuthorizationPending: boolean,
+): boolean {
+  return loadedOnce
+    && providerStatusCount === 0
+    && includedLocalSourceCount === 0
+    && !localAuthorizationPending;
 }
 
 /** "Đang quét Claude, Codex…" hint while some scans are still in flight but
@@ -853,7 +1138,12 @@ function render() {
   const body = el("div", "app-body");
   app.append(body);
 
-  if (state.loadedOnce && state.statuses.length === 0) {
+  if (shouldShowFirstProviderCTA(
+    state.loadedOnce,
+    state.statuses.length,
+    includedSourceCount(),
+    state.scanning.size > 0,
+  )) {
     const connect = el("section", "card first-provider-cta");
     connect.append(
       el("div", "first-provider-title", currentLang() === "vi" ? "Kết nối provider đầu tiên" : "Connect your first provider"),
@@ -869,7 +1159,9 @@ function render() {
 
   if (state.tab === "all") {
     const pending = pendingScanSources();
-    if (!state.claude && !state.codex && !state.grok && !state.omp && !state.pi) {
+    const sourceCount = includedSourceCount();
+    const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi, state.kiro);
+    if (sourceCount === 0) {
       // No data yet: skeleton card while scans are in flight (macOS
       // AllUsageOverview), "no logs" only once every scan came back empty.
       if (pending.length > 0) {
@@ -881,24 +1173,28 @@ function render() {
       }
     } else {
       if (pending.length > 0) body.append(scanningHint(pending));
-      const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi, state.kiro);
       // Agent-centric order (macOS parity 2026-08-24): tổng chi phí →
       // quota → chi phí theo → đã cấu hình → ngân sách.
       // Heatmap và insights card cố tình KHÔNG nằm ở All nữa: nhịp hoạt động
       // xem trong Settings → Phân tích. Badge LIVE/LỊCH SỬ cũng không nằm ở
       // đây nữa — footer luân phiên đã mang thông tin đó (macOS parity).
       body.append(chartCard(
-        combined, state.claude?.hourly ?? [], includedSourceCount()));
-      const visibleAgents = state.agents
-        ? state.agents.filter((a) => visibleAgentIds(state.agents!).includes(a.id))
-        : null;
-      const quota = quotaSection(
-        state.statuses, combined.daily, visibleAgents, visibleAgents?.length ?? 0);
-      if (quota) body.append(quota);
-      const costBy = costBySection(combined, allChartDays(), render);
-      if (costBy) body.append(costBy);
-      const configured = configuredSection(configuredAgents());
-      if (configured) body.append(configured);
+        combined, state.claude?.hourly ?? [], sourceCount));
+    }
+    // Quota/configured capabilities are independent of local cost evidence.
+    // Keep them visible even while all six scanners are unavailable.
+    const visibleAgents = state.agents
+      ? state.agents.filter((a) => visibleAgentIds(state.agents!).includes(a.id))
+      : null;
+    const quota = quotaSection(
+      state.statuses, combined.daily, visibleAgents, visibleAgents?.length ?? 0);
+    if (quota) body.append(quota);
+    const costBy = costBySection(combined, allChartDays(), render);
+    if (costBy) body.append(costBy);
+    const configured = configuredSection(configuredAgents());
+    if (configured) body.append(configured);
+    // No included source means no trustworthy zero/forecast.
+    if (sourceCount > 0) {
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
       if (budget) body.append(budget);
     }
@@ -925,16 +1221,16 @@ function render() {
     if (state.tab === "freemodel") {
       body.append(freemodelAccountsPopoverCard(
         () => scheduleFitWindow(),
-        () => { void refetchProvider("freemodel"); },
+        () => { providerIdentityRefreshCoordinator.invalidateAndRefresh("freemodel"); },
       ));
     }
     if (state.tab === "elevenlabs") {
       body.append(elevenlabsKeysPopoverCard(
         () => scheduleFitWindow(),
-        () => { void refetchProvider("elevenlabs"); },
+        () => { providerIdentityRefreshCoordinator.invalidateAndRefresh("elevenlabs"); },
       ));
     }
-    // Claude/Codex/Grok tabs also show their own local 30-day cost chart,
+    // Claude/Codex/Grok/Kiro tabs also show their own local 30-day cost chart,
     // matching the macOS per-provider chart cards.
     if (state.tab === "claude" && state.claude) {
       body.append(sourceChartCard(state.claude, "claude"));
@@ -943,6 +1239,8 @@ function render() {
       body.append(sourceChartCard(state.codex, "codex"));
     } else if (state.tab === "grok" && state.grok) {
       body.append(sourceChartCard(state.grok, "grok"));
+    } else if (state.tab === "kiro" && state.kiro?.included === true) {
+      body.append(sourceChartCard(state.kiro, "kiro"));
     }
     // Per-provider monthly budget — only when THIS tab's own budget is
     // configured (macOS ProviderBudgetCard parity). `combine()` is scoped to
@@ -970,7 +1268,7 @@ function render() {
     if (state.tab === "codex") {
       body.append(codexAccountsPopoverCard(
         () => scheduleFitWindow(),
-        () => { void refetchProvider("codex"); },
+        () => { providerIdentityRefreshCoordinator.ensureRefresh("codex"); },
       ));
     }
 
@@ -1033,8 +1331,12 @@ const FAILURE_NOTIFY_THRESHOLD = 3;
  * Fires exactly one notification at the Nth consecutive failure, stays
  * silent while the episode continues, and re-arms on recovery (a fresh
  * episode notifies again). */
-function evaluateFailureEpisodes(fetched: ProviderStatus[]) {
+function evaluateFailureEpisodes(
+  fetched: ProviderStatus[],
+  shouldApply: (providerId: string) => boolean = () => true,
+) {
   for (const s of fetched) {
+    if (!shouldApply(s.id)) continue;
     const st = failureEpisode.get(s.id) ?? { consecutive: 0, notified: false };
     if (!s.error) {
       failureEpisode.set(s.id, { consecutive: 0, notified: false });
@@ -1043,18 +1345,25 @@ function evaluateFailureEpisodes(fetched: ProviderStatus[]) {
     st.consecutive += 1;
     if (st.consecutive >= FAILURE_NOTIFY_THRESHOLD && !st.notified && failureNotificationsEnabled()) {
       st.notified = true;
-      void classifyAndNotifyFailure(s);
+      void classifyAndNotifyFailure(s, () => shouldApply(s.id));
     }
     failureEpisode.set(s.id, st);
   }
 }
 
-async function classifyAndNotifyFailure(s: ProviderStatus) {
-  const suffix = (await invoke<string | null>("classify_provider_error", { raw: s.error }).catch(() => null)) ?? "unknown";
-  await invoke("notify", {
-    title: s.displayName,
-    body: `${t(`providerError.${suffix}.title`)} — ${t(`providerError.${suffix}.hint`)}`,
-  }).catch(() => {});
+async function classifyAndNotifyFailure(s: ProviderStatus, isCurrent: () => boolean) {
+  await applyAfterProviderIdentityAwait(
+    invoke<string | null>("classify_provider_error", { raw: s.error })
+      .catch(() => null)
+      .then((suffix) => suffix ?? "unknown"),
+    isCurrent,
+    (suffix) => {
+      void invoke("notify", {
+        title: s.displayName,
+        body: `${t(`providerError.${suffix}.title`)} — ${t(`providerError.${suffix}.hint`)}`,
+      }).catch(() => {});
+    },
+  );
 }
 
 /**
@@ -1076,6 +1385,7 @@ const TRAY_FRAME_MS = 5_000;
 let trayFrames: TrayFrame[] = [];
 let trayFrameIndex = 0;
 let trayRotationTimer: ReturnType<typeof setInterval> | null = null;
+let trayProjectionSeq = 0;
 /** Cache composite icons: `${providerId}|${percentText}` → PNG bytes. */
 const trayIconCache = new Map<string, number[]>();
 
@@ -1457,19 +1767,31 @@ function stopTrayRotation() {
 /** Mirror the macOS menu-bar percent readout: rotating `%` + provider logo.
  * Providers with `showInTray === false` are skipped (`MenuBarVisibility`).
  * When Display → show-% is off, restore the default logo only. */
-async function updateTrayTooltip(statuses: ProviderStatus[], hidden: Set<string>) {
+async function updateTrayTooltip(
+  statuses: ProviderStatus[],
+  hidden: Set<string>,
+  projectionSeq: number,
+) {
   const built = await buildTrayFrames(statuses, hidden);
+  if (projectionSeq !== trayProjectionSeq) return;
   const withIcons: TrayFrame[] = await Promise.all(
     built.map(async (f) => ({
       ...f,
       iconPng: await renderPercentProviderIcon(f.providerId, f.percentText),
     })),
   );
+  if (projectionSeq !== trayProjectionSeq) return;
   trayFrames = withIcons;
   if (trayFrameIndex >= trayFrames.length) trayFrameIndex = 0;
   applyTrayFrame();
   if (trayFrames.length > 1) startTrayRotation();
   else stopTrayRotation();
+}
+
+function refreshTrayTooltip(statuses: ProviderStatus[] = state.statuses): Promise<void> {
+  const projectionSeq = ++trayProjectionSeq;
+  return fetchTrayHidden().then((hidden) =>
+    updateTrayTooltip(statuses, hidden, projectionSeq));
 }
 
 /** Data Confidence Pass: keep the previous `serviceStatus`/`serviceStatusLevel`
@@ -1523,7 +1845,12 @@ function staleWarningFor(id: string): StaleQuotaWarning | undefined {
  * be trusted. A successful fresh status is untouched here beyond the
  * existing service-status gap-fill. Fresh success or a non-transient error
  * both clear any previously recorded `staleWarnings` entry for this id. */
-async function withLastGood(cached: ProviderStatus | undefined, fresh: ProviderStatus): Promise<ProviderStatus> {
+async function withLastGood(
+  cached: ProviderStatus | undefined,
+  fresh: ProviderStatus,
+  shouldApply: () => boolean = () => true,
+): Promise<ProviderStatus> {
+  if (!shouldApply()) return fresh;
   if (!fresh.error) {
     staleWarnings.delete(fresh.id);
     return withLastGoodServiceStatus(cached, fresh);
@@ -1533,11 +1860,13 @@ async function withLastGood(cached: ProviderStatus | undefined, fresh: ProviderS
     return fresh;
   }
   const transient = await invoke<boolean>("is_transient_provider_error", { raw: fresh.error }).catch(() => false);
+  if (!shouldApply()) return fresh;
   if (!transient) {
     staleWarnings.delete(fresh.id);
     return fresh;
   }
   const kind = (await invoke<string | null>("classify_provider_error", { raw: fresh.error }).catch(() => null)) ?? "unknown";
+  if (!shouldApply()) return fresh;
   staleWarnings.set(fresh.id, { kind, lastGoodUpdated: cached.lastUpdated });
   return cached;
 }
@@ -1545,9 +1874,17 @@ async function withLastGood(cached: ProviderStatus | undefined, fresh: ProviderS
 /** Merge freshly fetched statuses over the cached ones by id, preserving the
  * **cached order** (which is settings.providers order via seed/rebuild).
  * New ids not yet in cache are appended. */
-async function mergeStatuses(cached: ProviderStatus[], fresh: ProviderStatus[]): Promise<ProviderStatus[]> {
+async function mergeStatuses(
+  cached: ProviderStatus[],
+  fresh: ProviderStatus[],
+  shouldApply: (status: ProviderStatus) => boolean = () => true,
+): Promise<ProviderStatus[]> {
   const byId = new Map(cached.map((s) => [s.id, s]));
-  for (const s of fresh) byId.set(s.id, await withLastGood(byId.get(s.id), s));
+  for (const s of fresh) {
+    if (!shouldApply(s)) continue;
+    const merged = await withLastGood(byId.get(s.id), s, () => shouldApply(s));
+    if (shouldApply(s)) byId.set(s.id, merged);
+  }
   const order = [...cached.map((s) => s.id)];
   for (const s of fresh) if (!order.includes(s.id)) order.push(s.id);
   return order.map((id) => byId.get(id)!).filter(Boolean);
@@ -1569,7 +1906,7 @@ async function fetchTrayHidden(): Promise<Set<string>> {
 function seedPlaceholderStatuses(settings: Settings | null) {
   if (!settings) return;
   const existing = new Map(state.statuses.map((s) => [s.id, s]));
-  state.statuses = settings.providers
+  replaceProviderStatuses(settings.providers
     .filter((p) => p.enabled === true)
     .map((p) => existing.get(p.id) ?? {
       id: p.id,
@@ -1577,7 +1914,7 @@ function seedPlaceholderStatuses(settings: Settings | null) {
       windows: [],
       lastUpdated: 0,
       pending: true,
-    });
+    }));
 }
 
 /**
@@ -1585,9 +1922,11 @@ function seedPlaceholderStatuses(settings: Settings | null) {
  * (macOS `rebuildProviders` on `.birdnionProvidersChanged`). Keeps cached
  * quota data for providers that stay enabled.
  */
-async function rebuildProviderOrderFromSettings() {
+async function rebuildProviderOrderFromSettings(settingsOverride?: Settings | null) {
   if (isSettingsWindow()) return;
-  const settings = await invoke<Settings>("get_settings").catch(() => null);
+  const settings = settingsOverride === undefined
+    ? await invoke<Settings>("get_settings").catch(() => null)
+    : settingsOverride;
   if (!settings) {
     await rebuildActionCenterInputs(null);
     return;
@@ -1611,7 +1950,197 @@ async function rebuildProviderOrderFromSettings() {
   }
   await refreshActionCenterIssues();
   render();
-  void updateTrayTooltip(state.statuses, await fetchTrayHidden()).catch(() => {});
+  void refreshTrayTooltip().catch(() => {});
+}
+
+function observedProviderIds(): Set<string> {
+  return new Set([
+    ...state.statuses.map((status) => status.id),
+    ...inFlightProviderIds,
+  ]);
+}
+
+function clearProviderIdentityState(providerId: string) {
+  replaceProviderStatuses(state.statuses.filter((status) => status.id !== providerId));
+  lastFetched.delete(providerId);
+  adaptiveFailureStreaks.delete(providerId);
+  staleWarnings.delete(providerId);
+  failureEpisode.delete(providerId);
+  for (const key of [...warned]) {
+    if (key.startsWith(`${providerId}:`)) warned.delete(key);
+  }
+  currentActionCenterIssues = currentActionCenterIssues
+    .filter((issue) => issue.providerId !== providerId);
+  trayFrames = trayFrames.filter((frame) => frame.providerId !== providerId);
+  if (trayFrameIndex >= trayFrames.length) trayFrameIndex = 0;
+  if (trayFrames.length <= 1) stopTrayRotation();
+  applyTrayFrame();
+  if (typeof document === "undefined") return;
+  updateActionCenterHeaderBadge();
+  render();
+  void refreshActionCenterIssues().catch(() => {});
+  void refreshTrayTooltip().catch(() => {});
+}
+
+function reconcileCanonicalProviderSettings(
+  settings: Settings,
+  initialize = false,
+): boolean {
+  if (!providerSettingsRevisionGate.accept(settings)) return false;
+  const canonical = canonicalProviderFetchIdentities(settings);
+  if (initialize
+      && providerIdentityRefreshCoordinator.initializeCanonicalProviders(canonical)) return true;
+  providerIdentityRefreshCoordinator.reconcileCanonicalProviders(
+    canonical,
+    observedProviderIds(),
+  );
+  return true;
+}
+
+async function readCanonicalLocalUsageSources(): Promise<Set<ScanSource>> {
+  const ids = await invoke<string[]>("enabled_local_usage_source_ids");
+  return new Set(ids.filter((id): id is ScanSource =>
+    SCAN_SOURCES.includes(id as ScanSource)));
+}
+
+const refreshLocalUsageReports = createLocalUsageRefreshCoordinator({
+  sources: SCAN_SOURCES,
+  readCanonicalSources: readCanonicalLocalUsageSources,
+  scanSource: (source) => invoke<UsageReport | null>(`${source}_usage_report`),
+  previousReport: (source) => state[source],
+  beginRefresh: () => {
+    state.scanning = new Set(SCAN_SOURCES);
+    render();
+  },
+  publishSource: (source, report) => {
+    state.scanning.delete(source);
+    state[source] = report;
+    render();
+  },
+});
+
+/** Settings saves affect both provider order and the canonical local-cost set.
+ * Run both projections from the same event; the usage coordinator invalidates
+ * any older scan before resolving current settings again. */
+export async function reconcileProviderSettingsChange(
+  rebuildOrder: (settings?: Settings | null) => Promise<void> = rebuildProviderOrderFromSettings,
+  refreshUsage: () => Promise<void> = refreshLocalUsageReports,
+  readSettings: () => Promise<Settings | null> = () =>
+    invoke<Settings>("get_settings").catch(() => null),
+): Promise<void> {
+  const cachedIdentitySnapshot = captureProviderIdentitySnapshot(
+    state.statuses.map((status) => status.id),
+  );
+  // The event has no provider-id payload. Invalidate every currently running
+  // provider immediately, before the async canonical settings read, then only
+  // requeue those that the persisted snapshot still enables. Popover identity
+  // switches separately invalidate their known provider before refetching.
+  providerIdentityRefreshCoordinator.invalidateForCanonicalReconciliation(
+    inFlightProviderIds,
+  );
+  const settings = await readSettings().catch(() => null);
+  if (settings === null) {
+    // A failed canonical read cannot prove any cached identity is still valid.
+    // Clear identities unchanged since this handler began. An account popover
+    // may already have advanced its known provider and started a current fetch;
+    // that newer generation owns its own result and must not be cancelled.
+    providerIdentityRefreshCoordinator.invalidateForCanonicalReconciliation(
+      [...cachedIdentitySnapshot.keys()].filter((providerId) =>
+        providerIdentityIsCurrent(cachedIdentitySnapshot, providerId)),
+    );
+  }
+  const shouldRebuild = settings === null || reconcileCanonicalProviderSettings(settings);
+  await Promise.all([
+    shouldRebuild ? rebuildOrder(settings).catch(() => {}) : Promise.resolve(),
+    refreshUsage().catch(() => {}),
+  ]);
+}
+
+type ProviderIdentitySnapshot = ReadonlyMap<string, number>;
+
+function captureProviderIdentitySnapshot(providerIds: readonly string[]): ProviderIdentitySnapshot {
+  return new Map(providerIds.map((providerId) => [
+    providerId,
+    providerIdentityRefreshCoordinator.snapshot(providerId),
+  ]));
+}
+
+function providerIdentityIsCurrent(
+  identitySnapshot: ProviderIdentitySnapshot,
+  providerId: string,
+): boolean {
+  const generation = identitySnapshot.get(providerId);
+  return generation === undefined
+    || providerIdentityRefreshCoordinator.isCurrent(providerId, generation);
+}
+
+/** An unreadable canonical settings document proves no cached provider
+ * identity. Invalidate cached and in-flight ids synchronously; callers must
+ * not issue a catch-all provider fetch until a checked settings read succeeds.
+ */
+export function failClosedUnavailableProviderSettings(
+  cachedProviderIds: readonly string[],
+  inFlightProviderIds: ReadonlySet<string>,
+  invalidate: (providerIds: Iterable<string>) => void,
+): string[] {
+  const providerIds = [...new Set([...cachedProviderIds, ...inFlightProviderIds])];
+  invalidate(providerIds);
+  return providerIds;
+}
+
+/** Resolve asynchronous merge work against the same provider identity that
+ * started the request. Candidates can only shrink, so an identity change
+ * during `mergeStatuses` is re-evaluated without the stale provider before
+ * the synchronous publish callback runs. */
+async function publishCurrentProviderFetch(
+  requestedIds: string[],
+  fresh: ProviderStatus[],
+  identitySnapshot: ProviderIdentitySnapshot,
+  publish: (
+    currentRequestedIds: string[],
+    currentFresh: ProviderStatus[],
+    merged: ProviderStatus[],
+    isStillCurrent: () => boolean,
+  ) => void,
+): Promise<boolean> {
+  let currentRequestedIds = requestedIds.filter((id) =>
+    providerIdentityIsCurrent(identitySnapshot, id));
+  let currentFresh = fresh.filter((status) =>
+    providerIdentityIsCurrent(identitySnapshot, status.id));
+
+  while (currentRequestedIds.length > 0 || currentFresh.length > 0) {
+    const committed = await commitAgainstLatestProviderState(
+      () => providerStatusStateRevision,
+      () => mergeStatuses(
+        state.statuses,
+        currentFresh,
+        (status) => providerIdentityIsCurrent(identitySnapshot, status.id),
+      ),
+      (merged) => {
+        const stableRequestedIds = currentRequestedIds.filter((id) =>
+          providerIdentityIsCurrent(identitySnapshot, id));
+        const stableFresh = currentFresh.filter((status) =>
+          providerIdentityIsCurrent(identitySnapshot, status.id));
+        if (stableRequestedIds.length !== currentRequestedIds.length
+            || stableFresh.length !== currentFresh.length) {
+          currentRequestedIds = stableRequestedIds;
+          currentFresh = stableFresh;
+          return false;
+        }
+        const isStillCurrent = () => currentRequestedIds.every((providerId) =>
+          providerIdentityIsCurrent(identitySnapshot, providerId));
+        if (!isStillCurrent()) {
+          currentRequestedIds = stableRequestedIds;
+          currentFresh = stableFresh;
+          return false;
+        }
+        publish(currentRequestedIds, currentFresh, merged, isStillCurrent);
+        return true;
+      },
+    );
+    if (committed) return true;
+  }
+  return false;
 }
 
 /** Initial full load (all enabled providers) plus the local usage reports.
@@ -1634,15 +2163,6 @@ async function load(manual = false) {
     render();
   };
 
-  const scanReport = (source: ScanSource) =>
-    invoke<UsageReport | null>(`${source}_usage_report`)
-      .catch(() => null)
-      .then((report) => publish(() => {
-        state.scanning.delete(source);
-        // Keep the previous report when a rescan fails/returns empty.
-        if (report) state[source] = report;
-      }));
-
   // First launch: replace the static index.html loading div with the app
   // frame (header + tab strip) before ANY await — the macOS popover always
   // has its chrome on screen. Re-loads keep the soft chrome-only update —
@@ -1654,7 +2174,16 @@ async function load(manual = false) {
   try {
     // Placeholder tabs/skeleton cards for every enabled provider, so each
     // card fills in as its own fetch lands (macOS displayStatuses seed).
-    const settings = await invoke<Settings>("get_settings").catch(() => null);
+    let settings = await invoke<Settings>("get_settings").catch(() => null);
+    if (settings && !reconcileCanonicalProviderSettings(settings, true)) settings = null;
+    if (settings === null) {
+      failClosedUnavailableProviderSettings(
+        state.statuses.map((status) => status.id),
+        inFlightProviderIds,
+        (providerIds) =>
+          providerIdentityRefreshCoordinator.invalidateForCanonicalReconciliation(providerIds),
+      );
+    }
     seedPlaceholderStatuses(settings);
     if (!state.loadedOnce) render();
 
@@ -1662,54 +2191,75 @@ async function load(manual = false) {
     // card fills in the moment ITS fetch lands — a 15s-timeout provider never
     // holds up the others. Falls back to one batch call when settings are
     // unreadable (no id list to fan out over).
-    const publishStatuses = async (requestedIds: string[], fresh: ProviderStatus[]) => {
-      const prevIds = state.statuses.map((s) => s.id).join(",");
-      recordFetchOutcomes(requestedIds, fresh, manual);
-      state.statuses = state.statuses.length > 0 ? await mergeStatuses(state.statuses, fresh) : fresh;
-      await refreshActionCenterIssues();
-      checkQuotaWarnings(fresh);
-      evaluateFailureEpisodes(fresh);
-      // Same gating as tick(): statuses don't feed the All-tab charts, so
-      // only repaint there when the tab strip set itself changed.
-      const nextIds = state.statuses.map((s) => s.id).join(",");
-      if (state.tab !== "all" || prevIds !== nextIds) render();
-    };
+    const publishStatuses = async (
+      requestedIds: string[],
+      fresh: ProviderStatus[],
+      identitySnapshot: ProviderIdentitySnapshot,
+    ) => publishCurrentProviderFetch(
+      requestedIds,
+      fresh,
+      identitySnapshot,
+      (currentRequestedIds, currentFresh, merged, isStillCurrent) => {
+        if (!isStillCurrent()) return;
+        const prevIds = state.statuses.map((s) => s.id).join(",");
+        recordFetchOutcomes(currentRequestedIds, currentFresh, manual);
+        replaceProviderStatuses(merged);
+        checkQuotaWarnings(currentFresh);
+        evaluateFailureEpisodes(currentFresh, (providerId) =>
+          providerIdentityIsCurrent(identitySnapshot, providerId));
+        // Same gating as tick(): statuses don't feed the All-tab charts, so
+        // only repaint there when the tab strip set itself changed.
+        const nextIds = state.statuses.map((s) => s.id).join(",");
+        if (state.tab !== "all" || prevIds !== nextIds) render();
+        void refreshActionCenterIssues().catch(() => {});
+      },
+    );
     const enabledIds = settings?.providers.filter((p) => p.enabled === true).map((p) => p.id) ?? [];
     const detectionDone = rebuildActionCenterInputs(settings);
-    const statusesDone = (enabledIds.length > 0
+    const statusesDone = (settings === null
+      // Canonical provider identities are unknown. Cached rows were already
+      // invalidated above; a catch-all fetch could only repopulate them under
+      // an unproven account/config identity.
+      ? refreshTrayTooltip([])
+      : enabledIds.length > 0
       // Per-id guard: skips a provider `refetchProvider()` or `tick()` is
       // already fetching instead of firing a duplicate request for it.
       ? Promise.all(enabledIds.map((id) =>
-          withProviderInFlightGuard(id, () =>
-            invoke<ProviderStatus[]>("provider_statuses", { ids: [id] })
-              .catch(() => [] as ProviderStatus[])
-              .then((fresh) => publishStatuses([id], fresh)))))
-      // Settings were unreadable, so the enabled-id list itself is unknown
-      // up front — this batch fetch can't be claimed per-id before firing.
-      // Rare/degraded path (`get_settings` itself failed); accepted gap.
-      : invoke<ProviderStatus[]>("provider_statuses", { ids: null })
-          .catch(() => [] as ProviderStatus[])
-          .then((fresh) => publishStatuses(fresh.map((status) => status.id), fresh))
-    ).then(async () => updateTrayTooltip(state.statuses, await fetchTrayHidden()));
+          withProviderInFlightGuard(id, async () => {
+            const identitySnapshot = captureProviderIdentitySnapshot([id]);
+            const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] })
+              .catch(() => [] as ProviderStatus[]);
+            await publishStatuses([id], fresh, identitySnapshot);
+          })))
+      // Authoritative empty provider list: there is nothing to fetch.
+      : (async () => {
+          await refreshTrayTooltip([]);
+        })()
+    ).then(() => refreshTrayTooltip());
 
     // Cả 6 nguồn chi phí đều được quét, kể cả agent không có provider (omp,
     // pi, kiro): backend tự quyết định qua `enabled_usage_sources()` — bật
     // provider HOẶC phát hiện agent trên máy — nên tắt provider không còn làm
     // mất chi phí của CLI đó (macOS parity 2026-08-24).
-    // Catalog agent: nguồn cho hàng "đã cấu hình" ở tab All. Lỗi dò không
-    // được làm hỏng lần load — hàng đó chỉ đơn giản không hiện.
-    void invoke<InstalledAgent[]>("list_installed_agents")
-      .catch(() => [] as InstalledAgent[])
-      .then((agents) => publish(() => { state.agents = agents; }));
+    const usageDone = refreshLocalUsageReports();
 
-    const usageDone = Promise.all(SCAN_SOURCES.map((id) => scanReport(id))).then(async () => {
-      const insights = await fetchProjectInsightsReport(7);
-      publish(() => { state.insights = insights; });
-    });
+    // Catalog agent: nguồn cho hàng "đã cấu hình" ở tab All. Chạy SAU quota
+    // và usage để backend đọc cost-history vừa persist, tránh phân loại Kiro
+    // đồng thời là "đã cấu hình" lẫn nguồn có cost trong lần nạp đầu tiên.
+    // Lỗi dò không được làm hỏng lần load: hàng đó chỉ đơn giản không hiện.
+    const agentsDone = Promise.all([statusesDone, usageDone]).then(() =>
+      invoke<InstalledAgent[]>("list_installed_agents", {
+        providerIdsWithQuota: state.statuses
+          .filter((s) => s.windows.length > 0)
+          .map((s) => s.id),
+      })
+        .catch(() => [] as InstalledAgent[])
+        .then((agents) => publish(() => { state.agents = agents; })));
 
     await Promise.all([
       usageDone,
       statusesDone,
+      agentsDone,
       detectionDone,
       invoke<ClaudeAdminSnapshot | null>("claude_admin_usage")
         .catch(() => null)
@@ -1719,10 +2269,14 @@ async function load(manual = false) {
   } finally {
     loadInFlight = false;
     state.refreshing = false;
-    state.scanning.clear();
     // Any placeholder whose fetch never returned (IPC failure) must not
     // spin forever — degrade to the regular "no quota data" card.
-    for (const s of state.statuses) delete s.pending;
+    let clearedPending = false;
+    for (const s of state.statuses) {
+      if (s.pending) clearedPending = true;
+      delete s.pending;
+    }
+    if (clearedPending) providerStatusStateRevision += 1;
     await refreshActionCenterIssues();
     render();
   }
@@ -1732,18 +2286,28 @@ async function load(manual = false) {
  * user clicking Retry) and merges the fresh status over the cached state.
  * Guarded by `inFlightProviderIds`: a no-op when `load()` or `tick()` is
  * already fetching this same provider — "don't create a duplicate request"
- * — the in-flight caller's own completion still applies the result. */
+ * — identity/config invalidation queues a forced follow-up and can discard
+ * that older in-flight caller's completion. */
 async function refetchProvider(id: string) {
   if (isSettingsWindow()) return;
   await withProviderInFlightGuard(id, async () => {
+    const identitySnapshot = captureProviderIdentitySnapshot([id]);
     const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] }).catch(() => []);
-    recordFetchOutcomes([id], fresh, true);
-    if (fresh.length === 0) return;
-    state.statuses = await mergeStatuses(state.statuses, fresh);
-    await refreshActionCenterIssues();
-    checkQuotaWarnings(fresh);
-    await updateTrayTooltip(state.statuses, await fetchTrayHidden());
-    render();
+    await publishCurrentProviderFetch(
+      [id],
+      fresh,
+      identitySnapshot,
+      (currentRequestedIds, currentFresh, merged, isStillCurrent) => {
+        if (!isStillCurrent()) return;
+        recordFetchOutcomes(currentRequestedIds, currentFresh, true);
+        if (currentFresh.length === 0) return;
+        replaceProviderStatuses(merged);
+        checkQuotaWarnings(currentFresh);
+        render();
+        void refreshActionCenterIssues().catch(() => {});
+        void refreshTrayTooltip().catch(() => {});
+      },
+    );
   });
 }
 
@@ -1763,23 +2327,34 @@ async function tick() {
   if (ids.length === 0) return;
   const prevIds = state.statuses.map((s) => s.id).join(",");
   for (const id of ids) inFlightProviderIds.add(id);
+  const identitySnapshot = captureProviderIdentitySnapshot(ids);
   try {
     const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
-    recordFetchOutcomes(ids, fresh, false);
-    state.statuses = await mergeStatuses(state.statuses, fresh);
-    await refreshActionCenterIssues();
-    checkQuotaWarnings(state.statuses);
-    evaluateFailureEpisodes(fresh);
-    await updateTrayTooltip(state.statuses, await fetchTrayHidden());
-    // Avoid rebuilding the All-tab charts every 10s (felt like constant spin/flicker).
-    // Re-render only when the tab strip set changed, or user is on a provider tab.
-    const nextIds = state.statuses.map((s) => s.id).join(",");
-    const onProviderTab = state.tab !== "all";
-    if (onProviderTab || prevIds !== nextIds) {
-      render();
-    }
+    await publishCurrentProviderFetch(
+      ids,
+      fresh,
+      identitySnapshot,
+      (currentRequestedIds, currentFresh, merged, isStillCurrent) => {
+        if (!isStillCurrent()) return;
+        recordFetchOutcomes(currentRequestedIds, currentFresh, false);
+        replaceProviderStatuses(merged);
+        checkQuotaWarnings(state.statuses);
+        evaluateFailureEpisodes(currentFresh, (providerId) =>
+          providerIdentityIsCurrent(identitySnapshot, providerId));
+        // Avoid rebuilding the All-tab charts every 10s (felt like constant spin/flicker).
+        // Re-render only when the tab strip set changed, or user is on a provider tab.
+        const nextIds = state.statuses.map((s) => s.id).join(",");
+        const onProviderTab = state.tab !== "all";
+        if (onProviderTab || prevIds !== nextIds) {
+          render();
+        }
+        void refreshActionCenterIssues().catch(() => {});
+        void refreshTrayTooltip().catch(() => {});
+      },
+    );
   } finally {
     for (const id of ids) inFlightProviderIds.delete(id);
+    for (const id of ids) providerIdentityRefreshCoordinator.onFetchReleased(id);
   }
 }
 
@@ -1825,9 +2400,7 @@ void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
  * webview — `storage` for cross-window, custom event for same-window). */
 function onTrayDisplayPrefChanged() {
   if (isSettingsWindow()) return;
-  void fetchTrayHidden()
-    .then((hidden) => updateTrayTooltip(state.statuses, hidden))
-    .catch(() => {});
+  void refreshTrayTooltip().catch(() => {});
 }
 window.addEventListener("storage", (e) => {
   if (e.key === "birdnion.showPercentInTray") onTrayDisplayPrefChanged();
@@ -1846,11 +2419,12 @@ window.addEventListener("storage", (e) => {
 });
 window.addEventListener(MONTHLY_BUDGET_CHANGED_EVENT, onMonthlyBudgetChanged);
 
-/** Repaint the current provider tab's budget card when its own Claude/Codex/
- * Grok budget changes — same webview-relay pattern as `onMonthlyBudgetChanged`. */
+/** Repaint the current provider tab's budget card when its own budget changes
+ * — same webview-relay pattern as `onMonthlyBudgetChanged`. */
 function onProviderBudgetChanged() {
   if (isSettingsWindow()) return;
-  if (state.tab === "claude" || state.tab === "codex" || state.tab === "grok") render();
+  if (state.tab === "claude" || state.tab === "codex" || state.tab === "grok"
+      || state.tab === "kiro") render();
 }
 const providerBudgetKeys = new Set(Object.values(PROVIDER_BUDGET_STORAGE_KEYS));
 window.addEventListener("storage", (e) => {
@@ -1858,7 +2432,7 @@ window.addEventListener("storage", (e) => {
 });
 window.addEventListener(PROVIDER_BUDGET_CHANGED_EVENT, onProviderBudgetChanged);
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   initTheme();
   if (isSettingsWindow()) {
     document.title = "BirdNion Settings";
@@ -1870,10 +2444,21 @@ window.addEventListener("DOMContentLoaded", () => {
     });
     return;
   }
-  // Settings webview → main: rebuild tab order (macOS providersDidChange).
-  void listen(PROVIDERS_CHANGED_EVENT, () => {
-    void rebuildProviderOrderFromSettings().catch(() => {});
-  });
+  // Both account UIs emit before and after mutation. The first pulse
+  // invalidates any old-identity result; the second guarantees a current
+  // Codex fetch, queued behind an existing load/tick/refetch when necessary.
+  try {
+    await awaitProviderCoordinatorListeners([
+      listen(CODEX_ACCOUNT_CHANGED_EVENT, onCodexAccountChanged),
+      // Settings webview → main: rebuild tab order and reconcile local usage.
+      listen(PROVIDERS_CHANGED_EVENT, () => {
+        void reconcileProviderSettingsChange();
+      }),
+    ]);
+  } catch (err) {
+    document.querySelector("#app")!.textContent = `${t("loadError")}: ${err}`;
+    return;
+  }
   // Settings webview → main: tray-percent toggled. Must be a Tauri event —
   // Settings is a separate webview, so its `storage`/DOM events never arrive
   // here, and the rotation timer would keep repainting the percent frame.
@@ -1906,9 +2491,22 @@ window.addEventListener("DOMContentLoaded", () => {
     const status = event.payload;
     if (!["claude", "codex", "grok"].includes(status.id)) return;
     void (async () => {
-      state.statuses = await mergeStatuses(state.statuses, [status]);
-      await refreshActionCenterIssues();
-      render();
+      const identitySnapshot = captureProviderIdentitySnapshot([status.id]);
+      await commitAgainstLatestProviderState(
+        () => providerStatusStateRevision,
+        () => mergeStatuses(
+          state.statuses,
+          [status],
+          (candidate) => providerIdentityIsCurrent(identitySnapshot, candidate.id),
+        ),
+        (merged) => {
+          if (!providerIdentityIsCurrent(identitySnapshot, status.id)) return false;
+          replaceProviderStatuses(merged);
+          render();
+          void refreshActionCenterIssues().catch(() => {});
+          return true;
+        },
+      );
     })();
   });
   load().catch((err) => {
