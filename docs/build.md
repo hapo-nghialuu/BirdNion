@@ -234,6 +234,7 @@ Có thể kiểm tra frontend và Rust trên macOS hoặc Linux:
 ```bash
 cd linux
 npm ci
+npm test
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
@@ -253,7 +254,7 @@ npm run tauri build
 ```
 
 Workflow `linux-build.yml` là lane kiểm tra/đính kèm artifact, không publish
-vào GitHub Release. Nó chạy `cargo test`, `npx tsc --noEmit` và tạo đủ ba
+vào GitHub Release. Nó chạy `npm test`, `cargo test`, `npx tsc --noEmit` và tạo đủ ba
 bundle trên `ubuntu-22.04`.
 
 ### 2. Version và source commit

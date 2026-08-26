@@ -99,8 +99,11 @@ Popover Accounts row (`CodexAccountsPopoverSection` trong `QuotaPanel.swift`) ch
 **CLI account switcher** (`CodexAccountStore.swift`): Switch button copy managed account vào `~/.codex/auth.json` để terminal `codex` dùng, với bảo mật:
 - One-time pristine backup tại `~/.codex/auth.json.birdnion-orig` (lần đầu overwrite)
 - Promote-before-overwrite: system account tự thêm vào managed nếu chưa tracked
-- Atomic writes 0600 qua `CodexAuthStore` (staged file + `fchmod` + `rename`)
-- Token-rotation sync-back: mỗi refresh, so sánh mtime CLI vs managed copy, auto-sync nếu CLI mới hơn (idempotent)
+- Auth transaction bind root/home bằng directory descriptor và identity `dev+ino`; symlink, real-directory replacement và route đổi giữa validation/write đều fail-closed
+- Atomic writes 0600 qua `CodexAuthStore`; exact bytes + app revision chặn reauth/remove ghi đè, source credential phải parse hợp lệ trước mọi copy
+- Token refresh giữ binding account đã capture: switch A→B giữa request chỉ có thể commit rotated token vào A, rồi generation guard loại UI/snapshot cũ
+- `codex login` chạy trong managed dir đã bind bằng child-process cwd descriptor; managed metadata/path lỗi không bao giờ fallback sang system credential
+- Linux carry identity root/home từ validation sang descriptor bind cho select/promote/remove và persist `dev+ino` cho account mới; thay managed root trước hoặc sau metadata commit đều fail-closed. Entry legacy thiếu identity không được route; remove chỉ bỏ metadata, còn entry identity-bearing chỉ unlink đúng `auth.json` qua bound home descriptor sau commit, không recurse, rename hoặc unlink tên UUID
 
 Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account id hiện đang ở CLI; `nil` = system account gốc.
 
@@ -122,8 +125,8 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
   5. *Ngân sách*: hỗ trợ cài đặt kỳ linh hoạt Tuần / Tháng (`BudgetPeriod` trong `SettingsStore`), tính toán dự phóng qua `BudgetForecast`.
 - **Agent Detail Child Panel**: NSPanel 340px độc lập neo bên phải popover chính, hiển thị 3 tab `Quota`, `Chi phí`, `Config` lấy đường dẫn và model từ dữ liệu quét thật.
 - Quota row dùng window chính đang active qua `ProviderStatusSummary.lowestWindow`; supplementary/inactive window không được thay quota chính. Detail chỉ hiện số cost khi có evidence thực, và chỉ nói quota/upstream/health khi snapshot có bridge/status tương ứng. Request mở child panel có generation guard để intent cũ không ghi đè click mới.
-- OMP/Pi stream JSONL theo chunk 64 KiB với read cursor tuyến tính và file cap 64 MiB; chỉ compact prefix đã consume. Malformed complete line, missing root, enumeration/read error, cancellation hoặc entry-limit truncation đều làm scan incomplete. Partial result không được merge vào high-water history hoặc cache/stamp như live; malformed unterminated tail đang được writer append mới được bỏ qua. Dedup chỉ claim key sau khi record có timestamp/usage hợp lệ, nên duplicate rỗng không chặn record usage hợp lệ phía sau. Kiro trả typed scan completion theo từng archive/SQLite/CLI source; JSON đúng cú pháp nhưng sai schema vẫn là failure, còn clean zero-usage khác I/O/parse failure và partial source không được stamp live.
-- `CostHistoryStore.applyWithReceipt` chỉ công bố merged window/freshness sau durable atomic write. Mutation read chỉ tạo document mới khi file thật sự chưa tồn tại; file hiện hữu unreadable/malformed làm receipt fail-closed và không bị ghi đè. Persist failure trả lại persisted window cũ; Claude/Codex/Grok/Kiro/OMP/Pi không phát `live` hoặc advance pricing/counting revision từ state chỉ tồn tại trong memory. Claude cũng không publish/cache hourly live khi daily history chưa persist.
+- OMP/Pi stream JSONL theo chunk 64 KiB với read cursor tuyến tính và file cap 64 MiB; chỉ compact prefix đã consume. Malformed complete line, missing root, enumeration/read error, cancellation hoặc entry-limit truncation đều làm scan incomplete. Partial result không được merge vào high-water history hoặc cache/stamp như live; malformed unterminated tail đang được writer append mới được bỏ qua. Dedup chỉ claim key sau khi record có timestamp/usage hợp lệ, nên duplicate rỗng không chặn record usage hợp lệ phía sau. Trên Linux, Kiro detector và scanner cùng nhận current CLI, legacy archive/SQLite và custom `XDG_DATA_HOME`, có fallback về DB mặc định khi custom DB không tồn tại; provider tắt không làm ẩn log thật. Scanner trả typed completion theo từng source: container/turn array rỗng **không** đủ làm live evidence; thiếu turn array, turn rỗng hoặc identity field sai type/value là semantic failure. Numeric integral như `1.0` được parser và validator hai nền tảng xử lý giống nhau; token/context tối đa 10B, percentage tối đa 100, metering/credit tối đa 1B mỗi turn và mọi aggregate dùng checked arithmetic. Alias token plural/cache chưa có parser contract bị fail-closed thay vì tạo live zero-usage. Partial source không được stamp live/cache.
+- `CostHistoryStore.applyWithReceipt` chỉ công bố merged window/freshness sau durable atomic write. Mutation read chỉ tạo document mới khi file thật sự chưa tồn tại; file hiện hữu unreadable/malformed làm receipt fail-closed và không bị ghi đè. Persist failure trả lại persisted window cũ; Claude/Codex/Grok/Kiro/OMP/Pi không phát `live` hoặc advance pricing/counting revision từ state chỉ tồn tại trong memory. Shared schema dùng snake_case `scanned_at`/`counting_revision`/`top_models`, timestamp mili-giây nguyên và day key Gregorian `yyyy-MM-dd` theo múi giờ local; model label non-empty sau trim nhưng giới hạn/control được kiểm trên original Unicode scalars (tối đa 128) ở cả hai nền tảng. Cả hai bản migrate alias camelCase và timestamp macOS cũ có phần lẻ. Reader bị chặn 8 MiB, 32 model/ngày, source/version/future-day/future-scan và đường dẫn symlink/FIFO. Claude cũng không publish/cache hourly live khi daily history chưa persist.
 - **52-week Activity Ledger**: Tổng hợp daily token evidence thật từ 400 ngày trong `CostHistoryStore` thành đúng 52 tuần; future/out-of-window evidence bị loại, zero-day có evidence khác missing-day, streak/current/longest tính theo ngày liên tiếp.
 
 #### 3.6.1 Bản Linux (Tauri) — cùng mô hình (2026-08-24)
@@ -132,9 +135,10 @@ Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
 
 - Catalog: `installed_agents.rs` giữ đúng allowlist bounded và kiểm tra mode bit thực thi; visibility lưu ở `localStorage` key `birdnion.agentVisibility`, vẫn chỉ ảnh hưởng hiển thị.
 - Sáu nguồn cost giống macOS sau khi thêm `kiro_scanner.rs` (CLI sessions với credit tính phí thật, SQLite v1/v2, archive JSON).
+- Kiro giữ bucket tổng hợp `Other` trong daily chart để bảo toàn USD/token, nhưng loại nó khỏi top-model và digest ranking; winner thật được lưu riêng trong `top_models`.
 - Cost tách khỏi provider toggle: `enabled_usage_sources()` là hợp của provider đang bật và agent phát hiện được, nên CLI tắt provider vẫn báo chi phí.
 - Panel phụ không nằm trong popover 420px mà là cửa sổ Tauri riêng (`panel.html`, 340px, frameless, always-on-top) neo cạnh popover — tương đương NSPanel con bên macOS, giữ nguyên vòng đời hover-transient / click-pin.
-- Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24, hiện 448 test Rust xanh.
+- Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24; gate local 2026-08-26 xanh `578/578` Rust, `65/65` Node và production build `60` modules.
 ## 4. Luồng quota
 
 ```
@@ -165,19 +169,20 @@ Adaptive refresh dùng chính polling/tick hiện có, không thêm timer hay da
 
 ### 4.1 Data confidence và last-good state
 
-Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (`UsageScanConfidence` trên macOS, `UsageReport` trên Linux):
+Mỗi scanner Claude/Codex/Grok/Kiro/OMP/Pi trả metadata `included`, `live`, `scannedAt` (`UsageScanConfidence` trên macOS, `UsageReport` trên Linux):
 
 - `live`: scan hiện tại thành công; `history-only`: không live nhưng có lịch sử; `unavailable`: không có cả hai.
-- `scannedAt` được lưu cùng cost history để vẫn hiển thị freshness khi chu kỳ hiện tại chỉ dùng lịch sử.
+- `scannedAt` được lưu cùng cost history dưới key chung `scanned_at` dạng epoch-millisecond integer để vẫn hiển thị freshness khi chu kỳ hiện tại chỉ dùng lịch sử.
 - Tab All chỉ cộng nguồn `included`; badge hiển thị trạng thái + freshness. Heatmap dùng token count, không dùng USD làm activity giả.
 - Provider refresh thiếu tạm thời `serviceStatus`/`serviceStatusLevel` sẽ kế thừa last-good pair thay vì làm trống UI.
 
 ### 4.2 Budget tuần/tháng, forecast và weekly digest
 
-- Trên macOS, budget tổng trong All dùng `BudgetForecast` và kỳ `SettingsStore.budgetPeriod` (`week`/`month`), cộng sáu nguồn local Claude/Codex/Grok/Kiro/OMP/Pi có confidence `included`, rồi linear-project tới cuối kỳ. Không có nguồn included thì hiện “chưa có dữ liệu chi phí”, không tạo trạng thái on-track giả. Budget là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API. Linux hiện vẫn dùng `MonthlyForecast` cho Claude/Codex/Grok.
-- **Budget per-provider** (Claude/Codex/Grok riêng biệt, độc lập với budget tổng): cùng công thức `MonthlyForecast.build(source:)` nhưng chỉ cộng daily USD của đúng 1 source. Lưu ở UserDefaults `claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD` (macOS) và `localStorage` `birdnion.claudeBudgetUSD`/`birdnion.codexBudgetUSD`/`birdnion.grokBudgetUSD` (Linux) — **không** ghi vào provider `settings.json`.
-  - Tab provider tương ứng (`ProviderBudgetCard` macOS / `providerBudgetCard` Linux, không phải All tab — All tab chỉ hiển thị budget tổng) hiển thị mỗi provider có budget > 0: MTD/budget, linear projection, remaining hoặc over, status on-track/forecast-over/already-over.
+- Budget tổng trong All dùng cùng kỳ `week`/`month`, cộng sáu nguồn local Claude/Codex/Grok/Kiro/OMP/Pi có confidence `included`, rồi linear-project tới cuối kỳ. Không có nguồn included thì hiện “chưa có dữ liệu chi phí”, không tạo trạng thái on-track giả. Budget là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API.
+- **Budget per-source** (sáu nguồn, độc lập với budget tổng): cùng công thức forecast nhưng chỉ cộng daily USD của đúng 1 source. Lưu bằng sáu key `<source>BudgetUSD` trong UserDefaults (macOS) hoặc `birdnion.<source>BudgetUSD` trong localStorage (Linux) — **không** ghi vào provider `settings.json`.
+  - Tab Claude/Codex/Grok/Kiro có `ProviderBudgetCard`/`providerBudgetCard`; OMP/Pi không có provider tab nên chỉ có Settings + weekly digest. Card chỉ hiện khi budget > 0: period-to-date, projection, remaining/over và status.
   - Trust rule: provider có `confidence == .unavailable` (không live lẫn không lịch sử) hiện "chưa có dữ liệu chi phí" thay vì tính forecast — không bao giờ hiện on-track (xanh) giả khi thiếu bằng chứng. History-only vẫn tính bình thường.
+- Kỳ tuần được pin ISO Monday–Sunday trên hai nền tảng; số ngày đã trôi được tính bằng calendar-day local, không chia giây nên không lệch tại DST.
 - Weekly digest mặc định OFF. Cửa sổ hiện tại là hôm nay + 6 ngày trước; cửa sổ so sánh là 7 ngày liền trước đó.
 - Digest đi nhờ refresh/tick sẵn có. `lastEvaluatedAt` giới hạn cadence và vẫn được ghi khi suppress/error; `lastSentAt` chỉ ghi sau khi notification thành công.
 - Không gửi khi không có live source hoặc tổng USD/token bằng 0. Nếu một phần nguồn không live, notification ghi rõ nguồn dùng cached data.
@@ -196,6 +201,7 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 - Classifier chỉ map ba nhóm user-fixable sang target ổn định `setupSource`, `credential`, `cookieSource`; network/rate-limit/schema/unknown chỉ có Retry.
 - Guided Setup luôn lưu cấu hình trước. Save fail rollback UI và dừng probe; save thành công mới chạy fetch user-initiated thật. Trạng thái Live cần response không lỗi và có quota window.
 - macOS giữ registry task/generation per provider để không cho self-test chồng nhau hoặc completion cũ ghi đè. Error status chỉ ở memory; disk cache chỉ nhận renderable non-error snapshots.
+- First Live Checkpoint chỉ áp dụng Claude/Codex/Grok trong Guided Setup. Mỗi lần save-first tạo `attemptId` và mốc thời gian riêng; chỉ explicit probe hiện tại, đúng generation/provider đang chọn, response `id` khớp request, provider còn bật, không lỗi và có quota window mới ghi receipt per-provider. Thay đổi config/account invalidate generation; Codex mutation phát event trước và sau durable commit, listener phải sẵn sàng trước khi pane interactive và được dispose khi pane rời DOM. `liveRenderedAtMs` chỉ được chốt sau AppKit view `draw` trên macOS hoặc hai `requestAnimationFrame` với Live node còn connected **và** cửa sổ Tauri native visible, không minimized, có focus. Failure, cache, background refresh, header self-test hoặc stale completion không tạo/ghi đè receipt trước; store từ chối attempt cũ hơn, bỏ riêng entry hỏng nhưng giữ nguyên toàn bộ blob nếu root corrupt/unreadable. macOS persist bằng atomic UUID journal trên một bound dirfd + `flock`; kết quả là `committed`/`rejected`/`indeterminate`, và trạng thái cuối chỉ hiện cảnh báo trung lập thay vì giả Live hoặc Fail. Load/save chuẩn hoá đúng 9 field allowlist; receipt không nhận token, credential, path hoặc raw error.
 - Action Center v1 chỉ project Claude/Codex/Grok đang bật từ cùng detection + current status + stale-warning memory của Guided Setup. Một provider có tối đa một issue; thứ tự `needsSource` → lỗi sửa được → lỗi transient cần Retry, tối đa ba issue.
 - Popover chỉ hiện badge count gọn; tab All không thêm card. Chi tiết và CTA nằm trong Settings `Action Center`. Issue tự biến mất khi status thành công/stale được xóa.
 - Không có issue database/history, polling loop riêng, raw-error persistence, quota/budget/release item. Trên Linux, main WebView giữ projection và fetch owner; Settings nhận snapshot sanitized qua Tauri event, còn Retry quay về existing per-provider in-flight guard thay vì tạo pipeline mới.
@@ -214,8 +220,11 @@ Mỗi scanner Claude/Codex/Grok trả metadata `included`, `live`, `scannedAt` (
 | Total monthly budget | macOS `UserDefaults.monthlyBudgetUSD`; Linux local storage `birdnion.monthlyBudgetUSD` | local preference |
 | Kỳ budget tổng macOS | `UserDefaults.birdnion.budgetPeriod` (`week`/`month`) | local preference, mặc định `month` |
 | Agent visibility/pinning | `UserDefaults.birdnion.agentVisibility.v1.*` | local presentation preference; không mutate provider/config |
-| Per-provider budget (Claude/Codex/Grok) | macOS `UserDefaults.claudeBudgetUSD`/`codexBudgetUSD`/`grokBudgetUSD`; Linux local storage `birdnion.claudeBudgetUSD`/`birdnion.codexBudgetUSD`/`birdnion.grokBudgetUSD` — không phải provider `settings.json` | local preference |
+| Per-source budget (Claude/Codex/Grok/Kiro/OMP/Pi) | macOS `UserDefaults.<source>BudgetUSD`; Linux local storage `birdnion.<source>BudgetUSD` — không phải provider `settings.json` | local preference |
 | Weekly digest toggle/cadence | macOS `weeklyDigest*`; Linux local storage `birdnion.weeklyDigest*` | local preference, default OFF |
+| First Live Checkpoint | macOS `Application Support/BirdNion/first-live-checkpoints-v1.json` (migrate key UserDefaults cũ); Linux `localStorage` key `birdnion.firstLiveCheckpoints.v1` | receipt local per-provider; exact-schema normalization, corrupt-root fail-closed, privacy allowlist |
+
+Shared `settings.json` dùng revision monotonic + exact-byte CAS, fixed recovery claim, reader/writer lock và directory-descriptor binding. Lỗi đọc authoritative không được giả thành document revision 0; parent route đổi làm transaction fail-closed. App chỉ đặt `0700` khi tự tạo leaf support directory, không thay mode của parent override đã tồn tại; settings/lock file vẫn `0600`.
 | Project cost history | `~/.config/birdnion/project-cost-history.json` (sibling của settings/cost history) | SHA-256 keys + safe basename, hashed retraction IDs, atomic `0600`, high-water 400 ngày |
 | Local token scanner cache | in-memory (5 min TTL) | n/a |
 
@@ -344,14 +353,15 @@ Scripts/
 - [x] Search box + active-first sort
 - [x] Menu-bar visibility toggle per provider
 - [x] Ad-hoc signed, Gatekeeper auto-strip qua Homebrew cask postflight
-- [x] `xcodebuild` build clean; full macOS suite 420 tests pass (2026-08-15)
+- [x] `xcodebuild` Release universal clean; full macOS suite `726` tests (`725` pass, `1` live skip, `0` fail) (2026-08-26)
 - [x] Local token scanner: 30-day chart for Claude usage
 - [x] Data confidence + freshness + last-good service status trên macOS/Linux
 - [x] Total monthly budget + linear forecast trên macOS/Linux
-- [x] Per-provider budget (Claude/Codex/Grok) + trust-unavailable no false-green trên macOS/Linux
+- [x] Per-source budget (Claude/Codex/Grok/Kiro/OMP/Pi) + trust-unavailable no false-green trên macOS/Linux
 - [x] Adaptive refresh 1×/2×/4×/8×, manual/forced bypass, không timer mới
 - [x] Weekly digest rolling 7 ngày, default OFF, trên macOS/Linux
 - [x] Usage Insights + Cost by Project trên macOS/Linux: compact All highlight, Settings Overview/Projects 7/30/90, Claude/Codex/Grok privacy key + residual `Unknown`
+- [x] First Live Checkpoint trên macOS/Linux: receipt per-provider chỉ từ explicit current probe sau visible paint, exact-schema/corrupt-root fail-closed và không persist secret/raw error
 - [x] macOS custom profile quick switch fail-closed; Linux Codex account quota/health snapshot
 - [x] Release pipeline (`Scripts/release.sh`) → tap → brew install
 - [ ] Windows 10/11 x64/ARM64 native compile, runtime, install, First Live và release integrity; hiện `FLASH_UNVERIFIED`, không public support claim
@@ -372,6 +382,7 @@ Scripts/
 | Project history tách khỏi aggregate history | Corrupt/missing project attribution không được ảnh hưởng quota, budget, digest hoặc `cost-history.json` |
 | Codex/Grok project attribution từ local logs | Codex hash validated `cwd`; Grok hash stable encoded session-directory token và chỉ dùng verified `git_root_dir` cho safe basename; aggregate thiếu metadata vẫn là `Unknown` |
 | Exact-snapshot activation guard | Delete/edit profile thắng async activation; stale continuation fail closed |
+| First Live receipt chỉ từ current explicit probe | Phân biệt setup vừa được chứng minh với cache/last-good/background; giữ receipt cũ khi lần thử mới thất bại |
 | Menu-bar visibility toggle per provider | User loại provider không quan tâm khỏi chuỗi % trên menu bar |
 | Cask filename: `BirdNion-${version}.zip` (no v prefix) | GitHub release-asset upload cache trả 404 BlobNotFound với `v${version}.zip` |
 | Windows evidence tách 4 OS/architecture lanes | Cross-compile, static review hoặc một lane không chứng minh ba lane còn lại; chỉ public claim sau native runtime/install/release receipts |

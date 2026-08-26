@@ -1,27 +1,27 @@
 # Linux ↔ macOS parity matrix
 
-Baseline updated 2026-08-24: macOS + Linux after the agent-centric remake — installed-agent catalog, 4-block All tab, side panels, 52-week activity, Kiro as the sixth cost source.
+Baseline updated 2026-08-26: macOS + Linux after the agent-centric remake — installed-agent catalog, 4-block All tab, side panels, 52-week activity, Kiro as the sixth cost source, First Live Checkpoint và credential/settings race hardening.
 
 Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest, per-provider budget, Usage Insights, Guided Setup và Action Center v1.
 
 | Area | macOS | Linux target | Status |
 |---|---|---|---|
-| Providers roster | 26 ids | 26 ids in registry + settings ROSTER | **done** |
+| Providers roster | 29 ids | 29 ids in registry + Settings ROSTER, gồm cả `xai` | **done** |
 | OpenAI Admin/API | OpenAIProvider.swift | `providers/openai.rs` | **done** |
 | Ollama cloud | OllamaProvider.swift | `providers/ollama.rs` | **done** |
 | Grok quota | GrokProvider.swift | `providers/grok.rs` | **done** |
 | Grok cost scanner | GrokCostScanner.swift | `grok_scanner.rs` | **done** — rev 3 chia token theo `events.jsonl` (xem "Quy ngày của Grok") |
-| Cost history | CostHistoryStore.swift | `cost_history.rs` (high-water merge) | **done** |
+| Cost history | CostHistoryStore.swift | `cost_history.rs` (high-water merge) | **done** — model label dùng cùng contract Unicode scalar: non-empty sau trim, tối đa 128 scalar và không control character |
 | Usage Insights + project cost | compact All highlight; Settings `Insights` Overview/Projects; `ProjectCostHistoryStore` | compact All highlight; Settings `Insights`; `project_cost_history.rs` + `project_insights.rs` | **done** — Claude/Codex/Grok SHA-256 identity + safe basename; only unattributed residual stays `Unknown` |
-| Guided Setup + Action Center v1 | exact remediation flow; save-first real self-test; header badge + Settings current issues | cùng remediation flow; header badge + Settings current issues | **done** — không All card, issue history, quota/budget/release item hoặc raw-error persistence |
+| Guided Setup + First Live Checkpoint + Action Center v1 | exact remediation flow; save-first real self-test; AppKit draw acknowledgment; receipt dùng atomic UUID journal + tri-state commit | cùng flow; hai animation frame + native visible/restored/focused; receipt exact-schema/fail-closed | **done** — response id/generation/config-account đều bind đúng attempt; failure/cache/stale completion/root storage hỏng không tạo hoặc ghi đè receipt; commit không xác định hiện cảnh báo trung lập, không giả Live/Fail; không lưu credential/path/token/raw error |
 | Data confidence | `UsageScanConfidence` (`included` / `live` / `scannedAt`) + freshness badges | `UsageReport` cùng metadata + freshness badges | **done** |
 | Last-good provider status | giữ `serviceStatus`/level khi refresh mới thiếu status | giữ `serviceStatus`/level từ cached status | **done** |
-| All tab 3 sources | AllUsageOverview | `usage.ts` + `all-tab.ts` (Claude/Codex/Grok) | **done** |
+| All-tab local cost aggregate 6 sources | `AllUsageOverview` (Claude/Codex/Grok/Kiro/OMP/Pi) | `usage.ts` + `all-tab.ts` cùng canonical source set | **done** — Kiro nằm trong 24h/30d, top source/model, agent panel, provider chart, digest và budget riêng |
 | Total monthly budget + forecast | local `monthlyBudgetUSD`, Claude+Codex+Grok linear forecast | local `birdnion.monthlyBudgetUSD`, cùng scope/logic | **done** |
-| Per-provider budget (Claude/Codex/Grok) | `UserDefaults` `claude/codex/grokBudgetUSD`, `ProviderBudgetCard` trong tab provider tương ứng (MTD/budget/forecast/remaining-over, trust-unavailable no false-green) | `localStorage` `birdnion.claude/codex/grokBudgetUSD`, `providerBudgetCard` cùng logic | **done** |
+| Per-source budget (6 nguồn) | `UserDefaults` cho Claude/Codex/Grok/Kiro/OMP/Pi; card trong tab Claude/Codex/Grok/Kiro; OMP/Pi tham gia Settings + digest | `localStorage` cùng 6 key và cùng card/digest scope | **done** — trust-unavailable, không false-green |
 | Adaptive refresh | base interval × 1/2/4/8; forced/manual bypass + success reset | cùng multiplier/bypass/reset, dùng tick sẵn có | **done** |
 | Weekly digest | rolling 7 ngày, default OFF, partial-data caveat, cảnh báo budget tổng + per-provider chỉ khi forecast-over/already-over | cùng cửa sổ/cadence, default OFF, cùng logic cảnh báo budget | **done** |
-| Per-provider cost chart | Claude/Codex/Grok cards | `source-chart.ts` + main tab branch | **done** |
+| Per-provider cost chart | Claude/Codex/Grok/Kiro cards | `source-chart.ts` + main tab branch cùng 4 nguồn | **done** |
 | Settings structure | multi-tab | section nav: Providers / General / About | **done** |
 | Heatmap greens | VocabbyTheme.heat* | `styles.css` soft GitHub greens | **done** |
 | Startup fetch | launch-time refresh, per-provider streaming, lazy scans + 5-min cache | first paint before any fetch; per-provider status streaming; scanners `spawn_blocking` + 5-min TTL cache; skeleton + "Đang quét…" hint | **done** |
@@ -43,10 +43,10 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 | Area | macOS | Linux | Status |
 |---|---|---|---|
 | Installed-agent catalog | `InstalledAgentCatalog` + `InstalledAgentDetectors` (allowlist bounded) | `installed_agents.rs` — cùng allowlist 16 agent, `is_executable` theo mode bit, không quét đệ quy | **done** |
-| Settings tab Agent | `AgentsPane` bảng phẳng + filter pill + cost 90d | `settings-agents.ts` cùng filter/predicate/sort (active lên trước) | **done** |
+| Settings tab Agent | `AgentsPane` bảng phẳng + filter pill + cost 90d | `settings-agents.ts` cùng filter/predicate/sort; truyền quota-bearing provider IDs vào catalog backend | **done** — badge/filter quota lấy từ status hiện tại, không rơi về false |
 | All tab 4 khối | quota / cost-by / configured / budget | `all-agents-sections.ts` cùng 4 khối | **done** |
 | Cost by: mode agent/model/token | 3 mode, đổi theo kỳ đang chọn | `costByMode()` lưu ở `birdnion.costByMode`, cùng 3 mode | **done** |
-| Cost source thứ 6 (Kiro) | `KiroCostScanner.swift` (3 thế hệ lưu trữ) | `kiro_scanner.rs` — CLI sessions (credit thật × $0.04), SQLite v1/v2, archive JSON | **done** |
+| Cost source thứ 6 (Kiro) | `KiroCostScanner.swift` (3 thế hệ lưu trữ) | `kiro_scanner.rs` — CLI sessions (credit thật × $0.04), SQLite v1/v2, archive JSON; detector nhận current + legacy + custom XDG markers và scanner fallback DB mặc định khi XDG DB thiếu; TS aggregate dùng cùng canonical source set | **done** — provider off vẫn scan khi storage thật được detect; empty semantic arrays không mint live evidence; thiếu turn array, turn rỗng, field sai type/value, numeric vượt bound hoặc alias token chưa hỗ trợ đều incomplete; checked aggregate không overflow/Inf và không cache/live |
 | Cost tách khỏi provider toggle | scan theo agent detected, provider chỉ gate quota/tab/menu bar | `enabled_usage_sources()` hợp provider bật ∪ agent detected | **done** |
 | Side panel (hover/pin) | `AgentDetailPanelCoordinator` (NSPanel con 340px) | cửa sổ Tauri `panel.html` 340px, frameless, always-on-top, đặt cạnh popover +4px | **done** |
 | Kỳ ngân sách tuần/tháng | mặc định tuần, ẩn card khi chưa cấu hình | `BudgetPeriod` trong `usage.ts`, cùng mặc định và cùng điều kiện ẩn | **done** |
@@ -58,13 +58,14 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 
 ## Provider ids (canonical order)
 
-claude, codex, minimax, hapo, openrouter, deepseek, zai, elevenlabs, deepgram, groq, **grok**, **openai**, **ollama**, copilot, kilo, commandcode, freemodel, mimo, alibaba, cursor, gemini, kiro, opencode, opencodego, antigravity, bedrock
+claude, codex, minimax, hapo, openrouter, tryapi, deepseek, zai, elevenlabs, hiyo, deepgram, groq, **grok**, **xai**, **openai**, **ollama**, copilot, kilo, commandcode, freemodel, mimo, alibaba, cursor, gemini, kiro, opencode, opencodego, antigravity, bedrock
 
 ## Auth notes (new providers)
 
 | Id | Auth | Notes |
 |---|---|---|
 | grok | `~/.grok/auth.json` (zero-config) | `grok login` / grok.com session |
+| xai | xAI Management API key + Team ID | Team-scoped balance/usage; khác Grok consumer quota |
 | openai | Admin API key + optional Project ID | **Not** ChatGPT/Codex OAuth — org spend |
 | ollama | Cookie (ollama.com) and/or API key | Session + weekly % from settings page |
 
@@ -75,6 +76,8 @@ Path: `~/.config/birdnion/cost-history.json` (shared schema with macOS).
 Never-shrink merge for `claude` / `codex` / `grok` so deleted local sessions keep past daily bars.
 
 Sáu nguồn chi phí cục bộ: `claude`, `codex`, `grok`, `omp`, `pi`, `kiro`.
+
+Schema chung ghi `scanned_at`, `counting_revision`, `top_models` bằng snake_case; timestamp là epoch-millisecond integer và key ngày luôn Gregorian `yyyy-MM-dd` theo timezone local, không phụ thuộc user calendar. Reader hai bên migrate camelCase/timestamp macOS cũ có phần lẻ, chặn file >8 MiB, source/version/cardinality/future timestamp/day sai, symlink và FIFO. Kiro `Other` chỉ là bucket bảo toàn tổng cho chart, không tham gia top-model/digest ranking.
 
 ### Quy ngày của Grok (rev 3, 2026-08-25)
 
@@ -89,12 +92,12 @@ Rev 3 chia tổng theo **dòng thời gian của chính session**: `events.jsonl
 
 Đây là **phân bổ có bằng chứng, không phải số đo**: trọng số là số lượt trả lời, không phải token thật của từng lượt.
 
-Đổi ngữ nghĩa đếm buộc dựng lại lịch sử một lần (Linux `cost_history::apply_and_report_replacing` + `Document.counting_revision`; macOS `countingRevision` + `replacingSource`), nếu không giá trị high-water cũ sẽ sống mãi.
+Đổi ngữ nghĩa đếm buộc dựng lại lịch sử một lần (Linux `cost_history::apply_and_report_at_counting_revision` + `Document.counting_revision`; macOS `countingRevision` + `replacingSource`), nếu không giá trị high-water cũ sẽ sống mãi.
 
 Các nguồn khác không dính lỗi này: `claude`, `codex`, `omp` đều quy ngày theo timestamp của từng dòng log.
 
 ## Verification
 
-`cargo check` từng báo 9 lỗi ở `lib.rs`/`codex_config.rs` và điều đó dễ bị hiểu nhầm là "crate Linux-only nên không build trên macOS". Thực tế crate KHÔNG compile ở đâu cả kể từ khi `target_config_path()`/`target_path()` chuyển sang infallible mà call site không đổi theo. Đã sửa 2026-08-24; hiện `cargo check` sạch và `cargo test` chạy 448 test, 0 fail, cả trên macOS lẫn Ubuntu.
+`cargo check` từng báo 9 lỗi ở `lib.rs`/`codex_config.rs` và điều đó dễ bị hiểu nhầm là "crate Linux-only nên không build trên macOS". Thực tế crate KHÔNG compile ở đâu cả kể từ khi `target_config_path()`/`target_path()` chuyển sang infallible mà call site không đổi theo. Đã sửa 2026-08-24. Gate local mới nhất 2026-08-26: Rust `578/578`, Node `65/65`, Linux production build `60` modules; tất cả 0 fail.
 
 Kiểm chứng đầy đủ chạy ở `.github/workflows/linux-build.yml` (Ubuntu 22.04, `cargo test` + `tsc --noEmit` + `npm run tauri build`), trigger bằng `workflow_dispatch`. Workflow này cũng từng hỏng từ 2026-07-21 vì `tauri.conf.json` khai báo resource `binaries/cliproxyapi` trong khi thư mục đó bị gitignore và helper build từ repo Go riêng — job nay tạo file stub để verify compile/test/bundle; bản phát hành vẫn đi qua `linux-release.yml` với helper thật kèm checksum.

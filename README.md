@@ -290,6 +290,7 @@ Development and tests can run from `linux/` on macOS or Linux. Native Linux bund
 ```bash
 cd linux
 npm ci
+npm test
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 
