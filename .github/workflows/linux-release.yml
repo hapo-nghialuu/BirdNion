@@ -58,6 +58,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Frontend contract tests
+        run: npm test
+
       - name: Download bundled CLIProxyAPI helper
         shell: bash
         run: |

@@ -125,7 +125,8 @@ fi
 
 # 2. Release verification gate — must pass before any version mutation or
 # publish action below. Runs the same checks a reviewer would: full macOS
-# build+test, the Linux TS build, and the Linux Rust test suite. Every
+# build+test, the Linux Node contract suite + TS build, and the Linux Rust
+# test suite. Every
 # command runs directly (no pipe into grep/tail/etc.) so `set -e` sees the
 # command's own exit code — piping into a filter can silently replace a
 # real failure with the filter's own (usually zero) exit status.
@@ -143,8 +144,8 @@ if [[ "$SKIP_BUILD" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
     -configuration Debug -destination "platform=macOS,arch=$TEST_ARCH" \
     -parallel-testing-enabled NO
 
-  echo "--> Linux: npm ci + build (tsc + vite)"
-  (cd "$REPO_ROOT/linux" && npm ci && npm run build)
+  echo "--> Linux: npm ci + tests + build (tsc + vite)"
+  (cd "$REPO_ROOT/linux" && npm ci && npm test && npm run build)
 
   echo "--> Linux: cargo test"
   (cd "$REPO_ROOT/linux/src-tauri" && cargo test)

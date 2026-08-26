@@ -40,6 +40,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Frontend contract tests
+        run: npm test
+
       # tauri.conf.json khai báo resource `binaries/cliproxyapi`, nhưng thư mục
       # đó bị gitignore và helper build từ một repo Go riêng, nên CI không có
       # cách nào lấy bản thật. Không có file này thì build.rs fail và cả job
