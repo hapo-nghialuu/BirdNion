@@ -107,6 +107,13 @@ Popover Accounts row (`CodexAccountsPopoverSection` trong `QuotaPanel.swift`) ch
 
 Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account id hiện đang ở CLI; `nil` = system account gốc.
 
+#### Antigravity multi-account
+
+- macOS và Linux cùng quản lý nhiều Google OAuth account, chọn account mặc định trong Settings và quick-switch trong popover; quick-switch ẩn khi chỉ có tối đa một account.
+- Store chỉ đổi `activeLabel` khi switch, ghi atomic với quyền `0600`; IPC Linux chỉ trả `label`, `email` và `activeLabel`, không serialize refresh token hay OAuth client secret.
+- Account OAuth đang chọn là identity ưu tiên. Ở chế độ `auto`, local process/CLI trả account mismatch sẽ không chặn OAuth fallback; kết quả mismatch chỉ được dùng nếu không có OAuth result.
+- Mỗi mutation Linux phát event trước và sau durable IPC: pulse đầu vô hiệu hóa result của account cũ, pulse sau xếp refresh account mới. macOS đổi selection đồng bộ rồi invalidate/refetch provider ngay.
+
 ### 3.5 Profile quick switch và activation safety
 
 - macOS popover cho phép quick switch custom Claude Code/Codex profile, đồng thời hiển thị trạng thái ready/stale/active và health của local proxy.
