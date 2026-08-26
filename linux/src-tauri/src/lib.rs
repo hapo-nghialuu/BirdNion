@@ -1077,6 +1077,36 @@ fn codex_account_remove(id: String) -> Result<CodexAccountsState, String> {
     Ok(codex_accounts_list())
 }
 
+/// Antigravity Google OAuth accounts. The returned descriptors intentionally
+/// contain only label/email; tokens and client credentials stay in Rust.
+#[tauri::command]
+fn antigravity_accounts_list() -> providers::antigravity::OAuthAccountsState {
+    providers::antigravity::accounts_list()
+}
+
+#[tauri::command]
+fn antigravity_account_add(
+    credential_json: String,
+    label: Option<String>,
+    email: Option<String>,
+) -> Result<providers::antigravity::OAuthAccountsState, String> {
+    providers::antigravity::account_add(&credential_json, label.as_deref(), email.as_deref())
+}
+
+#[tauri::command]
+fn antigravity_account_switch(
+    label: String,
+) -> Result<providers::antigravity::OAuthAccountsState, String> {
+    providers::antigravity::account_switch(&label)
+}
+
+#[tauri::command]
+fn antigravity_account_remove(
+    label: String,
+) -> Result<providers::antigravity::OAuthAccountsState, String> {
+    providers::antigravity::account_remove(&label)
+}
+
 /// FreeModel multi-account state — implicit "browser" entry (auto scan) +
 /// one entry per signed-in browser + managed pasted-cookie accounts, plus
 /// the active id.
@@ -1990,6 +2020,10 @@ pub fn run() {
             codex_account_save_current,
             codex_account_switch,
             codex_account_remove,
+            antigravity_accounts_list,
+            antigravity_account_add,
+            antigravity_account_switch,
+            antigravity_account_remove,
             freemodel_accounts_list,
             freemodel_account_add,
             freemodel_account_switch,

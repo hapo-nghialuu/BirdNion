@@ -419,6 +419,18 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   codexAccountRemove: { vi: "Xoá", en: "Remove" },
   codexAccountSaveCurrent: { vi: "Lưu account hiện tại", en: "Save current account" },
   codexAccountLoadError: { vi: "Không tải được danh sách account", en: "Failed to load accounts" },
+  antigravityAccountsLabel: { vi: "Tài khoản Google", en: "Google accounts" },
+  antigravityAccountsEmpty: { vi: "Chưa có tài khoản nào.", en: "No accounts." },
+  antigravityAccountAddPrimary: { vi: "+ Thêm tài khoản", en: "+ Add account" },
+  antigravityAdvancedSetup: { vi: "Cài đặt nâng cao", en: "Advanced setup" },
+  antigravityAccountAdd: { vi: "Thêm", en: "Add" },
+  antigravityAccountLabelPlaceholder: { vi: "Nhãn", en: "Label" },
+  antigravityAccountEmailPlaceholder: { vi: "Email (không bắt buộc)", en: "Email (optional)" },
+  antigravityCredentialPlaceholder: { vi: "OAuth credentials JSON", en: "OAuth credentials JSON" },
+  antigravityAccountAddHint: {
+    vi: "Linux hiện cần OAuth credentials JSON. Cùng nhãn sẽ cập nhật tài khoản cũ.",
+    en: "Linux currently requires OAuth credentials JSON. A duplicate label updates the existing account.",
+  },
   // Popover Codex accounts card (macOS popover.accounts / provider.* parity)
   popoverAccounts: { vi: "Tài khoản", en: "Accounts" },
   codexAccountSystemManaged: { vi: "Hệ thống · ~/.codex", en: "System · ~/.codex" },

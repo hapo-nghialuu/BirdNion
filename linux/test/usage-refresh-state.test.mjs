@@ -65,6 +65,7 @@ const {
   reconcileProviderSettingsChange,
   shouldShowFirstProviderCTA,
 } = await import("../src/main.ts");
+const { performAntigravityAccountMutation } = await import("../src/settings-provider-detail.ts");
 
 const prior = {
   todayUsd: 3,
@@ -312,6 +313,63 @@ test("Codex pre/post account events discard A and publish one queued B refresh",
 
   assert.deepEqual(fetches, ["A", "B"]);
   assert.deepEqual(published, [{ account: "B" }]);
+});
+
+test("Antigravity pre/post mutation events discard A and publish queued B", async () => {
+  const completions = { A: deferred(), B: deferred() };
+  const started = { A: deferred(), B: deferred() };
+  const finishedB = deferred();
+  const published = [];
+  let activeAccount = "A";
+  let inFlight = false;
+  let coordinator;
+
+  coordinator = createProviderIdentityRefreshCoordinator({
+    isInFlight: () => inFlight,
+    forceFetch: async (providerId) => {
+      const requestedAccount = activeAccount;
+      const generation = coordinator.snapshot(providerId);
+      inFlight = true;
+      started[requestedAccount].resolve();
+      const status = await completions[requestedAccount].promise;
+      if (coordinator.isCurrent(providerId, generation)) published.push(status);
+      inFlight = false;
+      coordinator.onFetchReleased(providerId);
+      if (requestedAccount === "B") finishedB.resolve();
+    },
+  });
+
+  const switched = await performAntigravityAccountMutation(
+    async () => {
+      await started.A.promise;
+      activeAccount = "B";
+      return "account-B";
+    },
+    async () => { coordinator.invalidateAndRefresh("antigravity"); },
+  );
+  assert.equal(switched, "account-B");
+
+  completions.A.resolve({ account: "A" });
+  await started.B.promise;
+  assert.deepEqual(published, []);
+  completions.B.resolve({ account: "B" });
+  await finishedB.promise;
+  assert.deepEqual(published, [{ account: "B" }]);
+});
+
+test("Antigravity failed Settings mutation keeps origin and emits both phases", async () => {
+  const changes = [];
+  await assert.rejects(
+    performAntigravityAccountMutation(
+      async () => { throw new Error("invalid credentials"); },
+      async (change) => { changes.push(change); },
+    ),
+    /invalid credentials/,
+  );
+  assert.deepEqual(changes, [
+    { phase: "before", origin: "settings" },
+    { phase: "after", origin: "settings" },
+  ]);
 });
 
 test("provider disable invalidates an in-flight result and never requeues it", async () => {

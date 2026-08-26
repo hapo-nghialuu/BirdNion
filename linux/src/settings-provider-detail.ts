@@ -4,6 +4,7 @@
 // fields, per-provider quota-warning thresholds, and the links list.
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t, currentLang } from "./i18n";
 import type { ProviderStatus, QuotaWindow } from "./provider-tab";
@@ -20,6 +21,44 @@ import { codexAccountsSection } from "./settings-codex-accounts";
 import { freemodelAccountsSection } from "./settings-freemodel-accounts";
 import { elevenlabsKeysSection } from "./settings-elevenlabs-keys";
 import { hiyoKeysSection } from "./settings-hiyo-keys";
+
+export const ANTIGRAVITY_ACCOUNT_CHANGED_EVENT = "birdnion-antigravity-account-changed";
+
+export type AntigravityAccountChange = {
+  phase: "before" | "after";
+  origin: "settings" | "main";
+};
+
+async function notifyAntigravityAccountChanged(change: AntigravityAccountChange): Promise<void> {
+  await emit(ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, change);
+}
+
+export async function performAntigravityAccountMutation<T>(
+  operation: () => Promise<T>,
+  notify: (change: AntigravityAccountChange) => Promise<void> = notifyAntigravityAccountChanged,
+  origin: AntigravityAccountChange["origin"] = "settings",
+): Promise<T> {
+  await notify({ phase: "before", origin });
+  try {
+    return await operation();
+  } finally {
+    await notify({ phase: "after", origin }).catch(() => {});
+  }
+}
+
+export type AntigravityAccount = { label: string; email?: string | null };
+export type AntigravityAccountsState = {
+  accounts: AntigravityAccount[];
+  activeLabel?: string | null;
+};
+
+let activeAntigravityAccountsRefresh: (() => void) | null = null;
+
+/** Refreshes the mounted card in place so cross-window account changes never
+ * detach a local form or its inline error state. */
+export function refreshMountedAntigravityAccountsCard(): void {
+  activeAntigravityAccountsRefresh?.();
+}
 
 /** settings.json provider entry (shared schema with macOS). */
 export type ProviderCfg = {
@@ -794,6 +833,177 @@ export function freemodelAccountsCard(): HTMLElement {
   body.append(freemodelAccountsSection());
   card.append(body);
   group.append(card);
+  return group;
+}
+
+function antigravityAccountName(account: AntigravityAccount): string {
+  return account.email ? `${account.label} · ${account.email}` : account.label;
+}
+
+/** Antigravity OAuth account manager. Credentials stay in the private Rust
+ * store; the webview receives only account labels and optional emails. */
+export function antigravityAccountsCard(): HTMLElement {
+  const group = el("div", "sw-group");
+  group.append(el("div", "sw-section-header", t("antigravityAccountsLabel").toUpperCase()));
+  const card = el("div", "sw-card");
+  const body = el("div", "sw-card-body");
+  const wrap = el("div", "pp-accounts");
+  const list = el("div", "pp-accounts-list");
+  const status = el("div", "pp-accounts-status");
+  wrap.append(list, status);
+  let renderGeneration = 0;
+  let mutationInProgress = false;
+  const setMutationInProgress = (inProgress: boolean) => {
+    mutationInProgress = inProgress;
+    wrap.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+      button.disabled = inProgress;
+    });
+  };
+
+  const render = async (clearStatus = true) => {
+    const generation = ++renderGeneration;
+    list.textContent = "";
+    if (clearStatus) status.textContent = "";
+    let state: AntigravityAccountsState;
+    try {
+      state = await invoke<AntigravityAccountsState>("antigravity_accounts_list");
+    } catch (err) {
+      if (generation === renderGeneration) {
+        status.textContent = `${t("loadError")}: ${err}`;
+      }
+      return;
+    }
+    if (generation !== renderGeneration) return;
+    if (state.accounts.length === 0) {
+      list.append(el("div", "pp-field-hint pp-account-empty", t("antigravityAccountsEmpty")));
+    }
+    for (const account of state.accounts) {
+      const row = el("div", "pp-account-row");
+      const name = el("span", "pp-account-name", antigravityAccountName(account));
+      if (account.email) name.title = account.email;
+      row.append(name);
+      const actions = el("span", "pp-account-actions");
+      if (account.label === state.activeLabel) {
+        actions.append(el("span", "pp-account-badge", t("codexAccountActive")));
+      } else {
+        const use = el("button", "sw-pill-btn", t("codexAccountSwitch")) as HTMLButtonElement;
+        use.type = "button";
+        use.addEventListener("click", async () => {
+          if (mutationInProgress) return;
+          setMutationInProgress(true);
+          try {
+            await performAntigravityAccountMutation(() =>
+              invoke("antigravity_account_switch", { label: account.label }));
+            await render();
+          } catch (err) {
+            status.textContent = String(err);
+          } finally {
+            setMutationInProgress(false);
+          }
+        });
+        actions.append(use);
+      }
+      const remove = el("button", "sw-pill-btn pp-account-remove", t("codexAccountRemove")) as HTMLButtonElement;
+      remove.type = "button";
+      remove.setAttribute("aria-label", `${t("codexAccountRemove")} ${account.label}`);
+      remove.addEventListener("click", async () => {
+        if (mutationInProgress) return;
+        setMutationInProgress(true);
+        try {
+          await performAntigravityAccountMutation(() =>
+            invoke("antigravity_account_remove", { label: account.label }));
+          await render();
+        } catch (err) {
+          status.textContent = String(err);
+        } finally {
+          setMutationInProgress(false);
+        }
+      });
+      actions.append(remove);
+      row.append(actions);
+      list.append(row);
+    }
+    setMutationInProgress(mutationInProgress);
+  };
+
+  const footer = el("div", "pp-account-footer");
+  const addPrimary = el("button", "sw-pill-btn antigravity-add-primary", t("antigravityAccountAddPrimary")) as HTMLButtonElement;
+  addPrimary.type = "button";
+  addPrimary.setAttribute("aria-expanded", "false");
+  addPrimary.setAttribute("aria-controls", "antigravity-advanced-setup");
+  const advanced = el("div", "antigravity-advanced-setup");
+  advanced.id = "antigravity-advanced-setup";
+  advanced.hidden = true;
+  const advancedToggle = el("button", "antigravity-advanced-toggle", `› ${t("antigravityAdvancedSetup")}`) as HTMLButtonElement;
+  advancedToggle.type = "button";
+  advancedToggle.setAttribute("aria-expanded", "false");
+  advancedToggle.setAttribute("aria-controls", advanced.id);
+  const setAdvancedOpen = (open: boolean) => {
+    advanced.hidden = !open;
+    addPrimary.setAttribute("aria-expanded", String(open));
+    advancedToggle.setAttribute("aria-expanded", String(open));
+    advancedToggle.textContent = `${open ? "⌄" : "›"} ${t("antigravityAdvancedSetup")}`;
+    if (open) credential.focus();
+  };
+  addPrimary.addEventListener("click", () => setAdvancedOpen(advanced.hidden));
+  advancedToggle.addEventListener("click", () => setAdvancedOpen(advanced.hidden));
+  advanced.append(el("div", "pp-field-hint ccp-nopad", t("antigravityAccountAddHint")));
+  const form = el("div", "pp-account-add antigravity-account-add");
+  const label = document.createElement("input");
+  label.type = "text";
+  label.className = "settings-input";
+  label.placeholder = t("antigravityAccountLabelPlaceholder");
+  label.setAttribute("aria-label", label.placeholder);
+  const email = document.createElement("input");
+  email.type = "email";
+  email.className = "settings-input";
+  email.placeholder = t("antigravityAccountEmailPlaceholder");
+  email.setAttribute("aria-label", email.placeholder);
+  const credential = document.createElement("input");
+  credential.type = "password";
+  credential.className = "settings-input";
+  credential.placeholder = t("antigravityCredentialPlaceholder");
+  credential.setAttribute("aria-label", credential.placeholder);
+  const add = el("button", "sw-pill-btn", t("antigravityAccountAdd")) as HTMLButtonElement;
+  add.type = "button";
+  add.addEventListener("click", async () => {
+    if (mutationInProgress || !credential.value.trim()) return;
+    setMutationInProgress(true);
+    try {
+      await performAntigravityAccountMutation(() => invoke("antigravity_account_add", {
+        credentialJson: credential.value,
+        label: label.value.trim() || null,
+        email: email.value.trim() || null,
+      }));
+      credential.value = "";
+      label.value = "";
+      email.value = "";
+      setAdvancedOpen(false);
+      await render();
+    } catch (err) {
+      status.textContent = String(err);
+    } finally {
+      setMutationInProgress(false);
+    }
+  });
+  form.append(label, email, credential, add);
+  advanced.append(form);
+  footer.append(addPrimary, advancedToggle, advanced);
+  wrap.append(footer);
+  body.append(wrap);
+  card.append(body);
+  group.append(card);
+  const refreshThisCard = () => {
+    if (!group.isConnected) {
+      if (activeAntigravityAccountsRefresh === refreshThisCard) {
+        activeAntigravityAccountsRefresh = null;
+      }
+      return;
+    }
+    void render(false);
+  };
+  activeAntigravityAccountsRefresh = refreshThisCard;
+  void render();
   return group;
 }
 

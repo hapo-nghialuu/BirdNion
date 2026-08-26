@@ -2832,6 +2832,25 @@ body.settings-body-root {
 }
 .pp-account-add .settings-input { flex: 1; min-width: 0; }
 .pp-account-add .sw-pill-btn { flex-shrink: 0; }
+.pp-account-empty { padding: 10px 14px; }
+.antigravity-account-add { flex-wrap: wrap; }
+.antigravity-account-add .settings-input { flex-basis: 120px; }
+.antigravity-account-add input[type="password"] { flex-basis: 240px; }
+.antigravity-add-primary { width: 100%; justify-content: center; color: var(--accent); }
+.antigravity-advanced-toggle {
+  display: block;
+  margin-top: 8px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.antigravity-advanced-toggle:hover { color: var(--text); }
+.antigravity-advanced-setup { margin-top: 6px; }
 
 .pp-setup-inner {
   padding: 4px 6px 8px;

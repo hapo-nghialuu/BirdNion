@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, listen, type Event as TauriEvent } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { t, currentLang } from "./i18n";
 import { reorderControls } from "./settings-provider-row";
@@ -16,7 +16,10 @@ import {
 } from "./provider-tab";
 import {
   detailInfoGrid, usageSection, setupSection, quotaWarningCard, linksSection,
-  codexAccountsCard, freemodelAccountsCard, elevenlabsKeysCard, hiyoKeysCard, relativeUpdated, displayError,
+  codexAccountsCard, freemodelAccountsCard, antigravityAccountsCard, elevenlabsKeysCard, hiyoKeysCard,
+  ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, relativeUpdated, displayError,
+  refreshMountedAntigravityAccountsCard,
+  type AntigravityAccountChange,
   type ProviderCfg, type Settings,
 } from "./settings-provider-detail";
 import { GUIDED_SETUP_STATUS_EVENT } from "./action-center";
@@ -604,7 +607,16 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
       if (selectedId === "codex") renderDetail();
     }
   };
+  const handleAntigravityAccountChange = (event: TauriEvent<AntigravityAccountChange>) => {
+    providerSettingsGenerations.invalidate("antigravity");
+    clearProviderStatus("antigravity");
+    if (event.payload.origin !== "settings" && root.isConnected) {
+      renderSidebar();
+      if (selectedId === "antigravity") refreshMountedAntigravityAccountsCard();
+    }
+  };
   let unlistenCodexAccountChanges: (() => void) | null = null;
+  let unlistenAntigravityAccountChanges: (() => void) | null = null;
   let unlistenSettingsSnapshotChanges: (() => void) | null = null;
 
   // providersPane can be rebuilt repeatedly while navigating Settings. Drop
@@ -617,6 +629,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     disposed = true;
     observer.disconnect();
     unlistenCodexAccountChanges?.();
+    unlistenAntigravityAccountChanges?.();
     unlistenSettingsSnapshotChanges?.();
     window.removeEventListener("birdnion-sidebar-search", onSharedSearch);
   };
@@ -1058,6 +1071,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     scroll.append(setupSection(cfg, vi));
     if (selectedId === "codex") scroll.append(codexAccountsCard());
     if (selectedId === "freemodel") scroll.append(freemodelAccountsCard());
+    if (selectedId === "antigravity") scroll.append(antigravityAccountsCard());
     if (selectedId === "elevenlabs") {
       const keys = elevenlabsKeysCard();
       keys.dataset.remediationTarget = "credential";
@@ -1241,13 +1255,18 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
         (handler) => listen(CODEX_ACCOUNT_CHANGED_EVENT, handler),
         handleCodexAccountChange,
       ),
+      () => listen<AntigravityAccountChange>(
+        ANTIGRAVITY_ACCOUNT_CHANGED_EVENT,
+        handleAntigravityAccountChange,
+      ),
       () => listen<Settings>(
         SETTINGS_SNAPSHOT_CHANGED_EVENT,
         ({ payload }) => applyCanonicalSettingsSnapshot(payload),
       ),
     ],
-    ([codexUnlisten, settingsUnlisten]) => {
+    ([codexUnlisten, antigravityUnlisten, settingsUnlisten]) => {
       unlistenCodexAccountChanges = codexUnlisten;
+      unlistenAntigravityAccountChanges = antigravityUnlisten;
       unlistenSettingsSnapshotChanges = settingsUnlisten;
     },
     () => {

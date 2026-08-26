@@ -34,7 +34,7 @@ use std::process::Child;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config;
@@ -55,14 +55,25 @@ struct ProcessInfo {
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
+    let mut account_mismatch = None;
 
     if let Some(status) = fetch_from_running_process(cfg, &name).await {
-        return status;
+        if !is_account_mismatch_status(&status) {
+            return status;
+        }
+        account_mismatch = Some(status);
     }
     if let Some(status) = fetch_via_cli_warm_session(cfg, &name).await {
-        return status;
+        if !is_account_mismatch_status(&status) {
+            return status;
+        }
+        account_mismatch = Some(status);
     }
     if let Some(status) = fetch_via_oauth(cfg, &name).await {
+        return status;
+    }
+
+    if let Some(status) = account_mismatch {
         return status;
     }
 
@@ -612,14 +623,12 @@ fn build_status(
     windows: Vec<QuotaWindow>,
     email: Option<String>,
 ) -> ProviderStatus {
-    if let Some(error) = account_mismatch_error(cfg.account_label.as_deref(), email.as_deref()) {
+    let oauth_store = load_oauth_store();
+    let expected_email = expected_account_email(oauth_store.as_ref(), cfg.account_label.as_deref());
+    if let Some(error) = account_mismatch_error(expected_email.as_deref(), email.as_deref()) {
         return ProviderStatus::failure(&cfg.id, name, error);
     }
-    let account_label = cfg
-        .account_label
-        .clone()
-        .or(email)
-        .unwrap_or_else(|| "Antigravity".to_string());
+    let account_label = email.unwrap_or_else(|| "Antigravity".to_string());
     ProviderStatus {
         id: cfg.id.clone(),
         display_name: name.to_string(),
@@ -983,14 +992,16 @@ fn parse_reset_value(value: &Value) -> Option<i64> {
 // MARK: - Google OAuth remote fallback (port of `AntigravityRemoteUsage` +
 // the relevant slice of `AntigravityOAuthStore`).
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Clone, Default)]
 struct OAuthAccount {
     label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
     #[serde(rename = "refreshToken")]
     refresh_token: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Clone, Default)]
 struct OAuthStore {
     #[serde(rename = "clientId")]
     client_id: Option<String>,
@@ -1000,6 +1011,24 @@ struct OAuthStore {
     active_label: Option<String>,
     #[serde(default)]
     accounts: Vec<OAuthAccount>,
+}
+
+static OAUTH_STORE_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Public account descriptor. Refresh tokens and OAuth client credentials are
+/// deliberately absent so IPC can never serialize them to the webview.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAccountDescriptor {
+    pub label: String,
+    pub email: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAccountsState {
+    pub accounts: Vec<OAuthAccountDescriptor>,
+    pub active_label: Option<String>,
 }
 
 fn oauth_store_path() -> std::path::PathBuf {
@@ -1012,6 +1041,163 @@ fn load_oauth_store() -> Option<OAuthStore> {
     serde_json::from_str(&contents).ok()
 }
 
+fn load_oauth_store_for_mutation() -> Result<OAuthStore, String> {
+    load_oauth_store_for_mutation_at(&oauth_store_path())
+}
+
+fn load_oauth_store_for_mutation_at(path: &std::path::Path) -> Result<OAuthStore, String> {
+    if !path.exists() {
+        return Ok(OAuthStore::default());
+    }
+    let contents = std::fs::read_to_string(path)
+        .map_err(|_| "Không thể đọc OAuth store hiện có; file được giữ nguyên".to_string())?;
+    serde_json::from_str(&contents)
+        .map_err(|_| "OAuth store hiện có không hợp lệ; file được giữ nguyên".to_string())
+}
+
+fn save_oauth_store(store: &OAuthStore) -> Result<(), String> {
+    save_oauth_store_at(&oauth_store_path(), store)
+}
+
+fn save_oauth_store_at(path: &std::path::Path, store: &OAuthStore) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
+    crate::platform::atomic_file::write_private_json_atomic::<OAuthStore>(path, json.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+fn public_accounts_state(store: &OAuthStore) -> OAuthAccountsState {
+    OAuthAccountsState {
+        accounts: store
+            .accounts
+            .iter()
+            .map(|account| OAuthAccountDescriptor {
+                label: account.label.clone(),
+                email: account.email.clone(),
+            })
+            .collect(),
+        active_label: active_account(store).map(|account| account.label.clone()),
+    }
+}
+
+pub fn accounts_list() -> OAuthAccountsState {
+    public_accounts_state(&load_oauth_store().unwrap_or_default())
+}
+
+#[derive(Deserialize, Default)]
+struct ImportedCredentials {
+    #[serde(alias = "clientId")]
+    client_id: Option<String>,
+    #[serde(alias = "clientSecret")]
+    client_secret: Option<String>,
+    #[serde(alias = "refreshToken")]
+    refresh_token: Option<String>,
+    email: Option<String>,
+}
+
+fn apply_imported_credentials(
+    store: &mut OAuthStore,
+    imported: ImportedCredentials,
+    label: Option<&str>,
+    email: Option<&str>,
+) -> Result<(), String> {
+    let client_id = non_empty(imported.client_id.as_deref());
+    let client_secret = non_empty(imported.client_secret.as_deref());
+    let refresh_token = non_empty(imported.refresh_token.as_deref());
+    if client_id.is_some() != client_secret.is_some() {
+        return Err("Cần cung cấp đầy đủ client_id và client_secret".to_string());
+    }
+    if refresh_token.is_none() && client_id.is_none() {
+        return Err("JSON cần refresh_token hoặc OAuth client credentials".to_string());
+    }
+
+    if let Some(client_id) = client_id {
+        store.client_id = Some(client_id);
+    }
+    if let Some(client_secret) = client_secret {
+        store.client_secret = Some(client_secret);
+    }
+    if let Some(refresh_token) = refresh_token {
+        let selected_email = non_empty(email).or_else(|| non_empty(imported.email.as_deref()));
+        let selected_label = non_empty(label)
+            .or_else(|| selected_email.clone())
+            .unwrap_or_else(|| "Tài khoản".to_string());
+        let replacement = OAuthAccount {
+            label: selected_label.clone(),
+            email: selected_email,
+            refresh_token,
+        };
+        if let Some(index) = store
+            .accounts
+            .iter()
+            .position(|account| account.label == selected_label)
+        {
+            store.accounts[index] = replacement;
+        } else {
+            store.accounts.push(replacement);
+        }
+        store.active_label = Some(selected_label);
+    }
+    Ok(())
+}
+
+pub fn account_add(
+    credential_json: &str,
+    label: Option<&str>,
+    email: Option<&str>,
+) -> Result<OAuthAccountsState, String> {
+    let _guard = OAUTH_STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let imported: ImportedCredentials = serde_json::from_str(credential_json.trim())
+        .map_err(|_| "OAuth credentials JSON không hợp lệ".to_string())?;
+    let mut store = load_oauth_store_for_mutation()?;
+    apply_imported_credentials(&mut store, imported, label, email)?;
+    save_oauth_store(&store)?;
+    Ok(public_accounts_state(&store))
+}
+
+pub fn account_switch(label: &str) -> Result<OAuthAccountsState, String> {
+    let _guard = OAUTH_STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = load_oauth_store_for_mutation()?;
+    set_active_account(&mut store, label)?;
+    save_oauth_store(&store)?;
+    Ok(public_accounts_state(&store))
+}
+
+fn set_active_account(store: &mut OAuthStore, label: &str) -> Result<(), String> {
+    if !store.accounts.iter().any(|account| account.label == label) {
+        return Err("Không tìm thấy tài khoản Antigravity".to_string());
+    }
+    store.active_label = Some(label.to_string());
+    Ok(())
+}
+
+fn remove_account_from_store(store: &mut OAuthStore, label: &str) {
+    store.accounts.retain(|account| account.label != label);
+    if store.active_label.as_deref() == Some(label)
+        || store.active_label.as_ref().is_some_and(|active| {
+            !store
+                .accounts
+                .iter()
+                .any(|account| &account.label == active)
+        })
+    {
+        store.active_label = store.accounts.first().map(|account| account.label.clone());
+    }
+}
+
+pub fn account_remove(label: &str) -> Result<OAuthAccountsState, String> {
+    let _guard = OAUTH_STORE_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = load_oauth_store_for_mutation()?;
+    remove_account_from_store(&mut store, label);
+    save_oauth_store(&store)?;
+    Ok(public_accounts_state(&store))
+}
+
 /// Pure: active account is the one matching `activeLabel`, else the first.
 fn active_account(store: &OAuthStore) -> Option<&OAuthAccount> {
     if let Some(label) = &store.active_label {
@@ -1020,6 +1206,19 @@ fn active_account(store: &OAuthStore) -> Option<&OAuthAccount> {
         }
     }
     store.accounts.first()
+}
+
+/// The selected OAuth account is authoritative for local-process matching.
+/// `cfg.accountLabel` remains a legacy fallback only when that account has no
+/// email metadata (or there is no OAuth account store yet).
+fn expected_account_email(
+    store: Option<&OAuthStore>,
+    config_label: Option<&str>,
+) -> Option<String> {
+    store
+        .and_then(active_account)
+        .and_then(|account| non_empty(account.email.as_deref()))
+        .or_else(|| non_empty(config_label))
 }
 
 /// Resolves the OAuth client id: store file → env var. No installed-app-bundle
@@ -1088,16 +1287,12 @@ async fn fetch_via_oauth(cfg: &config::Provider, name: &str) -> Option<ProviderS
         ));
     }
 
-    let account_label = cfg
-        .account_label
-        .clone()
-        .unwrap_or_else(|| account.label.clone());
     Some(ProviderStatus {
         id: cfg.id.clone(),
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        account_label: Some(account_label),
+        account_label: Some(account.label.clone()),
         menu_bar_metric: cfg.menu_bar_metric.clone(),
         ..Default::default()
     })
@@ -1418,10 +1613,12 @@ mod tests {
             accounts: vec![
                 OAuthAccount {
                     label: "personal".into(),
+                    email: None,
                     refresh_token: "rt1".into(),
                 },
                 OAuthAccount {
                     label: "work".into(),
+                    email: None,
                     refresh_token: "rt2".into(),
                 },
             ],
@@ -1437,10 +1634,169 @@ mod tests {
             active_label: None,
             accounts: vec![OAuthAccount {
                 label: "only".into(),
+                email: None,
                 refresh_token: "rt".into(),
             }],
         };
         assert_eq!(active_account(&store).unwrap().label, "only");
+    }
+
+    #[test]
+    fn selected_oauth_email_overrides_legacy_config_label_for_matching() {
+        let store = OAuthStore {
+            active_label: Some("work".into()),
+            accounts: vec![OAuthAccount {
+                label: "work".into(),
+                email: Some("work@example.com".into()),
+                refresh_token: "secret-token".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            expected_account_email(Some(&store), Some("legacy@example.com")).as_deref(),
+            Some("work@example.com")
+        );
+    }
+
+    #[test]
+    fn duplicate_label_updates_account_without_exposing_secrets() {
+        let mut store = OAuthStore::default();
+        let first: ImportedCredentials = serde_json::from_value(json!({
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "refresh_token": "refresh-one",
+            "email": "old@example.com"
+        }))
+        .unwrap();
+        apply_imported_credentials(&mut store, first, Some("Work"), None).unwrap();
+        let second: ImportedCredentials = serde_json::from_value(json!({
+            "refreshToken": "refresh-two"
+        }))
+        .unwrap();
+        apply_imported_credentials(&mut store, second, Some("Work"), Some("new@example.com"))
+            .unwrap();
+
+        assert_eq!(store.accounts.len(), 1);
+        assert_eq!(store.accounts[0].refresh_token, "refresh-two");
+        assert_eq!(store.client_id.as_deref(), Some("client-id"));
+        assert_eq!(store.client_secret.as_deref(), Some("client-secret"));
+        let public = serde_json::to_string(&public_accounts_state(&store)).unwrap();
+        assert!(public.contains("new@example.com"));
+        assert!(!public.contains("refresh-two"));
+        assert!(!public.contains("client-secret"));
+    }
+
+    #[test]
+    fn imported_account_becomes_active() {
+        let mut store = OAuthStore {
+            active_label: Some("Personal".into()),
+            accounts: vec![OAuthAccount {
+                label: "Personal".into(),
+                email: None,
+                refresh_token: "refresh-one".into(),
+            }],
+            ..Default::default()
+        };
+        let imported: ImportedCredentials = serde_json::from_value(json!({
+            "refresh_token": "refresh-two",
+            "email": "work@example.com"
+        }))
+        .unwrap();
+
+        apply_imported_credentials(&mut store, imported, Some("Work"), None).unwrap();
+
+        assert_eq!(store.active_label.as_deref(), Some("Work"));
+        assert_eq!(store.accounts.len(), 2);
+    }
+
+    #[test]
+    fn mutation_loader_preserves_corrupt_store_bytes() {
+        let directory = std::env::temp_dir().join(format!(
+            "birdnion-antigravity-corrupt-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("antigravity-oauth.json");
+        let corrupt = b"{not-json";
+        std::fs::write(&path, corrupt).unwrap();
+
+        assert!(load_oauth_store_for_mutation_at(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn invalid_client_credentials_do_not_mutate_existing_store() {
+        let mut store = OAuthStore {
+            client_id: Some("client-old".into()),
+            client_secret: Some("secret-old".into()),
+            active_label: Some("work".into()),
+            accounts: vec![OAuthAccount {
+                label: "work".into(),
+                email: Some("work@example.com".into()),
+                refresh_token: "refresh-old".into(),
+            }],
+        };
+
+        assert!(apply_imported_credentials(
+            &mut store,
+            ImportedCredentials::default(),
+            None,
+            None,
+        )
+        .is_err());
+        let half: ImportedCredentials = serde_json::from_value(json!({
+            "client_id": "client-new"
+        }))
+        .unwrap();
+        assert!(apply_imported_credentials(&mut store, half, None, None).is_err());
+        assert_eq!(store.client_id.as_deref(), Some("client-old"));
+        assert_eq!(store.client_secret.as_deref(), Some("secret-old"));
+        assert_eq!(store.accounts[0].refresh_token, "refresh-old");
+    }
+
+    #[test]
+    fn removing_active_account_falls_back_to_first_remaining() {
+        let mut store = OAuthStore {
+            active_label: Some("Work".into()),
+            accounts: vec![
+                OAuthAccount {
+                    label: "Personal".into(),
+                    email: None,
+                    refresh_token: "one".into(),
+                },
+                OAuthAccount {
+                    label: "Work".into(),
+                    email: None,
+                    refresh_token: "two".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        remove_account_from_store(&mut store, "Work");
+        assert_eq!(store.active_label.as_deref(), Some("Personal"));
+        assert_eq!(store.accounts.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oauth_store_write_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "birdnion-antigravity-store-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("antigravity-oauth.json");
+        save_oauth_store_at(&path, &OAuthStore::default()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

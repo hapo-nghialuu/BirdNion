@@ -31,6 +31,12 @@ import { freemodelAccountsPopoverCard } from "./freemodel-accounts-popover";
 import { elevenlabsKeysPopoverCard } from "./elevenlabs-keys-popover";
 import { codexAccountsPopoverCard } from "./codex-accounts-popover";
 import { CODEX_ACCOUNT_CHANGED_EVENT } from "./settings-codex-accounts";
+import {
+  ANTIGRAVITY_ACCOUNT_CHANGED_EVENT,
+  performAntigravityAccountMutation,
+  type AntigravityAccount,
+  type AntigravityAccountsState,
+} from "./settings-provider-detail";
 import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
@@ -487,6 +493,10 @@ function onCodexAccountChanged() {
   providerIdentityRefreshCoordinator.invalidateAndRefresh("codex");
 }
 
+function onAntigravityAccountChanged() {
+  providerIdentityRefreshCoordinator.invalidateAndRefresh("antigravity");
+}
+
 /** Pure filter: which of `dueIds` are actually fetchable right now, i.e. not
  * already in flight from ANY caller (`load`, `refetchProvider`, or an
  * earlier still-unresolved `tick`) — see `inFlightProviderIds`. Kept
@@ -585,6 +595,85 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function antigravityAccountName(account: AntigravityAccount): string {
+  return account.email ? `${account.label} · ${account.email}` : account.label;
+}
+
+/** Collapsible quick switcher for the active Antigravity OAuth account. */
+function antigravityAccountsPopoverCard(onResize: () => void): HTMLElement {
+  const card = el("section", "card fm-pop-card");
+  card.hidden = true;
+  const expansionKey = "birdnion.antigravityAccountsExpanded";
+  let expanded = localStorage.getItem(expansionKey) === "true";
+  let accountsState: AntigravityAccountsState | null = null;
+  let switching = false;
+
+  const paint = () => {
+    card.hidden = accountsState === null || accountsState.accounts.length <= 1;
+    card.textContent = "";
+    const head = el("button", "fm-pop-head");
+    const icon = el("span", "fm-pop-icon");
+    icon.append(settingsIcon("person", "fm-pop-icon-svg"));
+    const titles = el("span", "fm-pop-titles");
+    titles.append(el("span", "fm-pop-title", t("antigravityAccountsLabel")));
+    const active = accountsState?.accounts.find((account) => account.label === accountsState?.activeLabel);
+    if (active) titles.append(el("span", "fm-pop-active", antigravityAccountName(active)));
+    head.append(icon, titles);
+    if (accountsState) head.append(el("span", "fm-pop-count", String(accountsState.accounts.length)));
+    head.append(el("span", "fm-pop-chevron", expanded ? "▴" : "▾"));
+    head.addEventListener("click", () => {
+      expanded = !expanded;
+      localStorage.setItem(expansionKey, String(expanded));
+      paint();
+      onResize();
+    });
+    card.append(head);
+    if (!expanded || !accountsState) return;
+
+    const list = el("div", "fm-pop-list");
+    for (const account of accountsState.accounts) {
+      const activeAccount = account.label === accountsState.activeLabel;
+      const row = el("div", "fm-pop-row");
+      row.append(el("span", `fm-pop-radio${activeAccount ? " on" : ""}`));
+      const name = el("span", "fm-pop-name", antigravityAccountName(account));
+      name.title = account.email ?? "";
+      row.append(name);
+      if (activeAccount) {
+        row.append(el("span", "pp-account-badge", t("codexAccountActive")));
+      } else {
+        const use = el("button", "sw-pill-btn fm-pop-use", switching ? "…" : t("codexAccountSwitch"));
+        use.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          if (switching) return;
+          switching = true;
+          paint();
+          try {
+            accountsState = await performAntigravityAccountMutation(() =>
+              invoke<AntigravityAccountsState>("antigravity_account_switch", {
+                label: account.label,
+              }), undefined, "main");
+          } catch { /* retain previous selection */ }
+          switching = false;
+          paint();
+        });
+        row.append(use);
+      }
+      list.append(row);
+    }
+    card.append(list);
+  };
+
+  paint();
+  void invoke<AntigravityAccountsState>("antigravity_accounts_list")
+    .then((next) => {
+      accountsState = next;
+      paint();
+      onResize();
+    })
+    .catch(() => {});
+  return card;
 }
 
 function goTab(id: string) {
@@ -1223,6 +1312,9 @@ function render() {
         () => scheduleFitWindow(),
         () => { providerIdentityRefreshCoordinator.invalidateAndRefresh("freemodel"); },
       ));
+    }
+    if (state.tab === "antigravity") {
+      body.append(antigravityAccountsPopoverCard(() => scheduleFitWindow()));
     }
     if (state.tab === "elevenlabs") {
       body.append(elevenlabsKeysPopoverCard(
@@ -2450,6 +2542,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     await awaitProviderCoordinatorListeners([
       listen(CODEX_ACCOUNT_CHANGED_EVENT, onCodexAccountChanged),
+      listen(ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, onAntigravityAccountChanged),
       // Settings webview → main: rebuild tab order and reconcile local usage.
       listen(PROVIDERS_CHANGED_EVENT, () => {
         void reconcileProviderSettingsChange();
