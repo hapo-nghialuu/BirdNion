@@ -1,4 +1,5 @@
 import AppKit
+@testable import CodexBarCore
 import SQLite3
 import XCTest
 @testable import BirdNion
@@ -4043,6 +4044,283 @@ final class NewProviderTests: XCTestCase {
             error: "Account không khớp: old"
         ))
         XCTAssertFalse(AntigravityProvider._shouldContinueAfterCandidateForTesting(error: nil))
+    }
+
+    func testAntigravitySelectedOAuthEmailOverridesLegacyConfigGuard() {
+        XCTAssertEqual(
+            AntigravityProvider._expectedAccountEmailForTesting(
+                selectedEmail: " selected@example.com ",
+                configLabel: "legacy@example.com"
+            ),
+            "selected@example.com"
+        )
+        XCTAssertEqual(
+            AntigravityProvider._expectedAccountEmailForTesting(
+                selectedEmail: nil,
+                configLabel: " legacy@example.com "
+            ),
+            "legacy@example.com"
+        )
+        XCTAssertNil(AntigravityProvider._expectedAccountEmailForTesting(
+            selectedEmail: nil,
+            configLabel: "Work"
+        ))
+        XCTAssertNil(AntigravityProvider._accountMismatchErrorForTesting(
+            responseEmail: "SELECTED@example.com",
+            selectedEmail: "selected@example.com",
+            configLabel: "legacy@example.com"
+        ))
+        XCTAssertTrue(AntigravityProvider._accountMismatchErrorForTesting(
+            responseEmail: "legacy@example.com",
+            selectedEmail: "selected@example.com",
+            configLabel: "legacy@example.com"
+        )?.hasPrefix("Account không khớp:") == true)
+    }
+
+    func testAntigravityTwoClientBinaryUsesCanonicalSecretPairing() throws {
+        let secretPrefix = "GOCSPX" + "-"
+        let firstSecret = secretPrefix + String(repeating: "a", count: 28)
+        let secondSecret = secretPrefix + String(repeating: "b", count: 28)
+        let firstID = "100-" + String(repeating: "c", count: 24) + ".apps.googleusercontent.com"
+        let secondID = "200-" + String(repeating: "d", count: 24) + ".apps.googleusercontent.com"
+        let binaryPayload = [
+            firstSecret,
+            secondSecret,
+            firstID,
+            secondID,
+        ].joined(separator: "\0binary\0")
+        var binaryLikeData = Data([0xFF])
+        binaryLikeData.append(contentsOf: binaryPayload.utf8)
+
+        let canonicalClient = try XCTUnwrap(
+            AntigravityOAuthConfig.parseClient(fromInstalledArtifactData: binaryLikeData))
+        let client = try XCTUnwrap(
+            AntigravityOAuthStore.discoveredClient(from: canonicalClient))
+        let partialIDResolved = try XCTUnwrap(AntigravityOAuthStore.resolvedClient(
+            store: .init(clientId: "legacy-partial-client-id"),
+            fallbackClient: client))
+        let partialSecretResolved = try XCTUnwrap(AntigravityOAuthStore.resolvedClient(
+            store: .init(clientSecret: firstSecret),
+            fallbackClient: client))
+
+        XCTAssertEqual(partialIDResolved.id, firstID)
+        XCTAssertEqual(partialIDResolved.secret, secondSecret)
+        XCTAssertEqual(partialSecretResolved.id, firstID)
+        XCTAssertEqual(partialSecretResolved.secret, secondSecret)
+        XCTAssertNotEqual(partialSecretResolved.secret, firstSecret)
+    }
+
+    func testAntigravityActiveSelectionPersistsWithoutChangingCredentials() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-antigravity-\(UUID().uuidString)", isDirectory: true)
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let accounts = [
+            AntigravityOAuthStore.Account(
+                label: "personal", email: "one@example.com", refreshToken: "refresh-one"),
+            AntigravityOAuthStore.Account(
+                label: "work", email: "two@example.com", refreshToken: "refresh-two"),
+        ]
+        let original = AntigravityOAuthStore.Store(
+            clientId: "client-id",
+            clientSecret: "client-secret",
+            activeLabel: "personal",
+            accounts: accounts
+        )
+        try AntigravityOAuthStore.save(original, url: url)
+
+        XCTAssertTrue(try AntigravityOAuthStore.persistActiveLabel("work", url: url))
+        let selected = AntigravityOAuthStore.load(url: url)
+        XCTAssertEqual(selected.activeLabel, "work")
+        XCTAssertEqual(selected.clientId, original.clientId)
+        XCTAssertEqual(selected.clientSecret, original.clientSecret)
+        XCTAssertEqual(selected.accounts, accounts)
+        XCTAssertFalse(try AntigravityOAuthStore.persistActiveLabel("missing", url: url))
+        XCTAssertEqual(AntigravityOAuthStore.load(url: url).activeLabel, "work")
+    }
+
+    func testAntigravityAtomicMutationSurfacesPreserveConcurrentAccountChanges() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+        let original = AntigravityOAuthStore.Store(
+            clientId: "client-a",
+            clientSecret: "secret-a",
+            activeLabel: "personal",
+            accounts: [.init(label: "personal", email: "a@example.com", refreshToken: "token-a")])
+        try AntigravityOAuthStore.save(original, url: url)
+
+        _ = try AntigravityOAuthStore.persistAccount(
+            label: "work",
+            refreshToken: "token-b",
+            email: "b@example.com",
+            url: url)
+        XCTAssertTrue(try AntigravityOAuthStore.persistActiveLabel("personal", url: url))
+        let selected = AntigravityOAuthStore.load(url: url)
+        XCTAssertEqual(selected.accounts.map(\.label), ["personal", "work"])
+        XCTAssertEqual(selected.accounts.map(\.refreshToken), ["token-a", "token-b"])
+
+        let removed = try AntigravityOAuthStore.persistRemovingAccount("personal", url: url)
+        XCTAssertEqual(removed.accounts.map(\.label), ["work"])
+        XCTAssertEqual(removed.activeLabel, "work")
+        XCTAssertEqual(removed.clientId, "client-a")
+        XCTAssertEqual(removed.clientSecret, "secret-a")
+    }
+
+    func testAntigravityRemovingLastActiveAccountLeavesNoSelection() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+        try AntigravityOAuthStore.save(.init(
+            clientId: "client-a",
+            clientSecret: "secret-a",
+            activeLabel: "personal",
+            accounts: [.init(
+                label: "personal",
+                email: "a@example.com",
+                refreshToken: "token-a")]
+        ), url: url)
+
+        let removed = try AntigravityOAuthStore.persistRemovingAccount("personal", url: url)
+
+        XCTAssertTrue(removed.accounts.isEmpty)
+        XCTAssertNil(removed.activeLabel)
+        XCTAssertEqual(removed.clientId, "client-a")
+        XCTAssertEqual(removed.clientSecret, "secret-a")
+    }
+
+    func testAntigravityPersistAccountCanAtomicallyMakeNewLoginActive() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+        try AntigravityOAuthStore.save(.init(
+            activeLabel: "personal",
+            accounts: [.init(label: "personal", email: nil, refreshToken: "token-a")]), url: url)
+
+        let updated = try AntigravityOAuthStore.persistAccount(
+            label: "work",
+            refreshToken: "token-b",
+            email: "work@example.com",
+            makeActive: true,
+            url: url)
+
+        XCTAssertEqual(updated.activeLabel, "work")
+        XCTAssertEqual(updated.accounts.map(\.label), ["personal", "work"])
+        XCTAssertEqual(AntigravityOAuthStore.load(url: url).activeLabel, "work")
+    }
+
+    func testAntigravityNewLoginWithoutEmailKeepsExistingFallbackAccount() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+
+        _ = try AntigravityOAuthStore.persistNewLoginAccount(
+            fallbackLabel: "Account",
+            refreshToken: "token-a",
+            email: nil,
+            makeActive: true,
+            url: url)
+        let updated = try AntigravityOAuthStore.persistNewLoginAccount(
+            fallbackLabel: "Account",
+            refreshToken: "token-b",
+            email: nil,
+            makeActive: true,
+            url: url)
+
+        XCTAssertEqual(updated.accounts.map(\.label), ["Account", "Account 2"])
+        XCTAssertEqual(updated.accounts.map(\.refreshToken), ["token-a", "token-b"])
+        XCTAssertEqual(updated.activeLabel, "Account 2")
+    }
+
+    func testAntigravityActiveAccountFallsBackWhenStoredLabelIsStale() {
+        let first = AntigravityOAuthStore.Account(
+            label: "personal", email: "one@example.com", refreshToken: "token-a")
+        let store = AntigravityOAuthStore.Store(
+            activeLabel: "removed-account",
+            accounts: [first, .init(
+                label: "work", email: "two@example.com", refreshToken: "token-b")])
+
+        XCTAssertEqual(AntigravityOAuthStore.activeAccount(in: store), first)
+    }
+
+    func testAntigravityPersistAccountRejectsBlankTokenWithoutMutation() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+        let original = AntigravityOAuthStore.Store(
+            activeLabel: "personal",
+            accounts: [.init(label: "personal", email: nil, refreshToken: "token-a")])
+        try AntigravityOAuthStore.save(original, url: url)
+
+        XCTAssertThrowsError(try AntigravityOAuthStore.persistAccount(
+            label: "work",
+            refreshToken: "   \n",
+            email: nil,
+            makeActive: true,
+            url: url))
+
+        let preserved = AntigravityOAuthStore.load(url: url)
+        XCTAssertEqual(preserved.activeLabel, "personal")
+        XCTAssertEqual(preserved.accounts, original.accounts)
+    }
+
+    func testAntigravityMutationPreservesCorruptStoreBytes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+        let corrupt = Data("{not-json".utf8)
+        try corrupt.write(to: url)
+
+        XCTAssertThrowsError(try AntigravityOAuthStore.persistAccount(
+            label: "work",
+            refreshToken: "token-b",
+            email: nil,
+            url: url))
+
+        XCTAssertEqual(try Data(contentsOf: url), corrupt)
+    }
+
+    func testAntigravityInvalidClientCredentialPairPreservesStore() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("antigravity-oauth.json")
+        let original = AntigravityOAuthStore.Store(
+            clientId: "client-old",
+            clientSecret: "secret-old",
+            activeLabel: "work",
+            accounts: [.init(label: "work", email: "work@example.com", refreshToken: "token-old")])
+        try AntigravityOAuthStore.save(original, url: url)
+
+        XCTAssertThrowsError(try AntigravityOAuthStore.persistClientCredentials(
+            clientId: nil,
+            clientSecret: nil,
+            url: url))
+        XCTAssertThrowsError(try AntigravityOAuthStore.persistClientCredentials(
+            clientId: "client-new",
+            clientSecret: nil,
+            url: url))
+        XCTAssertThrowsError(try AntigravityOAuthStore.persistAccount(
+            label: "other",
+            refreshToken: "token-new",
+            email: nil,
+            clientId: "client-new",
+            clientSecret: nil,
+            url: url))
+
+        let preserved = AntigravityOAuthStore.load(url: url)
+        XCTAssertEqual(preserved.clientId, "client-old")
+        XCTAssertEqual(preserved.clientSecret, "secret-old")
+        XCTAssertEqual(preserved.accounts.map(\.label), ["work"])
+        XCTAssertEqual(preserved.accounts[0].refreshToken, "token-old")
     }
 
     func testAntigravityLiveFetchWhenEnabled() async throws {

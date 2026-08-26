@@ -153,6 +153,16 @@ final class ProviderErrorClassifierTests: XCTestCase {
         }
     }
 
+    func testTokenRemediationCopySupportsOAuthAndAPIKeyProviders() {
+        let vietnamese = L10n.t(ProviderErrorKind.tokenInvalidOrMissing.hintKey, "vi")
+        let english = L10n.t(ProviderErrorKind.tokenInvalidOrMissing.hintKey, "en")
+
+        XCTAssertFalse(vietnamese.localizedCaseInsensitiveContains("API key"))
+        XCTAssertFalse(english.localizedCaseInsensitiveContains("API key"))
+        XCTAssertTrue(vietnamese.contains("Cài đặt"))
+        XCTAssertTrue(english.localizedCaseInsensitiveContains("Settings"))
+    }
+
     func testSelfTestAndNotificationKeysResolve() {
         for key in ["provider.selfTest", "provider.selfTest.running", "provider.selfTest.pass",
                     "provider.selfTest.fail", "provider.selfTest.disabled",
