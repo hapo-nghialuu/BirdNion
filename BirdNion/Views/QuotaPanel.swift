@@ -2790,6 +2790,12 @@ struct AntigravityAccountsPopoverSection: View {
     @State private var errorText: String?
     @State private var accountPendingRemoval: AntigravityOAuthStore.Account?
 
+    // Đăng nhập agy cô lập cho một account cụ thể (một phiên tại một thời
+    // điểm — `agyLoginTargetLabel` chọn account nào đang mở panel).
+    @StateObject private var agyLogin = AntigravityIsolatedLoginSession()
+    @State private var agyLoginTargetLabel: String?
+    @State private var agyLoginCodeText = ""
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             collapsedRow
@@ -2891,105 +2897,111 @@ struct AntigravityAccountsPopoverSection: View {
     private func accountRow(_ account: AntigravityOAuthStore.Account) -> some View {
         let isActive = account.label == activeAccount?.label
         let name = accountName(account)
-        return HStack(spacing: 8) {
-            Button {
-                guard !isActive else { return }
-                switchTo(account)
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isActive ? VocabbyTheme.blue : VocabbyTheme.tertiary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(name)
-                            .font(.plexSans(12, weight: .medium))
-                            .foregroundStyle(VocabbyTheme.primary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if isActive {
-                            Text(L10n.t("elevenlabs.activeBadge", settings.appLanguage))
-                                .font(.plexMono(9, weight: .semibold))
-                                .foregroundStyle(VocabbyTheme.success)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    guard !isActive else { return }
+                    switchTo(account)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(isActive ? VocabbyTheme.blue : VocabbyTheme.tertiary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(name)
+                                .font(.plexSans(12, weight: .medium))
+                                .foregroundStyle(VocabbyTheme.primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if isActive {
+                                Text(L10n.t("elevenlabs.activeBadge", settings.appLanguage))
+                                    .font(.plexMono(9, weight: .semibold))
+                                    .foregroundStyle(VocabbyTheme.success)
+                            }
+                        }
+                        Spacer(minLength: 6)
+                        if !isActive {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(VocabbyTheme.blue)
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    RoundedRectangle(
+                                        cornerRadius: InstrumentShape.controlRadius,
+                                        style: .continuous
+                                    )
+                                    .fill(VocabbyTheme.blue.opacity(0.10))
+                                )
                         }
                     }
-                    Spacer(minLength: 6)
-                    if !isActive {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.blue)
-                            .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isActive || busy)
+                .pointingHandCursor(enabled: !isActive && !busy)
+                .help(isActive
+                      ? L10n.t("popover.accountSelectedHelp", settings.appLanguage)
+                      : L10n.t("freemodel.switchAccount", settings.appLanguage))
+                .accessibilityLabel(name)
+                .accessibilityValue(L10n.t(
+                    isActive ? "popover.accountSelected" : "popover.switchReady",
+                    settings.appLanguage
+                ))
+
+                if accountPendingRemoval?.label == account.label {
+                    // Xác nhận xoá NGAY TẠI DÒNG (thay confirmationDialog — dialog
+                    // này chập chờn trong NSPanel popover vì mất focus, khiến nút
+                    // xoá không ăn). Huỷ để đóng, Xoá để thực thi.
+                    Button {
+                        accountPendingRemoval = nil
+                    } label: {
+                        Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
+                            .font(.plexSans(11, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor(enabled: !busy)
+                    Button {
+                        removeConfirmedAccount()
+                    } label: {
+                        Text(L10n.t("provider.removeAccount", settings.appLanguage))
+                            .font(.plexSans(11, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.background)
+                            .padding(.horizontal, 10)
+                            .frame(height: 24)
                             .background(
                                 RoundedRectangle(
                                     cornerRadius: InstrumentShape.controlRadius,
                                     style: .continuous
                                 )
-                                .fill(VocabbyTheme.blue.opacity(0.10))
+                                .fill(VocabbyTheme.critical)
                             )
                     }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor(enabled: !busy)
+                    .disabled(busy)
+                } else {
+                    agyLoginAffordance(for: account)
+                    Button {
+                        accountPendingRemoval = account
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.critical)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor(enabled: !busy)
+                    .disabled(busy)
+                    .help(L10n.t("provider.removeAccount", settings.appLanguage))
+                    .accessibilityLabel(
+                        L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .disabled(isActive || busy)
-            .pointingHandCursor(enabled: !isActive && !busy)
-            .help(isActive
-                  ? L10n.t("popover.accountSelectedHelp", settings.appLanguage)
-                  : L10n.t("freemodel.switchAccount", settings.appLanguage))
-            .accessibilityLabel(name)
-            .accessibilityValue(L10n.t(
-                isActive ? "popover.accountSelected" : "popover.switchReady",
-                settings.appLanguage
-            ))
-
-            if accountPendingRemoval?.label == account.label {
-                // Xác nhận xoá NGAY TẠI DÒNG (thay confirmationDialog — dialog
-                // này chập chờn trong NSPanel popover vì mất focus, khiến nút
-                // xoá không ăn). Huỷ để đóng, Xoá để thực thi.
-                Button {
-                    accountPendingRemoval = nil
-                } label: {
-                    Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
-                        .font(.plexSans(11, weight: .medium))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                        .padding(.horizontal, 8)
-                        .frame(height: 24)
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor(enabled: !busy)
-                Button {
-                    removeConfirmedAccount()
-                } label: {
-                    Text(L10n.t("provider.removeAccount", settings.appLanguage))
-                        .font(.plexSans(11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.background)
-                        .padding(.horizontal, 10)
-                        .frame(height: 24)
-                        .background(
-                            RoundedRectangle(
-                                cornerRadius: InstrumentShape.controlRadius,
-                                style: .continuous
-                            )
-                            .fill(VocabbyTheme.critical)
-                        )
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor(enabled: !busy)
-                .disabled(busy)
-            } else {
-                Button {
-                    accountPendingRemoval = account
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.critical)
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor(enabled: !busy)
-                .disabled(busy)
-                .help(L10n.t("provider.removeAccount", settings.appLanguage))
-                .accessibilityLabel(
-                    L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
+            if agyLoginTargetLabel == account.label {
+                agyLoginPanel(for: account)
             }
         }
         .padding(.vertical, 4)
@@ -3090,6 +3102,178 @@ struct AntigravityAccountsPopoverSection: View {
         } catch {
             errorText = error.localizedDescription
         }
+    }
+
+    // MARK: - agy isolated login (one-time login flow)
+
+    /// Account đang thực sự được phục vụ quota (dù bởi agy chính hay agy cô
+    /// lập) theo snapshot mới nhất — dùng để ẩn nút "Đăng nhập vào agy" cho
+    /// account mà agy chính (HOME thật) đã đăng nhập sẵn.
+    private var currentlyServedAccountLabel: String? {
+        quota.statuses.first(where: { $0.id == "antigravity" })?.accountLabel
+    }
+
+    private func needsAgyLogin(_ account: AntigravityOAuthStore.Account) -> Bool {
+        guard !AntigravityIsolatedAgy.hasLogin(forAccountLabel: account.label) else { return false }
+        guard let served = currentlyServedAccountLabel else { return true }
+        return served != account.label && served != account.email
+    }
+
+    @ViewBuilder
+    private func agyLoginAffordance(for account: AntigravityOAuthStore.Account) -> some View {
+        if agyLoginTargetLabel == account.label {
+            EmptyView()
+        } else if needsAgyLogin(account) {
+            Button {
+                startAgyLogin(for: account)
+            } label: {
+                Text(L10n.t("antigravity.popover.signInAgy", settings.appLanguage))
+                    .font(.plexSans(10, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.blue)
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                            .fill(VocabbyTheme.blue.opacity(0.10))
+                    )
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor(enabled: !busy)
+            .disabled(busy)
+            .help(L10n.t("antigravity.popover.signInAgy", settings.appLanguage))
+        } else if AntigravityIsolatedAgy.hasLogin(forAccountLabel: account.label) {
+            Text(L10n.t("antigravity.popover.agyConnected", settings.appLanguage))
+                .font(.plexMono(9, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.success)
+        }
+    }
+
+    @ViewBuilder
+    private func agyLoginPanel(for account: AntigravityOAuthStore.Account) -> some View {
+        let lang = settings.appLanguage
+        VStack(alignment: .leading, spacing: 6) {
+            switch agyLogin.state {
+            case .idle, .launching:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.t("antigravity.login.launching", lang))
+                        .font(.plexSans(11))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                }
+            case .awaitingCode, .submitting:
+                let submitting = agyLogin.state == .submitting
+                Text(L10n.t("antigravity.login.instruction", lang))
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    TextField(L10n.t("antigravity.login.codePlaceholder", lang), text: $agyLoginCodeText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.plexMono(11))
+                        .disabled(submitting)
+                        .onSubmit { submitAgyLoginCode() }
+                    if submitting {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                HStack(spacing: 8) {
+                    Button {
+                        cancelAgyLogin()
+                    } label: {
+                        Text(L10n.t("ccx.pasteJSON.cancel", lang))
+                            .font(.plexSans(11, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor(enabled: !submitting)
+                    .disabled(submitting)
+                    Spacer(minLength: 0)
+                    Button {
+                        submitAgyLoginCode()
+                    } label: {
+                        Text(L10n.t("antigravity.login.submit", lang))
+                            .font(.plexSans(11, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.background)
+                            .padding(.horizontal, 10)
+                            .frame(height: 24)
+                            .background(
+                                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                    .fill(VocabbyTheme.blue)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(submitting
+                              || agyLoginCodeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .pointingHandCursor(enabled: !submitting
+                        && !agyLoginCodeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            case .success:
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(VocabbyTheme.success)
+                    Text(L10n.t("antigravity.popover.agyConnected", lang))
+                        .font(.plexSans(11, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.success)
+                }
+            case .failed(let message):
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(L10n.providerText(message, preference: lang))
+                        .font(.plexSans(10))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button {
+                            cancelAgyLogin()
+                        } label: {
+                            Text(L10n.t("ccx.pasteJSON.cancel", lang))
+                                .font(.plexSans(11, weight: .medium))
+                                .foregroundStyle(VocabbyTheme.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .pointingHandCursor()
+                        Button {
+                            startAgyLogin(for: account)
+                        } label: {
+                            Text(L10n.t("antigravity.login.retry", lang))
+                                .font(.plexSans(11, weight: .semibold))
+                                .foregroundStyle(VocabbyTheme.blue)
+                        }
+                        .buttonStyle(.plain)
+                        .pointingHandCursor()
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                .fill(VocabbyTheme.segment)
+        )
+        .onChange(of: agyLogin.state) { _, newValue in
+            guard newValue == .success, agyLoginTargetLabel == account.label else { return }
+            // Đóng panel sau một nhịp ngắn để người dùng kịp thấy xác nhận
+            // thành công trước khi nó tự thu gọn.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                if agyLoginTargetLabel == account.label { agyLoginTargetLabel = nil }
+            }
+        }
+    }
+
+    private func startAgyLogin(for account: AntigravityOAuthStore.Account) {
+        agyLoginTargetLabel = account.label
+        agyLoginCodeText = ""
+        agyLogin.start(accountLabel: account.label)
+    }
+
+    private func cancelAgyLogin() {
+        agyLogin.cancel()
+        agyLoginTargetLabel = nil
+        agyLoginCodeText = ""
+    }
+
+    private func submitAgyLoginCode() {
+        guard case .awaitingCode = agyLogin.state else { return }
+        agyLogin.submitCode(agyLoginCodeText)
     }
 }
 

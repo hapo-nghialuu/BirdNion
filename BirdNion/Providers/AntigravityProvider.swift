@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import AppKit
 
 // MARK: - Model quota (ported from AntigravityModelQuota in AntigravityStatusProbe.swift)
 
@@ -717,6 +718,264 @@ enum AntigravityIsolatedAgy {
         let tokenPath = homeDir(forAccountLabel: label, home: home, env: env, fileManager: fileManager)
             .appendingPathComponent(loginTokenRelativePath).path
         return fileManager.fileExists(atPath: tokenPath)
+    }
+}
+
+// MARK: - Isolated agy login session (one-time login flow, multi-account)
+//
+// Đăng nhập MỘT account vào HOME cô lập của riêng nó, để `fetchViaIsolatedAgy`
+// ở trên có thể đọc quota mà không đụng tới `~/.gemini` thật của user.
+//
+// Hành vi `agy` đã xác minh trên máy thật: chạy `agy -p "ping" --print-timeout 180s`
+// với HOME cô lập và stdin/stdout là pipe (không cần PTY — agy in URL OAuth ra
+// stdout kể cả khi stdout không phải TTY), agy in URL đăng nhập Google rồi đợi
+// TỐI ĐA ~60s để nhận authorization code qua một dòng trên stdin. Người dùng tự
+// đăng nhập trên trình duyệt (redirect là trang REMOTE antigravity.google, không
+// có localhost callback) rồi dán code agy hiển thị. Sau khi nhận code, agy trao
+// đổi token và ghi vào `<HOME>/.gemini/jetski-standalone-oauth-token` rồi thoát.
+@MainActor
+final class AntigravityIsolatedLoginSession: ObservableObject {
+    enum State: Equatable {
+        case idle
+        case launching
+        case awaitingCode(URL)
+        case submitting
+        case success
+        case failed(String)
+    }
+
+    @Published private(set) var state: State = .idle
+
+    private var process: Process?
+    private var stdinHandle: FileHandle?
+    private var stdoutBuffer = Data()
+    private var stderrBuffer = Data()
+    private var accountLabel: String?
+
+    /// Nhận diện lại đúng phiên hiện tại trong các callback bất đồng bộ
+    /// (readabilityHandler / terminationHandler / watchdog Task) — nếu một
+    /// callback của phiên CŨ bay tới sau khi `cancel()`/`start()` mới đã chạy,
+    /// token không khớp nữa nên callback đó tự bỏ qua, không ghi đè state mới.
+    private var sessionToken = UUID()
+
+    /// `agy` tự huỷ chờ code sau ~60s không nhận input; đặt print-timeout tổng
+    /// dài hơn nhiều (180s) để có dư thời gian cho bước trao đổi token sau khi
+    /// người dùng đã dán code kịp trong 60s đầu.
+    private static let printTimeoutArg = "180s"
+
+    /// Không thể gọi method actor-isolated trong `deinit` (deinit luôn
+    /// non-isolated) — nên ở đây chỉ đụng trực tiếp property lưu trữ của
+    /// chính object, không gọi lại `terminateProcess()`. Đây là lưới an toàn
+    /// cuối cùng chống leak process khi object bị giải phóng.
+    deinit {
+        if process?.isRunning == true {
+            process?.terminate()
+        }
+        (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        (process?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        try? stdinHandle?.close()
+    }
+
+    /// Bắt đầu phiên đăng nhập cho `accountLabel`: tạo HOME cô lập, spawn
+    /// `agy`, đọc stdout tới khi thấy URL OAuth rồi mở bằng trình duyệt mặc
+    /// định. An toàn gọi lại (kể cả khi một phiên trước đang chạy/đã lỗi) —
+    /// tự dọn phiên cũ trước khi bắt đầu phiên mới.
+    func start(accountLabel: String) {
+        terminateProcess()
+        self.accountLabel = accountLabel
+        state = .launching
+
+        guard let binary = AgCLIWarmSession.resolveAgyBinary() else {
+            state = .failed(L10n.t("antigravity.login.binaryMissing"))
+            return
+        }
+
+        let isolatedHome = AntigravityIsolatedAgy.homeDir(forAccountLabel: accountLabel)
+        do {
+            try FileManager.default.createDirectory(at: isolatedHome, withIntermediateDirectories: true)
+        } catch {
+            state = .failed(error.localizedDescription)
+            return
+        }
+
+        let token = UUID()
+        sessionToken = token
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.arguments = ["-p", "ping", "--print-timeout", Self.printTimeoutArg]
+        var env = ProcessInfo.processInfo.environment
+        env["HOME"] = isolatedHome.path
+        proc.environment = env
+        proc.currentDirectoryURL = isolatedHome
+
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        proc.standardInput = stdinPipe
+        proc.standardOutput = stdoutPipe
+        proc.standardError = stderrPipe
+
+        proc.terminationHandler = { [weak self] finished in
+            let status = finished.terminationStatus
+            Task { @MainActor [weak self] in
+                self?.handleProcessTermination(token: token, exitStatus: status)
+            }
+        }
+        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            Task { @MainActor [weak self] in
+                self?.consumeStdout(data, token: token)
+            }
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            Task { @MainActor [weak self] in
+                self?.consumeStderr(data, token: token)
+            }
+        }
+
+        do {
+            try proc.run()
+        } catch {
+            state = .failed(error.localizedDescription)
+            return
+        }
+
+        process = proc
+        stdinHandle = stdinPipe.fileHandleForWriting
+    }
+
+    /// Ghi authorization code (đã dán từ trình duyệt) vào stdin của `agy` rồi
+    /// chờ nó tự thoát (thành công/thất bại được xử lý trong
+    /// `handleProcessTermination`). Không làm gì nếu không đang ở trạng thái
+    /// chờ code (double-submit, hoặc phiên đã hết hạn).
+    func submitCode(_ rawCode: String) {
+        guard case .awaitingCode = state, let stdinHandle else { return }
+        let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, let data = (code + "\n").data(using: .utf8) else { return }
+
+        state = .submitting
+        let token = sessionToken
+        do {
+            try stdinHandle.write(contentsOf: data)
+        } catch {
+            state = .failed(error.localizedDescription)
+            terminateProcess()
+            return
+        }
+
+        // Watchdog: nếu agy không thoát trong thời gian hợp lý sau khi nhận
+        // code (đứng treo khi trao đổi token), báo lỗi thay vì chờ vô thời
+        // hạn — không block main thread vì đây chỉ là một Task ngủ.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            await self?.failIfStillSubmitting(token: token)
+        }
+    }
+
+    /// Huỷ phiên đăng nhập hiện tại (nếu có): kill process, đóng stdin, dọn
+    /// state về `.idle`. An toàn gọi nhiều lần / khi không có phiên nào chạy.
+    func cancel() {
+        terminateProcess()
+        state = .idle
+        accountLabel = nil
+    }
+
+    // MARK: - Private
+
+    private func consumeStdout(_ data: Data, token: UUID) {
+        guard token == sessionToken else { return }
+        stdoutBuffer.append(data)
+        guard case .launching = state,
+              let text = String(data: stdoutBuffer, encoding: .utf8),
+              let url = Self.parseOAuthURL(fromAgyOutput: text)
+        else { return }
+        state = .awaitingCode(url)
+        NSWorkspace.shared.open(url)
+    }
+
+    private func consumeStderr(_ data: Data, token: UUID) {
+        guard token == sessionToken else { return }
+        stderrBuffer.append(data)
+    }
+
+    private func handleProcessTermination(token: UUID, exitStatus: Int32) {
+        guard token == sessionToken, let accountLabel else { return }
+        switch state {
+        case .submitting:
+            if AntigravityIsolatedAgy.hasLogin(forAccountLabel: accountLabel) {
+                state = .success
+                // Báo QuotaService fetch lại Antigravity ngay — cùng cơ chế
+                // với nút refresh thủ công (xem QuotaService.start()).
+                NotificationCenter.default.post(name: .birdnionRefresh, object: "antigravity")
+            } else {
+                let tail = stderrTailText()
+                state = .failed(tail.isEmpty ? L10n.t("antigravity.login.exchangeFailed") : tail)
+            }
+        case .awaitingCode, .launching:
+            // agy tự thoát trước khi nhận được code — thường do hết ~60s chờ
+            // input (xem "Waiting for authentication (timeout 60s)").
+            state = .failed(L10n.t("antigravity.login.timeout"))
+        default:
+            break
+        }
+        cleanupHandles()
+    }
+
+    private func failIfStillSubmitting(token: UUID) {
+        guard token == sessionToken, case .submitting = state else { return }
+        state = .failed(L10n.t("antigravity.login.timeout"))
+        terminateProcess()
+    }
+
+    private func stderrTailText() -> String {
+        guard let text = String(data: stderrBuffer, encoding: .utf8) else { return "" }
+        let lines = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n").suffix(3)
+        return lines.joined(separator: " ")
+    }
+
+    /// Vô hiệu hoá callback của process hiện tại (đổi `sessionToken`) rồi kill
+    /// nó — dùng khi bắt đầu phiên mới, khi cancel, và khi watchdog timeout.
+    /// Không leak process: gửi SIGTERM ngay, rồi best-effort SIGKILL sau 0.5s
+    /// nếu vẫn còn sống — chạy off-main-actor để không block UI.
+    private func terminateProcess() {
+        sessionToken = UUID()
+        let proc = process
+        (proc?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        (proc?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        proc?.terminationHandler = nil
+        cleanupHandles()
+
+        guard let proc, proc.isRunning else { return }
+        proc.terminate()
+        let pid = proc.processIdentifier
+        Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if kill(pid, 0) == 0 {
+                _ = kill(pid, SIGKILL)
+            }
+        }
+    }
+
+    private func cleanupHandles() {
+        try? stdinHandle?.close()
+        stdinHandle = nil
+        process = nil
+        stdoutBuffer = Data()
+        stderrBuffer = Data()
+    }
+
+    /// Trích URL OAuth Google từ stdout của `agy` (mẫu thực tế đã xác minh —
+    /// xem block comment ở đầu type). Tách riêng thành static func thuần để
+    /// test được mà không cần spawn process thật.
+    nonisolated static func parseOAuthURL(fromAgyOutput text: String) -> URL? {
+        let pattern = #"https://accounts\.google\.com/o/oauth2/auth\?\S+"#
+        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
+        return URL(string: String(text[range]))
     }
 }
 

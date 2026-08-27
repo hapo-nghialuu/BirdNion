@@ -4348,6 +4348,30 @@ final class NewProviderTests: XCTestCase {
         XCTAssertFalse(status.windows.isEmpty, "Antigravity should return quota windows")
     }
 
+    func testAntigravityIsolatedLoginParsesOAuthURLFromAgyStdout() {
+        // Mẫu stdout thực tế của `agy` đã xác minh trên máy thật (xem doc
+        // comment ở AntigravityIsolatedLoginSession).
+        let sample = """
+        Authentication required. Please visit the URL to log in:
+          https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-...apps.googleusercontent.com&code_challenge=...&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=...aicode...&state=...
+        Waiting for authentication (timeout 60s)...
+        Or, paste the authorization code here and press Enter:
+        """
+        let url = AntigravityIsolatedLoginSession.parseOAuthURL(fromAgyOutput: sample)
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-...apps.googleusercontent.com&code_challenge=...&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=...aicode...&state=..."
+        )
+        XCTAssertEqual(url?.host, "accounts.google.com")
+
+        // Dữ liệu tới nửa chừng (mô phỏng readabilityHandler nhận từng chunk)
+        // -> dòng URL chưa đầy đủ -> không được đoán bừa, phải trả nil.
+        let partialChunk = "Authentication required. Please visit the URL to log in:\n  https://accounts.goo"
+        XCTAssertNil(AntigravityIsolatedLoginSession.parseOAuthURL(fromAgyOutput: partialChunk))
+
+        XCTAssertNil(AntigravityIsolatedLoginSession.parseOAuthURL(fromAgyOutput: "no url in this output"))
+    }
+
     // MARK: - OMP & Pi Coding Agents Tests
 
     func testOMPCostScannerDeduplicationAndExtraction() async throws {
