@@ -278,6 +278,21 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
             cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
             claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
     }
+
+    /// Copy with `accountLabel` overridden, every other field identical. Used
+    /// by `AntigravityProvider.fetchViaIsolatedAgy` to relabel a per-account
+    /// isolated probe result with that account's real email/label instead of
+    /// the provider-wide config label the endpoint helpers compute by default.
+    func withAccountLabel(_ accountLabel: String?) -> ProviderStatus {
+        ProviderStatus(
+            id: id, displayName: displayName, windows: windows, lastUpdated: lastUpdated,
+            error: error, accountLabel: accountLabel, planType: planType,
+            creditsRemaining: creditsRemaining, creditsUnlimited: creditsUnlimited,
+            version: version, serviceStatus: serviceStatus, serviceStatusLevel: serviceStatusLevel,
+            accountID: accountID, planName: planName, resetCreditsAvailable: resetCreditsAvailable,
+            cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
+            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
+    }
 }
 
 /// Structured Kiro usage consumed by the menu-bar display-mode picker and the

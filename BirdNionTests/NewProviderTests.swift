@@ -4046,6 +4046,21 @@ final class NewProviderTests: XCTestCase {
         XCTAssertFalse(AntigravityProvider._shouldContinueAfterCandidateForTesting(error: nil))
     }
 
+    func testAntigravityIsolatedAgyHomeDirSanitizesLabelDeterministically() {
+        let tempHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-isolated-agy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempHome) }
+
+        let dirA = AntigravityIsolatedAgy.homeDir(forAccountLabel: " user@example.com ", home: tempHome, env: [:])
+        let dirB = AntigravityIsolatedAgy.homeDir(forAccountLabel: " user@example.com ", home: tempHome, env: [:])
+        XCTAssertEqual(dirA, dirB, "cùng label phải luôn ra cùng một thư mục (deterministic)")
+        XCTAssertEqual(dirA.lastPathComponent, "user_example.com")
+        XCTAssertTrue(dirA.path.hasSuffix(".config/birdnion/agy-accounts/user_example.com"))
+
+        // Chưa từng login cô lập cho account này -> phải false, không được bịa dữ liệu
+        XCTAssertFalse(AntigravityIsolatedAgy.hasLogin(forAccountLabel: "user@example.com", home: tempHome, env: [:]))
+    }
+
     func testAntigravitySelectedOAuthEmailOverridesLegacyConfigGuard() {
         XCTAssertEqual(
             AntigravityProvider._expectedAccountEmailForTesting(

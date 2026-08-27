@@ -517,7 +517,21 @@ private enum AgCLIWarmSession {
     }
 
     /// Spawn `agy` in a pseudo-terminal (PTY) so it initializes its embedded server.
-    static func spawnAgy(binary: String) throws -> (process: AgSpawnedProcess, pid: Int) {
+    ///
+    /// - Parameters:
+    ///   - homeOverride: khi có giá trị, child process nhận `HOME=<homeOverride>`
+    ///     (và `PWD`/cwd cũng trỏ vào đó) thay vì HOME thật của user. `agy` đọc
+    ///     login Google từ `$HOME/.gemini/`, nên đây là cách cô lập hoàn toàn
+    ///     một account khỏi `~/.gemini` chính — không có override thì hành vi
+    ///     giữ nguyên như trước (dùng HOME thật).
+    ///   - args: đối số dòng lệnh truyền cho `agy` (ví dụ chế độ print
+    ///     non-interactive `-p "ping" --print-timeout 40s`). Mặc định rỗng —
+    ///     giữ nguyên phiên tương tác hiện có cho các caller cũ.
+    static func spawnAgy(
+        binary: String,
+        homeOverride: String? = nil,
+        args: [String] = []
+    ) throws -> (process: AgSpawnedProcess, pid: Int) {
         var primaryFD: Int32 = -1
         var secondaryFD: Int32 = -1
         var win = winsize(ws_row: 50, ws_col: 160, ws_xpixel: 0, ws_ypixel: 0)
@@ -540,8 +554,8 @@ private enum AgCLIWarmSession {
         posix_spawn_file_actions_addclose(&fileActions, primaryFD)
         posix_spawn_file_actions_addclose(&fileActions, secondaryFD)
 
-        let home = NSHomeDirectory()
-        _ = home.withCString { path in
+        let effectiveHome = homeOverride ?? NSHomeDirectory()
+        _ = effectiveHome.withCString { path in
             posix_spawn_file_actions_addchdir_np(&fileActions, path)
         }
 
@@ -559,11 +573,15 @@ private enum AgCLIWarmSession {
 
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
-        env["PWD"] = home
+        env["PWD"] = effectiveHome
+        if let homeOverride {
+            env["HOME"] = homeOverride
+        }
 
         let envStrings = env.map { "\($0.key)=\($0.value)" }
         let cEnv: [UnsafeMutablePointer<CChar>?] = envStrings.map { strdup($0) } + [nil]
-        let cArgs: [UnsafeMutablePointer<CChar>?] = [strdup(binary), nil]
+        let argv = [binary] + args
+        let cArgs: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
 
         defer {
             for ptr in cEnv where ptr != nil { free(ptr) }
@@ -609,12 +627,22 @@ private enum AgCLIWarmSession {
 
     /// Toàn bộ flow: resolve binary → spawn in PTY → wait for port → trả AgProcessInfo + ports.
     /// Throw nếu bất kỳ bước nào fail (caller sẽ bỏ qua).
-    static func warmAndProbe(overallTimeout: TimeInterval) async throws -> (process: AgProcessInfo, ports: [Int], spawnedProcess: AgSpawnedProcess?) {
+    ///
+    /// `homeOverride`/`args` chuyển thẳng xuống `spawnAgy` (xem doc ở đó) —
+    /// dùng cho warm session cô lập theo account. `portWaitCap` giới hạn thời
+    /// gian chờ port tối đa (mặc định 7s cho warm session chính; isolated
+    /// fetch cần lâu hơn vì agy phải auth trước khi mở port).
+    static func warmAndProbe(
+        homeOverride: String? = nil,
+        args: [String] = [],
+        overallTimeout: TimeInterval,
+        portWaitCap: TimeInterval = 7.0
+    ) async throws -> (process: AgProcessInfo, ports: [Int], spawnedProcess: AgSpawnedProcess?) {
         guard let binary = resolveAgyBinary() else {
             throw AntigravityProviderError.notRunning
         }
-        let (proc, pid) = try spawnAgy(binary: binary)
-        let deadline = Date().addingTimeInterval(min(overallTimeout, 7.0))
+        let (proc, pid) = try spawnAgy(binary: binary, homeOverride: homeOverride, args: args)
+        let deadline = Date().addingTimeInterval(min(overallTimeout, portWaitCap))
         do {
             let ports = try await waitForListeningPort(pid: pid, deadline: deadline)
             let info = AgProcessInfo(pid: pid, csrfToken: "", extensionPort: nil, extensionServerCSRFToken: nil)
@@ -623,6 +651,72 @@ private enum AgCLIWarmSession {
             proc.terminate()
             throw error
         }
+    }
+}
+
+// MARK: - Isolated per-account agy HOME (multi-account quota)
+//
+// `agy` đọc login Google từ `$HOME/.gemini/`. Để lấy quota của MỘT account cụ
+// thể — khác với account mà agy chính (dùng HOME thật) đang đăng nhập — ta
+// trỏ HOME sang một thư mục riêng cho account đó, mỗi account có bản sao
+// `.gemini/` độc lập, không đụng tới `~/.gemini` thật của user. Việc SAO CHÉP
+// login vào thư mục này (luồng đăng nhập lần đầu) nằm ngoài phạm vi file này —
+// ở đây chỉ đọc, và không bao giờ bịa quota khi chưa có login cô lập.
+enum AntigravityIsolatedAgy {
+    private static let subdirName = "agy-accounts"
+    private static let loginTokenRelativePath = ".gemini/jetski-standalone-oauth-token"
+
+    /// Thư mục gốc chứa tất cả HOME cô lập theo account: `~/.config/birdnion/agy-accounts/`.
+    /// Dùng chung path resolution với `BirdNionConfigStore` (BIRDNION_CONFIG /
+    /// XDG_CONFIG_HOME override) để nằm cạnh `settings.json`.
+    static func baseDir(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        BirdNionConfigStore.configURL(home: home, env: env, fileManager: fileManager)
+            .deletingLastPathComponent()
+            .appendingPathComponent(subdirName, isDirectory: true)
+    }
+
+    /// Sanitize một account label (thường là email) thành tên thư mục an
+    /// toàn và xác định (deterministic): chỉ giữ chữ/số ASCII, `-`, `_`, `.`;
+    /// mọi ký tự khác (kể cả `@`) thay bằng `_`.
+    static func sanitizedDirName(forAccountLabel label: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "_" }
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+        )
+        let scalars = trimmed.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
+        return String(scalars)
+    }
+
+    /// HOME dành riêng cho account này. `agy` chạy với HOME này sẽ đọc/ghi
+    /// `<homeDir>/.gemini/` — hoàn toàn tách biệt với `~/.gemini` thật.
+    static func homeDir(
+        forAccountLabel label: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        baseDir(home: home, env: env, fileManager: fileManager)
+            .appendingPathComponent(sanitizedDirName(forAccountLabel: label), isDirectory: true)
+    }
+
+    /// True khi account này đã có login cô lập sẵn (đã copy `.gemini/` với
+    /// token OAuth vào thư mục riêng qua luồng đăng nhập — ngoài phạm vi file
+    /// này). False khi thư mục/token chưa tồn tại; caller phải fallback,
+    /// không bao giờ bịa quota cho account chưa từng login cô lập.
+    static func hasLogin(
+        forAccountLabel label: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        let tokenPath = homeDir(forAccountLabel: label, home: home, env: env, fileManager: fileManager)
+            .appendingPathComponent(loginTokenRelativePath).path
+        return fileManager.fileExists(atPath: tokenPath)
     }
 }
 
@@ -905,6 +999,11 @@ final class AntigravityProvider: QuotaProvider {
     private let session: URLSession
     private let timeout: TimeInterval
 
+    /// Deadline chờ agy cô lập (per-account) auth + mở port. Dài hơn nhiều so
+    /// với warm session chính (7s) vì agy cô lập phải làm mới OAuth session
+    /// lần đầu trên mỗi lần spawn — theo thực nghiệm mất ~10-20s.
+    private static let isolatedFetchDeadline: TimeInterval = 35.0
+
     init(session: URLSession = .shared, timeout: TimeInterval = 8.0) {
         self.session = session
         self.timeout = timeout
@@ -933,6 +1032,22 @@ final class AntigravityProvider: QuotaProvider {
                     return status
                 }
                 accountMismatch = status
+            }
+            // Account đang chọn KHÔNG khớp account mà agy chính (HOME thật)
+            // đang đăng nhập, nhưng nếu account đó đã từng login cô lập
+            // (thư mục agy-accounts/<label> riêng), thử spawn agy cô lập cho
+            // đúng account đó trước khi rơi xuống OAuth/mismatch.
+            if let accountMismatch {
+                let store = AntigravityOAuthStore.load()
+                if let activeAccount = AntigravityOAuthStore.activeAccount(in: store),
+                   AntigravityIsolatedAgy.hasLogin(forAccountLabel: activeAccount.label),
+                   let isolatedStatus = await fetchViaIsolatedAgy(
+                       accountLabel: activeAccount.label,
+                       expectedEmail: activeAccount.email
+                   ),
+                   isolatedStatus.error == nil {
+                    return isolatedStatus
+                }
             }
             // OAuth (cloud) CHỈ hợp lệ khi lấy được quota thật. Với account mà
             // agy không đăng nhập, cloud luôn 403 — đừng để lỗi đó che thông báo
@@ -1053,11 +1168,78 @@ final class AntigravityProvider: QuotaProvider {
         return status
     }
 
+    /// Fetch quota cho MỘT account cụ thể đã lưu, bằng cách spawn một `agy`
+    /// cô lập với HOME trỏ vào bản sao `.gemini/` riêng của account đó —
+    /// KHÔNG đụng tới `~/.gemini` thật của user. Dùng khi agy chính (HOME
+    /// thật) đang đăng nhập một account KHÁC account được yêu cầu.
+    ///
+    /// - Returns: `nil` khi account chưa có login cô lập (caller fallback
+    ///   sang OAuth/mismatch như cũ) hoặc khi agy không mở port kịp thời gian
+    ///   chờ — không bao giờ bịa dữ liệu. Trả về status lỗi "mismatch" nếu
+    ///   agy cô lập lỡ trả về đúng account khác `expectedEmail` (bảo vệ khỏi
+    ///   hiển thị nhầm account).
+    func fetchViaIsolatedAgy(accountLabel: String, expectedEmail: String?) async -> ProviderStatus? {
+        guard AntigravityIsolatedAgy.hasLogin(forAccountLabel: accountLabel) else { return nil }
+
+        let deadline = Date().addingTimeInterval(Self.isolatedFetchDeadline)
+        let result: (process: AgProcessInfo, ports: [Int], spawnedProcess: AgCLIWarmSession.AgSpawnedProcess?)
+        do {
+            result = try await AgCLIWarmSession.warmAndProbe(
+                homeOverride: AntigravityIsolatedAgy.homeDir(forAccountLabel: accountLabel).path,
+                args: ["-p", "ping", "--print-timeout", "40s"],
+                overallTimeout: deadline.timeIntervalSinceNow,
+                portWaitCap: Self.isolatedFetchDeadline
+            )
+        } catch {
+            // agy binary missing hoặc port không mở kịp — bỏ qua, để caller fallback
+            return nil
+        }
+        // Luôn dọn dẹp process agy đã spawn, kể cả khi nó tự thoát theo
+        // --print-timeout — tránh leak process/zombie.
+        defer { result.spawnedProcess?.terminate() }
+
+        var currentPorts = result.ports
+        var status: ProviderStatus?
+        while Date() < deadline {
+            if !currentPorts.isEmpty,
+               let s = await probeEndpoints(
+                   process: result.process,
+                   ports: currentPorts,
+                   deadline: deadline,
+                   expectedEmailOverride: expectedEmail
+               ) {
+                status = s
+                break
+            }
+            let sleepInterval = min(0.4, max(0, deadline.timeIntervalSinceNow))
+            guard sleepInterval > 0 else { break }
+            try? await Task.sleep(nanoseconds: UInt64(sleepInterval * 1_000_000_000))
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            if let freshPorts = try? await AgProcessDetector.listeningPorts(
+                pid: result.process.pid,
+                timeout: min(1.0, remaining)
+            ),
+               !freshPorts.isEmpty {
+                currentPorts = freshPorts
+            }
+        }
+
+        guard let status else { return nil }
+        return status.withAccountLabel(expectedEmail ?? accountLabel)
+    }
+
     /// Try all ports with quota-summary first, then user-status.
+    ///
+    /// - Parameter expectedEmailOverride: khi có giá trị, account-match guard
+    ///   so khớp response email với GIÁ TRỊ NÀY thay vì account đang active
+    ///   toàn cục — dùng bởi `fetchViaIsolatedAgy` để xác minh đúng account
+    ///   cụ thể được yêu cầu, bất kể account nào đang active trong Settings.
     private func probeEndpoints(
         process: AgProcessInfo,
         ports: [Int],
-        deadline: Date
+        deadline: Date,
+        expectedEmailOverride: String? = nil
     ) async -> ProviderStatus? {
         let schemes = ["http", "https"]
         for port in ports {
@@ -1067,7 +1249,8 @@ final class AntigravityProvider: QuotaProvider {
                     scheme: scheme,
                     port: port,
                     process: process,
-                    deadline: deadline
+                    deadline: deadline,
+                    expectedEmailOverride: expectedEmailOverride
                 ) {
                     return status
                 }
@@ -1076,7 +1259,8 @@ final class AntigravityProvider: QuotaProvider {
                     scheme: scheme,
                     port: port,
                     process: process,
-                    deadline: deadline
+                    deadline: deadline,
+                    expectedEmailOverride: expectedEmailOverride
                 ) {
                     return status
                 }
@@ -1091,7 +1275,8 @@ final class AntigravityProvider: QuotaProvider {
         scheme: String,
         port: Int,
         process: AgProcessInfo,
-        deadline: Date
+        deadline: Date,
+        expectedEmailOverride: String? = nil
     ) async -> ProviderStatus? {
         do {
             let requestTimeout = deadline.timeIntervalSinceNow
@@ -1117,7 +1302,7 @@ final class AntigravityProvider: QuotaProvider {
             )
 
             // Account-match guard: nếu config chứa email, chỉ chấp nhận snapshot khớp
-            if let mismatch = accountMismatchError(responseEmail: email) {
+            if let mismatch = accountMismatchError(responseEmail: email, expectedEmailOverride: expectedEmailOverride) {
                 return failure(mismatch)
             }
 
@@ -1141,7 +1326,8 @@ final class AntigravityProvider: QuotaProvider {
         scheme: String,
         port: Int,
         process: AgProcessInfo,
-        deadline: Date
+        deadline: Date,
+        expectedEmailOverride: String? = nil
     ) async -> ProviderStatus? {
         do {
             let requestTimeout = deadline.timeIntervalSinceNow
@@ -1159,7 +1345,7 @@ final class AntigravityProvider: QuotaProvider {
             guard !windows.isEmpty else { return nil }
 
             // Account-match guard: nếu config chứa email, chỉ chấp nhận snapshot khớp
-            if let mismatch = accountMismatchError(responseEmail: email) {
+            if let mismatch = accountMismatchError(responseEmail: email, expectedEmailOverride: expectedEmailOverride) {
                 return failure(mismatch)
             }
 
@@ -1181,7 +1367,21 @@ final class AntigravityProvider: QuotaProvider {
 
     /// Prefer the selected OAuth account identity. The legacy config email is
     /// only a guard when the selected account has no known email.
-    private func accountMismatchError(responseEmail: String?) -> String? {
+    ///
+    /// `expectedEmailOverride`, khi có, thay thế hoàn toàn account đang
+    /// active toàn cục — dùng bởi `fetchViaIsolatedAgy` để so khớp với MỘT
+    /// account cụ thể được yêu cầu (không phải account đang chọn trong
+    /// Settings, vốn có thể là account khác).
+    private func accountMismatchError(responseEmail: String?, expectedEmailOverride: String? = nil) -> String? {
+        if let expectedEmailOverride {
+            let trimmed = expectedEmailOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return Self._accountMismatchErrorForTesting(
+                responseEmail: responseEmail,
+                selectedEmail: trimmed,
+                configLabel: nil
+            )
+        }
         let selectedEmail = AntigravityOAuthStore.activeAccount(
             in: AntigravityOAuthStore.load()
         )?.email
