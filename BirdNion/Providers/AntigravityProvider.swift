@@ -934,8 +934,20 @@ final class AntigravityProvider: QuotaProvider {
                 }
                 accountMismatch = status
             }
-            if let status = await fetchViaOAuth() { return status }
-            if let accountMismatch { return accountMismatch }
+            // OAuth (cloud) CHỈ hợp lệ khi lấy được quota thật. Với account mà
+            // agy không đăng nhập, cloud luôn 403 — đừng để lỗi đó che thông báo
+            // "account không khớp" (rõ ràng, đúng việc cần làm). Ưu tiên:
+            // OAuth thành công → thông báo mismatch → lỗi OAuth.
+            let oauthStatus = await fetchViaOAuth()
+            if let oauthStatus, oauthStatus.error == nil {
+                return oauthStatus
+            }
+            if let accountMismatch {
+                return accountMismatch
+            }
+            if let oauthStatus {
+                return oauthStatus
+            }
             return failure("Antigravity: cần IDE đang chạy, agy CLI, hoặc đăng nhập Google")
         }
     }
