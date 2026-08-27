@@ -218,9 +218,21 @@ public enum AntigravityOAuthConfig {
             "Contents/Resources/bin/language_server",
             "Contents/Resources/bin/language_server_macos",
         ]
-        return appBundleURLs.flatMap { bundleURL in
+        let appArtifacts = appBundleURLs.flatMap { bundleURL in
             relativePaths.map { bundleURL.appendingPathComponent($0) }
         }
+        // Binary CLI `agy` cũng nhúng OAuth client (client id + secret) như app
+        // bundle. Nhiều người chỉ cài agy CLI, không cài Antigravity.app — nếu
+        // chỉ dò app bundle thì "Thêm tài khoản" báo "hãy cài Antigravity.app".
+        // Dò thêm agy để login chạy được với riêng CLI.
+        let home = fileManager.homeDirectoryForCurrentUser
+        let cliArtifacts = [
+            home.appendingPathComponent(".local/bin/agy"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/agy"),
+            URL(fileURLWithPath: "/usr/local/bin/agy"),
+            URL(fileURLWithPath: "/usr/bin/agy"),
+        ]
+        return appArtifacts + cliArtifacts
     }
 
     private static func candidateAntigravityAppBundleURLs(
