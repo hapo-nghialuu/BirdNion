@@ -1637,7 +1637,6 @@ struct CodexAccountsPopoverSection: View {
     @State private var accountActionErrorText: String?
     @State private var switchErrorText: String?
     @State private var accountPendingRemoval: CodexAccount?
-    @State private var showingRemoveConfirmation = false
 
     var body: some View {
         // Click (not hover) toggles the account list — hover-reveal collapsed
@@ -1664,88 +1663,7 @@ struct CodexAccountsPopoverSection: View {
             }
         }
         .vocabbyCard()
-        .overlay {
-            if showingRemoveConfirmation, accountPendingRemoval != nil {
-                removeConfirmationOverlay
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.14), value: showingRemoveConfirmation)
         .onAppear(perform: reload)
-    }
-
-    private var removeConfirmationOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.42)
-                .contentShape(Rectangle())
-                .onTapGesture {}
-
-            VStack(spacing: 10) {
-                Image(nsImage: NSApplication.shared.applicationIconImage)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 54, height: 54)
-
-                VStack(spacing: 4) {
-                    Text(removeConfirmationTitle)
-                        .font(.plexSans(13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                    Text(removeConfirmationMessage)
-                        .font(.plexSans(11, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.88))
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                VStack(spacing: 7) {
-                    Button(role: .destructive) {
-                        if let accountPendingRemoval {
-                            removeAccount(accountPendingRemoval)
-                        }
-                    } label: {
-                        Text(removeConfirmationButtonTitle)
-                            .font(.plexSans(12, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.critical)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                                    .fill(Color.white.opacity(0.26))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busy)
-
-                    Button {
-                        dismissRemoveConfirmation()
-                    } label: {
-                        Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
-                            .font(.plexSans(12, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                                    .fill(Color.white.opacity(0.26))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busy)
-                }
-            }
-            .padding(16)
-            .frame(width: 260)
-            .background(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .fill(Color.black.opacity(0.72))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.35), radius: 16, y: 6)
-        }
     }
 
     private var collapsedRow: some View {
@@ -1866,17 +1784,51 @@ struct CodexAccountsPopoverSection: View {
                 .disabled(busy)
             }
             if canRemove(account) {
-                Button(role: .destructive) {
-                    confirmRemove(account)
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.critical)
-                        .frame(width: 18, height: 18)
+                if accountPendingRemoval?.id == account.id {
+                    // Xác nhận xoá NGAY TẠI DÒNG (thay overlay popup — đồng nhất
+                    // với tab Antigravity).
+                    Button {
+                        dismissRemoveConfirmation()
+                    } label: {
+                        Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
+                            .font(.plexSans(11, weight: .medium))
+                            .foregroundStyle(VocabbyTheme.secondary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                    Button {
+                        removeAccount(account)
+                    } label: {
+                        Text(removeConfirmationButtonTitle)
+                            .font(.plexSans(11, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.background)
+                            .padding(.horizontal, 10)
+                            .frame(height: 24)
+                            .background(
+                                RoundedRectangle(
+                                    cornerRadius: InstrumentShape.controlRadius,
+                                    style: .continuous
+                                )
+                                .fill(VocabbyTheme.critical)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                } else {
+                    Button {
+                        confirmRemove(account)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(VocabbyTheme.critical)
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .help(removeHelp(for: account))
+                    .disabled(busy)
                 }
-                .buttonStyle(.plain)
-                .help(removeHelp(for: account))
-                .disabled(busy)
             }
         }
         .padding(.vertical, 5)
@@ -1976,11 +1928,9 @@ struct CodexAccountsPopoverSection: View {
 
     private func confirmRemove(_ account: CodexAccount) {
         accountPendingRemoval = account
-        showingRemoveConfirmation = true
     }
 
     private func dismissRemoveConfirmation() {
-        showingRemoveConfirmation = false
         accountPendingRemoval = nil
     }
 
@@ -2182,7 +2132,6 @@ struct CodexAccountsPopoverSection: View {
 
     private func removeAccount(_ account: CodexAccount) {
         accountActionErrorText = nil
-        showingRemoveConfirmation = false
         do {
             try CodexAccountStore.remove(account: account, from: accounts)
             reload()
@@ -2840,7 +2789,6 @@ struct AntigravityAccountsPopoverSection: View {
     @State private var busy = false
     @State private var errorText: String?
     @State private var accountPendingRemoval: AntigravityOAuthStore.Account?
-    @State private var showingRemoveConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2870,20 +2818,6 @@ struct AntigravityAccountsPopoverSection: View {
             }
         }
         .vocabbyCard()
-        .confirmationDialog(
-            removeConfirmationTitle,
-            isPresented: $showingRemoveConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button(L10n.t("provider.removeAccount", settings.appLanguage), role: .destructive) {
-                removeConfirmedAccount()
-            }
-            Button(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage), role: .cancel) {
-                accountPendingRemoval = nil
-            }
-        } message: {
-            Text(L10n.t("provider.removeAccountMessage", settings.appLanguage))
-        }
         .onAppear {
             reload()
             if store.accounts.isEmpty { revealed = true }
@@ -3007,21 +2941,56 @@ struct AntigravityAccountsPopoverSection: View {
                 settings.appLanguage
             ))
 
-            Button(role: .destructive) {
-                accountPendingRemoval = account
-                showingRemoveConfirmation = true
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.critical)
-                    .frame(width: 28, height: 28)
+            if accountPendingRemoval?.label == account.label {
+                // Xác nhận xoá NGAY TẠI DÒNG (thay confirmationDialog — dialog
+                // này chập chờn trong NSPanel popover vì mất focus, khiến nút
+                // xoá không ăn). Huỷ để đóng, Xoá để thực thi.
+                Button {
+                    accountPendingRemoval = nil
+                } label: {
+                    Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
+                        .font(.plexSans(11, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.secondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor(enabled: !busy)
+                Button {
+                    removeConfirmedAccount()
+                } label: {
+                    Text(L10n.t("provider.removeAccount", settings.appLanguage))
+                        .font(.plexSans(11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.background)
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(
+                            RoundedRectangle(
+                                cornerRadius: InstrumentShape.controlRadius,
+                                style: .continuous
+                            )
+                            .fill(VocabbyTheme.critical)
+                        )
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor(enabled: !busy)
+                .disabled(busy)
+            } else {
+                Button {
+                    accountPendingRemoval = account
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.critical)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor(enabled: !busy)
+                .disabled(busy)
+                .help(L10n.t("provider.removeAccount", settings.appLanguage))
+                .accessibilityLabel(
+                    L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
             }
-            .buttonStyle(.plain)
-            .pointingHandCursor(enabled: !busy)
-            .disabled(busy)
-            .help(L10n.t("provider.removeAccount", settings.appLanguage))
-            .accessibilityLabel(
-                L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
         }
         .padding(.vertical, 4)
     }
@@ -3048,17 +3017,6 @@ struct AntigravityAccountsPopoverSection: View {
         .pointingHandCursor(enabled: !busy)
         .disabled(busy)
         .accessibilityHint(L10n.t("antigravity.popover.addAccountHint", settings.appLanguage))
-    }
-
-    private var removeConfirmationTitle: String {
-        guard let accountPendingRemoval else {
-            return L10n.t("provider.removeAccount", settings.appLanguage)
-        }
-        return L10n.f(
-            "provider.removeAccountTitle",
-            settings.appLanguage,
-            accountName(accountPendingRemoval)
-        )
     }
 
     private func reload() {
