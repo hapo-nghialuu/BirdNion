@@ -118,12 +118,12 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 - [x] [both] Thêm `notConfigured` tách khỏi token sai trong classifier; popover Retry hiện cho mọi provider lỗi (không chỉ Claude/Codex/Grok), Fix chỉ hiện khi lỗi thật sự sửa được từ Settings (not-configured/credential/cookie)
 - [x] [macOS] Chuẩn hóa macOS minimum 14.0 — `Info.plist` (`LSMinimumSystemVersion`) trước đó lệch còn 13.0 so với `MACOSX_DEPLOYMENT_TARGET`/docs
 - [x] Release gate: `Scripts/release.sh` chạy macOS build+test, Linux TS build (`npm run build`), và Rust tests trước khi bump version hoặc publish
-- [ ] [Linux] Custom Claude/Codex profile quick switch trong popover — deferred/accepted gap cho tới khi UX macOS ổn định
+- [ ] [Linux] Custom Claude/Codex profile quick switch trong popover — chuyển thành ưu tiên P0 để đóng khoảng trống parity với macOS
 - [x] [both] Budget **per-source** cho Claude/Codex/Grok/Kiro/OMP/Pi — UserDefaults (macOS) / localStorage (Linux), độc lập với budget tổng; Claude/Codex/Grok/Kiro có card trong tab provider, OMP/Pi có Settings + digest; mọi forecast tôn trọng trust-unavailable và digest chỉ cảnh báo forecast-over/already-over
 - [x] [both] Usage Insights + Cost by Project — All tab chỉ giữ compact highlight; Settings có tab Insights với Overview và Projects 7/30/90 ngày. Claude/Codex/Grok dùng project key SHA-256 + basename an toàn từ metadata local; chỉ residual không gán được mới vào `Unknown`; history riêng `project-cost-history.json` high-water/0600 — 2026-08-20
 - [x] [both] Guided Setup completion + Action Center v1 — lỗi sửa được mở đúng provider/control; save fail không chạy self-test; Live chỉ sau probe thật. Popover chỉ thêm badge gọn, chi tiết nằm trong Settings; chỉ current setup/connection-health, không history/quota/budget/release và không persist raw error — 2026-08-21
 - [x] [both] First Live Checkpoint — receipt local per-provider cho Claude/Codex/Grok chỉ được ghi từ save-first explicit probe hiện tại có quota window và sau paint acknowledgment thật (AppKit `draw` / hai `requestAnimationFrame`); failure/cache/background/stale generation không tạo hoặc ghi đè, root storage hỏng được giữ nguyên, payload chuẩn hoá đúng schema và không chứa credential/path/token/raw error. macOS dùng atomic UUID journal + tri-state commit; `indeterminate` không giả Live/Fail — 2026-08-26
-- [ ] [both] Export CSV/JSON chi phí theo ngày/model — deferred, ngoài scope đợt 2026-08-15
+- [ ] [both] Export CSV/JSON chi phí theo ngày/model — tiếp tục ở P4, chưa phải capability hiện có
 - [ ] [Windows] Port từ codebase Tauri `linux/` — **đang phát triển, `FLASH_UNVERIFIED`**:
   - [x] Platform seam cho `%USERPROFILE%`/`%APPDATA%`/`%LOCALAPPDATA%`, `PATH`/`PATHEXT`, atomic private writes và owner/SYSTEM DACL
   - [x] Static process ownership dùng owned child + Windows Job Object; listener chỉ được nhận khi PID khớp child BirdNion
@@ -135,10 +135,58 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 
 > Test suite đã được defer trong các lát cắt hiện tại. Chưa có Windows release workflow/artifact được xác minh và không được public claim Windows support từ các checkbox static ở trên.
 
-## 🌐 Phase 9 — Audience expansion (LATER, 3–6 tháng)
-Chọn một hướng khi Phase 7–8 xong:
+## 🎯 Public Proof & Landing — ACTIVE (2026-08-27)
+
+Mục tiêu đợt hiện tại là biến capability đã có bằng chứng thành public proof có thể kiểm tra, **không** đồng nghĩa P1/P2 hoặc các feature roadmap tương lai đã ship. Design contract được lưu tại [`landing-page-design-guidelines.md`](./landing-page-design-guidelines.md); built-in plan trong `plans/260827-birdnion-public-landing-and-launch/` là tài liệu điều phối local vì `plans/` không được Git track.
+
+- [ ] Landing tĩnh trên Vercel, GitHub-first; outcome chính trong 5 phút đầu là quota/reset **First Live** thật, không dùng số liệu hoặc UI giả.
+- [ ] Chứng minh clean install và privacy bằng journey có receipt; dùng asset macOS/Linux và screenshot capability thật.
+- [ ] Giữ surface độc lập với app native/Tauri: không backend, account, email capture, auto telemetry, paid ads hoặc analytics stack đầy đủ.
+- [ ] Soft launch theo nhịp GitHub → Show HN → community phù hợp; Product Hunt chỉ sau khi đã học từ cohort riêng và soft launch.
+
+## 🧭 Product roadmap đã duyệt — hướng tương lai (P0–P5)
+
+> **Ranh giới trạng thái (2026-08-27):** các checkbox đã hoàn tất ở Phase 0–8 và bảng milestone bên dưới là capability/lịch sử đã có bằng chứng. P0–P5 là định hướng sản phẩm đã duyệt nhưng **chưa triển khai**; mỗi mục chỉ được đánh dấu hoàn tất sau spec, implementation và receipt riêng cho macOS/Linux.
+
+### P0 — Đóng khoảng trống Linux custom profile quick-switch
+
+- [ ] [Linux] Đưa custom Claude/Codex profile quick-switch vào popover, giữ cùng contract activation fail-closed đã có trên macOS và đóng khoảng trống parity macOS/Linux.
+
+### P1 — Allowance Runway & Reset Timeline
+
+- [ ] [both] Hiển thị allowance theo **đơn vị native** của từng nguồn; chỉ hiện `used` / `remaining` / `limit` khi contract nguồn thật sự cung cấp, kèm reset/cycle timeline.
+- [ ] [both] Phản ánh đúng overage, top-up và hard-stop; luôn ghi source authority, freshness và forecast confidence.
+- [ ] [both] Không ép các contract khác nhau về một phần trăm giả. Trường thiếu dữ liệu phải là `Unknown`, không suy diễn thành `0`, `100%` hoặc limit ước lượng.
+
+### P2 — Observational Agent Source Health
+
+- [ ] [both] Hiển thị thụ động installed/version/path, config precedence, auth/source type đang chọn, contract level, lần probe thật gần nhất, lần thành công gần nhất và stale reason.
+- [ ] [both] `Check`/`Fix` chỉ chạy khi người dùng yêu cầu, có deadline và phạm vi rõ ràng; read-only đối với credential, không credential rewrite và không tạo polling loop riêng.
+
+### P3 — Local Data Provenance & Privacy
+
+- [ ] [both] Thêm panel giải thích dữ liệu local nào được đọc, nguồn/owner, mục đích, freshness/retention và dữ liệu dẫn xuất nào được lưu; phân biệt rõ BirdNion-owned với credential/config do agent khác sở hữu.
+
+### P4 — Export chi phí
+
+- [ ] [both] Hoàn tất TODO export CSV/JSON chi phí theo ngày/model, giữ nguyên đơn vị, nguồn và trạng thái dữ liệu thiếu thay vì làm phẳng sai semantics.
+
+### P5 — OpenCode cost scanner sau contract discovery
+
+- [ ] [both] Chỉ thiết kế/triển khai OpenCode cost scanner sau khi discovery xác minh nguồn dữ liệu thật, schema, đơn vị, ownership và giới hạn scan; nếu chưa có contract đủ tin cậy thì giữ `Unknown` và không ship scanner suy đoán.
+
+### Chủ động defer
+
+- [ ] Team/cloud aggregation và đồng bộ nhiều máy.
+- [ ] Mở rộng provider hàng loạt; chỉ thêm provider khi có nhu cầu thật và contract phù hợp.
+- [ ] Tự động bật OpenTelemetry (OTel).
+- [ ] Đồng bộ hoặc ghi lại credential của Claude/Codex/agent khác.
+- [ ] Công bố Windows support trước khi đủ native receipts cho Windows 10/11 × x64/ARM64 và các journey phát hành bắt buộc.
+
+## 🌐 Phase 9 — Audience expansion (GATED)
+Landing và soft launch đã chuyển lên initiative active **Public Proof & Landing**, không còn chờ P0–P5. Team expansion và campaign diện rộng vẫn defer cho tới khi có evidence từ clean install, First Live và cohort riêng:
 - [ ] **Team/nội bộ Hapo**: dashboard org (Claude Admin API + Kilo orgs đã có), tổng hợp chi phí nhiều máy (cả macOS lẫn Linux ghi chung schema → sync file là đủ), báo cáo
-- [ ] **Public/OSS**: landing page, README tiếng Anh đầy đủ, screenshots cả 2 OS, launch HN/Product Hunt (điểm bán: cross-platform, thứ CodexBar không có)
+- [ ] **Broad campaigns**: mở rộng community và Product Hunt sau soft launch; không dùng paid ads, newsletter gate hoặc claim Windows/P1/P2 khi chưa có receipt riêng
 
 ## 💰 Blocked on budget (làm ngay khi có $99/năm Apple Developer)
 - [ ] Developer ID + notarization → cài đặt không cần strip quarantine, mở rộng được tệp người dùng không kỹ thuật
@@ -156,6 +204,8 @@ Chọn một hướng khi Phase 7–8 xong:
 - KHÔNG monetization khi chưa có khối người dùng
 - Parity với CodexBar coi như XONG — không đuổi theo tiếp
 - Linux không được tụt quá 1 phase so với macOS (mục "Linux sync" là bắt buộc trước khi đóng phase)
+- Không chuẩn hóa quota/allowance về phần trăm khi source contract không cung cấp đủ dữ liệu
+- Không sửa hoặc đồng bộ credential do agent khác sở hữu
 
 ## Recent milestones
 
