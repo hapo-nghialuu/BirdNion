@@ -34,7 +34,7 @@ The website should feel like a cheerful desktop companion sitting beside BirdNio
 - Mobile is one column with 20px gutters. Narrative alternates 7/5 and 5/7 on larger screens.
 - Use whitespace and hairlines before cards, shadows or rounded containers.
 - The product UI is the hero. The mascot stays secondary and never covers the headline, primary action, or product evidence.
-- `website/assets/birdnion-readme-bird-gpt.png` is the approved transparent master generated with `docs/social.png` attached as the reference image. The hero serves its 384px delivery derivative, `website/assets/birdnion-readme-bird-gpt-384.png`; do not generate alternate characters without explicit approval.
+- `website/assets/birdnion-readme-bird-quota.png` is the approved transparent master derived from the original BirdNion mascot. The hero and README serve its 384px delivery derivative, `website/assets/birdnion-readme-bird-quota-384.png`; do not generate alternate characters without explicit approval.
 - Header, footer, and favicon use the existing `docs/images/logo.png` mark.
 
 ## Product-truth and asset rules

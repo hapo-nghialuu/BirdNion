@@ -21,7 +21,7 @@ The native macOS app uses SwiftUI/AppKit and a vendored, trimmed `CodexBarCore` 
 - **Plan around resets.** Per-provider 5-hour, weekly, monthly, credit, and budget windows with reset countdowns.
 - **See spend and cost.** Claude local JSONL scans, weekly usage insights, privacy-safe project rankings, Claude Admin API charts, Codex credits, OpenRouter balances, Bedrock budgets, and provider-specific cost/credit summaries where available.
 - **Configure agent sources.** Pick OAuth, CLI, browser cookies, API keys, AWS credentials, local app files, or provider apps from Settings per provider.
-- **Keep desktop chrome quiet.** macOS can rotate provider quota percents in the menu bar; Linux shows the same rotation in the tray tooltip.
+- **Keep desktop chrome quiet.** macOS can rotate provider quota percents in the menu bar; Linux rotates the provider logo and percentage directly in the tray icon.
 - **Privacy-first.** BirdNion reuses existing sessions and explicit config. It does not store passwords or perform unrestricted disk scans.
 
 ## Install
@@ -157,9 +157,17 @@ Planned direction:
 
 Open to more providers when they fit the existing `QuotaProvider` model.
 
-## Icon & Screenshots
+## Mascot, Icon & Screenshots
 
-The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in menu bar" is enabled, the bar rotates through active provider quota percents with each provider's logo. Linux keeps the tray icon stable and exposes the rotating provider value in its tooltip.
+The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in menu bar" is enabled, the bar rotates through active provider quota percents with each provider's logo. Linux renders the rotating provider logo and percentage directly in the tray icon.
+
+<div align="center">
+  <img src="website/assets/birdnion-readme-bird-quota-384.png" width="196" alt="BirdNion mascot holding a blue and yellow quota bar" />
+  <br />
+  <strong>BirdNion quota companion</strong>
+</div>
+
+<br />
 
 <div align="center">
   <img src="docs/images/logo.png" width="112" alt="BirdNion app icon" />
@@ -185,7 +193,7 @@ The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in m
 
 ## Features
 
-- Optional rotating provider values in the macOS menu bar or Linux tray tooltip, with provider toggles and drag-to-reorder Settings.
+- Optional rotating provider values in the macOS menu bar or Linux tray icon, with provider toggles and platform-appropriate reorder controls.
 - Provider-specific usage meters with reset countdowns.
 - Guided Setup routes fixable provider errors to the exact Settings control, saves first, then marks the provider Live only after a real self-test succeeds.
 - A compact popover-header Action Center badge opens Settings for current setup/connection issues; resolved items disappear automatically, with no issue-history store.
@@ -248,7 +256,7 @@ No passwords are stored. Browser cookies are reused only when the user chooses a
 ### Linux
 
 - Browser-cookie providers require a supported Chrome/Chromium/Brave/Edge/Firefox profile and may depend on the desktop keyring.
-- The system tray exposes quota rotation through its tooltip because Linux desktops do not provide portable text beside tray icons.
+- The system tray renders the rotating provider logo and percentage directly in its icon because Linux desktops do not provide portable text beside tray icons.
 - Global hotkeys are not enabled on Linux; use the app window and Settings controls.
 
 ## Docs
