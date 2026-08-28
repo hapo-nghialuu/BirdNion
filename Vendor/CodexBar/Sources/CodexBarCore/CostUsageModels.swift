@@ -68,6 +68,8 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
     public let projectBreakdown: [CostUsageProjectBreakdown]?
     public let projectRetractions: [CostUsageProjectRetraction]?
     public let updatedAt: Date
+    /// Scan bị cắt sớm do hết ngân sách thời gian → caller nên quét tiếp ngay.
+    public let scanIncomplete: Bool
 
     public init(
         sessionTokens: Int?,
@@ -82,8 +84,10 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
         daily: [CostUsageDailyReport.Entry],
         projectBreakdown: [CostUsageProjectBreakdown]? = nil,
         projectRetractions: [CostUsageProjectRetraction]? = nil,
-        updatedAt: Date)
+        updatedAt: Date,
+        scanIncomplete: Bool = false)
     {
+        self.scanIncomplete = scanIncomplete
         self.sessionTokens = sessionTokens
         self.sessionCostUSD = sessionCostUSD
         self.sessionRequests = sessionRequests
@@ -314,6 +318,10 @@ public struct CostUsageDailyReport: Sendable, Decodable {
     public let summary: Summary?
     public let projectBreakdown: [CostUsageProjectBreakdown]?
     public let projectRetractions: [CostUsageProjectRetraction]?
+    /// `true` khi scan bị cắt sớm do hết ngân sách thời gian (còn file chưa
+    /// quét). Không nằm trong CodingKeys → report đọc từ cache luôn là `false`
+    /// (đã hoàn tất). Caller dùng cờ này để lên lịch quét tiếp ngay.
+    public var scanIncomplete: Bool = false
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -362,12 +370,14 @@ public struct CostUsageDailyReport: Sendable, Decodable {
         data: [Entry],
         summary: Summary?,
         projectBreakdown: [CostUsageProjectBreakdown]? = nil,
-        projectRetractions: [CostUsageProjectRetraction]? = nil)
+        projectRetractions: [CostUsageProjectRetraction]? = nil,
+        scanIncomplete: Bool = false)
     {
         self.data = data
         self.summary = summary
         self.projectBreakdown = projectBreakdown
         self.projectRetractions = projectRetractions
+        self.scanIncomplete = scanIncomplete
     }
 }
 

@@ -135,6 +135,12 @@ public struct CostUsageFetcher: Sendable {
             options.codexSessionsRoot = URL(fileURLWithPath: codexHomePath, isDirectory: true)
                 .appendingPathComponent("sessions", isDirectory: true)
         }
+        // Chống treo khi lịch sử Codex JSONL cực lớn (hàng GB): giới hạn thời
+        // gian mỗi lần scan; phần còn lại resume ở lần scan sau qua cache đĩa.
+        // Chỉ áp khi caller không tự đặt (override giữ nguyên hành vi test).
+        if provider == .codex, overrideScannerOptions == nil, options.maxScanWallClock == nil {
+            options.maxScanWallClock = 12
+        }
         if provider == .codex || provider == .claude {
             let pricingCacheRoot = options.cacheRoot
             if refreshPricingInBackground {
@@ -320,7 +326,8 @@ public struct CostUsageFetcher: Sendable {
             daily: daily.data,
             projectBreakdown: daily.projectBreakdown,
             projectRetractions: daily.projectRetractions,
-            updatedAt: now)
+            updatedAt: now,
+            scanIncomplete: daily.scanIncomplete)
     }
 
     static func selectCurrentSession(from sessions: [CostUsageSessionReport.Entry])

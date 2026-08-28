@@ -28,6 +28,12 @@ enum CostUsageScanner {
         var claudeLogProviderFilter: ClaudeLogProviderFilter = .all
         /// Force a full rescan, ignoring per-file cache and incremental offsets.
         var forceRescan: Bool = false
+        /// Ngân sách thời gian (giây) cho MỘT lần scan. Khi vượt, vòng lặp file
+        /// dừng sớm nhưng vẫn lưu cache tiến độ đã quét; lần scan sau resume
+        /// (skip file đã quét bằng mtime, parse tiếp phần còn lại). Chống treo
+        /// khi lịch sử JSONL cực lớn (hàng GB) hoặc scan lạnh/migration. `nil` =
+        /// không giới hạn (hành vi cũ).
+        var maxScanWallClock: TimeInterval?
 
         init(
             codexSessionsRoot: URL? = nil,
@@ -35,7 +41,8 @@ enum CostUsageScanner {
             cacheRoot: URL? = nil,
             codexTraceDatabaseURL: URL? = nil,
             claudeLogProviderFilter: ClaudeLogProviderFilter = .all,
-            forceRescan: Bool = false)
+            forceRescan: Bool = false,
+            maxScanWallClock: TimeInterval? = nil)
         {
             self.codexSessionsRoot = codexSessionsRoot
             self.claudeProjectsRoots = claudeProjectsRoots
@@ -43,6 +50,7 @@ enum CostUsageScanner {
             self.codexTraceDatabaseURL = codexTraceDatabaseURL
             self.claudeLogProviderFilter = claudeLogProviderFilter
             self.forceRescan = forceRescan
+            self.maxScanWallClock = maxScanWallClock
         }
     }
 
@@ -2367,6 +2375,9 @@ enum CostUsageScanner {
             provider: .codex,
             cacheRoot: options.cacheRoot,
             calendar: Calendar.current)
+        // Đặt true khi vòng lặp file dừng sớm vì hết ngân sách thời gian → còn
+        // file chưa quét; caller sẽ lên lịch quét tiếp ngay.
+        var scanTruncated = false
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
         let plan = Self.makeCodexRefreshPlan(cache: cache, range: range, now: now, nowMs: nowMs, options: options)
 
@@ -2439,7 +2450,16 @@ enum CostUsageScanner {
                 modelsDevCatalog: plan.modelsDevCatalog,
                 modelsDevCacheRoot: options.cacheRoot,
                 priorityTurns: plan.priorityTurns)
-            for fileURL in files {
+            // (A) Ngân sách thời gian: dừng vòng lặp khi quá hạn, nhưng vẫn đi
+            // tiếp xuống chỗ lưu cache phía dưới (không throw) để tiến độ đã quét
+            // được persist; lần scan sau resume phần còn lại. File đã quét ở pass
+            // trước sẽ skip tức thì bằng mtime nên mỗi pass luôn tiến lên.
+            let scanDeadline = options.maxScanWallClock.map { Date().addingTimeInterval($0) }
+            // Quét MỚI→CŨ (path chứa ngày, giảm dần) để dữ liệu gần đây hiện
+            // trước khi hết ngân sách; file cũ hơn quét ở pass sau. `fileIndex`
+            // dựng từ `files` gốc nên không ảnh hưởng.
+            for fileURL in files.sorted(by: { $0.path > $1.path }) {
+                if let scanDeadline, Date() >= scanDeadline { scanTruncated = true; break }
                 try Self.scanCodexFile(
                     fileURL: fileURL,
                     context: CodexFileScanContext(
@@ -2521,12 +2541,14 @@ enum CostUsageScanner {
             CostUsageCacheIO.save(provider: .codex, cache: cache, cacheRoot: options.cacheRoot)
         }
 
-        return Self.buildCodexReportFromCache(
+        var report = Self.buildCodexReportFromCache(
             cache: cache,
             range: range,
             modelsDevCatalog: plan.modelsDevCatalog,
             modelsDevCacheRoot: options.cacheRoot,
             priorityTurns: plan.priorityTurns)
+        report.scanIncomplete = scanTruncated
+        return report
     }
 }
 

@@ -138,14 +138,32 @@ enum CodexCostScanner {
     /// the usage chart/heatmap. Returns nil only when the scan throws.
     static func usageReport(now: Date = Date()) async -> CodexUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
+        // Quét NHẸ: mỗi lần chỉ một pass giới hạn thời gian (A); phần chưa quét
+        // để lần mở/refresh sau. Tổng cost vẫn đúng ngay nhờ high-water trong
+        // CostHistoryStore (partial scan không kéo tụt số đã lưu). `_` = cờ dở,
+        // không tự re-trigger (tránh churn CPU — theo lựa chọn "nhẹ nhàng").
+        let (value, _) = await performReportScan(now: now)
+        guard let value else { return nil }
+        await Cache.shared.storeReport(value, at: now)
+        return value
+    }
+
+    /// MỘT lần scan report (không kiểm/ghi `Cache.shared`) → (report, còn dở?).
+    /// Dùng chung bởi `usageReport` và vòng lặp hội tụ để không phụ thuộc vào
+    /// throttle của QuotaService.
+    private static func performReportScan(
+        now: Date,
+        forceRefresh: Bool = false) async -> (CodexUsageReport?, Bool) {
         // Same as `summary()`: the machine-wide ~/.codex is the only place
         // session logs actually accumulate.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
         let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,
+            forceRefresh: forceRefresh,
             codexHomePath: codexHome,
             historyDays: chartWindowDays)
+        let incomplete = snapshot?.scanIncomplete ?? false
         let live = snapshot.map { mapReport($0, now: now) }
         let liveDays = (live?.daily ?? []).map {
             ($0.date, $0.usd, $0.tokens,
@@ -175,10 +193,9 @@ enum CodexCostScanner {
         // Persist high-water days even when the live snapshot fails / is empty
         // (e.g. user deleted ~/.codex/sessions after a prior successful scan).
         if value.isEmpty && live == nil {
-            return nil
+            return (nil, incomplete)
         }
-        await Cache.shared.storeReport(value, at: now)
-        return value
+        return (value, incomplete)
     }
 
     /// Instant chart seed from persisted history — no log scan. Nil when the
