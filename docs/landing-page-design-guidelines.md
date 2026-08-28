@@ -1,6 +1,6 @@
 # BirdNion Landing Page Design Guidelines
 
-> Status: approved design contract for the active Public Proof & Landing initiative. Vercel is the selected static hosting target; the production origin is not assigned yet. This document defines future behavior; it does not claim the landing page or roadmap P0–P5 features are implemented.
+> Status: approved design contract for the active Public Proof & Landing initiative. Vercel is the selected static hosting target at `https://birdnion.vercel.app/`. This document defines future behavior; it does not claim the roadmap P0–P5 features are implemented.
 
 ## Product outcome
 
@@ -128,7 +128,7 @@ Do not public-launch while the same install, First Live or privacy blocker repea
 
 ## Unresolved questions
 
-- Vercel production project URL and whether a custom domain will replace it later.
+- Whether a custom domain will replace `https://birdnion.vercel.app/` later.
 - English-only or bilingual first release.
 - Independent visual reviewer ownership.
 - Whether the website-only bird mark should replace native app icons; keep the two identities separate until explicitly approved.
