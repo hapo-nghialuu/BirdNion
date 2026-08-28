@@ -1243,8 +1243,10 @@ struct ProviderHeaderCard: View {
         // Design body pad after tabs (16pt) — without this the name row
         // sits flush under the provider chip strip.
         .padding(.top, 16)
-        .padding(.bottom, 2)
+        .padding(.bottom, 12)
         .background(VocabbyTheme.background)
+        // Convention bottom: header vẽ hairline đáy để ngăn với summary/quota.
+        .overlay(alignment: .bottom) { PopoverInsetHairline() }
     }
 
     /// Design credits row (sits with window list): `CREDITS` · `$24.80 CÒN LẠI`
@@ -1263,9 +1265,6 @@ struct ProviderHeaderCard: View {
         }
         .popoverContentInset()
         .padding(.vertical, 12)
-        .overlay(alignment: .bottom) {
-            PopoverInsetHairline()
-        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(L10n.t("provider.creditsAvailable", language) + ": " + creditsText)
     }
@@ -1317,7 +1316,7 @@ struct ServiceStatusStrip: View {
             .pointingHandCursor()
             .popoverContentInset()
             .padding(.vertical, 12)
-            .overlay(alignment: .top) {
+            .overlay(alignment: .bottom) {
                 PopoverInsetHairline()
             }
             .accessibilityLabel(accessibilityLabel(for: strip))
@@ -1405,10 +1404,10 @@ struct XAISpendCard: View {
                 .foregroundStyle(VocabbyTheme.secondary)
         }
         .popoverContentInset()
-        .padding(.vertical, 9)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(VocabbyTheme.background)
-        .popoverHairlineTop()
+        .overlay(alignment: .bottom) { PopoverInsetHairline() }
     }
 }
 
@@ -1517,12 +1516,12 @@ struct ProviderCard: View {
                     creditsText: creditsText(credits))
             }
         }
-        // Error / empty rows keep content inset; window rows pad themselves.
-        // Section rule is inset (only header + tabs are edge-to-edge).
-        .padding(.top, 16)
-        .overlay(alignment: .top) {
-            PopoverInsetHairline()
-        }
+        // Convention bottom: MỘT hairline đáy cho CẢ khối quota (không vẽ
+        // hairline giữa từng window — các thanh quota liền nhau, không gạch
+        // ngang). Top/bottom 6: cộng với padding 6 của row đầu/cuối thành 12,
+        // khớp padding 12 của mọi section khác → line trên/dưới đối xứng.
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { PopoverInsetHairline() }
     }
 }
 
@@ -2204,16 +2203,11 @@ struct QuotaSummaryStrip: View {
                 .lineSpacing(4) // ~1.6 line-height optical
             }
         }
-        // Design: margin-top 16 + padding-top 14 under ink rule (inset).
-        // Bottom 16 keeps RESETS/USED clear of the next section hairline.
+        // Convention bottom: hairline ĐÁY (ngăn với khối quota dưới). Padding
+        // dọc 12 để mọi line có khoảng cách trên/dưới bằng nhau.
         .popoverContentInset()
-        .padding(.top, 30)
-        .padding(.bottom, 16)
-        .overlay(alignment: .top) {
-            // Section divider: xám, inset (quy ước 2026-08-24).
-            PopoverInsetHairline()
-                .padding(.top, 16)
-        }
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) { PopoverInsetHairline() }
         .accessibilityElement(children: .combine)
     }
 }
@@ -2364,10 +2358,8 @@ struct WindowRow: View {
             }
         }
         .popoverContentInset()
-        .padding(.vertical, 12)
-        .overlay(alignment: .bottom) {
-            PopoverInsetHairline()
-        }
+        // Gọn: các thanh quota sát nhau hơn (không hairline ngăn giữa nữa).
+        .padding(.vertical, 6)
     }
 
     private func paceLine(_ pace: WindowPace) -> String {
@@ -2465,7 +2457,8 @@ struct AntigravitySemanticQuotaRows: View {
             .foregroundStyle(VocabbyTheme.muted)
             .tracking(0.6)
             .popoverContentInset()
-            .padding(.top, 10)
+            // Top 6: khớp row (6) để line trên/dưới group header đối xứng.
+            .padding(.top, 6)
             .padding(.bottom, 2)
     }
 
@@ -2484,9 +2477,13 @@ struct AntigravitySemanticQuotaRows: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             quotaGroup(title: "Gemini", windows: geminiWindows)
-            // No extra between-group rule: each row already draws the same
-            // inset hairline as `WindowRow` (aligned to the quota bar width).
-            // A second `.popoverContentInset()` rule here was shorter than the bar.
+            // Chỉ có MỘT hairline ngăn 2 nhóm model (Gemini ↔ Claude/GPT) khi
+            // cả hai cùng hiện — trong mỗi nhóm các thanh quota liền nhau không
+            // gạch ngang (đồng bộ với WindowRow). Ranh giới đáy của cả khối do
+            // ProviderCard vẽ.
+            if !geminiWindows.isEmpty, !claudeGPTWindows.isEmpty {
+                PopoverInsetHairline()
+            }
             quotaGroup(title: "Claude/GPT", windows: claudeGPTWindows)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2555,12 +2552,8 @@ private struct AntigravitySemanticQuotaRow: View {
             .padding(.top, 7)
         }
         .popoverContentInset()
-        .padding(.vertical, 12)
-        // Same as `WindowRow`: overlay hairline on the full row width; the
-        // hairline's own horizontal inset matches the bar/text content edges.
-        .overlay(alignment: .bottom) {
-            PopoverInsetHairline()
-        }
+        // Gọn: các thanh quota sát nhau hơn (không hairline ngăn giữa nữa).
+        .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(shortLabel), \(window.remainingPct) percent left"
@@ -2794,7 +2787,9 @@ struct AntigravityAccountsPopoverSection: View {
     // điểm — `agyLoginTargetLabel` chọn account nào đang mở panel).
     @StateObject private var agyLogin = AntigravityIsolatedLoginSession()
     @State private var agyLoginTargetLabel: String?
-    @State private var agyLoginCodeText = ""
+    // "Công tắc" áp account ra công cụ thật: agy CLI (~/.gemini) + import omp.
+    @State private var applyBusy = false
+    @State private var applyMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -3000,11 +2995,117 @@ struct AntigravityAccountsPopoverSection: View {
                         L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
                 }
             }
+            if AntigravityIsolatedAgy.hasLogin(forAccountLabel: account.label),
+               accountPendingRemoval?.label != account.label,
+               agyLoginTargetLabel != account.label {
+                agyApplyRow(for: account)
+            }
             if agyLoginTargetLabel == account.label {
                 agyLoginPanel(for: account)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// "Công tắc" áp account đã login cô lập ra công cụ thật: đổi account cho
+    /// lệnh `agy` (ghi `~/.gemini`) và import account vào omp. Chỉ hiện khi
+    /// account đã có login cô lập.
+    @ViewBuilder
+    private func agyApplyRow(for account: AntigravityOAuthStore.Account) -> some View {
+        let lang = settings.appLanguage
+        let inCLI = AntigravityAgyCLI.isActiveInCLI(accountLabel: account.label)
+        HStack(spacing: 6) {
+            if inCLI {
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text(L10n.t("antigravity.apply.agyActive", lang))
+                }
+                .font(.plexMono(9, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.success)
+            } else {
+                Button {
+                    applyToAgyCLI(account)
+                } label: {
+                    Text(L10n.t("antigravity.apply.useAgy", lang))
+                        .font(.plexSans(10, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.blue)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                                .fill(VocabbyTheme.blue.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor(enabled: !applyBusy)
+                .disabled(applyBusy)
+                .help(L10n.t("antigravity.apply.useAgyHelp", lang))
+            }
+            Button {
+                importToOmp(account)
+            } label: {
+                HStack(spacing: 3) {
+                    if applyBusy { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                    Text(L10n.t("antigravity.apply.importOmp", lang))
+                }
+                .font(.plexSans(10, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.secondary)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(VocabbyTheme.segment))
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor(enabled: !applyBusy)
+            .disabled(applyBusy)
+            .help(L10n.t("antigravity.apply.importOmpHelp", lang))
+            Spacer(minLength: 0)
+            if let applyMessage {
+                Text(applyMessage)
+                    .font(.plexSans(9))
+                    .foregroundStyle(VocabbyTheme.success)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func applyToAgyCLI(_ account: AntigravityOAuthStore.Account) {
+        do {
+            try AntigravityAgyCLI.switchToCLI(accountLabel: account.label)
+            errorText = nil
+            applyMessage = L10n.t("antigravity.apply.agyDone", settings.appLanguage)
+            // agy đổi account → Antigravity CLI fetch lại theo account mới.
+            NotificationCenter.default.post(name: .birdnionRefresh, object: "antigravity")
+            clearApplyMessageSoon()
+        } catch {
+            applyMessage = nil
+            errorText = error.localizedDescription
+        }
+    }
+
+    private func importToOmp(_ account: AntigravityOAuthStore.Account) {
+        applyBusy = true
+        applyMessage = nil
+        errorText = nil
+        let label = account.label
+        let email = account.email
+        Task {
+            do {
+                try await AntigravityOmpImport.importAccount(accountLabel: label, email: email)
+                applyMessage = L10n.t("antigravity.apply.ompDone", settings.appLanguage)
+                clearApplyMessageSoon()
+            } catch {
+                errorText = error.localizedDescription
+            }
+            applyBusy = false
+        }
+    }
+
+    private func clearApplyMessageSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            applyMessage = nil
+        }
     }
 
     private var addAccountRow: some View {
@@ -3160,53 +3261,6 @@ struct AntigravityAccountsPopoverSection: View {
                         .font(.plexSans(11))
                         .foregroundStyle(VocabbyTheme.secondary)
                 }
-            case .awaitingCode, .submitting:
-                let submitting = agyLogin.state == .submitting
-                Text(L10n.t("antigravity.login.instruction", lang))
-                    .font(.plexSans(11))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    TextField(L10n.t("antigravity.login.codePlaceholder", lang), text: $agyLoginCodeText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.plexMono(11))
-                        .disabled(submitting)
-                        .onSubmit { submitAgyLoginCode() }
-                    if submitting {
-                        ProgressView().controlSize(.small)
-                    }
-                }
-                HStack(spacing: 8) {
-                    Button {
-                        cancelAgyLogin()
-                    } label: {
-                        Text(L10n.t("ccx.pasteJSON.cancel", lang))
-                            .font(.plexSans(11, weight: .medium))
-                            .foregroundStyle(VocabbyTheme.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor(enabled: !submitting)
-                    .disabled(submitting)
-                    Spacer(minLength: 0)
-                    Button {
-                        submitAgyLoginCode()
-                    } label: {
-                        Text(L10n.t("antigravity.login.submit", lang))
-                            .font(.plexSans(11, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.background)
-                            .padding(.horizontal, 10)
-                            .frame(height: 24)
-                            .background(
-                                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                                    .fill(VocabbyTheme.blue)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(submitting
-                              || agyLoginCodeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .pointingHandCursor(enabled: !submitting
-                        && !agyLoginCodeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
             case .success:
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
@@ -3261,19 +3315,12 @@ struct AntigravityAccountsPopoverSection: View {
 
     private func startAgyLogin(for account: AntigravityOAuthStore.Account) {
         agyLoginTargetLabel = account.label
-        agyLoginCodeText = ""
         agyLogin.start(accountLabel: account.label)
     }
 
     private func cancelAgyLogin() {
         agyLogin.cancel()
         agyLoginTargetLabel = nil
-        agyLoginCodeText = ""
-    }
-
-    private func submitAgyLoginCode() {
-        guard case .awaitingCode = agyLogin.state else { return }
-        agyLogin.submitCode(agyLoginCodeText)
     }
 }
 
@@ -3533,11 +3580,17 @@ struct ActionsList: View {
             }
         }
         .popoverContentInset()
-        .padding(.top, 10)
+        // Top 12 để khoảng cách từ chrome rule tới icon bằng khoảng cách từ
+        // section cuối tới chrome rule (đối xứng như mọi line khác).
+        .padding(.top, 12)
         .padding(.bottom, 10)
+        // Chrome rule chân popover: full-bleed (chạm 2 mép, đối xứng với chrome
+        // rule đầu). Vẽ đè 1px LÊN hairline inset của section cuối (offset -1)
+        // để 2 đường trùng vị trí → nhìn ra 1 line full-bleed, không phải 2px.
         .overlay(alignment: .top) {
-            // Chrome rule foot: đậm hơn hairline, full-bleed (quy ước 2026-08-24).
-            VocabbyTheme.chromeRule.frame(height: 1)
+            VocabbyTheme.chromeRule
+                .frame(height: 1)
+                .offset(y: -1)
         }
     }
 
@@ -4382,21 +4435,23 @@ enum AboutPresenter {
 // MARK: - Card modifier
 
 struct VocabbyCard: ViewModifier {
-    // Instrument redesign: no filled/rounded/shadowed card — a plain top
-    // hairline divider instead (matches CSS `.card { border-radius: 0;
-    // border-top: 1px solid var(--hairline); padding: 16px 0; }`). Content
-    // and rule share the 16pt side inset (only header/tabs are edge-to-edge).
+    // Convention hairline popover (2026-08-28): MỌI section chỉ vẽ hairline ở
+    // cạnh DƯỚI, không vẽ cạnh trên. Nhờ vậy mỗi ranh giới giữa 2 section chỉ
+    // có đúng 1 đường (bottom của section trên), không bao giờ 2px hay mất line.
+    // Content + rule cùng inset 16pt (chỉ header/tabs/footer full-bleed).
     func body(content: Content) -> some View {
         content
             .popoverContentInset()
             .padding(.vertical, 12)
             .background(VocabbyTheme.background)
-            .popoverHairlineTop()
+            .overlay(alignment: .bottom) { PopoverInsetHairline() }
     }
 }
 
 extension View {
-    func vocabbyCard() -> some View { modifier(VocabbyCard()) }
+    func vocabbyCard() -> some View {
+        modifier(VocabbyCard())
+    }
 }
 
 // MARK: - Usage chart scaling
@@ -4436,7 +4491,9 @@ struct ClaudeUsageChartCard: View {
             startLabel: daily30.first.map { dayLabel($0.date) },
             dayDetail: dayDetail,
             footnote: L10n.t("chart.estimateClaude", settings.appLanguage),
-            barTint: VocabbyTheme.chartClaude
+            barTint: VocabbyTheme.chartClaude,
+            hairlineTopEdge: false,
+            hairlineBottomEdge: true
         ) {
             barChart
         }
@@ -4515,7 +4572,9 @@ struct CodexUsageChartCard: View {
             startLabel: daily30.first.map { dayLabel($0.date) },
             dayDetail: dayDetail,
             footnote: L10n.t("chart.estimateCodex", settings.appLanguage),
-            barTint: VocabbyTheme.chartCodex
+            barTint: VocabbyTheme.chartCodex,
+            hairlineTopEdge: false,
+            hairlineBottomEdge: true
         ) {
             barChart
         }
@@ -4618,6 +4677,12 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
     let dayDetail: ProviderDayChartDetail?
     let footnote: String
     let barTint: Color
+    /// Cạnh vẽ hairline. Mặc định TOP (như mọi section popover). Codex đặt
+    /// `top:false, bottom:true` để: (1) không đôi line với hairline đáy của
+    /// hàng quota ngay trên, (2) tự tạo line ngăn với card ngân sách ngay dưới
+    /// (card ngân sách chỉ có hairline đáy, không có top).
+    var hairlineTopEdge: Bool = true
+    var hairlineBottomEdge: Bool = false
     @ViewBuilder let bars: () -> Bars
 
     var body: some View {
@@ -4687,8 +4752,11 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
                 .padding(.top, 2)
         }
         .popoverContentInset()
-        .padding(.vertical, 14)
-        .popoverHairlineTop()
+        .padding(.vertical, 12)
+        .popoverHairlineTop(hairlineTopEdge ? VocabbyTheme.hairline : .clear)
+        .overlay(alignment: .bottom) {
+            if hairlineBottomEdge { PopoverInsetHairline() }
+        }
     }
 }
 
@@ -4718,7 +4786,9 @@ struct KiroUsageChartCard: View {
             startLabel: daily30.first.map { dayLabel($0.date) },
             dayDetail: dayDetail,
             footnote: L10n.t("chart.estimateKiro", settings.appLanguage),
-            barTint: VocabbyTheme.primary
+            barTint: VocabbyTheme.primary,
+            hairlineTopEdge: false,
+            hairlineBottomEdge: true
         ) {
             barChart
         }
@@ -4795,7 +4865,9 @@ struct GrokUsageChartCard: View {
             startLabel: daily30.first.map { dayLabel($0.date) },
             dayDetail: dayDetail,
             footnote: L10n.t("chart.estimateGrok", settings.appLanguage),
-            barTint: VocabbyTheme.chartGrok
+            barTint: VocabbyTheme.chartGrok,
+            hairlineTopEdge: false,
+            hairlineBottomEdge: true
         ) {
             barChart
         }

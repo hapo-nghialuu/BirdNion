@@ -1129,7 +1129,7 @@ struct ProviderBudgetCard: View {
                     .tracking(0.3)
             }
             .popoverContentInset()
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
             .overlay(alignment: .bottom) { PopoverInsetHairline() }
         }
     }
