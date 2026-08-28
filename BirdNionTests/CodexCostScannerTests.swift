@@ -295,4 +295,107 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertEqual(r.last30USD, 1.0, accuracy: 0.001)
         XCTAssertNil(r.topModel)                // no model breakdowns logged
     }
+
+    func testJsonlBoundedScanResumesAtCompleteLineBoundary() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-jsonl-resume-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("large.jsonl")
+        let first = #"{"type":"first"}"#
+        let second = #"{"type":"second","payload":""# + String(repeating: "x", count: 300_000) + #""}"#
+        try Data("\(first)\n\(second)\n".utf8).write(to: file)
+
+        var stopChecks = 0
+        var firstPassLines: [String] = []
+        let partial = try CostUsageJsonl.scanResumable(
+            fileURL: file,
+            maxLineBytes: 512 * 1024,
+            prefixBytes: 512 * 1024,
+            shouldStop: {
+                stopChecks += 1
+                return stopChecks >= 2
+            },
+            onLine: { firstPassLines.append(String(decoding: $0.bytes, as: UTF8.self)) })
+
+        XCTAssertTrue(partial.stoppedEarly)
+        XCTAssertEqual(firstPassLines, [first])
+        XCTAssertEqual(partial.parsedBytes, Int64(first.utf8.count + 1))
+
+        var resumedLines: [String] = []
+        let resumed = try CostUsageJsonl.scanResumable(
+            fileURL: file,
+            offset: partial.parsedBytes,
+            maxLineBytes: 512 * 1024,
+            prefixBytes: 512 * 1024,
+            onLine: { resumedLines.append(String(decoding: $0.bytes, as: UTF8.self)) })
+
+        XCTAssertFalse(resumed.stoppedEarly)
+        XCTAssertEqual(resumedLines, [second])
+        XCTAssertEqual(resumed.parsedBytes, Int64(first.utf8.count + second.utf8.count + 2))
+    }
+
+    func testTruncatedScanDoesNotFinalizeGlobalCacheMetadata() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-bounded-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let cacheRoot = root.appendingPathComponent("cache")
+        try writeCodexFixture(root: home, sessionID: "bounded", cwds: ["/tmp/bounded"])
+        let now = ISO8601DateFormatter().date(from: "2026-08-20T18:00:00Z")!
+
+        let partial = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot, maxScanWallClock: 0))
+        XCTAssertTrue(partial.scanIncomplete)
+        let pending = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertEqual(pending.lastScanUnixMs, 0)
+        XCTAssertNil(pending.scanSinceKey)
+        XCTAssertNil(pending.scanUntilKey)
+        XCTAssertNotNil(pending.codexPendingScanGeneration)
+
+        let complete = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertFalse(complete.scanIncomplete)
+        var finalized = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertGreaterThan(finalized.lastScanUnixMs, 0)
+        XCTAssertNotNil(finalized.scanSinceKey)
+        XCTAssertNotNil(finalized.scanUntilKey)
+        XCTAssertNil(finalized.codexPendingScanGeneration)
+
+        // Regression: a normal refresh must not classify an unfinished file
+        // as fresh merely because its mtime and size still match. Starting at
+        // EOF is intentional: it proves the scanner takes the resume path and
+        // flips the per-file completion marker instead of skipping the file.
+        let filePath = try XCTUnwrap(finalized.files.keys.first)
+        let generation = try XCTUnwrap(finalized.files[filePath]?.codexScanGeneration)
+        finalized.files[filePath]?.codexScanComplete = false
+        finalized.codexPendingScanGeneration = generation
+        CostUsageCacheIO.save(provider: .codex, cache: finalized, cacheRoot: cacheRoot)
+
+        let resumed = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertFalse(resumed.scanIncomplete)
+        XCTAssertEqual(resumed.last30DaysTokens, complete.last30DaysTokens)
+        let resumedCache = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertEqual(resumedCache.files[filePath]?.codexScanComplete, true)
+        XCTAssertNil(resumedCache.codexPendingScanGeneration)
+    }
 }

@@ -118,7 +118,9 @@ enum CodexCostScanner {
             historyDays: historyDays)
         else { return nil }
         let value = map(snapshot)
-        await Cache.shared.store(value, at: now)
+        if !snapshot.scanIncomplete {
+            await Cache.shared.store(value, at: now)
+        }
         return value
     }
 
@@ -142,9 +144,11 @@ enum CodexCostScanner {
         // để lần mở/refresh sau. Tổng cost vẫn đúng ngay nhờ high-water trong
         // CostHistoryStore (partial scan không kéo tụt số đã lưu). `_` = cờ dở,
         // không tự re-trigger (tránh churn CPU — theo lựa chọn "nhẹ nhàng").
-        let (value, _) = await performReportScan(now: now)
+        let (value, incomplete) = await performReportScan(now: now)
         guard let value else { return nil }
-        await Cache.shared.storeReport(value, at: now)
+        if !incomplete {
+            await Cache.shared.storeReport(value, at: now)
+        }
         return value
     }
 
@@ -168,6 +172,18 @@ enum CodexCostScanner {
         let liveDays = (live?.daily ?? []).map {
             ($0.date, $0.usd, $0.tokens,
              $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
+        }
+        if incomplete {
+            let window = CostHistoryStore.window(
+                source: .codex, now: now, windowDays: chartWindowDays)
+            guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else {
+                return (nil, true)
+            }
+            let confidence = CostHistoryStore.confidence(
+                source: .codex, liveScanSucceeded: false)
+            return (
+                CostHistoryStore.makeCodexReport(window: window, now: now, confidence: confidence),
+                true)
         }
         let liveScanSucceeded = live != nil
         if let snapshot {

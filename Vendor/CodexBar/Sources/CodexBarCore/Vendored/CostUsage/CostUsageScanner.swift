@@ -69,6 +69,7 @@ enum CostUsageScanner {
         let projectName: String?
         let projectAttributionAmbiguous: Bool
         let rows: [CodexUsageRow]
+        let scanComplete: Bool
     }
 
     struct CodexUsageRow: Codable, Equatable {
@@ -190,6 +191,8 @@ enum CostUsageScanner {
         let changedPriorityTurnIDs: Set<String>
         let resources: CodexScanResources
         let checkCancellation: CancellationCheck?
+        let shouldStop: (() -> Bool)?
+        let scanGeneration: String
     }
 
     struct CodexRefreshPlan {
@@ -1561,7 +1564,8 @@ enum CostUsageScanner {
             projectKey: nil,
             projectName: nil,
             projectAttributionAmbiguous: false,
-            rows: [])
+            rows: [],
+            scanComplete: true)
     }
 
     // swiftlint:disable:next cyclomatic_complexity function_body_length
@@ -1575,7 +1579,8 @@ enum CostUsageScanner {
         initialHasDivergentTotals: Bool = false,
         initialCodexTurnID: String? = nil,
         inheritedTotalsResolver: ((String, String) throws -> CodexForkBaseline)? = nil,
-        checkCancellation: CancellationCheck? = nil) throws -> CodexParseResult
+        checkCancellation: CancellationCheck? = nil,
+        shouldStop: (() -> Bool)? = nil) throws -> CodexParseResult
     {
         var currentModel = initialModel
         var previousTotals = initialTotals
@@ -1888,13 +1893,15 @@ enum CostUsageScanner {
         }
 
         var parsedBytes: Int64
+        var scanComplete = true
         do {
-            parsedBytes = try CostUsageJsonl.scan(
+            let scanOutcome = try CostUsageJsonl.scanResumable(
                 fileURL: fileURL,
                 offset: startOffset,
                 maxLineBytes: maxLineBytes,
                 prefixBytes: prefixBytes,
                 checkCancellation: checkCancellation,
+                shouldStop: shouldStop,
                 onLine: { line in
                     if deferredError != nil { return }
                     guard !line.bytes.isEmpty else { return }
@@ -2197,6 +2204,8 @@ enum CostUsageScanner {
                         }
                     }
                 })
+            parsedBytes = scanOutcome.parsedBytes
+            scanComplete = !scanOutcome.stoppedEarly
             if let deferredError {
                 throw deferredError
             }
@@ -2225,7 +2234,8 @@ enum CostUsageScanner {
             projectKey: projectKey,
             projectName: projectName,
             projectAttributionAmbiguous: projectAttributionAmbiguous,
-            rows: rows)
+            rows: rows,
+            scanComplete: scanComplete)
     }
 
     private static func codexTurnID(from payload: [String: Any]) -> String? {
@@ -2242,13 +2252,13 @@ enum CostUsageScanner {
         fileURL: URL,
         context: CodexFileScanContext,
         cache: inout CostUsageCache,
-        state: inout CodexScanState) throws
+        state: inout CodexScanState) throws -> Bool
     {
         try context.checkCancellation?()
         let metadata = Self.codexFileMetadata(fileURL: fileURL)
         if let fileId = metadata.fileId, state.seenFileIds.contains(fileId) {
             Self.dropCachedCodexFile(path: metadata.path, cached: cache.files[metadata.path], cache: &cache)
-            return
+            return true
         }
 
         let cached = cache.files[metadata.path]
@@ -2261,17 +2271,18 @@ enum CostUsageScanner {
                 cache: &cache,
                 state: &state)
             Self.dropCachedCodexFile(path: metadata.path, cached: cached, cache: &cache)
-            return
+            return true
         }
 
         let input = CodexFileScanInput(fileURL: fileURL, metadata: metadata, cached: cached)
         if Self.keepCachedCodexFileIfFresh(input: input, context: context, cache: &cache, state: &state) {
-            return
+            return true
         }
         if try Self.appendCodexFileIncrementIfPossible(input: input, context: context, cache: &cache, state: &state) {
-            return
+            return cache.files[metadata.path]?.codexScanComplete != false
         }
         try Self.rescanCodexFile(input: input, context: context, cache: &cache, state: &state)
+        return cache.files[metadata.path]?.codexScanComplete != false
     }
 
     private static func makeCodexRefreshPlan(
@@ -2432,6 +2443,18 @@ enum CostUsageScanner {
             }
 
             let filePathsInScan = Set(files.map(\.path))
+            let rootsGeneration = plan.rootsFingerprint.keys.sorted().map {
+                "\($0)=\(plan.rootsFingerprint[$0] ?? 0)"
+            }.joined(separator: ",")
+            let scanGeneration = [
+                range.scanSinceKey,
+                range.scanUntilKey,
+                plan.codexPricingKey,
+                plan.codexPriorityMetadataKey,
+                rootsGeneration,
+            ].joined(separator: "|")
+            let scanDeadline = options.maxScanWallClock.map { Date().addingTimeInterval($0) }
+            let shouldStop = scanDeadline.map { deadline in { Date() >= deadline } }
             var scanState = CodexScanState()
             let fileIndex = CodexSessionFileIndex(
                 files: files,
@@ -2450,17 +2473,12 @@ enum CostUsageScanner {
                 modelsDevCatalog: plan.modelsDevCatalog,
                 modelsDevCacheRoot: options.cacheRoot,
                 priorityTurns: plan.priorityTurns)
-            // (A) Ngân sách thời gian: dừng vòng lặp khi quá hạn, nhưng vẫn đi
-            // tiếp xuống chỗ lưu cache phía dưới (không throw) để tiến độ đã quét
-            // được persist; lần scan sau resume phần còn lại. File đã quét ở pass
-            // trước sẽ skip tức thì bằng mtime nên mỗi pass luôn tiến lên.
-            let scanDeadline = options.maxScanWallClock.map { Date().addingTimeInterval($0) }
             // Quét MỚI→CŨ (path chứa ngày, giảm dần) để dữ liệu gần đây hiện
             // trước khi hết ngân sách; file cũ hơn quét ở pass sau. `fileIndex`
             // dựng từ `files` gốc nên không ảnh hưởng.
             for fileURL in files.sorted(by: { $0.path > $1.path }) {
                 if let scanDeadline, Date() >= scanDeadline { scanTruncated = true; break }
-                try Self.scanCodexFile(
+                let fileComplete = try Self.scanCodexFile(
                     fileURL: fileURL,
                     context: CodexFileScanContext(
                         range: range,
@@ -2474,69 +2492,80 @@ enum CostUsageScanner {
                         requiresTurnIDCache: plan.needsTurnIDCacheMigration,
                         changedPriorityTurnIDs: plan.changedPriorityTurnIDs,
                         resources: resources,
-                        checkCancellation: checkCancellation),
+                        checkCancellation: checkCancellation,
+                        shouldStop: shouldStop,
+                        scanGeneration: scanGeneration),
                     cache: &cache,
                     state: &scanState)
+                if !fileComplete {
+                    scanTruncated = true
+                    break
+                }
             }
             try checkCancellation?()
 
-            Self.pruneForceRescanFilesOutsideWindow(
-                cache: &cache,
-                range: range,
-                isForceRescan: options.forceRescan)
+            if scanTruncated {
+                cache.codexPendingScanGeneration = scanGeneration
+            } else {
+                Self.pruneForceRescanFilesOutsideWindow(
+                    cache: &cache,
+                    range: range,
+                    isForceRescan: options.forceRescan)
 
-            let shouldDropAllUnscannedFiles = options.forceRescan || plan.rootsChanged || cache.files.isEmpty
-            for key in cache.files.keys where !filePathsInScan.contains(key) {
-                guard let old = cache.files[key] else { continue }
-                let shouldDrop = shouldDropAllUnscannedFiles ||
-                    old.touchesCodexScanWindow(sinceKey: range.scanSinceKey, untilKey: range.scanUntilKey)
-                guard shouldDrop else { continue }
-                Self.applyFileDays(cache: &cache, fileDays: old.days, sign: -1)
-                cache.files.removeValue(forKey: key)
-            }
-
-            if !shouldDropAllUnscannedFiles {
-                for key in cache.files.keys {
+                let shouldDropAllUnscannedFiles = options.forceRescan || plan.rootsChanged || cache.files.isEmpty
+                for key in cache.files.keys where !filePathsInScan.contains(key) {
                     guard let old = cache.files[key] else { continue }
-                    guard old.touchesCodexScanWindow(sinceKey: range.scanSinceKey, untilKey: range.scanUntilKey)
-                    else { continue }
-                    guard FileManager.default.fileExists(atPath: key) else {
-                        Self.applyFileDays(cache: &cache, fileDays: old.days, sign: -1)
-                        cache.files.removeValue(forKey: key)
-                        continue
+                    let shouldDrop = shouldDropAllUnscannedFiles ||
+                        old.touchesCodexScanWindow(sinceKey: range.scanSinceKey, untilKey: range.scanUntilKey)
+                    guard shouldDrop else { continue }
+                    Self.applyFileDays(cache: &cache, fileDays: old.days, sign: -1)
+                    cache.files.removeValue(forKey: key)
+                }
+
+                if !shouldDropAllUnscannedFiles {
+                    for key in cache.files.keys {
+                        guard let old = cache.files[key] else { continue }
+                        guard old.touchesCodexScanWindow(sinceKey: range.scanSinceKey, untilKey: range.scanUntilKey)
+                        else { continue }
+                        guard FileManager.default.fileExists(atPath: key) else {
+                            Self.applyFileDays(cache: &cache, fileDays: old.days, sign: -1)
+                            cache.files.removeValue(forKey: key)
+                            continue
+                        }
                     }
                 }
-            }
 
-            let shouldRetainWiderWindow = !options.forceRescan && !plan.pricingChanged && !plan
-                .priorityMetadataChanged && !plan.needsTurnIDCacheMigration
-            let retainedSinceKey = shouldRetainWiderWindow
-                ? [cachedSinceKey, range.scanSinceKey].compactMap(\.self).min() ?? range.scanSinceKey
-                : range.scanSinceKey
-            let retainedUntilKey = shouldRetainWiderWindow
-                ? [cachedUntilKey, range.scanUntilKey].compactMap(\.self).max() ?? range.scanUntilKey
-                : range.scanUntilKey
-            Self.pruneDays(cache: &cache, sinceKey: retainedSinceKey, untilKey: retainedUntilKey)
-            cache.roots = plan.rootsFingerprint
-            cache.scanSinceKey = retainedSinceKey
-            cache.scanUntilKey = retainedUntilKey
-            cache.codexPricingKey = plan.codexPricingKey
-            cache.codexPriorityMetadataKey = plan.codexPriorityMetadataKey
-            if plan.hasPriorityMetadata {
-                cache.codexPriorityTurnKeys = Self.mergePriorityTurnKeys(
-                    existing: shouldRetainWiderWindow ? cache.codexPriorityTurnKeys : nil,
-                    new: plan.priorityTurnKeys,
-                    range: range,
-                    retainedSinceKey: retainedSinceKey,
-                    retainedUntilKey: retainedUntilKey)
-                cache.codexPriorityTurnIDsByDay = Self.mergePriorityTurnIDsByDay(
-                    existing: shouldRetainWiderWindow ? cache.codexPriorityTurnIDsByDay : nil,
-                    new: plan.priorityTurnIDsByDay,
-                    range: range,
-                    retainedSinceKey: retainedSinceKey,
-                    retainedUntilKey: retainedUntilKey)
+                let shouldRetainWiderWindow = !options.forceRescan && !plan.pricingChanged && !plan
+                    .priorityMetadataChanged && !plan.needsTurnIDCacheMigration
+                let retainedSinceKey = shouldRetainWiderWindow
+                    ? [cachedSinceKey, range.scanSinceKey].compactMap(\.self).min() ?? range.scanSinceKey
+                    : range.scanSinceKey
+                let retainedUntilKey = shouldRetainWiderWindow
+                    ? [cachedUntilKey, range.scanUntilKey].compactMap(\.self).max() ?? range.scanUntilKey
+                    : range.scanUntilKey
+                Self.pruneDays(cache: &cache, sinceKey: retainedSinceKey, untilKey: retainedUntilKey)
+                cache.roots = plan.rootsFingerprint
+                cache.scanSinceKey = retainedSinceKey
+                cache.scanUntilKey = retainedUntilKey
+                cache.codexPricingKey = plan.codexPricingKey
+                cache.codexPriorityMetadataKey = plan.codexPriorityMetadataKey
+                if plan.hasPriorityMetadata {
+                    cache.codexPriorityTurnKeys = Self.mergePriorityTurnKeys(
+                        existing: shouldRetainWiderWindow ? cache.codexPriorityTurnKeys : nil,
+                        new: plan.priorityTurnKeys,
+                        range: range,
+                        retainedSinceKey: retainedSinceKey,
+                        retainedUntilKey: retainedUntilKey)
+                    cache.codexPriorityTurnIDsByDay = Self.mergePriorityTurnIDsByDay(
+                        existing: shouldRetainWiderWindow ? cache.codexPriorityTurnIDsByDay : nil,
+                        new: plan.priorityTurnIDsByDay,
+                        range: range,
+                        retainedSinceKey: retainedSinceKey,
+                        retainedUntilKey: retainedUntilKey)
+                }
+                cache.lastScanUnixMs = nowMs
+                cache.codexPendingScanGeneration = nil
             }
-            cache.lastScanUnixMs = nowMs
             try checkCancellation?()
             CostUsageCacheIO.save(provider: .codex, cache: cache, cacheRoot: options.cacheRoot)
         }

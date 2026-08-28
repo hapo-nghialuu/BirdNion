@@ -292,7 +292,11 @@ extension CostUsageScanner {
         codexPriorityTokens: [String: [String: Int]]? = nil,
         codexTurnIDs: [String]? = nil,
         codexRows: [CodexUsageRow]? = nil,
-        claudeRows: [ClaudeUsageRow]? = nil) -> CostUsageFileUsage
+        claudeRows: [ClaudeUsageRow]? = nil,
+        codexScanFileId: String? = nil,
+        codexScanTargetSize: Int64? = nil,
+        codexScanComplete: Bool? = nil,
+        codexScanGeneration: String? = nil) -> CostUsageFileUsage
     {
         CostUsageFileUsage(
             mtimeUnixMs: mtimeUnixMs,
@@ -320,7 +324,11 @@ extension CostUsageScanner {
             codexPriorityTokens: codexPriorityTokens,
             codexTurnIDs: codexTurnIDs,
             codexRows: codexRows,
-            claudeRows: claudeRows)
+            claudeRows: claudeRows,
+            codexScanFileId: codexScanFileId,
+            codexScanTargetSize: codexScanTargetSize,
+            codexScanComplete: codexScanComplete,
+            codexScanGeneration: codexScanGeneration)
     }
 
     static func needsCodexCostCache(_ usage: CostUsageFileUsage) -> Bool {
@@ -738,10 +746,13 @@ extension CostUsageScanner {
     {
         guard let cached = input.cached else { return false }
         let needsSessionId = cached.sessionId == nil
+        let completedCurrentGeneration = cached.codexScanGeneration == context.scanGeneration
+            && cached.codexScanComplete == true
         guard cached.mtimeUnixMs == input.metadata.mtimeUnixMs,
               cached.size == input.metadata.size,
               !needsSessionId,
-              !context.forceFullScan
+              cached.codexScanComplete != false,
+              (!context.forceFullScan || completedCurrentGeneration)
         else { return false }
 
         guard !Self.cachedCodexFileNeedsPriorityRescan(cached, context: context) else { return false }
@@ -776,15 +787,23 @@ extension CostUsageScanner {
         state: inout CodexScanState) throws -> Bool
     {
         try context.checkCancellation?()
-        guard let cached = input.cached, cached.sessionId != nil, !context.forceFullScan else { return false }
+        guard let cached = input.cached, cached.sessionId != nil else { return false }
+        let resumesCurrentGeneration = cached.codexScanGeneration == context.scanGeneration
+            && cached.codexScanComplete == false
+            && cached.mtimeUnixMs == input.metadata.mtimeUnixMs
+            && cached.size == input.metadata.size
+            && cached.codexScanTargetSize == input.metadata.size
+            && (cached.codexScanFileId == nil || input.metadata.fileId == nil
+                || cached.codexScanFileId == input.metadata.fileId)
+        guard !context.forceFullScan || resumesCurrentGeneration else { return false }
         guard !Self.cachedCodexFileNeedsPriorityRescan(cached, context: context) else { return false }
         let startOffset = cached.parsedBytes ?? cached.size
         let initialCountedTotals = cached.lastCountedTotals ?? cached.lastTotals
         let initialRawTotalsBaseline = cached.lastRawTotalsBaseline ?? cached.lastTotals
-        let canIncremental = input.metadata.size > cached.size && startOffset > 0
+        let canIncremental = (input.metadata.size > cached.size || resumesCurrentGeneration) && startOffset > 0
             && startOffset <= input.metadata.size
             && initialCountedTotals != nil
-            && cached.forkedFromId == nil
+            && (cached.forkedFromId == nil || resumesCurrentGeneration)
         guard canIncremental else { return false }
 
         let delta = try Self.parseCodexFileCancellable(
@@ -796,7 +815,8 @@ extension CostUsageScanner {
             initialRawTotalsBaseline: initialRawTotalsBaseline,
             initialHasDivergentTotals: cached.hasDivergentTotals ?? (cached.lastTotals == nil),
             initialCodexTurnID: cached.lastCodexTurnID,
-            checkCancellation: context.checkCancellation)
+            checkCancellation: context.checkCancellation,
+            shouldStop: context.shouldStop)
         if delta.forkedFromId != nil {
             return false
         }
@@ -883,7 +903,11 @@ extension CostUsageScanner {
                 migratedCached.codexPriorityTokens,
                 splitMaps.priorityTokens),
             codexTurnIDs: Self.mergeCodexTurnIDs(migratedCached.codexTurnIDs, rows: delta.rows),
-            codexRows: migratedCached.codexRows)
+            codexRows: migratedCached.codexRows,
+            codexScanFileId: input.metadata.fileId,
+            codexScanTargetSize: input.metadata.size,
+            codexScanComplete: delta.scanComplete,
+            codexScanGeneration: context.scanGeneration)
         Self.rememberScannedCodexFile(
             fileURL: input.fileURL,
             metadata: input.metadata,
@@ -912,7 +936,8 @@ extension CostUsageScanner {
             fileURL: input.fileURL,
             range: context.range,
             inheritedTotalsResolver: context.resources.inheritedResolver.inheritedTotals(for:atOrBefore:),
-            checkCancellation: context.checkCancellation)
+            checkCancellation: context.checkCancellation,
+            shouldStop: context.shouldStop)
         let sessionId = parsed.sessionId ?? input.cached?.sessionId
         if let sessionId, state.seenSessionIds.contains(sessionId) {
             Self.reconcileDuplicateCodexProject(
@@ -1003,7 +1028,11 @@ extension CostUsageScanner {
             codexTurnIDs: context.dropDeferredCodexRows
                 ? Self.codexTurnIDs(rows: parsed.rows)
                 : Self.mergeCodexTurnIDs(migratedCached?.codexTurnIDs, rows: parsed.rows),
-            codexRows: context.dropDeferredCodexRows ? nil : migratedCached?.codexRows)
+            codexRows: context.dropDeferredCodexRows ? nil : migratedCached?.codexRows,
+            codexScanFileId: input.metadata.fileId,
+            codexScanTargetSize: input.metadata.size,
+            codexScanComplete: parsed.scanComplete,
+            codexScanGeneration: context.scanGeneration)
         Self.applyFileDays(cache: &cache, fileDays: cache.files[input.metadata.path]?.days ?? [:], sign: 1)
         Self.rememberScannedCodexFile(
             fileURL: input.fileURL,

@@ -6,6 +6,11 @@ enum CostUsageJsonl {
         let wasTruncated: Bool
     }
 
+    struct ScanOutcome {
+        let parsedBytes: Int64
+        let stoppedEarly: Bool
+    }
+
     @discardableResult
     static func scan(
         fileURL: URL,
@@ -15,13 +20,13 @@ enum CostUsageJsonl {
         onLine: (Line) -> Void) throws
         -> Int64
     {
-        try self.scan(
+        try self.scanResumable(
             fileURL: fileURL,
             offset: offset,
             maxLineBytes: maxLineBytes,
             prefixBytes: prefixBytes,
             checkCancellation: nil,
-            onLine: onLine)
+            onLine: onLine).parsedBytes
     }
 
     @discardableResult
@@ -33,6 +38,28 @@ enum CostUsageJsonl {
         checkCancellation: (() throws -> Void)? = nil,
         onLine: (Line) -> Void) throws
         -> Int64
+    {
+        try self.scanResumable(
+            fileURL: fileURL,
+            offset: offset,
+            maxLineBytes: maxLineBytes,
+            prefixBytes: prefixBytes,
+            checkCancellation: checkCancellation,
+            onLine: onLine).parsedBytes
+    }
+
+    /// Stops only at a resumable byte boundary. If the current chunk ends in
+    /// the middle of a JSONL record, the returned offset rewinds to that
+    /// record's first byte so the next pass never drops a partial line.
+    static func scanResumable(
+        fileURL: URL,
+        offset: Int64 = 0,
+        maxLineBytes: Int,
+        prefixBytes: Int,
+        checkCancellation: (() throws -> Void)? = nil,
+        shouldStop: (() -> Bool)? = nil,
+        onLine: (Line) -> Void) throws
+        -> ScanOutcome
     {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
@@ -73,6 +100,11 @@ enum CostUsageJsonl {
 
         while true {
             try checkCancellation?()
+            if shouldStop?() == true {
+                return ScanOutcome(
+                    parsedBytes: startOffset + bytesRead - Int64(lineBytes),
+                    stoppedEarly: true)
+            }
             let reachedEOF = try autoreleasepool {
                 let chunk = try handle.read(upToCount: 256 * 1024) ?? Data()
                 if chunk.isEmpty {
@@ -102,8 +134,13 @@ enum CostUsageJsonl {
             }
             if reachedEOF { break }
             try checkCancellation?()
+            if shouldStop?() == true {
+                return ScanOutcome(
+                    parsedBytes: startOffset + bytesRead - Int64(lineBytes),
+                    stoppedEarly: true)
+            }
         }
 
-        return startOffset + bytesRead
+        return ScanOutcome(parsedBytes: startOffset + bytesRead, stoppedEarly: false)
     }
 }

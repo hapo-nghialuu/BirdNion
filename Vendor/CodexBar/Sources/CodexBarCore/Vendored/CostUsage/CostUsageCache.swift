@@ -145,6 +145,8 @@ struct CostUsageCache: Codable {
     var codexProjectMetadataVersion: Int?
     var codexPriorityTurnKeys: [String: String]?
     var codexPriorityTurnIDsByDay: [String: [String]]?
+    /// Multi-pass bounded scan that has not finalized global metadata yet.
+    var codexPendingScanGeneration: String?
 
     /// filePath -> file usage
     var files: [String: CostUsageFileUsage] = [:]
@@ -194,6 +196,7 @@ struct CostUsageFileUsage: Codable {
     var codexScanFileId: String?
     var codexScanTargetSize: Int64?
     var codexScanComplete: Bool?
+    var codexScanGeneration: String?
 }
 
 struct CostUsageCodexTotals: Codable, Equatable {

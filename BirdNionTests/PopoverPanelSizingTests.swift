@@ -67,3 +67,10 @@ final class PopoverPanelSizingTests: XCTestCase {
         )
     }
 }
+
+final class SettingsWindowOpenerTests: XCTestCase {
+    func testRetryIntervalsStayWithinColdBootBudget() {
+        XCTAssertEqual(SettingsWindowOpener.retryIntervals.first, 0)
+        XCTAssertLessThanOrEqual(SettingsWindowOpener.retryIntervals.reduce(0, +), 20)
+    }
+}

@@ -67,8 +67,11 @@ enum SettingsWindowOpener {
     // ở `.accessory` và SwiftUI hoãn materialize `Settings` scene cho tới khi
     // app thực sự active; dưới tải boot nặng việc này có thể mất >3s. Cửa sổ
     // retry ngắn (cũ ~3.5s) cạn trước khi scene sẵn sàng → nút Settings "chết".
-    private static let retryDelays: [TimeInterval] = [
-        0, 0.12, 0.3, 0.55, 1.0, 1.6, 2.5, 3.5, 5.0, 7.0, 9.5, 12.5, 16.0, 20.0]
+    /// Delays are intervals between attempts, not absolute timestamps. Keep
+    /// their sum at or below 20 seconds so a failed open cannot retain focus
+    /// or Dock presence indefinitely during login-item startup.
+    static let retryIntervals: [TimeInterval] = [
+        0, 0.12, 0.18, 0.25, 0.45, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 3.0, 4.5]
 
     private static func attemptOpen(generation: Int, attempt: Int) {
         guard generation == openGeneration else { return }
@@ -104,8 +107,12 @@ enum SettingsWindowOpener {
             if settingsWindowVisible() { return }
 
             let next = attempt + 1
-            guard next < retryDelays.count else { return }
-            let delay = retryDelays[next]
+            guard next < retryIntervals.count else {
+                settingsOpenLog.error("Settings did not become visible before retry deadline")
+                demoteIfIdle()
+                return
+            }
+            let delay = retryIntervals[next]
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 attemptOpen(generation: generation, attempt: next)
             }
