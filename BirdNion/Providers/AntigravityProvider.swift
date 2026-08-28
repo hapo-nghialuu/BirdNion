@@ -1,6 +1,5 @@
 import Foundation
 import Darwin
-import AppKit
 
 // MARK: - Model quota (ported from AntigravityModelQuota in AntigravityStatusProbe.swift)
 
@@ -719,263 +718,404 @@ enum AntigravityIsolatedAgy {
             .appendingPathComponent(loginTokenRelativePath).path
         return fileManager.fileExists(atPath: tokenPath)
     }
+
+    /// Seed một login `agy` cô lập TỪ bộ token OAuth (client 1071 + scope agy)
+    /// mà KHÔNG cần chạy `agy` login: ghi đúng bộ file agy cần để coi account
+    /// này đã đăng nhập + onboard xong. Đã kiểm chứng trên máy thật — agy chấp
+    /// nhận thư mục seed này và trả quota bình thường.
+    ///
+    /// 5 file: `.gemini/jetski-standalone-oauth-token` +
+    /// `.gemini/antigravity-cli/antigravity-oauth-token` (cùng nội dung token,
+    /// 0600), `.gemini/antigravity-cli/jetski_state.pbtxt` (đánh dấu
+    /// post-onboarding hoàn tất — thiếu là agy ép login lại), `.gemini/user_id`,
+    /// `.gemini/antigravity-cli/installation_id`.
+    static func seedLogin(
+        forAccountLabel label: String,
+        accessToken: String,
+        refreshToken: String,
+        expiry: Date,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) throws {
+        let gemini = homeDir(forAccountLabel: label, home: home, env: env, fileManager: fileManager)
+            .appendingPathComponent(".gemini", isDirectory: true)
+        let cli = gemini.appendingPathComponent("antigravity-cli", isDirectory: true)
+        try fileManager.createDirectory(at: cli, withIntermediateDirectories: true)
+
+        // Token theo đúng format agy: { "token": {...}, "auth_method": "consumer" }.
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let tokenObject: [String: Any] = [
+            "token": [
+                "access_token": accessToken,
+                "token_type": "Bearer",
+                "refresh_token": refreshToken,
+                "expiry": iso.string(from: expiry),
+            ],
+            "auth_method": "consumer",
+        ]
+        let tokenData = try JSONSerialization.data(withJSONObject: tokenObject, options: [.sortedKeys])
+        try writeSecureFile(tokenData, to: gemini.appendingPathComponent("jetski-standalone-oauth-token"), fileManager: fileManager)
+        try writeSecureFile(tokenData, to: cli.appendingPathComponent("antigravity-oauth-token"), fileManager: fileManager)
+
+        // installation_id phải KHỚP installation_uuid trong pbtxt; UUID mới cho
+        // mỗi account cô lập để không đụng nhau.
+        let installationID = UUID().uuidString.lowercased()
+        let userID = UUID().uuidString.lowercased()
+        try Data(userID.utf8).write(to: gemini.appendingPathComponent("user_id"), options: .atomic)
+        try Data(installationID.utf8).write(to: cli.appendingPathComponent("installation_id"), options: .atomic)
+        try Data(jetskiState(installationUUID: installationID).utf8)
+            .write(to: cli.appendingPathComponent("jetski_state.pbtxt"), options: .atomic)
+    }
+
+    /// Ghi file 0600 cho dữ liệu nhạy cảm (token) — tạo mới hoặc ghi đè.
+    private static func writeSecureFile(_ data: Data, to url: URL, fileManager: FileManager) throws {
+        try data.write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    /// `jetski_state.pbtxt` đánh dấu post-onboarding đã xong — bản tối thiểu của
+    /// state agy ghi sau onboarding (đã xác minh đủ để agy không ép onboard lại).
+    private static func jetskiState(installationUUID: String) -> String {
+        """
+        post_onboarding:  {
+          completed_steps:  POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+          completed_steps:  POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+          completed_steps:  POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
+          completed_steps:  POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE
+        }
+        installation_uuid:  "\(installationUUID)"
+        migrations:  {
+          key:  3
+          value:  MIGRATION_STATUS_COMPLETED
+        }
+        migrations:  {
+          key:  4
+          value:  MIGRATION_STATUS_COMPLETED
+        }
+        migrations:  {
+          key:  5
+          value:  MIGRATION_STATUS_COMPLETED
+        }
+
+        """
+    }
 }
 
-// MARK: - Isolated agy login session (one-time login flow, multi-account)
+// MARK: - agy CLI switch + omp import (áp account đang chọn ra công cụ thật)
 //
-// Đăng nhập MỘT account vào HOME cô lập của riêng nó, để `fetchViaIsolatedAgy`
-// ở trên có thể đọc quota mà không đụng tới `~/.gemini` thật của user.
+// BirdNion mặc định CHỈ đọc quota. Hai type dưới đây là ngoại lệ có chủ đích do
+// người dùng yêu cầu "công tắc": ghi credential của account đang chọn ra công cụ
+// mà họ chạy model.
+//   - `AntigravityAgyCLI`: switch account cho lệnh `agy` (ghi `~/.gemini/...`),
+//     tương đương cơ chế switch của Codex (`~/.codex/auth.json`). Đảo lại được
+//     nhờ backup token cũ. So account bằng refresh_token (offline, không mạng).
+//   - `AntigravityOmpImport`: import account vào kho auth của omp qua lệnh
+//     chính thống `omp auth-broker import` (KHÔNG ghi thẳng SQLite có mirror
+//     guard). omp tự rank/rotate nên đây là "thêm vào pool", không ép riêng.
+
+/// Đọc trường token từ file `jetski-standalone-oauth-token`.
+private struct AntigravityJetskiToken: Decodable {
+    struct Inner: Decodable {
+        let accessToken: String
+        let refreshToken: String
+        let expiry: String
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiry
+        }
+    }
+    let token: Inner
+
+    static func load(_ url: URL) -> AntigravityJetskiToken? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(AntigravityJetskiToken.self, from: data)
+    }
+}
+
+enum AntigravityAgyCLI {
+    private static let jetskiRel = "jetski-standalone-oauth-token"
+    private static let cliTokenRel = "antigravity-cli/antigravity-oauth-token"
+
+    static func realGeminiDir(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent(".gemini", isDirectory: true)
+    }
+
+    private static func isolatedGeminiDir(
+        accountLabel: String,
+        home: URL,
+        env: [String: String],
+        fileManager: FileManager
+    ) -> URL {
+        AntigravityIsolatedAgy.homeDir(forAccountLabel: accountLabel, home: home, env: env, fileManager: fileManager)
+            .appendingPathComponent(".gemini", isDirectory: true)
+    }
+
+    /// Account nào đang được nạp vào `~/.gemini` — so bằng refresh_token của
+    /// login cô lập với refresh_token trong `~/.gemini` (offline). True khớp.
+    static func isActiveInCLI(
+        accountLabel: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        let isoURL = isolatedGeminiDir(accountLabel: accountLabel, home: home, env: env, fileManager: fileManager)
+            .appendingPathComponent(jetskiRel)
+        let realURL = realGeminiDir(home: home).appendingPathComponent(jetskiRel)
+        guard let iso = AntigravityJetskiToken.load(isoURL)?.token.refreshToken,
+              let real = AntigravityJetskiToken.load(realURL)?.token.refreshToken,
+              !iso.isEmpty
+        else { return false }
+        return iso == real
+    }
+
+    /// Ghi token của account cô lập vào `~/.gemini` để lệnh `agy` (và mọi tool
+    /// đọc `~/.gemini`) dùng account đó. Chỉ ghi đè 2 file token, giữ nguyên
+    /// device ids/state của `~/.gemini` (đã xác minh agy vẫn auth đúng account
+    /// theo token). Backup token cũ vào `agy-cli-backup/` trước khi ghi.
+    static func switchToCLI(
+        accountLabel: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) throws {
+        let isoGemini = isolatedGeminiDir(accountLabel: accountLabel, home: home, env: env, fileManager: fileManager)
+        let isoJetski = isoGemini.appendingPathComponent(jetskiRel)
+        guard fileManager.fileExists(atPath: isoJetski.path) else {
+            throw AntigravityOAuthError.missingCredentials
+        }
+
+        let realGemini = realGeminiDir(home: home)
+        let realCliDir = realGemini.appendingPathComponent("antigravity-cli", isDirectory: true)
+        try fileManager.createDirectory(at: realCliDir, withIntermediateDirectories: true)
+
+        // Backup token ~/.gemini hiện tại (đảo lại được nếu cần).
+        let configDir = AntigravityIsolatedAgy.baseDir(home: home, env: env, fileManager: fileManager)
+            .deletingLastPathComponent()
+        let backupDir = configDir.appendingPathComponent("agy-cli-backup", isDirectory: true)
+        try? fileManager.createDirectory(at: backupDir, withIntermediateDirectories: true)
+        backup(realGemini.appendingPathComponent(jetskiRel),
+               to: backupDir.appendingPathComponent(jetskiRel), fileManager: fileManager)
+        backup(realGemini.appendingPathComponent(cliTokenRel),
+               to: backupDir.appendingPathComponent("antigravity-oauth-token"), fileManager: fileManager)
+
+        // Ghi đè token: isolated -> ~/.gemini.
+        try copySecure(from: isoJetski,
+                       to: realGemini.appendingPathComponent(jetskiRel), fileManager: fileManager)
+        let isoCli = isoGemini.appendingPathComponent(cliTokenRel)
+        if fileManager.fileExists(atPath: isoCli.path) {
+            try copySecure(from: isoCli,
+                           to: realCliDir.appendingPathComponent("antigravity-oauth-token"), fileManager: fileManager)
+        }
+    }
+
+    private static func backup(_ src: URL, to dst: URL, fileManager: FileManager) {
+        guard fileManager.fileExists(atPath: src.path), let data = try? Data(contentsOf: src) else { return }
+        try? data.write(to: dst, options: .atomic)
+        try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dst.path)
+    }
+
+    private static func copySecure(from src: URL, to dst: URL, fileManager: FileManager) throws {
+        let data = try Data(contentsOf: src)
+        try data.write(to: dst, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dst.path)
+    }
+}
+
+enum AntigravityOmpImport {
+    /// omp lưu auth trong `~/.omp/agent/agent.db`; import qua lệnh chính thống
+    /// `omp auth-broker import <file>` (JSON kiểu CLIProxyAPI). omp tự rank +
+    /// rotate nhiều account nên đây là THÊM account vào pool, không ép riêng.
+    static func resolveOmpBinary(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> String? {
+        let home = fileManager.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "/opt/homebrew/bin/omp", "/usr/local/bin/omp", "/usr/bin/omp",
+            "\(home)/.bun/bin/omp", "\(home)/.local/bin/omp",
+        ]
+        return candidates.first { fileManager.isExecutableFile(atPath: $0) }
+    }
+
+    /// Dựng JSON CLIProxyAPI từ token cô lập của account rồi chạy `omp import`.
+    /// Ném lỗi khi thiếu token, không có binary omp, hoặc omp bỏ qua file.
+    static func importAccount(
+        accountLabel: String,
+        email: String?,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) async throws {
+        let tokenURL = AntigravityIsolatedAgy.homeDir(forAccountLabel: accountLabel, home: home, env: env, fileManager: fileManager)
+            .appendingPathComponent(".gemini", isDirectory: true)
+            .appendingPathComponent("jetski-standalone-oauth-token")
+        guard let parsed = AntigravityJetskiToken.load(tokenURL) else {
+            throw AntigravityOAuthError.missingCredentials
+        }
+        guard let omp = resolveOmpBinary(env: env, fileManager: fileManager) else {
+            throw AntigravityOAuthError.tokenExchangeFailed("Không tìm thấy omp — hãy cài oh-my-pi trước.")
+        }
+
+        let mail = (email?.isEmpty == false ? email! : accountLabel)
+        let json: [String: Any] = [
+            "type": "antigravity",
+            "access_token": parsed.token.accessToken,
+            "refresh_token": parsed.token.refreshToken,
+            "expired": parsed.token.expiry,
+            "email": mail,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+
+        let tmpDir = fileManager.temporaryDirectory
+            .appendingPathComponent("birdnion-omp-import-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tmpDir) }
+        // Tên file: `antigravity-<email>.json` (import cũng suy type từ prefix).
+        let safeMail = mail.replacingOccurrences(of: "/", with: "_")
+        let fileURL = tmpDir.appendingPathComponent("antigravity-\(safeMail).json")
+        try data.write(to: fileURL, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+
+        let (out, status) = try runProcess(
+            binary: omp,
+            args: ["auth-broker", "import", fileURL.path, "--json"],
+            env: env)
+        guard status == 0 else {
+            throw AntigravityOAuthError.tokenExchangeFailed("omp import lỗi (exit \(status)): \(out.prefix(200))")
+        }
+        // Output JSON có `skipped: [...]` khi file bị bỏ qua (thiếu field…).
+        if let obj = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any],
+           let skipped = obj["skipped"] as? [[String: Any]], !skipped.isEmpty {
+            let reason = (skipped.first?["reason"] as? String) ?? "không rõ lý do"
+            throw AntigravityOAuthError.tokenExchangeFailed("omp bỏ qua: \(reason)")
+        }
+    }
+
+    /// Chạy process đồng bộ (off main), trả (stdout+stderr, exitCode).
+    private static func runProcess(binary: String, args: [String], env: [String: String]) throws -> (String, Int32) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.arguments = args
+        proc.environment = env
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        try proc.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        return (String(data: data, encoding: .utf8) ?? "", proc.terminationStatus)
+    }
+}
+
+// MARK: - Isolated agy login session (multi-account, no agy login needed)
 //
-// Hành vi `agy` đã xác minh trên máy thật: chạy `agy -p "ping" --print-timeout 180s`
-// với HOME cô lập và stdin/stdout là pipe (không cần PTY — agy in URL OAuth ra
-// stdout kể cả khi stdout không phải TTY), agy in URL đăng nhập Google rồi đợi
-// TỐI ĐA ~60s để nhận authorization code qua một dòng trên stdin. Người dùng tự
-// đăng nhập trên trình duyệt (redirect là trang REMOTE antigravity.google, không
-// có localhost callback) rồi dán code agy hiển thị. Sau khi nhận code, agy trao
-// đổi token và ghi vào `<HOME>/.gemini/jetski-standalone-oauth-token` rồi thoát.
+// Đăng nhập MỘT account vào HOME cô lập của riêng nó để `fetchViaIsolatedAgy`
+// đọc quota mà không đụng `~/.gemini` thật.
+//
+// Cách làm (đã xác minh trên máy thật — KHÔNG chạy `agy` login, KHÔNG dán code):
+// BirdNion tự chạy loopback OAuth với client agy CLI (1071) + scope agy, người
+// dùng đăng nhập Google trên trình duyệt, Google redirect về `127.0.0.1` nên
+// BirdNion tự bắt code (không dính giới hạn ~60s của luồng `agy` login). Sau đó
+// seed đúng bộ file vào HOME cô lập (`AntigravityIsolatedAgy.seedLogin`) — agy
+// coi như account này đã đăng nhập + onboard xong.
 @MainActor
 final class AntigravityIsolatedLoginSession: ObservableObject {
     enum State: Equatable {
         case idle
         case launching
-        case awaitingCode(URL)
-        case submitting
         case success
         case failed(String)
     }
 
     @Published private(set) var state: State = .idle
 
-    private var process: Process?
-    private var stdinHandle: FileHandle?
-    private var stdoutBuffer = Data()
-    private var stderrBuffer = Data()
-    private var accountLabel: String?
-
-    /// Nhận diện lại đúng phiên hiện tại trong các callback bất đồng bộ
-    /// (readabilityHandler / terminationHandler / watchdog Task) — nếu một
-    /// callback của phiên CŨ bay tới sau khi `cancel()`/`start()` mới đã chạy,
-    /// token không khớp nữa nên callback đó tự bỏ qua, không ghi đè state mới.
+    /// Nhận diện phiên hiện tại: nếu người dùng huỷ / khởi động phiên khác
+    /// trong lúc OAuth (loopback chờ tới 120s) đang chạy, kết quả của phiên cũ
+    /// bay tới sau sẽ không khớp token nên tự bỏ qua, không ghi đè state mới.
     private var sessionToken = UUID()
 
-    /// `agy` tự huỷ chờ code sau ~60s không nhận input; đặt print-timeout tổng
-    /// dài hơn nhiều (180s) để có dư thời gian cho bước trao đổi token sau khi
-    /// người dùng đã dán code kịp trong 60s đầu.
-    private static let printTimeoutArg = "180s"
-
-    /// Không thể gọi method actor-isolated trong `deinit` (deinit luôn
-    /// non-isolated) — nên ở đây chỉ đụng trực tiếp property lưu trữ của
-    /// chính object, không gọi lại `terminateProcess()`. Đây là lưới an toàn
-    /// cuối cùng chống leak process khi object bị giải phóng.
-    deinit {
-        if process?.isRunning == true {
-            process?.terminate()
-        }
-        (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        (process?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        try? stdinHandle?.close()
-    }
-
-    /// Bắt đầu phiên đăng nhập cho `accountLabel`: tạo HOME cô lập, spawn
-    /// `agy`, đọc stdout tới khi thấy URL OAuth rồi mở bằng trình duyệt mặc
-    /// định. An toàn gọi lại (kể cả khi một phiên trước đang chạy/đã lỗi) —
-    /// tự dọn phiên cũ trước khi bắt đầu phiên mới.
+    /// Bắt đầu đăng nhập cho `accountLabel`: mở trình duyệt (loopback OAuth) rồi
+    /// seed HOME cô lập. An toàn gọi lại — phiên cũ tự bị vô hiệu.
     func start(accountLabel: String) {
-        terminateProcess()
-        self.accountLabel = accountLabel
-        state = .launching
-
-        guard let binary = AgCLIWarmSession.resolveAgyBinary() else {
-            state = .failed(L10n.t("antigravity.login.binaryMissing"))
-            return
-        }
-
-        let isolatedHome = AntigravityIsolatedAgy.homeDir(forAccountLabel: accountLabel)
-        do {
-            try FileManager.default.createDirectory(at: isolatedHome, withIntermediateDirectories: true)
-        } catch {
-            state = .failed(error.localizedDescription)
-            return
-        }
-
         let token = UUID()
         sessionToken = token
+        state = .launching
 
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = ["-p", "ping", "--print-timeout", Self.printTimeoutArg]
-        var env = ProcessInfo.processInfo.environment
-        env["HOME"] = isolatedHome.path
-        proc.environment = env
-        proc.currentDirectoryURL = isolatedHome
-
-        let stdinPipe = Pipe()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        proc.standardInput = stdinPipe
-        proc.standardOutput = stdoutPipe
-        proc.standardError = stderrPipe
-
-        proc.terminationHandler = { [weak self] finished in
-            let status = finished.terminationStatus
-            Task { @MainActor [weak self] in
-                self?.handleProcessTermination(token: token, exitStatus: status)
-            }
-        }
-        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            Task { @MainActor [weak self] in
-                self?.consumeStdout(data, token: token)
-            }
-        }
-        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            Task { @MainActor [weak self] in
-                self?.consumeStderr(data, token: token)
-            }
-        }
-
-        do {
-            try proc.run()
-        } catch {
-            state = .failed(error.localizedDescription)
-            return
-        }
-
-        process = proc
-        stdinHandle = stdinPipe.fileHandleForWriting
-    }
-
-    /// Ghi authorization code (đã dán từ trình duyệt) vào stdin của `agy` rồi
-    /// chờ nó tự thoát (thành công/thất bại được xử lý trong
-    /// `handleProcessTermination`). Không làm gì nếu không đang ở trạng thái
-    /// chờ code (double-submit, hoặc phiên đã hết hạn).
-    func submitCode(_ rawCode: String) {
-        guard case .awaitingCode = state, let stdinHandle else { return }
-        let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !code.isEmpty, let data = (code + "\n").data(using: .utf8) else { return }
-
-        state = .submitting
-        let token = sessionToken
-        do {
-            try stdinHandle.write(contentsOf: data)
-        } catch {
-            state = .failed(error.localizedDescription)
-            terminateProcess()
-            return
-        }
-
-        // Watchdog: nếu agy không thoát trong thời gian hợp lý sau khi nhận
-        // code (đứng treo khi trao đổi token), báo lỗi thay vì chờ vô thời
-        // hạn — không block main thread vì đây chỉ là một Task ngủ.
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 20_000_000_000)
-            await self?.failIfStillSubmitting(token: token)
+            do {
+                let tokens = try await AntigravityOAuthLogin.loginForAgyCLI()
+                // Đa tài khoản: nếu label là email mà người dùng đăng nhập nhầm
+                // account khác thì báo lỗi rõ, tuyệt đối không seed sai account.
+                if accountLabel.contains("@"),
+                   let email = tokens.email, !email.isEmpty,
+                   email.caseInsensitiveCompare(accountLabel) != .orderedSame {
+                    await self?.finish(
+                        token: token,
+                        result: .failure(AntigravityLoginError.accountMismatch(
+                            expected: accountLabel, got: email)))
+                    return
+                }
+                try AntigravityIsolatedAgy.seedLogin(
+                    forAccountLabel: accountLabel,
+                    accessToken: tokens.accessToken,
+                    refreshToken: tokens.refreshToken,
+                    expiry: tokens.expiry)
+                await self?.finish(token: token, result: .success(()))
+            } catch {
+                await self?.finish(token: token, result: .failure(error))
+            }
         }
     }
 
-    /// Huỷ phiên đăng nhập hiện tại (nếu có): kill process, đóng stdin, dọn
-    /// state về `.idle`. An toàn gọi nhiều lần / khi không có phiên nào chạy.
+    /// Huỷ phiên hiện tại: vô hiệu kết quả OAuth đang chờ + đưa state về idle.
     func cancel() {
-        terminateProcess()
+        sessionToken = UUID()
         state = .idle
-        accountLabel = nil
     }
 
     // MARK: - Private
 
-    private func consumeStdout(_ data: Data, token: UUID) {
+    private func finish(token: UUID, result: Result<Void, Error>) {
         guard token == sessionToken else { return }
-        stdoutBuffer.append(data)
-        guard case .launching = state,
-              let text = String(data: stdoutBuffer, encoding: .utf8),
-              let url = Self.parseOAuthURL(fromAgyOutput: text)
-        else { return }
-        state = .awaitingCode(url)
-        NSWorkspace.shared.open(url)
-    }
-
-    private func consumeStderr(_ data: Data, token: UUID) {
-        guard token == sessionToken else { return }
-        stderrBuffer.append(data)
-    }
-
-    private func handleProcessTermination(token: UUID, exitStatus: Int32) {
-        guard token == sessionToken, let accountLabel else { return }
-        switch state {
-        case .submitting:
-            if AntigravityIsolatedAgy.hasLogin(forAccountLabel: accountLabel) {
-                state = .success
-                // Báo QuotaService fetch lại Antigravity ngay — cùng cơ chế
-                // với nút refresh thủ công (xem QuotaService.start()).
-                NotificationCenter.default.post(name: .birdnionRefresh, object: "antigravity")
-            } else {
-                let tail = stderrTailText()
-                state = .failed(tail.isEmpty ? L10n.t("antigravity.login.exchangeFailed") : tail)
-            }
-        case .awaitingCode, .launching:
-            // agy tự thoát trước khi nhận được code — thường do hết ~60s chờ
-            // input (xem "Waiting for authentication (timeout 60s)").
-            state = .failed(L10n.t("antigravity.login.timeout"))
-        default:
-            break
-        }
-        cleanupHandles()
-    }
-
-    private func failIfStillSubmitting(token: UUID) {
-        guard token == sessionToken, case .submitting = state else { return }
-        state = .failed(L10n.t("antigravity.login.timeout"))
-        terminateProcess()
-    }
-
-    private func stderrTailText() -> String {
-        guard let text = String(data: stderrBuffer, encoding: .utf8) else { return "" }
-        let lines = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\n").suffix(3)
-        return lines.joined(separator: " ")
-    }
-
-    /// Vô hiệu hoá callback của process hiện tại (đổi `sessionToken`) rồi kill
-    /// nó — dùng khi bắt đầu phiên mới, khi cancel, và khi watchdog timeout.
-    /// Không leak process: gửi SIGTERM ngay, rồi best-effort SIGKILL sau 0.5s
-    /// nếu vẫn còn sống — chạy off-main-actor để không block UI.
-    private func terminateProcess() {
-        sessionToken = UUID()
-        let proc = process
-        (proc?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        (proc?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        proc?.terminationHandler = nil
-        cleanupHandles()
-
-        guard let proc, proc.isRunning else { return }
-        proc.terminate()
-        let pid = proc.processIdentifier
-        Task.detached(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if kill(pid, 0) == 0 {
-                _ = kill(pid, SIGKILL)
-            }
+        switch result {
+        case .success:
+            state = .success
+            // Báo QuotaService fetch lại Antigravity ngay — cùng cơ chế với nút
+            // refresh thủ công (xem QuotaService.start()).
+            NotificationCenter.default.post(name: .birdnionRefresh, object: "antigravity")
+        case .failure(let error):
+            state = .failed(Self.message(for: error))
         }
     }
 
-    private func cleanupHandles() {
-        try? stdinHandle?.close()
-        stdinHandle = nil
-        process = nil
-        stdoutBuffer = Data()
-        stderrBuffer = Data()
+    private static func message(for error: Error) -> String {
+        if let login = error as? AntigravityLoginError { return login.userMessage }
+        if let oauth = error as? AntigravityOAuthError {
+            switch oauth {
+            case .timeout:
+                return L10n.t("antigravity.login.timeout")
+            case .codeMissing, .tokenExchangeFailed:
+                return L10n.t("antigravity.login.exchangeFailed")
+            default:
+                break
+            }
+        }
+        return error.localizedDescription
     }
+}
 
-    /// Trích URL OAuth Google từ stdout của `agy` (mẫu thực tế đã xác minh —
-    /// xem block comment ở đầu type). Tách riêng thành static func thuần để
-    /// test được mà không cần spawn process thật.
-    nonisolated static func parseOAuthURL(fromAgyOutput text: String) -> URL? {
-        let pattern = #"https://accounts\.google\.com/o/oauth2/auth\?\S+"#
-        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
-        return URL(string: String(text[range]))
+/// Lỗi cấp phiên đăng nhập agy cô lập (khác `AntigravityOAuthError` cấp mạng).
+enum AntigravityLoginError: Error {
+    case accountMismatch(expected: String, got: String)
+
+    var userMessage: String {
+        switch self {
+        case let .accountMismatch(expected, got):
+            return L10n.t("antigravity.login.accountMismatch") + " (\(got) ≠ \(expected))"
+        }
     }
 }
 

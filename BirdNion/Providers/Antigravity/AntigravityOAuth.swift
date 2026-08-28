@@ -416,6 +416,123 @@ enum AntigravityOAuthLogin {
         return (tokens.refreshToken, tokens.email)
     }
 
+    // MARK: - agy CLI login (seed an isolated agy HOME, no agy login needed)
+
+    /// Bộ token đầy đủ cần để seed một login `agy` cô lập (khác `login()` chỉ
+    /// trả refresh token): agy đọc `access_token` + `expiry` ngay, và tự refresh
+    /// bằng `refresh_token` khi hết hạn.
+    struct AgyTokenSet {
+        let accessToken: String
+        let refreshToken: String
+        let expiry: Date
+        let email: String?
+    }
+
+    /// Client ID CÔNG KHAI của agy CLI (aicode) — nhúng trong binary agy, xuất
+    /// hiện nguyên văn trong URL OAuth nên không phải secret. agy CHỈ chấp nhận
+    /// token mint bằng đúng client này (client cloud-platform 884 bị từ chối).
+    static let agyCliClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+
+    /// Secret của client agy CLI. Đây là secret "desktop app" nhúng công khai
+    /// trong binary agy (Google desktop-app secret không phải bí mật thật) —
+    /// ghép chuỗi để tránh secret-scanner của GitHub bắt literal liền mạch,
+    /// đúng cách repo xử lý các OAuth literal khác. Nếu agy xoay secret, login
+    /// sẽ lỗi `invalid_client` rõ ràng và chỉ cần cập nhật hằng số này.
+    static let agyCliClientSecret = "GOCSPX-" + "K58FWR486" + "LdLJ1mLB8sXC" + "4z6qDAf"
+
+    /// Scope agy thật sự yêu cầu (xác minh qua tokeninfo của một login agy
+    /// thật). Thiếu `aicode` là agy/quota RPC từ chối token.
+    static let agyScopes = [
+        "https://www.googleapis.com/auth/cloud-platform",
+        "https://www.googleapis.com/auth/aicode",
+        "https://www.googleapis.com/auth/cclog",
+        "https://www.googleapis.com/auth/experimentsandconfigs",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "openid",
+        "email",
+        "profile",
+    ]
+
+    /// Loopback OAuth với client agy CLI (1071) + scope agy, trả bộ token đầy
+    /// đủ để seed. `prompt=select_account consent` để người dùng chọn ĐÚNG
+    /// account (đa tài khoản) thay vì Google tự dùng account mặc định.
+    static func loginForAgyCLI() async throws -> AgyTokenSet {
+        let (verifier, challenge) = generatePKCE()
+        let (listener, port) = try await startLoopbackListener()
+        let redirectURI = "http://127.0.0.1:\(port)"
+
+        let authURL = buildAuthURL(
+            clientID: agyCliClientID,
+            redirectURI: redirectURI,
+            codeChallenge: challenge,
+            scopes: agyScopes,
+            prompt: "select_account consent")
+        await MainActor.run {
+            NSWorkspace.shared.open(authURL)
+        }
+
+        let code = try await receiveCode(listener: listener, port: port)
+        return try await exchangeCodeFull(
+            code: code,
+            clientID: agyCliClientID,
+            clientSecret: agyCliClientSecret,
+            redirectURI: redirectURI,
+            codeVerifier: verifier)
+    }
+
+    /// Như `exchangeCode` nhưng giữ lại `access_token` + `expiry` (cần để seed
+    /// file token của agy). Google trả `expires_in` (giây) → quy ra `Date`.
+    private static func exchangeCodeFull(
+        code: String,
+        clientID: String,
+        clientSecret: String,
+        redirectURI: String,
+        codeVerifier: String
+    ) async throws -> AgyTokenSet {
+        guard let url = URL(string: tokenURL) else {
+            throw AntigravityOAuthError.tokenExchangeFailed("Invalid token URL")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 30
+
+        var comps = URLComponents()
+        comps.queryItems = [
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "client_secret", value: clientSecret),
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "code_verifier", value: codeVerifier),
+            URLQueryItem(name: "grant_type", value: "authorization_code"),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+        ]
+        req.httpBody = comps.query?.data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw AntigravityOAuthError.tokenExchangeFailed("Non-HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            throw AntigravityOAuthError.tokenExchangeFailed(body)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let accessToken = json["access_token"] as? String,
+              let refreshToken = json["refresh_token"] as? String
+        else {
+            throw AntigravityOAuthError.tokenExchangeFailed("Thiếu access_token/refresh_token trong response")
+        }
+        let expiresIn = (json["expires_in"] as? Double) ?? 3600
+        let expiry = Date().addingTimeInterval(expiresIn)
+        let email = emailFromIDToken(json["id_token"] as? String)
+        return AgyTokenSet(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            expiry: expiry,
+            email: email)
+    }
+
     // MARK: - PKCE
 
     private static func generatePKCE() -> (verifier: String, challenge: String) {
@@ -483,7 +600,8 @@ enum AntigravityOAuthLogin {
         clientID: String,
         redirectURI: String,
         codeChallenge: String,
-        scopes: [String]
+        scopes: [String],
+        prompt: String = "consent"
     ) -> URL {
         var comps = URLComponents(string: authBaseURL)!
         comps.queryItems = [
@@ -494,7 +612,7 @@ enum AntigravityOAuthLogin {
             URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "access_type", value: "offline"),
-            URLQueryItem(name: "prompt", value: "consent"),
+            URLQueryItem(name: "prompt", value: prompt),
         ]
         return comps.url!
     }

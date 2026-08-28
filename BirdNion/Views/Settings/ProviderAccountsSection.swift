@@ -351,6 +351,7 @@ extension ProvidersPane {
                             }
                         }
                         Spacer()
+                        agySettingsAffordance(for: acc)
                         if !isActive {
                             Button(vi ? "Đặt mặc định" : "Set default") {
                                 do {
@@ -389,6 +390,10 @@ extension ProvidersPane {
                         .pointingHandCursor()
                     }
                     .padding(.vertical, 8)
+                    if agyLoginTargetLabel == acc.label {
+                        agySettingsLoginPanel(for: acc)
+                            .padding(.bottom, 8)
+                    }
                 }
             }
 
@@ -486,6 +491,84 @@ extension ProvidersPane {
             .hairlineTop()
         }
         .padding(.horizontal, 14)
+        .onChange(of: agyLogin.state) { _, newValue in
+            // Login agy cô lập xong: reload store + refetch để hàng account
+            // chuyển sang "agy đã kết nối" và quota cập nhật ngay.
+            guard newValue == .success, let target = agyLoginTargetLabel else { return }
+            antigravityStore = AntigravityOAuthStore.load()
+            providerFetchIdentityDidChange("antigravity")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                if agyLoginTargetLabel == target { agyLoginTargetLabel = nil }
+            }
+        }
+    }
+
+    // MARK: - Isolated agy login (Settings — tương đương popover)
+
+    /// Badge "agy đã kết nối" hoặc nút "Đăng nhập agy" cho từng account, để
+    /// seed login cô lập ngay trong Settings.
+    @ViewBuilder
+    func agySettingsAffordance(for acc: AntigravityOAuthStore.Account) -> some View {
+        let vi = L10n.languageCode(language) == "vi"
+        if agyLoginTargetLabel == acc.label {
+            EmptyView()
+        } else if AntigravityIsolatedAgy.hasLogin(forAccountLabel: acc.label) {
+            Text(vi ? "agy đã kết nối" : "agy connected")
+                .font(.plexMono(9, weight: .semibold))
+                .foregroundStyle(SettingsTheme.success)
+        } else {
+            Button(vi ? "Đăng nhập agy" : "Sign in to agy") {
+                startAgyLoginSettings(acc.label)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .font(.plexSans(11, weight: .medium))
+            .foregroundStyle(SettingsTheme.accent)
+        }
+    }
+
+    /// Panel trạng thái đăng nhập agy (mở trình duyệt → thành công/thất bại).
+    @ViewBuilder
+    func agySettingsLoginPanel(for acc: AntigravityOAuthStore.Account) -> some View {
+        let vi = L10n.languageCode(language) == "vi"
+        HStack(spacing: 6) {
+            switch agyLogin.state {
+            case .idle, .launching:
+                ProgressView().controlSize(.small)
+                Text(L10n.t("antigravity.login.launching", language))
+                    .font(.plexSans(11))
+                    .foregroundStyle(SettingsTheme.secondary)
+            case .success:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(SettingsTheme.success)
+                Text(vi ? "Đã kết nối agy" : "agy connected")
+                    .font(.plexSans(11, weight: .medium))
+                    .foregroundStyle(SettingsTheme.success)
+            case .failed(let message):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(SettingsTheme.critical)
+                Text(L10n.providerText(message, preference: language))
+                    .font(.plexSans(10))
+                    .foregroundStyle(SettingsTheme.critical)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(vi ? "Thử lại" : "Retry") { startAgyLoginSettings(acc.label) }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .font(.plexSans(11, weight: .medium))
+                    .foregroundStyle(SettingsTheme.accent)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(SettingsTheme.selectedSurface)
+        )
+    }
+
+    func startAgyLoginSettings(_ label: String) {
+        agyLoginTargetLabel = label
+        agyLogin.start(accountLabel: label)
     }
 
     func antigravityLoginWithGoogle(vi: Bool) {

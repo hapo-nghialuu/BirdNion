@@ -67,6 +67,10 @@ struct ProvidersPane: View {
     @State var antigravityLoginError: String? = nil
     @State var antigravityAdvancedSetupExpanded: Bool = false
     @State var antigravityReloadTick: Int = 0
+    // Đăng nhập agy cô lập theo account (seed HOME riêng để đọc quota đa tài
+    // khoản) — cùng cơ chế với popover (QuotaPanel.agyLogin).
+    @StateObject var agyLogin = AntigravityIsolatedLoginSession()
+    @State var agyLoginTargetLabel: String? = nil
 
     // MARK: - Copilot OAuth state
     @State var copilotStore: CopilotAccountStore.Store = CopilotAccountStore.load()
