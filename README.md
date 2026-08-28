@@ -178,9 +178,9 @@ The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in m
 <br />
 
 <div align="center">
-  <img src="docs/images/general-settings.png" width="776" alt="BirdNion general settings" />
+  <img src="website/assets/control-surface-redraw.jpg" width="776" alt="Illustrated BirdNion Linux control surface based on the current Settings implementation" />
   <br />
-  <strong>General settings</strong>
+  <strong>Control surface · illustrated from the current Linux Settings implementation</strong>
 </div>
 
 ## Features
