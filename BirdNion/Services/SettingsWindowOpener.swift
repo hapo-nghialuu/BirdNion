@@ -1,5 +1,8 @@
 import AppKit
+import OSLog
 import SwiftUI
+
+private let settingsOpenLog = Logger(subsystem: "com.local.birdnion", category: "settings-open")
 
 /// Shared open-Settings request so the keepalive scene can ack that SwiftUI's
 /// `openSettings` environment action actually ran.
@@ -35,9 +38,17 @@ enum SettingsWindowOpener {
         startObserversIfNeeded()
         // Accessory apps sometimes defer WindowGroup creation until activation.
         NSApp.activate(ignoringOtherApps: false)
-        DispatchQueue.main.async {
-            // Touch windows list so AppKit finishes scene materialization.
-            _ = NSApp.windows
+        // Re-nudge over the first few seconds: at a cold macOS boot the keepalive
+        // WindowGroup may not mount on the first pass under heavy login load, so
+        // the first Settings click would otherwise race scene creation.
+        for delay in [0.5, 1.5, 3.0, 6.0] as [TimeInterval] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                _ = NSApp.windows
+                if !keepaliveReady { NSApp.activate(ignoringOtherApps: false) }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.5) {
+            settingsOpenLog.notice("warmup done keepalive=\(keepaliveReady) policy=\(NSApp.activationPolicy().rawValue)")
         }
     }
 
@@ -52,12 +63,20 @@ enum SettingsWindowOpener {
 
     // MARK: - Open attempts
 
-    private static let retryDelays: [TimeInterval] = [0, 0.12, 0.3, 0.55, 1.0, 1.6]
+    // Kéo dài retry tới ~20s: sau khi khởi động lại macOS, login-item chạy nền
+    // ở `.accessory` và SwiftUI hoãn materialize `Settings` scene cho tới khi
+    // app thực sự active; dưới tải boot nặng việc này có thể mất >3s. Cửa sổ
+    // retry ngắn (cũ ~3.5s) cạn trước khi scene sẵn sàng → nút Settings "chết".
+    private static let retryDelays: [TimeInterval] = [
+        0, 0.12, 0.3, 0.55, 1.0, 1.6, 2.5, 3.5, 5.0, 7.0, 9.5, 12.5, 16.0, 20.0]
 
     private static func attemptOpen(generation: Int, attempt: Int) {
         guard generation == openGeneration else { return }
 
         if settingsWindowVisible() {
+            if attempt > 0 {
+                settingsOpenLog.notice("Settings visible after \(attempt) retries")
+            }
             frontSettingsWindows()
             return
         }
@@ -70,10 +89,13 @@ enum SettingsWindowOpener {
         // AppKit fallback when keepalive hasn't subscribed yet (cold start).
         // Even after ack, cold-start openSettings can no-op until the next
         // attempt — keep sending AppKit show until a window is visible.
+        var appKitHandled = true
         if !request.wasHandled || !keepaliveReady || !settingsWindowVisible() {
-            _ = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            appKitHandled = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
                 || NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
         }
+        settingsOpenLog.notice(
+            "open attempt=\(attempt) policy=\(NSApp.activationPolicy().rawValue) keepalive=\(keepaliveReady) swiftUIAck=\(request.wasHandled) appKit=\(appKitHandled) visible=\(settingsWindowVisible())")
 
         // Front whatever Settings window exists after this tick.
         DispatchQueue.main.async {
@@ -100,6 +122,10 @@ enum SettingsWindowOpener {
         if NSApp.activationPolicy() != .regular {
             if NSApp.setActivationPolicy(.regular) {
                 managingRegularPolicy = true
+            } else {
+                // Có thể fail nếu gọi quá sớm sau login-item cold start; các
+                // attempt sau sẽ thử lại (log để chẩn đoán nếu vẫn kẹt).
+                settingsOpenLog.error("setActivationPolicy(.regular) returned false")
             }
         }
         NSApp.activate(ignoringOtherApps: true)
