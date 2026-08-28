@@ -1,0 +1,65 @@
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("../../BirdNion/Resources/Fonts/IBMPlexSans-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("../../BirdNion/Resources/Fonts/IBMPlexMono-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --paper: #fbfaf7;
+  --paper-deep: #f3f1ea;
+  --paper-bright: #fffefa;
+  --ink: #16150f;
+  --ink-soft: #58564d;
+  --hairline: #dedbd1;
+  --hairline-dark: #3c3a32;
+  --blue: #1f4fd8;
+  --blue-dark: #173aa0;
+  --green: #1f7a4c;
+  --warning: #8f5f12;
+  --critical: #b4402f;
+  --content: min(1184px, calc(100vw - 48px));
+  --font-sans: "IBM Plex Sans", "Avenir Next", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --ease-out: cubic-bezier(.2, .75, .25, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--blue);
+  color: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

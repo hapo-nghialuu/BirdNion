@@ -1,0 +1,124 @@
+.proof-section,
+.platform-section,
+.privacy-section,
+.install-section,
+.faq-section {
+  width: var(--content);
+  margin: 0 auto;
+  padding: 118px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.proof-section {
+  display: grid;
+  grid-template-columns: 5fr 1fr 6fr;
+}
+
+.section-heading {
+  grid-column: 1;
+}
+
+.section-heading h2,
+.platform-copy h2,
+.privacy-intro h2,
+.install-section h2 {
+  margin-top: 18px;
+  font-size: clamp(40px, 4.5vw, 64px);
+  font-weight: 620;
+  letter-spacing: -.052em;
+  line-height: .98;
+}
+
+.section-heading > p:last-child,
+.platform-copy > p,
+.privacy-intro > p {
+  max-width: 480px;
+  margin-top: 28px;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.feature-ledger {
+  grid-column: 3;
+  border-top: 1px solid var(--ink);
+}
+
+.feature-ledger article {
+  min-height: 132px;
+  padding: 25px 0;
+  display: grid;
+  grid-template-columns: 48px 170px 1fr;
+  align-items: baseline;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.feature-ledger span,
+.platform-rows span {
+  color: var(--blue);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .05em;
+}
+
+.feature-ledger h3 {
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.feature-ledger p {
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.platform-section {
+  display: grid;
+  grid-template-columns: 5fr 1fr 6fr;
+  align-items: start;
+}
+
+.platform-copy {
+  grid-column: 1;
+  position: sticky;
+  top: 28px;
+}
+
+.platform-rows {
+  margin-top: 42px;
+  border-top: 1px solid var(--ink);
+}
+
+.platform-rows div {
+  min-height: 70px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.platform-rows strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-proof {
+  grid-column: 3;
+  margin: 0;
+  padding: 7px;
+  background: var(--paper-deep);
+  border: 1px solid var(--ink);
+}
+
+.settings-proof .proof-label {
+  border-color: var(--hairline);
+}
+
+.settings-proof img {
+  width: 100%;
+  max-height: 700px;
+  object-fit: cover;
+  object-position: top center;
+}

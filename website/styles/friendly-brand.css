@@ -1,0 +1,134 @@
+:root {
+  --sky: #84b8f4;
+  --bird-blue: #4f80e8;
+  --sun: #f2bf38;
+  --sun-soft: #fff7d6;
+}
+
+.brand-mark {
+  box-sizing: border-box;
+  padding: 4px;
+  border: 0 !important;
+  border-radius: 12px;
+  background: var(--ink);
+  object-fit: contain;
+  transition: transform 160ms var(--ease-out);
+}
+
+.brand:hover .brand-mark {
+  transform: rotate(-5deg) translateY(-1px);
+}
+
+.hero h1 {
+  max-width: 620px;
+  font-size: clamp(52px, 5.4vw, 74px);
+  letter-spacing: -.055em;
+  line-height: .94;
+}
+
+.hero .product-proof {
+  --mascot-size: 132px;
+  position: relative;
+  border-radius: 18px 18px 6px 6px;
+}
+
+.hero-mascot {
+  position: absolute;
+  z-index: 2;
+  top: calc(47px - var(--mascot-size));
+  right: 12px;
+  width: var(--mascot-size);
+  height: var(--mascot-size);
+  border: 0;
+  background: transparent;
+  filter: drop-shadow(0 12px 18px rgba(9, 18, 32, .2));
+  pointer-events: none;
+  transform: rotate(2deg);
+  transform-origin: bottom center;
+}
+
+.hero .proof-label {
+  padding-right: calc(var(--mascot-size) + 20px);
+}
+
+.hero-mascot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.screen-crop {
+  border-radius: 10px 10px 2px 2px;
+}
+
+.provider-line {
+  max-width: 460px;
+  margin-top: 17px;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.provider-line a {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+.button,
+.command-row,
+.command-row button {
+  border-radius: 12px;
+}
+
+.button-primary {
+  box-shadow: 4px 4px 0 var(--sun);
+}
+
+.button-primary:hover {
+  box-shadow: 2px 2px 0 var(--sun);
+}
+
+.feature-ledger span,
+.first-live-path li > span {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--ink);
+  border-radius: 50%;
+  background: var(--sun-soft);
+  color: var(--ink);
+}
+
+.settings-proof {
+  border-radius: 16px 16px 5px 5px;
+}
+
+.settings-proof img {
+  border-radius: 9px 9px 2px 2px;
+}
+
+.install-fit {
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.faq-list summary::marker {
+  color: var(--blue);
+}
+
+@media (max-width: 900px) {
+  .hero .product-proof { margin-top: 72px; }
+}
+
+@media (max-width: 600px) {
+  .hero h1 { font-size: clamp(44px, 13vw, 60px); }
+  .hero .product-proof { --mascot-size: 112px; }
+  .hero-mascot { right: 8px; }
+  .hero .proof-label span:last-child { display: none; }
+  .provider-line { font-size: 11px; }
+}
