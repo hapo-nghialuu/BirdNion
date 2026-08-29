@@ -10,7 +10,7 @@ The landing page helps an individual developer move from discovery to a truthful
 Landing → platform install → provider source → real self-test → First Live quota/reset
 ```
 
-Primary audience: developers using multiple AI coding agents on macOS or Linux. Primary CTA: install. GitHub source and secondary platform downloads remain subordinate.
+Primary audience: developers using multiple AI coding agents on macOS or Linux, with equal platform weight. Primary CTA: install. English is the default public copy and Vietnamese is the companion version. GitHub source and secondary platform downloads remain subordinate.
 
 ## Human decision lens
 
@@ -115,21 +115,20 @@ Rate each category 1–5. Score = `Σ(weight × rating / 5)`. Pass requires ≥8
 
 The receipt records reviewer, date, category ratings, calculation, concrete findings and `PASS`/`NEEDS FIXES` verdict. Automated tools and AI critics cannot issue this final verdict.
 
-## Private validation and launch gate
+## Validation and launch gate
 
-Validate with 5–10 developers using at least two AI coding agents. Internal hypotheses—not public benchmarks—are:
+The original private-cohort lane proposed validation with 5–10 developers using at least two AI coding agents. That lane and Show HN are temporarily deferred by maintainer decision; the hypotheses below remain future internal decision gates, not current public claims or industry benchmarks:
 
 - clean install success ≥80%;
 - median First Live ≤5 minutes;
 - real self-test success within 10 minutes ≥70%;
 - qualitative D7 repeat use ≥50%.
 
-Do not public-launch while the same install, First Live or privacy blocker repeats without a recovery path. Launch sequence: GitHub soft launch → Show HN → tailored communities → Product Hunt after feedback is absorbed.
+Do not continue a public launch while the same install, First Live or privacy blocker repeats without a recovery path. The active sequence is GitHub soft launch → tailored Cursor/r/ClaudeCode communities → Product Hunt after community feedback is absorbed. Every public surface must disclose that the macOS package is currently ad-hoc signed while Developer ID/notarization is paused.
 
 ## Unresolved questions
 
 - Whether a custom domain will replace `https://birdnion.vercel.app/` later.
-- English-only or bilingual first release.
 - Independent visual reviewer ownership.
 - Whether the website-only bird mark should replace native app icons; keep the two identities separate until explicitly approved.
 - Screenshot sample-data provenance.

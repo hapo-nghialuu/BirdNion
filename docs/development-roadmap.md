@@ -137,12 +137,13 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 
 ## 🎯 Public Proof & Landing — ACTIVE (2026-08-27)
 
-Mục tiêu đợt hiện tại là biến capability đã có bằng chứng thành public proof có thể kiểm tra, **không** đồng nghĩa P1/P2 hoặc các feature roadmap tương lai đã ship. Design contract được lưu tại [`landing-page-design-guidelines.md`](./landing-page-design-guidelines.md); built-in plan trong `plans/260827-birdnion-public-landing-and-launch/` là tài liệu điều phối local vì `plans/` không được Git track.
+Mục tiêu đợt hiện tại là biến capability đã có bằng chứng thành public proof có thể kiểm tra, **không** đồng nghĩa P1/P2 hoặc các feature roadmap tương lai đã ship. Design contract được lưu tại [`landing-page-design-guidelines.md`](./landing-page-design-guidelines.md), copy/media checklist tại [`community-and-product-hunt-launch-kit.md`](./community-and-product-hunt-launch-kit.md); built-in plan trong `plans/260827-birdnion-public-landing-and-launch/` là tài liệu điều phối local vì `plans/` không được Git track.
 
 - [ ] Landing tĩnh trên Vercel, GitHub-first; outcome chính trong 5 phút đầu là quota/reset **First Live** thật, không dùng số liệu hoặc UI giả.
 - [ ] Chứng minh clean install và privacy bằng journey có receipt; dùng asset macOS/Linux và screenshot capability thật.
 - [ ] Giữ surface độc lập với app native/Tauri: không backend, account, email capture, auto telemetry, paid ads hoặc analytics stack đầy đủ.
-- [ ] Soft launch theo nhịp GitHub → Show HN → community phù hợp; Product Hunt chỉ sau khi đã học từ cohort riêng và soft launch.
+- [ ] Launch lane hiện tại: GitHub → Cursor Community Forum → r/ClaudeCode Weekly Showcase → Product Hunt sau khi hấp thụ feedback cộng đồng. Private cohort và Show HN tạm hoãn theo quyết định maintainer; không được ghi các bài là live khi chưa có URL thật.
+- [ ] Public copy dùng English chính + bản companion tiếng Việt, cân bằng macOS/Linux và disclose rõ macOS hiện ad-hoc signed trong khi Developer ID/notarization đang pause.
 
 ## 🧭 Product roadmap đã duyệt — hướng tương lai (P0–P5)
 
@@ -184,9 +185,9 @@ Mục tiêu đợt hiện tại là biến capability đã có bằng chứng th
 - [ ] Công bố Windows support trước khi đủ native receipts cho Windows 10/11 × x64/ARM64 và các journey phát hành bắt buộc.
 
 ## 🌐 Phase 9 — Audience expansion (GATED)
-Landing và soft launch đã chuyển lên initiative active **Public Proof & Landing**, không còn chờ P0–P5. Team expansion và campaign diện rộng vẫn defer cho tới khi có evidence từ clean install, First Live và cohort riêng:
+Landing và soft launch đã chuyển lên initiative active **Public Proof & Landing**, không còn chờ P0–P5. Private cohort và Show HN đang tạm hoãn; community/Product Hunt chỉ qua manual publish gate sau khi recheck policy, account/browser và asset truth. Team expansion vẫn defer cho tới khi có evidence từ clean install và First Live:
 - [ ] **Team/nội bộ Hapo**: dashboard org (Claude Admin API + Kilo orgs đã có), tổng hợp chi phí nhiều máy (cả macOS lẫn Linux ghi chung schema → sync file là đủ), báo cáo
-- [ ] **Broad campaigns**: mở rộng community và Product Hunt sau soft launch; không dùng paid ads, newsletter gate hoặc claim Windows/P1/P2 khi chưa có receipt riêng
+- [ ] **Broad campaigns**: chuẩn bị đúng hai community lane (Cursor Showcase + r/ClaudeCode Weekly Showcase) và Product Hunt; không dùng paid ads, newsletter gate, tracked link, fake metric hoặc claim Windows/P1/P2 khi chưa có receipt riêng
 
 ## 💰 Blocked on budget (làm ngay khi có $99/năm Apple Developer)
 - [ ] Developer ID + notarization → cài đặt không cần strip quarantine, mở rộng được tệp người dùng không kỹ thuật
