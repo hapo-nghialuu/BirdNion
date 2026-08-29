@@ -1593,6 +1593,7 @@ enum CostUsageScanner {
         var remainingInheritedTotals: CostUsageCodexTotals?
         var forkBaselineResolved = false
         var hasUnresolvedForkBaseline = false
+        var forkBaselineCapped = false
         var unresolvedForkTotalWatermark: CostUsageCodexTotals?
         var currentTurnID = initialCodexTurnID
         var rawTotalsBaseline = initialRawTotalsBaseline ?? initialTotals
@@ -1698,6 +1699,20 @@ enum CostUsageScanner {
                 }
 
                 return adjusted
+            }
+
+            // Cap baseline kế thừa ở `total` ĐẦU TIÊN của chính fork. codex mới
+            // (0.150.x) bắt đầu `total_token_usage` của fork từ context kế thừa
+            // (~vài trăm K), KHÔNG gộp usage cả đời của session cha — nhưng
+            // resolver trả về tổng của cha (có thể hàng chục triệu). Trừ tổng của
+            // cha sẽ clamp toàn bộ token của fork về 0 (mất sạch usage). min
+            // per-component: codex CŨ (fork gộp cha, first-total ≈ tổng cha) giữ
+            // nguyên; codex MỚI cap về đúng context kế thừa.
+            if !forkBaselineCapped, let total, let inherited = inheritedTotals {
+                forkBaselineCapped = true
+                let capped = Self.codexMinTotals(inherited, total)
+                inheritedTotals = capped
+                remainingInheritedTotals = remainingInheritedTotals.map { Self.codexMinTotals($0, total) }
             }
 
             let handledUnresolvedForkTotal = hasUnresolvedForkBaseline && total != nil
@@ -2045,6 +2060,19 @@ enum CostUsageScanner {
                             }
 
                             return adjusted
+                        }
+
+                        // Cap baseline kế thừa ở `total` ĐẦU TIÊN của chính fork
+                        // (xem handleTokenCount cho fast path). JSON fallback tự
+                        // lặp lại logic trừ inheritedTotals nên cần cap y hệt;
+                        // `forkBaselineCapped` chia sẻ giữa 2 path nên chỉ chạy 1 lần.
+                        if !forkBaselineCapped, let total, let inherited = inheritedTotals {
+                            forkBaselineCapped = true
+                            let firstTotals = tokenTotals(total)
+                            inheritedTotals = Self.codexMinTotals(inherited, firstTotals)
+                            remainingInheritedTotals = remainingInheritedTotals.map {
+                                Self.codexMinTotals($0, firstTotals)
+                            }
                         }
 
                         let handledUnresolvedForkTotal = hasUnresolvedForkBaseline && total != nil
