@@ -953,6 +953,7 @@ enum CostUsageScanner {
         let sessionId: String?
         let forkedFromId: String?
         let forkTimestamp: String?
+        let cliVersion: String?
         let projectKey: String?
         let projectName: String?
         let projectAttributionAmbiguous: Bool
@@ -975,6 +976,7 @@ enum CostUsageScanner {
 
     private static let codexJSONFieldCachedInputTokens = Array("cached_input_tokens".utf8)
     private static let codexJSONFieldCacheReadInputTokens = Array("cache_read_input_tokens".utf8)
+    private static let codexJSONFieldCliVersion = Array("cli_version".utf8)
     private static let codexJSONFieldForkedFromId = Array("forked_from_id".utf8)
     private static let codexJSONFieldForkedFromIdCamel = Array("forkedFromId".utf8)
     private static let codexJSONFieldId = Array("id".utf8)
@@ -1123,6 +1125,17 @@ enum CostUsageScanner {
         return CostUsageCodexTotals(input: input, cached: cached, output: output)
     }
 
+    private static func codexUsesCompactForkTotals(cliVersion: String?) -> Bool {
+        guard let cliVersion else { return false }
+        let components = cliVersion.split(separator: ".", maxSplits: 2).map { component in
+            Int(component.prefix(while: { $0.isNumber })) ?? 0
+        }
+        guard components.count >= 2 else { return false }
+        if components[0] != 0 { return components[0] > 0 }
+        if components[1] != 150 { return components[1] > 150 }
+        return (components.count > 2 ? components[2] : 0) >= 0
+    }
+
     private static func parseCodexFastLine(_ bytes: Data) -> CodexFastLine? {
         bytes.withUnsafeBytes { rawBytes in
             let rawBuffer = rawBytes.bindMemory(to: UInt8.self)
@@ -1165,6 +1178,13 @@ enum CostUsageScanner {
                         from: rawBuffer,
                         in: objectRange,
                         atDepth: 1),
+                    cliVersion: payloadRange.flatMap {
+                        Self.extractJSONByteStringField(
+                            Self.codexJSONFieldCliVersion,
+                            from: rawBuffer,
+                            in: $0,
+                            atDepth: 1)
+                    },
                     projectKey: project?.key,
                     projectName: project?.name,
                     projectAttributionAmbiguous: cwdPresent && project == nil))
@@ -1334,6 +1354,7 @@ enum CostUsageScanner {
                     forkedFromId: Self.codexForkParentId(from: payload),
                     forkTimestamp: payload?["timestamp"] as? String
                         ?? obj["timestamp"] as? String,
+                    cliVersion: payload?["cli_version"] as? String,
                     projectKey: project?.key,
                     projectName: project?.name,
                     projectAttributionAmbiguous: cwdPresent && project == nil)
@@ -1593,7 +1614,8 @@ enum CostUsageScanner {
         var remainingInheritedTotals: CostUsageCodexTotals?
         var forkBaselineResolved = false
         var hasUnresolvedForkBaseline = false
-        var forkBaselineCapped = false
+        var usesCompactForkTotals = false
+        var compactForkBaselineApplied = false
         var unresolvedForkTotalWatermark: CostUsageCodexTotals?
         var currentTurnID = initialCodexTurnID
         var rawTotalsBaseline = initialRawTotalsBaseline ?? initialTotals
@@ -1656,6 +1678,8 @@ enum CostUsageScanner {
             if forkedFromId == nil {
                 forkedFromId = metadata.forkedFromId
             }
+            usesCompactForkTotals = usesCompactForkTotals
+                || Self.codexUsesCompactForkTotals(cliVersion: metadata.cliVersion)
             if metadata.projectAttributionAmbiguous {
                 invalidateProjectIdentity()
             } else {
@@ -1663,6 +1687,23 @@ enum CostUsageScanner {
             }
             if let forkedFromId {
                 try resolveForkBaseline(parentSessionId: forkedFromId, forkedAt: metadata.forkTimestamp ?? "")
+            }
+        }
+
+        func applyCompactForkBaseline(total: CostUsageCodexTotals, last: CostUsageCodexTotals?) {
+            guard usesCompactForkTotals,
+                  !compactForkBaselineApplied,
+                  let inherited = inheritedTotals,
+                  let last
+            else { return }
+            compactForkBaselineApplied = true
+            let preTurnTotals = CostUsageCodexTotals(
+                input: max(0, total.input - last.input),
+                cached: max(0, total.cached - last.cached),
+                output: max(0, total.output - last.output))
+            inheritedTotals = Self.codexMinTotals(inherited, preTurnTotals)
+            remainingInheritedTotals = remainingInheritedTotals.map {
+                Self.codexMinTotals($0, preTurnTotals)
             }
         }
 
@@ -1701,18 +1742,8 @@ enum CostUsageScanner {
                 return adjusted
             }
 
-            // Cap baseline kế thừa ở `total` ĐẦU TIÊN của chính fork. codex mới
-            // (0.150.x) bắt đầu `total_token_usage` của fork từ context kế thừa
-            // (~vài trăm K), KHÔNG gộp usage cả đời của session cha — nhưng
-            // resolver trả về tổng của cha (có thể hàng chục triệu). Trừ tổng của
-            // cha sẽ clamp toàn bộ token của fork về 0 (mất sạch usage). min
-            // per-component: codex CŨ (fork gộp cha, first-total ≈ tổng cha) giữ
-            // nguyên; codex MỚI cap về đúng context kế thừa.
-            if !forkBaselineCapped, let total, let inherited = inheritedTotals {
-                forkBaselineCapped = true
-                let capped = Self.codexMinTotals(inherited, total)
-                inheritedTotals = capped
-                remainingInheritedTotals = remainingInheritedTotals.map { Self.codexMinTotals($0, total) }
+            if let total {
+                applyCompactForkBaseline(total: total, last: last)
             }
 
             let handledUnresolvedForkTotal = hasUnresolvedForkBaseline && total != nil
@@ -1894,6 +1925,7 @@ enum CostUsageScanner {
         {
             sessionId = metadata.sessionId
             forkedFromId = metadata.forkedFromId
+            usesCompactForkTotals = Self.codexUsesCompactForkTotals(cliVersion: metadata.cliVersion)
             if metadata.projectAttributionAmbiguous {
                 invalidateProjectIdentity()
             } else {
@@ -2062,17 +2094,10 @@ enum CostUsageScanner {
                             return adjusted
                         }
 
-                        // Cap baseline kế thừa ở `total` ĐẦU TIÊN của chính fork
-                        // (xem handleTokenCount cho fast path). JSON fallback tự
-                        // lặp lại logic trừ inheritedTotals nên cần cap y hệt;
-                        // `forkBaselineCapped` chia sẻ giữa 2 path nên chỉ chạy 1 lần.
-                        if !forkBaselineCapped, let total, let inherited = inheritedTotals {
-                            forkBaselineCapped = true
-                            let firstTotals = tokenTotals(total)
-                            inheritedTotals = Self.codexMinTotals(inherited, firstTotals)
-                            remainingInheritedTotals = remainingInheritedTotals.map {
-                                Self.codexMinTotals($0, firstTotals)
-                            }
+                        if let total {
+                            applyCompactForkBaseline(
+                                total: tokenTotals(total),
+                                last: last.map(tokenTotals))
                         }
 
                         let handledUnresolvedForkTotal = hasUnresolvedForkBaseline && total != nil

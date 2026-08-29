@@ -22,10 +22,12 @@ final class CodexForkBaselineTests: XCTestCase {
     }
 
     private func sessionMeta(id: String, sessionId: String? = nil, forkedFrom: String? = nil,
-                             parentThread: String? = nil, timestamp: String) -> String {
+                             parentThread: String? = nil, cliVersion: String? = nil,
+                             timestamp: String) -> String {
         var payload = "\"session_id\":\"\(sessionId ?? id)\",\"id\":\"\(id)\",\"timestamp\":\"\(timestamp)\""
         if let forkedFrom { payload += ",\"forked_from_id\":\"\(forkedFrom)\"" }
         if let parentThread { payload += ",\"parent_thread_id\":\"\(parentThread)\"" }
+        if let cliVersion { payload += ",\"cli_version\":\"\(cliVersion)\"" }
         return "{\"timestamp\":\"\(timestamp)\",\"type\":\"session_meta\",\"payload\":{\(payload)}}"
     }
 
@@ -77,7 +79,7 @@ final class CodexForkBaselineTests: XCTestCase {
         try write(
             tmp.appendingPathComponent("sessions/2026/01/15/rollout-2026-01-15T00-00-00-fork-session.jsonl"),
             [
-                sessionMeta(id: "fork-session", forkedFrom: "root-session",
+                sessionMeta(id: "fork-session", forkedFrom: "root-session", cliVersion: "0.149.0",
                            timestamp: "2026-01-15T00:00:00.000Z"),
                 tokenCount(timestamp: "2026-01-15T00:00:01.000Z", totalTokens: 1_100, lastTokens: 1_100),
                 tokenCount(timestamp: "2026-01-15T00:00:02.000Z", totalTokens: 1_000_000, lastTokens: 998_900),
@@ -99,5 +101,42 @@ final class CodexForkBaselineTests: XCTestCase {
         // Buggy behavior counted ~1,055,000 (the entire replayed history);
         // the fix must land near the genuinely-new 55,000-token delta.
         XCTAssertEqual(forkDay?.totalTokens ?? -1, 55_000, accuracy: 1_000)
+    }
+
+    func testCompactForkCountsFirstAndLaterTurnsWithoutParentLifetimeTotal() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-compact-fork-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try write(
+            tmp.appendingPathComponent("sessions/2026/01/05/rollout-parent.jsonl"),
+            [
+                sessionMeta(id: "parent", timestamp: "2026-01-05T00:00:00.000Z"),
+                tokenCount(timestamp: "2026-01-06T00:00:00.000Z", totalTokens: 10_000_000,
+                           lastTokens: 10_000_000),
+            ])
+        try write(
+            tmp.appendingPathComponent("sessions/2026/01/15/rollout-fork.jsonl"),
+            [
+                sessionMeta(id: "fork", forkedFrom: "parent", cliVersion: "0.150.1",
+                           timestamp: "2026-01-15T00:00:00.000Z"),
+                tokenCount(timestamp: "2026-01-15T00:00:01.000Z", totalTokens: 310_000,
+                           lastTokens: 10_000),
+                tokenCount(timestamp: "2026-01-15T00:00:02.000Z", totalTokens: 365_000,
+                           lastTokens: 55_000),
+            ])
+
+        let snapshot = try await CostUsageFetcher(cacheRoot: tmp.appendingPathComponent("cache"))
+            .loadTokenSnapshot(
+                provider: .codex,
+                now: DateComponents(calendar: .init(identifier: .gregorian),
+                                    timeZone: TimeZone(identifier: "UTC"),
+                                    year: 2026, month: 1, day: 20).date!,
+                forceRefresh: true,
+                codexHomePath: tmp.path,
+                historyDays: 30)
+
+        let forkDay = snapshot.daily.first { $0.date == "2026-01-15" }
+        XCTAssertEqual(forkDay?.totalTokens ?? -1, 65_000, accuracy: 1_000)
     }
 }

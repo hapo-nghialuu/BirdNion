@@ -803,7 +803,10 @@ extension CostUsageScanner {
         let canIncremental = (input.metadata.size > cached.size || resumesCurrentGeneration) && startOffset > 0
             && startOffset <= input.metadata.size
             && initialCountedTotals != nil
-            && (cached.forkedFromId == nil || resumesCurrentGeneration)
+            // Fork parsing depends on session metadata plus its resolved parent
+            // baseline. Those are not present when resuming from a byte offset,
+            // so restart forks from byte zero instead of corrupting their delta.
+            && cached.forkedFromId == nil
         guard canIncremental else { return false }
 
         let delta = try Self.parseCodexFileCancellable(
