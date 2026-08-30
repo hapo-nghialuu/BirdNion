@@ -1,6 +1,6 @@
 # Linux ↔ macOS parity matrix
 
-Baseline updated 2026-08-26: macOS + Linux after the agent-centric remake — installed-agent catalog, 4-block All tab, side panels, 52-week activity, Kiro as the sixth cost source, First Live Checkpoint và credential/settings race hardening.
+Baseline updated 2026-08-30: macOS + Linux after the agent-centric remake, Quota Agenda và parity close cho custom profile quick-switch, Codex reset-credit/auto-prime, Copilot multi-account.
 
 Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, adaptive refresh, weekly digest, per-provider budget, Usage Insights, Guided Setup và Action Center v1.
 
@@ -22,7 +22,7 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 | Adaptive refresh | base interval × 1/2/4/8; forced/manual bypass + success reset | cùng multiplier/bypass/reset, dùng tick sẵn có | **done** |
 | Weekly digest | rolling 7 ngày, default OFF, partial-data caveat, cảnh báo budget tổng + per-provider chỉ khi forecast-over/already-over | cùng cửa sổ/cadence, default OFF, cùng logic cảnh báo budget | **done** |
 | Per-provider cost chart | Claude/Codex/Grok/Kiro cards | `source-chart.ts` + main tab branch cùng 4 nguồn | **done** |
-| Quota Agenda MVP | Icon calendar ở footer mở `QuotaAgendaPanelRoot` trong shared `AgentDetailPanelCoordinator`; mở/đóng không đổi tab, chọn dòng đóng panel rồi route provider | `quota-agenda.ts` + `quota-agenda-panel.ts` chạy trong side panel 340px hiện có; main validate provider trước `goTab`, cập nhật theo status/tick/privacy/catalog; All-tab Quota/Configured giữ nguyên | **done** — tối đa 3 dòng + `+N`, percent vẫn là giá trị đã normalize; không thêm poller/backend/storage; native-unit / overage và visual E2E chưa nằm trong receipt MVP |
+| Quota Agenda MVP | Icon calendar-clock ở ô cuối header mở `QuotaAgendaPanelRoot` qua shared `AgentDetailPanelCoordinator`; mở/đóng không đổi tab, chọn dòng đóng panel rồi route provider | Cùng placement/icon; thứ tự header `Action Center → Refresh → Calendar`; `quota-agenda.ts` + `quota-agenda-panel.ts` chạy trong side panel 340px hiện có | **done** — Theme không còn ở popover, Appearance vẫn ở Settings; tối đa 3 dòng + `+N`; canonical lowest-quota window; không thêm poller/backend/storage |
 | Settings structure | multi-tab | section nav: Providers / General / About | **done** |
 | Heatmap greens | VocabbyTheme.heat* | `styles.css` soft GitHub greens | **done** |
 | Startup fetch | launch-time refresh, per-provider streaming, lazy scans + 5-min cache | first paint before any fetch; per-provider status streaming; scanners `spawn_blocking` + 5-min TTL cache; skeleton + "Đang quét…" hint | **done** |
@@ -31,12 +31,12 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 | Menu-bar % text | yes | tray tooltip | **accepted gap** |
 | Settings provider detail | detailHeader + info grid + usage (pace/credits/cost) + setup + quota-warn card + links | `settings-provider-detail.ts` full port; ProviderStatus mở rộng (plan/version/serviceStatus/sourceLabel/windowSeconds) | **done** |
 | Settings Claude Code pane | 2-pane: preset + custom profiles, activation panel + power 76px, scope segmented + folder picker, remove env, token/baseURL, model loader, 1M toggle, paste JSON | `claude-code-pane.ts` + Rust `claudeCodeProfiles` (config flatten giữ key lạ), `claude_code_models` fetcher, profile apply/state commands, tauri-plugin-dialog | **done** |
-| Custom Claude/Codex quick switch trong popover | có, kèm ready/stale/active + proxy health; exact-snapshot guard chống activate sau delete/edit | chưa port; Settings quick-apply vẫn có | **accepted gap** |
+| Custom Claude/Codex quick switch trong popover | có, kèm ready/stale/active + proxy health; exact-snapshot guard chống activate sau delete/edit | `ai-coding-profile-popover.ts` + `profile_switch.rs`; opaque HMAC snapshot, kiểm tra lại sau mọi `await`, provider-scoped proxy cleanup/reconcile | **done** |
 | Codex account quick switch health | account switcher + quota state | last-good quota/health snapshot thụ động, không polling mới | **done** |
 | Codex web extras (Code review %) | WKWebView scrape | không có headless tương đương | **accepted gap** |
-| Codex reset-credits row / auto-prime card | CodexResetCreditsAPI + scheduler | chưa port | **gap (todo)** |
+| Codex reset-credits row / auto-prime card | CodexResetCreditsAPI + scheduler | OAuth reset-credit best-effort; Settings auto-prime default OFF, 08:55, once/day, dùng tick hiện có; Rust chạy `codex exec` read-only với timeout | **done** |
 | Claude web cost bar + webExtras + multi-account | web cookie enrichment | web source không port enrichment | **accepted gap** |
-| Antigravity/Copilot OAuth accounts cards | multi-account store | copilot device-flow có; multi-account chưa | **gap (todo)** |
+| Antigravity/Copilot OAuth accounts cards | multi-account store | cả hai có list/add/switch/remove; Copilot Device Flow chỉ trả opaque handle, account store atomic `0600`, corrupt store fail-closed | **done** |
 | Kilo org picker / menu-bar metric pickers | riêng macOS menu bar | tray tooltip không có metric per-provider | **accepted gap** |
 
 ## Agent-centric remake (2026-08-23 → 2026-08-24)
@@ -99,6 +99,6 @@ Các nguồn khác không dính lỗi này: `claude`, `codex`, `omp` đều quy 
 
 ## Verification
 
-`cargo check` từng báo 9 lỗi ở `lib.rs`/`codex_config.rs` và điều đó dễ bị hiểu nhầm là "crate Linux-only nên không build trên macOS". Thực tế crate KHÔNG compile ở đâu cả kể từ khi `target_config_path()`/`target_path()` chuyển sang infallible mà call site không đổi theo. Đã sửa 2026-08-24. Gate local mới nhất 2026-08-26: Rust `578/578`, Node `65/65`, Linux production build `60` modules; tất cả 0 fail.
+`cargo check` từng báo 9 lỗi ở `lib.rs`/`codex_config.rs` và điều đó dễ bị hiểu nhầm là "crate Linux-only nên không build trên macOS". Thực tế crate KHÔNG compile ở đâu cả kể từ khi `target_config_path()`/`target_path()` chuyển sang infallible mà call site không đổi theo. Đã sửa 2026-08-24. Gate local mới nhất 2026-08-30: Rust `614/614`, Node `84/84`, Linux production build `65` modules và macOS `756` test (`755` pass, `1` live skip); tất cả 0 fail.
 
 Kiểm chứng đầy đủ chạy ở `.github/workflows/linux-build.yml` (Ubuntu 22.04, `cargo test` + `tsc --noEmit` + `npm run tauri build`), trigger bằng `workflow_dispatch`. Workflow này cũng từng hỏng từ 2026-07-21 vì `tauri.conf.json` khai báo resource `binaries/cliproxyapi` trong khi thư mục đó bị gitignore và helper build từ repo Go riêng — job nay tạo file stub để verify compile/test/bundle; bản phát hành vẫn đi qua `linux-release.yml` với helper thật kèm checksum.

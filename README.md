@@ -21,6 +21,7 @@ The native macOS app uses SwiftUI/AppKit and a vendored, trimmed `CodexBarCore` 
 - **Plan around resets.** Per-provider 5-hour, weekly, monthly, credit, and budget windows with reset countdowns.
 - **See spend and cost.** Claude local JSONL scans, weekly usage insights, privacy-safe project rankings, Claude Admin API charts, Codex credits, OpenRouter balances, Bedrock budgets, and provider-specific cost/credit summaries where available.
 - **Configure agent sources.** Pick OAuth, CLI, browser cookies, API keys, AWS credentials, local app files, or provider apps from Settings per provider.
+- **Switch without losing context.** macOS and Linux both expose custom Claude/Codex profile switching, Codex reset-credit/auto-prime, and multi-account flows for Codex, Copilot, Antigravity, and FreeModel.
 - **Keep desktop chrome quiet.** macOS can rotate provider quota percents in the menu bar; Linux rotates the provider logo and percentage directly in the tray icon.
 - **Privacy-first.** BirdNion reuses existing sessions and explicit config. It does not store passwords or perform unrestricted disk scans.
 
@@ -116,7 +117,8 @@ What exists today:
 - Provider-specific settings for cookie mode, manual cookie headers, MiniMax/z.ai/Alibaba regions, AWS keys/profile/region, Deepgram Project ID, Kilo organization scope, Copilot enterprise host, and menu-bar metric selection.
 - Local session discovery for agents that own their auth state: Claude Code, Codex CLI, Gemini CLI, Kiro, Cursor, Antigravity, and similar tools.
 - A Claude Code config console for preset/custom backends, model tiers, global or project scope, JSON import, and safe removal of BirdNion-managed environment keys.
-- Multi-account discovery and switching for Codex and FreeModel, including per-browser FreeModel sessions.
+- Custom Claude Code and Codex profile switching with real ready/stale/proxy health and fail-closed activation.
+- Multi-account discovery and switching for Codex, GitHub Copilot, Antigravity, and FreeModel, including per-browser FreeModel sessions.
 
 Planned direction:
 
@@ -141,7 +143,7 @@ Planned direction:
 - **xAI** - Management API key plus Team ID for the developer platform (separate from the Grok consumer subscription); prepaid balance and 30-day platform spend.
 - **OpenAI** - Platform Admin API (`OPENAI_ADMIN_KEY` / config) for org spend Today/7d/30d; optional Project ID; legacy credit-grants fallback for user API keys. Not ChatGPT/Codex subscription (use Codex for that).
 - **Ollama** - Cloud Session/Weekly usage via ollama.com cookies (Auto/Manual); optional `OLLAMA_API_KEY` verifies Cloud API access.
-- **GitHub Copilot** - GitHub Device Flow or PAT fallback, enterprise host, premium usage, username, and budget extras via web cookies.
+- **GitHub Copilot** - GitHub Device Flow or PAT fallback, enterprise host, full account add/switch/remove management, premium usage, username, and budget extras via web cookies.
 - **Kilo** - API token or CLI session, Kilo organization scope, credits, and auto top-up details.
 - **Kiro** - CLI-based usage, credits/overage data, and 9 menu-bar display modes.
 - **Command Code** - Browser or manual cookies for billing credits and plan catalog.

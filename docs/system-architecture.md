@@ -116,9 +116,22 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
 
 ### 3.5 Profile quick switch và activation safety
 
-- macOS popover cho phép quick switch custom Claude Code/Codex profile, đồng thời hiển thị trạng thái ready/stale/active và health của local proxy.
-- Linux giữ quick switch Codex account hiện có, bổ sung last-good quota + health snapshot thụ động; không tạo polling loop riêng. Custom Claude/Codex profile switcher trong popover Linux vẫn là accepted gap.
-- Mỗi activation macOS kiểm tra **exact profile snapshot** trước và sau mọi `await`. Profile bị sửa hoặc xóa trong lúc activation chạy sẽ ném `profileChangedDuringActivation`, không upsert/apply/ghi overlay từ snapshot cũ; proxy reconcile đọc lại store hiện tại.
+- Cả hai popover cho phép quick switch custom Claude Code/Codex profile, hiển thị ready/stale/active và health thật của local proxy. Codex OAuth account switching vẫn là card riêng vì nó đổi authentication, không phải backend/model config.
+- Linux `profile_switch.rs` chỉ gửi metadata an toàn và HMAC snapshot opaque sang webview; base URL, API key, loopback key và management key không qua IPC.
+- Mỗi activation kiểm tra **exact profile snapshot** trước/sau mọi `await`. Profile bị sửa hoặc xóa giữa chừng fail-closed; direct profile chỉ dọn proxy signature đúng provider rồi reconcile, không làm rơi proxy đang phục vụ agent còn lại.
+- Mọi entry point activation cũ/mới dùng chung một lock xuyên prepare/apply/cleanup. Claude target dùng private atomic write `0600`; Codex ghi overlay trước global selection. Helper loopback chỉ được tin khi PID/cmdline trỏ đúng binary và private config của BirdNion; health response từ listener lạ không được nhận và credential management không được gửi.
+
+#### 3.5.1 Codex reset-credit và auto-prime
+
+- Reset-credit là enrichment OAuth best-effort: lỗi endpoint không làm hỏng quota chính. Popover chỉ hiện badge khi số reset lớn hơn 0; Settings hiển thị cả 0.
+- Auto-prime mặc định OFF, mặc định 08:55 local, tối đa một attempt mỗi ngày và chỉ chạy khi window 5 giờ chưa dùng. Linux dùng tick 10 giây hiện có, stamp attempt trước `await`, không tạo scheduler khác.
+- Rust chạy đúng `codex exec -s read-only --skip-git-repo-check "say ok"` trên system Codex home, null stdio, timeout 30 giây rồi kill/wait; chỉ exit 0 mới phát thông báo thành công.
+
+#### 3.5.2 Copilot multi-account
+
+- Settings macOS/Linux đều có list/add/switch/remove. Account mới từ Device Flow trở thành active; xóa active chọn account còn lại đầu tiên.
+- Linux giữ token, raw `device_code` và host trong Rust; webview chỉ nhận user code/verification URI và random opaque handle. Poll song song/replay bị chặn, host GitHub/GHE được validate.
+- IPC account chỉ trả `label`, `login`, `active`; store ghi atomic `0600`, file corrupt/unreadable fail-closed. Mutation phát barrier trước/sau để result quota của identity cũ không thể sống lại.
 
 ### 3.6 Agent Catalog, Popover Capability Blocks và 52-week Activity Ledger (2026-08-23)
 
@@ -145,14 +158,14 @@ Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
 - Kiro giữ bucket tổng hợp `Other` trong daily chart để bảo toàn USD/token, nhưng loại nó khỏi top-model và digest ranking; winner thật được lưu riêng trong `top_models`.
 - Cost tách khỏi provider toggle: `enabled_usage_sources()` là hợp của provider đang bật và agent phát hiện được, nên CLI tắt provider vẫn báo chi phí.
 - Panel phụ không nằm trong popover 420px mà là cửa sổ Tauri riêng (`panel.html`, 340px, frameless, always-on-top) neo cạnh popover — tương đương NSPanel con bên macOS, giữ nguyên vòng đời hover-transient / click-pin.
-- Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24; gate local 2026-08-26 xanh `578/578` Rust, `65/65` Node và production build `60` modules.
+- Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24; gate local 2026-08-30 xanh `614/614` Rust, `84/84` Node, production build `65` modules và macOS `756` test (`755` pass, `1` live skip).
 
 #### 3.6.2 Quota Agenda MVP (2026-08-30)
 
-- Quota Agenda là companion panel mở từ icon calendar trong nhóm action góc phải footer popover. Khối Quota và Đã cấu hình cũ trong tab All giữ nguyên; Agenda không chiếm thêm chiều cao của popover chính.
+- Quota Agenda là companion panel mở từ icon calendar-clock trung tính ở ô cuối toolbar đầu popover (`Action Center → Refresh → Calendar`). Theme shortcut đã rời popover; Appearance vẫn chỉnh trong Settings. Khối Quota và Đã cấu hình cũ trong tab All giữ nguyên; Agenda không chiếm thêm chiều cao của popover chính.
 - macOS tái sử dụng `AgentDetailPanelCoordinator`/NSPanel 340px với `QuotaAgendaPanelRoot`; Linux tái sử dụng cửa sổ `panel.html` qua `quota-agenda-panel.ts`. Không lồng thêm popover và không tạo window coordinator thứ hai.
 - Mở hoặc đóng Agenda không mutate selected provider. Mỗi provider có tối đa một dòng, panel hiện tối đa 3 dòng; click dòng hoặc `+N` đóng panel trước, sau đó main view validate ID rồi mới chuyển và persist provider tab.
-- Selector ưu tiên window có `resetDate` tương lai gần nhất; nếu không có reset tương lai thì mới rơi về window primary còn lại có `remainingPct` thấp nhất. Percent là giá trị đã normalize; native-unit / overage chưa nằm trong MVP.
+- Selector dùng window primary hợp lệ có `remainingPct` thấp nhất, đồng nhất với quota summary chính; label, phần trăm và reset luôn thuộc cùng window. Agenda chỉ dùng reset của window đại diện này để sắp xếp provider. Percent là giá trị đã normalize; native-unit / overage chưa nằm trong MVP.
 - State chỉ có `scheduled`, `awaitingRefresh`, `unknown`, và `staleLastKnown`. `scheduled` dùng reset countdown, `awaitingRefresh` che phần trăm hiện tại, `staleLastKnown` giữ last-known và `unknown` giữ số hiện tại nhưng không khẳng định lịch reset.
 - Metadata source/account/freshness tuân theo `hidePersonalInfo`; catalog installed-agent fail-closed và chỉ hiện agent được phát hiện/cho phép hiển thị.
 - `QuotaAgendaProjection.build(...)` trên macOS và `quota-agenda.ts` trên Linux chỉ project snapshot hiện có. Panel cập nhật theo provider status, tick, privacy và catalog hiện hữu; không thêm polling loop, backend schema, persistence, calendar sync, ETA hay recommendation.
@@ -380,7 +393,9 @@ Scripts/
 - [x] Weekly digest rolling 7 ngày, default OFF, trên macOS/Linux
 - [x] Usage Insights + Cost by Project trên macOS/Linux: compact All highlight, Settings Overview/Projects 7/30/90, Claude/Codex/Grok privacy key + residual `Unknown`
 - [x] First Live Checkpoint trên macOS/Linux: receipt per-provider chỉ từ explicit current probe sau visible paint, exact-schema/corrupt-root fail-closed và không persist secret/raw error
-- [x] macOS custom profile quick switch fail-closed; Linux Codex account quota/health snapshot
+- [x] Custom Claude/Codex profile quick switch fail-closed trên macOS/Linux; Linux Codex account quota/health snapshot
+- [x] Codex reset-credit + auto-prime opt-in trên macOS/Linux
+- [x] Copilot multi-account list/add/switch/remove trên macOS/Linux với credential-safe IPC
 - [x] Release pipeline (`Scripts/release.sh`) → tap → brew install
 - [ ] Windows 10/11 x64/ARM64 native compile, runtime, install, First Live và release integrity; hiện `FLASH_UNVERIFIED`, không public support claim
 
@@ -413,7 +428,7 @@ Scripts/
 - **Mac App Store** — nếu muốn mass distribution, cần review process
 - **Claude code API key** flow — hiện support Anthropic key, có thể extend cho setup token từ CLI
 - **Local memory** — track Anthropic Max weekly + Sonnet daily qua `~/.claude/projects/`
-- **Phase 8 còn lại** — CSV/JSON export, Linux custom-profile popover và hoàn tất native evidence/release gates cho Windows port
+- **Phase 8 còn lại** — CSV/JSON export và hoàn tất native evidence/release gates cho Windows port
 - **Windows blockers** — native matrix, browser/DPAPI, sidecar artifact/SHA/PE/bundle, installer/upgrade/uninstall và First Live journeys chưa có receipt
 
 ## File liên quan
