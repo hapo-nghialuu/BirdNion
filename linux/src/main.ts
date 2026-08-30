@@ -41,7 +41,17 @@ import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
-import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
+import { costBySection } from "./all-agents-sections";
+import {
+  configuredAgentsSlot,
+  refreshConfiguredAgentsSlot,
+} from "./configured-agents-section";
+import { buildQuotaAgendaRows } from "./quota-agenda";
+import {
+  quotaAgendaSlot,
+  refreshQuotaAgendaSlot,
+  type QuotaAgendaSectionOptions,
+} from "./quota-agenda-section";
 import { closeTransientPanel, PANEL_OWNER_ATTR } from "./side-panel";
 import { configOnlyAgents, InstalledAgent, visibleAgentIds } from "./settings-agents";
 import {
@@ -49,6 +59,7 @@ import {
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
   MONTHLY_BUDGET_CHANGED_EVENT, getProviderBudgetUsd, PROVIDER_BUDGET_STORAGE_KEYS,
   PROVIDER_BUDGET_CHANGED_EVENT, TRAY_DISPLAY_CHANGED_EVENT,
+  HIDE_PERSONAL_INFO_CHANGED_EVENT, isHidePersonalInfo,
 } from "./settings-about";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -986,9 +997,37 @@ function relativeTime(ts: number): string | null {
 function configuredAgents(): InstalledAgent[] {
   const all = state.agents;
   if (!all) return [];
+  const quotaAgentIds = new Set(
+    buildQuotaAgendaRows(state.statuses, quotaAgendaOptions()).map((row) => row.agentId));
   // Chỉ agent có config nhưng KHÔNG quota và KHÔNG log chi phí thuộc hàng
   // gộp này; ẩn agent trong Settings chỉ giấu nó khỏi đây, tổng chi phí giữ nguyên.
-  return configOnlyAgents(all, visibleAgentIds(all));
+  return configOnlyAgents(all, visibleAgentIds(all))
+    .filter((agent) => !quotaAgentIds.has(agent.id));
+}
+
+function quotaAgendaOptions(): QuotaAgendaSectionOptions {
+  const agents = state.agents;
+  const visibleIds = agents ? new Set(visibleAgentIds(agents)) : null;
+  const visibleAgents = agents && visibleIds
+    ? agents.filter((agent) => visibleIds.has(agent.id))
+    : null;
+  return {
+    agents: visibleAgents,
+    staleWarnings,
+    hidePersonalInfo: isHidePersonalInfo(),
+    onProviderSelect: goTab,
+  };
+}
+
+/** Repaint capability slots together so an agent cannot appear in both. */
+function refreshCapabilitySlotsInPlace(): void {
+  if (state.tab !== "all") return;
+  const agendaSlot = document.querySelector<HTMLElement>("#app .quota-agenda-slot");
+  const configuredSlot = document.querySelector<HTMLElement>("#app .configured-agents-slot");
+  if (!agendaSlot || !configuredSlot) return;
+  refreshQuotaAgendaSlot(agendaSlot, state.statuses, quotaAgendaOptions());
+  refreshConfiguredAgentsSlot(configuredSlot, configuredAgents());
+  scheduleFitWindow();
 }
 
 /** Số nguồn chi phí thật sự được tính vào tổng — hiện sau token ở hero
@@ -1272,16 +1311,10 @@ function render() {
     }
     // Quota/configured capabilities are independent of local cost evidence.
     // Keep them visible even while all six scanners are unavailable.
-    const visibleAgents = state.agents
-      ? state.agents.filter((a) => visibleAgentIds(state.agents!).includes(a.id))
-      : null;
-    const quota = quotaSection(
-      state.statuses, combined.daily, visibleAgents, visibleAgents?.length ?? 0);
-    if (quota) body.append(quota);
+    body.append(quotaAgendaSlot(state.statuses, quotaAgendaOptions()));
     const costBy = costBySection(combined, allChartDays(), render);
     if (costBy) body.append(costBy);
-    const configured = configuredSection(configuredAgents());
-    if (configured) body.append(configured);
+    body.append(configuredAgentsSlot(configuredAgents()));
     // No included source means no trustworthy zero/forecast.
     if (sourceCount > 0) {
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
@@ -2303,6 +2336,7 @@ async function load(manual = false) {
         // only repaint there when the tab strip set itself changed.
         const nextIds = state.statuses.map((s) => s.id).join(",");
         if (state.tab !== "all" || prevIds !== nextIds) render();
+        else refreshCapabilitySlotsInPlace();
         void refreshActionCenterIssues().catch(() => {});
       },
     );
@@ -2408,6 +2442,8 @@ async function refetchProvider(id: string) {
  * flicker back to "loading". */
 async function tick() {
   if (isSettingsWindow() || loadInFlight) return;
+  // Reset/freshness copy advances with wall time even when no provider is due.
+  refreshCapabilitySlotsInPlace();
   // Weekly Digest rides this existing cadence — evaluated even when no
   // provider quota is due this cycle (its own 7-day/in-flight gates decide).
   void checkWeeklyDigest().catch(() => {});
@@ -2439,6 +2475,8 @@ async function tick() {
         const onProviderTab = state.tab !== "all";
         if (onProviderTab || prevIds !== nextIds) {
           render();
+        } else {
+          refreshCapabilitySlotsInPlace();
         }
         void refreshActionCenterIssues().catch(() => {});
         void refreshTrayTooltip().catch(() => {});
@@ -2557,6 +2595,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   // here, and the rotation timer would keep repainting the percent frame.
   void listen(TRAY_DISPLAY_CHANGED_EVENT, () => {
     onTrayDisplayPrefChanged();
+  });
+  void listen(HIDE_PERSONAL_INFO_CHANGED_EVENT, () => {
+    if (state.tab === "all") refreshCapabilitySlotsInPlace();
+    else render();
   });
   void listen(ACTION_CENTER_SNAPSHOT_REQUEST_EVENT, () => {
     if (actionCenterSnapshotError) {

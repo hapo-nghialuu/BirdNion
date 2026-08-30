@@ -1,5 +1,5 @@
-// Ba khối capability của tab All — port từ macOS (agent-centric remake
-// 2026-08-23/24): Quota → Cost by (Agent/Model/Token) → Đã cấu hình.
+// Khối Cost by với ba chế độ của tab All. Quota Agenda và Đã cấu hình
+// nằm ở các module riêng để polling có thể cập nhật capability slots tại chỗ.
 //
 // Quy ước giữ nguyên macOS: mỗi agent chỉ xuất hiện ở khối nó thật sự có dữ
 // liệu, mỗi khối cắt ở N dòng rồi gộp phần còn lại vào một dòng "+N", khối
@@ -12,10 +12,9 @@ import {
   usd, tokensShort,
 } from "./usage";
 import { t } from "./i18n";
-import { logoMark, logoUrl } from "./logos";
+import { logoMark } from "./logos";
 import { showModelsPanel, showAgentPanel, bindHoverPanel } from "./side-panel";
 import { buildAgentPanelPayload } from "./agent-panel-payload";
-import type { ProviderStatus } from "./provider-tab";
 
 /** Nguồn có log chi phí thật (khớp `UsageSourceId`) — agent khác như cursor
  * hoặc gemini chỉ có quota/config, không có tab Activity. */
@@ -23,7 +22,6 @@ function isUsageSourceId(id: string): id is UsageSourceId {
   return (USAGE_SOURCE_IDS as readonly string[]).includes(id);
 }
 
-const QUOTA_ROW_LIMIT = 3;
 const COST_ROW_LIMIT = 5;
 
 /** Chế độ của khối "Chi phí theo": theo agent, theo model ($), theo token. */
@@ -44,126 +42,6 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   if (className) node.className = className;
   if (text != null) node.textContent = text;
   return node;
-}
-
-function sectionHead(title: string, trailing?: string): HTMLElement {
-  const head = el("div", "agents-section-head");
-  head.append(el("span", "agents-section-title", title.toUpperCase()));
-  if (trailing) head.append(el("span", "agents-section-meta", trailing));
-  return head;
-}
-
-// ---------------------------------------------------------------- Quota
-
-/** Danh sách quota trong tab All — AGENT-centric như macOS `quotaRows`: tên
- *  hiển thị lấy từ catalog agent ("Claude Code", "Codex CLI"), không phải tên
- *  provider ("Claude", "Codex"). Thứ tự bám theo tab strip provider, không sort
- *  theo % còn lại. `daily` (combined.daily đầy đủ, không windowed) chỉ dùng để
- *  widen panel phụ khi agent này cũng có log chi phí thật.
- *  `agents` rỗng/null (catalog chưa nạp) thì lùi về tên provider. */
-export function quotaSection(
-  statuses: ProviderStatus[],
-  daily: CombinedDay[],
-  agents: { id: string; displayName: string }[] | null = null,
-  totalAgentCount = 0,
-): HTMLElement | null {
-  const nameById = new Map((agents ?? []).map((a) => [a.id, a.displayName]));
-  const rows = statuses
-    .map((status) => {
-      const window = lowestWindow(status);
-      return window
-        ? { status, window, displayName: nameById.get(status.id) ?? status.displayName }
-        : null;
-    })
-    .filter((row): row is QuotaRowData => row != null);
-  if (rows.length === 0) return null;
-
-  const wrap = el("div", "agents-section");
-  wrap.append(sectionHead(
-    t("quota"),
-    t("agentsWithQuota", {
-      n: rows.length,
-      total: totalAgentCount > 0 ? totalAgentCount : statuses.length,
-    }),
-  ));
-
-  for (const row of rows.slice(0, QUOTA_ROW_LIMIT)) {
-    wrap.append(quotaRow(row, daily));
-  }
-  const hidden = rows.slice(QUOTA_ROW_LIMIT);
-  if (hidden.length > 0) {
-    const more = el("div", "agents-more-row is-clickable",
-      t("moreAgentsWithQuota", { n: hidden.length }));
-    // Click mở panel của agent bị ẩn đầu tiên (macOS `AllAgentsQuotaSection`).
-    const next = hidden[0];
-    const nextSource = isUsageSourceId(next.status.id) ? next.status.id : undefined;
-    more.addEventListener("click", () => showAgentPanel(buildAgentPanelPayload({
-      agentId: next.status.id,
-      displayName: next.displayName,
-      quotaWindows: next.status.windows ?? [],
-      daily: nextSource ? daily : undefined,
-      source: nextSource,
-      sourceLabel: next.status.sourceLabel,
-      scannedAt: next.status.lastUpdated,
-    }), "quota", true));
-    wrap.append(more);
-  }
-  return wrap;
-}
-
-type QuotaWindowLike = { label: string; remainingPct: number };
-
-function lowestWindow(status: ProviderStatus): QuotaWindowLike | null {
-  const windows = (status.windows ?? []).filter((w) => Number.isFinite(w.remainingPct));
-  if (windows.length === 0) return null;
-  return windows.reduce((lowest, w) => (w.remainingPct < lowest.remainingPct ? w : lowest));
-}
-
-type QuotaRowData = {
-  status: ProviderStatus;
-  window: QuotaWindowLike;
-  displayName: string;
-};
-
-function quotaRow(data: QuotaRowData, daily: CombinedDay[]): HTMLElement {
-  const { status, window, displayName } = data;
-  const row = el("div", "agents-row");
-  row.append(logoMark(status.id, "agents-row-logo"));
-  row.append(el("span", "agents-row-name", displayName));
-  row.append(el("span", "agents-row-window", window.label.toUpperCase()));
-
-  const track = el("span", "agents-quota-track");
-  const fill = el("span", "agents-quota-fill");
-  fill.style.width = `${Math.max(0, Math.min(100, window.remainingPct))}%`;
-  fill.classList.add(quotaTone(window.remainingPct));
-  track.append(fill);
-  row.append(track);
-
-  const pct = el("span", `agents-row-pct ${quotaTone(window.remainingPct)}`,
-    `${Math.round(window.remainingPct)}%`);
-  row.append(pct, el("span", "agents-row-chevron", "›"));
-
-  row.classList.add("is-clickable");
-  const source = isUsageSourceId(status.id) ? status.id : undefined;
-  const buildPayload = () => buildAgentPanelPayload({
-    agentId: status.id,
-    displayName,
-    quotaWindows: status.windows ?? [],
-    daily: source ? daily : undefined,
-    source,
-    sourceLabel: status.sourceLabel,
-    scannedAt: status.lastUpdated,
-  });
-  // Chỉ click, KHÔNG hover: macOS `AllAgentsQuotaSection` bọc hàng trong
-  // Button trần, không gắn `.onHover` như bên Chi phí theo.
-  row.addEventListener("click", () => showAgentPanel(buildPayload(), "quota", true));
-  return row;
-}
-
-function quotaTone(remaining: number): string {
-  if (remaining <= 20) return "tone-critical";
-  if (remaining <= 50) return "tone-warning";
-  return "tone-ok";
 }
 
 // ------------------------------------------------------------- Cost by
@@ -370,44 +248,4 @@ function shortModelName(name: string): string {
   const trimmed = name.trim();
   const slash = trimmed.lastIndexOf("/");
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
-}
-
-// --------------------------------------------------------- Đã cấu hình
-
-/** Dòng gộp các agent chỉ có cấu hình (không quota, không log chi phí).
- *  Ẩn hẳn khi rỗng — parity macOS `AllAgentsConfiguredSection`. Agent có
- *  brand mark thì dùng logo, còn lại dùng monogram như bản macOS. */
-export function configuredSection(agents: ConfiguredAgent[]): HTMLElement | null {
-  if (agents.length === 0) return null;
-  const wrap = el("div", "agents-section");
-  const row = el("div", "agents-row agents-configured-row");
-  row.append(el("span", "agents-section-title", t("configured").toUpperCase()));
-  const badges = el("span", "agents-configured-badges");
-  for (const agent of agents.slice(0, 4)) {
-    badges.append(logoUrl(agent.id)
-      ? logoMark(agent.id, "agents-configured-logo")
-      : el("span", "agents-configured-badge", initials(agent.displayName)));
-  }
-  row.append(badges);
-  row.append(el("span", "agents-row-meta", t("configuredNoLogs", { n: agents.length })));
-  row.append(el("span", "agents-row-chevron", "›"));
-  // Click mở panel của agent đầu tiên trong nhóm (macOS
-  // `AllAgentsConfiguredSection`); nhóm này không có quota lẫn log nên panel
-  // chỉ có tab Config.
-  const first = agents[0];
-  row.classList.add("is-clickable");
-  row.addEventListener("click", () => showAgentPanel(
-    buildAgentPanelPayload({ agentId: first.id, displayName: first.displayName }), "config", true));
-  wrap.append(row);
-  return wrap;
-}
-
-/** Chỉ cần id + tên để vẽ badge — nhận cả `InstalledAgent`. */
-export type ConfiguredAgent = { id: string; displayName: string };
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
 }

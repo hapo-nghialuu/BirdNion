@@ -26,6 +26,9 @@ export type QuotaWindow = {
   resetsAt?: number;
   /** Window length in seconds (5h/tuần) — drives the settings pace line. */
   windowSeconds?: number;
+  /** Optional semantic flags used when a provider/backend supplies them. */
+  isSupplementary?: boolean;
+  isInactive?: boolean;
 };
 
 export type ProviderStatus = {

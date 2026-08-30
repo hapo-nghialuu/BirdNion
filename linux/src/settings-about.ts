@@ -237,8 +237,10 @@ export function setProviderBudgetUsd(provider: UsageSourceId, n: number | null):
 export function isHidePersonalInfo(): boolean {
   return localStorage.getItem(HIDE_PERSONAL_KEY) === "true";
 }
+export const HIDE_PERSONAL_INFO_CHANGED_EVENT = "birdnion-hide-personal-info-changed";
 export function setHidePersonalInfo(v: boolean) {
   localStorage.setItem(HIDE_PERSONAL_KEY, String(v));
+  void emit(HIDE_PERSONAL_INFO_CHANGED_EVENT, { enabled: v }).catch(() => {});
 }
 export function setRefreshOnOpenEnabledPublic(enabled: boolean) {
   setRefreshOnOpenEnabled(enabled);
