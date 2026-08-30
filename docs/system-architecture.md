@@ -158,7 +158,7 @@ Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
 - Kiro giữ bucket tổng hợp `Other` trong daily chart để bảo toàn USD/token, nhưng loại nó khỏi top-model và digest ranking; winner thật được lưu riêng trong `top_models`.
 - Cost tách khỏi provider toggle: `enabled_usage_sources()` là hợp của provider đang bật và agent phát hiện được, nên CLI tắt provider vẫn báo chi phí.
 - Panel phụ không nằm trong popover 420px mà là cửa sổ Tauri riêng (`panel.html`, 340px, frameless, always-on-top) neo cạnh popover — tương đương NSPanel con bên macOS, giữ nguyên vòng đời hover-transient / click-pin.
-- Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24; gate local 2026-08-30 xanh `614/614` Rust, `84/84` Node, production build `65` modules và macOS `756` test (`755` pass, `1` live skip).
+- Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24; gate local 2026-08-30 xanh `615/615` Rust, `84/84` Node, production build `65` modules và macOS `756` test (`755` pass, `1` live skip).
 
 #### 3.6.2 Quota Agenda MVP (2026-08-30)
 

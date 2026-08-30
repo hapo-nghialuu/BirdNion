@@ -5,7 +5,7 @@
 //! and returns a credential-free success/failure result.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -47,21 +47,26 @@ fn prime_command(executable: &Path, codex_home: &Path) -> Command {
 }
 
 fn run_prime(executable: &Path, codex_home: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
     let mut command = prime_command(executable, codex_home);
     let Ok(mut child) = command.spawn() else {
         return false;
     };
+    let deadline = Instant::now() + timeout;
+    wait_for_prime(&mut child, deadline)
+}
+
+fn wait_for_prime(child: &mut Child, deadline: Instant) -> bool {
     loop {
-        let now = Instant::now();
-        if now >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return false;
-        }
         match child.try_wait() {
             Ok(Some(status)) => return status.success(),
-            Ok(None) => thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(now))),
+            Ok(None) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    let _ = child.kill();
+                    return child.wait().map(|status| status.success()).unwrap_or(false);
+                }
+                thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+            }
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -124,6 +129,23 @@ mod tests {
 
         std::fs::remove_dir_all(success.parent().unwrap()).unwrap();
         std::fs::remove_dir_all(nonzero.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_child_status_wins_after_deadline() {
+        let executable = write_script("completed", "exit 0");
+        let mut command = prime_command(&executable, Path::new("/tmp/system-codex-home"));
+        let mut child = command.spawn().unwrap();
+        while child.try_wait().unwrap().is_none() {
+            thread::yield_now();
+        }
+
+        assert!(wait_for_prime(
+            &mut child,
+            Instant::now() - Duration::from_millis(1),
+        ));
+        std::fs::remove_dir_all(executable.parent().unwrap()).unwrap();
     }
 
     #[cfg(unix)]

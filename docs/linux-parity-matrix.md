@@ -99,6 +99,6 @@ Các nguồn khác không dính lỗi này: `claude`, `codex`, `omp` đều quy 
 
 ## Verification
 
-`cargo check` từng báo 9 lỗi ở `lib.rs`/`codex_config.rs` và điều đó dễ bị hiểu nhầm là "crate Linux-only nên không build trên macOS". Thực tế crate KHÔNG compile ở đâu cả kể từ khi `target_config_path()`/`target_path()` chuyển sang infallible mà call site không đổi theo. Đã sửa 2026-08-24. Gate local mới nhất 2026-08-30: Rust `614/614`, Node `84/84`, Linux production build `65` modules và macOS `756` test (`755` pass, `1` live skip); tất cả 0 fail.
+`cargo check` từng báo 9 lỗi ở `lib.rs`/`codex_config.rs` và điều đó dễ bị hiểu nhầm là "crate Linux-only nên không build trên macOS". Thực tế crate KHÔNG compile ở đâu cả kể từ khi `target_config_path()`/`target_path()` chuyển sang infallible mà call site không đổi theo. Đã sửa 2026-08-24. Gate local mới nhất 2026-08-30: Rust `615/615`, Node `84/84`, Linux production build `65` modules và macOS `756` test (`755` pass, `1` live skip); tất cả 0 fail.
 
 Kiểm chứng đầy đủ chạy ở `.github/workflows/linux-build.yml` (Ubuntu 22.04, `cargo test` + `tsc --noEmit` + `npm run tauri build`), trigger bằng `workflow_dispatch`. Workflow này cũng từng hỏng từ 2026-07-21 vì `tauri.conf.json` khai báo resource `binaries/cliproxyapi` trong khi thư mục đó bị gitignore và helper build từ repo Go riêng — job nay tạo file stub để verify compile/test/bundle; bản phát hành vẫn đi qua `linux-release.yml` với helper thật kèm checksum.
