@@ -149,12 +149,13 @@ Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
 
 #### 3.6.2 Quota Agenda MVP (2026-08-30)
 
-- All tab có Quota Agenda theo contract trust-first, dùng `remainingPct` đã normalize từ provider; native-unit / overage chưa nằm trong MVP này.
-- Mỗi provider có tối đa một dòng và toàn Agenda chỉ hiện 3 dòng; `+N` mở provider ẩn kế tiếp, còn click một dòng đi thẳng tới provider tab tương ứng.
-- Selector ưu tiên window có `resetDate` tương lai gần nhất; nếu không có reset tương lai thì mới rơi về window primary còn lại có `remainingPct` thấp nhất.
-- State hiện tại chỉ có `scheduled`, `awaitingRefresh`, `unknown`, và `staleLastKnown`. `scheduled` dùng reset countdown, `awaitingRefresh` che phần trăm hiện tại, `staleLastKnown` giữ last-known và `unknown` giữ số hiện tại nhưng không khẳng định lịch reset.
-- Metadata hiển thị source, account và freshness theo kiểu privacy-safe; `hidePersonalInfo` chỉ ẩn account label, không đổi source/freshness.
-- macOS dùng `QuotaAgendaProjection.build(...)` và `AllAgentsQuotaSection`; Linux dùng `quota-agenda.ts` + `quota-agenda-section.ts`. `main.ts` refresh đồng thời hai slot ổn định Agenda/Đã cấu hình khi provider hoặc `birdnion-hide-personal-info-changed` đổi, nên agent không bị trùng/mất mà chart cũng không bị rerender.
+- Quota Agenda là companion panel mở từ icon calendar trong nhóm action góc phải footer popover. Khối Quota và Đã cấu hình cũ trong tab All giữ nguyên; Agenda không chiếm thêm chiều cao của popover chính.
+- macOS tái sử dụng `AgentDetailPanelCoordinator`/NSPanel 340px với `QuotaAgendaPanelRoot`; Linux tái sử dụng cửa sổ `panel.html` qua `quota-agenda-panel.ts`. Không lồng thêm popover và không tạo window coordinator thứ hai.
+- Mở hoặc đóng Agenda không mutate selected provider. Mỗi provider có tối đa một dòng, panel hiện tối đa 3 dòng; click dòng hoặc `+N` đóng panel trước, sau đó main view validate ID rồi mới chuyển và persist provider tab.
+- Selector ưu tiên window có `resetDate` tương lai gần nhất; nếu không có reset tương lai thì mới rơi về window primary còn lại có `remainingPct` thấp nhất. Percent là giá trị đã normalize; native-unit / overage chưa nằm trong MVP.
+- State chỉ có `scheduled`, `awaitingRefresh`, `unknown`, và `staleLastKnown`. `scheduled` dùng reset countdown, `awaitingRefresh` che phần trăm hiện tại, `staleLastKnown` giữ last-known và `unknown` giữ số hiện tại nhưng không khẳng định lịch reset.
+- Metadata source/account/freshness tuân theo `hidePersonalInfo`; catalog installed-agent fail-closed và chỉ hiện agent được phát hiện/cho phép hiển thị.
+- `QuotaAgendaProjection.build(...)` trên macOS và `quota-agenda.ts` trên Linux chỉ project snapshot hiện có. Panel cập nhật theo provider status, tick, privacy và catalog hiện hữu; không thêm polling loop, backend schema, persistence, calendar sync, ETA hay recommendation.
 
 ## 4. Luồng quota
 
