@@ -118,11 +118,12 @@ Chuyển từ *hiển thị* sang *hành động* trên dữ liệu chi phí:
 - [x] [both] Thêm `notConfigured` tách khỏi token sai trong classifier; popover Retry hiện cho mọi provider lỗi (không chỉ Claude/Codex/Grok), Fix chỉ hiện khi lỗi thật sự sửa được từ Settings (not-configured/credential/cookie)
 - [x] [macOS] Chuẩn hóa macOS minimum 14.0 — `Info.plist` (`LSMinimumSystemVersion`) trước đó lệch còn 13.0 so với `MACOSX_DEPLOYMENT_TARGET`/docs
 - [x] Release gate: `Scripts/release.sh` chạy macOS build+test, Linux TS build (`npm run build`), và Rust tests trước khi bump version hoặc publish
-- [ ] [Linux] Custom Claude/Codex profile quick switch trong popover — chuyển thành ưu tiên P0 để đóng khoảng trống parity với macOS
+- [x] [Linux] Custom Claude/Codex profile quick switch trong popover — ready/stale/active, proxy health, opaque exact-snapshot guard và provider-scoped cleanup/reconcile — 2026-08-30
 - [x] [both] Budget **per-source** cho Claude/Codex/Grok/Kiro/OMP/Pi — UserDefaults (macOS) / localStorage (Linux), độc lập với budget tổng; Claude/Codex/Grok/Kiro có card trong tab provider, OMP/Pi có Settings + digest; mọi forecast tôn trọng trust-unavailable và digest chỉ cảnh báo forecast-over/already-over
 - [x] [both] Usage Insights + Cost by Project — All tab chỉ giữ compact highlight; Settings có tab Insights với Overview và Projects 7/30/90 ngày. Claude/Codex/Grok dùng project key SHA-256 + basename an toàn từ metadata local; chỉ residual không gán được mới vào `Unknown`; history riêng `project-cost-history.json` high-water/0600 — 2026-08-20
 - [x] [both] Guided Setup completion + Action Center v1 — lỗi sửa được mở đúng provider/control; save fail không chạy self-test; Live chỉ sau probe thật. Popover chỉ thêm badge gọn, chi tiết nằm trong Settings; chỉ current setup/connection-health, không history/quota/budget/release và không persist raw error — 2026-08-21
 - [x] [both] First Live Checkpoint — receipt local per-provider cho Claude/Codex/Grok chỉ được ghi từ save-first explicit probe hiện tại có quota window và sau paint acknowledgment thật (AppKit `draw` / hai `requestAnimationFrame`); failure/cache/background/stale generation không tạo hoặc ghi đè, root storage hỏng được giữ nguyên, payload chuẩn hoá đúng schema và không chứa credential/path/token/raw error. macOS dùng atomic UUID journal + tri-state commit; `indeterminate` không giả Live/Fail — 2026-08-26
+- [x] [both] Quota Agenda MVP — companion panel mở từ icon calendar-clock trong header toolbar, còn Quota/Đã cấu hình trong tab All giữ nguyên; tối đa 3 dòng, dùng cùng quota window thấp nhất với summary chính, state `scheduled` / `awaitingRefresh` / `unknown` / `staleLastKnown`, metadata source/account/freshness privacy-safe. Mở panel không đổi tab; click dòng đóng panel rồi đi provider hợp lệ. Dùng refresh/tick hiện có, không thêm poller/backend/storage — 2026-08-30
 - [ ] [both] Export CSV/JSON chi phí theo ngày/model — tiếp tục ở P4, chưa phải capability hiện có
 - [ ] [Windows] Port từ codebase Tauri `linux/` — **đang phát triển, `FLASH_UNVERIFIED`**:
   - [x] Platform seam cho `%USERPROFILE%`/`%APPDATA%`/`%LOCALAPPDATA%`, `PATH`/`PATHEXT`, atomic private writes và owner/SYSTEM DACL
@@ -147,11 +148,11 @@ Mục tiêu đợt hiện tại là biến capability đã có bằng chứng th
 
 ## 🧭 Product roadmap đã duyệt — hướng tương lai (P0–P5)
 
-> **Ranh giới trạng thái (2026-08-27):** các checkbox đã hoàn tất ở Phase 0–8 và bảng milestone bên dưới là capability/lịch sử đã có bằng chứng. P0–P5 là định hướng sản phẩm đã duyệt nhưng **chưa triển khai**; mỗi mục chỉ được đánh dấu hoàn tất sau spec, implementation và receipt riêng cho macOS/Linux.
+> **Ranh giới trạng thái (2026-08-30):** các checkbox đã hoàn tất ở Phase 0–8 và bảng milestone bên dưới là capability/lịch sử đã có bằng chứng. P0 đã ship; P1–P5 vẫn là định hướng tương lai và chỉ được đánh dấu hoàn tất sau implementation + receipt riêng cho macOS/Linux.
 
 ### P0 — Đóng khoảng trống Linux custom profile quick-switch
 
-- [ ] [Linux] Đưa custom Claude/Codex profile quick-switch vào popover, giữ cùng contract activation fail-closed đã có trên macOS và đóng khoảng trống parity macOS/Linux.
+- [x] [Linux] Custom Claude/Codex profile quick-switch trong popover, cùng contract activation fail-closed với macOS — 2026-08-30.
 
 ### P1 — Allowance Runway & Reset Timeline
 
@@ -212,6 +213,8 @@ Landing và soft launch đã chuyển lên initiative active **Public Proof & La
 
 | Date | Milestone |
 |---|---|
+| 2026-08-30 | Đóng ba khoảng trống chức năng Linux: custom Claude/Codex profile quick-switch với exact-snapshot/shared-lock/owned-proxy guard; Codex reset-credit + auto-prime opt-in; Copilot multi-account list/add/switch/remove với opaque Device Flow và private atomic store. Popover macOS/Linux bỏ Theme shortcut, Calendar chiếm ô cuối; Appearance vẫn ở Settings. Gate: Linux Rust `615/615`, Node `84/84`, production build `65` modules; macOS `756` test (`755` pass, `1` live skip); 0 fail. |
+| 2026-08-30 | Quota Agenda MVP implemented as a macOS/Linux companion panel opened by a neutral calendar-clock in the header toolbar; existing All-tab Quota/Configured blocks remain unchanged. Max 3 rows, canonical lowest-quota window per provider, privacy-safe source/account/freshness, close-then-validate provider drilldown, and updates ride existing status/tick/privacy/catalog events without a new poller. |
 | 2026-08-26 | Antigravity multi-account parity macOS/Linux: quản lý account trong Settings, quick-switch trong popover, private atomic credential store, selected-account guard và pre/post invalidation trên Linux. Gate: macOS `730` tests (`729` pass, `1` live skip); Linux Rust `583/583`, Node `66/66`, production build `60` modules; review độc lập `PASS 9.7/10`, 0 fail. |
 | 2026-08-26 | Đóng parity macOS/Linux cho Kiro aggregate/storage, xAI roster, provider status invalidation, settings revision/dirfd, Codex account filesystem identity và First Live atomic journal/tri-state; Linux account remove chỉ unlink đúng `auth.json` qua bound dirfd, không recurse/rename/UUID unlink. Gate: macOS full `726` tests (`725` pass, `1` live skip), First Live `19/19`, Release universal `x86_64 arm64`; Linux Rust `578/578`, Node `65/65`, production build `60` modules; review độc lập `PASS 9.9/10`, 0 fail. |
 | 2026-08-25 | macOS/Linux parity increment: Kiro tham gia canonical 6-source aggregate trên Linux (24h/30d, day/agent panel, provider chart, digest, budget); semantic scan receipt từ chối turn sai type/value, numeric vượt bound/overflow và alias chưa hỗ trợ; detector/scanner nhận current/legacy/XDG storage với default-DB fallback khi provider off; Settings Agents truyền quota IDs đúng contract; budget riêng 6 nguồn đồng bộ hai nền tảng; First Live receipt chỉ sau visible paint và storage fail-closed, state đã settle bị reset khi switch/disable. Gate: macOS full `578` tests (`577` pass, `1` live skip), focused `55/55`; Linux Node `14/14`, production build `59` modules, Rust `477/477`; 0 fail |

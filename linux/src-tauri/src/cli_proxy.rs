@@ -49,6 +49,12 @@ static PROCESS: LazyLock<Mutex<ProcessState>> = LazyLock::new(|| {
 });
 static PREPARE_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
+static PROFILE_ACTIVATION_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+pub async fn lock_profile_activation() -> tokio::sync::MutexGuard<'static, ()> {
+    PROFILE_ACTIVATION_LOCK.lock().await
+}
 
 fn set_runtime(state: RuntimeState) {
     if let Ok(mut g) = PROCESS.lock() {
@@ -633,6 +639,25 @@ fn is_owned_listener() -> bool {
     false
 }
 
+fn listener_commands_are_managed(command_lines: &[String], config_url: &Path) -> bool {
+    !command_lines.is_empty()
+        && command_lines
+            .iter()
+            .all(|command_line| is_managed_process(command_line, config_url))
+}
+
+#[cfg(not(windows))]
+fn is_owned_listener() -> bool {
+    let Some(config_url) = config_yaml_path() else {
+        return false;
+    };
+    let command_lines: Vec<String> = listener_pids(LOCAL_PORT)
+        .into_iter()
+        .map(command_line_for)
+        .collect();
+    listener_commands_are_managed(&command_lines, &config_url)
+}
+
 fn start_process(executable: &Path, config_url: &Path, work_dir: &Path) -> Result<(), String> {
     let mut g = PROCESS.lock().map_err(|e| e.to_string())?;
     if let Some(child) = g.child.as_mut() {
@@ -861,11 +886,10 @@ async fn is_healthy() -> bool {
 }
 
 async fn is_healthy_owned() -> bool {
-    #[cfg(windows)]
     if !is_owned_listener() {
         return false;
     }
-    is_healthy().await
+    is_healthy().await && is_owned_listener()
 }
 
 async fn put_management<T: Serialize>(
@@ -896,7 +920,6 @@ async fn put_management<T: Serialize>(
     }
 }
 
-#[cfg(windows)]
 fn ensure_owned_management_target() -> Result<(), String> {
     if is_owned_listener() {
         Ok(())
@@ -905,11 +928,6 @@ fn ensure_owned_management_target() -> Result<(), String> {
             "Cổng {LOCAL_PORT} không thuộc process CLIProxyAPI do BirdNion quản lý"
         ))
     }
-}
-
-#[cfg(not(windows))]
-fn ensure_owned_management_target() -> Result<(), String> {
-    Ok(())
 }
 
 fn management_endpoint(base_url: &str, route: &str) -> Result<String, String> {
@@ -1005,21 +1023,14 @@ async fn synchronize(configuration: &ProxyConfiguration) -> Result<(), String> {
 }
 
 async fn ensure_running(executable: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    if is_owned_listener() {
-        return Ok(());
-    }
-    #[cfg(not(windows))]
-    if is_owned_running() {
-        return Ok(());
-    }
     if is_healthy().await {
-        #[cfg(windows)]
-        return Err(format!(
-            "Cổng {LOCAL_PORT} đang được process không thuộc BirdNion sử dụng"
-        ));
-        #[cfg(not(windows))]
-        return Ok(());
+        return if is_owned_listener() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Cổng {LOCAL_PORT} đang được process không thuộc BirdNion sử dụng"
+            ))
+        };
     }
     let work_dir =
         config_directory().ok_or_else(|| "Không xác định được thư mục cấu hình".to_string())?;
@@ -1027,12 +1038,7 @@ async fn ensure_running(executable: &Path) -> Result<(), String> {
     start_process(executable, &config_url, &work_dir)?;
     for _ in 0..25 {
         if is_healthy().await {
-            #[cfg(windows)]
             if is_owned_listener() {
-                return Ok(());
-            }
-            #[cfg(not(windows))]
-            if is_owned_running() {
                 return Ok(());
             }
             return Err(format!(
@@ -1085,6 +1091,7 @@ fn shared_management_key(
     excluding_claude_id: Option<&str>,
     excluding_codex_id: Option<&str>,
     fallback: Option<&str>,
+    prefer_active_codex: bool,
 ) -> String {
     let from_active_claude = settings
         .claude_code_profiles
@@ -1095,9 +1102,6 @@ fn shared_management_key(
                 && is_configuration_current(p)
         })
         .find_map(|p| cleaned(p.cli_proxy_management_key.as_deref()));
-    if let Some(k) = from_active_claude {
-        return k;
-    }
     let from_active_codex = settings
         .codex_profiles
         .iter()
@@ -1107,7 +1111,12 @@ fn shared_management_key(
                 && codex_config::is_cli_proxy_configuration_current(p)
         })
         .find_map(|p| cleaned(p.cli_proxy_management_key.as_deref()));
-    if let Some(k) = from_active_codex {
+    let active = if prefer_active_codex {
+        from_active_codex.or(from_active_claude)
+    } else {
+        from_active_claude.or(from_active_codex)
+    };
+    if let Some(k) = active {
         return k;
     }
     if let Some(k) = cleaned(fallback) {
@@ -1133,87 +1142,79 @@ fn shared_management_key(
         .unwrap_or_else(random_secret)
 }
 
-fn prepare_claude_profile(profile: &ClaudeCodeProfile) -> Result<ClaudeCodeProfile, String> {
+fn prepare_claude_profile(
+    settings: &config::Settings,
+    profile: &ClaudeCodeProfile,
+) -> Result<ClaudeCodeProfile, String> {
     if !has_upstream_configuration(profile) {
         return Err("Thiếu Base URL hoặc API key".into());
     }
-    config::update(|settings| {
-        let shared_mgmt = shared_management_key(
-            settings,
-            Some(&profile.id),
-            None,
-            profile.cli_proxy_management_key.as_deref(),
+    let current = settings
+        .claude_code_profiles
+        .iter()
+        .find(|candidate| candidate.id == profile.id);
+    if current != Some(profile) {
+        return Err(
+            "Config Claude đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật".to_string(),
         );
-        if !settings
-            .claude_code_profiles
-            .iter()
-            .any(|p| p.id == profile.id)
-        {
-            return Err("Không tìm thấy config".to_string());
-        }
-        for p in &mut settings.claude_code_profiles {
-            if p.id == profile.id {
-                let needs_fresh = p.embedded_local_proxy != Some(true)
-                    || cleaned(p.cli_proxy_api_key.as_deref()).is_none();
-                p.embedded_local_proxy = Some(true);
-                p.cli_proxy_base_url = Some(LOCAL_BASE_URL.to_string());
-                if needs_fresh {
-                    p.cli_proxy_api_key = Some(random_secret());
-                }
-                p.cli_proxy_management_key = Some(shared_mgmt.clone());
-                p.cli_proxy_applied_signature = None;
-            } else if p.cli_proxy_applied_signature.is_some() {
-                p.cli_proxy_applied_signature = None;
-            }
-        }
-        settings
-            .claude_code_profiles
-            .iter()
-            .find(|p| p.id == profile.id)
-            .cloned()
-            .ok_or_else(|| "Thiếu Base URL hoặc API key".to_string())
-    })
+    }
+    let shared_mgmt = shared_management_key(
+        settings,
+        Some(&profile.id),
+        None,
+        profile.cli_proxy_management_key.as_deref(),
+        true,
+    );
+    let mut prepared = profile.clone();
+    let needs_fresh = prepared.embedded_local_proxy != Some(true)
+        || cleaned(prepared.cli_proxy_api_key.as_deref()).is_none();
+    prepared.embedded_local_proxy = Some(true);
+    prepared.cli_proxy_base_url = Some(LOCAL_BASE_URL.to_string());
+    if needs_fresh {
+        prepared.cli_proxy_api_key = Some(random_secret());
+    }
+    prepared.cli_proxy_management_key = Some(shared_mgmt);
+    prepared.cli_proxy_applied_signature = None;
+    Ok(prepared)
 }
 
-fn prepare_codex_profile(profile: &CodexProfile) -> Result<CodexProfile, String> {
+fn prepare_codex_profile(
+    settings: &config::Settings,
+    profile: &CodexProfile,
+) -> Result<CodexProfile, String> {
     if cleaned(Some(profile.base_url.as_str())).is_none()
         || cleaned(Some(profile.api_key.as_str())).is_none()
         || cleaned(Some(profile.model.as_str())).is_none()
     {
         return Err("Thiếu Base URL, API key hoặc model cho Codex".into());
     }
-    config::update(|settings| {
-        let shared_mgmt = shared_management_key(
-            settings,
-            None,
-            Some(&profile.id),
-            profile.cli_proxy_management_key.as_deref(),
+    let current = settings
+        .codex_profiles
+        .iter()
+        .find(|candidate| candidate.id == profile.id);
+    if current != Some(profile) {
+        return Err(
+            "Config Codex đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật".to_string(),
         );
-        if !settings.codex_profiles.iter().any(|p| p.id == profile.id) {
-            return Err("Không tìm thấy config".to_string());
-        }
-        for p in &mut settings.codex_profiles {
-            if p.id == profile.id {
-                let needs_fresh = !p.uses_embedded_cli_proxy()
-                    || cleaned(p.cli_proxy_api_key.as_deref()).is_none();
-                p.connection_mode_raw = Some(CodexProfile::MODE_LOCAL_PROXY.into());
-                p.cli_proxy_base_url = Some(LOCAL_BASE_URL.to_string());
-                if needs_fresh {
-                    p.cli_proxy_api_key = Some(random_secret());
-                }
-                p.cli_proxy_management_key = Some(shared_mgmt.clone());
-                p.cli_proxy_applied_signature = None;
-            } else if p.cli_proxy_applied_signature.is_some() {
-                p.cli_proxy_applied_signature = None;
-            }
-        }
-        settings
-            .codex_profiles
-            .iter()
-            .find(|p| p.id == profile.id)
-            .cloned()
-            .ok_or_else(|| "Thiếu Base URL, API key hoặc model cho Codex".to_string())
-    })
+    }
+    let shared_mgmt = shared_management_key(
+        settings,
+        None,
+        Some(&profile.id),
+        profile.cli_proxy_management_key.as_deref(),
+        false,
+    );
+    let mut prepared = profile.clone();
+    let needs_fresh = !prepared.uses_embedded_cli_proxy()
+        || cleaned(prepared.cli_proxy_api_key.as_deref()).is_none();
+    prepared.connection_mode_raw = Some(CodexProfile::MODE_LOCAL_PROXY.into());
+    prepared.cli_proxy_base_url = Some(LOCAL_BASE_URL.to_string());
+    if needs_fresh {
+        prepared.cli_proxy_api_key = Some(random_secret());
+    }
+    prepared.cli_proxy_management_key = Some(shared_mgmt);
+    prepared.cli_proxy_applied_signature = None;
+    Ok(prepared)
 }
 
 fn active_claude_profiles(profiles: &[ClaudeCodeProfile]) -> Vec<ClaudeCodeProfile> {
@@ -1234,9 +1235,108 @@ fn active_codex_profiles(profiles: &[CodexProfile]) -> Vec<CodexProfile> {
         .collect()
 }
 
+fn clear_claude_proxy_signatures(settings: &mut config::Settings) {
+    for profile in &mut settings.claude_code_profiles {
+        profile.cli_proxy_applied_signature = None;
+    }
+}
+
+fn clear_codex_proxy_signatures(settings: &mut config::Settings) {
+    for profile in &mut settings.codex_profiles {
+        profile.cli_proxy_applied_signature = None;
+    }
+}
+
+/// Clear only Claude registrations after selecting a direct Claude upstream.
+/// The exact target guard makes a delayed activation fail before it can clear
+/// a newer profile snapshot. Codex registration state is intentionally kept.
+fn clear_claude_proxy_signatures_if_current(
+    expected: &ClaudeCodeProfile,
+) -> Result<ClaudeCodeProfile, String> {
+    config::update(|settings| {
+        let current = settings
+            .claude_code_profiles
+            .iter()
+            .find(|profile| profile.id == expected.id);
+        if current != Some(expected) {
+            return Err(
+                "Config Claude đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật"
+                    .to_string(),
+            );
+        }
+        clear_claude_proxy_signatures(settings);
+        settings
+            .claude_code_profiles
+            .iter()
+            .find(|profile| profile.id == expected.id)
+            .cloned()
+            .ok_or_else(|| "Không tìm thấy config Claude".to_string())
+    })
+}
+
+/// Codex counterpart of `clear_claude_proxy_signatures_if_current`.
+fn clear_codex_proxy_signatures_if_current(
+    expected: &CodexProfile,
+) -> Result<CodexProfile, String> {
+    config::update(|settings| {
+        let current = settings
+            .codex_profiles
+            .iter()
+            .find(|profile| profile.id == expected.id);
+        if current != Some(expected) {
+            return Err(
+                "Config Codex đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật".to_string(),
+            );
+        }
+        clear_codex_proxy_signatures(settings);
+        settings
+            .codex_profiles
+            .iter()
+            .find(|profile| profile.id == expected.id)
+            .cloned()
+            .ok_or_else(|| "Không tìm thấy config Codex".to_string())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Public orchestration
 // ---------------------------------------------------------------------------
+
+/// Credential-free helper facts safe to return through Tauri IPC.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyRuntimeFacts {
+    pub running: bool,
+    pub claude_profile_id: Option<String>,
+    pub codex_profile_id: Option<String>,
+}
+
+fn runtime_facts_for_settings(settings: &config::Settings, running: bool) -> ProxyRuntimeFacts {
+    let active_claude = active_claude_profiles(&settings.claude_code_profiles);
+    let active_codex = active_codex_profiles(&settings.codex_profiles);
+    let unambiguous = active_claude.len() <= 1 && active_codex.len() <= 1;
+    ProxyRuntimeFacts {
+        running: running && unambiguous,
+        claude_profile_id: unambiguous
+            .then(|| active_claude.first().map(|profile| profile.id.clone()))
+            .flatten(),
+        codex_profile_id: unambiguous
+            .then(|| active_codex.first().map(|profile| profile.id.clone()))
+            .flatten(),
+    }
+}
+
+pub async fn runtime_facts() -> Result<ProxyRuntimeFacts, String> {
+    let running = is_healthy_owned().await;
+    let settings = config::load_checked()?;
+    let facts = runtime_facts_for_settings(&settings, running);
+    set_runtime(if facts.running {
+        RuntimeState::Running
+    } else {
+        RuntimeState::Stopped
+    });
+    Ok(facts)
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1304,58 +1404,81 @@ pub async fn status_for_profile(profile_id: &str) -> ProxyStatus {
 }
 
 pub async fn prepare_profile(app: &AppHandle, profile_id: &str) -> Result<ProxyStatus, String> {
-    let _prepare_guard = PREPARE_LOCK.lock().await;
-    let profile =
-        config::find_profile(profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
-    if !has_upstream_configuration(&profile) {
-        return Err("Thiếu Base URL hoặc API key".into());
-    }
-    set_runtime(RuntimeState::Starting);
-    let executable = resolve_binary(app)?;
-    match prepare_and_reload(&executable, &profile).await {
-        Ok(prepared) => {
-            let mut applied = prepared;
-            applied.cli_proxy_applied_signature = configuration_signature(&applied);
-            // Persist signature on this profile.
-            let persisted = config::update(|settings| {
-                let p = settings
-                    .claude_code_profiles
-                    .iter_mut()
-                    .find(|p| p.id == applied.id)
-                    .ok_or_else(|| "Không tìm thấy config".to_string())?;
-                p.cli_proxy_applied_signature = applied.cli_proxy_applied_signature.clone();
-                p.cli_proxy_api_key = applied.cli_proxy_api_key.clone();
-                p.cli_proxy_management_key = applied.cli_proxy_management_key.clone();
-                p.cli_proxy_base_url = applied.cli_proxy_base_url.clone();
-                p.embedded_local_proxy = Some(true);
-                Ok(p.clone())
-            })?;
-            let current = is_configuration_current(&persisted);
-            set_runtime(RuntimeState::Running);
-            Ok(ProxyStatus {
-                state: if current { "running" } else { "needsUpdate" }.into(),
-                endpoint: LOCAL_ENDPOINT.into(),
-                configuration_current: current,
-                has_upstream: true,
-            })
-        }
-        Err(e) => {
-            set_runtime(RuntimeState::Failed);
-            Err(e)
-        }
-    }
+    let profile = config::load_checked()?
+        .claude_code_profiles
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| "Không tìm thấy config Claude".to_string())?;
+    let persisted = prepare_claude_profile_exact(app, &profile).await?;
+    let current = is_configuration_current(&persisted);
+    Ok(ProxyStatus {
+        state: if current { "running" } else { "needsUpdate" }.into(),
+        endpoint: LOCAL_ENDPOINT.into(),
+        configuration_current: current,
+        has_upstream: true,
+    })
 }
 
-async fn prepare_and_reload(
-    executable: &Path,
-    profile: &ClaudeCodeProfile,
+/// Prepare one exact Claude profile snapshot. The profile is revalidated after
+/// local credential preparation and again after the async helper reload before
+/// its applied signature is committed.
+pub async fn prepare_claude_profile_exact(
+    app: &AppHandle,
+    expected: &ClaudeCodeProfile,
 ) -> Result<ClaudeCodeProfile, String> {
-    let prepared = prepare_claude_profile(profile)?;
-    let active_codex = active_codex_profiles(&config::load().codex_profiles);
-    // Reload with the prepared profile as the sole managed Claude entry
-    // (signature not yet stamped — is_embedded_cli_proxy_ready still holds).
-    reload(executable, &[prepared.clone()], &active_codex).await?;
-    Ok(prepared)
+    let _prepare_guard = PREPARE_LOCK.lock().await;
+    config::require_current_claude_profile(expected)?;
+    if !has_upstream_configuration(expected) {
+        return Err("Thiếu Base URL hoặc API key".into());
+    }
+
+    set_runtime(RuntimeState::Starting);
+    let executable = resolve_binary(app)?;
+    let settings = config::load_checked()?;
+    let prepared = prepare_claude_profile(&settings, expected)?;
+    config::require_current_claude_profile(expected)?;
+    let active_codex = active_codex_profiles(&settings.codex_profiles);
+    if let Err(error) = reload(&executable, &[prepared.clone()], &active_codex).await {
+        let snapshot_result = config::require_current_claude_profile(expected);
+        let _ = reconcile_or_stop_locked(app).await;
+        if let Err(snapshot_error) = snapshot_result {
+            return Err(snapshot_error);
+        }
+        return Err(error);
+    }
+
+    let mut applied = prepared.clone();
+    applied.cli_proxy_applied_signature = configuration_signature(&applied);
+    let persisted = config::update(|settings| {
+        let current = settings
+            .claude_code_profiles
+            .iter()
+            .find(|profile| profile.id == prepared.id);
+        if current != Some(expected) {
+            return Err(
+                "Config Claude đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật"
+                    .to_string(),
+            );
+        }
+        for profile in &mut settings.claude_code_profiles {
+            if profile.id == applied.id {
+                *profile = applied.clone();
+            } else {
+                profile.cli_proxy_applied_signature = None;
+            }
+        }
+        Ok(applied.clone())
+    });
+    match persisted {
+        Ok(profile) => {
+            set_runtime(RuntimeState::Running);
+            Ok(profile)
+        }
+        Err(error) => {
+            let _ = reconcile_or_stop_locked(app).await;
+            Err(error)
+        }
+    }
 }
 
 /// Prepare a Codex profile on the embedded proxy and reload the helper.
@@ -1363,47 +1486,108 @@ pub async fn prepare_codex_profile_cmd(
     app: &AppHandle,
     profile_id: &str,
 ) -> Result<ProxyStatus, String> {
+    let profile = config::load_checked()?
+        .codex_profiles
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
+    let persisted = prepare_codex_profile_exact(app, &profile).await?;
+    // A manual proxy restart rotates the local bearer; keep an existing
+    // overlay current without creating a new one implicitly.
+    if codex_config::profile_flag(&persisted.id, None).is_some() {
+        codex_config::write_profile_file(&persisted, None)?;
+        config::require_current_codex_profile(&persisted)?;
+    }
+    let current = codex_config::is_cli_proxy_configuration_current(&persisted);
+    Ok(ProxyStatus {
+        state: if current { "running" } else { "needsUpdate" }.into(),
+        endpoint: LOCAL_ENDPOINT.into(),
+        configuration_current: current,
+        has_upstream: true,
+    })
+}
+
+pub async fn prepare_codex_profile_exact(
+    app: &AppHandle,
+    expected: &CodexProfile,
+) -> Result<CodexProfile, String> {
     let _prepare_guard = PREPARE_LOCK.lock().await;
-    let profile = config::find_codex_profile(profile_id)
-        .ok_or_else(|| "Không tìm thấy config".to_string())?;
-    if cleaned(Some(profile.base_url.as_str())).is_none()
-        || cleaned(Some(profile.api_key.as_str())).is_none()
-        || cleaned(Some(profile.model.as_str())).is_none()
-    {
+    config::require_current_codex_profile(expected)?;
+    if !expected.has_upstream_configuration() {
         return Err("Thiếu Base URL, API key hoặc model cho Codex".into());
     }
+
     set_runtime(RuntimeState::Starting);
     let executable = resolve_binary(app)?;
-    match prepare_and_reload_codex(&executable, &profile).await {
-        Ok(prepared) => {
-            let mut applied = prepared;
-            applied.cli_proxy_applied_signature =
-                codex_config::codex_cli_proxy_configuration_signature(&applied);
-            let persisted = config::update(|settings| {
-                let p = settings
-                    .codex_profiles
-                    .iter_mut()
-                    .find(|p| p.id == applied.id)
-                    .ok_or_else(|| "Không tìm thấy config".to_string())?;
-                p.connection_mode_raw = applied.connection_mode_raw.clone();
-                p.cli_proxy_base_url = applied.cli_proxy_base_url.clone();
-                p.cli_proxy_api_key = applied.cli_proxy_api_key.clone();
-                p.cli_proxy_management_key = applied.cli_proxy_management_key.clone();
-                p.cli_proxy_applied_signature = applied.cli_proxy_applied_signature.clone();
-                Ok(p.clone())
-            })?;
-            // Overlay bearer rotation — keep existing --profile file in sync.
-            if codex_config::profile_flag(&persisted.id, None).is_some() {
-                let _ = codex_config::write_profile_file(&persisted, None);
+    let settings = config::load_checked()?;
+    let prepared = prepare_codex_profile(&settings, expected)?;
+    config::require_current_codex_profile(expected)?;
+    let active_claude = active_claude_profiles(&settings.claude_code_profiles);
+    if let Err(error) = reload(&executable, &active_claude, &[prepared.clone()]).await {
+        let snapshot_result = config::require_current_codex_profile(expected);
+        let _ = reconcile_or_stop_locked(app).await;
+        if let Err(snapshot_error) = snapshot_result {
+            return Err(snapshot_error);
+        }
+        return Err(error);
+    }
+
+    let mut applied = prepared.clone();
+    applied.cli_proxy_applied_signature =
+        codex_config::codex_cli_proxy_configuration_signature(&applied);
+    let persisted = config::update(|settings| {
+        let current = settings
+            .codex_profiles
+            .iter()
+            .find(|profile| profile.id == prepared.id);
+        if current != Some(expected) {
+            return Err(
+                "Config Codex đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật".to_string(),
+            );
+        }
+        for profile in &mut settings.codex_profiles {
+            if profile.id == applied.id {
+                *profile = applied.clone();
+            } else {
+                profile.cli_proxy_applied_signature = None;
             }
-            let current = codex_config::is_cli_proxy_configuration_current(&persisted);
+        }
+        Ok(applied.clone())
+    });
+    match persisted {
+        Ok(profile) => {
             set_runtime(RuntimeState::Running);
-            Ok(ProxyStatus {
-                state: if current { "running" } else { "needsUpdate" }.into(),
-                endpoint: LOCAL_ENDPOINT.into(),
-                configuration_current: current,
-                has_upstream: true,
-            })
+            Ok(profile)
+        }
+        Err(error) => {
+            let _ = reconcile_or_stop_locked(app).await;
+            Err(error)
+        }
+    }
+}
+
+async fn reconcile_stored_profiles_locked(app: &AppHandle) -> Result<ProxyRuntimeFacts, String> {
+    let settings = config::load_checked()?;
+    let active_claude = active_claude_profiles(&settings.claude_code_profiles);
+    let active_codex = active_codex_profiles(&settings.codex_profiles);
+    if active_claude.len() > 1 || active_codex.len() > 1 {
+        stop_proxy();
+        return Err(
+            "Có nhiều config proxy đang được đánh dấu active; đã dừng proxy để tránh dùng sai credential"
+                .to_string(),
+        );
+    }
+    if active_claude.is_empty() && active_codex.is_empty() {
+        stop_proxy();
+        return Ok(runtime_facts_for_settings(&settings, false));
+    }
+
+    let executable = resolve_binary(app)?;
+    set_runtime(RuntimeState::Starting);
+    match reload(&executable, &active_claude, &active_codex).await {
+        Ok(()) => {
+            set_runtime(RuntimeState::Running);
+            Ok(runtime_facts_for_settings(&settings, true))
         }
         Err(e) => {
             set_runtime(RuntimeState::Failed);
@@ -1412,37 +1596,51 @@ pub async fn prepare_codex_profile_cmd(
     }
 }
 
-async fn prepare_and_reload_codex(
-    executable: &Path,
-    profile: &CodexProfile,
-) -> Result<CodexProfile, String> {
-    let prepared = prepare_codex_profile(profile)?;
-    let active_claude = active_claude_profiles(&config::load().claude_code_profiles);
-    reload(executable, &active_claude, &[prepared.clone()]).await?;
-    Ok(prepared)
+async fn reconcile_or_stop_locked(app: &AppHandle) -> Result<ProxyRuntimeFacts, String> {
+    match reconcile_stored_profiles_locked(app).await {
+        Ok(facts) => Ok(facts),
+        Err(error) => {
+            stop_proxy();
+            Err(error)
+        }
+    }
+}
+
+/// Direct Claude activation atomically clears only Claude proxy signatures and
+/// reconciles the shared helper while the prepare lock excludes proxy races.
+pub async fn deactivate_claude_proxy_for_direct(
+    app: &AppHandle,
+    expected: &ClaudeCodeProfile,
+) -> Result<(ClaudeCodeProfile, ProxyRuntimeFacts), String> {
+    let _prepare_guard = PREPARE_LOCK.lock().await;
+    let profile = clear_claude_proxy_signatures_if_current(expected)?;
+    config::require_current_claude_profile(&profile)?;
+    let facts = reconcile_or_stop_locked(app).await?;
+    config::require_current_claude_profile(&profile)?;
+    Ok((profile, facts))
+}
+
+/// Direct Codex counterpart of `deactivate_claude_proxy_for_direct`.
+pub async fn deactivate_codex_proxy_for_direct(
+    app: &AppHandle,
+    expected: &CodexProfile,
+) -> Result<(CodexProfile, ProxyRuntimeFacts), String> {
+    let _prepare_guard = PREPARE_LOCK.lock().await;
+    let profile = clear_codex_proxy_signatures_if_current(expected)?;
+    config::require_current_codex_profile(&profile)?;
+    let facts = reconcile_or_stop_locked(app).await?;
+    config::require_current_codex_profile(&profile)?;
+    Ok((profile, facts))
 }
 
 /// Drop Codex proxy entries while keeping any active Claude profile.
 pub async fn deactivate_codex_proxy_profiles(app: &AppHandle) -> Result<(), String> {
     let _prepare_guard = PREPARE_LOCK.lock().await;
-    let settings = config::load();
-    let active_claude = active_claude_profiles(&settings.claude_code_profiles);
-    if active_claude.is_empty() {
-        stop_proxy();
-        return Ok(());
-    }
-    let executable = resolve_binary(app)?;
-    set_runtime(RuntimeState::Starting);
-    match reload(&executable, &active_claude, &[]).await {
-        Ok(()) => {
-            set_runtime(RuntimeState::Running);
-            Ok(())
-        }
-        Err(e) => {
-            set_runtime(RuntimeState::Failed);
-            Err(e)
-        }
-    }
+    config::update(|settings| {
+        clear_codex_proxy_signatures(settings);
+        Ok(())
+    })?;
+    reconcile_or_stop_locked(app).await.map(|_| ())
 }
 
 pub async fn status_for_codex_profile(profile_id: &str) -> ProxyStatus {
@@ -1507,6 +1705,7 @@ pub fn stop_proxy() -> bool {
 /// Non-blocking restore after app launch when a previously activated proxy
 /// profile exists. Failures stay quiet — Settings can surface them later.
 pub async fn restore_if_configured(app: &AppHandle) {
+    let _activation_guard = lock_profile_activation().await;
     let _prepare_guard = PREPARE_LOCK.lock().await;
     let settings = config::load();
     let ready_claude = settings
@@ -1585,6 +1784,7 @@ pub async fn cli_proxy_status(profile_id: String) -> ProxyStatus {
 
 #[tauri::command]
 pub async fn cli_proxy_prepare(app: AppHandle, profile_id: String) -> Result<ProxyStatus, String> {
+    let _activation_guard = lock_profile_activation().await;
     prepare_profile(&app, &profile_id).await
 }
 
@@ -1598,11 +1798,13 @@ pub async fn cli_proxy_codex_prepare(
     app: AppHandle,
     profile_id: String,
 ) -> Result<ProxyStatus, String> {
+    let _activation_guard = lock_profile_activation().await;
     prepare_codex_profile_cmd(&app, &profile_id).await
 }
 
 #[tauri::command]
-pub fn cli_proxy_stop() -> bool {
+pub async fn cli_proxy_stop() -> bool {
+    let _activation_guard = lock_profile_activation().await;
     stop_proxy()
 }
 
@@ -1698,6 +1900,27 @@ mod tests {
         ));
         assert!(!is_managed_process(
             "cliproxyapi -config /other/config.yaml",
+            path
+        ));
+    }
+
+    #[test]
+    fn listener_ownership_fails_closed_for_missing_or_foreign_processes() {
+        let path = Path::new("/home/u/.config/birdnion/cli-proxy-api/config.yaml");
+        let managed =
+            "cliproxyapi -config /home/u/.config/birdnion/cli-proxy-api/config.yaml -local-model"
+                .to_string();
+        let foreign = "python3 malicious-listener.py --port 24323".to_string();
+        let lookalike = "nginx -c /home/u/.config/birdnion/cli-proxy-api/config.yaml".to_string();
+        let wrong_config = "cliproxyapi -config /other/config.yaml -local-model".to_string();
+
+        assert!(!listener_commands_are_managed(&[], path));
+        assert!(listener_commands_are_managed(&[managed.clone()], path));
+        assert!(!listener_commands_are_managed(&[foreign], path));
+        assert!(!listener_commands_are_managed(&[lookalike], path));
+        assert!(!listener_commands_are_managed(&[wrong_config], path));
+        assert!(!listener_commands_are_managed(
+            &[managed, "unknown-listener".to_string()],
             path
         ));
     }
@@ -1808,5 +2031,176 @@ mod tests {
             Some("https://openai-upstream.example/v1")
         );
         assert_eq!(upstream_api_key(&p).as_deref(), Some("upstream-openai-key"));
+    }
+
+    fn sample_codex_profile() -> CodexProfile {
+        let mut profile = CodexProfile {
+            id: "codex-1".into(),
+            name: "Codex proxy".into(),
+            base_url: "https://chat.example/v1".into(),
+            api_key: "codex-upstream-key".into(),
+            model: "gpt-test".into(),
+            upstream_protocol_raw: Some(CodexProfile::PROTOCOL_OPENAI_CHAT.into()),
+            connection_mode_raw: Some(CodexProfile::MODE_LOCAL_PROXY.into()),
+            cli_proxy_base_url: Some(LOCAL_BASE_URL.into()),
+            cli_proxy_api_key: Some("codex-loopback-key".into()),
+            cli_proxy_management_key: Some("mgmt-key".into()),
+            ..Default::default()
+        };
+        profile.cli_proxy_applied_signature =
+            codex_config::codex_cli_proxy_configuration_signature(&profile);
+        profile
+    }
+
+    #[test]
+    fn claude_prepare_prefers_active_codex_key_without_early_mutation() {
+        let mut active_claude = sample_profile();
+        active_claude.id = "claude-active".into();
+        active_claude.cli_proxy_management_key = Some("claude-key".into());
+        active_claude.cli_proxy_applied_signature = configuration_signature(&active_claude);
+
+        let mut active_codex = sample_codex_profile();
+        active_codex.cli_proxy_management_key = Some("codex-key".into());
+        active_codex.cli_proxy_applied_signature =
+            codex_config::codex_cli_proxy_configuration_signature(&active_codex);
+
+        let mut target = sample_profile();
+        target.id = "claude-target".into();
+        target.cli_proxy_management_key = Some("target-fallback".into());
+        target.cli_proxy_applied_signature = None;
+        let settings = config::Settings {
+            claude_code_profiles: vec![active_claude.clone(), target.clone()],
+            codex_profiles: vec![active_codex.clone()],
+            ..Default::default()
+        };
+
+        let prepared = prepare_claude_profile(&settings, &target).unwrap();
+
+        assert_eq!(
+            prepared.cli_proxy_management_key.as_deref(),
+            Some("codex-key")
+        );
+        assert_eq!(settings.claude_code_profiles[0], active_claude);
+        assert_eq!(settings.claude_code_profiles[1], target);
+        let configuration =
+            ProxyConfiguration::from_profiles(&[prepared], &[active_codex], Path::new("/tmp/auth"))
+                .unwrap();
+        assert_eq!(configuration.management_key, "codex-key");
+        assert_eq!(configuration.claude_api_keys.len(), 1);
+        assert_eq!(configuration.openai_compatibility.len(), 1);
+    }
+
+    #[test]
+    fn codex_prepare_prefers_active_claude_key_without_early_mutation() {
+        let mut active_claude = sample_profile();
+        active_claude.cli_proxy_management_key = Some("claude-key".into());
+        active_claude.cli_proxy_applied_signature = configuration_signature(&active_claude);
+
+        let mut active_codex = sample_codex_profile();
+        active_codex.id = "codex-active".into();
+        active_codex.cli_proxy_management_key = Some("codex-key".into());
+        active_codex.cli_proxy_applied_signature =
+            codex_config::codex_cli_proxy_configuration_signature(&active_codex);
+
+        let mut target = sample_codex_profile();
+        target.id = "codex-target".into();
+        target.cli_proxy_management_key = Some("target-fallback".into());
+        target.cli_proxy_applied_signature = None;
+        let settings = config::Settings {
+            claude_code_profiles: vec![active_claude.clone()],
+            codex_profiles: vec![active_codex.clone(), target.clone()],
+            ..Default::default()
+        };
+
+        let prepared = prepare_codex_profile(&settings, &target).unwrap();
+
+        assert_eq!(
+            prepared.cli_proxy_management_key.as_deref(),
+            Some("claude-key")
+        );
+        assert_eq!(settings.codex_profiles[0], active_codex);
+        assert_eq!(settings.codex_profiles[1], target);
+        let configuration = ProxyConfiguration::from_profiles(
+            &[active_claude],
+            &[prepared],
+            Path::new("/tmp/auth"),
+        )
+        .unwrap();
+        assert_eq!(configuration.management_key, "claude-key");
+        assert_eq!(configuration.claude_api_keys.len(), 1);
+        assert_eq!(configuration.openai_compatibility.len(), 1);
+    }
+
+    #[test]
+    fn claude_direct_cleanup_preserves_active_codex_registration() {
+        let mut claude = sample_profile();
+        claude.cli_proxy_applied_signature = configuration_signature(&claude);
+        let codex = sample_codex_profile();
+        let expected_codex_signature = codex.cli_proxy_applied_signature.clone();
+        let mut settings = config::Settings {
+            claude_code_profiles: vec![claude],
+            codex_profiles: vec![codex],
+            ..Default::default()
+        };
+
+        clear_claude_proxy_signatures(&mut settings);
+
+        assert!(settings.claude_code_profiles[0]
+            .cli_proxy_applied_signature
+            .is_none());
+        assert_eq!(
+            settings.codex_profiles[0].cli_proxy_applied_signature,
+            expected_codex_signature
+        );
+        let facts = runtime_facts_for_settings(&settings, true);
+        assert_eq!(facts.claude_profile_id, None);
+        assert_eq!(facts.codex_profile_id.as_deref(), Some("codex-1"));
+    }
+
+    #[test]
+    fn codex_direct_cleanup_preserves_active_claude_registration() {
+        let mut claude = sample_profile();
+        claude.cli_proxy_applied_signature = configuration_signature(&claude);
+        let expected_claude_signature = claude.cli_proxy_applied_signature.clone();
+        let codex = sample_codex_profile();
+        let mut settings = config::Settings {
+            claude_code_profiles: vec![claude],
+            codex_profiles: vec![codex],
+            ..Default::default()
+        };
+
+        clear_codex_proxy_signatures(&mut settings);
+
+        assert!(settings.codex_profiles[0]
+            .cli_proxy_applied_signature
+            .is_none());
+        assert_eq!(
+            settings.claude_code_profiles[0].cli_proxy_applied_signature,
+            expected_claude_signature
+        );
+        let facts = runtime_facts_for_settings(&settings, true);
+        assert_eq!(facts.claude_profile_id.as_deref(), Some("abc-123"));
+        assert_eq!(facts.codex_profile_id, None);
+    }
+
+    #[test]
+    fn runtime_facts_fail_closed_when_active_signatures_are_ambiguous() {
+        let mut first = sample_profile();
+        first.id = "claude-first".into();
+        first.cli_proxy_applied_signature = configuration_signature(&first);
+        let mut second = sample_profile();
+        second.id = "claude-second".into();
+        second.cli_proxy_applied_signature = configuration_signature(&second);
+        let settings = config::Settings {
+            claude_code_profiles: vec![first, second],
+            codex_profiles: vec![sample_codex_profile()],
+            ..Default::default()
+        };
+
+        let facts = runtime_facts_for_settings(&settings, true);
+
+        assert!(!facts.running);
+        assert_eq!(facts.claude_profile_id, None);
+        assert_eq!(facts.codex_profile_id, None);
     }
 }

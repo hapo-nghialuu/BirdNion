@@ -582,6 +582,14 @@ final class ClaudeCodeTests: XCTestCase {
             "/usr/bin/python3 -m http.server 24323",
             configURL: configURL
         ))
+        XCTAssertFalse(LocalProxyProcessController.isManagedProcess(
+            "/tmp/not-cliproxyapi -config \(configURL.path)",
+            configURL: configURL
+        ))
+        XCTAssertFalse(LocalProxyProcessController.isManagedProcess(
+            "/usr/local/bin/cliproxyapi -config \(configURL.path).attacker",
+            configURL: configURL
+        ))
     }
 
     @MainActor

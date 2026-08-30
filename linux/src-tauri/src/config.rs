@@ -188,7 +188,7 @@ pub struct Settings {
 
 /// One custom Claude Code profile — mirrors the macOS `ClaudeCodeProfile`
 /// JSON exactly (`baseURL` capitalization included).
-#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeCodeProfile {
     pub id: String,
@@ -282,7 +282,7 @@ pub struct ClaudeCodeProfile {
 /// One third-party backend for Codex CLI. Codex only speaks OpenAI Responses
 /// natively, so non-Responses upstreams use BirdNion's embedded CLIProxyAPI.
 /// JSON keys match macOS `BirdNionConfigStore.CodexProfile` exactly.
-#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexProfile {
     pub id: String,
@@ -387,7 +387,7 @@ impl CodexProfile {
 }
 
 /// One KEY=value row of a custom profile's extra env.
-#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileEnvRow {
     pub id: String,
@@ -400,6 +400,24 @@ pub struct ProfileEnvRow {
 /// Find a custom Claude Code profile by id.
 pub fn find_profile(id: &str) -> Option<ClaudeCodeProfile> {
     load().claude_code_profiles.into_iter().find(|p| p.id == id)
+}
+
+/// Reload and compare the complete credential-bearing profile before an
+/// activation step. Comparing only `id` would let a delayed task apply stale
+/// URL/model/key edits after Settings saved a newer version.
+pub fn require_current_claude_profile(
+    expected: &ClaudeCodeProfile,
+) -> Result<ClaudeCodeProfile, String> {
+    let current = load_checked()?
+        .claude_code_profiles
+        .into_iter()
+        .find(|profile| profile.id == expected.id);
+    match current {
+        Some(profile) if profile == *expected => Ok(profile),
+        _ => Err(
+            "Config Claude đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật".to_string(),
+        ),
+    }
 }
 
 /// Process-wide lock for tests that mutate `BIRDNION_CONFIG`/env vars —
@@ -686,6 +704,20 @@ pub fn migrate_standalone_codex_profiles(settings: &mut Settings) -> bool {
 /// Find a Codex profile by id.
 pub fn find_codex_profile(id: &str) -> Option<CodexProfile> {
     load().codex_profiles.into_iter().find(|p| p.id == id)
+}
+
+/// Exact Codex counterpart of `require_current_claude_profile`.
+pub fn require_current_codex_profile(expected: &CodexProfile) -> Result<CodexProfile, String> {
+    let current = load_checked()?
+        .codex_profiles
+        .into_iter()
+        .find(|profile| profile.id == expected.id);
+    match current {
+        Some(profile) if profile == *expected => Ok(profile),
+        _ => {
+            Err("Config Codex đã thay đổi hoặc bị xóa; tải lại danh sách trước khi bật".to_string())
+        }
+    }
 }
 
 /// Upsert one Codex profile (does NOT mirror back to Claude).

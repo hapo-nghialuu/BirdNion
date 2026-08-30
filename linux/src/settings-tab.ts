@@ -16,7 +16,7 @@ import {
 } from "./provider-tab";
 import {
   detailInfoGrid, usageSection, setupSection, quotaWarningCard, linksSection,
-  codexAccountsCard, freemodelAccountsCard, antigravityAccountsCard, elevenlabsKeysCard, hiyoKeysCard,
+  codexAccountsCard, copilotAccountsCard, freemodelAccountsCard, antigravityAccountsCard, elevenlabsKeysCard, hiyoKeysCard,
   ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, relativeUpdated, displayError,
   refreshMountedAntigravityAccountsCard,
   type AntigravityAccountChange,
@@ -24,6 +24,11 @@ import {
 } from "./settings-provider-detail";
 import { GUIDED_SETUP_STATUS_EVENT } from "./action-center";
 import { CODEX_ACCOUNT_CHANGED_EVENT } from "./settings-codex-accounts";
+import { codexAutoPrimeCard } from "./settings-codex-auto-prime";
+import {
+  COPILOT_ACCOUNT_CHANGED_EVENT,
+  type CopilotAccountChange,
+} from "./settings-copilot-login";
 import {
   beginFirstLiveAttempt,
   checkpointDurationMs,
@@ -615,8 +620,20 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
       if (selectedId === "antigravity") refreshMountedAntigravityAccountsCard();
     }
   };
+  const handleCopilotAccountChange = (event: TauriEvent<CopilotAccountChange>) => {
+    providerSettingsGenerations.invalidate("copilot");
+    clearProviderStatus("copilot");
+    invalidateOnboardingTest("copilot");
+    if (event.payload.phase !== "after") return;
+    void refreshStatuses().then(() => {
+      if (!root.isConnected) return;
+      renderSidebar();
+      if (selectedId === "copilot") renderDetail();
+    });
+  };
   let unlistenCodexAccountChanges: (() => void) | null = null;
   let unlistenAntigravityAccountChanges: (() => void) | null = null;
+  let unlistenCopilotAccountChanges: (() => void) | null = null;
   let unlistenSettingsSnapshotChanges: (() => void) | null = null;
 
   // providersPane can be rebuilt repeatedly while navigating Settings. Drop
@@ -630,6 +647,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     observer.disconnect();
     unlistenCodexAccountChanges?.();
     unlistenAntigravityAccountChanges?.();
+    unlistenCopilotAccountChanges?.();
     unlistenSettingsSnapshotChanges?.();
     window.removeEventListener("birdnion-sidebar-search", onSharedSearch);
   };
@@ -1068,9 +1086,12 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     // accounts card) → warnings → links.
     scroll.append(detailInfoGrid(selectedId, enabled, st));
     scroll.append(usageSection(selectedId, enabled, st));
-    scroll.append(setupSection(cfg, vi));
-    if (selectedId === "codex") scroll.append(codexAccountsCard());
+    scroll.append(setupSection(cfg));
+    if (selectedId === "codex") {
+      scroll.append(codexAccountsCard(), codexAutoPrimeCard());
+    }
     if (selectedId === "freemodel") scroll.append(freemodelAccountsCard());
+    if (selectedId === "copilot") scroll.append(copilotAccountsCard(cfg));
     if (selectedId === "antigravity") scroll.append(antigravityAccountsCard());
     if (selectedId === "elevenlabs") {
       const keys = elevenlabsKeysCard();
@@ -1259,14 +1280,19 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
         ANTIGRAVITY_ACCOUNT_CHANGED_EVENT,
         handleAntigravityAccountChange,
       ),
+      () => listen<CopilotAccountChange>(
+        COPILOT_ACCOUNT_CHANGED_EVENT,
+        handleCopilotAccountChange,
+      ),
       () => listen<Settings>(
         SETTINGS_SNAPSHOT_CHANGED_EVENT,
         ({ payload }) => applyCanonicalSettingsSnapshot(payload),
       ),
     ],
-    ([codexUnlisten, antigravityUnlisten, settingsUnlisten]) => {
+    ([codexUnlisten, antigravityUnlisten, copilotUnlisten, settingsUnlisten]) => {
       unlistenCodexAccountChanges = codexUnlisten;
       unlistenAntigravityAccountChanges = antigravityUnlisten;
+      unlistenCopilotAccountChanges = copilotUnlisten;
       unlistenSettingsSnapshotChanges = settingsUnlisten;
     },
     () => {

@@ -42,13 +42,29 @@ import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
 import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
-import { closeTransientPanel, PANEL_OWNER_ATTR } from "./side-panel";
+import {
+  buildQuotaAgendaRows,
+  validQuotaAgendaProviderId,
+  type QuotaAgendaBuildOptions,
+} from "./quota-agenda";
+import {
+  QUOTA_AGENDA_PROVIDER_SELECTED_EVENT,
+  type QuotaAgendaProviderSelectedPayload,
+} from "./quota-agenda-panel";
+import {
+  acknowledgeSidePanelClosed,
+  closeTransientPanel,
+  PANEL_OWNER_ATTR,
+  refreshQuotaAgendaPanel,
+  showQuotaAgendaPanel,
+} from "./side-panel";
 import { configOnlyAgents, InstalledAgent, visibleAgentIds } from "./settings-agents";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
   isShowTrayPercentEnabled, getMonthlyBudgetUsd, MONTHLY_BUDGET_STORAGE_KEY,
   MONTHLY_BUDGET_CHANGED_EVENT, getProviderBudgetUsd, PROVIDER_BUDGET_STORAGE_KEYS,
   PROVIDER_BUDGET_CHANGED_EVENT, TRAY_DISPLAY_CHANGED_EVENT,
+  HIDE_PERSONAL_INFO_CHANGED_EVENT, isHidePersonalInfo,
 } from "./settings-about";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -65,8 +81,14 @@ import {
   type ActionCenterSnapshot,
   type GuidedSetupProviderInput,
 } from "./action-center";
-import { initTheme, setAppearance, resolveTheme } from "./theme";
+import { initTheme } from "./theme";
 import { checkWeeklyDigest } from "./weekly-digest";
+import { maybePrimeCodex } from "./codex-auto-prime";
+import { aiCodingProfilePopoverCard } from "./ai-coding-profile-popover";
+import {
+  COPILOT_ACCOUNT_CHANGED_EVENT,
+  type CopilotAccountChange,
+} from "./settings-copilot-login";
 
 /** Popover width — matches macOS panelWidth / ProviderTabs density. */
 const POPOVER_WIDTH = 420;
@@ -284,6 +306,9 @@ export function createProviderIdentityRefreshCoordinator(
         canonicalProviderIdentities === null || canonicalProviderIdentities.has(providerId),
       );
     },
+    invalidateWithoutRefresh: (providerId: string) => {
+      invalidate(providerId, false);
+    },
     ensureRefresh: (providerId: string) => {
       if (canonicalProviderIdentities !== null
           && !canonicalProviderIdentities.has(providerId)) return;
@@ -339,7 +364,7 @@ type State = {
   kiro: UsageReport | null;
   statuses: ProviderStatus[];
   /** Agent phát hiện trên máy (`list_installed_agents`) — nguồn cho hàng "đã
-   *  cấu hình" và cho visibility. Null khi chưa nạp xong. */
+   *  cấu hình", Quota Agenda và visibility. Null khi chưa nạp xong. */
   agents: InstalledAgent[] | null;
   claudeAdmin: ClaudeAdminSnapshot | null;
   tab: string; // "all" | provider id
@@ -374,6 +399,7 @@ let providerStatusStateRevision = 0;
 function replaceProviderStatuses(statuses: ProviderStatus[]) {
   state.statuses = statuses;
   providerStatusStateRevision += 1;
+  refreshQuotaAgendaPanelIfOpen();
 }
 
 /** Any unrelated provider can be invalidated while an async merge classifies
@@ -495,6 +521,14 @@ function onCodexAccountChanged() {
 
 function onAntigravityAccountChanged() {
   providerIdentityRefreshCoordinator.invalidateAndRefresh("antigravity");
+}
+
+function onCopilotAccountChanged(change: CopilotAccountChange) {
+  if (change.phase === "before") {
+    providerIdentityRefreshCoordinator.invalidateWithoutRefresh("copilot");
+  } else {
+    providerIdentityRefreshCoordinator.ensureRefresh("copilot");
+  }
 }
 
 /** Pure filter: which of `dueIds` are actually fetchable right now, i.e. not
@@ -684,7 +718,15 @@ function goTab(id: string) {
   render();
 }
 
-/** macOS BirdNionHeader parity: brand mark + status + refresh + appearance. */
+function onQuotaAgendaProviderSelected(
+  event: { payload: QuotaAgendaProviderSelectedPayload },
+): void {
+  acknowledgeSidePanelClosed();
+  const providerId = validQuotaAgendaProviderId(state.statuses, event.payload?.providerId);
+  if (providerId) goTab(providerId);
+}
+
+/** macOS BirdNionHeader parity: brand, status, Action Center, refresh, Calendar. */
 function appHeader(): HTMLElement {
   const head = el("header", "app-header");
   const brand = el("div", "app-brand");
@@ -704,6 +746,14 @@ function appHeader(): HTMLElement {
 
   const actions = el("div", "header-actions");
   const actionCenter = actionCenterHeaderButton();
+  const agenda = document.createElement("button");
+  agenda.type = "button";
+  agenda.className = "header-refresh header-agenda";
+  agenda.title = t("quotaAgenda.title");
+  agenda.setAttribute("aria-label", t("quotaAgenda.title"));
+  agenda.append(settingsIcon("calendar.badge.clock", "header-refresh-icon"));
+  agenda.addEventListener("click", () => showQuotaAgendaPanel(quotaAgendaRows()));
+
   const refresh = document.createElement("button");
   refresh.type = "button";
   refresh.className = `header-refresh${refreshing ? " spinning" : ""}`;
@@ -713,23 +763,10 @@ function appHeader(): HTMLElement {
   refresh.append(settingsIcon("arrow.clockwise", "header-refresh-icon"));
   refresh.addEventListener("click", () => { void refreshNow(); });
 
-  // macOS BirdNionHeader: sun/moon toggles light ↔ dark (resolved theme).
-  // Icon shows the *target* mode (sun → go light, moon → go dark).
-  const effectivelyDark = resolveTheme() === "dark";
-  const appearanceIcon = effectivelyDark ? "sun.max" : "moon";
-  const themeBtn = document.createElement("button");
-  themeBtn.type = "button";
-  themeBtn.className = "header-refresh header-appearance";
-  themeBtn.title = effectivelyDark ? t("appearanceLight") : t("appearanceDark");
-  themeBtn.setAttribute("aria-label", themeBtn.title);
-  themeBtn.append(settingsIcon(appearanceIcon, "header-refresh-icon"));
-  themeBtn.addEventListener("click", () => {
-    setAppearance(resolveTheme() === "dark" ? "light" : "dark");
-    render();
-  });
-
   if (actionCenter) actions.append(actionCenter);
-  actions.append(refresh, themeBtn);
+  // Calendar takes the former appearance shortcut's final slot. Appearance
+  // remains available in Settings on both platforms.
+  actions.append(refresh, agenda);
   head.append(brand, actions);
   return head;
 }
@@ -989,6 +1026,28 @@ function configuredAgents(): InstalledAgent[] {
   // Chỉ agent có config nhưng KHÔNG quota và KHÔNG log chi phí thuộc hàng
   // gộp này; ẩn agent trong Settings chỉ giấu nó khỏi đây, tổng chi phí giữ nguyên.
   return configOnlyAgents(all, visibleAgentIds(all));
+}
+
+function quotaAgendaOptions(): QuotaAgendaBuildOptions {
+  const agents = state.agents;
+  const visibleIds = agents ? new Set(visibleAgentIds(agents)) : null;
+  const visibleAgents = agents && visibleIds
+    ? agents.filter((agent) => visibleIds.has(agent.id))
+    : null;
+  return {
+    agents: visibleAgents,
+    staleWarnings,
+    hidePersonalInfo: isHidePersonalInfo(),
+  };
+}
+
+function quotaAgendaRows() {
+  return buildQuotaAgendaRows(state.statuses, quotaAgendaOptions());
+}
+
+/** Status tick advances reset countdown/freshness only while Agenda is open. */
+function refreshQuotaAgendaPanelIfOpen(): void {
+  refreshQuotaAgendaPanel(quotaAgendaRows());
 }
 
 /** Số nguồn chi phí thật sự được tính vào tổng — hiện sau token ở hero
@@ -1273,7 +1332,7 @@ function render() {
     // Quota/configured capabilities are independent of local cost evidence.
     // Keep them visible even while all six scanners are unavailable.
     const visibleAgents = state.agents
-      ? state.agents.filter((a) => visibleAgentIds(state.agents!).includes(a.id))
+      ? state.agents.filter((agent) => visibleAgentIds(state.agents!).includes(agent.id))
       : null;
     const quota = quotaSection(
       state.statuses, combined.daily, visibleAgents, visibleAgents?.length ?? 0);
@@ -1311,6 +1370,13 @@ function render() {
       body.append(freemodelAccountsPopoverCard(
         () => scheduleFitWindow(),
         () => { providerIdentityRefreshCoordinator.invalidateAndRefresh("freemodel"); },
+      ));
+    }
+    if (state.tab === "claude") {
+      body.append(aiCodingProfilePopoverCard(
+        "claude",
+        () => scheduleFitWindow(),
+        () => openSettings("claudeCode"),
       ));
     }
     if (state.tab === "antigravity") {
@@ -1358,6 +1424,11 @@ function render() {
     }
     // Codex: account switcher BELOW the cost chart (macOS CodexAccountsPopoverSection).
     if (state.tab === "codex") {
+      body.append(aiCodingProfilePopoverCard(
+        "codex",
+        () => scheduleFitWindow(),
+        () => openSettings("claudeCode"),
+      ));
       body.append(codexAccountsPopoverCard(
         () => scheduleFitWindow(),
         () => { providerIdentityRefreshCoordinator.ensureRefresh("codex"); },
@@ -2303,6 +2374,7 @@ async function load(manual = false) {
         // only repaint there when the tab strip set itself changed.
         const nextIds = state.statuses.map((s) => s.id).join(",");
         if (state.tab !== "all" || prevIds !== nextIds) render();
+        else refreshQuotaAgendaPanelIfOpen();
         void refreshActionCenterIssues().catch(() => {});
       },
     );
@@ -2346,7 +2418,10 @@ async function load(manual = false) {
           .map((s) => s.id),
       })
         .catch(() => [] as InstalledAgent[])
-        .then((agents) => publish(() => { state.agents = agents; })));
+        .then((agents) => publish(() => {
+          state.agents = agents;
+          refreshQuotaAgendaPanelIfOpen();
+        })));
 
     await Promise.all([
       usageDone,
@@ -2408,9 +2483,24 @@ async function refetchProvider(id: string) {
  * flicker back to "loading". */
 async function tick() {
   if (isSettingsWindow() || loadInFlight) return;
+  // Reset/freshness copy advances with wall time even when no provider is due.
+  refreshQuotaAgendaPanelIfOpen();
   // Weekly Digest rides this existing cadence — evaluated even when no
   // provider quota is due this cycle (its own 7-day/in-flight gates decide).
   void checkWeeklyDigest().catch(() => {});
+  void maybePrimeCodex({
+    status: state.statuses.find((status) => status.id === "codex"),
+    invokePrime: () => invoke<boolean>("prime_codex"),
+    onSuccess: (now) => invoke("notify", {
+      title: t("notificationCodexPrimedTitle"),
+      body: t("notificationCodexPrimedBody", {
+        time: new Intl.DateTimeFormat(currentLang(), {
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(now),
+      }),
+    }),
+  });
   const due = await dueProviderIds();
   if (!due || due.length === 0) return;
   // Exclude ids an earlier, still-unresolved tick already requested — see
@@ -2439,6 +2529,8 @@ async function tick() {
         const onProviderTab = state.tab !== "all";
         if (onProviderTab || prevIds !== nextIds) {
           render();
+        } else {
+          refreshQuotaAgendaPanelIfOpen();
         }
         void refreshActionCenterIssues().catch(() => {});
         void refreshTrayTooltip().catch(() => {});
@@ -2543,6 +2635,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     await awaitProviderCoordinatorListeners([
       listen(CODEX_ACCOUNT_CHANGED_EVENT, onCodexAccountChanged),
       listen(ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, onAntigravityAccountChanged),
+      listen<CopilotAccountChange>(COPILOT_ACCOUNT_CHANGED_EVENT, (event) =>
+        onCopilotAccountChanged(event.payload)),
+      listen(QUOTA_AGENDA_PROVIDER_SELECTED_EVENT, onQuotaAgendaProviderSelected),
       // Settings webview → main: rebuild tab order and reconcile local usage.
       listen(PROVIDERS_CHANGED_EVENT, () => {
         void reconcileProviderSettingsChange();
@@ -2557,6 +2652,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   // here, and the rotation timer would keep repainting the percent frame.
   void listen(TRAY_DISPLAY_CHANGED_EVENT, () => {
     onTrayDisplayPrefChanged();
+  });
+  void listen(HIDE_PERSONAL_INFO_CHANGED_EVENT, () => {
+    refreshQuotaAgendaPanelIfOpen();
+    if (state.tab !== "all") render();
   });
   void listen(ACTION_CENTER_SNAPSHOT_REQUEST_EVENT, () => {
     if (actionCenterSnapshotError) {

@@ -7,6 +7,8 @@ export type SettingsIconId =
   | "square.grid.2x2"
   | "terminal"
   | "chart.bar"
+  | "calendar"
+  | "calendar.badge.clock"
   | "eye"
   | "eye.slash"
   | "slider.horizontal.3"
@@ -50,6 +52,20 @@ const PATHS: Record<SettingsIconId, string> = {
   // SF `chart.bar` — Insights.
   "chart.bar": `
     <path ${O} d="M4.2 19.3V11h3.2v8.3M10.4 19.3V5.2h3.2v14.1M16.6 19.3v-9h3.2v9M3.2 19.3h17.6"/>`,
+
+  // SF `calendar` — compact outline for the Quota Agenda companion panel.
+  calendar: `
+    <rect x="3.7" y="5.2" width="16.6" height="15" rx="2.2" ${O}/>
+    <path ${O} d="M7.8 3.8v3M16.2 3.8v3M3.7 9.2h16.6"/>
+    <circle cx="7.4" cy="12.4" r=".75" fill="currentColor"/><circle cx="12" cy="12.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="12.4" r=".75" fill="currentColor"/>
+    <circle cx="7.4" cy="16.4" r=".75" fill="currentColor"/><circle cx="12" cy="16.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="16.4" r=".75" fill="currentColor"/>`,
+
+  // Calendar + clock: Quota Agenda is a reset schedule, not a date picker.
+  "calendar.badge.clock": `
+    <rect x="3.7" y="4.9" width="15.8" height="14.4" rx="2.2" ${O}/>
+    <path ${O} d="M7.7 3.6v3M15.5 3.6v3M3.7 8.9h15.8"/>
+    <circle cx="16.6" cy="16.3" r="3.8" fill="var(--bg)" stroke="currentColor" stroke-width="1.55"/>
+    <path ${O} d="M16.6 14.2v2.25l1.45.85"/>`,
 
   // SF `eye`
   eye: `

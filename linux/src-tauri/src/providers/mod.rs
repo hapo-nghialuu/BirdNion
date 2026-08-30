@@ -10,6 +10,7 @@ pub mod browser_cookies;
 pub mod claude;
 pub mod claude_admin;
 pub mod codex;
+pub mod codex_prime;
 pub mod commandcode;
 pub mod copilot;
 pub mod copilot_oauth;
@@ -77,6 +78,9 @@ pub struct ProviderStatus {
     pub account_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credits_remaining: Option<f64>,
+    /// Codex manual rate-limit reset credits (best-effort OAuth side channel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_credits_available: Option<i32>,
     /// Codex web-dashboard extras (best-effort cookie enrichment) — port of
     /// `CodexWebExtras`. `code_review_remaining_percent` is intentionally
     /// never populated on Linux: Swift parses it from a *rendered* dashboard

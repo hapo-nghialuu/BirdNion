@@ -16,7 +16,7 @@ import {
 } from "./settings-about";
 import { trayVisibilityToggle, regionSelect, claudeSourceSelect } from "./settings-provider-row";
 import { claudeCodeSettingsSection } from "./claude-code-settings";
-import { copilotDeviceLoginRow } from "./settings-copilot-login";
+import { copilotAccountsSection } from "./settings-copilot-login";
 import { codexAccountsSection } from "./settings-codex-accounts";
 import { freemodelAccountsSection } from "./settings-freemodel-accounts";
 import { elevenlabsKeysSection } from "./settings-elevenlabs-keys";
@@ -229,6 +229,9 @@ export function detailInfoGrid(id: string, enabled: boolean, st: ProviderStatus 
   if (st?.planName) body.append(infoRow(t("provider.planName"), st.planName));
   const account = isHidePersonalInfo() ? null : (st?.accountLabel || st?.signedInEmail);
   if (account) body.append(infoRow(t("provider.account"), account));
+  if (id === "codex" && st?.resetCreditsAvailable !== undefined) {
+    body.append(infoRow(t("providerResetCredits"), String(st.resetCreditsAvailable)));
+  }
   if (st?.version) body.append(infoRow(t("provider.version"), st.version));
   if (id === "kiro" && st?.kiroContextPercent != null) {
     // Context-window usage from `kiro-cli /context` (best-effort).
@@ -716,7 +719,7 @@ function refreshEverySelect(cfg: ProviderCfg): HTMLElement {
 }
 
 /** macOS settingsSection: THIẾT LẬP card + MENU BAR card (P4 reskin). */
-export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
+export function setupSection(cfg: ProviderCfg): HTMLElement {
   const id = cfg.id;
   const wrap = el("div", "pp-setup-wrap");
 
@@ -779,10 +782,6 @@ export function setupSection(cfg: ProviderCfg, vi: boolean): HTMLElement {
       t("settingsGheHost"),
       textInput(cfg.baseUrl, "github.com", (v) => { cfg.baseUrl = v; }),
     ));
-    const login = copilotDeviceLoginRow(vi, (label) => { cfg.accountLabel = label; });
-    login.dataset.remediationTarget = "credential";
-    login.tabIndex = -1;
-    body.append(login);
   }
 
   // 3. Shared extras (refresh cadence stays in SETUP).
@@ -818,6 +817,21 @@ export function codexAccountsCard(): HTMLElement {
   const card = el("div", "sw-card");
   const body = el("div", "sw-card-body");
   body.append(codexAccountsSection());
+  card.append(body);
+  group.append(card);
+  return group;
+}
+
+/** Copilot credentials stay in the private Rust store; only safe account
+ * labels/logins are rendered here. */
+export function copilotAccountsCard(cfg: ProviderCfg): HTMLElement {
+  const group = el("div", "sw-group");
+  group.dataset.remediationTarget = "credential";
+  group.tabIndex = -1;
+  group.append(el("div", "sw-section-header", t("copilotAccountsLabel").toUpperCase()));
+  const card = el("div", "sw-card");
+  const body = el("div", "sw-card-body");
+  body.append(copilotAccountsSection(() => cfg.baseUrl));
   card.append(body);
   group.append(card);
   return group;

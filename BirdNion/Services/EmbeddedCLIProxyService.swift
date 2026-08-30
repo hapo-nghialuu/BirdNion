@@ -442,7 +442,7 @@ final class EmbeddedCLIProxyService: ObservableObject {
     }
 
     private func ensureRunning() async throws {
-        if processController.isOwnedProcessRunning { return }
+        if processController.isOwnedProcessRunning, await isHealthy() { return }
         if await isHealthy() { return }
         guard let executable = Bundle.main.url(forResource: "cliproxyapi", withExtension: nil) else {
             throw ServiceError.helperUnavailable
@@ -467,6 +467,10 @@ final class EmbeddedCLIProxyService: ObservableObject {
     }
 
     private func isHealthy() async -> Bool {
+        guard processController.hasManagedListener(
+            configURL: configURL,
+            ports: [CLIProxyAPIConfiguration.localPort]
+        ) else { return false }
         guard let url = URL(string: CLIProxyAPIConfiguration.localBaseURL + "/healthz") else { return false }
         var request = URLRequest(url: url)
         request.timeoutInterval = 1

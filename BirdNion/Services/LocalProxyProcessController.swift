@@ -51,8 +51,26 @@ final class LocalProxyProcessController {
         return stopped
     }
 
+    /// A successful loopback health response is trusted only when the listener
+    /// is the bundled helper launched with BirdNion's exact private config.
+    /// This prevents a foreign process occupying the fixed port from receiving
+    /// profile credentials through the management API.
+    func hasManagedListener(configURL: URL, ports: [Int]) -> Bool {
+        let pids = Set(ports.flatMap { listenerPIDs(on: $0) })
+        return pids.contains { pid in
+            Self.isManagedProcess(commandLine(for: pid), configURL: configURL)
+        }
+    }
+
     static func isManagedProcess(_ commandLine: String, configURL: URL) -> Bool {
-        commandLine.contains("cliproxyapi") && commandLine.contains(configURL.path)
+        let helperToken = commandLine.hasPrefix("cliproxyapi ")
+            || commandLine.contains("/cliproxyapi ")
+        guard helperToken else { return false }
+
+        let configArgument = "-config \(configURL.path)"
+        guard let range = commandLine.range(of: configArgument) else { return false }
+        return range.upperBound == commandLine.endIndex
+            || commandLine[range.upperBound].isWhitespace
     }
 
     private func listenerPIDs(on port: Int) -> [Int32] {

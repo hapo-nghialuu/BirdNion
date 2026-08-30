@@ -19,6 +19,7 @@ mod kiro_scanner;
 mod omp_scanner;
 mod pi_scanner;
 mod platform;
+mod profile_switch;
 mod project_cost_history;
 mod project_insights;
 mod providers;
@@ -892,7 +893,8 @@ fn claude_code_state(provider_id: String) -> ClaudeCodeState {
 /// (global or project). Fails with a Vietnamese message mirroring the macOS
 /// `WriteError` when the provider isn't ready.
 #[tauri::command]
-fn claude_code_apply(provider_id: String) -> Result<ClaudeCodeState, String> {
+async fn claude_code_apply(provider_id: String) -> Result<ClaudeCodeState, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let provider = config::find_provider(&provider_id);
     if !claude_code::is_supported(&provider_id) {
         return Err("Provider không hỗ trợ làm backend Claude Code".to_string());
@@ -914,7 +916,8 @@ fn claude_code_apply(provider_id: String) -> Result<ClaudeCodeState, String> {
 /// scope: clears the managed `env`/`apiKeyHelper` block, leaves the rest of
 /// settings.json intact.
 #[tauri::command]
-fn claude_code_deactivate(provider_id: String) -> Result<ClaudeCodeState, String> {
+async fn claude_code_deactivate(provider_id: String) -> Result<ClaudeCodeState, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let provider = config::find_provider(&provider_id);
     let scope = claude_code::current_scope(&provider)
         .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
@@ -926,7 +929,8 @@ fn claude_code_deactivate(provider_id: String) -> Result<ClaudeCodeState, String
 /// scope without creating a settings file when none exists. Returns whether
 /// anything was actually removed.
 #[tauri::command]
-fn claude_code_remove_env(provider_id: String) -> Result<bool, String> {
+async fn claude_code_remove_env(provider_id: String) -> Result<bool, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let provider = config::find_provider(&provider_id);
     let scope = claude_code::current_scope(&provider)
         .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
@@ -1002,19 +1006,49 @@ fn claude_code_profile_state(profile_id: String) -> ClaudeCodeState {
 }
 
 #[tauri::command]
-fn claude_code_profile_apply(profile_id: String) -> Result<ClaudeCodeState, String> {
-    let profile =
+async fn claude_code_profile_apply(
+    app: tauri::AppHandle,
+    profile_id: String,
+) -> Result<ClaudeCodeState, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
+    let expected =
         config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
-    let scope = claude_code::profile_scope(&profile)
-        .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
-    let spec = claude_code::spec_for_profile(&profile)
-        .ok_or_else(|| "Nhập Base URL + Token để bật".to_string())?;
-    claude_code::apply(&spec, &scope)?;
+
+    if cli_proxy::uses_embedded_cli_proxy(&expected) {
+        let prepared = cli_proxy::prepare_claude_profile_exact(&app, &expected).await?;
+        let activation = (|| -> Result<(), String> {
+            config::require_current_claude_profile(&prepared)?;
+            let scope = claude_code::profile_scope(&prepared)
+                .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+            let spec = claude_code::spec_for_profile(&prepared)
+                .ok_or_else(|| "Nhập Base URL + Token để bật".to_string())?;
+            claude_code::apply(&spec, &scope)?;
+            config::require_current_claude_profile(&prepared)?;
+            Ok(())
+        })();
+        if let Err(error) = activation {
+            // Do not leave a helper profile marked active when its target
+            // settings failed to commit or its source changed mid-activation.
+            return match cli_proxy::deactivate_claude_proxy_for_direct(&app, &prepared).await {
+                Ok(_) => Err(error),
+                Err(cleanup) => Err(format!("{error}; cleanup proxy thất bại: {cleanup}")),
+            };
+        }
+    } else {
+        config::require_current_claude_profile(&expected)?;
+        let scope = claude_code::profile_scope(&expected)
+            .ok_or_else(|| "Chưa chọn thư mục project".to_string())?;
+        let spec = claude_code::spec_for_profile(&expected)
+            .ok_or_else(|| "Nhập Base URL + Token để bật".to_string())?;
+        claude_code::apply(&spec, &scope)?;
+        let _ = cli_proxy::deactivate_claude_proxy_for_direct(&app, &expected).await?;
+    }
     Ok(claude_code_profile_state_for(&profile_id))
 }
 
 #[tauri::command]
-fn claude_code_profile_deactivate(profile_id: String) -> Result<ClaudeCodeState, String> {
+async fn claude_code_profile_deactivate(profile_id: String) -> Result<ClaudeCodeState, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let profile =
         config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
     let scope = claude_code::profile_scope(&profile)
@@ -1024,7 +1058,8 @@ fn claude_code_profile_deactivate(profile_id: String) -> Result<ClaudeCodeState,
 }
 
 #[tauri::command]
-fn claude_code_profile_remove_env(profile_id: String) -> Result<bool, String> {
+async fn claude_code_profile_remove_env(profile_id: String) -> Result<bool, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let profile =
         config::find_profile(&profile_id).ok_or_else(|| "Không tìm thấy config".to_string())?;
     let scope = claude_code::profile_scope(&profile)
@@ -1295,17 +1330,65 @@ fn hiyo_key_remove(id: String) -> Result<HiyoKeysState, String> {
 /// Starts a GitHub Device Flow login for Copilot: requests a user code the
 /// user enters at the returned verification URL.
 #[tauri::command]
-async fn copilot_login_start() -> Result<providers::copilot_oauth::DeviceCode, String> {
-    providers::copilot_oauth::start("github.com").await
+async fn copilot_login_start(
+    host: Option<String>,
+) -> Result<providers::copilot_oauth::DeviceCode, String> {
+    let host = host
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("github.com");
+    providers::copilot_oauth::start(host).await
 }
 
 /// Single poll tick against the device-flow token endpoint. The caller (JS)
 /// drives the retry loop, sleeping `interval` seconds between calls.
 #[tauri::command]
 async fn copilot_login_poll(
-    device_code: String,
+    handle: String,
 ) -> Result<providers::copilot_oauth::PollResult, String> {
-    providers::copilot_oauth::poll("github.com", &device_code).await
+    providers::copilot_oauth::poll(&handle).await
+}
+
+#[tauri::command]
+fn copilot_accounts_list(
+) -> Result<providers::copilot_oauth::accounts::CopilotAccountsState, String> {
+    providers::copilot_oauth::accounts::accounts_list()
+}
+
+#[tauri::command]
+fn copilot_account_switch(
+    label: String,
+) -> Result<providers::copilot_oauth::accounts::CopilotAccountsState, String> {
+    providers::copilot_oauth::accounts::account_switch(&label)
+}
+
+#[tauri::command]
+fn copilot_account_remove(
+    label: String,
+) -> Result<providers::copilot_oauth::accounts::CopilotAccountsState, String> {
+    providers::copilot_oauth::accounts::account_remove(&label)
+}
+
+#[tauri::command]
+async fn profile_catalog() -> Result<profile_switch::ProfileSwitchCatalog, String> {
+    profile_switch::profile_catalog().await
+}
+
+#[tauri::command]
+async fn activate_claude_profile(
+    app: tauri::AppHandle,
+    request: profile_switch::ProfileActivationRequest,
+) -> Result<profile_switch::ProfileActivationResult, String> {
+    profile_switch::activate_claude_profile(&app, request).await
+}
+
+#[tauri::command]
+async fn activate_codex_profile(
+    app: tauri::AppHandle,
+    request: profile_switch::ProfileActivationRequest,
+) -> Result<profile_switch::ProfileActivationResult, String> {
+    profile_switch::activate_codex_profile(&app, request).await
 }
 
 /// Full settings.json content for the Settings view (local app — keys stay
@@ -1320,7 +1403,12 @@ fn get_settings() -> Result<config::Settings, String> {
 /// even when the frontend bulk-saves the whole settings blob. Returns the new
 /// optimistic-concurrency revision for the caller's in-memory snapshot.
 #[tauri::command]
-fn save_settings(mut settings: config::Settings) -> Result<u64, String> {
+async fn save_settings(mut settings: config::Settings) -> Result<u64, String> {
+    // Settings edits and profile activation share one coordinator. A save that
+    // started from an older UI revision therefore waits, then fails its normal
+    // revision check instead of changing a credential-bearing profile midway
+    // through prepare/apply.
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let _ = config::migrate_standalone_codex_profiles(&mut settings);
     config::mirror_claude_to_codex(&mut settings);
     config::save_frontend_snapshot(settings)
@@ -1343,6 +1431,7 @@ async fn codex_apply(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<codex_config::CodexProfileState, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let target = codex_config::target_config_path();
     let mut profile =
         config::find_codex_profile(&id).ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
@@ -1358,16 +1447,15 @@ async fn codex_apply(
         // Reload after prepare stamped loopback keys + signature.
         profile = config::find_codex_profile(&id)
             .ok_or_else(|| "Không tìm thấy config Codex".to_string())?;
-        codex_config::apply(&profile, Some(&target))?;
+        // Keep the profile overlay ahead of the global selection so an overlay
+        // failure cannot leave a partially activated global Codex config.
+        codex_config::apply_with_profile_file(&profile, Some(&target))?;
     } else {
-        profile.cli_proxy_applied_signature = None;
-        config::save_codex_profile(profile.clone())?;
-        codex_config::apply(&profile, Some(&target))?;
-        let _ = cli_proxy::deactivate_codex_proxy_profiles(&app).await;
+        config::require_current_codex_profile(&profile)?;
+        codex_config::apply_with_profile_file(&profile, Some(&target))?;
+        let (_persisted, _proxy) =
+            cli_proxy::deactivate_codex_proxy_for_direct(&app, &profile).await?;
     }
-
-    // Per-project overlay — same content as global apply.
-    codex_config::write_profile_file(&profile, Some(&target))?;
     Ok(codex_config::profile_state(&id))
 }
 
@@ -1376,6 +1464,7 @@ async fn codex_deactivate(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<codex_config::CodexProfileState, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let target = codex_config::target_config_path();
     let _ = codex_config::deactivate(Some(&target))?;
     if let Some(mut profile) = config::find_codex_profile(&id) {
@@ -1392,6 +1481,7 @@ async fn codex_delete(
     id: String,
     delete_linked_claude: bool,
 ) -> Result<(), String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     let target = codex_config::target_config_path();
     // Best-effort: if this was the active proxy codex profile, drop it from helper.
     if let Some(p) = config::find_codex_profile(&id) {
@@ -1405,7 +1495,10 @@ async fn codex_delete(
 
 /// Ensure a custom Claude profile has a linked Codex counterpart (create if needed).
 #[tauri::command]
-fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexProfile, String> {
+async fn codex_ensure_counterpart(
+    claude_profile_id: String,
+) -> Result<config::CodexProfile, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     config::update(|settings| {
         let claude = settings
             .claude_code_profiles
@@ -1441,7 +1534,8 @@ fn codex_ensure_counterpart(claude_profile_id: String) -> Result<config::CodexPr
 
 /// Ensure a preset provider has a derived Codex profile (Anthropic + local proxy).
 #[tauri::command]
-fn codex_ensure_preset(provider_id: String) -> Result<config::CodexProfile, String> {
+async fn codex_ensure_preset(provider_id: String) -> Result<config::CodexProfile, String> {
+    let _activation_guard = profile_switch::lock_profile_activation().await;
     config::update(|settings| {
         let provider = settings
             .providers
@@ -1812,6 +1906,29 @@ async fn open_side_panel(
     Ok(())
 }
 
+/// Update an existing visible panel without changing its visibility intent.
+/// Status ticks use this command so stale JS state cannot reopen a panel that
+/// is concurrently closing through × or the main popover lifecycle.
+#[tauri::command]
+fn update_side_panel(app: tauri::AppHandle, payload: serde_json::Value) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+
+    if !PANEL_WANTED.load(Ordering::SeqCst) {
+        panel_log("update: ignored because panel is not wanted");
+        return Ok(());
+    }
+    let Some(panel) = app.get_webview_window("panel") else {
+        return Ok(());
+    };
+    if !panel.is_visible().unwrap_or(false) {
+        panel_log("update: ignored because panel is hidden");
+        return Ok(());
+    }
+    let _ = panel.emit("birdnion-panel-payload", payload);
+    position_panel_beside_main(&app, &panel);
+    Ok(())
+}
+
 /// Ẩn panel phụ (hover rời hoặc bấm ✕).
 ///
 /// Báo về popover để nó bỏ cờ ghim: nếu không, sau khi bấm ✕ phía popover vẫn
@@ -1938,10 +2055,13 @@ fn show_main_window(app: &tauri::AppHandle) {
 /// trên màn hình (macOS `AppDelegate` gọi `agentDetailCoordinator.close()`
 /// mỗi lần đóng popover).
 fn hide_side_panel_with_popover(app: &tauri::AppHandle) {
-    use tauri::Manager;
+    use tauri::{Emitter, Manager};
     PANEL_WANTED.store(false, Ordering::SeqCst);
     if let Some(panel) = app.get_webview_window("panel") {
         let _ = panel.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.emit("birdnion-panel-closed", ());
     }
 }
 
@@ -1984,6 +2104,7 @@ pub fn run() {
             list_installed_agents,
             panel_debug,
             open_side_panel,
+            update_side_panel,
             close_side_panel,
             resize_side_panel,
             classify_provider_error,
@@ -2038,6 +2159,13 @@ pub fn run() {
             hiyo_key_remove,
             copilot_login_start,
             copilot_login_poll,
+            copilot_accounts_list,
+            copilot_account_switch,
+            copilot_account_remove,
+            profile_catalog,
+            activate_claude_profile,
+            activate_codex_profile,
+            providers::codex_prime::prime_codex,
             get_settings,
             save_settings,
             notify,

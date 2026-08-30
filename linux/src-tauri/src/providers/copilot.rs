@@ -1,8 +1,7 @@
 //! GitHub Copilot quota provider — port of `CopilotProvider.swift`.
 //!
-//! Token resolution: BirdNion's platform config `copilot-accounts.json` (same file
-//! macOS's Device Flow login writes; that flow is out of scope on Linux, so
-//! this reads an existing file only) → `cfg.api_key` manual token fallback.
+//! Token resolution: the centralized Copilot account store's immutable active
+//! credential → `cfg.api_key` manual token fallback.
 //!
 //! Main endpoint: GET https://<apiHost>/copilot_internal/user.
 //! Budget windows are a best-effort browser-cookie scrape of GitHub's
@@ -13,6 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::providers::browser_cookies;
+use crate::providers::copilot_oauth::accounts;
 use crate::providers::{display_name, ProviderStatus, QuotaWindow};
 
 const USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
@@ -21,17 +21,20 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     let id = cfg.id.clone();
 
-    let account = load_active_account();
-    let token = account
-        .as_ref()
-        .and_then(|a| {
-            if a.token.is_empty() {
-                None
-            } else {
-                Some(a.token.clone())
-            }
-        })
-        .or_else(|| crate::config::api_key(cfg));
+    let account = match accounts::active_credential() {
+        Ok(account) => account,
+        Err(error) => return ProviderStatus::failure(&id, &name, error),
+    };
+    let account_token = account.as_ref().and_then(|a| {
+        let token = a.token.trim();
+        if token.is_empty() {
+            None
+        } else {
+            Some(token.to_string())
+        }
+    });
+    let has_account_token = account_token.is_some();
+    let token = account_token.or_else(|| crate::config::api_key(cfg));
 
     let Some(token) = token else {
         return ProviderStatus::failure(&id, &name, "Chưa đăng nhập Copilot");
@@ -40,12 +43,12 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let api_host = resolve_api_host(cfg);
     let client = crate::providers::shared_client();
 
-    let account_label = if let Some(login) = account
-        .as_ref()
-        .and_then(|a| a.login.clone())
-        .filter(|l| !l.is_empty())
-    {
-        login
+    let account_label = if let Some(account) = account.as_ref().filter(|_| has_account_token) {
+        account
+            .login
+            .clone()
+            .filter(|login| !login.trim().is_empty())
+            .unwrap_or_else(|| account.label.clone())
     } else if let Some(manual) = cfg
         .account_label
         .as_deref()
@@ -56,7 +59,7 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     } else if let Some(login) = fetch_github_username(&client, &api_host, &token).await {
         login
     } else {
-        token.chars().take(8).collect()
+        accounts::GENERIC_ACCOUNT_LABEL.to_string()
     };
 
     let usage_url = format!("https://{api_host}/copilot_internal/user");
@@ -100,47 +103,6 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     }
 
     base
-}
-
-struct CopilotAccount {
-    login: Option<String>,
-    token: String,
-}
-
-#[derive(Deserialize)]
-struct AccountEntry {
-    label: String,
-    login: Option<String>,
-    token: String,
-}
-
-#[derive(Deserialize)]
-struct AccountStore {
-    #[serde(rename = "activeLabel")]
-    active_label: Option<String>,
-    #[serde(default)]
-    accounts: Vec<AccountEntry>,
-}
-
-fn copilot_accounts_path() -> Option<std::path::PathBuf> {
-    crate::config::support_dir().map(|path| path.join("copilot-accounts.json"))
-}
-
-fn load_active_account() -> Option<CopilotAccount> {
-    let path = copilot_accounts_path()?;
-    let text = std::fs::read_to_string(path).ok()?;
-    let store: AccountStore = serde_json::from_str(&text).ok()?;
-
-    let active = store
-        .active_label
-        .as_ref()
-        .and_then(|label| store.accounts.iter().find(|a| &a.label == label))
-        .or_else(|| store.accounts.first())?;
-
-    Some(CopilotAccount {
-        login: active.login.clone(),
-        token: active.token.clone(),
-    })
 }
 
 fn resolve_api_host(cfg: &crate::config::Provider) -> String {

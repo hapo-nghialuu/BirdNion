@@ -64,7 +64,8 @@ struct QuotaOverview: View {
                         isRefreshing: quota.isRefreshing,
                         actionCount: ActionCenterIssue.current(
                             statuses: quota.displayStatuses,
-                            staleWarning: { quota.staleWarning(for: $0) }).count)
+                            staleWarning: { quota.staleWarning(for: $0) }).count,
+                        onOpenQuotaAgenda: openQuotaAgenda)
                     let selected = effectiveSelectedId()
                     ProviderTabs(
                         providers: quota.displayStatuses,
@@ -122,7 +123,9 @@ struct QuotaOverview: View {
                 // AppDelegate.fittingSize. A Spacer here absorbed leftover
                 // host height (seed / prior tall tab) into a visible gap
                 // between the last section (e.g. Accounts) and the footer.
-                ActionsList(sourceStates: footerSourceStates)
+                ActionsList(
+                    sourceStates: footerSourceStates,
+                    onQuotaAgendaTick: updateQuotaAgenda)
             }
             // No horizontal pad here: header/tabs own full-bleed rules;
             // body sections inset content + hairlines themselves.
@@ -135,6 +138,12 @@ struct QuotaOverview: View {
         }
         .onChange(of: selectedProviderId) { id in
             triggerReportsIfNeeded(providerId: id ?? "")
+        }
+        .onChange(of: quotaAgendaItems) { _, items in
+            NotificationCenter.default.post(
+                name: .birdnionUpdateQuotaAgenda,
+                object: nil,
+                userInfo: ["items": items])
         }
         .onChange(of: quota.displayStatuses.map(\.id)) { ids in
             // "all" stays valid as long as one local-cost source is enabled;
@@ -161,6 +170,10 @@ struct QuotaOverview: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .claudeCodeTargetChanged)) { _ in
             claudeCodeTargetRevision += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionSelectProviderTab)) { note in
+            guard let providerID = note.userInfo?["providerID"] as? String else { return }
+            selectProviderTab(providerID)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             // QuotaOverview stays mounted while the popover is hidden, so this
@@ -592,6 +605,51 @@ struct QuotaOverview: View {
         agentVisibility.visibleRecords(from: projectedAgentRecords)
     }
 
+    /// Staleness is session-local state owned by QuotaService. Pass only IDs
+    /// into the pure Agenda projection; age alone is not stale evidence.
+    private var staleProviderIDs: Set<String> {
+        Set(quota.displayStatuses.compactMap { status in
+            quota.staleWarning(for: status.id) == nil ? nil : status.id
+        })
+    }
+
+    private var quotaAgendaItems: [QuotaAgendaPanelItem] {
+        buildQuotaAgendaItems(now: Date())
+    }
+
+    private func buildQuotaAgendaItems(now: Date) -> [QuotaAgendaPanelItem] {
+        QuotaAgendaProjection.build(
+            statuses: quota.displayStatuses,
+            staleProviderIDs: staleProviderIDs,
+            hidePersonalInfo: settings.hidePersonalInfo,
+            now: now
+        ).compactMap { projection in
+            guard let record = visibleAgentRecords.first(where: {
+                $0.id.rawValue == projection.providerID
+                    || $0.providerIDs.contains(projection.providerID)
+            }) else { return nil }
+            return QuotaAgendaPanelItem(
+                agentName: record.displayName,
+                projection: projection)
+        }
+    }
+
+    private func openQuotaAgenda() {
+        NotificationCenter.default.post(
+            name: .birdnionOpenQuotaAgenda,
+            object: nil,
+            userInfo: ["items": quotaAgendaItems])
+    }
+
+    /// Reuse the footer's existing cadence so an open Agenda crosses reset
+    /// boundaries and advances countdown/freshness without another poller.
+    private func updateQuotaAgenda(at now: Date) {
+        NotificationCenter.default.post(
+            name: .birdnionUpdateQuotaAgenda,
+            object: nil,
+            userInfo: ["items": buildQuotaAgendaItems(now: now)])
+    }
+
     /// Trạng thái nguồn (LIVE/LỊCH SỬ + freshness) cho footer — chỉ nguồn
     /// quota-backed đang enabled, không gộp OMP/Pi (quy ước 2026-08-24).
     private var footerSourceStates: [FooterSourceState] {
@@ -650,6 +708,12 @@ struct QuotaOverview: View {
             return sel
         }
         return quota.displayStatuses.first?.id ?? ""
+    }
+
+    private func selectProviderTab(_ providerID: String) {
+        guard quota.displayStatuses.contains(where: { $0.id == providerID }) else { return }
+        selectedProviderId = providerID
+        UserDefaults.standard.set(providerID, forKey: Self.selectedTabKey)
     }
 
     private func combinedReport() -> CombinedUsageReport {
@@ -738,6 +802,7 @@ struct BirdNionHeader: View {
 
     let isRefreshing: Bool
     let actionCount: Int
+    let onOpenQuotaAgenda: () -> Void
 
     private var statusTone: Color {
         isRefreshing ? VocabbyTheme.yellow : VocabbyTheme.success
@@ -804,18 +869,18 @@ struct BirdNionHeader: View {
                     NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                 }
 
-                // Toggle light ↔ dark. Icon shows the *target* mode (sun → go
-                // light, moon → go dark). Settings stays on the footer gear.
+                // Quota Agenda is a global data view, not an app utility.
+                // It replaces the former appearance shortcut in the final
+                // header slot; appearance remains available in Settings.
                 headerIconButton(
-                    systemName: isEffectivelyDark ? "sun.max" : "moon",
+                    systemName: "calendar.badge.clock",
                     spinning: false,
-                    label: isEffectivelyDark
-                        ? L10n.t("popover.appearance.light", settings.appLanguage)
-                        : L10n.t("popover.appearance.dark", settings.appLanguage),
-                    disabled: false
-                ) {
-                    toggleAppearance()
-                }
+                    label: L10n.languageCode(settings.appLanguage) == "vi"
+                        ? "Mở lịch quota"
+                        : "Open Quota Agenda",
+                    disabled: false,
+                    action: onOpenQuotaAgenda
+                )
             }
         }
         .padding(.horizontal, 16)
@@ -825,22 +890,6 @@ struct BirdNionHeader: View {
             // Chrome rule top: đậm hơn hairline, full-bleed (quy ước 2026-08-24).
             VocabbyTheme.chromeRule.frame(height: 1)
         }
-    }
-
-    /// Resolved dark/light for the header toggle (auto follows system).
-    private var isEffectivelyDark: Bool {
-        switch AppAppearance(rawValue: settings.appAppearance) ?? .auto {
-        case .dark: return true
-        case .light: return false
-        case .auto:
-            return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        }
-    }
-
-    private func toggleAppearance() {
-        let next: AppAppearance = isEffectivelyDark ? .light : .dark
-        settings.appAppearance = next.rawValue
-        settings.applyAppearance()
     }
 
     /// Design header actions: 26×26, r4, border #DCD8CD, icon 14.
@@ -3517,6 +3566,7 @@ struct ActionsList: View {
     @EnvironmentObject var quota: QuotaService
 
     var sourceStates: [FooterSourceState] = []
+    var onQuotaAgendaTick: (Date) -> Void = { _ in }
 
     /// Luân phiên 5 giây/lượt giữa caption cập nhật và trạng thái nguồn.
     @State private var showSources = false
@@ -3552,7 +3602,8 @@ struct ActionsList: View {
                 }
             }
             .frame(height: 16, alignment: .leading)
-            .onReceive(rotation) { _ in
+            .onReceive(rotation) { now in
+                onQuotaAgendaTick(now)
                 guard !sourceStates.isEmpty else { return }
                 showSources.toggle()
             }

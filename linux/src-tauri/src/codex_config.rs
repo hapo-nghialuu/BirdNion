@@ -552,10 +552,8 @@ pub fn deactivate(config_url: Option<&Path>) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Codex profile flag name: `bn-<slug>` from display name.
-pub fn profile_flag_name(profile: &CodexProfile) -> String {
-    let slug: String = profile
-        .name
+fn safe_profile_slug(value: &str) -> String {
+    let slug: String = value
         .to_lowercase()
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
@@ -567,18 +565,49 @@ pub fn profile_flag_name(profile: &CodexProfile) -> String {
         }
         collapsed.push(ch);
     }
-    let trimmed = collapsed.trim_matches('-');
-    let base = if trimmed.is_empty() {
-        profile
-            .id
-            .chars()
-            .take(8)
-            .collect::<String>()
-            .to_lowercase()
+    collapsed.trim_matches('-').to_string()
+}
+
+/// Codex profile flag name: `bn-<slug>` from display name.
+pub fn profile_flag_name(profile: &CodexProfile) -> String {
+    let name = safe_profile_slug(&profile.name);
+    let id = safe_profile_slug(&profile.id);
+    let base = if !name.is_empty() {
+        name
+    } else if !id.is_empty() {
+        id.chars().take(32).collect()
     } else {
-        trimmed.to_string()
+        hex::encode(Sha256::digest(profile.id.as_bytes()))[..8].to_string()
     };
     format!("bn-{base}")
+}
+
+fn allocated_profile_flag(profile: &CodexProfile, state: &ProfileFilesState) -> String {
+    let base = profile_flag_name(profile);
+    let available = |flag: &str| {
+        let file_name = format!("{flag}.config.toml");
+        !state
+            .files
+            .iter()
+            .any(|(id, existing)| id != &profile.id && existing == &file_name)
+    };
+    if available(&base) {
+        return base;
+    }
+
+    let digest = hex::encode(Sha256::digest(profile.id.as_bytes()));
+    let stem = format!("{base}-{}", &digest[..12]);
+    for attempt in 0..=state.files.len() {
+        let candidate = if attempt == 0 {
+            stem.clone()
+        } else {
+            format!("{stem}-{attempt}")
+        };
+        if available(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("finite profile file map must leave a free suffix")
 }
 
 /// Write/refresh `~/.codex/bn-<slug>.config.toml`. Returns the `--profile` flag.
@@ -593,34 +622,33 @@ pub fn write_profile_file(
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
     let mut state = load_profile_files_state(&path);
 
-    let mut flag = profile_flag_name(profile);
-    let file_candidate = format!("{flag}.config.toml");
-    if state
-        .files
-        .iter()
-        .any(|(k, v)| k != &profile.id && v == &file_candidate)
-    {
-        let suffix: String = profile
-            .id
-            .chars()
-            .take(4)
-            .collect::<String>()
-            .to_lowercase();
-        flag = format!("{flag}-{suffix}");
-    }
+    let flag = allocated_profile_flag(profile, &state);
     let file_name = format!("{flag}.config.toml");
 
-    if let Some(previous) = state.files.get(&profile.id) {
-        if previous != &file_name {
-            let _ = std::fs::remove_file(directory.join(previous));
-        }
-    }
+    let previous = state.files.get(&profile.id).cloned();
     write_string(
         &document::applying(&configuration, ""),
         &directory.join(&file_name),
     )?;
     state.files.insert(profile.id.clone(), file_name);
     write_profile_files_state(&state, &path)?;
+    if let Some(previous) = previous {
+        if state.files.get(&profile.id) != Some(&previous) {
+            let _ = std::fs::remove_file(directory.join(previous));
+        }
+    }
+    Ok(flag)
+}
+
+/// Canonical activation used by Settings and the compact popover. The overlay
+/// is committed first so an overlay failure cannot leave the global selection
+/// activated without the matching `--profile` file.
+pub fn apply_with_profile_file(
+    profile: &CodexProfile,
+    config_url: Option<&Path>,
+) -> Result<String, String> {
+    let flag = write_profile_file(profile, config_url)?;
+    apply(profile, config_url)?;
     Ok(flag)
 }
 
@@ -893,19 +921,81 @@ mod tests {
         a.id = "aaaa1111".into();
         a.name = "Shared Name".into();
         let mut b = sample_direct();
-        b.id = "bbbb2222".into();
+        b.id = "aaaa2222".into();
         b.name = "Shared Name".into();
+        let mut c = sample_direct();
+        c.id = "aaaa3333".into();
+        c.name = "Shared Name".into();
 
         let flag_a = write_profile_file(&a, Some(&config)).unwrap();
         let flag_b = write_profile_file(&b, Some(&config)).unwrap();
+        let flag_c = write_profile_file(&c, Some(&config)).unwrap();
         assert_ne!(flag_a, flag_b);
+        assert_ne!(flag_a, flag_c);
+        assert_ne!(flag_b, flag_c);
         assert!(flag_a.starts_with("bn-"));
         assert!(flag_b.starts_with("bn-"));
+        assert!(flag_c.starts_with("bn-"));
         assert!(dir.join(format!("{flag_a}.config.toml")).exists());
         assert!(dir.join(format!("{flag_b}.config.toml")).exists());
+        assert!(dir.join(format!("{flag_c}.config.toml")).exists());
 
         remove_profile_file(&a.id, Some(&config));
         assert!(!dir.join(format!("{flag_a}.config.toml")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overlay_failure_does_not_apply_global_selection() {
+        let _g = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "birdnion-codex-overlay-failure-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        let original = "# user config\ndebug = true\n";
+        std::fs::write(&config, original).unwrap();
+        let profile = sample_direct();
+        let blocked_overlay = dir.join(format!("{}.config.toml", profile_flag_name(&profile)));
+        std::fs::create_dir(&blocked_overlay).unwrap();
+
+        assert!(apply_with_profile_file(&profile, Some(&config)).is_err());
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        assert!(!state_path(&config).exists());
+        assert!(!profile_files_state_path(&config).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_overlay_rename_preserves_previous_profile_file_and_state() {
+        let _g = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "birdnion-codex-overlay-rename-failure-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        let mut profile = sample_direct();
+        profile.name = "Old Name".into();
+        let old_flag = write_profile_file(&profile, Some(&config)).unwrap();
+        let old_path = dir.join(format!("{old_flag}.config.toml"));
+        assert!(old_path.is_file());
+
+        profile.name = "New Name".into();
+        let blocked_path = dir.join(format!("{}.config.toml", profile_flag_name(&profile)));
+        std::fs::create_dir(&blocked_path).unwrap();
+
+        assert!(write_profile_file(&profile, Some(&config)).is_err());
+        assert!(old_path.is_file());
+        assert_eq!(
+            profile_flag(&profile.id, Some(&config)).as_deref(),
+            Some(old_flag.as_str())
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -937,6 +1027,8 @@ mod tests {
         p.name = "!!!".into();
         p.id = "deadbeef".into();
         assert_eq!(profile_flag_name(&p), "bn-deadbeef");
+        p.id = "../../Unsafe ID".into();
+        assert_eq!(profile_flag_name(&p), "bn-unsafe-id");
     }
 
     #[test]

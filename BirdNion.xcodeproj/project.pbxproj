@@ -9,9 +9,11 @@
 /* Begin PBXBuildFile section */
 		AAAA0001000000000000B001 /* BirdNionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA0002000000000000F001 /* BirdNionApp.swift */; };
 		BBBB0001000000000000B001 /* ProviderStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBB0002000000000000F001 /* ProviderStatus.swift */; };
+		QAGN0001000000000000B001 /* quota-agenda-projection.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAGN0002000000000000F001 /* quota-agenda-projection.swift */; };
 		PSPG0001000000000000B001 /* ProviderStatusPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = PSPG0002000000000000F001 /* ProviderStatusPage.swift */; };
 		BBBB0003000000000000B002 /* QuotaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBB0004000000000000F002 /* QuotaProvider.swift */; };
 		CCCC0001000000000000B001 /* ProviderStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0002000000000000F001 /* ProviderStatusTests.swift */; };
+		QAGT0001000000000000B001 /* quota-agenda-projection-tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAGT0002000000000000F001 /* quota-agenda-projection-tests.swift */; };
 		CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */; };
 		CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0008000000000000F004 /* HapoHubProviderTests.swift */; };
 		CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC000A000000000000F005 /* QuotaServicePollingTests.swift */; };
@@ -149,6 +151,7 @@
 		AACF0001000000000000B001 /* all-agents-section-configured.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACF0002000000000000F001 /* all-agents-section-configured.swift */; };
 		AAO00001000000000000B001 /* all-agents-overview.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAO00002000000000000F001 /* all-agents-overview.swift */; };
 		AGDR0001000000000000B001 /* agent-detail-panel-root.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGDR0002000000000000F001 /* agent-detail-panel-root.swift */; };
+		QAPR0001000000000000B001 /* quota-agenda-panel-root.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAPR0002000000000000F001 /* quota-agenda-panel-root.swift */; };
 		AGPN0001000000000000B001 /* AgentsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGPN0002000000000000F001 /* AgentsPane.swift */; };
 		AGIR0001000000000000B001 /* agent-inventory-row.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGIR0002000000000000F001 /* agent-inventory-row.swift */; };
 		AGCB0001000000000000B001 /* agent-capability-badges.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGCB0002000000000000F001 /* agent-capability-badges.swift */; };
@@ -218,6 +221,7 @@
 		AAAA0002000000000000F001 /* BirdNionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionApp.swift; sourceTree = "<group>"; };
 		AAAA0004000000000000F003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BBBB0002000000000000F001 /* ProviderStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderStatus.swift; sourceTree = "<group>"; };
+		QAGN0002000000000000F001 /* quota-agenda-projection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "quota-agenda-projection.swift"; sourceTree = "<group>"; };
 		PSPG0002000000000000F001 /* ProviderStatusPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderStatusPage.swift; sourceTree = "<group>"; };
 		PCST0002000000000000F001 /* ProviderCostSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Models/ProviderCostSnapshot.swift; sourceTree = "<group>"; };
 		CLM00002000000000000F01 /* ClaudeUsageModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Core/ClaudeUsageModels.swift; sourceTree = "<group>"; };
@@ -232,6 +236,7 @@
 		CWF00002000000000000F01 /* ClaudeWebAPIFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Web/ClaudeWebAPIFetcher.swift; sourceTree = "<group>"; };
 		BBBB0004000000000000F002 /* QuotaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaProvider.swift; sourceTree = "<group>"; };
 		CCCC0002000000000000F001 /* ProviderStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ProviderStatusTests.swift; sourceTree = "<group>"; };
+		QAGT0002000000000000F001 /* quota-agenda-projection-tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNionTests/quota-agenda-projection-tests.swift"; sourceTree = "<group>"; };
 		CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/MiniMaxProviderParserTests.swift; sourceTree = "<group>"; };
 		CCCC0008000000000000F004 /* HapoHubProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/HapoHubProviderTests.swift; sourceTree = "<group>"; };
 		CCCC000A000000000000F005 /* QuotaServicePollingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/QuotaServicePollingTests.swift; sourceTree = "<group>"; };
@@ -361,6 +366,7 @@
 		AACF0002000000000000F001 /* all-agents-section-configured.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-section-configured.swift; sourceTree = "<group>"; };
 		AAO00002000000000000F001 /* all-agents-overview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/all-agents-overview.swift; sourceTree = "<group>"; };
 		AGDR0002000000000000F001 /* agent-detail-panel-root.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/agent-detail-panel-root.swift; sourceTree = "<group>"; };
+		QAPR0002000000000000F001 /* quota-agenda-panel-root.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Popover/quota-agenda-panel-root.swift; sourceTree = "<group>"; };
 		AGPN0002000000000000F001 /* AgentsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/AgentsPane.swift; sourceTree = "<group>"; };
 		AGIR0002000000000000F001 /* agent-inventory-row.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-inventory-row.swift; sourceTree = "<group>"; };
 		AGCB0002000000000000F001 /* agent-capability-badges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/agent-capability-badges.swift; sourceTree = "<group>"; };
@@ -441,6 +447,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CCCC0001000000000000B001 /* ProviderStatusTests.swift in Sources */,
+				QAGT0001000000000000B001 /* quota-agenda-projection-tests.swift in Sources */,
 				CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */,
 				CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */,
 				CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */,
@@ -579,6 +586,7 @@
 			isa = PBXGroup;
 			children = (
 				BBBB0002000000000000F001 /* ProviderStatus.swift */,
+				QAGN0002000000000000F001 /* quota-agenda-projection.swift */,
 				PSPG0002000000000000F001 /* ProviderStatusPage.swift */,
 			);
 			path = Models;
@@ -752,6 +760,7 @@
 				FNT00001000000000000B001 /* AppFonts.swift in Sources */,
 				ICMP0001000000000000B001 /* InstrumentComponents.swift in Sources */,
 				BBBB0001000000000000B001 /* ProviderStatus.swift in Sources */,
+				QAGN0001000000000000B001 /* quota-agenda-projection.swift in Sources */,
 				PSPG0001000000000000B001 /* ProviderStatusPage.swift in Sources */,
 				PCST0001000000000000B001 /* ProviderCostSnapshot.swift in Sources */,
 				CLM00001000000000000B01 /* ClaudeUsageModels.swift in Sources */,
@@ -864,6 +873,7 @@
 				AACF0001000000000000B001 /* all-agents-section-configured.swift in Sources */,
 				AAO00001000000000000B001 /* all-agents-overview.swift in Sources */,
 				AGDR0001000000000000B001 /* agent-detail-panel-root.swift in Sources */,
+				QAPR0001000000000000B001 /* quota-agenda-panel-root.swift in Sources */,
 				AGPN0001000000000000B001 /* AgentsPane.swift in Sources */,
 				AGIR0001000000000000B001 /* agent-inventory-row.swift in Sources */,
 				AGCB0001000000000000B001 /* agent-capability-badges.swift in Sources */,
