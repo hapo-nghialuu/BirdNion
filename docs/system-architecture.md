@@ -146,6 +146,16 @@ Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
 - Cost tách khỏi provider toggle: `enabled_usage_sources()` là hợp của provider đang bật và agent phát hiện được, nên CLI tắt provider vẫn báo chi phí.
 - Panel phụ không nằm trong popover 420px mà là cửa sổ Tauri riêng (`panel.html`, 340px, frameless, always-on-top) neo cạnh popover — tương đương NSPanel con bên macOS, giữ nguyên vòng đời hover-transient / click-pin.
 - Kiểm chứng chạy ở workflow `linux-build.yml` trên Ubuntu (`cargo test` + `tsc` + bundle). Crate từng không compile do call site chưa theo kịp `target_config_path()`/`target_path()` infallible — đã sửa 2026-08-24; gate local 2026-08-26 xanh `578/578` Rust, `65/65` Node và production build `60` modules.
+
+#### 3.6.2 Quota Agenda MVP (2026-08-30)
+
+- All tab có Quota Agenda theo contract trust-first, dùng `remainingPct` đã normalize từ provider; native-unit / overage chưa nằm trong MVP này.
+- Mỗi provider có tối đa một dòng và toàn Agenda chỉ hiện 3 dòng; `+N` mở provider ẩn kế tiếp, còn click một dòng đi thẳng tới provider tab tương ứng.
+- Selector ưu tiên window có `resetDate` tương lai gần nhất; nếu không có reset tương lai thì mới rơi về window primary còn lại có `remainingPct` thấp nhất.
+- State hiện tại chỉ có `scheduled`, `awaitingRefresh`, `unknown`, và `staleLastKnown`. `scheduled` dùng reset countdown, `awaitingRefresh` che phần trăm hiện tại, `staleLastKnown` giữ last-known và `unknown` giữ số hiện tại nhưng không khẳng định lịch reset.
+- Metadata hiển thị source, account và freshness theo kiểu privacy-safe; `hidePersonalInfo` chỉ ẩn account label, không đổi source/freshness.
+- macOS dùng `QuotaAgendaProjection.build(...)` và `AllAgentsQuotaSection`; Linux dùng `quota-agenda.ts` + `quota-agenda-section.ts`. `main.ts` refresh đồng thời hai slot ổn định Agenda/Đã cấu hình khi provider hoặc `birdnion-hide-personal-info-changed` đổi, nên agent không bị trùng/mất mà chart cũng không bị rerender.
+
 ## 4. Luồng quota
 
 ```
