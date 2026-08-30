@@ -46,7 +46,7 @@ struct QuotaAgendaProjection: Equatable, Identifiable {
     ) -> [QuotaAgendaProjection] {
         let indexed: [(Int, QuotaAgendaProjection)] = statuses.enumerated().compactMap { pair in
             let (index, status) = pair
-            guard let window = selectedWindow(for: status, now: now) else { return nil }
+            guard let window = selectedWindow(for: status) else { return nil }
             let stale = staleProviderIDs.contains(status.id)
             let resetState = resetState(
                 window: window,
@@ -108,19 +108,15 @@ struct QuotaAgendaProjection: Equatable, Identifiable {
             isStale: stale)
     }
 
-    private static func selectedWindow(for status: ProviderStatus, now: Date) -> QuotaWindow? {
+    /// Keep the provider summary consistent with the rest of BirdNion: one
+    /// provider is represented by its most constrained valid quota window.
+    /// Agenda sorts providers by that window's reset; it must not swap in a
+    /// healthier window merely because that window resets sooner.
+    private static func selectedWindow(for status: ProviderStatus) -> QuotaWindow? {
         let primary = status.windows.enumerated().filter {
             !isAgendaSupplementary($0.element)
                 && !$0.element.isInactive
                 && !isAgendaExcluded(status: status, window: $0.element)
-        }
-        if let next = primary.compactMap({ pair -> (Int, QuotaWindow, Date)? in
-            guard let reset = pair.element.resetDate, reset > now else { return nil }
-            return (pair.offset, pair.element, reset)
-        }).min(by: {
-            $0.2 == $1.2 ? $0.0 < $1.0 : $0.2 < $1.2
-        }) {
-            return next.1
         }
         return primary.min {
             $0.element.remainingPct == $1.element.remainingPct

@@ -714,16 +714,8 @@ export async function claudeCodePane(onSaved: () => void): Promise<HTMLElement> 
         if (sel.kind === "provider") {
           await invoke("claude_code_apply", { providerId: sel.cfg.id });
         } else {
-          // Full activation: ensure local proxy is running + current before apply.
-          if (usesLocalProxy(sel.profile)) {
-            const st = await invoke<ProxyStatus>("cli_proxy_status", {
-              profileId: sel.profile.id,
-            }).catch(() => null);
-            if (!st || st.state !== "running" || !st.configurationCurrent) {
-              await invoke<ProxyStatus>("cli_proxy_prepare", { profileId: sel.profile.id });
-              await reloadProfileFromDisk(sel.profile);
-            }
-          }
+          // Backend owns proxy preparation + exact apply under one activation
+          // lock, so popover switching cannot interleave between two IPC calls.
           await invoke("claude_code_profile_apply", { profileId: sel.profile.id });
         }
         statusMsg = state === "stale"

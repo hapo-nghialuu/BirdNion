@@ -8,6 +8,7 @@ export type SettingsIconId =
   | "terminal"
   | "chart.bar"
   | "calendar"
+  | "calendar.badge.clock"
   | "eye"
   | "eye.slash"
   | "slider.horizontal.3"
@@ -58,6 +59,13 @@ const PATHS: Record<SettingsIconId, string> = {
     <path ${O} d="M7.8 3.8v3M16.2 3.8v3M3.7 9.2h16.6"/>
     <circle cx="7.4" cy="12.4" r=".75" fill="currentColor"/><circle cx="12" cy="12.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="12.4" r=".75" fill="currentColor"/>
     <circle cx="7.4" cy="16.4" r=".75" fill="currentColor"/><circle cx="12" cy="16.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="16.4" r=".75" fill="currentColor"/>`,
+
+  // Calendar + clock: Quota Agenda is a reset schedule, not a date picker.
+  "calendar.badge.clock": `
+    <rect x="3.7" y="4.9" width="15.8" height="14.4" rx="2.2" ${O}/>
+    <path ${O} d="M7.7 3.6v3M15.5 3.6v3M3.7 8.9h15.8"/>
+    <circle cx="16.6" cy="16.3" r="3.8" fill="var(--bg)" stroke="currentColor" stroke-width="1.55"/>
+    <path ${O} d="M16.6 14.2v2.25l1.45.85"/>`,
 
   // SF `eye`
   eye: `

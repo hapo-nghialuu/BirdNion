@@ -39,6 +39,8 @@ export type ProviderStatus = {
   error?: string;
   accountLabel?: string;
   creditsRemaining?: number;
+  /** Unused manual-reset credits returned by Codex's best-effort endpoint. */
+  resetCreditsAvailable?: number;
   /** Codex web-dashboard extras (best-effort cookie enrichment) — port of
    * macOS `CodexWebExtras`. `codeReviewRemainingPercent` is never populated
    * on Linux (see provider backend docs). */
@@ -323,6 +325,11 @@ function providerHeaderCard(status: ProviderStatus): HTMLElement {
     const plan = planLabel(status);
     if (plan) meta.push(plan);
     if (status.sourceLabel?.trim()) meta.push(status.sourceLabel.trim());
+    if (status.id === "codex"
+        && status.resetCreditsAvailable !== undefined
+        && status.resetCreditsAvailable > 0) {
+      meta.push(t("providerResetBadge", { n: status.resetCreditsAvailable }));
+    }
     if (meta.length === 0 && !isHidePersonalInfo()) {
       if (status.accountLabel) meta.push(status.accountLabel);
       else if (status.signedInEmail) meta.push(status.signedInEmail);

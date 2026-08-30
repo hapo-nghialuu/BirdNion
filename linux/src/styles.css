@@ -2186,6 +2186,12 @@ body.settings-body-root {
   max-width: 180px;
 }
 
+.codex-auto-prime-time {
+  width: auto;
+  min-width: 104px;
+  flex: 0 0 auto;
+}
+
 .sw-input-num {
   width: 64px;
   font-size: 12px;
@@ -2823,6 +2829,13 @@ body.settings-body-root {
 
 .pp-accounts-status { font-size: 10px; color: var(--critical); padding: 0 14px 6px; }
 .pp-accounts-status:empty { display: none; }
+.copilot-login-status {
+  color: var(--text2);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.copilot-login-status.error { color: var(--critical); }
+.copilot-login-status a { color: var(--accent); }
 
 /* FreeModel add-account form (cookie + label + button) */
 .pp-account-add {
@@ -3864,6 +3877,50 @@ body.settings-body-root {
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
+.ai-profile-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ai-profile-row:hover:not(:disabled) { background: var(--hover-surface); }
+.ai-profile-row:disabled { cursor: default; }
+.ai-profile-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  outline-offset: -2px;
+}
+.ai-profile-health {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--text3);
+  border-radius: 50%;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+}
+.ai-profile-health.active {
+  border-color: var(--success);
+  background: radial-gradient(circle, var(--success) 0 42%, transparent 47%);
+}
+.ai-profile-health.stale { border-color: var(--warning); }
+.ai-profile-health.needsSetup { border-color: var(--accent); }
+.ai-profile-state {
+  flex: 0 0 auto;
+  font: 600 10px/1.2 "IBM Plex Mono", monospace;
+  color: var(--text2);
+}
+.ai-profile-state.active { color: var(--success); }
+.ai-profile-state.stale { color: var(--warning); }
+.ai-profile-state.needsSetup { color: var(--accent); }
+.ai-profile-error {
+  padding: 7px 10px 9px;
+  color: var(--critical);
+  font-size: 10px;
+  line-height: 1.35;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
 
 /* =======================================================================
  * Instrument redesign v1 — shape & type layer.
@@ -3883,6 +3940,8 @@ body.settings-body-root {
   padding: 13px 16px;
   border-bottom: 1px solid var(--ink-rule);
 }
+
+.header-actions { gap: 6px; }
 
 .app-logo { border-radius: 0; width: 42px; height: 28px; }
 

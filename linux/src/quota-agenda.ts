@@ -93,20 +93,20 @@ export function validQuotaAgendaProviderId(
   return providerId;
 }
 
-/** Agenda selector is intentionally independent from provider-tab lowestWindow. */
+/** Agenda uses the same user-facing invariant as the provider summary: the
+ * most constrained valid window. Its percentage, label, and reset must always
+ * describe that one window; a sooner reset must not substitute a healthier
+ * quota and contradict the main panel. */
 export function selectQuotaAgendaWindow(
   status: ProviderStatus,
-  nowSeconds: number,
+  _nowSeconds: number,
 ): QuotaWindow | null {
   const eligible = status.windows.filter((window) =>
     !isQuotaAgendaInactive(status, window)
       && !isQuotaAgendaPlaceholder(status, window)
       && Number.isFinite(window.remainingPct));
   const primary = eligible.filter((window) => !isQuotaAgendaSupplementary(window));
-  const scheduled = primary
-    .filter((window) => (explicitReset(window) ?? 0) > nowSeconds)
-    .sort((left, right) => explicitReset(left)! - explicitReset(right)!);
-  return scheduled[0] ?? primary.reduce<QuotaWindow | null>((lowest, window) => {
+  return primary.reduce<QuotaWindow | null>((lowest, window) => {
     if (lowest == null || window.remainingPct < lowest.remainingPct) return window;
     return lowest;
   }, null);

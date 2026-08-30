@@ -4,7 +4,7 @@ import XCTest
 final class QuotaAgendaProjectionTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
 
-    func testChoosesNearestExplicitFutureResetInsteadOfLowestPercent() {
+    func testChoosesLowestPrimaryWindowAndKeepsItsReset() {
         let status = makeStatus(windows: [
             QuotaWindow(
                 label: "Bonus Credits", usedPct: 99, remainingPct: 1,
@@ -15,7 +15,7 @@ final class QuotaAgendaProjectionTests: XCTestCase {
             QuotaWindow(
                 label: "Gia hạn", usedPct: 0, remainingPct: 100,
                 resetDate: now.addingTimeInterval(180)),
-            QuotaWindow(label: "Lowest", usedPct: 96, remainingPct: 4),
+            QuotaWindow(label: "No Reset", usedPct: 10, remainingPct: 90),
             QuotaWindow(
                 label: "Later", usedPct: 90, remainingPct: 10,
                 resetDate: now.addingTimeInterval(7_200)),
@@ -26,9 +26,26 @@ final class QuotaAgendaProjectionTests: XCTestCase {
 
         let row = project([status]).first
 
-        XCTAssertEqual(row?.windowLabel, "Next")
-        XCTAssertEqual(row?.remaining, .current(80))
-        XCTAssertEqual(row?.resetState, .scheduled(now.addingTimeInterval(3_600)))
+        XCTAssertEqual(row?.windowLabel, "Later")
+        XCTAssertEqual(row?.remaining, .current(10))
+        XCTAssertEqual(row?.resetState, .scheduled(now.addingTimeInterval(7_200)))
+    }
+
+    func testCodexAgendaMatchesLowestQuotaSummaryInsteadOfSoonestReset() {
+        let status = makeStatus(id: "codex", windows: [
+            QuotaWindow(
+                label: "Codex Spark 5 giờ", usedPct: 0, remainingPct: 100,
+                resetDate: now.addingTimeInterval(18_000)),
+            QuotaWindow(
+                label: "Tuần", usedPct: 11, remainingPct: 89,
+                resetDate: now.addingTimeInterval(604_800)),
+        ])
+
+        let row = project([status]).first
+
+        XCTAssertEqual(row?.windowLabel, "Tuần")
+        XCTAssertEqual(row?.remaining, .current(89))
+        XCTAssertEqual(row?.resetState, .scheduled(now.addingTimeInterval(604_800)))
     }
 
     func testSortsScheduledAscendingThenAwaitingUnknownAndStale() {

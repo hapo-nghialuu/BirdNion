@@ -1,11 +1,35 @@
-// GitHub Copilot Device Flow login row — port of the macOS Settings'
-// "Sign in to Copilot" flow: request a device code, show it plus the
-// verification URL, then poll (JS-driven loop honoring `interval`/`slowDown`)
-// until the user approves it in the browser.
+// GitHub Copilot multi-account manager. OAuth tokens and raw device codes
+// never cross IPC; the webview sees only account descriptors and an opaque
+// login handle.
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t } from "./i18n";
+
+export const COPILOT_ACCOUNT_CHANGED_EVENT = "birdnion-copilot-account-changed";
+
+export type CopilotAccountChange = {
+  phase: "before" | "after";
+  origin: "settings" | "main";
+};
+export type CopilotAccount = { label: string; login: string | null; active: boolean };
+export type CopilotAccountsState = {
+  accounts: CopilotAccount[];
+  activeLabel: string | null;
+};
+type DeviceCode = {
+  userCode: string;
+  verificationUri: string;
+  interval: number;
+  handle: string;
+};
+type PollResult =
+  | { kind: "pending" }
+  | { kind: "slowDown" }
+  | { kind: "success"; label: string }
+  | { kind: "denied" }
+  | { kind: "expired" };
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -14,69 +38,159 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   return node;
 }
 
-type DeviceCode = { userCode: string; verificationUri: string; deviceCode: string; interval: number };
-type PollResult =
-  | { kind: "pending" }
-  | { kind: "slowDown" }
-  | { kind: "success"; label: string }
-  | { kind: "denied" }
-  | { kind: "expired" };
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function copilotDeviceLoginRow(vi: boolean, onLoggedIn: (label: string) => void): HTMLElement {
-  const row = el("div", "settings-row");
-  const button = el("button", "save-button", t("settingsSignInGithub"));
-  const status = el("div", "window-subtitle");
-  row.append(button, status);
+async function notifyCopilotAccountChanged(change: CopilotAccountChange): Promise<void> {
+  await emit(COPILOT_ACCOUNT_CHANGED_EVENT, change);
+}
 
-  button.addEventListener("click", async () => {
-    button.setAttribute("disabled", "true");
-    status.textContent = "";
-    status.textContent = vi ? "Đang lấy mã đăng nhập…" : "Requesting device code…";
-    try {
-      const code = await invoke<DeviceCode>("copilot_login_start");
-      status.textContent = "";
-      const codeText = el("span", "provider-name", code.userCode);
-      const link = document.createElement("a");
-      link.href = code.verificationUri;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = code.verificationUri;
-      link.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        void openUrl(code.verificationUri).catch(() => {});
-      });
-      status.append(
-        el("span", "", vi ? "Mã: " : "Code: "), codeText,
-        el("span", "", " · "), link,
-      );
-      void openUrl(code.verificationUri).catch(() => {});
+export async function performCopilotAccountMutation<T>(
+  operation: () => Promise<T>,
+  notify: (change: CopilotAccountChange) => Promise<void> = notifyCopilotAccountChanged,
+  origin: CopilotAccountChange["origin"] = "settings",
+): Promise<T> {
+  await notify({ phase: "before", origin });
+  try {
+    return await operation();
+  } finally {
+    await notify({ phase: "after", origin }).catch(() => {});
+  }
+}
 
-      let interval = Math.max(1, code.interval);
-      for (;;) {
-        await sleep(interval * 1000);
-        const result = await invoke<PollResult>("copilot_login_poll", { deviceCode: code.deviceCode });
-        if (result.kind === "pending") continue;
-        if (result.kind === "slowDown") { interval += 5; continue; }
-        if (result.kind === "success") {
-          status.textContent = vi ? `Đã đăng nhập: ${result.label}` : `Signed in: ${result.label}`;
-          onLoggedIn(result.label);
-          break;
+function accountName(account: CopilotAccount): string {
+  return account.login?.trim() || account.label;
+}
+
+/** Settings body for list/switch/remove/add. Switch/remove wrap their durable
+ * mutations; login invalidates only after success so quota stays visible while
+ * the user completes Device Flow. */
+export function copilotAccountsSection(readHost: () => string | null | undefined): HTMLElement {
+  const wrap = el("div", "pp-accounts");
+  const list = el("div", "pp-accounts-list");
+  const status = el("div", "pp-accounts-status copilot-login-status");
+  const footer = el("div", "pp-account-footer");
+  const add = el("button", "sw-pill-btn", t("copilotAddAccount")) as HTMLButtonElement;
+  add.type = "button";
+  footer.append(add);
+  wrap.append(list, status, footer);
+
+  let state: CopilotAccountsState | null = null;
+  let busy = false;
+
+  const paint = () => {
+    list.textContent = "";
+    if (!state || state.accounts.length === 0) {
+      list.append(el("div", "pp-account-empty sw-row-sub", t("copilotNoAccounts")));
+    } else {
+      for (const account of state.accounts) {
+        const row = el("div", "pp-account-row");
+        const name = el("span", "pp-account-name", accountName(account));
+        if (account.login && account.login !== account.label) name.title = account.label;
+        const actions = el("span", "pp-account-actions");
+        if (account.active) {
+          actions.append(el("span", "pp-account-badge", t("codexAccountActive")));
+        } else {
+          const use = el("button", "sw-pill-btn", t("codexAccountSwitch")) as HTMLButtonElement;
+          use.type = "button";
+          use.disabled = busy;
+          use.addEventListener("click", () => { void mutateAccount("copilot_account_switch", account.label); });
+          actions.append(use);
         }
-        if (result.kind === "denied") {
-          status.textContent = vi ? "Yêu cầu đăng nhập bị từ chối." : "Login request was denied.";
-          break;
-        }
-        status.textContent = vi ? "Hết thời gian chờ xác thực." : "Login request expired.";
-        break;
+        const remove = el(
+          "button", "sw-pill-btn pp-account-remove", t("codexAccountRemove"),
+        ) as HTMLButtonElement;
+        remove.type = "button";
+        remove.disabled = busy;
+        remove.addEventListener("click", () => { void mutateAccount("copilot_account_remove", account.label); });
+        actions.append(remove);
+        row.append(name, actions);
+        list.append(row);
       }
-    } catch (err) {
-      status.textContent = `${vi ? "Lỗi" : "Error"}: ${err}`;
+    }
+    add.disabled = busy;
+  };
+
+  const load = async () => {
+    state = await invoke<CopilotAccountsState>("copilot_accounts_list");
+    paint();
+  };
+
+  const mutateAccount = async (command: string, label: string) => {
+    if (busy) return;
+    busy = true;
+    status.textContent = "";
+    status.classList.remove("error");
+    paint();
+    try {
+      state = await performCopilotAccountMutation(() =>
+        invoke<CopilotAccountsState>(command, { label }));
+    } catch (error) {
+      status.classList.add("error");
+      status.textContent = `${t("loadError")}: ${error}`;
     } finally {
-      button.removeAttribute("disabled");
+      busy = false;
+      paint();
+    }
+  };
+
+  const runLogin = async () => {
+    const code = await invoke<DeviceCode>("copilot_login_start", {
+      host: readHost()?.trim() || null,
+    });
+    status.classList.remove("error");
+    status.textContent = "";
+    const codeText = el("strong", "provider-name", code.userCode);
+    const link = document.createElement("a");
+    link.href = code.verificationUri;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = t("copilotOpenLogin");
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      void openUrl(code.verificationUri).catch(() => {});
+    });
+    status.append(el("span", "", `${t("copilotLoginCode")}: `), codeText, el("span", "", " · "), link);
+    void openUrl(code.verificationUri).catch(() => {});
+
+    let interval = Math.max(1, code.interval);
+    for (;;) {
+      await sleep(interval * 1000);
+      const result = await invoke<PollResult>("copilot_login_poll", { handle: code.handle });
+      if (result.kind === "pending") continue;
+      if (result.kind === "slowDown") { interval += 5; continue; }
+      if (result.kind === "success") {
+        status.classList.remove("error");
+        status.textContent = t("copilotLoginSuccess", { account: result.label });
+        await performCopilotAccountMutation(load);
+        return;
+      }
+      status.classList.add("error");
+      status.textContent = result.kind === "denied" ? t("copilotLoginDenied") : t("copilotLoginExpired");
+      return;
+    }
+  };
+
+  add.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    status.textContent = t("copilotLoginRequesting");
+    status.classList.remove("error");
+    paint();
+    try {
+      await runLogin();
+    } catch (error) {
+      status.classList.add("error");
+      status.textContent = `${t("loadError")}: ${error}`;
+    } finally {
+      busy = false;
+      paint();
     }
   });
 
-  return row;
+  paint();
+  void load().catch((error) => {
+    status.classList.add("error");
+    status.textContent = `${t("loadError")}: ${error}`;
+  });
+  return wrap;
 }

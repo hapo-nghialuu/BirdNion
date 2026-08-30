@@ -64,7 +64,8 @@ struct QuotaOverview: View {
                         isRefreshing: quota.isRefreshing,
                         actionCount: ActionCenterIssue.current(
                             statuses: quota.displayStatuses,
-                            staleWarning: { quota.staleWarning(for: $0) }).count)
+                            staleWarning: { quota.staleWarning(for: $0) }).count,
+                        onOpenQuotaAgenda: openQuotaAgenda)
                     let selected = effectiveSelectedId()
                     ProviderTabs(
                         providers: quota.displayStatuses,
@@ -124,7 +125,6 @@ struct QuotaOverview: View {
                 // between the last section (e.g. Accounts) and the footer.
                 ActionsList(
                     sourceStates: footerSourceStates,
-                    onOpenQuotaAgenda: openQuotaAgenda,
                     onQuotaAgendaTick: updateQuotaAgenda)
             }
             // No horizontal pad here: header/tabs own full-bleed rules;
@@ -802,6 +802,7 @@ struct BirdNionHeader: View {
 
     let isRefreshing: Bool
     let actionCount: Int
+    let onOpenQuotaAgenda: () -> Void
 
     private var statusTone: Color {
         isRefreshing ? VocabbyTheme.yellow : VocabbyTheme.success
@@ -868,18 +869,18 @@ struct BirdNionHeader: View {
                     NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
                 }
 
-                // Toggle light ↔ dark. Icon shows the *target* mode (sun → go
-                // light, moon → go dark). Settings stays on the footer gear.
+                // Quota Agenda is a global data view, not an app utility.
+                // It replaces the former appearance shortcut in the final
+                // header slot; appearance remains available in Settings.
                 headerIconButton(
-                    systemName: isEffectivelyDark ? "sun.max" : "moon",
+                    systemName: "calendar.badge.clock",
                     spinning: false,
-                    label: isEffectivelyDark
-                        ? L10n.t("popover.appearance.light", settings.appLanguage)
-                        : L10n.t("popover.appearance.dark", settings.appLanguage),
-                    disabled: false
-                ) {
-                    toggleAppearance()
-                }
+                    label: L10n.languageCode(settings.appLanguage) == "vi"
+                        ? "Mở lịch quota"
+                        : "Open Quota Agenda",
+                    disabled: false,
+                    action: onOpenQuotaAgenda
+                )
             }
         }
         .padding(.horizontal, 16)
@@ -889,22 +890,6 @@ struct BirdNionHeader: View {
             // Chrome rule top: đậm hơn hairline, full-bleed (quy ước 2026-08-24).
             VocabbyTheme.chromeRule.frame(height: 1)
         }
-    }
-
-    /// Resolved dark/light for the header toggle (auto follows system).
-    private var isEffectivelyDark: Bool {
-        switch AppAppearance(rawValue: settings.appAppearance) ?? .auto {
-        case .dark: return true
-        case .light: return false
-        case .auto:
-            return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        }
-    }
-
-    private func toggleAppearance() {
-        let next: AppAppearance = isEffectivelyDark ? .light : .dark
-        settings.appAppearance = next.rawValue
-        settings.applyAppearance()
     }
 
     /// Design header actions: 26×26, r4, border #DCD8CD, icon 14.
@@ -3581,7 +3566,6 @@ struct ActionsList: View {
     @EnvironmentObject var quota: QuotaService
 
     var sourceStates: [FooterSourceState] = []
-    var onOpenQuotaAgenda: () -> Void = {}
     var onQuotaAgendaTick: (Date) -> Void = { _ in }
 
     /// Luân phiên 5 giây/lượt giữa caption cập nhật và trạng thái nguồn.
@@ -3624,12 +3608,6 @@ struct ActionsList: View {
                 showSources.toggle()
             }
             Spacer(minLength: 8)
-            footerIcon(
-                systemName: "calendar",
-                label: vi ? "Mở lịch quota" : "Open Quota Agenda",
-                tint: VocabbyTheme.blue,
-                action: onOpenQuotaAgenda
-            )
             footerIcon(
                 systemName: "gearshape",
                 label: L10n.t("popover.settings", lang),

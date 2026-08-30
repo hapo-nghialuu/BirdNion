@@ -117,7 +117,7 @@ const allAgents = await server.ssrLoadModule("/src/all-agents-sections.ts");
 const sidePanelState = await server.ssrLoadModule("/src/side-panel.ts");
 test.after(async () => server.close());
 
-test("Agenda selector uses nearest explicit primary reset and centralized flags", () => {
+test("Agenda selector uses the lowest primary quota and centralized flags", () => {
   const candidate = status("selector", [
     window("Inactive", 99, { resetsAt: NOW + 1, isInactive: true }),
     window("Bonus Credits", 5, { resetsAt: NOW + 2 }),
@@ -127,7 +127,10 @@ test("Agenda selector uses nearest explicit primary reset and centralized flags"
     window("Session", 80, { resetsAt: NOW + 100 }),
   ]);
 
-  assert.equal(agenda.selectQuotaAgendaWindow(candidate, NOW).label, "Session");
+  const selected = agenda.selectQuotaAgendaWindow(candidate, NOW);
+  assert.equal(selected.label, "Weekly");
+  assert.equal(selected.remainingPct, 10);
+  assert.equal(selected.resetsAt, NOW + 200);
   assert.equal(agenda.isQuotaAgendaSupplementary(window("Số dư", 100)), true);
   assert.equal(agenda.isQuotaAgendaSupplementary(
     window("Provider bonus", 100, { isSupplementary: true })), true);
@@ -144,6 +147,17 @@ test("Agenda selector uses nearest explicit primary reset and centralized flags"
   ]), NOW).label, "Lowest primary");
   assert.equal(agenda.selectQuotaAgendaWindow(
     status("supplementary-only", [window("Bonus Credits", 50)]), NOW), null);
+});
+
+test("Codex Agenda matches the lowest quota summary instead of the soonest reset", () => {
+  const selected = agenda.selectQuotaAgendaWindow(status("codex", [
+    window("Codex Spark 5 giờ", 100, { resetsAt: NOW + 18_000 }),
+    window("Tuần", 89, { resetsAt: NOW + 604_800 }),
+  ]), NOW);
+
+  assert.equal(selected.label, "Tuần");
+  assert.equal(selected.remainingPct, 89);
+  assert.equal(selected.resetsAt, NOW + 604_800);
 });
 
 test("Agenda suppresses catalog races and ambiguous provider placeholders", () => {
