@@ -5,14 +5,15 @@ struct AllAgentsOverview: View {
 
     let report: CombinedUsageReport
     let pendingSources: [String]
-    let visibleRecords: [InstalledAgentRecord]
     let aggregateAgentCount: Int
     let quotaRows: [AgentQuotaRow]
     let costRows: [AgentCostRow]
     let modelRows: [AgentModelRow]
     let configuredRows: [AgentConfiguredRow]
-    /// Mở panel agent kèm tab theo nguồn click (quota/cost/config).
+    /// Mở panel agent kèm tab theo nguồn click (cost/config).
     let onOpenAgent: (InstalledAgentID, String?) -> Void
+    /// Quota Agenda đi thẳng tới provider tab, không mở agent detail.
+    let onOpenProvider: (String) -> Void
     let onOpenActivity: () -> Void
     /// Hover = panel transient; click = ghim.
     let onHoverAgent: (InstalledAgentID) -> Void
@@ -51,8 +52,7 @@ struct AllAgentsOverview: View {
         // Khối 2: Quota
         AllAgentsQuotaSection(
             rows: quotaRows,
-            totalAgentCount: visibleRecords.count,
-            onOpenAgent: { onOpenAgent($0, "quota") }
+            onOpenProvider: onOpenProvider
         )
 
         // Khối 3: Chi phí theo
@@ -82,11 +82,9 @@ struct AllAgentsOverview: View {
 
 struct AgentQuotaRow: Identifiable {
     let record: InstalledAgentRecord
-    let providerName: String
-    let windowLabel: String
-    let remainingPct: Int?
+    let projection: QuotaAgendaProjection
 
-    var id: InstalledAgentID { record.id }
+    var id: String { projection.providerID }
 }
 
 struct AgentCostRow: Identifiable {

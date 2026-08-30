@@ -101,6 +101,8 @@ struct QuotaOverview: View {
                             visibleAgentRecords: visibleAgentRecords,
                             allAgentRecords: projectedAgentRecords,
                             providerStatuses: quota.displayStatuses,
+                            staleProviderIDs: staleProviderIDs,
+                            onOpenProvider: { selectProviderTab($0) },
                             onOpenAgentDetail: { openAgentDetail($0, tab: $1) },
                             onOpenActivity: { openActivity() },
                             onHoverAgentDetail: { openAgentDetail($0, pinned: false) },
@@ -592,6 +594,14 @@ struct QuotaOverview: View {
         agentVisibility.visibleRecords(from: projectedAgentRecords)
     }
 
+    /// Staleness is session-local state owned by QuotaService. Pass only IDs
+    /// into the pure Agenda projection; age alone is not stale evidence.
+    private var staleProviderIDs: Set<String> {
+        Set(quota.displayStatuses.compactMap { status in
+            quota.staleWarning(for: status.id) == nil ? nil : status.id
+        })
+    }
+
     /// Trạng thái nguồn (LIVE/LỊCH SỬ + freshness) cho footer — chỉ nguồn
     /// quota-backed đang enabled, không gộp OMP/Pi (quy ước 2026-08-24).
     private var footerSourceStates: [FooterSourceState] {
@@ -650,6 +660,12 @@ struct QuotaOverview: View {
             return sel
         }
         return quota.displayStatuses.first?.id ?? ""
+    }
+
+    private func selectProviderTab(_ providerID: String) {
+        guard quota.displayStatuses.contains(where: { $0.id == providerID }) else { return }
+        selectedProviderId = providerID
+        UserDefaults.standard.set(providerID, forKey: Self.selectedTabKey)
     }
 
     private func combinedReport() -> CombinedUsageReport {
