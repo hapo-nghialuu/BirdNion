@@ -628,8 +628,6 @@ struct AllUsageOverview: View {
     let visibleAgentRecords: [InstalledAgentRecord]
     let allAgentRecords: [InstalledAgentRecord]
     let providerStatuses: [ProviderStatus]
-    let staleProviderIDs: Set<String>
-    let onOpenProvider: (String) -> Void
     let onOpenAgentDetail: (InstalledAgentRecord, String?) -> Void
     let onOpenActivity: () -> Void
     /// Hover mở panel transient (rời chuột đóng) — click mới ghim.
@@ -650,8 +648,6 @@ struct AllUsageOverview: View {
         visibleAgentRecords: [InstalledAgentRecord] = [],
         allAgentRecords: [InstalledAgentRecord] = [],
         providerStatuses: [ProviderStatus] = [],
-        staleProviderIDs: Set<String> = [],
-        onOpenProvider: @escaping (String) -> Void = { _ in },
         onOpenAgentDetail: @escaping (InstalledAgentRecord, String?) -> Void = { _, _ in },
         onOpenActivity: @escaping () -> Void = {},
         onHoverAgentDetail: @escaping (InstalledAgentRecord) -> Void = { _ in },
@@ -670,8 +666,6 @@ struct AllUsageOverview: View {
         self.visibleAgentRecords = visibleAgentRecords
         self.allAgentRecords = allAgentRecords
         self.providerStatuses = providerStatuses
-        self.staleProviderIDs = staleProviderIDs
-        self.onOpenProvider = onOpenProvider
         self.onOpenAgentDetail = onOpenAgentDetail
         self.onOpenActivity = onOpenActivity
         self.onHoverAgentDetail = onHoverAgentDetail
@@ -738,6 +732,7 @@ struct AllUsageOverview: View {
             AllAgentsOverview(
                 report: report,
                 pendingSources: pendingSources,
+                visibleRecords: visibleAgentRecords,
                 aggregateAgentCount: report.includedSourceCount,
                 quotaRows: quotaRows,
                 costRows: rows,
@@ -747,7 +742,6 @@ struct AllUsageOverview: View {
                     guard let record = allAgentRecords.first(where: { $0.id == id }) ?? visibleAgentRecords.first(where: { $0.id == id }) else { return }
                     onOpenAgentDetail(record, tab)
                 },
-                onOpenProvider: onOpenProvider,
                 onOpenActivity: onOpenActivity,
                 onHoverAgent: { id in
                     guard let record = allAgentRecords.first(where: { $0.id == id }) ?? visibleAgentRecords.first(where: { $0.id == id }) else { return }
@@ -761,14 +755,24 @@ struct AllUsageOverview: View {
     }
 
     private var quotaRows: [AgentQuotaRow] {
-        QuotaAgendaProjection.build(
-            statuses: providerStatuses,
-            staleProviderIDs: staleProviderIDs,
-            hidePersonalInfo: settings.hidePersonalInfo
-        ).compactMap { projection in
-            guard let record = agentRecord(for: projection.providerID) else { return nil }
-            return AgentQuotaRow(record: record, projection: projection)
+        // Thứ tự bám theo tab strip provider (thứ tự người dùng sắp trong
+        // Settings), không sort theo % còn lại (2026-08-24).
+        let order = Dictionary(
+            uniqueKeysWithValues: providerStatuses.enumerated().map { ($0.element.id, $0.offset) })
+        return visibleAgentRecords.compactMap { record -> (row: AgentQuotaRow, rank: Int)? in
+            guard record.capabilities.contains(.quota) else { return nil }
+            guard let status = providerStatus(for: record),
+                  let window = ProviderStatusSummary.lowestWindow(status)
+            else { return nil }
+            let row = AgentQuotaRow(
+                record: record,
+                providerName: status.displayName,
+                windowLabel: window.label,
+                remainingPct: window.remainingPct)
+            return (row, order[status.id] ?? Int.max)
         }
+        .sorted { $0.rank < $1.rank }
+        .map(\.row)
     }
 
     /// Cost by ăn theo đúng cửa sổ chart (key AppStorage chung với period chips):
@@ -838,7 +842,7 @@ struct AllUsageOverview: View {
 
     private func configuredRows(costRows: [AgentCostRow]) -> [AgentConfiguredRow] {
         let costIDs = Set(costRows.map(\.id))
-        let quotaIDs = Set(quotaRows.map(\.record.id))
+        let quotaIDs = Set(quotaRows.map(\.id))
         return visibleAgentRecords.filter { record in
             record.capabilities.contains(.nativeConfig) && !costIDs.contains(record.id) && !quotaIDs.contains(record.id)
         }.map { record in
@@ -849,9 +853,9 @@ struct AllUsageOverview: View {
         }
     }
 
-    private func agentRecord(for providerID: String) -> InstalledAgentRecord? {
-        visibleAgentRecords.first { record in
-            record.id.rawValue == providerID || record.providerIDs.contains(providerID)
+    private func providerStatus(for record: InstalledAgentRecord) -> ProviderStatus? {
+        providerStatuses.first { s in
+            record.providerIDs.contains(s.id) || s.id == record.id.rawValue
         }
     }
 }

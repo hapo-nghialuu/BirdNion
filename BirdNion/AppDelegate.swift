@@ -248,6 +248,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .birdnionOpenQuotaAgenda)
+            .sink { [weak self] note in
+                guard let self,
+                      let items = note.userInfo?["items"] as? [QuotaAgendaPanelItem],
+                      let parent = self.panel,
+                      parent.isVisible else { return }
+                NotificationCenter.default.post(
+                    name: .birdnionInvalidateAgentPanelRequests,
+                    object: nil)
+                self.agentDetailCoordinator.showQuotaAgenda(
+                    items: items,
+                    settings: self.services.settings,
+                    beside: parent,
+                    onSelectProvider: { providerID in
+                        NotificationCenter.default.post(
+                            name: .birdnionSelectProviderTab,
+                            object: nil,
+                            userInfo: ["providerID": providerID])
+                    })
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .birdnionUpdateQuotaAgenda)
+            .sink { [weak self] note in
+                guard let items = note.userInfo?["items"] as? [QuotaAgendaPanelItem] else { return }
+                self?.agentDetailCoordinator.updateQuotaAgenda(items: items)
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .birdnionOpenAgentActivity)
             .sink { [weak self] note in
                 guard let self,

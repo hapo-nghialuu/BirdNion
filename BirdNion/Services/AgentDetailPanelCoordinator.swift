@@ -5,7 +5,7 @@ import SwiftUI
 final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     /// What the shared side panel is currently rendering — hover-driven day
     /// detail must never hijack a pinned agent/activity surface.
-    private enum Content { case agent, activity, day, models }
+    private enum Content { case agent, activity, day, models, quotaAgenda }
 
     private let panelWidth: CGFloat = 340
     private let defaultHeight: CGFloat = 480
@@ -15,6 +15,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
     private var content: Content?
     /// Agent đang hiển thị trong panel — để click cùng agent lần nữa = toggle đóng.
     private var currentAgentID: InstalledAgentID?
+    private var quotaAgendaSelection: ((String) -> Void)?
     /// Panel đang ghim (mở bằng click) hay transient (mở bằng hover).
     private var contentPinned = false
     /// Generation token: a new hover cancels the pending transient close.
@@ -35,6 +36,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         parentWindow = parent
         self.settings = settings
         content = .agent
+        quotaAgendaSelection = nil
         currentAgentID = snapshot.id
         contentPinned = pinned
         detailPanel.contentViewController = hostController(
@@ -60,6 +62,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         parentWindow = parent
         self.settings = settings
         content = .activity
+        quotaAgendaSelection = nil
         currentAgentID = nil
         contentPinned = pinned
         detailPanel.contentViewController = hostController(
@@ -89,6 +92,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         parentWindow = parent
         self.settings = settings
         content = .day
+        quotaAgendaSelection = nil
         currentAgentID = nil
         contentPinned = pinned
         detailPanel.contentViewController = hostController(
@@ -117,6 +121,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         parentWindow = parent
         self.settings = settings
         content = .models
+        quotaAgendaSelection = nil
         currentAgentID = nil
         contentPinned = false
         detailPanel.contentViewController = hostController(
@@ -126,6 +131,30 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
         detailPanel.orderFront(nil)
+        panel = detailPanel
+    }
+
+    /// Footer action: show a pinned Quota Agenda in the existing companion
+    /// panel. Opening it does not mutate the selected provider in the parent.
+    func showQuotaAgenda(
+        items: [QuotaAgendaPanelItem],
+        settings: SettingsStore,
+        beside parent: NSWindow,
+        onSelectProvider: @escaping (String) -> Void
+    ) {
+        transientCloseGeneration += 1
+        let detailPanel = panel ?? makePanel()
+        parentWindow = parent
+        self.settings = settings
+        content = .quotaAgenda
+        currentAgentID = nil
+        contentPinned = true
+        quotaAgendaSelection = onSelectProvider
+        installQuotaAgenda(items, in: detailPanel, settings: settings)
+        refit(panel: detailPanel)
+        position(detailPanel, beside: parent)
+        applyPanelChrome(detailPanel)
+        detailPanel.makeKeyAndOrderFront(nil)
         panel = detailPanel
     }
 
@@ -163,15 +192,24 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         contentPinned = false
         content = nil
         currentAgentID = nil
+        quotaAgendaSelection = nil
         panel?.orderOut(nil)
     }
 
     func update(snapshot: AgentDetailSnapshot) {
-        guard let panel, let settings else { return }
+        guard content == .agent, let panel, let settings else { return }
         panel.contentViewController = hostController(
             for: AgentDetailPanelRoot(snapshot: snapshot)
                 .environmentObject(settings)
         )
+        applyPanelChrome(panel)
+    }
+
+    func updateQuotaAgenda(items: [QuotaAgendaPanelItem]) {
+        guard content == .quotaAgenda, let panel, panel.isVisible, let settings else { return }
+        installQuotaAgenda(items, in: panel, settings: settings)
+        refit(panel: panel)
+        if let parentWindow { position(panel, beside: parentWindow) }
         applyPanelChrome(panel)
     }
 
@@ -203,6 +241,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
             contentPinned = false
             content = nil
             currentAgentID = nil
+            quotaAgendaSelection = nil
             panel = nil
         }
     }
@@ -214,6 +253,31 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         let host = NSHostingController(rootView: view)
         host.safeAreaRegions = []
         return host
+    }
+
+    private func installQuotaAgenda(
+        _ items: [QuotaAgendaPanelItem],
+        in panel: NSPanel,
+        settings: SettingsStore
+    ) {
+        panel.contentViewController = hostController(
+            for: QuotaAgendaPanelRoot(
+                items: items,
+                onSelectProvider: { [weak self] providerID in
+                    let selection = self?.quotaAgendaSelection
+                    self?.close()
+                    selection?(providerID)
+                },
+                onClose: { [weak self] in self?.close() }
+            )
+            .environmentObject(settings)
+        )
+    }
+
+    private func refit(panel: NSPanel) {
+        guard let view = panel.contentViewController?.view else { return }
+        view.layoutSubtreeIfNeeded()
+        panel.setContentSize(view.fittingSize)
     }
 
     private func makePanel() -> NSPanel {
@@ -285,4 +349,7 @@ extension Notification.Name {
     static let birdnionDayDetailClosed = Notification.Name("com.local.birdnion.dayDetailClosed")
     static let birdnionAgentPanelRefit = Notification.Name("com.local.birdnion.agentPanelRefit")
     static let birdnionOpenModelList = Notification.Name("com.local.birdnion.openModelList")
+    static let birdnionOpenQuotaAgenda = Notification.Name("com.local.birdnion.openQuotaAgenda")
+    static let birdnionUpdateQuotaAgenda = Notification.Name("com.local.birdnion.updateQuotaAgenda")
+    static let birdnionSelectProviderTab = Notification.Name("com.local.birdnion.selectProviderTab")
 }

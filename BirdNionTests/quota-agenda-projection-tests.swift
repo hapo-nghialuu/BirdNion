@@ -7,8 +7,8 @@ final class QuotaAgendaProjectionTests: XCTestCase {
     func testChoosesNearestExplicitFutureResetInsteadOfLowestPercent() {
         let status = makeStatus(windows: [
             QuotaWindow(
-                label: "Bonus", usedPct: 99, remainingPct: 1,
-                resetDate: now.addingTimeInterval(60), isSupplementary: true),
+                label: "Bonus Credits", usedPct: 99, remainingPct: 1,
+                resetDate: now.addingTimeInterval(60)),
             QuotaWindow(
                 label: "Inactive", usedPct: 99, remainingPct: 1,
                 resetDate: now.addingTimeInterval(120), isInactive: true),
@@ -66,6 +66,25 @@ final class QuotaAgendaProjectionTests: XCTestCase {
 
         XCTAssertEqual(row?.resetState, .awaitingRefresh)
         XCTAssertEqual(row?.remaining, .unavailable)
+    }
+
+    func testClockCrossingResetInvalidatesPercentWithoutNewSnapshot() {
+        let reset = now.addingTimeInterval(5)
+        let status = makeStatus(
+            windows: [window("5h", remaining: 64, reset: reset)],
+            observedAt: now)
+
+        let before = QuotaAgendaProjection.build(
+            statuses: [status], staleProviderIDs: [],
+            hidePersonalInfo: false, now: now).first
+        let after = QuotaAgendaProjection.build(
+            statuses: [status], staleProviderIDs: [],
+            hidePersonalInfo: false, now: reset.addingTimeInterval(1)).first
+
+        XCTAssertEqual(before?.resetState, .scheduled(reset))
+        XCTAssertEqual(before?.remaining, .current(64))
+        XCTAssertEqual(after?.resetState, .awaitingRefresh)
+        XCTAssertEqual(after?.remaining, .unavailable)
     }
 
     func testPastResetObservedAfterResetKeepsObservedPercentButNotNextResetClaim() {

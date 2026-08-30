@@ -26,7 +26,7 @@ struct QuotaAgendaMetadata: Equatable {
     let isStale: Bool
 }
 
-/// Trust-first projection for the All-tab Quota Agenda. It only uses explicit
+/// Trust-first projection for the companion Quota Agenda. It only uses explicit
 /// reset timestamps; `windowSeconds` is deliberately outside this contract.
 struct QuotaAgendaProjection: Equatable, Identifiable {
     let providerID: String
@@ -110,7 +110,7 @@ struct QuotaAgendaProjection: Equatable, Identifiable {
 
     private static func selectedWindow(for status: ProviderStatus, now: Date) -> QuotaWindow? {
         let primary = status.windows.enumerated().filter {
-            !$0.element.isSupplementary
+            !isAgendaSupplementary($0.element)
                 && !$0.element.isInactive
                 && !isAgendaExcluded(status: status, window: $0.element)
         }
@@ -152,6 +152,14 @@ struct QuotaAgendaProjection: Equatable, Identifiable {
 
     private static func clampedPercent(_ value: Int) -> Int {
         min(100, max(0, value))
+    }
+
+    /// Old cached snapshots predate the explicit supplementary flag. Keep the
+    /// small canonical label fallback aligned with Linux until caches age out.
+    private static func isAgendaSupplementary(_ window: QuotaWindow) -> Bool {
+        if window.isSupplementary { return true }
+        let label = window.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["số dư", "bonus credits", "daily routines"].contains(label)
     }
 
     /// Provider metadata and ambiguous 100% placeholders are not observed

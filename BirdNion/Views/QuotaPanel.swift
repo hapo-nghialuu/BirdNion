@@ -101,8 +101,6 @@ struct QuotaOverview: View {
                             visibleAgentRecords: visibleAgentRecords,
                             allAgentRecords: projectedAgentRecords,
                             providerStatuses: quota.displayStatuses,
-                            staleProviderIDs: staleProviderIDs,
-                            onOpenProvider: { selectProviderTab($0) },
                             onOpenAgentDetail: { openAgentDetail($0, tab: $1) },
                             onOpenActivity: { openActivity() },
                             onHoverAgentDetail: { openAgentDetail($0, pinned: false) },
@@ -124,7 +122,10 @@ struct QuotaOverview: View {
                 // AppDelegate.fittingSize. A Spacer here absorbed leftover
                 // host height (seed / prior tall tab) into a visible gap
                 // between the last section (e.g. Accounts) and the footer.
-                ActionsList(sourceStates: footerSourceStates)
+                ActionsList(
+                    sourceStates: footerSourceStates,
+                    onOpenQuotaAgenda: openQuotaAgenda,
+                    onQuotaAgendaTick: updateQuotaAgenda)
             }
             // No horizontal pad here: header/tabs own full-bleed rules;
             // body sections inset content + hairlines themselves.
@@ -137,6 +138,12 @@ struct QuotaOverview: View {
         }
         .onChange(of: selectedProviderId) { id in
             triggerReportsIfNeeded(providerId: id ?? "")
+        }
+        .onChange(of: quotaAgendaItems) { _, items in
+            NotificationCenter.default.post(
+                name: .birdnionUpdateQuotaAgenda,
+                object: nil,
+                userInfo: ["items": items])
         }
         .onChange(of: quota.displayStatuses.map(\.id)) { ids in
             // "all" stays valid as long as one local-cost source is enabled;
@@ -163,6 +170,10 @@ struct QuotaOverview: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .claudeCodeTargetChanged)) { _ in
             claudeCodeTargetRevision += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .birdnionSelectProviderTab)) { note in
+            guard let providerID = note.userInfo?["providerID"] as? String else { return }
+            selectProviderTab(providerID)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             // QuotaOverview stays mounted while the popover is hidden, so this
@@ -600,6 +611,43 @@ struct QuotaOverview: View {
         Set(quota.displayStatuses.compactMap { status in
             quota.staleWarning(for: status.id) == nil ? nil : status.id
         })
+    }
+
+    private var quotaAgendaItems: [QuotaAgendaPanelItem] {
+        buildQuotaAgendaItems(now: Date())
+    }
+
+    private func buildQuotaAgendaItems(now: Date) -> [QuotaAgendaPanelItem] {
+        QuotaAgendaProjection.build(
+            statuses: quota.displayStatuses,
+            staleProviderIDs: staleProviderIDs,
+            hidePersonalInfo: settings.hidePersonalInfo,
+            now: now
+        ).compactMap { projection in
+            guard let record = visibleAgentRecords.first(where: {
+                $0.id.rawValue == projection.providerID
+                    || $0.providerIDs.contains(projection.providerID)
+            }) else { return nil }
+            return QuotaAgendaPanelItem(
+                agentName: record.displayName,
+                projection: projection)
+        }
+    }
+
+    private func openQuotaAgenda() {
+        NotificationCenter.default.post(
+            name: .birdnionOpenQuotaAgenda,
+            object: nil,
+            userInfo: ["items": quotaAgendaItems])
+    }
+
+    /// Reuse the footer's existing cadence so an open Agenda crosses reset
+    /// boundaries and advances countdown/freshness without another poller.
+    private func updateQuotaAgenda(at now: Date) {
+        NotificationCenter.default.post(
+            name: .birdnionUpdateQuotaAgenda,
+            object: nil,
+            userInfo: ["items": buildQuotaAgendaItems(now: now)])
     }
 
     /// Trạng thái nguồn (LIVE/LỊCH SỬ + freshness) cho footer — chỉ nguồn
@@ -3533,6 +3581,8 @@ struct ActionsList: View {
     @EnvironmentObject var quota: QuotaService
 
     var sourceStates: [FooterSourceState] = []
+    var onOpenQuotaAgenda: () -> Void = {}
+    var onQuotaAgendaTick: (Date) -> Void = { _ in }
 
     /// Luân phiên 5 giây/lượt giữa caption cập nhật và trạng thái nguồn.
     @State private var showSources = false
@@ -3568,11 +3618,18 @@ struct ActionsList: View {
                 }
             }
             .frame(height: 16, alignment: .leading)
-            .onReceive(rotation) { _ in
+            .onReceive(rotation) { now in
+                onQuotaAgendaTick(now)
                 guard !sourceStates.isEmpty else { return }
                 showSources.toggle()
             }
             Spacer(minLength: 8)
+            footerIcon(
+                systemName: "calendar",
+                label: vi ? "Mở lịch quota" : "Open Quota Agenda",
+                tint: VocabbyTheme.blue,
+                action: onOpenQuotaAgenda
+            )
             footerIcon(
                 systemName: "gearshape",
                 label: L10n.t("popover.settings", lang),
