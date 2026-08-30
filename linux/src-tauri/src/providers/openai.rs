@@ -163,6 +163,7 @@ pub fn parse_admin_status(
         error: None,
         account_label: None,
         credits_remaining: None,
+        reset_credits_available: None,
         signed_in_email: None,
         code_review_remaining_percent: None,
         credits_purchase_url: None,

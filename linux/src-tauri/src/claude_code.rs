@@ -565,12 +565,8 @@ fn read_target(scope: &Scope) -> Result<String, String> {
 
 fn write_target(scope: &Scope, content: &str) -> Result<(), String> {
     let path = target_path(scope);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::platform::atomic_file::write_private_atomic(&path, content.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// Merge `spec` into the settings file for `scope` (global or project).
@@ -884,5 +880,48 @@ mod tests {
         assert!(parsed.get("env").is_none());
         assert!(parsed.get("apiKeyHelper").is_none());
         assert_eq!(parsed["keep"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_write_uses_private_atomic_temp_and_does_not_follow_legacy_temp_symlink() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "birdnion-claude-code-write-{}-{nonce}",
+            std::process::id()
+        ));
+        let claude_dir = root.join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        let victim = root.join("victim.json");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let legacy_temp = claude_dir.join("settings.json.tmp");
+        symlink(&victim, &legacy_temp).unwrap();
+
+        let scope = Scope::Project(root.clone());
+        write_target(&scope, r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"}}"#).unwrap();
+
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert!(std::fs::symlink_metadata(&legacy_temp)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let target = target_path(&scope);
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"}}"#
+        );
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

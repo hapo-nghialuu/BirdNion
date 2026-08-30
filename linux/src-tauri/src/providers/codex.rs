@@ -31,6 +31,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 const REFRESH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const EIGHT_DAYS_SECS: i64 = 8 * 24 * 60 * 60;
@@ -418,12 +419,18 @@ fn save_bound_snapshot_if_current(
 type RefreshResult = Result<(String, Option<String>, Option<String>), String>;
 type RefreshFuture<'a> = Pin<Box<dyn Future<Output = RefreshResult> + Send + 'a>>;
 type UsageFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, UsageError>> + Send + 'a>>;
+type ResetCreditsFuture<'a> = Pin<Box<dyn Future<Output = Option<i32>> + Send + 'a>>;
 type EnrichmentFuture<'a> = Pin<Box<dyn Future<Output = Option<Value>> + Send + 'a>>;
 type SideInfoFuture<'a> = Pin<Box<dyn Future<Output = SideInfo> + Send + 'a>>;
 
 trait CodexOperations: Sync {
     fn refresh<'a>(&'a self, refresh_token: &'a str) -> RefreshFuture<'a>;
     fn usage<'a>(&'a self, access_token: &'a str, account_id: Option<&'a str>) -> UsageFuture<'a>;
+    fn reset_credits<'a>(
+        &'a self,
+        access_token: &'a str,
+        account_id: Option<&'a str>,
+    ) -> ResetCreditsFuture<'a>;
     fn enrichment<'a>(&'a self, cfg: &'a config::Provider) -> EnrichmentFuture<'a>;
     fn side_info(&self) -> SideInfoFuture<'_>;
 }
@@ -439,6 +446,20 @@ impl CodexOperations for LiveOperations {
         Box::pin(async move {
             let client = shared_client();
             fetch_usage(&client, access_token, account_id).await
+        })
+    }
+
+    fn reset_credits<'a>(
+        &'a self,
+        access_token: &'a str,
+        account_id: Option<&'a str>,
+    ) -> ResetCreditsFuture<'a> {
+        Box::pin(async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .ok()?;
+            fetch_reset_credits(&client, access_token, account_id).await
         })
     }
 
@@ -532,6 +553,59 @@ async fn fetch_usage(
         401 | 403 => Err(UsageError::Unauthorized),
         code => Err(UsageError::Server(code)),
     }
+}
+
+/// Best-effort manual reset-credit fetch. A missing/invalid response must not
+/// affect the primary quota result and no credential data leaves this module.
+async fn fetch_reset_credits(
+    client: &reqwest::Client,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> Option<i32> {
+    fetch_reset_credits_at(client, RESET_CREDITS_URL, access_token, account_id).await
+}
+
+async fn fetch_reset_credits_at(
+    client: &reqwest::Client,
+    url: &str,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> Option<i32> {
+    let response = reset_credits_request(client, url, access_token, account_id)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.json::<Value>().await.ok()?;
+    decode_reset_credits_available(&body)
+}
+
+fn reset_credits_request(
+    client: &reqwest::Client,
+    url: &str,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let mut request = client
+        .get(url)
+        .bearer_auth(access_token)
+        .header("User-Agent", "BirdNion")
+        .header("Accept", "application/json")
+        .header("OpenAI-Beta", "codex-1")
+        .header("originator", "Codex Desktop");
+    if let Some(id) = account_id.filter(|value| !value.is_empty()) {
+        request = request.header("ChatGPT-Account-Id", id);
+    }
+    request
+}
+
+fn decode_reset_credits_available(body: &Value) -> Option<i32> {
+    body.get("available_count")
+        .and_then(Value::as_i64)
+        .filter(|count| *count >= 0)
+        .and_then(|count| i32::try_from(count).ok())
 }
 
 enum UsageError {
@@ -759,11 +833,23 @@ async fn fetch_uncached(
     }
     let mut status = match usage {
         Ok(body) => {
-            let enrichment = operations.enrichment(cfg).await;
+            let (enrichment, reset_credits_available) = futures::join!(
+                operations.enrichment(cfg),
+                operations.reset_credits(&creds.access_token, creds.account_id.as_deref()),
+            );
             if !guard.is_current() {
                 return FetchAttempt::Stale;
             }
-            build_success(&cfg.id, &name, &body, &creds, enrichment.as_ref(), &side).await
+            build_success(
+                &cfg.id,
+                &name,
+                &body,
+                &creds,
+                enrichment.as_ref(),
+                reset_credits_available,
+                &side,
+            )
+            .await
         }
         Err(UsageError::Unauthorized) => {
             if !creds.refresh_token.is_empty() {
@@ -809,7 +895,11 @@ async fn fetch_uncached(
                         return FetchAttempt::Stale;
                     }
                     if let Ok(body) = retry {
-                        let enrichment = operations.enrichment(cfg).await;
+                        let (enrichment, reset_credits_available) = futures::join!(
+                            operations.enrichment(cfg),
+                            operations
+                                .reset_credits(&creds.access_token, creds.account_id.as_deref(),),
+                        );
                         if !guard.is_current() {
                             return FetchAttempt::Stale;
                         }
@@ -819,6 +909,7 @@ async fn fetch_uncached(
                             &body,
                             &creds,
                             enrichment.as_ref(),
+                            reset_credits_available,
                             &side,
                         )
                         .await;
@@ -947,6 +1038,7 @@ async fn build_success(
     body: &Value,
     creds: &Credentials,
     cookie_enrichment: Option<&Value>,
+    reset_credits_available: Option<i32>,
     side: &SideInfo,
 ) -> ProviderStatus {
     let windows = map_windows(body);
@@ -982,6 +1074,7 @@ async fn build_success(
         last_updated: chrono::Utc::now().timestamp(),
         account_label: Some(account_label),
         credits_remaining,
+        reset_credits_available,
         signed_in_email,
         credits_purchase_url,
         credits_history_count,
@@ -1209,6 +1302,76 @@ mod tests {
     fn malformed_auth_json_is_error() {
         assert!(parse_auth_json("not json").is_err());
         assert!(parse_auth_json(r#"{"tokens":{}}"#).is_err());
+    }
+
+    #[test]
+    fn reset_credits_decoder_accepts_complete_and_zero_counts() {
+        assert_eq!(
+            decode_reset_credits_available(&json!({
+                "credits": [{"id": "credit-1", "status": "available"}],
+                "available_count": 3
+            })),
+            Some(3)
+        );
+        assert_eq!(
+            decode_reset_credits_available(&json!({"credits": [], "available_count": 0})),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn reset_credits_decoder_rejects_negative_or_malformed_counts() {
+        assert_eq!(
+            decode_reset_credits_available(&json!({"available_count": -1})),
+            None
+        );
+        for body in [
+            json!({}),
+            json!({"available_count": "2"}),
+            json!({"available_count": 1.5}),
+            json!({"available_count": null}),
+            json!({"available_count": i64::MAX}),
+        ] {
+            assert_eq!(decode_reset_credits_available(&body), None);
+        }
+    }
+
+    #[test]
+    fn reset_credits_request_sets_codex_oauth_headers() {
+        let client = reqwest::Client::new();
+        let request = reset_credits_request(
+            &client,
+            "https://example.test/backend-api/wham/rate-limit-reset-credits",
+            "access-token",
+            Some("account-123"),
+        )
+        .build()
+        .unwrap();
+        let headers = request.headers();
+        assert_eq!(
+            headers
+                .get("Authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer access-token")
+        );
+        assert_eq!(
+            headers
+                .get("ChatGPT-Account-Id")
+                .and_then(|value| value.to_str().ok()),
+            Some("account-123")
+        );
+        assert_eq!(
+            headers
+                .get("OpenAI-Beta")
+                .and_then(|value| value.to_str().ok()),
+            Some("codex-1")
+        );
+        assert_eq!(
+            headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some("Codex Desktop")
+        );
     }
 
     #[test]
@@ -1453,6 +1616,14 @@ mod tests {
             })
         }
 
+        fn reset_credits<'a>(
+            &'a self,
+            _access_token: &'a str,
+            _account_id: Option<&'a str>,
+        ) -> ResetCreditsFuture<'a> {
+            Box::pin(async { None })
+        }
+
         fn enrichment<'a>(&'a self, _cfg: &'a config::Provider) -> EnrichmentFuture<'a> {
             Box::pin(async { None })
         }
@@ -1496,6 +1667,14 @@ mod tests {
             self.usage_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(json!({})) })
+        }
+
+        fn reset_credits<'a>(
+            &'a self,
+            _access_token: &'a str,
+            _account_id: Option<&'a str>,
+        ) -> ResetCreditsFuture<'a> {
+            Box::pin(async { None })
         }
 
         fn enrichment<'a>(&'a self, _cfg: &'a config::Provider) -> EnrichmentFuture<'a> {
@@ -1918,6 +2097,54 @@ mod tests {
         assert_eq!(
             credits_balance(&json!({"credits": {"unlimited": true}})),
             None
+        );
+    }
+
+    #[test]
+    fn reset_credit_failure_never_fails_quota_and_success_serializes_count() {
+        let body = json!({
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 10,
+                    "reset_at": 1_800_000_000,
+                    "limit_window_seconds": 300 * 60
+                }
+            }
+        });
+        let creds = Credentials {
+            access_token: "secret-token".into(),
+            refresh_token: String::new(),
+            id_token: None,
+            account_id: Some("secret-account".into()),
+            last_refresh: None,
+        };
+        let side = SideInfo {
+            version: None,
+            service: None,
+        };
+
+        let without_reset = block_on(build_success(
+            "codex", "Codex", &body, &creds, None, None, &side,
+        ));
+        assert!(without_reset.error.is_none());
+        assert_eq!(without_reset.reset_credits_available, None);
+        let serialized = serde_json::to_value(&without_reset).unwrap();
+        assert!(serialized.get("resetCreditsAvailable").is_none());
+        assert!(!serialized.to_string().contains("secret-token"));
+        assert!(!serialized.to_string().contains("secret-account"));
+
+        let with_reset = block_on(build_success(
+            "codex",
+            "Codex",
+            &body,
+            &creds,
+            None,
+            Some(2),
+            &side,
+        ));
+        assert_eq!(
+            serde_json::to_value(&with_reset).unwrap()["resetCreditsAvailable"],
+            json!(2)
         );
     }
 
