@@ -1,13 +1,13 @@
 // Cửa sổ panel phụ cạnh popover — port của macOS `AgentDetailPanelCoordinator`
-// (NSPanel con). Bốn loại nội dung: chi tiết ngày, chi tiết agent, hoạt động
-// 52 tuần, và danh sách model tràn.
+// (NSPanel con). Năm loại nội dung: chi tiết ngày, chi tiết agent, hoạt động
+// 52 tuần, danh sách model tràn, và Quota Agenda.
 //
 // Vòng đời giữ nguyên semantics macOS: hover mở panel transient, click ghim;
 // panel đã ghim không bị hover khác chiếm chỗ, chỉ đóng bằng nút ✕.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { t } from "./i18n";
 import { logoMark } from "./logos";
 import {
@@ -16,6 +16,12 @@ import {
 } from "./usage";
 import type { CombinedDay, CombinedModel, UsageSourceId } from "./usage";
 import type { AgentCostDay, AgentPanelPayload, AgentQuotaWindow, AgentTabId } from "./agent-panel-payload";
+import {
+  QUOTA_AGENDA_PROVIDER_SELECTED_EVENT,
+  quotaAgendaPanel,
+  selectQuotaAgendaProvider,
+  type QuotaAgendaPanelPayload,
+} from "./quota-agenda-panel";
 
 export const PANEL_PAYLOAD_EVENT = "birdnion-panel-payload";
 
@@ -23,6 +29,7 @@ export type PanelPayload =
   | { kind: "day"; pinned: boolean; day: CombinedDay; windowUsd: number; windowLabel: string }
   | { kind: "models"; models: CombinedModel[]; mode: "model" | "token" }
   | AgentPanelPayload
+  | QuotaAgendaPanelPayload
   | {
       kind: "activity";
       cells: ActivityCell[];
@@ -47,6 +54,14 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   return node;
 }
 
+async function closeSidePanelWindow(): Promise<void> {
+  try {
+    await invoke("close_side_panel");
+  } catch {
+    await getCurrentWindow().hide().catch(() => {});
+  }
+}
+
 function header(title: string, subtitle: string, pinned: boolean): HTMLElement {
   const head = el("div", "panel-head");
   const col = el("div", "panel-head-text");
@@ -57,7 +72,7 @@ function header(title: string, subtitle: string, pinned: boolean): HTMLElement {
     const close = el("button", "panel-close", "✕");
     // Qua command chứ không hide() thẳng: popover cần biết để bỏ cờ ghim.
     close.addEventListener("click", () => {
-      void invoke("close_side_panel").catch(() => { void getCurrentWindow().hide(); });
+      void closeSidePanelWindow();
     });
     head.append(close);
   } else {
@@ -609,6 +624,14 @@ function render(payload: PanelPayload): void {
     case "models": root.append(modelsPanel(payload)); break;
     case "agent": root.append(agentPanel(payload)); break;
     case "activity": root.append(activityPanel(payload)); break;
+    case "quotaAgenda": root.append(quotaAgendaPanel(payload, {
+      onClose: closeSidePanelWindow,
+      onProviderSelect: (providerId) => selectQuotaAgendaProvider(
+        providerId,
+        closeSidePanelWindow,
+        (selected) => emit(QUOTA_AGENDA_PROVIDER_SELECTED_EVENT, selected),
+      ),
+    })); break;
   }
 }
 

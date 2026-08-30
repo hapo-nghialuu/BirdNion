@@ -8,13 +8,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CombinedDay, CombinedModel } from "./usage";
 import type { AgentPanelPayload, AgentTabId } from "./agent-panel-payload";
+import type { QuotaAgendaPanelPayload } from "./quota-agenda-panel";
 
 const CLOSE_DELAY_MS = 140;
 
 let pinned = false;
 let closeTimer: number | null = null;
 /** Loại nội dung panel đang mở — quyết định phạm vi đóng khi đổi kỳ. */
-let openKind: "day" | "models" | "agent" | "activity" | null = null;
+let openKind: "day" | "models" | "agent" | "activity" | "quotaAgenda" | null = null;
 
 /** Truy vết vòng đời hover. Tắt mặc định — bật bằng
  *  `localStorage.setItem("birdnion.panelDebug", "1")` rồi mở lại app, kèm
@@ -50,6 +51,16 @@ async function show(payload: unknown, isPinned: boolean): Promise<void> {
     await invoke("open_side_panel", { payload, pinned: isPinned });
   } catch {
     // Panel là phụ trợ: lỗi mở cửa sổ không được làm hỏng popover.
+  }
+}
+
+/** Update content only when native panel is still wanted and visible. Unlike
+ * `show`, this path can never reopen a panel racing with × or popover close. */
+async function update(payload: unknown): Promise<void> {
+  try {
+    await invoke("update_side_panel", { payload });
+  } catch {
+    // Panel is auxiliary; a dropped refresh must not affect the popover.
   }
 }
 
@@ -108,11 +119,19 @@ export function isPanelPinned(): boolean {
   return pinned;
 }
 
-// Panel tự đóng (nút ✕ trong cửa sổ phụ) — nhả cờ ghim để hover mở lại được.
-void listen("birdnion-panel-closed", () => {
+/** Idempotent local acknowledgement for native close and panel selections.
+ *  The selection event calls this synchronously before changing main tabs so
+ *  a fallback `hide()` cannot leave Agenda eligible for a tick-driven reopen. */
+export function acknowledgeSidePanelClosed(): void {
   cancelPendingClose();
   pinned = false;
   openKind = null;
+}
+
+// Panel tự đóng (nút ✕ trong cửa sổ phụ) — nhả cờ ghim để hover mở lại được.
+void listen("birdnion-panel-closed", acknowledgeSidePanelClosed).catch(() => {
+  // Side panel is auxiliary; an unavailable native listener must not reject
+  // into the main window (also keeps non-Tauri projection tests fail-safe).
 });
 
 export function showDayPanel(
@@ -147,4 +166,15 @@ export function showActivityPanel(
   isPinned = true,
 ): void {
   void show({ kind: "activity", cells, peakUsd, avgUsd, streak, longestStreak }, isPinned);
+}
+
+/** Footer calendar always opens Quota Agenda pinned. */
+export function showQuotaAgendaPanel(rows: QuotaAgendaPanelPayload["rows"]): void {
+  void show({ kind: "quotaAgenda", rows } satisfies QuotaAgendaPanelPayload, true);
+}
+
+/** Reuse the existing status tick to update an already-open Agenda only. */
+export function refreshQuotaAgendaPanel(rows: QuotaAgendaPanelPayload["rows"]): void {
+  if (openKind !== "quotaAgenda") return;
+  void update({ kind: "quotaAgenda", rows } satisfies QuotaAgendaPanelPayload);
 }

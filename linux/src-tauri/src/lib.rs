@@ -1812,6 +1812,32 @@ async fn open_side_panel(
     Ok(())
 }
 
+/// Update an existing visible panel without changing its visibility intent.
+/// Status ticks use this command so stale JS state cannot reopen a panel that
+/// is concurrently closing through × or the main popover lifecycle.
+#[tauri::command]
+fn update_side_panel(
+    app: tauri::AppHandle,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+
+    if !PANEL_WANTED.load(Ordering::SeqCst) {
+        panel_log("update: ignored because panel is not wanted");
+        return Ok(());
+    }
+    let Some(panel) = app.get_webview_window("panel") else {
+        return Ok(());
+    };
+    if !panel.is_visible().unwrap_or(false) {
+        panel_log("update: ignored because panel is hidden");
+        return Ok(());
+    }
+    let _ = panel.emit("birdnion-panel-payload", payload);
+    position_panel_beside_main(&app, &panel);
+    Ok(())
+}
+
 /// Ẩn panel phụ (hover rời hoặc bấm ✕).
 ///
 /// Báo về popover để nó bỏ cờ ghim: nếu không, sau khi bấm ✕ phía popover vẫn
@@ -1938,10 +1964,13 @@ fn show_main_window(app: &tauri::AppHandle) {
 /// trên màn hình (macOS `AppDelegate` gọi `agentDetailCoordinator.close()`
 /// mỗi lần đóng popover).
 fn hide_side_panel_with_popover(app: &tauri::AppHandle) {
-    use tauri::Manager;
+    use tauri::{Emitter, Manager};
     PANEL_WANTED.store(false, Ordering::SeqCst);
     if let Some(panel) = app.get_webview_window("panel") {
         let _ = panel.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.emit("birdnion-panel-closed", ());
     }
 }
 
@@ -1984,6 +2013,7 @@ pub fn run() {
             list_installed_agents,
             panel_debug,
             open_side_panel,
+            update_side_panel,
             close_side_panel,
             resize_side_panel,
             classify_provider_error,

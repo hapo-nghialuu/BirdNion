@@ -7,6 +7,7 @@ export type SettingsIconId =
   | "square.grid.2x2"
   | "terminal"
   | "chart.bar"
+  | "calendar"
   | "eye"
   | "eye.slash"
   | "slider.horizontal.3"
@@ -50,6 +51,13 @@ const PATHS: Record<SettingsIconId, string> = {
   // SF `chart.bar` — Insights.
   "chart.bar": `
     <path ${O} d="M4.2 19.3V11h3.2v8.3M10.4 19.3V5.2h3.2v14.1M16.6 19.3v-9h3.2v9M3.2 19.3h17.6"/>`,
+
+  // SF `calendar` — compact outline for the Quota Agenda companion panel.
+  calendar: `
+    <rect x="3.7" y="5.2" width="16.6" height="15" rx="2.2" ${O}/>
+    <path ${O} d="M7.8 3.8v3M16.2 3.8v3M3.7 9.2h16.6"/>
+    <circle cx="7.4" cy="12.4" r=".75" fill="currentColor"/><circle cx="12" cy="12.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="12.4" r=".75" fill="currentColor"/>
+    <circle cx="7.4" cy="16.4" r=".75" fill="currentColor"/><circle cx="12" cy="16.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="16.4" r=".75" fill="currentColor"/>`,
 
   // SF `eye`
   eye: `

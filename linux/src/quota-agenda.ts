@@ -84,6 +84,15 @@ export function quotaAgendaAgentId(providerId: string): string {
   return PROVIDER_AGENT_ALIASES[providerId] ?? providerId;
 }
 
+/** Main-webview guard for selections emitted by the companion panel. */
+export function validQuotaAgendaProviderId(
+  statuses: readonly ProviderStatus[],
+  providerId: string | null | undefined,
+): string | null {
+  if (!providerId || !statuses.some((status) => status.id === providerId)) return null;
+  return providerId;
+}
+
 /** Agenda selector is intentionally independent from provider-tab lowestWindow. */
 export function selectQuotaAgendaWindow(
   status: ProviderStatus,

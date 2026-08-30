@@ -41,18 +41,23 @@ import { NAME_BY_ID, PROVIDERS_CHANGED_EVENT } from "./settings-tab";
 import { sourceChartCard } from "./source-chart";
 import { adminChartCard, ClaudeAdminSnapshot } from "./admin-chart";
 import { currentLang, t } from "./i18n";
-import { costBySection } from "./all-agents-sections";
+import { quotaSection, costBySection, configuredSection } from "./all-agents-sections";
 import {
-  configuredAgentsSlot,
-  refreshConfiguredAgentsSlot,
-} from "./configured-agents-section";
-import { buildQuotaAgendaRows } from "./quota-agenda";
+  buildQuotaAgendaRows,
+  validQuotaAgendaProviderId,
+  type QuotaAgendaBuildOptions,
+} from "./quota-agenda";
 import {
-  quotaAgendaSlot,
-  refreshQuotaAgendaSlot,
-  type QuotaAgendaSectionOptions,
-} from "./quota-agenda-section";
-import { closeTransientPanel, PANEL_OWNER_ATTR } from "./side-panel";
+  QUOTA_AGENDA_PROVIDER_SELECTED_EVENT,
+  type QuotaAgendaProviderSelectedPayload,
+} from "./quota-agenda-panel";
+import {
+  acknowledgeSidePanelClosed,
+  closeTransientPanel,
+  PANEL_OWNER_ATTR,
+  refreshQuotaAgendaPanel,
+  showQuotaAgendaPanel,
+} from "./side-panel";
 import { configOnlyAgents, InstalledAgent, visibleAgentIds } from "./settings-agents";
 import {
   getPollSeconds, isManualRefresh, isRefreshOnOpenEnabled, effectiveQuotaWarn,
@@ -350,7 +355,7 @@ type State = {
   kiro: UsageReport | null;
   statuses: ProviderStatus[];
   /** Agent phát hiện trên máy (`list_installed_agents`) — nguồn cho hàng "đã
-   *  cấu hình" và cho visibility. Null khi chưa nạp xong. */
+   *  cấu hình", Quota Agenda và visibility. Null khi chưa nạp xong. */
   agents: InstalledAgent[] | null;
   claudeAdmin: ClaudeAdminSnapshot | null;
   tab: string; // "all" | provider id
@@ -385,6 +390,7 @@ let providerStatusStateRevision = 0;
 function replaceProviderStatuses(statuses: ProviderStatus[]) {
   state.statuses = statuses;
   providerStatusStateRevision += 1;
+  refreshQuotaAgendaPanelIfOpen();
 }
 
 /** Any unrelated provider can be invalidated while an async merge classifies
@@ -695,6 +701,14 @@ function goTab(id: string) {
   render();
 }
 
+function onQuotaAgendaProviderSelected(
+  event: { payload: QuotaAgendaProviderSelectedPayload },
+): void {
+  acknowledgeSidePanelClosed();
+  const providerId = validQuotaAgendaProviderId(state.statuses, event.payload?.providerId);
+  if (providerId) goTab(providerId);
+}
+
 /** macOS BirdNionHeader parity: brand mark + status + refresh + appearance. */
 function appHeader(): HTMLElement {
   const head = el("header", "app-header");
@@ -967,6 +981,9 @@ function popoverFooter(): HTMLElement {
     return btn;
   };
   actions.append(
+    mkIcon("calendar", t("quotaAgenda.title"), "agenda", () => {
+      showQuotaAgendaPanel(quotaAgendaRows());
+    }),
     mkIcon("gearshape", t("footerSettings"), "", () => openSettings("general")),
     mkIcon("info.circle", t("footerAbout"), "", () => openSettings("about")),
     mkIcon("power", t("footerQuit"), "quit", () => {
@@ -997,15 +1014,12 @@ function relativeTime(ts: number): string | null {
 function configuredAgents(): InstalledAgent[] {
   const all = state.agents;
   if (!all) return [];
-  const quotaAgentIds = new Set(
-    buildQuotaAgendaRows(state.statuses, quotaAgendaOptions()).map((row) => row.agentId));
   // Chỉ agent có config nhưng KHÔNG quota và KHÔNG log chi phí thuộc hàng
   // gộp này; ẩn agent trong Settings chỉ giấu nó khỏi đây, tổng chi phí giữ nguyên.
-  return configOnlyAgents(all, visibleAgentIds(all))
-    .filter((agent) => !quotaAgentIds.has(agent.id));
+  return configOnlyAgents(all, visibleAgentIds(all));
 }
 
-function quotaAgendaOptions(): QuotaAgendaSectionOptions {
+function quotaAgendaOptions(): QuotaAgendaBuildOptions {
   const agents = state.agents;
   const visibleIds = agents ? new Set(visibleAgentIds(agents)) : null;
   const visibleAgents = agents && visibleIds
@@ -1015,19 +1029,16 @@ function quotaAgendaOptions(): QuotaAgendaSectionOptions {
     agents: visibleAgents,
     staleWarnings,
     hidePersonalInfo: isHidePersonalInfo(),
-    onProviderSelect: goTab,
   };
 }
 
-/** Repaint capability slots together so an agent cannot appear in both. */
-function refreshCapabilitySlotsInPlace(): void {
-  if (state.tab !== "all") return;
-  const agendaSlot = document.querySelector<HTMLElement>("#app .quota-agenda-slot");
-  const configuredSlot = document.querySelector<HTMLElement>("#app .configured-agents-slot");
-  if (!agendaSlot || !configuredSlot) return;
-  refreshQuotaAgendaSlot(agendaSlot, state.statuses, quotaAgendaOptions());
-  refreshConfiguredAgentsSlot(configuredSlot, configuredAgents());
-  scheduleFitWindow();
+function quotaAgendaRows() {
+  return buildQuotaAgendaRows(state.statuses, quotaAgendaOptions());
+}
+
+/** Status tick advances reset countdown/freshness only while Agenda is open. */
+function refreshQuotaAgendaPanelIfOpen(): void {
+  refreshQuotaAgendaPanel(quotaAgendaRows());
 }
 
 /** Số nguồn chi phí thật sự được tính vào tổng — hiện sau token ở hero
@@ -1311,10 +1322,16 @@ function render() {
     }
     // Quota/configured capabilities are independent of local cost evidence.
     // Keep them visible even while all six scanners are unavailable.
-    body.append(quotaAgendaSlot(state.statuses, quotaAgendaOptions()));
+    const visibleAgents = state.agents
+      ? state.agents.filter((agent) => visibleAgentIds(state.agents!).includes(agent.id))
+      : null;
+    const quota = quotaSection(
+      state.statuses, combined.daily, visibleAgents, visibleAgents?.length ?? 0);
+    if (quota) body.append(quota);
     const costBy = costBySection(combined, allChartDays(), render);
     if (costBy) body.append(costBy);
-    body.append(configuredAgentsSlot(configuredAgents()));
+    const configured = configuredSection(configuredAgents());
+    if (configured) body.append(configured);
     // No included source means no trustworthy zero/forecast.
     if (sourceCount > 0) {
       const budget = budgetForecastCard(combined, getMonthlyBudgetUsd());
@@ -2336,7 +2353,7 @@ async function load(manual = false) {
         // only repaint there when the tab strip set itself changed.
         const nextIds = state.statuses.map((s) => s.id).join(",");
         if (state.tab !== "all" || prevIds !== nextIds) render();
-        else refreshCapabilitySlotsInPlace();
+        else refreshQuotaAgendaPanelIfOpen();
         void refreshActionCenterIssues().catch(() => {});
       },
     );
@@ -2380,7 +2397,10 @@ async function load(manual = false) {
           .map((s) => s.id),
       })
         .catch(() => [] as InstalledAgent[])
-        .then((agents) => publish(() => { state.agents = agents; })));
+        .then((agents) => publish(() => {
+          state.agents = agents;
+          refreshQuotaAgendaPanelIfOpen();
+        })));
 
     await Promise.all([
       usageDone,
@@ -2443,7 +2463,7 @@ async function refetchProvider(id: string) {
 async function tick() {
   if (isSettingsWindow() || loadInFlight) return;
   // Reset/freshness copy advances with wall time even when no provider is due.
-  refreshCapabilitySlotsInPlace();
+  refreshQuotaAgendaPanelIfOpen();
   // Weekly Digest rides this existing cadence — evaluated even when no
   // provider quota is due this cycle (its own 7-day/in-flight gates decide).
   void checkWeeklyDigest().catch(() => {});
@@ -2476,7 +2496,7 @@ async function tick() {
         if (onProviderTab || prevIds !== nextIds) {
           render();
         } else {
-          refreshCapabilitySlotsInPlace();
+          refreshQuotaAgendaPanelIfOpen();
         }
         void refreshActionCenterIssues().catch(() => {});
         void refreshTrayTooltip().catch(() => {});
@@ -2581,6 +2601,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     await awaitProviderCoordinatorListeners([
       listen(CODEX_ACCOUNT_CHANGED_EVENT, onCodexAccountChanged),
       listen(ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, onAntigravityAccountChanged),
+      listen(QUOTA_AGENDA_PROVIDER_SELECTED_EVENT, onQuotaAgendaProviderSelected),
       // Settings webview → main: rebuild tab order and reconcile local usage.
       listen(PROVIDERS_CHANGED_EVENT, () => {
         void reconcileProviderSettingsChange();
@@ -2597,8 +2618,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     onTrayDisplayPrefChanged();
   });
   void listen(HIDE_PERSONAL_INFO_CHANGED_EVENT, () => {
-    if (state.tab === "all") refreshCapabilitySlotsInPlace();
-    else render();
+    refreshQuotaAgendaPanelIfOpen();
+    if (state.tab !== "all") render();
   });
   void listen(ACTION_CENTER_SNAPSHOT_REQUEST_EVENT, () => {
     if (actionCenterSnapshotError) {
