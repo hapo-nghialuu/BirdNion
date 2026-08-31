@@ -17,6 +17,25 @@ public enum CostUsageError: LocalizedError, Sendable {
     }
 }
 
+public struct CodexPendingScanStatus: Sendable, Equatable {
+    public let generation: String
+    public let parsedBytes: Int64
+    public let incompleteFiles: Int
+    public let progressFingerprint: String
+
+    public init(
+        generation: String,
+        parsedBytes: Int64,
+        incompleteFiles: Int,
+        progressFingerprint: String)
+    {
+        self.generation = generation
+        self.parsedBytes = parsedBytes
+        self.incompleteFiles = incompleteFiles
+        self.progressFingerprint = progressFingerprint
+    }
+}
+
 public struct CostUsageFetcher: Sendable {
     private let scannerOptions: CostUsageScanner.Options?
 
@@ -45,6 +64,45 @@ public struct CostUsageFetcher: Sendable {
             codexHomePath: codexHomePath,
             historyDays: historyDays,
             scannerOptions: self.scannerOptionsOverride())
+    }
+
+    /// Returns privacy-safe progress for an unfinished local Codex scan.
+    public func loadCodexPendingScanStatus() async -> CodexPendingScanStatus? {
+        let options = self.scannerOptionsOverride() ?? CostUsageScanner.Options()
+        return try? await CostUsageScanExecutor.run { _ in
+            let cache = CostUsageCacheIO.load(provider: .codex, cacheRoot: options.cacheRoot)
+            guard let generation = cache.codexPendingScanGeneration else { return nil }
+            let manifest = cache.codexPendingFileManifest ?? [:]
+            let pendingFiles = cache.codexPendingFiles ?? [:]
+            let parentScans = cache.codexPendingParentScans ?? [:]
+            let parentDiscoveries = cache.codexPendingParentDiscoveries ?? [:]
+            let pendingBytes = Self.saturatingParsedBytesSum(
+                pendingFiles.values.map { $0.parsedBytes ?? 0 })
+            let parentBytes = Self.saturatingParsedBytesSum(
+                parentScans.values.map(\.parsedBytes))
+            return CodexPendingScanStatus(
+                generation: CostUsageScanner.codexOpaquePendingGeneration(generation),
+                parsedBytes: Self.saturatingParsedBytesSum([pendingBytes, parentBytes]),
+                incompleteFiles: manifest.keys.count { path in
+                    let usage = pendingFiles[path]
+                    return usage?.codexScanComplete != true
+                        || usage?.codexScanTargetSize != manifest[path]?.targetEOF
+                }
+                    + parentScans.values.count { !$0.scanComplete }
+                    + parentDiscoveries.values.count { $0.resolvedRelativePath == nil },
+                progressFingerprint: CostUsageScanner.codexPendingProgressFingerprint(cache))
+        }
+    }
+
+    static func saturatingParsedBytesSum(_ values: [Int64]) -> Int64 {
+        var total: Int64 = 0
+        for value in values {
+            let nonnegative = max(0, value)
+            let (sum, overflowed) = total.addingReportingOverflow(nonnegative)
+            if overflowed { return Int64.max }
+            total = sum
+        }
+        return total
     }
 
     public func loadTokenSnapshot(
@@ -213,6 +271,13 @@ public struct CostUsageFetcher: Sendable {
                 try checkCancellation()
                 daily = CostUsageDailyReport.merged([daily, piReport])
             }
+            if daily.scanIncomplete, daily.data.isEmpty {
+                return CostUsageDailyReport(
+                    data: [],
+                    summary: nil,
+                    scanIncomplete: true,
+                    completedFiniteScanGeneration: daily.completedFiniteScanGeneration)
+            }
             return daily
         }
 
@@ -327,7 +392,8 @@ public struct CostUsageFetcher: Sendable {
             projectBreakdown: daily.projectBreakdown,
             projectRetractions: daily.projectRetractions,
             updatedAt: now,
-            scanIncomplete: daily.scanIncomplete)
+            scanIncomplete: daily.scanIncomplete,
+            completedFiniteScanGeneration: daily.completedFiniteScanGeneration)
     }
 
     static func selectCurrentSession(from sessions: [CostUsageSessionReport.Entry])

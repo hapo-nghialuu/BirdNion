@@ -68,8 +68,11 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
     public let projectBreakdown: [CostUsageProjectBreakdown]?
     public let projectRetractions: [CostUsageProjectRetraction]?
     public let updatedAt: Date
-    /// Scan bị cắt sớm do hết ngân sách thời gian → caller nên quét tiếp ngay.
+    /// Vẫn cò một finite generation cần quét tiếp.
     public let scanIncomplete: Bool
+    /// `true` khi generation vừa quét đã commit atomically, nhưng bytes/files
+    /// mới hơn đã được seed sang catch-up generation.
+    public let completedFiniteScanGeneration: Bool
 
     public init(
         sessionTokens: Int?,
@@ -85,9 +88,11 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
         projectBreakdown: [CostUsageProjectBreakdown]? = nil,
         projectRetractions: [CostUsageProjectRetraction]? = nil,
         updatedAt: Date,
-        scanIncomplete: Bool = false)
+        scanIncomplete: Bool = false,
+        completedFiniteScanGeneration: Bool = false)
     {
         self.scanIncomplete = scanIncomplete
+        self.completedFiniteScanGeneration = completedFiniteScanGeneration
         self.sessionTokens = sessionTokens
         self.sessionCostUSD = sessionCostUSD
         self.sessionRequests = sessionRequests
@@ -318,10 +323,12 @@ public struct CostUsageDailyReport: Sendable, Decodable {
     public let summary: Summary?
     public let projectBreakdown: [CostUsageProjectBreakdown]?
     public let projectRetractions: [CostUsageProjectRetraction]?
-    /// `true` khi scan bị cắt sớm do hết ngân sách thời gian (còn file chưa
-    /// quét). Không nằm trong CodingKeys → report đọc từ cache luôn là `false`
-    /// (đã hoàn tất). Caller dùng cờ này để lên lịch quét tiếp ngay.
+    /// `true` khi vẫn cò finite generation cần quét tiếp. Report có thể
+    /// đính kèm committed generation gần nhất thay vì buộc phải rỗng.
     public var scanIncomplete: Bool = false
+    /// Generation vừa quét đã commit, sau đó scanner phát hiện catch-up
+    /// frontier mới. Không encode vì đây là receipt của lần quét hiện tại.
+    public var completedFiniteScanGeneration: Bool = false
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -371,13 +378,15 @@ public struct CostUsageDailyReport: Sendable, Decodable {
         summary: Summary?,
         projectBreakdown: [CostUsageProjectBreakdown]? = nil,
         projectRetractions: [CostUsageProjectRetraction]? = nil,
-        scanIncomplete: Bool = false)
+        scanIncomplete: Bool = false,
+        completedFiniteScanGeneration: Bool = false)
     {
         self.data = data
         self.summary = summary
         self.projectBreakdown = projectBreakdown
         self.projectRetractions = projectRetractions
         self.scanIncomplete = scanIncomplete
+        self.completedFiniteScanGeneration = completedFiniteScanGeneration
     }
 }
 
@@ -536,14 +545,24 @@ extension CostUsageDailyReport {
 
     public static func merged(_ reports: [CostUsageDailyReport]) -> CostUsageDailyReport {
         let entries = self.mergedEntries(from: reports)
-        guard !entries.isEmpty else { return CostUsageDailyReport(data: [], summary: nil) }
+        let scanIncomplete = reports.contains { $0.scanIncomplete }
+        let completedFiniteScanGeneration = reports.contains { $0.completedFiniteScanGeneration }
+        guard !entries.isEmpty else {
+            return CostUsageDailyReport(
+                data: [],
+                summary: nil,
+                scanIncomplete: scanIncomplete,
+                completedFiniteScanGeneration: completedFiniteScanGeneration)
+        }
         let projects = reports.flatMap { $0.projectBreakdown ?? [] }
         let retractions = reports.flatMap { $0.projectRetractions ?? [] }
         return CostUsageDailyReport(
             data: entries,
             summary: self.mergedSummary(from: entries),
             projectBreakdown: projects.isEmpty ? nil : projects,
-            projectRetractions: retractions.isEmpty ? nil : retractions)
+            projectRetractions: retractions.isEmpty ? nil : retractions,
+            scanIncomplete: scanIncomplete,
+            completedFiniteScanGeneration: completedFiniteScanGeneration)
     }
 
     private static func mergedEntries(from reports: [CostUsageDailyReport]) -> [Entry] {

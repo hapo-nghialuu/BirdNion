@@ -295,8 +295,10 @@ extension CostUsageScanner {
         claudeRows: [ClaudeUsageRow]? = nil,
         codexScanFileId: String? = nil,
         codexScanTargetSize: Int64? = nil,
+        codexScanContentFingerprint: String? = nil,
         codexScanComplete: Bool? = nil,
-        codexScanGeneration: String? = nil) -> CostUsageFileUsage
+        codexScanGeneration: String? = nil,
+        codexParseResumeState: CodexParseResumeState? = nil) -> CostUsageFileUsage
     {
         CostUsageFileUsage(
             mtimeUnixMs: mtimeUnixMs,
@@ -327,8 +329,10 @@ extension CostUsageScanner {
             claudeRows: claudeRows,
             codexScanFileId: codexScanFileId,
             codexScanTargetSize: codexScanTargetSize,
+            codexScanContentFingerprint: codexScanContentFingerprint,
             codexScanComplete: codexScanComplete,
-            codexScanGeneration: codexScanGeneration)
+            codexScanGeneration: codexScanGeneration,
+            codexParseResumeState: codexParseResumeState)
     }
 
     static func needsCodexCostCache(_ usage: CostUsageFileUsage) -> Bool {
@@ -642,13 +646,189 @@ extension CostUsageScanner {
     struct CodexFileScanInput {
         let fileURL: URL
         let metadata: CodexFileMetadata
+        let target: CodexFrozenFile
         let cached: CostUsageFileUsage?
     }
 
-    static func codexFileMetadata(fileURL: URL) -> CodexFileMetadata {
-        let path = fileURL.path
+    struct CodexParsedCoverage: Equatable {
+        let mtimeUnixMs: Int64
+        let size: Int64
+        let scanComplete: Bool
+    }
+
+    private static func codexModeIsRegular(_ mode: mode_t) -> Bool {
+        (mode & mode_t(S_IFMT)) == mode_t(S_IFREG)
+    }
+
+    private static func codexRelativeComponents(
+        fileURL: URL,
+        withinRoot root: URL) -> [String]?
+    {
+        let rootPath = root.standardizedFileURL.path
+        let filePath = fileURL.standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard filePath.hasPrefix(prefix) else { return nil }
+        let relative = String(filePath.dropFirst(prefix.count))
+        let components = relative.split(separator: "/").map(String.init)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+        else { return nil }
+        return components
+    }
+
+    static func codexContainingRoot(fileURL: URL, roots: [URL]) -> URL? {
+        roots
+            .filter { Self.codexRelativeComponents(fileURL: fileURL, withinRoot: $0) != nil }
+            .max { $0.standardizedFileURL.path.count < $1.standardizedFileURL.path.count }
+    }
+
+    /// Foundation can expose the same macOS temporary file as `/var/...` or
+    /// `/private/var/...` depending on which directory API produced the URL.
+    /// Pending manifests must use one spelling or a single inode can be scanned
+    /// twice and keep seeding catch-up generations forever.
+    static func codexFrozenManifestUsesCanonicalPaths(
+        _ manifest: [String: CodexFrozenFile]) -> Bool
+    {
+        var seen: Set<String> = []
+        for path in manifest.keys {
+            let canonicalPath = URL(fileURLWithPath: path).standardizedFileURL.path
+            guard path == canonicalPath, seen.insert(canonicalPath).inserted else {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Produces a stable identity for cache keys even after the leaf vanished.
+    /// Foundation can spell the same macOS temporary tree as `/var/...` or
+    /// `/private/var/...`; resolving the nearest existing ancestor makes those
+    /// aliases comparable without requiring the frozen file to remain present.
+    static func codexCachePathIdentity(_ path: String) -> String {
+        var existingAncestor = URL(fileURLWithPath: path).standardizedFileURL
+        var missingComponents: [String] = []
+        while existingAncestor.path != "/",
+              !FileManager.default.fileExists(atPath: existingAncestor.path)
+        {
+            missingComponents.append(existingAncestor.lastPathComponent)
+            existingAncestor.deleteLastPathComponent()
+        }
+
+        var identity = existingAncestor.resolvingSymlinksInPath().standardizedFileURL
+        for component in missingComponents.reversed() {
+            identity.appendPathComponent(component)
+        }
+        return identity.standardizedFileURL.path
+    }
+
+    /// Replaces every partial/aliased working contribution for one frozen path
+    /// with exactly one committed last-good contribution. This prevents a
+    /// transient delete, replace, or read failure during resume from shrinking
+    /// the snapshot that is published while a catch-up generation is seeded.
+    @discardableResult
+    static func restoreCommittedCodexFile(
+        path: String,
+        committedFiles: [String: CostUsageFileUsage],
+        cache: inout CostUsageCache) -> CostUsageFileUsage?
+    {
+        let canonicalPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        let pathIdentity = Self.codexCachePathIdentity(canonicalPath)
+        let workingKeys = cache.files.keys.filter {
+            Self.codexCachePathIdentity($0) == pathIdentity
+        }
+        for key in workingKeys {
+            guard let partial = cache.files.removeValue(forKey: key) else { continue }
+            Self.applyFileDays(cache: &cache, fileDays: partial.days, sign: -1)
+        }
+
+        let committedCandidates = committedFiles
+            .filter { Self.codexCachePathIdentity($0.key) == pathIdentity }
+            .sorted { lhs, rhs in
+                let lhsExact = lhs.key == canonicalPath
+                let rhsExact = rhs.key == canonicalPath
+                if lhsExact != rhsExact { return lhsExact }
+                return lhs.key < rhs.key
+            }
+        guard let committed = committedCandidates.first?.value else { return nil }
+        cache.files[canonicalPath] = committed
+        Self.applyFileDays(cache: &cache, fileDays: committed.days, sign: 1)
+        return committed
+    }
+
+    /// Open without following any symlink below a trusted sessions root and
+    /// without ever waiting on a FIFO. Directory descriptors close path-swap
+    /// races; the final fstat rejects every non-regular input.
+    static func codexOpenRegularFileForReading(
+        fileURL: URL,
+        withinRoot root: URL? = nil) throws -> FileHandle
+    {
+        let descriptor: Int32
+        if let root {
+            guard let components = Self.codexRelativeComponents(
+                fileURL: fileURL,
+                withinRoot: root)
+            else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES)) }
+
+            let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
+            var current = resolvedRoot.path.withCString {
+                open($0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC | O_DIRECTORY)
+            }
+            guard current >= 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+
+            for (index, component) in components.enumerated() {
+                let isLast = index == components.count - 1
+                let flags = isLast
+                    ? O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+                    : O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC | O_DIRECTORY
+                let next = component.withCString { openat(current, $0, flags) }
+                let failure = errno
+                close(current)
+                guard next >= 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(failure))
+                }
+                current = next
+            }
+            descriptor = current
+        } else {
+            descriptor = fileURL.path.withCString {
+                open($0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+            }
+        }
+        guard descriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+
         var info = stat()
-        guard path.withCString({ fstatat(AT_FDCWD, $0, &info, 0) }) == 0 else {
+        guard fstat(descriptor, &info) == 0,
+              Self.codexModeIsRegular(info.st_mode)
+        else {
+            let failure = errno == 0 ? EINVAL : errno
+            close(descriptor)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(failure))
+        }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
+    static func codexFileMetadata(
+        fileURL: URL,
+        withinRoot root: URL? = nil) -> CodexFileMetadata
+    {
+        let path = fileURL.standardizedFileURL.path
+        var info = stat()
+        let metadataResult: Int32
+        if let handle = try? Self.codexOpenRegularFileForReading(
+            fileURL: fileURL,
+            withinRoot: root)
+        {
+            metadataResult = fstat(handle.fileDescriptor, &info)
+            try? handle.close()
+        } else {
+            metadataResult = -1
+        }
+        guard metadataResult == 0,
+            Self.codexModeIsRegular(info.st_mode)
+        else {
             return CodexFileMetadata(path: path, mtimeUnixMs: 0, size: 0, fileId: nil)
         }
         #if os(Linux)
@@ -663,6 +843,256 @@ extension CostUsageScanner {
             mtimeUnixMs: modifiedSeconds * 1000 + modifiedNanoseconds / 1_000_000,
             size: Int64(info.st_size),
             fileId: "\(info.st_dev):\(info.st_ino)")
+    }
+
+    /// Capture a stable append-only JSONL boundary. A trailing partial record
+    /// is deferred so the next generation can parse it from its first byte.
+    static func codexFrozenFile(
+        fileURL: URL,
+        withinRoot root: URL? = nil,
+        minimumKnownCompleteEOF: Int64 = 0) -> CodexFrozenFile?
+    {
+        let metadata = Self.codexFileMetadata(fileURL: fileURL, withinRoot: root)
+        guard let fileId = metadata.fileId, metadata.size >= 0 else { return nil }
+        let targetEOF = Self.codexCompleteRecordEOF(
+            fileURL: fileURL,
+            observedSize: metadata.size,
+            withinRoot: root,
+            minimumKnownCompleteEOF: minimumKnownCompleteEOF)
+        guard let contentFingerprint = Self.codexFrozenPrefixFingerprint(
+            fileURL: fileURL,
+            targetEOF: targetEOF,
+            withinRoot: root)
+        else { return nil }
+        return CodexFrozenFile(
+            fileId: fileId,
+            mtimeUnixMs: metadata.mtimeUnixMs,
+            observedSize: metadata.size,
+            targetEOF: targetEOF,
+            contentFingerprint: contentFingerprint)
+    }
+
+    static func codexFrozenPrefixFingerprint(
+        fileURL: URL,
+        targetEOF: Int64,
+        withinRoot root: URL? = nil) -> String?
+    {
+        guard targetEOF >= 0,
+              let handle = try? Self.codexOpenRegularFileForReading(
+                  fileURL: fileURL,
+                  withinRoot: root)
+        else { return nil }
+        defer { try? handle.close() }
+
+        let sampleSize = Int64(16 * 1024)
+        let offsets = Self.codexFrozenPrefixSampleOffsets(
+            targetEOF: targetEOF,
+            sampleSize: sampleSize)
+        var material = Data("codex-frozen-prefix-sample-v2\0\(targetEOF)\0".utf8)
+        do {
+            for offset in offsets where offset < targetEOF {
+                let count = Int(min(sampleSize, targetEOF - offset))
+                try handle.seek(toOffset: UInt64(offset))
+                let sample = try handle.read(upToCount: count) ?? Data()
+                guard sample.count == count else { return nil }
+                material.append(Data("\(offset):\(count)\0".utf8))
+                material.append(sample)
+            }
+            return "sha256-sample-v2:" + SHA256.hash(data: material)
+                .map { String(format: "%02x", $0) }
+                .joined()
+        } catch {
+            return nil
+        }
+    }
+
+    /// Distributed sample positions without multiplying the potentially huge
+    /// sparse-file EOF. Every intermediate stays inside signed Int64 bounds.
+    static func codexFrozenPrefixSampleOffsets(
+        targetEOF: Int64,
+        sampleSize: Int64) -> [Int64]
+    {
+        guard targetEOF >= 0, sampleSize > 0 else { return [] }
+        let halfSample = sampleSize / 2
+        let quarter = targetEOF / 4
+        let remainder = targetEOF % 4
+        let threeQuarters = quarter * 3 + (remainder * 3) / 4
+        func sampleStart(center: Int64) -> Int64 {
+            center > halfSample ? center - halfSample : 0
+        }
+        let finalSample = targetEOF > sampleSize ? targetEOF - sampleSize : 0
+        return Set([
+            Int64(0),
+            sampleStart(center: quarter),
+            sampleStart(center: targetEOF / 2),
+            sampleStart(center: threeQuarters),
+            finalSample,
+        ]).sorted()
+    }
+
+    private static func codexCompleteRecordEOF(
+        fileURL: URL,
+        observedSize: Int64,
+        withinRoot root: URL? = nil,
+        minimumKnownCompleteEOF: Int64 = 0) -> Int64
+    {
+        let safeKnownEOF = min(max(0, minimumKnownCompleteEOF), max(0, observedSize))
+        guard observedSize > 0,
+              let handle = try? Self.codexOpenRegularFileForReading(
+                  fileURL: fileURL,
+                  withinRoot: root)
+        else { return safeKnownEOF }
+        defer { try? handle.close() }
+        do {
+            let chunkSize = Int64(512 * 1024)
+            let minimumOffset = max(safeKnownEOF, observedSize - 4 * 1024 * 1024)
+            var end = observedSize
+            var trailingRecord = Data()
+            var canValidateTrailingRecord = true
+
+            while end > minimumOffset {
+                let start = max(minimumOffset, end - chunkSize)
+                try handle.seek(toOffset: UInt64(start))
+                let chunk = try handle.read(upToCount: Int(end - start)) ?? Data()
+                guard Int64(chunk.count) == end - start else { return safeKnownEOF }
+
+                if end == observedSize, chunk.last == 0x0A {
+                    return observedSize
+                }
+                if let newline = chunk.lastIndex(of: 0x0A) {
+                    let suffixStart = chunk.index(after: newline)
+                    if canValidateTrailingRecord {
+                        var candidate = Data(chunk[suffixStart...])
+                        candidate.append(trailingRecord)
+                        if !candidate.isEmpty,
+                           (try? JSONSerialization.jsonObject(with: candidate)) != nil
+                        {
+                            return observedSize
+                        }
+                    }
+                    return start + Int64(chunk.distance(
+                        from: chunk.startIndex,
+                        to: chunk.index(after: newline)))
+                }
+
+                if canValidateTrailingRecord,
+                   trailingRecord.count + chunk.count <= Int(chunkSize)
+                {
+                    trailingRecord.insert(contentsOf: chunk, at: 0)
+                } else {
+                    trailingRecord.removeAll(keepingCapacity: false)
+                    canValidateTrailingRecord = false
+                }
+                end = start
+            }
+
+            if minimumOffset == 0,
+               canValidateTrailingRecord,
+               (try? JSONSerialization.jsonObject(with: trailingRecord)) != nil
+            {
+                return observedSize
+            }
+            return safeKnownEOF
+        } catch {
+            return safeKnownEOF
+        }
+    }
+
+    /// Compare the bytes that can affect a generation. Growth beyond the same
+    /// complete-record EOF is only an unfinished append and must not create an
+    /// endless series of catch-up generations.
+    static func codexFrozenManifestsHaveSameFrontier(
+        _ lhs: [String: CodexFrozenFile],
+        _ rhs: [String: CodexFrozenFile]) -> Bool
+    {
+        guard lhs.count == rhs.count else { return false }
+        return lhs.allSatisfy { path, old in
+            guard let current = rhs[path],
+                  old.fileId == current.fileId,
+                  old.targetEOF == current.targetEOF,
+                  old.contentFingerprint != nil,
+                  old.contentFingerprint == current.contentFingerprint
+            else { return false }
+
+            if current.observedSize > old.observedSize {
+                return true
+            }
+            return current.observedSize == old.observedSize
+                && current.mtimeUnixMs == old.mtimeUnixMs
+        }
+    }
+
+    static func codexFrozenFileIsReadable(
+        _ target: CodexFrozenFile,
+        current: CodexFileMetadata,
+        fileURL: URL? = nil,
+        withinRoot root: URL? = nil) -> Bool
+    {
+        guard current.fileId == target.fileId,
+              target.targetEOF >= 0,
+              target.targetEOF <= target.observedSize,
+              current.size >= target.observedSize
+        else { return false }
+        guard current.size > target.observedSize || current.mtimeUnixMs == target.mtimeUnixMs
+        else { return false }
+        if let expected = target.contentFingerprint {
+            guard let fileURL,
+                  Self.codexFrozenPrefixFingerprint(
+                      fileURL: fileURL,
+                      targetEOF: target.targetEOF,
+                      withinRoot: root) == expected
+            else { return false }
+        }
+        return true
+    }
+
+    /// Normalize the persisted target to bytes the parser actually covered.
+    /// A post-parse append remains pending instead of being marked fresh.
+    static func codexParsedCoverage(
+        fileURL: URL,
+        target: CodexFrozenFile,
+        parsedBytes: Int64,
+        scanComplete: Bool,
+        withinRoot root: URL? = nil) -> CodexParsedCoverage?
+    {
+        let current = Self.codexFileMetadata(fileURL: fileURL, withinRoot: root)
+        guard Self.codexFrozenFileIsReadable(
+            target,
+            current: current,
+            fileURL: fileURL,
+            withinRoot: root),
+              parsedBytes >= 0,
+              parsedBytes <= target.targetEOF
+        else { return nil }
+
+        return CodexParsedCoverage(
+            mtimeUnixMs: target.mtimeUnixMs,
+            size: target.targetEOF,
+            scanComplete: scanComplete && parsedBytes == target.targetEOF)
+    }
+
+    static func retainKnownGoodCodexFileAsIncomplete(
+        input: CodexFileScanInput,
+        context: CodexFileScanContext,
+        cache: inout CostUsageCache)
+    {
+        if var cached = input.cached {
+            cached.codexScanComplete = false
+            cached.codexScanGeneration = context.scanGeneration
+            cached.codexScanTargetSize = input.target.targetEOF
+            cache.files[input.metadata.path] = cached
+            return
+        }
+        cache.files[input.metadata.path] = Self.makeFileUsage(
+            mtimeUnixMs: input.target.mtimeUnixMs,
+            size: input.target.targetEOF,
+            days: [:],
+            parsedBytes: 0,
+            codexScanFileId: input.target.fileId,
+            codexScanTargetSize: input.target.targetEOF,
+            codexScanContentFingerprint: input.target.contentFingerprint,
+            codexScanComplete: false,
+            codexScanGeneration: context.scanGeneration)
     }
 
     static func dropCachedCodexFile(
@@ -745,11 +1175,14 @@ extension CostUsageScanner {
         state: inout CodexScanState) -> Bool
     {
         guard let cached = input.cached else { return false }
-        let needsSessionId = cached.sessionId == nil
+        let needsSessionId = cached.sessionId == nil && cached.codexParseResumeState == nil
         let completedCurrentGeneration = cached.codexScanGeneration == context.scanGeneration
             && cached.codexScanComplete == true
-        guard cached.mtimeUnixMs == input.metadata.mtimeUnixMs,
-              cached.size == input.metadata.size,
+        guard cached.mtimeUnixMs == input.target.mtimeUnixMs,
+              cached.size == input.target.targetEOF,
+              cached.codexScanFileId == input.target.fileId,
+              cached.codexScanContentFingerprint != nil,
+              cached.codexScanContentFingerprint == input.target.contentFingerprint,
               !needsSessionId,
               cached.codexScanComplete != false,
               (!context.forceFullScan || completedCurrentGeneration)
@@ -787,26 +1220,43 @@ extension CostUsageScanner {
         state: inout CodexScanState) throws -> Bool
     {
         try context.checkCancellation?()
-        guard let cached = input.cached, cached.sessionId != nil else { return false }
+        guard let cached = input.cached else { return false }
+        let root = Self.codexContainingRoot(fileURL: input.fileURL, roots: context.roots)
+        guard context.roots.isEmpty || root != nil else { return false }
+        let sameFileId = cached.codexScanFileId != nil
+            && cached.codexScanFileId == input.target.fileId
+        let currentCachedPrefixFingerprint = cached.size == input.target.targetEOF
+            ? input.target.contentFingerprint
+            : Self.codexFrozenPrefixFingerprint(
+                fileURL: input.fileURL,
+                targetEOF: cached.size,
+                withinRoot: root)
+        let sameCachedPrefix = cached.codexScanContentFingerprint != nil
+            && cached.codexScanContentFingerprint == currentCachedPrefixFingerprint
+        let unchangedPendingFile = cached.codexScanTargetSize == input.target.targetEOF
+            && cached.size == input.target.targetEOF
         let resumesCurrentGeneration = cached.codexScanGeneration == context.scanGeneration
             && cached.codexScanComplete == false
-            && cached.mtimeUnixMs == input.metadata.mtimeUnixMs
-            && cached.size == input.metadata.size
-            && cached.codexScanTargetSize == input.metadata.size
-            && (cached.codexScanFileId == nil || input.metadata.fileId == nil
-                || cached.codexScanFileId == input.metadata.fileId)
+            && sameFileId
+            && sameCachedPrefix
+            && unchangedPendingFile
         guard !context.forceFullScan || resumesCurrentGeneration else { return false }
         guard !Self.cachedCodexFileNeedsPriorityRescan(cached, context: context) else { return false }
         let startOffset = cached.parsedBytes ?? cached.size
         let initialCountedTotals = cached.lastCountedTotals ?? cached.lastTotals
         let initialRawTotalsBaseline = cached.lastRawTotalsBaseline ?? cached.lastTotals
-        let canIncremental = (input.metadata.size > cached.size || resumesCurrentGeneration) && startOffset > 0
-            && startOffset <= input.metadata.size
-            && initialCountedTotals != nil
-            // Fork parsing depends on session metadata plus its resolved parent
-            // baseline. Those are not present when resuming from a byte offset,
-            // so restart forks from byte zero instead of corrupting their delta.
-            && cached.forkedFromId == nil
+        let resumeState = cached.codexParseResumeState
+        let hasCompatibleForkState = cached.forkedFromId == nil || (
+            resumeState?.forkedFromId == cached.forkedFromId
+                && resumeState?.sessionId == cached.sessionId)
+        let canIncremental = (input.target.targetEOF > (cached.parsedBytes ?? 0) || resumesCurrentGeneration)
+            && startOffset > 0
+            && startOffset <= cached.size
+            && startOffset <= input.target.targetEOF
+            && sameFileId
+            && sameCachedPrefix
+            && (initialCountedTotals != nil || resumeState != nil)
+            && hasCompatibleForkState
         guard canIncremental else { return false }
 
         let delta = try Self.parseCodexFileCancellable(
@@ -818,10 +1268,24 @@ extension CostUsageScanner {
             initialRawTotalsBaseline: initialRawTotalsBaseline,
             initialHasDivergentTotals: cached.hasDivergentTotals ?? (cached.lastTotals == nil),
             initialCodexTurnID: cached.lastCodexTurnID,
+            initialResumeState: resumeState,
             checkCancellation: context.checkCancellation,
-            shouldStop: context.shouldStop)
-        if delta.forkedFromId != nil {
+            shouldStop: context.shouldStop,
+            endOffset: input.target.targetEOF,
+            withinRoot: root)
+        if delta.forkedFromId != cached.forkedFromId {
             return false
+        }
+        guard let coverage = Self.codexParsedCoverage(
+            fileURL: input.fileURL,
+            target: input.target,
+            parsedBytes: delta.parsedBytes,
+            scanComplete: delta.scanComplete,
+            withinRoot: root)
+        else {
+            Self.retainKnownGoodCodexFileAsIncomplete(
+                input: input, context: context, cache: &cache)
+            return true
         }
         let sessionId = delta.sessionId ?? cached.sessionId
         if let sessionId, state.seenSessionIds.contains(sessionId) {
@@ -868,8 +1332,8 @@ extension CostUsageScanner {
                 sessionId.map { Self.codexProjectRetractionID(sessionId: $0, projectKey: key) }
             }
         cache.files[input.metadata.path] = Self.makeFileUsage(
-            mtimeUnixMs: input.metadata.mtimeUnixMs,
-            size: input.metadata.size,
+            mtimeUnixMs: coverage.mtimeUnixMs,
+            size: coverage.size,
             days: mergedDays,
             parsedBytes: delta.parsedBytes,
             lastModel: delta.lastModel,
@@ -907,10 +1371,12 @@ extension CostUsageScanner {
                 splitMaps.priorityTokens),
             codexTurnIDs: Self.mergeCodexTurnIDs(migratedCached.codexTurnIDs, rows: delta.rows),
             codexRows: migratedCached.codexRows,
-            codexScanFileId: input.metadata.fileId,
-            codexScanTargetSize: input.metadata.size,
-            codexScanComplete: delta.scanComplete,
-            codexScanGeneration: context.scanGeneration)
+            codexScanFileId: input.target.fileId,
+            codexScanTargetSize: input.target.targetEOF,
+            codexScanContentFingerprint: input.target.contentFingerprint,
+            codexScanComplete: coverage.scanComplete,
+            codexScanGeneration: context.scanGeneration,
+            codexParseResumeState: delta.resumeState)
         Self.rememberScannedCodexFile(
             fileURL: input.fileURL,
             metadata: input.metadata,
@@ -927,6 +1393,14 @@ extension CostUsageScanner {
         state: inout CodexScanState) throws
     {
         try context.checkCancellation?()
+        let root = Self.codexContainingRoot(fileURL: input.fileURL, roots: context.roots)
+        guard context.roots.isEmpty || root != nil else {
+            Self.retainKnownGoodCodexFileAsIncomplete(
+                input: input,
+                context: context,
+                cache: &cache)
+            return
+        }
         if let cached = input.cached {
             self.applyFileDays(cache: &cache, fileDays: cached.days, sign: -1)
         }
@@ -940,7 +1414,23 @@ extension CostUsageScanner {
             range: context.range,
             inheritedTotalsResolver: context.resources.inheritedResolver.inheritedTotals(for:atOrBefore:),
             checkCancellation: context.checkCancellation,
-            shouldStop: context.shouldStop)
+            shouldStop: context.shouldStop,
+            endOffset: input.target.targetEOF,
+            withinRoot: root)
+        guard let coverage = Self.codexParsedCoverage(
+            fileURL: input.fileURL,
+            target: input.target,
+            parsedBytes: parsed.parsedBytes,
+            scanComplete: parsed.scanComplete,
+            withinRoot: root)
+        else {
+            if let cached = input.cached {
+                Self.applyFileDays(cache: &cache, fileDays: cached.days, sign: 1)
+            }
+            Self.retainKnownGoodCodexFileAsIncomplete(
+                input: input, context: context, cache: &cache)
+            return
+        }
         let sessionId = parsed.sessionId ?? input.cached?.sessionId
         if let sessionId, state.seenSessionIds.contains(sessionId) {
             Self.reconcileDuplicateCodexProject(
@@ -972,8 +1462,8 @@ extension CostUsageScanner {
                 sessionId.map { Self.codexProjectRetractionID(sessionId: $0, projectKey: key) }
             }
         cache.files[input.metadata.path] = Self.makeFileUsage(
-            mtimeUnixMs: input.metadata.mtimeUnixMs,
-            size: input.metadata.size,
+            mtimeUnixMs: coverage.mtimeUnixMs,
+            size: coverage.size,
             days: usageDays,
             parsedBytes: parsed.parsedBytes,
             lastModel: parsed.lastModel,
@@ -1032,10 +1522,12 @@ extension CostUsageScanner {
                 ? Self.codexTurnIDs(rows: parsed.rows)
                 : Self.mergeCodexTurnIDs(migratedCached?.codexTurnIDs, rows: parsed.rows),
             codexRows: context.dropDeferredCodexRows ? nil : migratedCached?.codexRows,
-            codexScanFileId: input.metadata.fileId,
-            codexScanTargetSize: input.metadata.size,
-            codexScanComplete: parsed.scanComplete,
-            codexScanGeneration: context.scanGeneration)
+            codexScanFileId: input.target.fileId,
+            codexScanTargetSize: input.target.targetEOF,
+            codexScanContentFingerprint: input.target.contentFingerprint,
+            codexScanComplete: coverage.scanComplete,
+            codexScanGeneration: context.scanGeneration,
+            codexParseResumeState: parsed.resumeState)
         Self.applyFileDays(cache: &cache, fileDays: cache.files[input.metadata.path]?.days ?? [:], sign: 1)
         Self.rememberScannedCodexFile(
             fileURL: input.fileURL,
