@@ -1,6 +1,26 @@
 import SwiftUI
 import AppKit
 
+enum QuotaPanelLifecycle {
+    static func shouldRetriggerCodexAfterWindowOpened(
+        isDropdown: Bool,
+        providerID: String) -> Bool
+    {
+        isDropdown && supportsCodexReport(providerID)
+    }
+
+    static func shouldRetriggerCodexAfterDayChanged(
+        hasVisibleDropdown: Bool,
+        providerID: String) -> Bool
+    {
+        hasVisibleDropdown && supportsCodexReport(providerID)
+    }
+
+    private static func supportsCodexReport(_ providerID: String) -> Bool {
+        providerID == "all" || providerID == "codex"
+    }
+}
+
 // MARK: - Quota Overview (CodexBar-style)
 
 /// Menu-bar popover body:
@@ -175,11 +195,32 @@ struct QuotaOverview: View {
             guard let providerID = note.userInfo?["providerID"] as? String else { return }
             selectProviderTab(providerID)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
             // QuotaOverview stays mounted while the popover is hidden, so this
             // refreshes raw detector evidence whenever a BirdNion window opens
-            // (popover or Settings/Insights) without coupling provider refresh.
+            // (popover or Settings/Insights). Only the dropdown additionally
+            // asks the Codex single-flight coordinator for a fresh report.
             installedAgents.refresh()
+            let providerID = effectiveSelectedId()
+            guard QuotaPanelLifecycle.shouldRetriggerCodexAfterWindowOpened(
+                isDropdown: note.object is DropdownPanel,
+                providerID: providerID)
+            else { return }
+            triggerCodexReportIfNeeded(providerId: providerID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            // The view can remain mounted across midnight. Refresh immediately
+            // only while the dropdown is visible; reopening is the fallback
+            // after sleep or while it was hidden.
+            let providerID = effectiveSelectedId()
+            let hasVisibleDropdown = NSApp.windows.contains {
+                $0 is DropdownPanel && $0.isVisible
+            }
+            guard QuotaPanelLifecycle.shouldRetriggerCodexAfterDayChanged(
+                hasVisibleDropdown: hasVisibleDropdown,
+                providerID: providerID)
+            else { return }
+            triggerCodexReportIfNeeded(providerId: providerID)
         }
         .onReceive(NotificationCenter.default.publisher(for: .birdnionAllTabWillOpen)) { _ in
             // Switching into All does not change the key window; refresh here
@@ -406,8 +447,6 @@ struct QuotaOverview: View {
         }
     }
 
-    /// Trigger the Codex 30-day scan only when the user views the Codex tab.
-    /// Cached 5 min by `CodexCostScanner`; switching tabs cancels via taskId.
     private func triggerCodexReportIfNeeded(providerId: String) {
         let taskId = UUID().uuidString
         codexReportTaskId = taskId
