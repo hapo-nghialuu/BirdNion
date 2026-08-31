@@ -237,6 +237,18 @@ Mỗi scanner Claude/Codex/Grok/Kiro/OMP/Pi trả metadata `included`, `live`, `
 - Popover chỉ hiện badge count gọn; tab All không thêm card. Chi tiết và CTA nằm trong Settings `Action Center`. Issue tự biến mất khi status thành công/stale được xóa.
 - Không có issue database/history, polling loop riêng, raw-error persistence, quota/budget/release item. Trên Linux, main WebView giữ projection và fetch owner; Settings nhận snapshot sanitized qua Tauri event, còn Retry quay về existing per-provider in-flight guard thay vì tạo pipeline mới.
 
+### 4.5 Local scanner cache, pending journal và reopen gate
+
+- `CodexCostScanner.Cache` là singleflight actor cho report. Core chỉ promote một frozen generation sau khi cache ghi thành công; generation vừa promote có thể được đưa vào history và trả ngay cả khi một catch-up generation mới đang pending.
+- `usageReport()` đọc `pendingScanProgress()` trước fast-path của cache. Nếu có journal pending, nó bypass cache và đi vào `runReportEpisode()`; episode tiếp tục khi durable checkpoint thật sự tiến, dừng khi complete, vừa publish một finite snapshot, bị cancel, không còn progress hoặc gặp lại cùng checkpoint. Không còn giới hạn cứng hai pass và cũng không spin khi progress đứng yên.
+- `summary()` và `lastSummary()` giữ same-day last-good fallback: report cùng ngày vẫn được trả khi scan chưa complete, còn `validReport()` vẫn bị khóa theo cùng ngày + TTL để tránh flash empty.
+- `CostUsageCache` tách publishable `files`/`days` khỏi pending state (`codexPendingScanGeneration`, immutable range, frozen file manifest, pending file/day maps và parent journals). Appends/file mới chỉ vào catch-up generation; journal cũ thiếu finite manifest/fingerprint bị loại mà không xóa committed maps. Manifest chuẩn hóa khóa path theo sessions root; khi rollback, identity của ancestor gần nhất còn tồn tại hợp nhất alias như `/var` và `/private/var` mà không cần frozen leaf còn trên đĩa. Journal cũ có khóa không chuẩn không được resume; mixed legacy state bị bỏ coverage để không bị hiểu nhầm là snapshot hoàn chỉnh.
+- Mỗi manifest đóng băng membership, inode, physical size, complete-record EOF và fingerprint mẫu có giới hạn. File được mở component-by-component dưới đúng sessions root bằng `openat` + `O_NOFOLLOW`/`O_NONBLOCK`, sau đó `fstat` phải là regular file; FIFO và symlink không được parse. EOF search có giới hạn và giữ verified cached boundary khi trailing record đang viết dở.
+- Nếu frozen target biến mất, bị thay thế hoặc tạm unreadable khi resume, toàn bộ working generation bị rollback thay vì promote snapshot trộn. Main maps và các trust marker về window/pricing/priority giữ nguyên last-good; alias per-file được canonicalize đúng một contribution, catch-up được seed lại và snapshot hiển thị vẫn non-LIVE. Sample-offset và tổng progress dùng arithmetic overflow-safe/saturating tới `Int64.max`.
+- Main/parent parser đều checkpoint `parsedBytes` cùng toàn bộ semantic resume state. Khi deadline cắt giữa record oversized vốn chắc chắn bị bỏ, journal lưu `discardingTruncatedLine`; pass sau tiến tiếp đến newline/authoritative EOF, không parse suffix và không quay mãi về đầu line. Metadata prepass/identity cũng bị chặn bởi frozen `targetEOF`.
+- Parent lookup của Codex dùng `CodexSessionFileIndex` + `CodexInheritedTotalsResolver`: directory membership được snapshot, depth giới hạn 32, locator chỉ relative và kết quả phân biệt `found` / `definitivelyAbsent` / `retryableIOFailure`.
+- `QuotaPanel` chỉ retrigger Codex report khi dropdown đang visible hoặc khi window-open là `DropdownPanel`, và chỉ cho `all`/`codex`; khi tab hidden thì chờ reopen thay vì spawn poller riêng.
+
 ## 5. Lưu trữ & bảo mật
 
 | Dữ liệu | Vị trí | Quyền |
@@ -257,7 +269,7 @@ Mỗi scanner Claude/Codex/Grok/Kiro/OMP/Pi trả metadata `included`, `live`, `
 
 Shared `settings.json` dùng revision monotonic + exact-byte CAS, fixed recovery claim, reader/writer lock và directory-descriptor binding. Lỗi đọc authoritative không được giả thành document revision 0; parent route đổi làm transaction fail-closed. App chỉ đặt `0700` khi tự tạo leaf support directory, không thay mode của parent override đã tồn tại; settings/lock file vẫn `0600`.
 | Project cost history | `~/.config/birdnion/project-cost-history.json` (sibling của settings/cost history) | SHA-256 keys + safe basename, hashed retraction IDs, atomic `0600`, high-water 400 ngày |
-| Local token scanner cache | in-memory (5 min TTL) | n/a |
+| Local token scanner cache | macOS `~/Library/Caches/CodexBar/cost-usage/codex-v12.json`; report memory cache có TTL 5 phút | committed maps và pending journal tách riêng; atomic replace; không lưu raw JSONL content |
 
 > As of the 2026-06-25 storage refactor, there is **no BirdNion-owned
 > Keychain entry**. The previous split between
