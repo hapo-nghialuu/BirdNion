@@ -161,6 +161,18 @@ struct CostUsageCache: Codable {
     /// Immutable file membership and byte frontier for one bounded episode.
     /// Appends and newly-created files are captured by a later catch-up episode.
     var codexPendingFileManifest: [String: CodexFrozenFile]?
+    /// Durable FIFO for the frozen manifest. Dictionaries do not preserve the
+    /// scheduling contract: a partial file must move behind every waiter so a
+    /// continuously-growing session cannot starve the rest of the generation.
+    var codexPendingFileOrder: [String]?
+    /// Flat-root inventory cursors. A key remains until that root reaches EOF;
+    /// scanning/pruning starts only after every cursor has drained.
+    var codexPendingFlatDiscoveryOffsets: [String: Int64]?
+    /// Opaque identity of the live bounded directory cursor plus its replay
+    /// position. After an app restart the ordinal can temporarily stay fixed
+    /// while the new cursor catches up; this token proves that bounded replay
+    /// is advancing so the background no-progress guard does not stop early.
+    var codexPendingFlatDiscoveryProgress: [String: String]?
     /// Working state for an unfinished generation. These fields are never used
     /// to build a publishable report; completion promotes them atomically.
     var codexPendingFiles: [String: CostUsageFileUsage]?
@@ -207,6 +219,9 @@ struct CostUsageCache: Codable {
         self.codexPendingScanSinceKey = nil
         self.codexPendingScanUntilKey = nil
         self.codexPendingFileManifest = nil
+        self.codexPendingFileOrder = nil
+        self.codexPendingFlatDiscoveryOffsets = nil
+        self.codexPendingFlatDiscoveryProgress = nil
         self.codexPendingFiles = nil
         self.codexPendingDays = nil
         self.codexPendingParentScans = nil

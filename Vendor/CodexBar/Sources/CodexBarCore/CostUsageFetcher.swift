@@ -76,6 +76,12 @@ public struct CostUsageFetcher: Sendable {
             let pendingFiles = cache.codexPendingFiles ?? [:]
             let parentScans = cache.codexPendingParentScans ?? [:]
             let parentDiscoveries = cache.codexPendingParentDiscoveries ?? [:]
+            let flatDiscoveryOffsets = cache.codexPendingFlatDiscoveryOffsets ?? [:]
+            let expectedFileGeneration = [
+                generation,
+                cache.codexPendingScanSinceKey ?? "",
+                cache.codexPendingScanUntilKey ?? "",
+            ].joined(separator: "|")
             let pendingBytes = Self.saturatingParsedBytesSum(
                 pendingFiles.values.map { $0.parsedBytes ?? 0 })
             let parentBytes = Self.saturatingParsedBytesSum(
@@ -85,11 +91,15 @@ public struct CostUsageFetcher: Sendable {
                 parsedBytes: Self.saturatingParsedBytesSum([pendingBytes, parentBytes]),
                 incompleteFiles: manifest.keys.count { path in
                     let usage = pendingFiles[path]
-                    return usage?.codexScanComplete != true
+                    return usage?.codexScanGeneration != expectedFileGeneration
+                        || usage?.codexScanComplete != true
                         || usage?.codexScanTargetSize != manifest[path]?.targetEOF
+                        || usage?.codexScanFileId != manifest[path]?.fileId
+                        || usage?.codexScanContentFingerprint != manifest[path]?.contentFingerprint
                 }
                     + parentScans.values.count { !$0.scanComplete }
-                    + parentDiscoveries.values.count { $0.resolvedRelativePath == nil },
+                    + parentDiscoveries.values.count { $0.resolvedRelativePath == nil }
+                    + flatDiscoveryOffsets.count,
                 progressFingerprint: CostUsageScanner.codexPendingProgressFingerprint(cache))
         }
     }
@@ -193,11 +203,11 @@ public struct CostUsageFetcher: Sendable {
             options.codexSessionsRoot = URL(fileURLWithPath: codexHomePath, isDirectory: true)
                 .appendingPathComponent("sessions", isDirectory: true)
         }
-        // Chống treo khi lịch sử Codex JSONL cực lớn (hàng GB): giới hạn thời
-        // gian mỗi lần scan; phần còn lại resume ở lần scan sau qua cache đĩa.
-        // Chỉ áp khi caller không tự đặt (override giữ nguyên hành vi test).
+        // Keep the foreground pass off the popover's critical path. Remaining
+        // work owns a durable queue and continues through background catch-up.
+        // Explicit scanner options retain their test/caller-defined budget.
         if provider == .codex, overrideScannerOptions == nil, options.maxScanWallClock == nil {
-            options.maxScanWallClock = 12
+            options.maxScanWallClock = 2
         }
         if provider == .codex || provider == .claude {
             let pricingCacheRoot = options.cacheRoot

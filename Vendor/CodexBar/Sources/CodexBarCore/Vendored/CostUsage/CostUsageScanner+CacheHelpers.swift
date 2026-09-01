@@ -1190,9 +1190,16 @@ extension CostUsageScanner {
 
         guard !Self.cachedCodexFileNeedsPriorityRescan(cached, context: context) else { return false }
 
-        if Self.needsCodexCostCache(cached, range: context.range) {
-            cache.files[input.metadata.path] = Self.codexFileUsageWithCostCache(cached, context: context)
-        }
+        var retained = Self.needsCodexCostCache(cached, range: context.range)
+            ? Self.codexFileUsageWithCostCache(cached, context: context)
+            : cached
+        // A frozen generation treats this file as complete, so persist that
+        // fact. Without the marker, resumed passes revisit the same newest
+        // prefix forever while pending-status still reports the file unfinished.
+        retained.codexScanGeneration = context.scanGeneration
+        retained.codexScanComplete = true
+        retained.codexScanTargetSize = input.target.targetEOF
+        cache.files[input.metadata.path] = retained
         Self.rememberScannedCodexFile(
             fileURL: input.fileURL,
             metadata: input.metadata,
