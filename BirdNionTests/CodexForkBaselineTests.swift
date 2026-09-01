@@ -1266,6 +1266,9 @@ final class CodexForkBaselineTests: XCTestCase {
         XCTAssertNil(migrated.scanUntilKey)
         XCTAssertNil(migrated.codexPendingScanGeneration)
         XCTAssertNil(migrated.codexPendingFileManifest)
+        XCTAssertNil(migrated.codexPendingFileOrder)
+        XCTAssertNil(migrated.codexPendingFlatDiscoveryOffsets)
+        XCTAssertNil(migrated.codexPendingFlatDiscoveryProgress)
         XCTAssertNil(migrated.codexPendingFiles)
         XCTAssertNil(migrated.codexPendingDays)
         XCTAssertNil(migrated.codexPendingParentScans)
@@ -1329,6 +1332,9 @@ final class CodexForkBaselineTests: XCTestCase {
         committedAfter.codexPendingScanSinceKey = nil
         committedAfter.codexPendingScanUntilKey = nil
         committedAfter.codexPendingFileManifest = nil
+        committedAfter.codexPendingFileOrder = nil
+        committedAfter.codexPendingFlatDiscoveryOffsets = nil
+        committedAfter.codexPendingFlatDiscoveryProgress = nil
         committedAfter.codexPendingFiles = nil
         committedAfter.codexPendingDays = nil
         committedAfter.codexPendingParentScans = nil

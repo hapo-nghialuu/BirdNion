@@ -46,6 +46,29 @@ final class CodexCostScannerTests: XCTestCase {
         }
     }
 
+    private actor CatchUpRaceProbe {
+        private var started = false
+        private var released = false
+        private var finished = false
+
+        func load(_ report: CodexUsageReport) async -> CodexCostScanner.ReportLoad {
+            started = true
+            while !released { await Task.yield() }
+            finished = true
+            return .init(value: report, completed: true)
+        }
+
+        func waitUntilStarted() async {
+            while !started { await Task.yield() }
+        }
+
+        func release() { released = true }
+
+        func waitUntilFinished() async {
+            while !finished { await Task.yield() }
+        }
+    }
+
     private static func report(tokens: Int = 1) -> CodexUsageReport {
         CodexUsageReport(
             todayUSD: 0.01,
@@ -93,6 +116,50 @@ final class CodexCostScannerTests: XCTestCase {
         lines.append(
             #"{"timestamp":"2026-08-20T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50}}}}"#)
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file)
+    }
+
+    private func writeIncrementalCodexFixture(
+        root: URL,
+        partition: String,
+        sessionID: String,
+        timestamp: String,
+        totalTokens: Int) throws -> URL
+    {
+        let file = root.appendingPathComponent(
+            "sessions/\(partition)/rollout-\(sessionID).jsonl")
+        try FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let lines = [
+            """
+            {"timestamp":"\(timestamp)","type":"session_meta",\
+            "payload":{"id":"\(sessionID)","timestamp":"\(timestamp)"}}
+            """,
+            #"{"timestamp":"\#(timestamp)","type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            """
+            {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count",\
+            "info":{"total_token_usage":{"input_tokens":\(totalTokens),"cached_input_tokens":0,"output_tokens":0},\
+            "last_token_usage":{"input_tokens":\(totalTokens),"cached_input_tokens":0,"output_tokens":0}}}}
+            """,
+        ]
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file)
+        return file
+    }
+
+    private func appendIncrementalCodexUsage(
+        to file: URL,
+        timestamp: String,
+        totalTokens: Int,
+        lastTokens: Int) throws
+    {
+        let line = """
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count",\
+        "info":{"total_token_usage":{"input_tokens":\(totalTokens),"cached_input_tokens":0,"output_tokens":0},\
+        "last_token_usage":{"input_tokens":\(lastTokens),"cached_input_tokens":0,"output_tokens":0}}}}
+        """
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((line + "\n").utf8))
     }
 
     func testMapsSnapshot() {
@@ -698,7 +765,9 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertNil(finalized.codexPendingScanGeneration)
 
         // Seed a valid bounded episode through the public scanner API, then
-        // make only its persisted per-file completion marker stale at EOF.
+        // make only its persisted per-file completion marker absent at EOF.
+        // Older catch-up journals used this exact nil state, which the scanner
+        // accepted as fresh without durably recording traversal progress.
         let bounded = try await CostUsageFetcher.loadTokenSnapshot(
             provider: .codex,
             now: now,
@@ -727,8 +796,11 @@ final class CodexCostScannerTests: XCTestCase {
         let target = try XCTUnwrap(finalized.codexPendingFileManifest?[filePath])
         let pendingFile = try XCTUnwrap(finalized.codexPendingFiles?[filePath])
         XCTAssertEqual(pendingFile.parsedBytes, target.targetEOF)
-        finalized.codexPendingFiles?[filePath]?.codexScanComplete = false
+        finalized.codexPendingFiles?[filePath]?.codexScanComplete = nil
         CostUsageCacheIO.save(provider: .codex, cache: finalized, cacheRoot: cacheRoot)
+        let nilMarkerStatus = await CostUsageFetcher(cacheRoot: cacheRoot)
+            .loadCodexPendingScanStatus()
+        XCTAssertEqual(nilMarkerStatus?.incompleteFiles, 1)
 
         let resumed = try await CostUsageFetcher.loadTokenSnapshot(
             provider: .codex,
@@ -747,6 +819,380 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertNil(resumedCache.codexPendingScanGeneration)
     }
 
+    func testWarmRefreshQueuesOnlyChangedSessionAndRetainsHistoricalTotal() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-warm-delta-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let cacheRoot = root.appendingPathComponent("cache")
+        let historical = try writeIncrementalCodexFixture(
+            root: home,
+            partition: "2026/08/18",
+            sessionID: "historical",
+            timestamp: "2026-08-18T10:00:00.000Z",
+            totalTokens: 100)
+        let active = try writeIncrementalCodexFixture(
+            root: home,
+            partition: "2026/08/19",
+            sessionID: "cross-midnight-active",
+            timestamp: "2026-08-19T10:00:00.000Z",
+            totalTokens: 200)
+        let baselineNow = ISO8601DateFormatter().date(from: "2026-08-20T10:00:00Z")!
+        try FileManager.default.setAttributes(
+            [.modificationDate: baselineNow.addingTimeInterval(-3600)],
+            ofItemAtPath: historical.path)
+        try FileManager.default.setAttributes(
+            [.modificationDate: baselineNow.addingTimeInterval(-72 * 60 * 60)],
+            ofItemAtPath: active.path)
+
+        let baseline = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: baselineNow,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertFalse(baseline.scanIncomplete)
+        XCTAssertEqual(baseline.last30DaysTokens, 300)
+
+        let updateNow = ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z")!
+        try appendIncrementalCodexUsage(
+            to: active,
+            timestamp: "2026-08-20T11:00:00.000Z",
+            totalTokens: 250,
+            lastTokens: 50)
+        try FileManager.default.setAttributes(
+            [.modificationDate: updateNow.addingTimeInterval(-1800)],
+            ofItemAtPath: active.path)
+        let seeded = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: updateNow,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot, maxScanWallClock: 0))
+        XCTAssertTrue(seeded.scanIncomplete)
+        let pending = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertEqual(
+            Set(pending.codexPendingFileManifest?.keys.map(\.self) ?? []),
+            [active.path])
+        XCTAssertNotNil(pending.codexPendingFiles?[historical.path])
+        let status = await CostUsageFetcher(cacheRoot: cacheRoot).loadCodexPendingScanStatus()
+        XCTAssertEqual(status?.incompleteFiles, 1)
+
+        let completed = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: updateNow,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertFalse(completed.scanIncomplete)
+        XCTAssertEqual(completed.sessionTokens, 50)
+        XCTAssertEqual(completed.last30DaysTokens, 350)
+        let finalized = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertNotNil(finalized.files[historical.path])
+        XCTAssertNil(finalized.codexPendingScanGeneration)
+    }
+
+    func testWarmRefreshReconcilesArchivedRenameWithoutLosingUsage() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-archive-rename-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let cacheRoot = root.appendingPathComponent("cache")
+        let session = try writeIncrementalCodexFixture(
+            root: home,
+            partition: "2026/08/18",
+            sessionID: "archived-preserved-mtime",
+            timestamp: "2026-08-18T10:00:00.000Z",
+            totalTokens: 100)
+        let now = ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z")!
+        let oldMtime = now.addingTimeInterval(-24 * 60 * 60)
+        try FileManager.default.setAttributes(
+            [.modificationDate: oldMtime],
+            ofItemAtPath: session.path)
+
+        let baseline = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertFalse(baseline.scanIncomplete)
+        XCTAssertEqual(baseline.last30DaysTokens, 100)
+        let baselineCache = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        let baselineFileID = try XCTUnwrap(baselineCache.files[session.path]?.codexScanFileId)
+
+        let archiveDirectory = home.appendingPathComponent("archived_sessions")
+        try FileManager.default.createDirectory(
+            at: archiveDirectory,
+            withIntermediateDirectories: true)
+        let archived = archiveDirectory.appendingPathComponent(session.lastPathComponent)
+        try FileManager.default.moveItem(at: session, to: archived)
+        let archivedMtime = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: archived.path)[.modificationDate] as? Date)
+        XCTAssertEqual(archivedMtime.timeIntervalSince1970, oldMtime.timeIntervalSince1970, accuracy: 1)
+
+        let bounded = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now.addingTimeInterval(60),
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot, maxScanWallClock: 0))
+        XCTAssertTrue(bounded.scanIncomplete)
+        let pending = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertEqual(
+            Set(pending.codexPendingFileManifest?.keys.map(\.self) ?? []),
+            [archived.path])
+
+        let completed = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now.addingTimeInterval(60),
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertFalse(completed.scanIncomplete)
+        XCTAssertEqual(completed.last30DaysTokens, 100)
+        let finalized = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertEqual(finalized.files.count, 1)
+        XCTAssertNil(finalized.files[session.path])
+        XCTAssertNotNil(finalized.files[archived.path])
+        XCTAssertEqual(finalized.files[archived.path]?.codexScanFileId, baselineFileID)
+        XCTAssertEqual(finalized.days, baselineCache.days)
+        XCTAssertNil(finalized.codexPendingScanGeneration)
+    }
+
+    func testWarmFlatDiscoveryResumesAfterInMemoryCursorIsLost() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-flat-page-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let cacheRoot = root.appendingPathComponent("cache")
+        _ = try writeIncrementalCodexFixture(
+            root: home,
+            partition: "2026/08/20",
+            sessionID: "flat-page-baseline",
+            timestamp: "2026-08-20T10:00:00.000Z",
+            totalTokens: 100)
+        let now = ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z")!
+        let baseline = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertEqual(baseline.last30DaysTokens, 100)
+
+        let archiveDirectory = home.appendingPathComponent("archived_sessions")
+        try FileManager.default.createDirectory(
+            at: archiveDirectory,
+            withIntermediateDirectories: true)
+        for index in 0..<1300 {
+            let file = archiveDirectory.appendingPathComponent("ignored-\(index).txt")
+            _ = FileManager.default.createFile(atPath: file.path, contents: Data())
+        }
+
+        let first = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now.addingTimeInterval(60),
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertTrue(first.scanIncomplete)
+        let pending = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertNotNil(pending.codexPendingFlatDiscoveryOffsets)
+        XCTAssertFalse(pending.codexPendingFlatDiscoveryOffsets?.isEmpty ?? true)
+        let firstPendingStatus = await CostUsageFetcher(cacheRoot: cacheRoot)
+            .loadCodexPendingScanStatus()
+        let firstStatus = try XCTUnwrap(firstPendingStatus)
+
+        let second = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now.addingTimeInterval(60),
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertTrue(second.scanIncomplete)
+        let beforeRestart = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        let archivePath = archiveDirectory.standardizedFileURL.path
+        XCTAssertEqual(beforeRestart.codexPendingFlatDiscoveryOffsets?[archivePath], 1024)
+        let pendingStatusBeforeRestart = await CostUsageFetcher(cacheRoot: cacheRoot)
+            .loadCodexPendingScanStatus()
+        let beforeRestartStatus = try XCTUnwrap(pendingStatusBeforeRestart)
+        XCTAssertNotEqual(beforeRestartStatus.progressFingerprint, firstStatus.progressFingerprint)
+
+        // Simulate an app restart: the durable ordinal remains, but every DIR
+        // cursor disappears. Replay must advertise bounded progress until it
+        // catches the ordinal, otherwise the background no-progress guard
+        // stops before entry 1025.
+        CostUsageScanner.resetCodexFlatDirectoryCursorsForTesting()
+        let firstReplay = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now.addingTimeInterval(60),
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertTrue(firstReplay.scanIncomplete)
+        XCTAssertEqual(
+            CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+                .codexPendingFlatDiscoveryOffsets?[archivePath],
+            1024)
+        let pendingStatusAfterFirstReplay = await CostUsageFetcher(cacheRoot: cacheRoot)
+            .loadCodexPendingScanStatus()
+        let firstReplayStatus = try XCTUnwrap(pendingStatusAfterFirstReplay)
+        XCTAssertNotEqual(
+            firstReplayStatus.progressFingerprint,
+            beforeRestartStatus.progressFingerprint)
+
+        let secondReplay = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now.addingTimeInterval(60),
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(cacheRoot: cacheRoot))
+        XCTAssertTrue(secondReplay.scanIncomplete)
+        XCTAssertEqual(
+            CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+                .codexPendingFlatDiscoveryOffsets?[archivePath],
+            1024)
+        let pendingStatusAfterSecondReplay = await CostUsageFetcher(cacheRoot: cacheRoot)
+            .loadCodexPendingScanStatus()
+        let secondReplayStatus = try XCTUnwrap(pendingStatusAfterSecondReplay)
+        XCTAssertNotEqual(
+            secondReplayStatus.progressFingerprint,
+            firstReplayStatus.progressFingerprint)
+
+        var completed = secondReplay
+        for _ in 0..<4 where completed.scanIncomplete {
+            completed = try await CostUsageFetcher.loadTokenSnapshot(
+                provider: .codex,
+                now: now.addingTimeInterval(60),
+                forceRefresh: true,
+                codexHomePath: home.path,
+                historyDays: 7,
+                refreshPricingInBackground: false,
+                scannerOptions: .init(cacheRoot: cacheRoot))
+        }
+        XCTAssertFalse(completed.scanIncomplete)
+        XCTAssertEqual(completed.last30DaysTokens, 100)
+        XCTAssertNil(
+            CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+                .codexPendingFlatDiscoveryOffsets)
+        XCTAssertNil(
+            CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+                .codexPendingFlatDiscoveryProgress)
+    }
+
+    func testBoundedCandidateQueueDrainsWithoutStarvingTailFile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-fair-queue-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let cacheRoot = root.appendingPathComponent("cache")
+        let now = ISO8601DateFormatter().date(from: "2026-08-20T18:00:00Z")!
+        for index in 0...CostUsageScanner.codexCatchUpScanCandidateLimit {
+            _ = try writeIncrementalCodexFixture(
+                root: home,
+                partition: "2026/08/20",
+                sessionID: "queue-\(String(format: "%04d", index))",
+                timestamp: "2026-08-20T10:00:00.000Z",
+                totalTokens: 1)
+        }
+        let options = CostUsageScanner.Options(
+            cacheRoot: cacheRoot,
+            codexTraceDatabaseURL: root.appendingPathComponent("missing-codex-trace.sqlite"))
+
+        let first = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: options)
+        XCTAssertTrue(first.scanIncomplete)
+        let pending = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertEqual(pending.codexPendingFileOrder?.count, 1)
+        let status = await CostUsageFetcher(cacheRoot: cacheRoot).loadCodexPendingScanStatus()
+        XCTAssertEqual(status?.incompleteFiles, 1)
+
+        let completed = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: options)
+        XCTAssertFalse(completed.scanIncomplete)
+        XCTAssertEqual(
+            completed.last30DaysTokens,
+            CostUsageScanner.codexCatchUpScanCandidateLimit + 1)
+        XCTAssertNil(
+            CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+                .codexPendingFileOrder)
+    }
+
+    func testPendingFileOrderPreservesWaitersAndExistingAdmissionSemantics() {
+        let oldWaiter = "/tmp/birdnion-codex-old-waiter.jsonl"
+        let newest = "/tmp/birdnion-codex-newest.jsonl"
+        let smaller = "/tmp/birdnion-codex-smaller.jsonl"
+        let larger = "/tmp/birdnion-codex-larger.jsonl"
+        let eligible = Set([oldWaiter, newest, smaller, larger])
+
+        let order = CostUsageScanner.reconciledCodexPendingFileOrder(
+            persistedOrder: [oldWaiter, oldWaiter, "/tmp/no-longer-eligible.jsonl"],
+            eligiblePaths: eligible)
+
+        XCTAssertEqual(order, [oldWaiter, smaller, newest, larger])
+    }
+
+    func testPendingFileOrderRotatesServicedPartialBehindEveryWaiter() {
+        let order = (0...512).map { "/tmp/birdnion-codex-waiter-\($0).jsonl" }
+        let result = CostUsageScanner.finalizedCodexPendingFileOrder(
+            order,
+            completedPaths: [order[1]],
+            servicedIncompletePaths: [order[0]])
+
+        XCTAssertEqual(result.first, order[2])
+        XCTAssertEqual(result.last, order[0])
+        XCTAssertFalse(result.contains(order[1]))
+        XCTAssertEqual(result.count, 512)
+    }
+
+    func testPendingProgressIgnoresQueueRotationButTracksMembership() {
+        var cache = CostUsageCache()
+        cache.codexPendingScanGeneration = "generation"
+        cache.codexPendingFileOrder = ["/tmp/a.jsonl", "/tmp/b.jsonl"]
+        let baseline = CostUsageScanner.codexPendingProgressFingerprint(cache)
+
+        cache.codexPendingFileOrder = ["/tmp/b.jsonl", "/tmp/a.jsonl"]
+        XCTAssertEqual(CostUsageScanner.codexPendingProgressFingerprint(cache), baseline)
+
+        cache.codexPendingFileOrder = ["/tmp/b.jsonl"]
+        XCTAssertNotEqual(CostUsageScanner.codexPendingProgressFingerprint(cache), baseline)
+    }
+
     func testReportEpisodeRetriesIncompleteScanExactlyOnce() async {
         let report = Self.report(tokens: 42)
         let probe = ReportPassProbe([
@@ -762,6 +1208,24 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertEqual(result.value?.todayTokens, 42)
         let calls = await probe.calls()
         XCTAssertEqual(calls, [false, true])
+    }
+
+    func testForegroundReportEpisodeYieldsAfterOneBoundedPass() async {
+        let pending = CodexCostScanner.ReportLoad(
+            value: nil,
+            completed: false,
+            progress: Self.progress(bytes: 10))
+        let probe = ReportPassProbe([pending])
+
+        let result = await CodexCostScanner.runReportEpisode(yieldAfterFirstPass: true) {
+            forceRefresh in
+            await probe.load(forceRefresh: forceRefresh)
+        }
+
+        XCTAssertFalse(result.completed)
+        XCTAssertNil(result.value)
+        let calls = await probe.calls()
+        XCTAssertEqual(calls, [false])
     }
 
     func testReportEpisodeStopsImmediatelyAfterPublishingFiniteGenerationWithCatchUpPending() async {
@@ -787,6 +1251,61 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertEqual(result.progress?.parsedBytes, 1)
         XCTAssertEqual(result.progress?.incompleteFiles, 1)
         XCTAssertEqual(result.progress?.progressFingerprint, "catch-up-1-1")
+        let calls = await probe.calls()
+        XCTAssertEqual(calls, [true])
+    }
+
+    func testBackgroundReportEpisodeContinuesPastPublishedSnapshot() async {
+        let initial = CodexCostScanner.ReportLoad(
+            value: Self.report(tokens: 7),
+            completed: false,
+            progress: Self.progress(bytes: 10),
+            publishedSnapshot: true)
+        let probe = ReportPassProbe([
+            .init(
+                value: Self.report(tokens: 7),
+                completed: false,
+                progress: Self.progress(bytes: 20),
+                publishedSnapshot: true),
+            .init(value: Self.report(tokens: 77), completed: true),
+        ])
+
+        let result = await CodexCostScanner.runBackgroundReportEpisode(
+            initial: initial,
+            continuationDelay: .zero)
+        { forceRefresh in
+            await probe.load(forceRefresh: forceRefresh)
+        }
+
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.value?.todayTokens, 77)
+        let calls = await probe.calls()
+        XCTAssertEqual(calls, [true, true])
+    }
+
+    func testBackgroundReportEpisodePausesWhenCheckpointDoesNotAdvance() async {
+        let progress = Self.progress(bytes: 10)
+        let initial = CodexCostScanner.ReportLoad(
+            value: Self.report(tokens: 7),
+            completed: false,
+            progress: progress,
+            publishedSnapshot: true)
+        let probe = ReportPassProbe([
+            .init(
+                value: Self.report(tokens: 7),
+                completed: false,
+                progress: progress,
+                publishedSnapshot: true),
+        ])
+
+        let result = await CodexCostScanner.runBackgroundReportEpisode(
+            initial: initial,
+            continuationDelay: .zero)
+        { forceRefresh in
+            await probe.load(forceRefresh: forceRefresh)
+        }
+
+        XCTAssertFalse(result.completed)
         let calls = await probe.calls()
         XCTAssertEqual(calls, [true])
     }
@@ -1005,6 +1524,126 @@ final class CodexCostScannerTests: XCTestCase {
         let callCount = await probe.calls
         XCTAssertEqual(result.value?.todayTokens, 99)
         XCTAssertEqual(callCount, 1)
+    }
+
+    func testCompletedBackgroundCatchUpCannotOverwriteNewerCompletedForeground() async {
+        let cache = CodexCostScanner.Cache()
+        let probe = CatchUpRaceProbe()
+        let now = Date()
+        let initial = CodexCostScanner.ReportLoad(
+            value: Self.report(tokens: 5),
+            completed: false,
+            progress: Self.progress(bytes: 10),
+            publishedSnapshot: true)
+        await cache.scheduleReportCatchUp(
+            initial: initial,
+            continuationDelay: .zero)
+        { _ in
+            await probe.load(Self.report(tokens: 50))
+        }
+        await probe.waitUntilStarted()
+
+        let foreground = await cache.report(
+            now: now,
+            ttl: 300,
+            bypassCache: true)
+        {
+            .init(value: Self.report(tokens: 99), completed: true)
+        }
+        XCTAssertEqual(foreground.value?.todayTokens, 99)
+
+        await probe.release()
+        await probe.waitUntilFinished()
+        try? await Task.sleep(for: .milliseconds(20))
+        let cached = await cache.validReport(now: Date(), ttl: 300)
+        XCTAssertEqual(cached?.todayTokens, 99)
+    }
+
+    func testIncompleteForegroundHandsOffWithoutSuppressingCatchUpCompletion() async {
+        let cache = CodexCostScanner.Cache()
+        let probe = CatchUpRaceProbe()
+        let now = Date()
+        let initial = CodexCostScanner.ReportLoad(
+            value: Self.report(tokens: 5),
+            completed: false,
+            progress: Self.progress(bytes: 10),
+            publishedSnapshot: true)
+        await cache.scheduleReportCatchUp(
+            initial: initial,
+            requestedAt: now,
+            continuationDelay: .zero)
+        { _ in
+            await probe.load(Self.report(tokens: 50))
+        }
+        await probe.waitUntilStarted()
+
+        let foreground = await cache.report(
+            now: now.addingTimeInterval(1),
+            ttl: 300,
+            bypassCache: true)
+        {
+            .init(
+                value: Self.report(tokens: 25),
+                completed: false,
+                progress: Self.progress(bytes: 10),
+                publishedSnapshot: true)
+        }
+        await cache.scheduleReportCatchUp(
+            initial: foreground,
+            requestedAt: now.addingTimeInterval(1),
+            continuationDelay: .zero)
+        { _ in
+            .init(value: Self.report(tokens: 999), completed: true)
+        }
+
+        await probe.release()
+        await probe.waitUntilFinished()
+        try? await Task.sleep(for: .milliseconds(20))
+        let cached = await cache.validReport(now: Date(), ttl: 300)
+        XCTAssertEqual(cached?.todayTokens, 50)
+    }
+
+    func testCompletedCatchUpHandsOffNewCheckpointWithSameSemanticGeneration() async {
+        let cache = CodexCostScanner.Cache()
+        let queuedProbe = SingleFlightProbe()
+        let now = Date()
+        let firstCheckpoint = CodexCostScanner.ReportLoad(
+            value: Self.report(tokens: 5),
+            completed: false,
+            progress: Self.progress(generation: "same-semantic-generation", bytes: 10),
+            publishedSnapshot: true)
+        let nextCheckpoint = CodexCostScanner.ReportLoad(
+            value: Self.report(tokens: 25),
+            completed: false,
+            progress: Self.progress(generation: "same-semantic-generation", bytes: 20),
+            publishedSnapshot: true)
+
+        await cache.scheduleReportCatchUp(
+            initial: firstCheckpoint,
+            requestedAt: now,
+            continuationDelay: .zero)
+        { _ in
+            let completedCoreResult = CodexCostScanner.ReportLoad(
+                value: Self.report(tokens: 50),
+                completed: true)
+
+            // The first core pass has produced its completed result, but its
+            // actor callback has not run yet. Queue a newer durable checkpoint
+            // from another foreground refresh in exactly that handoff window.
+            await cache.scheduleReportCatchUp(
+                initial: nextCheckpoint,
+                requestedAt: now.addingTimeInterval(1),
+                continuationDelay: .zero)
+            { _ in
+                await queuedProbe.load(Self.report(tokens: 99))
+            }
+            return completedCoreResult
+        }
+
+        await queuedProbe.waitUntilCalled()
+        try? await Task.sleep(for: .milliseconds(80))
+        let cached = await cache.validReport(now: Date(), ttl: 300)
+        XCTAssertEqual(cached?.todayTokens, 99)
     }
 
     func testReportCacheSerializesNewDayBehindOldInFlightScan() async {
