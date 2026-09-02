@@ -604,6 +604,24 @@ enum AllUsageSourceAuthorization {
         authorizedSources.intersection(loadingSources)
     }
 
+    static func pendingSourceLabels(
+        authorizedSources: Set<CostHistoryStore.Source>,
+        loadingSources: Set<CostHistoryStore.Source>
+    ) -> [String] {
+        let pending = pendingSources(
+            authorizedSources: authorizedSources,
+            loadingSources: loadingSources)
+        let labels: [(CostHistoryStore.Source, String)] = [
+            (.claude, "Claude"),
+            (.codex, "Codex"),
+            (.grok, "Grok"),
+            (.kiro, "Kiro"),
+            (.omp, "Oh My Pi"),
+            (.pi, "Pi"),
+        ]
+        return labels.compactMap { pending.contains($0.0) ? $0.1 : nil }
+    }
+
     static func shouldShowSkeleton(
         authorizedSources: Set<CostHistoryStore.Source>,
         loadingSources: Set<CostHistoryStore.Source>,
@@ -679,18 +697,9 @@ struct AllUsageOverview: View {
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
     private var pendingSources: [String] {
-        let sources = AllUsageSourceAuthorization.pendingSources(
+        AllUsageSourceAuthorization.pendingSourceLabels(
             authorizedSources: authorizedSources,
             loadingSources: loadingSources)
-        let labels: [(CostHistoryStore.Source, String)] = [
-            (.claude, "Claude"),
-            (.codex, "Codex"),
-            (.grok, "Grok"),
-            (.kiro, "Kiro"),
-            (.omp, "Oh My Pi"),
-            (.pi, "Pi"),
-        ]
-        return labels.compactMap { sources.contains($0.0) ? $0.1 : nil }
     }
 
     private var readySources: Set<CostHistoryStore.Source> {

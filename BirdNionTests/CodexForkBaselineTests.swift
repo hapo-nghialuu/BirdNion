@@ -17,6 +17,13 @@ import XCTest
 final class CodexForkBaselineTests: XCTestCase {
     private struct SyntheticReadError: Error {}
 
+    private func seedFreshModelsDevPricingCache(at cacheRoot: URL) {
+        ModelsDevCache.save(
+            catalog: ModelsDevCatalog(providers: [:]),
+            fetchedAt: Date(timeIntervalSince1970: 4_102_444_800),
+            cacheRoot: cacheRoot)
+    }
+
     private func write(_ path: URL, _ lines: [String]) throws {
         try FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1266,6 +1273,9 @@ final class CodexForkBaselineTests: XCTestCase {
         XCTAssertNil(migrated.scanUntilKey)
         XCTAssertNil(migrated.codexPendingScanGeneration)
         XCTAssertNil(migrated.codexPendingFileManifest)
+        XCTAssertNil(migrated.codexPendingFileOrder)
+        XCTAssertNil(migrated.codexPendingFlatDiscoveryOffsets)
+        XCTAssertNil(migrated.codexPendingFlatDiscoveryProgress)
         XCTAssertNil(migrated.codexPendingFiles)
         XCTAssertNil(migrated.codexPendingDays)
         XCTAssertNil(migrated.codexPendingParentScans)
@@ -1278,6 +1288,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-committed-cache-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         try write(
             home.appendingPathComponent("sessions/2026/01/15/rollout.jsonl"),
@@ -1326,9 +1337,18 @@ final class CodexForkBaselineTests: XCTestCase {
         XCTAssertNotEqual(status?.generation, committedAfter.codexPendingScanGeneration)
         XCTAssertTrue(status?.generation.hasPrefix("codex-") == true)
         committedAfter.codexPendingScanGeneration = nil
+        committedAfter.codexPendingManifestContractVersion = nil
+        committedAfter.codexPendingPriorityTurnsCursorPayload = nil
+        committedAfter.codexPendingPriorityTurnsPayload = nil
         committedAfter.codexPendingScanSinceKey = nil
         committedAfter.codexPendingScanUntilKey = nil
+        committedAfter.codexPendingManifestCapturedUnixMs = nil
+        committedAfter.codexPendingNeedsFlatReconciliation = nil
+        committedAfter.codexPendingTurnIDBackfillPaths = nil
         committedAfter.codexPendingFileManifest = nil
+        committedAfter.codexPendingFileOrder = nil
+        committedAfter.codexPendingFlatDiscoveryOffsets = nil
+        committedAfter.codexPendingFlatDiscoveryProgress = nil
         committedAfter.codexPendingFiles = nil
         committedAfter.codexPendingDays = nil
         committedAfter.codexPendingParentScans = nil
@@ -1362,6 +1382,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-frozen-generation-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         let day = "2026-01-15"
         let directory = home.appendingPathComponent("sessions/2026/01/15")
@@ -1427,6 +1448,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-unavailable-partial-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         let file = home.appendingPathComponent("sessions/2026/01/15/rollout.jsonl")
         let committedAliasRoot = tmp.appendingPathComponent("committed-home-alias")
@@ -1540,6 +1562,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-midnight-pending-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         try write(
             home.appendingPathComponent("sessions/2026/01/15/rollout.jsonl"),
@@ -1626,6 +1649,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-stale-generation-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         try write(
             home.appendingPathComponent("sessions/2026/01/15/rollout.jsonl"),
@@ -1691,6 +1715,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-trailing-partial-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         let file = home.appendingPathComponent("sessions/2026/01/15/a.jsonl")
         let now = ISO8601DateFormatter().date(from: "2026-01-20T00:00:00Z")!
@@ -1738,6 +1763,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-complete-append-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         let file = home.appendingPathComponent("sessions/2026/01/15/a.jsonl")
         let now = ISO8601DateFormatter().date(from: "2026-01-20T00:00:00Z")!
@@ -2034,6 +2060,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-symlink-input-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         let target = tmp.appendingPathComponent("outside-target.jsonl")
         let link = home.appendingPathComponent("sessions/2026/01/15/link.jsonl")
@@ -2068,6 +2095,7 @@ final class CodexForkBaselineTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-large-partial-line-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        seedFreshModelsDevPricingCache(at: tmp)
         let home = tmp.appendingPathComponent("home")
         let file = home.appendingPathComponent("sessions/2026/01/15/rollout.jsonl")
         let traceDatabaseURL = tmp.appendingPathComponent("missing-codex-trace.sqlite")

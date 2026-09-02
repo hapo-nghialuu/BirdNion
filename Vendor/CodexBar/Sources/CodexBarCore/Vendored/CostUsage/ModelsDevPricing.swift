@@ -542,7 +542,7 @@ struct URLSessionModelsDevTransport: ModelsDevHTTPTransport {
     }
 }
 
-struct ModelsDevClient {
+struct ModelsDevClient: Sendable {
     enum Error: Swift.Error, Equatable {
         case invalidResponse
         case httpStatus(Int)
@@ -577,7 +577,21 @@ struct ModelsDevClient {
     }
 }
 
+private actor ModelsDevPricingRefreshGate {
+    private var activeCachePaths: Set<String> = []
+
+    func begin(cachePath: String) -> Bool {
+        self.activeCachePaths.insert(cachePath).inserted
+    }
+
+    func finish(cachePath: String) {
+        self.activeCachePaths.remove(cachePath)
+    }
+}
+
 enum ModelsDevPricingPipeline {
+    private static let refreshGate = ModelsDevPricingRefreshGate()
+
     static func lookup(
         providerID: String,
         modelID: String,
@@ -597,15 +611,20 @@ enum ModelsDevPricingPipeline {
     {
         let load = ModelsDevCache.load(now: now, cacheRoot: cacheRoot)
         guard load.isStale else { return }
+        let cachePath = ModelsDevCache.cacheFileURL(cacheRoot: cacheRoot)
+            .standardizedFileURL.path
+        guard await self.refreshGate.begin(cachePath: cachePath) else { return }
 
         do {
             let catalog = try await client.fetchCatalog()
-            let oldCatalog = load.artifact?.catalog
-            guard catalog.isPlausibleRefresh() else { return }
-            let refreshedCatalog = oldCatalog.map { catalog.mergingFallbackPricing(from: $0) } ?? catalog
-            ModelsDevCache.save(catalog: refreshedCatalog, fetchedAt: now, cacheRoot: cacheRoot)
+            if catalog.isPlausibleRefresh() {
+                let oldCatalog = load.artifact?.catalog
+                let refreshedCatalog = oldCatalog.map { catalog.mergingFallbackPricing(from: $0) } ?? catalog
+                ModelsDevCache.save(catalog: refreshedCatalog, fetchedAt: now, cacheRoot: cacheRoot)
+            }
         } catch {
             // Best-effort refresh only. Future scanner integration should keep using the last valid cache.
         }
+        await self.refreshGate.finish(cachePath: cachePath)
     }
 }

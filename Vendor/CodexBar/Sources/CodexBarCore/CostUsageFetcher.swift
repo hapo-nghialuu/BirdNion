@@ -71,11 +71,31 @@ public struct CostUsageFetcher: Sendable {
         let options = self.scannerOptionsOverride() ?? CostUsageScanner.Options()
         return try? await CostUsageScanExecutor.run { _ in
             let cache = CostUsageCacheIO.load(provider: .codex, cacheRoot: options.cacheRoot)
-            guard let generation = cache.codexPendingScanGeneration else { return nil }
+            guard let generation = cache.codexPendingScanGeneration else {
+                guard cache.codexNeedsLegacyColdInventory == true else { return nil }
+                let stage = [
+                    "legacy-cold-inventory-v1",
+                    cache.scanSinceKey ?? "",
+                    cache.scanUntilKey ?? "",
+                    cache.producerKey ?? "",
+                ].joined(separator: "|")
+                let opaqueStage = CostUsageScanner.codexOpaquePendingGeneration(stage)
+                return CodexPendingScanStatus(
+                    generation: opaqueStage,
+                    parsedBytes: 0,
+                    incompleteFiles: 1,
+                    progressFingerprint: "stage:\(opaqueStage)")
+            }
             let manifest = cache.codexPendingFileManifest ?? [:]
             let pendingFiles = cache.codexPendingFiles ?? [:]
             let parentScans = cache.codexPendingParentScans ?? [:]
             let parentDiscoveries = cache.codexPendingParentDiscoveries ?? [:]
+            let flatDiscoveryOffsets = cache.codexPendingFlatDiscoveryOffsets ?? [:]
+            let expectedFileGeneration = [
+                generation,
+                cache.codexPendingScanSinceKey ?? "",
+                cache.codexPendingScanUntilKey ?? "",
+            ].joined(separator: "|")
             let pendingBytes = Self.saturatingParsedBytesSum(
                 pendingFiles.values.map { $0.parsedBytes ?? 0 })
             let parentBytes = Self.saturatingParsedBytesSum(
@@ -85,11 +105,15 @@ public struct CostUsageFetcher: Sendable {
                 parsedBytes: Self.saturatingParsedBytesSum([pendingBytes, parentBytes]),
                 incompleteFiles: manifest.keys.count { path in
                     let usage = pendingFiles[path]
-                    return usage?.codexScanComplete != true
+                    return usage?.codexScanGeneration != expectedFileGeneration
+                        || usage?.codexScanComplete != true
                         || usage?.codexScanTargetSize != manifest[path]?.targetEOF
+                        || usage?.codexScanFileId != manifest[path]?.fileId
+                        || usage?.codexScanContentFingerprint != manifest[path]?.contentFingerprint
                 }
                     + parentScans.values.count { !$0.scanComplete }
-                    + parentDiscoveries.values.count { $0.resolvedRelativePath == nil },
+                    + parentDiscoveries.values.count { $0.resolvedRelativePath == nil }
+                    + flatDiscoveryOffsets.count,
                 progressFingerprint: CostUsageScanner.codexPendingProgressFingerprint(cache))
         }
     }
@@ -113,6 +137,7 @@ public struct CostUsageFetcher: Sendable {
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
         historyDays: Int = 30,
+        refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true) async throws -> CostUsageTokenSnapshot
     {
         try await Self.loadTokenSnapshot(
@@ -123,6 +148,7 @@ public struct CostUsageFetcher: Sendable {
             allowVertexClaudeFallback: allowVertexClaudeFallback,
             codexHomePath: codexHomePath,
             historyDays: historyDays,
+            refreshPricing: refreshPricing,
             refreshPricingInBackground: refreshPricingInBackground,
             scannerOptions: self.scannerOptionsOverride())
     }
@@ -136,6 +162,7 @@ public struct CostUsageFetcher: Sendable {
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
         historyDays: Int = 30,
+        refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true,
         automaticCodexScanByteLimit _: Int64?) async throws -> CostUsageTokenSnapshot
     {
@@ -147,6 +174,7 @@ public struct CostUsageFetcher: Sendable {
             allowVertexClaudeFallback: allowVertexClaudeFallback,
             codexHomePath: codexHomePath,
             historyDays: historyDays,
+            refreshPricing: refreshPricing,
             refreshPricingInBackground: refreshPricingInBackground)
     }
 
@@ -162,6 +190,7 @@ public struct CostUsageFetcher: Sendable {
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
         historyDays: Int = 30,
+        refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true,
         includePiSessions: Bool = false,
         scannerOptions overrideScannerOptions: CostUsageScanner.Options? = nil,
@@ -193,13 +222,16 @@ public struct CostUsageFetcher: Sendable {
             options.codexSessionsRoot = URL(fileURLWithPath: codexHomePath, isDirectory: true)
                 .appendingPathComponent("sessions", isDirectory: true)
         }
-        // Chống treo khi lịch sử Codex JSONL cực lớn (hàng GB): giới hạn thời
-        // gian mỗi lần scan; phần còn lại resume ở lần scan sau qua cache đĩa.
-        // Chỉ áp khi caller không tự đặt (override giữ nguyên hành vi test).
+        // Keep the foreground pass off the popover's critical path. Remaining
+        // work owns a durable queue and continues through background catch-up.
+        // Explicit scanner options retain their test/caller-defined budget.
         if provider == .codex, overrideScannerOptions == nil, options.maxScanWallClock == nil {
-            options.maxScanWallClock = 12
+            // Keep the visible refresh comfortably below two seconds on large
+            // histories. The durable journal resumes every unfinished byte in
+            // background passes, so this bounds latency without dropping data.
+            options.maxScanWallClock = 0.5
         }
-        if provider == .codex || provider == .claude {
+        if refreshPricing && (provider == .codex || provider == .claude) {
             let pricingCacheRoot = options.cacheRoot
             if refreshPricingInBackground {
                 Task.detached(priority: .utility) {

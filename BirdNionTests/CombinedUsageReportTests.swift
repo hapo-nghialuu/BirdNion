@@ -864,4 +864,12 @@ final class CombinedUsageReportTests: XCTestCase {
             loadingSources: [.kiro],
             readySources: [.claude]))
     }
+
+    func testAllUsagePendingSourceLabelsAreAuthorizedAndStable() {
+        XCTAssertEqual(
+            AllUsageSourceAuthorization.pendingSourceLabels(
+                authorizedSources: [.pi, .codex, .claude],
+                loadingSources: [.grok, .pi, .codex, .claude]),
+            ["Claude", "Codex", "Pi"])
+    }
 }

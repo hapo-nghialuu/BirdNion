@@ -71,6 +71,12 @@ struct CodexUsageReport: Equatable {
 /// pane doesn't rescan on every open.
 enum CodexCostScanner {
     private static let cacheTTL: TimeInterval = 300
+    /// The wrapper yields a stable report quickly, then asks the core for a
+    /// bounded warm refresh at CodexBar's minute-scale cadence.
+    private static let reportCacheTTL: TimeInterval = 60
+    /// Gives a normal warm refresh a brief chance to replace the seed in the
+    /// same UI request. Cold/upgrade scans keep running after this hard handoff.
+    private static let foregroundPublicationWait: Duration = .milliseconds(1_500)
     static let historyDaysKey = "codexCostHistoryDays"
     /// Daily-bucket window for `usageReport` (feeds the 120-day heatmap on the
     /// All tab). Independent of the user-configurable `historyDays`, which
@@ -147,6 +153,34 @@ enum CodexCostScanner {
             generation: UInt,
             at: Date,
             task: Task<ReportLoad, Never>)?
+        private struct SeedFirstRequest {
+            let at: Date
+            let calendar: Calendar
+            let fallback: CodexUsageReport?
+            let loader: @Sendable () async -> ReportLoad
+            let continuationDelay: Duration?
+            let continuationLoader: (@Sendable (_ forceRefresh: Bool) async -> ReportLoad)?
+        }
+        private var seedFirstGeneration: UInt = 0
+        private var seedFirstInFlight: (
+            generation: UInt,
+            at: Date,
+            completedPublicationRevision: UInt,
+            task: Task<ReportLoad, Never>)?
+        private var pendingSeedFirstRequest: SeedFirstRequest?
+        private struct CatchUpRequest {
+            let initial: ReportLoad
+            let requestedAt: Date
+            let calendar: Calendar
+            let continuationDelay: Duration
+            let loader: @Sendable (_ forceRefresh: Bool) async -> ReportLoad
+        }
+        private var reportCatchUpGeneration: UInt = 0
+        private var reportCatchUpTask: Task<Void, Never>?
+        private var pendingCatchUpRequest: CatchUpRequest?
+        private var reportPublicationRevision: UInt = 0
+        private var completedReportPublicationRevision: UInt = 0
+        private var latestReportRequestAt: Date?
 
         func valid(
             now: Date,
@@ -185,7 +219,25 @@ enum CodexCostScanner {
             else { return nil }
             return reportEntry.value
         }
-        func storeReport(_ value: CodexUsageReport, at: Date) { reportEntry = (at, value) }
+        func storeReport(_ value: CodexUsageReport, at: Date) {
+            reportEntry = (at, value)
+            reportPublicationRevision &+= 1
+            completedReportPublicationRevision &+= 1
+        }
+
+        func publicationRevision() -> UInt { reportPublicationRevision }
+
+        func publishedReport(
+            after revision: UInt,
+            now: Date,
+            calendar: Calendar = .current) -> CodexUsageReport?
+        {
+            guard reportPublicationRevision != revision,
+                  let reportEntry,
+                  calendar.isDate(reportEntry.at, inSameDayAs: now)
+            else { return nil }
+            return reportEntry.value
+        }
 
         func report(
             now: Date,
@@ -206,8 +258,8 @@ enum CodexCostScanner {
                 if calendar.isDate(current.at, inSameDayAs: now) {
                     return result
                 }
-                // A request for a new local day must wait for the old worker,
-                // then start its own generation instead of accepting old data.
+                // A new local day must wait for the old worker, then start its
+                // own generation.
                 return await report(
                     now: now,
                     ttl: ttl,
@@ -218,6 +270,7 @@ enum CodexCostScanner {
 
             reportGeneration &+= 1
             let generation = reportGeneration
+            latestReportRequestAt = now
             let task = Task<ReportLoad, Never> { await loader() }
             let current = (generation: generation, at: now, task: task)
             reportInFlight = current
@@ -227,13 +280,231 @@ enum CodexCostScanner {
         }
 
         private func finish(
-            _ flight: (generation: UInt, at: Date, task: Task<ReportLoad, Never>),
+            _ flight: (
+                generation: UInt,
+                at: Date,
+                task: Task<ReportLoad, Never>),
             result: ReportLoad)
         {
             guard reportInFlight?.generation == flight.generation else { return }
             reportInFlight = nil
-            if result.completed, let value = result.value {
-                reportEntry = (flight.at, value)
+            if result.completed {
+                reportPublicationRevision &+= 1
+                completedReportPublicationRevision &+= 1
+                if let value = result.value {
+                    reportEntry = (flight.at, value)
+                } else {
+                    reportEntry = nil
+                }
+            }
+        }
+
+        /// Starts an actor-owned report refresh without making the caller wait
+        /// for SQLite/log hydration. The fallback is returned immediately; the
+        /// live result is still published into `reportEntry` when the worker
+        /// completes, so a seed can never discard the real scan.
+        func seedFirstReport(
+            now: Date,
+            ttl: TimeInterval,
+            calendar: Calendar = .current,
+            bypassCache: Bool = false,
+            fallback: CodexUsageReport?,
+            continuationDelay: Duration? = nil,
+            continuationLoader: (@Sendable (_ forceRefresh: Bool) async -> ReportLoad)? = nil,
+            loader: @escaping @Sendable () async -> ReportLoad) -> ReportLoad
+        {
+            if !bypassCache,
+               let cached = validReport(now: now, ttl: ttl, calendar: calendar)
+            {
+                return ReportLoad(value: cached, completed: true)
+            }
+
+            let visibleFallback = reportEntry.flatMap { entry in
+                calendar.isDate(entry.at, inSameDayAs: now) ? entry.value : nil
+            } ?? fallback
+            let request = SeedFirstRequest(
+                at: now,
+                calendar: calendar,
+                fallback: fallback,
+                loader: loader,
+                continuationDelay: continuationDelay,
+                continuationLoader: continuationLoader)
+
+            if let current = seedFirstInFlight {
+                if !calendar.isDate(current.at, inSameDayAs: now) {
+                    // Keep only the newest next-day request. The old worker is
+                    // allowed to finish, but cannot publish over this request.
+                    let newestQueuedAt = pendingSeedFirstRequest?.at ?? current.at
+                    if now > newestQueuedAt { pendingSeedFirstRequest = request }
+                }
+                return ReportLoad(
+                    value: visibleFallback,
+                    completed: false,
+                    publishedSnapshot: visibleFallback != nil)
+            }
+
+            startSeedFirstReport(request)
+            return ReportLoad(
+                value: visibleFallback,
+                completed: false,
+                publishedSnapshot: visibleFallback != nil)
+        }
+
+        private func startSeedFirstReport(_ request: SeedFirstRequest) {
+            seedFirstGeneration &+= 1
+            let generation = seedFirstGeneration
+            let completedPublicationRevision = self.completedReportPublicationRevision
+            latestReportRequestAt = request.at
+            let task = Task<ReportLoad, Never> { await request.loader() }
+            seedFirstInFlight = (
+                generation: generation,
+                at: request.at,
+                completedPublicationRevision: completedPublicationRevision,
+                task: task)
+            Task { [weak self] in
+                let result = await task.value
+                await self?.finishSeedFirstReport(
+                    generation: generation,
+                    completedPublicationRevision: completedPublicationRevision,
+                    request: request,
+                    result: result)
+            }
+        }
+
+        private func finishSeedFirstReport(
+            generation: UInt,
+            completedPublicationRevision: UInt,
+            request: SeedFirstRequest,
+            result: ReportLoad)
+        {
+            guard seedFirstInFlight?.generation == generation else { return }
+            seedFirstInFlight = nil
+            let queuedRequest = pendingSeedFirstRequest
+            pendingSeedFirstRequest = nil
+
+            // A request for a new local day owns publication. The older task
+            // may finish its durable journal, but its report must not replace
+            // the new day's visible state.
+            let canPublish = self.completedReportPublicationRevision == completedPublicationRevision
+                && (result.completed || result.publishedSnapshot)
+            if queuedRequest == nil, canPublish {
+                reportPublicationRevision &+= 1
+                if result.completed {
+                    completedReportPublicationRevision &+= 1
+                }
+                if let value = result.value {
+                    reportEntry = (request.at, value)
+                } else if result.completed {
+                    reportEntry = nil
+                }
+            }
+
+            if let queuedRequest {
+                startSeedFirstReport(queuedRequest)
+            } else if !result.completed,
+                      result.progress != nil,
+                      let continuationDelay = request.continuationDelay,
+                      let continuationLoader = request.continuationLoader
+            {
+                scheduleReportCatchUp(
+                    initial: result,
+                    requestedAt: request.at,
+                    calendar: request.calendar,
+                    continuationDelay: continuationDelay,
+                    loader: continuationLoader)
+            }
+        }
+
+        func scheduleReportCatchUp(
+            initial: ReportLoad,
+            requestedAt: Date = Date(),
+            calendar: Calendar = .current,
+            continuationDelay: Duration,
+            loader: @escaping @Sendable (_ forceRefresh: Bool) async -> ReportLoad)
+        {
+            guard !initial.completed,
+                  initial.progress != nil
+            else { return }
+
+            let request = CatchUpRequest(
+                initial: initial,
+                requestedAt: requestedAt,
+                calendar: calendar,
+                continuationDelay: continuationDelay,
+                loader: loader)
+            guard reportCatchUpTask == nil else {
+                // Keep the newest foreground checkpoint. If the current worker
+                // stalls or belongs to another day/generation, it hands off to
+                // this request instead of silently dropping the continuation.
+                pendingCatchUpRequest = request
+                return
+            }
+            startReportCatchUp(request)
+        }
+
+        private func startReportCatchUp(_ request: CatchUpRequest) {
+            reportCatchUpGeneration &+= 1
+            let generation = reportCatchUpGeneration
+            let visiblePublicationRevision = reportPublicationRevision
+            let completedPublicationRevision = completedReportPublicationRevision
+            reportCatchUpTask = Task { [weak self] in
+                let result = await CodexCostScanner.runBackgroundReportEpisode(
+                    initial: request.initial,
+                    continuationDelay: request.continuationDelay,
+                    scanPass: request.loader)
+                await self?.finishReportCatchUp(
+                    generation: generation,
+                    visiblePublicationRevision: visiblePublicationRevision,
+                    completedPublicationRevision: completedPublicationRevision,
+                    request: request,
+                    result: result)
+            }
+        }
+
+        private func finishReportCatchUp(
+            generation: UInt,
+            visiblePublicationRevision: UInt,
+            completedPublicationRevision: UInt,
+            request: CatchUpRequest,
+            result: ReportLoad)
+        {
+            guard reportCatchUpGeneration == generation else { return }
+            reportCatchUpTask = nil
+            let queuedRequest = pendingCatchUpRequest
+            pendingCatchUpRequest = nil
+
+            // Starting another same-day foreground pass is not a newer
+            // publication. Only a completed foreground result, or a request
+            // for another day, may suppress this completed catch-up.
+            let latestRequestMatches = latestReportRequestAt.map {
+                request.calendar.isDate($0, inSameDayAs: request.requestedAt)
+            } ?? true
+            let canPublish = result.completed
+                ? self.completedReportPublicationRevision == completedPublicationRevision
+                : result.publishedSnapshot
+                    && reportPublicationRevision == visiblePublicationRevision
+            if canPublish, latestRequestMatches {
+                reportPublicationRevision &+= 1
+                if result.completed {
+                    self.completedReportPublicationRevision &+= 1
+                }
+                if let value = result.value {
+                    reportEntry = (request.requestedAt, value)
+                } else if result.completed {
+                    reportEntry = nil
+                }
+            }
+
+            guard let queuedRequest else { return }
+            let currentCheckpoint = request.initial.progress?.continuationIdentity
+            let queuedCheckpoint = queuedRequest.initial.progress?.continuationIdentity
+            let queuedNeedsOwnWorker = !result.completed
+                || !request.calendar.isDate(
+                    queuedRequest.requestedAt,
+                    inSameDayAs: request.requestedAt)
+                || queuedCheckpoint != currentCheckpoint
+            if queuedNeedsOwnWorker {
+                startReportCatchUp(queuedRequest)
             }
         }
 
@@ -351,23 +622,56 @@ enum CodexCostScanner {
     /// Cached, off-main full report: 30-day totals + 120-day per-day series for
     /// the usage chart/heatmap. Returns nil only when the scan throws.
     static func usageReport(now: Date = Date()) async -> CodexUsageReport? {
-        // Another consumer (for example `summary()`) can create a durable
-        // pending journal while this report's 5-minute cache is still fresh.
-        // Observe it before the fast-path so reopening continues real work.
-        let initialProgress = await pendingScanProgress()
-        let load = await Cache.shared.report(
+        // Start the complete convergence episode as an actor-owned task, but
+        // hand persisted history back to the popover immediately. This keeps a
+        // first-run SQLite hydration off the foreground path without losing the
+        // eventual live publication.
+        let fallback = await seededReport(now: now)
+        let publicationRevision = await Cache.shared.publicationRevision()
+        let load = await Cache.shared.seedFirstReport(
             now: now,
-            ttl: cacheTTL,
-            bypassCache: initialProgress != nil)
+            ttl: reportCacheTTL,
+            // Always probe the core in the actor-owned worker. Another local
+            // consumer can create a durable journal after the preflight read;
+            // the core's own refresh throttle keeps the no-work path cheap.
+            bypassCache: true,
+            fallback: fallback,
+            continuationDelay: .milliseconds(250),
+            continuationLoader: { _ in
+                await performReportScan(
+                    now: Date(),
+                    forceRefresh: true,
+                    refreshPricing: false)
+            })
         {
-            return await runReportEpisode(
-                initialProgress: initialProgress,
-                continuationDelay: .milliseconds(250))
-            { forceRefresh in
-                await performReportScan(now: now, forceRefresh: forceRefresh)
+            await performReportScan(now: now, forceRefresh: false)
+        }
+        guard !load.completed else { return load.value }
+        return await waitForForegroundPublication(
+            after: publicationRevision,
+            now: now) ?? load.value
+    }
+
+    private static func waitForForegroundPublication(
+        after revision: UInt,
+        now: Date) async -> CodexUsageReport?
+    {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: foregroundPublicationWait)
+        while clock.now < deadline {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return nil
+            }
+            if let report = await Cache.shared.publishedReport(
+                after: revision,
+                now: now)
+            {
+                return report
             }
         }
-        return load.value
+        return nil
     }
 
     /// One progress-driven convergence episode. Every core pass remains
@@ -378,12 +682,14 @@ enum CodexCostScanner {
     static func runReportEpisode(
         initialProgress: ScanProgress? = nil,
         continuationDelay: Duration = .zero,
+        yieldAfterFirstPass: Bool = false,
         scanPass: @escaping (_ forceRefresh: Bool) async -> ReportLoad) async -> ReportLoad
     {
         // A durable pending journal bypasses the core refresh throttle so a
         // reopen actually continues it instead of returning the same snapshot.
         var current = await scanPass(initialProgress != nil)
-        guard !current.completed, !current.publishedSnapshot else { return current }
+        guard !current.completed else { return current }
+        if yieldAfterFirstPass || current.publishedSnapshot { return current }
 
         var previousProgress = initialProgress
         var seenProgress = Set(initialProgress.map { [$0.continuationIdentity] } ?? [])
@@ -419,22 +725,71 @@ enum CodexCostScanner {
         return current
     }
 
-    private static func pendingScanProgress() async -> ScanProgress? {
-        let status = await CostUsageFetcher().loadCodexPendingScanStatus()
-        return status.map {
-            ScanProgress(
-                generation: $0.generation,
-                parsedBytes: $0.parsedBytes,
-                incompleteFiles: $0.incompleteFiles,
-                progressFingerprint: $0.progressFingerprint)
+    /// Continues a durable journal after the foreground has published its
+    /// stable last-good snapshot. Queue/checkpoint progress is required between
+    /// passes; repeated or cyclic state pauses silently instead of spinning.
+    static func runBackgroundReportEpisode(
+        initial: ReportLoad,
+        continuationDelay: Duration,
+        scanPass: @escaping @Sendable (_ forceRefresh: Bool) async -> ReportLoad) async -> ReportLoad
+    {
+        guard !initial.completed, let initialProgress = initial.progress else { return initial }
+        var current = initial
+        var publishedValue = initial.publishedSnapshot ? initial.value : nil
+        var hasPublishedSnapshot = initial.publishedSnapshot
+        var previousProgress = initialProgress
+        var seenProgress = Set([initialProgress.continuationIdentity])
+
+        while !current.completed {
+            guard !Task.isCancelled else { return current }
+            if continuationDelay == .zero {
+                await Task.yield()
+            } else {
+                do {
+                    try await Task.sleep(for: continuationDelay)
+                } catch {
+                    return current
+                }
+            }
+
+            let next = await scanPass(true)
+            if next.publishedSnapshot {
+                publishedValue = next.value ?? publishedValue
+                hasPublishedSnapshot = true
+            }
+            if next.completed {
+                return ReportLoad(
+                    value: next.value ?? publishedValue ?? current.value,
+                    completed: true,
+                    progress: next.progress,
+                    publishedSnapshot: hasPublishedSnapshot)
+            }
+            guard let progress = next.progress,
+                  progress.hasAdvanced(since: previousProgress),
+                  seenProgress.insert(progress.continuationIdentity).inserted
+            else {
+                return ReportLoad(
+                    value: publishedValue ?? next.value ?? current.value,
+                    completed: false,
+                    progress: next.progress,
+                    publishedSnapshot: hasPublishedSnapshot)
+            }
+            previousProgress = progress
+            current = ReportLoad(
+                value: publishedValue ?? next.value ?? current.value,
+                completed: false,
+                progress: progress,
+                publishedSnapshot: hasPublishedSnapshot)
         }
+        return current
     }
 
     /// Một bounded pass không đụng `Cache.shared`; pending trả last-good
     /// history kèm progress journal, complete mới được publish/persist.
     private static func performReportScan(
         now: Date,
-        forceRefresh: Bool = false) async -> ReportLoad {
+        forceRefresh: Bool = false,
+        refreshPricing: Bool = true) async -> ReportLoad {
         // Same as `summary()`: the machine-wide ~/.codex is the only place
         // session logs actually accumulate.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
@@ -445,7 +800,8 @@ enum CodexCostScanner {
             now: now,
             forceRefresh: forceRefresh,
             codexHomePath: codexHome,
-            historyDays: sharedScanWindowDays)
+            historyDays: sharedScanWindowDays,
+            refreshPricing: refreshPricing)
         // A non-cancellation parser I/O failure intentionally throws without
         // mutating its checkpoint. The snapshot is then nil, so the durable
         // journal—not `snapshot?.scanIncomplete` alone—is authoritative.
