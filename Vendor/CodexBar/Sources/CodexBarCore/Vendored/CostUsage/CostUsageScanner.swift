@@ -1186,7 +1186,9 @@ enum CostUsageScanner {
     private static func encodeCodexPendingPriorityTurns(
         _ turns: [String: CodexPriorityTurnMetadata]) -> String?
     {
-        guard let data = try? JSONEncoder().encode(turns) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(turns) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
