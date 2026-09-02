@@ -1739,13 +1739,10 @@ mod tests {
             }],
         };
 
-        assert!(apply_imported_credentials(
-            &mut store,
-            ImportedCredentials::default(),
-            None,
-            None,
-        )
-        .is_err());
+        assert!(
+            apply_imported_credentials(&mut store, ImportedCredentials::default(), None, None,)
+                .is_err()
+        );
         let half: ImportedCredentials = serde_json::from_value(json!({
             "client_id": "client-new"
         }))
