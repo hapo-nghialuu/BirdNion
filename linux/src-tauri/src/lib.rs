@@ -47,6 +47,27 @@ static USAGE_REPORT_CACHE: LazyLock<Mutex<HashMap<&'static str, (Instant, usage:
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static KIRO_USAGE_SCAN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+fn codex_scan_progress_from_active_scan(active: codex_scanner::ActiveScan) -> usage::ScanProgress {
+    usage::ScanProgress {
+        generation: active.generation,
+        completed: active.completed,
+        total: active.total,
+        fingerprint: active.fingerprint,
+    }
+}
+
+fn codex_terminal_failure_report(generation: u64) -> usage::UsageReport {
+    let mut report = cost_history::report("codex");
+    report.scan_pending = Some(false);
+    report.scan_progress = Some(usage::ScanProgress {
+        generation,
+        completed: 0,
+        total: 0,
+        fingerprint: format!("generation-{generation}-incomplete"),
+    });
+    report
+}
+
 /// Claude Code CLI usage rolled up from local session logs. The scan runs on
 /// a blocking thread — sync commands execute on the GTK main loop and froze
 /// the webview's first paint for the whole log walk (macOS runs its scanners
@@ -82,39 +103,105 @@ async fn claude_usage_report() -> Option<usage::UsageReport> {
     authorize_usage_report("claude", report, &started_sources, &enabled_usage_sources())
 }
 
-/// Codex CLI usage rolled up from local rollout logs (blocking thread + cache,
-/// see `claude_usage_report`).
+/// Codex returns persisted history immediately, then one singleflight worker
+/// refreshes the exact live aggregate and notifies the webview. This keeps a
+/// large Codex home off the first-paint critical path.
 #[tauri::command]
-async fn codex_usage_report() -> Option<usage::UsageReport> {
+async fn codex_usage_report(app: tauri::AppHandle) -> Option<usage::UsageReport> {
     let started_sources = enabled_usage_sources();
     if !started_sources.contains("codex") {
         return None;
     }
-    let report = tauri::async_runtime::spawn_blocking(|| {
-        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("codex") {
-            if at.elapsed() < USAGE_REPORT_TTL {
-                return report.clone();
-            }
-        }
-        let live = codex_scanner::usage_scan();
-        let merged = cost_history::apply_and_report("codex", live.as_ref().map(|scan| &scan.usage));
-        if let Some(scan) = &live {
-            let _ = project_cost_history::apply_with_retractions(
+    if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get("codex") {
+        if at.elapsed() < USAGE_REPORT_TTL {
+            return authorize_usage_report(
                 "codex",
-                &scan.projects,
-                &scan.retractions,
-                false,
+                Some(report.clone()),
+                &started_sources,
+                &enabled_usage_sources(),
             );
         }
-        USAGE_REPORT_CACHE
-            .lock()
-            .unwrap()
-            .insert("codex", (Instant::now(), merged.clone()));
-        merged
-    })
-    .await
-    .ok();
-    authorize_usage_report("codex", report, &started_sources, &enabled_usage_sources())
+    }
+
+    let mut seed = cost_history::report("codex");
+    if let Some((_generation, guard)) = codex_scanner::try_begin_scan() {
+        seed.scan_pending = Some(true);
+        seed.scan_progress =
+            codex_scanner::current_scan().map(codex_scan_progress_from_active_scan);
+        std::thread::spawn(move || {
+            use tauri::Emitter as _;
+            let _guard = guard;
+            let Some(active_scan) = codex_scanner::current_scan() else {
+                return;
+            };
+            let generation = active_scan.generation;
+            let live = loop {
+                match codex_scanner::usage_scan_generation(generation) {
+                    codex_scanner::GenerationOutcome::Pending => {
+                        if !enabled_usage_sources().contains("codex") {
+                            return;
+                        }
+                        // Each scanner episode has a hard wall-clock budget.
+                        // Keep the singleflight worker alive and yield CPU
+                        // before resuming from its durable journal + spool.
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    codex_scanner::GenerationOutcome::Complete(live) => break live,
+                    codex_scanner::GenerationOutcome::Failed => {
+                        if enabled_usage_sources().contains("codex") {
+                            let terminal = codex_terminal_failure_report(generation);
+                            let _ = app.emit("birdnion-codex-usage-updated", terminal);
+                        }
+                        return;
+                    }
+                }
+            };
+            if !enabled_usage_sources().contains("codex") {
+                return;
+            };
+            let mut merged = cost_history::apply_and_report("codex", Some(&live.usage));
+            if !merged.live {
+                let terminal = codex_terminal_failure_report(generation);
+                let _ = app.emit("birdnion-codex-usage-updated", terminal);
+                return;
+            }
+            // Project insights are a secondary projection, as on macOS. A
+            // project-history write failure must not roll back or suppress an
+            // already durable exact aggregate; the next scan retries the
+            // idempotent high-water/retraction merge.
+            let _ = project_cost_history::apply_with_retractions(
+                "codex",
+                &live.projects,
+                &live.retractions,
+                false,
+            );
+            merged.scan_pending = Some(false);
+            merged.scan_progress = Some(usage::ScanProgress {
+                generation,
+                completed: 1,
+                total: 1,
+                fingerprint: live
+                    .progress_fingerprint
+                    .clone()
+                    .unwrap_or_else(|| format!("generation-{generation}-complete")),
+            });
+            USAGE_REPORT_CACHE
+                .lock()
+                .unwrap()
+                .insert("codex", (Instant::now(), merged.clone()));
+            let _ = app.emit("birdnion-codex-usage-updated", merged);
+        });
+    } else {
+        let active_scan = codex_scanner::current_scan();
+        seed.scan_pending = Some(active_scan.is_some());
+        seed.scan_progress = active_scan.map(codex_scan_progress_from_active_scan);
+    }
+    authorize_usage_report(
+        "codex",
+        Some(seed),
+        &started_sources,
+        &enabled_usage_sources(),
+    )
 }
 
 /// Grok Build local session cost (signals.json) + history merge (blocking
@@ -470,6 +557,91 @@ mod usage_source_gating_tests {
         assert!(authorize_usage_report("kiro", Some(report.clone()), &started, &revoked).is_none());
         assert!(authorize_usage_report("claude", Some(report), &started, &revoked).is_some());
         assert_eq!(intersect_usage_sources(&started, &revoked), revoked);
+    }
+}
+
+#[cfg(test)]
+mod codex_terminal_failure_tests {
+    use super::*;
+    use crate::config::TEST_ENV_LOCK as ENV_LOCK;
+    use chrono::Local;
+
+    #[test]
+    fn terminal_failure_publishes_last_good_without_mutating_histories() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let base = std::env::temp_dir().join(format!(
+            "birdnion-codex-terminal-failure-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::env::set_var("BIRDNION_CONFIG", base.join("settings.json"));
+
+        let date = Local::now().date_naive().to_string();
+        let live = usage::UsageReport {
+            daily: vec![usage::DailyUsage {
+                date: date.clone(),
+                usd: 0.25,
+                tokens: 42,
+                models: vec![],
+            }],
+            ..Default::default()
+        };
+        cost_history::apply_and_report("codex", Some(&live));
+        project_cost_history::apply(
+            "codex",
+            &[project_cost_history::ProjectContribution {
+                project_key: "a".repeat(64),
+                display_name: "repo".into(),
+                capability: "exact".into(),
+                date,
+                usd: 0.25,
+                tokens: 42,
+                models: vec![],
+            }],
+            false,
+        )
+        .unwrap();
+        let cost_path = cost_history::history_path().unwrap();
+        let project_path = project_cost_history::history_path().unwrap();
+        let cost_before = std::fs::read(&cost_path).unwrap();
+        let project_before = std::fs::read(&project_path).unwrap();
+
+        let terminal = codex_terminal_failure_report(17);
+
+        assert_eq!(terminal.today_tokens, 42);
+        assert!(!terminal.live);
+        assert_eq!(terminal.scan_pending, Some(false));
+        assert_eq!(terminal.scan_progress.as_ref().unwrap().generation, 17);
+        assert_eq!(
+            terminal.scan_progress.as_ref().unwrap().fingerprint,
+            "generation-17-incomplete"
+        );
+        assert_eq!(std::fs::read(cost_path).unwrap(), cost_before);
+        assert_eq!(std::fs::read(project_path).unwrap(), project_before);
+
+        std::env::remove_var("BIRDNION_CONFIG");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn terminal_failure_is_not_authorized_after_codex_is_disabled() {
+        let started = HashSet::from(["codex".to_string()]);
+        let disabled = HashSet::new();
+        let terminal = usage::UsageReport {
+            scan_pending: Some(false),
+            scan_progress: Some(usage::ScanProgress {
+                generation: 17,
+                completed: 0,
+                total: 0,
+                fingerprint: "generation-17-incomplete".into(),
+            }),
+            ..Default::default()
+        };
+
+        assert!(authorize_usage_report("codex", Some(terminal), &started, &disabled).is_none());
     }
 }
 

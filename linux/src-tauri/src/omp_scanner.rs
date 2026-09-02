@@ -405,6 +405,8 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
             included: true,
             live: true,
             scanned_at: None,
+            scan_pending: None,
+            scan_progress: None,
         },
         projects,
     }

@@ -380,6 +380,17 @@ pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport
     apply_and_report_inner(source, live, false, None)
 }
 
+/// Read-only seed used by the Linux Codex background scanner. It never
+/// rewrites history or advances freshness while a live generation is pending.
+pub fn report(source: &str) -> UsageReport {
+    let _guard = HISTORY_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let now = Local::now();
+    let document = read_for_mutation(now.timestamp_millis()).unwrap_or_default();
+    build_report(source, &document, None, false, now.date_naive())
+}
+
 /// Như `apply_and_report` nhưng THAY THẾ hẳn chuỗi ngày của nguồn thay vì gộp
 /// không-bao-giờ-giảm.
 ///
@@ -643,6 +654,8 @@ fn build_report(
         included: is_included(persisted_live, history_has_data),
         live: persisted_live,
         scanned_at,
+        scan_pending: None,
+        scan_progress: None,
     }
 }
 

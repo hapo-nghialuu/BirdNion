@@ -7,6 +7,12 @@ import { t } from "./i18n.ts";
 export type DailyModel = { name: string; usd: number; tokens: number };
 export type DailyUsage = { date: string; usd: number; tokens: number; models: DailyModel[] };
 export type HourlyUsage = { hour: string; usd: number; tokens: number };
+export type ScanProgress = {
+  generation: number;
+  completed: number;
+  total: number;
+  fingerprint: string;
+};
 export type UsageReport = {
   todayUsd: number;
   todayTokens: number;
@@ -21,6 +27,10 @@ export type UsageReport = {
   included?: boolean;
   live?: boolean;
   scannedAt?: number | null;
+  /** Linux may return a persisted report immediately while its bounded Codex
+   * scan continues. Both fields stay optional for older backend responses. */
+  scanPending?: boolean;
+  scanProgress?: ScanProgress;
 };
 
 /** Resolve one streamed local-cost refresh without confusing two different
