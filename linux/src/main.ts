@@ -204,6 +204,20 @@ let footerRotateTimer: number | null = null;
 /** Local usage-report sources scanned from disk. */
 const SCAN_SOURCES = ["claude", "codex", "grok", "omp", "pi", "kiro"] as const;
 type ScanSource = (typeof SCAN_SOURCES)[number];
+const SCAN_SOURCE_LABELS: Record<ScanSource, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+  kiro: "Kiro",
+  omp: "Oh My Pi",
+  pi: "Pi",
+};
+
+export function localUsageScanSourceLabels(sources: Iterable<ScanSource>): string[] {
+  const active = new Set(sources);
+  return SCAN_SOURCES.filter((source) => active.has(source))
+    .map((source) => SCAN_SOURCE_LABELS[source]);
+}
 
 type LocalUsageRefreshDependencies = {
   sources: readonly ScanSource[];
@@ -211,6 +225,7 @@ type LocalUsageRefreshDependencies = {
   scanSource: (source: ScanSource) => Promise<UsageReport | null>;
   previousReport: (source: ScanSource) => UsageReport | null;
   beginRefresh: () => void;
+  authorizeRefresh?: (sources: ReadonlySet<ScanSource>) => void;
   publishSource: (source: ScanSource, report: UsageReport | null) => void;
 };
 
@@ -235,6 +250,7 @@ export function createLocalUsageRefreshCoordinator(
       }
       return;
     }
+    dependencies.authorizeRefresh?.(enabledBeforeScan);
 
     await Promise.all(dependencies.sources.map(async (source) => {
       const report = !enabledBeforeScan.has(source)
@@ -370,9 +386,12 @@ type State = {
   tab: string; // "all" | provider id
   refreshing: boolean;
   loadedOnce: boolean;
-  /** Local-log scans still in flight — drives the All-tab scanning hint
-   * (macOS AllUsageOverview "Scanning X, Y…"). */
+  /** Local-log scan placeholders/in-flight sources. Before canonical source
+   * authorization resolves, this keeps the first-load skeleton visible. */
   scanning: Set<ScanSource>;
+  /** In-flight scans confirmed by the canonical enabled-source read. Footer
+   * telemetry must never expose the pre-authorization skeleton placeholders. */
+  authorizedScanning: Set<ScanSource>;
 };
 
 const state: State = {
@@ -392,6 +411,7 @@ const state: State = {
   refreshing: false,
   loadedOnce: false,
   scanning: new Set<ScanSource>(),
+  authorizedScanning: new Set<ScanSource>(),
 };
 
 let providerStatusStateRevision = 0;
@@ -954,10 +974,18 @@ function popoverFooter(): HTMLElement {
   const caption = latest > 0 ? relativeTime(latest) : null;
   const slot = el("div", "footer-rotate-slot");
   const sources = footerSourceStates();
+  const scanning = SCAN_SOURCES.filter((source) => state.authorizedScanning.has(source));
 
   const paintSlot = () => {
     slot.textContent = "";
-    if (footerShowingSources && sources.length > 0) {
+    if (scanning.length > 0) {
+      const names = localUsageScanSourceLabels(scanning).join(", ");
+      const indicator = el("span", "footer-scanning", t("scanningSources", { names }));
+      indicator.setAttribute("role", "status");
+      indicator.setAttribute("aria-live", "polite");
+      indicator.setAttribute("aria-atomic", "true");
+      slot.append(indicator);
+    } else if (footerShowingSources && sources.length > 0) {
       slot.append(footerSourceRow(sources));
     } else if (caption) {
       slot.append(el("span", "footer-updated", t("lastUpdated", { time: caption })));
@@ -967,7 +995,10 @@ function popoverFooter(): HTMLElement {
   foot.append(slot);
 
   if (footerRotateTimer != null) clearInterval(footerRotateTimer);
-  if (sources.length > 0) {
+  if (scanning.length > 0) {
+    footerRotateTimer = null;
+    footerShowingSources = false;
+  } else if (sources.length > 0) {
     footerRotateTimer = window.setInterval(() => {
       // Slot cao cố định trong CSS nên đổi nội dung không làm popover đổi cỡ.
       if (!slot.isConnected) {
@@ -1071,13 +1102,6 @@ export function shouldShowFirstProviderCTA(
     && providerStatusCount === 0
     && includedLocalSourceCount === 0
     && !localAuthorizationPending;
-}
-
-/** "Đang quét Claude, Codex…" hint while some scans are still in flight but
- * others already rendered — macOS AllUsageOverview partial-results hint. */
-function scanningHint(names: ScanSource[]): HTMLElement {
-  const labels = names.map((s) => NAME_BY_ID.get(s) ?? s);
-  return el("div", "scanning-hint", t("scanningSources", { names: labels.join(", ") }));
 }
 
 /**
@@ -1320,7 +1344,6 @@ function render() {
         body.append(el("div", "empty", t("noLogs")));
       }
     } else {
-      if (pending.length > 0) body.append(scanningHint(pending));
       // Agent-centric order (macOS parity 2026-08-24): tổng chi phí →
       // quota → chi phí theo → đã cấu hình → ngân sách.
       // Heatmap và insights card cố tình KHÔNG nằm ở All nữa: nhịp hoạt động
@@ -2173,10 +2196,16 @@ const refreshLocalUsageReports = createLocalUsageRefreshCoordinator({
   previousReport: (source) => state[source],
   beginRefresh: () => {
     state.scanning = new Set(SCAN_SOURCES);
+    state.authorizedScanning = new Set<ScanSource>();
+    render();
+  },
+  authorizeRefresh: (sources) => {
+    state.authorizedScanning = new Set(sources);
     render();
   },
   publishSource: (source, report) => {
     state.scanning.delete(source);
+    state.authorizedScanning.delete(source);
     state[source] = report;
     render();
   },
@@ -2315,8 +2344,9 @@ async function load(manual = false) {
   loadInFlight = true;
   state.refreshing = true;
   // Marked up-front (not per-invoke) so the very first paint below already
-  // shows the All-tab skeleton/scanning hint instead of "no logs found".
+  // shows the All-tab skeleton instead of "no logs found".
   state.scanning = new Set(SCAN_SOURCES);
+  state.authorizedScanning = new Set<ScanSource>();
 
   // Publish one source's result and repaint. Chrome-only repaint while a
   // provider tab shows fresh-enough data would be nice, but a full render()

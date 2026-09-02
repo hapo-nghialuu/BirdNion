@@ -62,6 +62,7 @@ const {
   createLocalUsageRefreshCoordinator,
   createProviderIdentityRefreshCoordinator,
   failClosedUnavailableProviderSettings,
+  localUsageScanSourceLabels,
   reconcileProviderSettingsChange,
   shouldShowFirstProviderCTA,
 } = await import("../src/main.ts");
@@ -110,6 +111,58 @@ test("canonical authorization read failure scans nothing and clears prior usage"
 
   assert.equal(scanCalls, 0);
   assert.deepEqual(published, [["claude", null], ["codex", null]]);
+});
+
+test("active scan indicator starts before work and clears each canonical source", async () => {
+  const blockedScan = deferred();
+  const authorized = [];
+  const scanned = [];
+  const events = [];
+  const active = new Set();
+  const publishedActive = [];
+  const refresh = createLocalUsageRefreshCoordinator({
+    sources: ["claude", "codex"],
+    readCanonicalSources: async () => new Set(["claude"]),
+    scanSource: async (source) => {
+      events.push(`scan:${source}`);
+      scanned.push(source);
+      return blockedScan.promise;
+    },
+    previousReport: () => null,
+    beginRefresh() {},
+    authorizeRefresh: (sources) => {
+      events.push(`authorize:${[...sources].join(",")}`);
+      authorized.push([...sources]);
+      active.clear();
+      for (const source of sources) active.add(source);
+    },
+    publishSource(source) {
+      active.delete(source);
+      publishedActive.push([source, [...active]]);
+    },
+  });
+
+  const inFlight = refresh();
+  while (scanned.length === 0) await Promise.resolve();
+
+  assert.deepEqual(authorized, [["claude"]]);
+  assert.deepEqual(scanned, ["claude"]);
+  assert.deepEqual(events, ["authorize:claude", "scan:claude"]);
+  assert.deepEqual([...active], ["claude"]);
+
+  blockedScan.resolve(prior);
+  await inFlight;
+  assert.deepEqual(publishedActive, [
+    ["codex", ["claude"]],
+    ["claude", []],
+  ]);
+});
+
+test("scan indicator labels use stable user-facing names", () => {
+  assert.deepEqual(
+    localUsageScanSourceLabels(new Set(["pi", "omp", "codex"])),
+    ["Codex", "Oh My Pi", "Pi"],
+  );
 });
 
 test("unavailable provider settings invalidate cached and in-flight identities", () => {

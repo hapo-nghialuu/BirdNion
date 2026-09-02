@@ -1,10 +1,7 @@
 import SwiftUI
 
 struct AllAgentsOverview: View {
-    @EnvironmentObject var settings: SettingsStore
-
     let report: CombinedUsageReport
-    let pendingSources: [String]
     let visibleRecords: [InstalledAgentRecord]
     let aggregateAgentCount: Int
     let quotaRows: [AgentQuotaRow]
@@ -21,22 +18,10 @@ struct AllAgentsOverview: View {
     let onHoverModels: ([AgentModelRow], String) -> Void
     let onHoverEnd: () -> Void
 
-    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
     private var insightsSources: Set<ProjectUsageSource> {
         Set(ProjectUsageSource.allCases)
     }
     var body: some View {
-        if !pendingSources.isEmpty {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small).tint(VocabbyTheme.blue)
-                Text((vi ? "Đang quét " : "Scanning ") + pendingSources.joined(separator: ", ") + "…")
-                    .font(.plexSans(10))
-                    .foregroundStyle(VocabbyTheme.tertiary)
-            }
-            .popoverContentInset()
-            .padding(.top, 12)
-        }
-
         // Khối 1: Tổng chi phí. (Confidence badges đã dời xuống footer,
         // luân phiên với dòng UPDATED.)
         CombinedChartCard(

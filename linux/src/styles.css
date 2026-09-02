@@ -1247,13 +1247,6 @@ html.popover-capped .app-body {
   50% { opacity: 0.45; }
 }
 
-/* macOS AllUsageOverview "Scanning X, Y…" partial-results hint. */
-.scanning-hint {
-  font-size: 10px;
-  color: var(--tertiary);
-  padding: 0 2px 6px;
-}
-
 /* macOS WindowRow — solid fills, 5px bar */
 .window-row { margin-top: 0; }
 
@@ -4275,7 +4268,6 @@ body.settings-body-root {
 .quota-summary-label,
 .pp-usage-label,
 .sw-section-header,
-.scanning-hint,
 .heatmap-head .summary-label {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -5733,6 +5725,17 @@ body.settings-body-root {
   min-width: 0;
   flex: 1;
   overflow: hidden;
+}
+
+.footer-scanning {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text3);
 }
 
 .footer-sources { display: flex; align-items: center; gap: 10px; white-space: nowrap; }

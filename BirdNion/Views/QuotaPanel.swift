@@ -145,6 +145,7 @@ struct QuotaOverview: View {
                 // between the last section (e.g. Accounts) and the footer.
                 ActionsList(
                     sourceStates: footerSourceStates,
+                    scanningSources: footerScanningSources,
                     onQuotaAgendaTick: updateQuotaAgenda)
             }
             // No horizontal pad here: header/tabs own full-bleed rules;
@@ -704,6 +705,12 @@ struct QuotaOverview: View {
         add("grok", VocabbyTheme.chartGrok, grokReport?.scanConfidence)
         add("kiro", VocabbyTheme.chartKiro, kiroReport?.scanConfidence)
         return out
+    }
+
+    private var footerScanningSources: [String] {
+        AllUsageSourceAuthorization.pendingSourceLabels(
+            authorizedSources: authorizedCostSources,
+            loadingSources: loadingCostSources)
     }
 
     /// The All tab exists for enabled local providers or detected local-cost agents.
@@ -3605,6 +3612,7 @@ struct ActionsList: View {
     @EnvironmentObject var quota: QuotaService
 
     var sourceStates: [FooterSourceState] = []
+    var scanningSources: [String] = []
     var onQuotaAgendaTick: (Date) -> Void = { _ in }
 
     /// Luân phiên 5 giây/lượt giữa caption cập nhật và trạng thái nguồn.
@@ -3630,7 +3638,9 @@ struct ActionsList: View {
             // đổi fitting-size ở đây sẽ kích hoạt resize panel giữa layout
             // pass và gây AttributeGraph cycle (crash 2026-08-24).
             ZStack(alignment: .leading) {
-                if showSources, !sourceStates.isEmpty {
+                if !scanningSources.isEmpty {
+                    scanningStateRow
+                } else if showSources, !sourceStates.isEmpty {
                     sourceStateRow
                 } else if let lastRefreshCaption {
                     Text(lastRefreshCaption.uppercased())
@@ -3643,7 +3653,7 @@ struct ActionsList: View {
             .frame(height: 16, alignment: .leading)
             .onReceive(rotation) { now in
                 onQuotaAgendaTick(now)
-                guard !sourceStates.isEmpty else { return }
+                guard scanningSources.isEmpty, !sourceStates.isEmpty else { return }
                 showSources.toggle()
             }
             Spacer(minLength: 8)
@@ -3669,6 +3679,9 @@ struct ActionsList: View {
                 NSApp.terminate(nil)
             }
         }
+        .onChange(of: scanningSources) { _, sources in
+            if sources.isEmpty { showSources = false }
+        }
         .popoverContentInset()
         // Top 12 để khoảng cách từ chrome rule tới icon bằng khoảng cách từ
         // section cuối tới chrome rule (đối xứng như mọi line khác).
@@ -3682,6 +3695,21 @@ struct ActionsList: View {
                 .frame(height: 1)
                 .offset(y: -1)
         }
+    }
+
+    private var scanningStateRow: some View {
+        HStack(spacing: 5) {
+            ProgressView()
+                .controlSize(.mini)
+                .tint(VocabbyTheme.blue)
+            Text((vi ? "Đang tính lịch sử " : "Calculating history for ")
+                 + scanningSources.joined(separator: ", ") + "…")
+                .font(.plexMono(9, weight: .medium))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .tracking(0.3)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// Dòng trạng thái nguồn compact: logo tint + LIVE/LỊCH SỬ + freshness.
