@@ -17,6 +17,9 @@ enum CostUsageScanner {
     static let log = CodexBarLog.logger(LogCategories.tokenCost)
     static let codexActiveSessionLookbackDays = 30
     static let codexCatchUpScanCandidateLimit = 512
+    static let codexTurnIDBackfillFileLimit = 32
+    static let codexTurnIDBackfillByteLimit: Int64 = 32 * 1024 * 1024
+    static let codexPendingManifestContractVersion = 7
     static let costScale = 1_000_000_000.0
 
     enum ClaudeLogProviderFilter {
@@ -40,6 +43,11 @@ enum CostUsageScanner {
         /// khi lịch sử JSONL cực lớn (hàng GB) hoặc scan lạnh/migration. `nil` =
         /// không giới hạn (hành vi cũ).
         var maxScanWallClock: TimeInterval?
+#if DEBUG
+        /// Deterministic race seam for moving/replacing the Priority database
+        /// after the request plan is validated but before pending resumption.
+        var _testAfterCodexRequestedPlan: (@Sendable () -> Void)?
+#endif
 
         init(
             codexSessionsRoot: URL? = nil,
@@ -57,6 +65,9 @@ enum CostUsageScanner {
             self.claudeLogProviderFilter = claudeLogProviderFilter
             self.forceRescan = forceRescan
             self.maxScanWallClock = maxScanWallClock
+#if DEBUG
+            self._testAfterCodexRequestedPlan = nil
+#endif
         }
     }
 
@@ -232,6 +243,7 @@ enum CostUsageScanner {
         let rootsFingerprint: [String: Int64]
         let rootsChanged: Bool
         let windowExpanded: Bool
+        let requestMovesBeyondSuccessfulFrontier: Bool
         let needsCostCacheMigration: Bool
         let modelsDevCatalog: ModelsDevCatalog?
         let codexPricingKey: String
@@ -240,12 +252,21 @@ enum CostUsageScanner {
         let priorityTurns: [String: CodexPriorityTurnMetadata]
         let priorityTurnKeys: [String: String]
         let priorityTurnIDsByDay: [String: [String]]
+        let hasTrustedCommittedPriorityAdmission: Bool
+        let inspectedPriorityTurns: Bool
+        let priorityValidationPending: Bool
+        let priorityTurnsCursorPayload: String?
         let pricingChanged: Bool
         let priorityMetadataChanged: Bool
         let priorityTurnsChanged: Bool
         let needsTurnIDCacheMigration: Bool
         let changedPriorityTurnIDs: Set<String>
         let shouldRefresh: Bool
+    }
+
+    private struct CodexManifestCapture {
+        let files: [String: CodexFrozenFile]
+        let turnIDBackfillPaths: Set<String>
     }
 
     final class CodexSessionFileIndex {
@@ -1132,6 +1153,60 @@ enum CostUsageScanner {
         return new.hasPrefix("sqlite:")
     }
 
+    private static func decodeCodexPriorityTurnsCursor(
+        _ payload: String?) -> CodexPriorityTurnsPersistedCursor?
+    {
+        guard let payload, let data = payload.data(using: .utf8) else { return nil }
+        guard let cursor = try? JSONDecoder().decode(
+            CodexPriorityTurnsPersistedCursor.self,
+            from: data),
+            Self.codexPriorityTurnsCursorIsValid(cursor)
+        else { return nil }
+        return cursor
+    }
+
+    private static func encodeCodexPriorityTurnsCursor(
+        _ cursor: CodexPriorityTurnsPersistedCursor?) -> String?
+    {
+        guard let cursor,
+              let data = try? JSONEncoder().encode(cursor)
+        else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func decodeCodexPendingPriorityTurns(
+        _ payload: String?) -> [String: CodexPriorityTurnMetadata]?
+    {
+        guard let payload, let data = payload.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(
+            [String: CodexPriorityTurnMetadata].self,
+            from: data)
+    }
+
+    private static func encodeCodexPendingPriorityTurns(
+        _ turns: [String: CodexPriorityTurnMetadata]) -> String?
+    {
+        guard let data = try? JSONEncoder().encode(turns) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Returns only cursor turns whose published day fingerprint still matches
+    /// the committed cache. This is the last-good fallback when SQLite cannot
+    /// be validated; an older cursor must not silently rewrite newer pricing.
+    private static func validatedPriorityTurns(
+        cache: CostUsageCache) -> [String: CodexPriorityTurnMetadata]
+    {
+        guard let cursor = Self.decodeCodexPriorityTurnsCursor(
+            cache.codexPriorityTurnsCursorPayload)
+        else { return [:] }
+        let resolvedTurns = Self.resolvedCodexPriorityTurns(from: cursor)
+        let keys = Self.codexPriorityTurnKeys(resolvedTurns)
+        return resolvedTurns.filter { _, turn in
+            guard let day = Self.codexPriorityDayKey(turn) else { return false }
+            return keys[day] == cache.codexPriorityTurnKeys?[day]
+        }
+    }
+
     private static func codexPriorityTurnKeys(
         _ priorityTurns: [String: CodexPriorityTurnMetadata]) -> [String: String]
     {
@@ -1246,12 +1321,21 @@ enum CostUsageScanner {
     }
 
     static func codexPendingProgressFingerprint(_ cache: CostUsageCache) -> String {
-        var parts = ["generation:\(cache.codexPendingScanGeneration ?? "")"]
+        var parts = [
+            "generation:\(cache.codexPendingScanGeneration ?? "")",
+            "manifest-contract:\(cache.codexPendingManifestContractVersion ?? 0)",
+            "scan-since:\(cache.codexPendingScanSinceKey ?? "")",
+            "scan-until:\(cache.codexPendingScanUntilKey ?? "")",
+            "priority:\(Self.sha256Hex(Data((cache.codexPendingPriorityTurnsPayload ?? "").utf8)))",
+        ]
         // Queue membership is durable progress, but queue rotation alone is
         // not. Sorting here mirrors CodexBar's no-progress contract and stops
         // an unproductive partial file from creating an infinite cycle.
         for path in Set(cache.codexPendingFileOrder ?? []).sorted() {
             parts.append("queue:\(Self.sha256Hex(Data(path.utf8)))")
+        }
+        for path in Set(cache.codexPendingTurnIDBackfillPaths ?? []).sorted() {
+            parts.append("turn-id-backfill:\(Self.sha256Hex(Data(path.utf8)))")
         }
         for (root, offset) in (cache.codexPendingFlatDiscoveryOffsets ?? [:])
             .sorted(by: { $0.key < $1.key })
@@ -3229,6 +3313,163 @@ enum CostUsageScanner {
         case unavailable
     }
 
+    /// Builds only the invalidation index needed by Priority refreshes. The
+    /// committed numeric/project entry is the source of truth: partial parser
+    /// state lives in the pending copy, and completion copies back only turn
+    /// IDs plus the trusted frozen-file receipt.
+    private static func scanCodexTurnIDBackfill(
+        fileURL: URL,
+        target: CodexFrozenFile,
+        committed: CostUsageFileUsage,
+        working: CostUsageFileUsage?,
+        checkCancellation: CancellationCheck?,
+        shouldStop: (() -> Bool)?,
+        scanGeneration: String,
+        roots: [URL],
+        cache: inout CostUsageCache,
+        state: inout CodexScanState) throws -> CodexFileScanOutcome
+    {
+        let fileURL = fileURL.standardizedFileURL
+        guard let root = Self.codexContainingRoot(fileURL: fileURL, roots: roots) else {
+            return .unavailable
+        }
+        let metadata = Self.codexFileMetadata(fileURL: fileURL, withinRoot: root)
+        guard Self.codexFrozenFileIsReadable(
+            target,
+            current: metadata,
+            fileURL: fileURL,
+            withinRoot: root)
+        else { return .unavailable }
+
+        let resumes = working?.codexScanGeneration == scanGeneration
+            && working?.codexScanComplete == false
+            && working?.codexScanTargetSize == target.targetEOF
+            && working?.codexScanFileId == target.fileId
+            && working?.codexScanContentFingerprint == target.contentFingerprint
+        let startOffset = resumes ? (working?.parsedBytes ?? 0) : 0
+        var currentTurnID = resumes ? working?.lastCodexTurnID : nil
+        var turnIDs = Set(resumes ? (working?.codexTurnIDs ?? []) : [])
+        let initialDiscarding = resumes
+            && working?.codexTurnIDBackfillDiscardingTruncatedLine == true
+
+        let outcome: CostUsageJsonl.ScanOutcome
+        do {
+            outcome = try CostUsageJsonl.scanResumable(
+                fileURL: fileURL,
+                offset: startOffset,
+                endOffset: target.targetEOF,
+                maxLineBytes: 256 * 1024,
+                prefixBytes: 256 * 1024,
+                checkCancellation: checkCancellation,
+                shouldStop: shouldStop,
+                discardingTruncatedLine: initialDiscarding,
+                withinRoot: root,
+                onLine: { line in
+                    guard !line.bytes.isEmpty, !line.wasTruncated else { return }
+                    guard line.bytes.containsAscii(#""type":"event_msg""#) else { return }
+                    guard line.bytes.containsAscii(#""token_count""#)
+                            || line.bytes.containsAscii(#""task_started""#)
+                    else { return }
+
+                    if let fastLine = Self.parseCodexFastLine(line.bytes) {
+                        switch fastLine {
+                        case let .taskStarted(turnID):
+                            currentTurnID = turnID
+                            if let turnID, !turnID.isEmpty { turnIDs.insert(turnID) }
+                        case let .tokenCount(record):
+                            if let turnID = record.turnID ?? currentTurnID, !turnID.isEmpty {
+                                turnIDs.insert(turnID)
+                            }
+                        default:
+                            break
+                        }
+                        return
+                    }
+
+                    autoreleasepool {
+                        guard let object = (try? JSONSerialization.jsonObject(with: line.bytes))
+                            as? [String: Any],
+                              object["type"] as? String == "event_msg",
+                              let payload = object["payload"] as? [String: Any]
+                        else { return }
+                        switch payload["type"] as? String {
+                        case "task_started":
+                            currentTurnID = Self.codexTurnID(from: payload)
+                            if let currentTurnID, !currentTurnID.isEmpty {
+                                turnIDs.insert(currentTurnID)
+                            }
+                        case "token_count":
+                            if let turnID = Self.codexTurnID(from: payload) ?? currentTurnID,
+                               !turnID.isEmpty
+                            {
+                                turnIDs.insert(turnID)
+                            }
+                        default:
+                            break
+                        }
+                    }
+                })
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Self.log.warning(
+                "Codex cost usage turn-ID backfill could not read frozen file",
+                metadata: ["path": fileURL.path, "error": error.localizedDescription])
+            var checkpoint = resumes ? (working ?? committed) : committed
+            if !resumes {
+                checkpoint.parsedBytes = 0
+                checkpoint.lastCodexTurnID = nil
+                checkpoint.codexTurnIDs = []
+                checkpoint.codexTurnIDBackfillDiscardingTruncatedLine = false
+            }
+            checkpoint.codexScanGeneration = scanGeneration
+            checkpoint.codexScanComplete = false
+            checkpoint.codexScanTargetSize = target.targetEOF
+            checkpoint.codexScanFileId = target.fileId
+            checkpoint.codexScanContentFingerprint = target.contentFingerprint
+            cache.files[fileURL.path] = checkpoint
+            return .incomplete
+        }
+
+        guard let coverage = Self.codexParsedCoverage(
+            fileURL: fileURL,
+            target: target,
+            parsedBytes: outcome.parsedBytes,
+            scanComplete: !outcome.stoppedEarly && !outcome.discardingTruncatedLine,
+            withinRoot: root)
+        else { return .unavailable }
+
+        var indexed = committed
+        indexed.codexTurnIDs = turnIDs.sorted()
+        indexed.codexScanGeneration = scanGeneration
+        indexed.codexScanComplete = coverage.scanComplete
+        indexed.codexScanTargetSize = target.targetEOF
+        indexed.codexScanFileId = target.fileId
+        indexed.codexScanContentFingerprint = target.contentFingerprint
+        if coverage.scanComplete {
+            indexed.codexTurnIDBackfillDiscardingTruncatedLine = nil
+        } else {
+            // These parser fields are pending-only checkpoint storage. They are
+            // restored from `committed` when the frozen EOF completes.
+            indexed.parsedBytes = outcome.parsedBytes
+            indexed.lastCodexTurnID = currentTurnID
+            indexed.codexTurnIDBackfillDiscardingTruncatedLine =
+                outcome.discardingTruncatedLine
+        }
+        cache.files[fileURL.path] = indexed
+
+        if let sessionID = committed.sessionId, !sessionID.isEmpty {
+            state.seenSessionIds.insert(sessionID)
+            if state.sessionFilePaths[sessionID] == nil {
+                state.sessionFilePaths[sessionID] = fileURL.path
+            }
+            state.ambiguousProjectSessionIds.formUnion(
+                committed.projectAttributionAmbiguous == true ? [sessionID] : [])
+        }
+        state.seenFileIds.insert(target.fileId)
+        return coverage.scanComplete ? .complete : .incomplete
+    }
+
     private static func scanCodexFile(
         fileURL: URL,
         target: CodexFrozenFile,
@@ -3287,13 +3528,24 @@ enum CostUsageScanner {
         range: CostUsageDayRange,
         now: Date,
         nowMs: Int64,
-        options: Options) -> CodexRefreshPlan
+        options: Options,
+        priorityCoverageSinceKey: String? = nil,
+        priorityCoverageUntilKey: String? = nil) -> CodexRefreshPlan
     {
         let refreshMs = Int64(max(0, options.refreshMinIntervalSeconds) * 1000)
         let roots = self.codexSessionsRoots(options: options)
         let rootsFingerprint = Self.codexRootsFingerprint(roots)
         let rootsChanged = cache.roots != rootsFingerprint
         let windowExpanded = Self.requestedWindowExpandsCache(range: range, cache: cache)
+        let requestMovesBeyondSuccessfulFrontier: Bool = if cache.lastScanUnixMs == 0 {
+            false
+        } else if let successfulSince = cache.codexLastSuccessfulRequestScanSinceKey,
+                  let successfulUntil = cache.codexLastSuccessfulRequestScanUntilKey
+        {
+            range.scanSinceKey < successfulSince || range.scanUntilKey > successfulUntil
+        } else {
+            true
+        }
         let needsCostCacheMigration = cache.files.values.contains { Self.needsCodexCostCache($0, range: range) }
         let modelsDevLoad = ModelsDevCache.load(now: now, cacheRoot: options.cacheRoot)
         let modelsDevCatalog = modelsDevLoad.artifact?.catalog
@@ -3301,7 +3553,7 @@ enum CostUsageScanner {
         let codexPriorityMetadataKey = Self.codexPriorityMetadataKey(databaseURL: options.codexTraceDatabaseURL)
         let hasPriorityMetadata = codexPriorityMetadataKey.hasPrefix("sqlite:")
         let pricingChanged = cache.codexPricingKey != nil && cache.codexPricingKey != codexPricingKey
-        let priorityMetadataChanged = Self.codexPriorityMetadataChanged(
+        let detectedPriorityMetadataChanged = Self.codexPriorityMetadataChanged(
             old: cache.codexPriorityMetadataKey,
             new: codexPriorityMetadataKey)
         let needsTurnIDCacheMigration = hasPriorityMetadata && cache.files.values.contains {
@@ -3312,27 +3564,90 @@ enum CostUsageScanner {
         let shouldInspectPriorityTurns = options.forceRescan
             || cache.codexPendingScanGeneration != nil
             || windowExpanded
+            || requestMovesBeyondSuccessfulFrontier
             || rootsChanged
             || needsCostCacheMigration
             || needsTurnIDCacheMigration
             || pricingChanged
-            || priorityMetadataChanged
+            || detectedPriorityMetadataChanged
             || refreshMs == 0
             || cache.lastScanUnixMs == 0
             || nowMs - cache.lastScanUnixMs > refreshMs
-        let priorityTurns = shouldInspectPriorityTurns ? Self.codexPriorityTurns(
-            databaseURL: options.codexTraceDatabaseURL,
-            sinceDayKey: range.scanSinceKey,
-            untilDayKey: range.scanUntilKey) : [:]
+        let resolvedPriorityDatabaseURL = Self.resolvedCodexPriorityDatabaseURL(
+            options.codexTraceDatabaseURL)
+        if shouldInspectPriorityTurns {
+            Self.seedCodexPriorityTurnsMemoIfEmpty(
+                Self.decodeCodexPriorityTurnsCursor(
+                    cache.codexPendingPriorityTurnsCursorPayload),
+                databaseURL: resolvedPriorityDatabaseURL)
+            if options.forceRescan {
+                Self.dropCodexPriorityTurnsMemo(databaseURL: resolvedPriorityDatabaseURL)
+            } else {
+                Self.seedCodexPriorityTurnsMemoIfEmpty(
+                    Self.decodeCodexPriorityTurnsCursor(cache.codexPriorityTurnsCursorPayload),
+                    databaseURL: resolvedPriorityDatabaseURL)
+            }
+        }
+        let previouslyObservedPriorityDatabase = cache.codexPriorityMetadataKey
+            == "sqlite:\(resolvedPriorityDatabaseURL.standardizedFileURL.path)"
+        let priorityResolution = shouldInspectPriorityTurns
+            ? Self.resolveCodexPriorityTurns(
+                databaseURL: resolvedPriorityDatabaseURL,
+                sinceDayKey: priorityCoverageSinceKey ?? range.scanSinceKey,
+                untilDayKey: priorityCoverageUntilKey ?? range.scanUntilKey,
+                expectExistingDatabase: previouslyObservedPriorityDatabase)
+            : nil
+        let priorityValidationPending = priorityResolution?.validationPending ?? false
+        let committedPriorityCursor = Self.decodeCodexPriorityTurnsCursor(
+            cache.codexPriorityTurnsCursorPayload)
+        let committedPriorityTurns = Self.validatedPriorityTurns(cache: cache)
+        let committedPriorityTurnKeys = Self.codexPriorityTurnKeys(committedPriorityTurns)
+        let hasTrustedCommittedPriorityAdmission = committedPriorityCursor != nil
+            && !Self.codexPriorityTurnKeysChanged(
+                old: cache.codexPriorityTurnKeys,
+                new: committedPriorityTurnKeys,
+                range: range)
+        let resolvedPriorityTurns = priorityResolution?.turns ?? committedPriorityTurns
+        let exactLegacyCoverageIsMissing = !cache.files.isEmpty
+            && cache.lastScanUnixMs > 0
+            && (cache.codexLastSuccessfulRequestScanSinceKey == nil
+                || cache.codexLastSuccessfulRequestScanUntilKey == nil)
+        let shouldDeferLivePriorityAdmission = !options.forceRescan
+            && !detectedPriorityMetadataChanged
+            && hasTrustedCommittedPriorityAdmission
+            && (needsTurnIDCacheMigration
+                || cache.codexNeedsLegacyColdInventory == true
+                || exactLegacyCoverageIsMissing)
+        // While legacy coverage or its turn-ID index is incomplete, keep the
+        // last committed Priority admission. New trace rows are picked up as
+        // one targeted reprice after exact ownership is available; allowing a
+        // live change here would reopen the entire numeric corpus and stall
+        // Today behind migration again.
+        let priorityTurns = priorityValidationPending || shouldDeferLivePriorityAdmission
+            ? committedPriorityTurns
+            : resolvedPriorityTurns
+        let priorityMetadataChanged = detectedPriorityMetadataChanged
+            && !priorityValidationPending
+        let priorityTurnsCursorPayload: String? = if shouldDeferLivePriorityAdmission {
+            cache.codexPriorityTurnsCursorPayload
+        } else if shouldInspectPriorityTurns && !priorityValidationPending {
+            Self.encodeCodexPriorityTurnsCursor(
+                Self.codexPriorityTurnsPersistedCursor(databaseURL: resolvedPriorityDatabaseURL))
+        } else {
+            nil
+        }
         let priorityTurnKeys = Self.codexPriorityTurnKeys(priorityTurns)
         let priorityTurnIDsByDay = Self.codexPriorityTurnIDsByDay(priorityTurns)
         let priorityTurnsChanged = shouldInspectPriorityTurns
+            && !priorityValidationPending
             && hasPriorityMetadata
             && Self.codexPriorityTurnKeysChanged(
                 old: cache.codexPriorityTurnKeys,
                 new: priorityTurnKeys,
                 range: range)
-        let changedPriorityTurnIDs = shouldInspectPriorityTurns && hasPriorityMetadata
+        let changedPriorityTurnIDs = shouldInspectPriorityTurns
+            && !priorityValidationPending
+            && hasPriorityMetadata
             ? Self.changedPriorityTurnIDs(
                 old: cache.codexPriorityTurnIDsByDay,
                 new: priorityTurnIDsByDay,
@@ -3343,12 +3658,14 @@ enum CostUsageScanner {
         let shouldRefresh = options.forceRescan
             || cache.codexPendingScanGeneration != nil
             || windowExpanded
+            || requestMovesBeyondSuccessfulFrontier
             || rootsChanged
             || needsCostCacheMigration
             || needsTurnIDCacheMigration
             || pricingChanged
             || priorityMetadataChanged
             || priorityTurnsChanged
+            || priorityValidationPending
             || refreshMs == 0
             || cache.lastScanUnixMs == 0
             || nowMs - cache.lastScanUnixMs > refreshMs
@@ -3359,6 +3676,7 @@ enum CostUsageScanner {
             rootsFingerprint: rootsFingerprint,
             rootsChanged: rootsChanged,
             windowExpanded: windowExpanded,
+            requestMovesBeyondSuccessfulFrontier: requestMovesBeyondSuccessfulFrontier,
             needsCostCacheMigration: needsCostCacheMigration,
             modelsDevCatalog: modelsDevCatalog,
             codexPricingKey: codexPricingKey,
@@ -3367,6 +3685,10 @@ enum CostUsageScanner {
             priorityTurns: priorityTurns,
             priorityTurnKeys: priorityTurnKeys,
             priorityTurnIDsByDay: priorityTurnIDsByDay,
+            hasTrustedCommittedPriorityAdmission: hasTrustedCommittedPriorityAdmission,
+            inspectedPriorityTurns: shouldInspectPriorityTurns,
+            priorityValidationPending: priorityValidationPending,
+            priorityTurnsCursorPayload: priorityTurnsCursorPayload,
             pricingChanged: pricingChanged,
             priorityMetadataChanged: priorityMetadataChanged,
             priorityTurnsChanged: priorityTurnsChanged,
@@ -3391,13 +3713,91 @@ enum CostUsageScanner {
         var scanTruncated = false
         var committedGenerationCompleted = false
         var committedGenerationPersisted = false
+        var committedUsageGenerationCompleted = false
+        let pendingNeedsFlatReconciliation =
+            committedCache.codexPendingNeedsFlatReconciliation == true
         let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        // A finite episode may still own yesterday's wider/older scan range at
+        // midnight. Do not advance and prune the shared Priority cursor past
+        // that range before its frozen episode has completed; the second plan
+        // would otherwise expand backward and trigger a full SQLite rebuild.
+        let pendingPriorityCoverageSinceKey: String? = if !options.forceRescan,
+                                                          committedCache
+                                                          .codexPendingManifestContractVersion
+                                                          == Self.codexPendingManifestContractVersion,
+                                                          committedCache.codexPendingScanGeneration != nil
+        {
+            committedCache.codexPendingScanSinceKey
+        } else {
+            nil
+        }
+        let pendingPriorityCoverageUntilKey: String? = if pendingPriorityCoverageSinceKey != nil {
+            committedCache.codexPendingScanUntilKey
+        } else {
+            nil
+        }
+        let requestedPriorityCoverageSinceKey = [
+            range.scanSinceKey,
+            pendingPriorityCoverageSinceKey,
+        ].compactMap(\.self).min()
+        let requestedPriorityCoverageUntilKey = [
+            range.scanUntilKey,
+            pendingPriorityCoverageUntilKey,
+        ].compactMap(\.self).max()
         let requestedPlan = Self.makeCodexRefreshPlan(
             cache: committedCache,
             range: range,
             now: now,
             nowMs: nowMs,
-            options: options)
+            options: options,
+            priorityCoverageSinceKey: requestedPriorityCoverageSinceKey,
+            priorityCoverageUntilKey: requestedPriorityCoverageUntilKey)
+
+        // A transient trace-DB failure is not authoritative evidence that all
+        // prior Priority turns disappeared. Publish only the last-good cache,
+        // leave every committed marker untouched, and let the next invocation
+        // retry validation from the same baseline.
+        if requestedPlan.priorityValidationPending {
+            guard committedCache.roots == requestedPlan.rootsFingerprint,
+                  committedCache.timeZoneIdentifier == Calendar.current.timeZone.identifier
+            else {
+                return CostUsageDailyReport(data: [], summary: nil, scanIncomplete: true)
+            }
+            // A pre-cursor cache can contain raw rows without durable cost or
+            // mode splits. Repricing those rows with an empty Priority set
+            // during a trace outage would silently turn Priority usage into
+            // standard usage. Return no live payload so the caller keeps its
+            // last-good history until admission can be validated.
+            let hasUnmigratedRowsInRange = committedCache.files.values.contains { usage in
+                usage.codexRows?.contains {
+                    CostUsageDayRange.isInRange(
+                        dayKey: $0.day,
+                        since: range.sinceKey,
+                        until: range.untilKey)
+                } == true
+            }
+            guard !hasUnmigratedRowsInRange
+                    || requestedPlan.hasTrustedCommittedPriorityAdmission
+            else {
+                return CostUsageDailyReport(data: [], summary: nil, scanIncomplete: true)
+            }
+            let report = Self.buildCodexReportFromCache(
+                cache: committedCache,
+                range: range,
+                modelsDevCatalog: requestedPlan.modelsDevCatalog,
+                modelsDevCacheRoot: options.cacheRoot,
+                priorityTurns: Self.validatedPriorityTurns(cache: committedCache))
+            return CostUsageDailyReport(
+                data: report.data,
+                summary: report.summary,
+                projectBreakdown: report.projectBreakdown,
+                projectRetractions: report.projectRetractions,
+                scanIncomplete: true)
+        }
+
+#if DEBUG
+        options._testAfterCodexRequestedPlan?()
+#endif
 
         func semanticGeneration(for plan: CodexRefreshPlan) -> String {
             let rootsGeneration = plan.rootsFingerprint.keys.sorted().map {
@@ -3410,22 +3810,137 @@ enum CostUsageScanner {
             ].joined(separator: "|")
         }
 
+        func freezingPriorityAdmission(
+            in livePlan: CodexRefreshPlan,
+            turnsPayload: String?,
+            cursorPayload: String?,
+            cache: CostUsageCache,
+            range: CostUsageDayRange) -> CodexRefreshPlan?
+        {
+            let frozenPriorityTurns: [String: CodexPriorityTurnMetadata]
+            if livePlan.hasPriorityMetadata {
+                guard let turns = Self.decodeCodexPendingPriorityTurns(turnsPayload) else {
+                    return nil
+                }
+                frozenPriorityTurns = turns.filter { _, turn in
+                    guard let day = Self.codexPriorityDayKey(turn) else { return false }
+                    return day >= range.scanSinceKey && day <= range.scanUntilKey
+                }
+            } else {
+                frozenPriorityTurns = [:]
+            }
+            let frozenKeys = Self.codexPriorityTurnKeys(frozenPriorityTurns)
+            let frozenIDsByDay = Self.codexPriorityTurnIDsByDay(frozenPriorityTurns)
+            let hasTrustedFrozenPriorityAdmission: Bool = if let cursor =
+                Self.decodeCodexPriorityTurnsCursor(cursorPayload)
+            {
+                !Self.codexPriorityTurnKeysChanged(
+                    old: frozenKeys,
+                    new: Self.codexPriorityTurnKeys(
+                        Self.resolvedCodexPriorityTurns(from: cursor)),
+                    range: range)
+            } else {
+                false
+            }
+            let windowExpanded = Self.requestedWindowExpandsCache(range: range, cache: cache)
+            let requestMovesBeyondSuccessfulFrontier: Bool = if cache.lastScanUnixMs == 0 {
+                false
+            } else if let successfulSince = cache.codexLastSuccessfulRequestScanSinceKey,
+                      let successfulUntil = cache.codexLastSuccessfulRequestScanUntilKey
+            {
+                range.scanSinceKey < successfulSince || range.scanUntilKey > successfulUntil
+            } else {
+                true
+            }
+            let needsCostCacheMigration = cache.files.values.contains {
+                Self.needsCodexCostCache($0, range: range)
+            }
+            let needsTurnIDCacheMigration = livePlan.hasPriorityMetadata
+                && cache.files.values.contains {
+                    $0.codexTurnIDs == nil && $0.touchesCodexScanWindow(
+                        sinceKey: range.scanSinceKey,
+                        untilKey: range.scanUntilKey)
+                }
+            let frozenTurnsChanged = livePlan.hasPriorityMetadata
+                && Self.codexPriorityTurnKeysChanged(
+                    old: cache.codexPriorityTurnKeys,
+                    new: frozenKeys,
+                    range: range)
+            let frozenChangedTurnIDs = livePlan.hasPriorityMetadata
+                ? Self.changedPriorityTurnIDs(
+                    old: cache.codexPriorityTurnIDsByDay,
+                    new: frozenIDsByDay,
+                    oldKeys: cache.codexPriorityTurnKeys,
+                    newKeys: frozenKeys,
+                    range: range)
+                : []
+            let shouldRefresh = options.forceRescan
+                || cache.codexPendingScanGeneration != nil
+                || windowExpanded
+                || requestMovesBeyondSuccessfulFrontier
+                || livePlan.rootsChanged
+                || needsCostCacheMigration
+                || needsTurnIDCacheMigration
+                || livePlan.pricingChanged
+                || livePlan.priorityMetadataChanged
+                || frozenTurnsChanged
+                || livePlan.refreshMs == 0
+                || cache.lastScanUnixMs == 0
+                || nowMs - cache.lastScanUnixMs > livePlan.refreshMs
+            return CodexRefreshPlan(
+                refreshMs: livePlan.refreshMs,
+                roots: livePlan.roots,
+                rootsFingerprint: livePlan.rootsFingerprint,
+                rootsChanged: livePlan.rootsChanged,
+                windowExpanded: windowExpanded,
+                requestMovesBeyondSuccessfulFrontier: requestMovesBeyondSuccessfulFrontier,
+                needsCostCacheMigration: needsCostCacheMigration,
+                modelsDevCatalog: livePlan.modelsDevCatalog,
+                codexPricingKey: livePlan.codexPricingKey,
+                codexPriorityMetadataKey: livePlan.codexPriorityMetadataKey,
+                hasPriorityMetadata: livePlan.hasPriorityMetadata,
+                priorityTurns: frozenPriorityTurns,
+                priorityTurnKeys: frozenKeys,
+                priorityTurnIDsByDay: frozenIDsByDay,
+                hasTrustedCommittedPriorityAdmission: hasTrustedFrozenPriorityAdmission,
+                inspectedPriorityTurns: livePlan.inspectedPriorityTurns,
+                priorityValidationPending: false,
+                priorityTurnsCursorPayload: cursorPayload,
+                pricingChanged: livePlan.pricingChanged,
+                priorityMetadataChanged: livePlan.priorityMetadataChanged,
+                priorityTurnsChanged: frozenTurnsChanged,
+                needsTurnIDCacheMigration: needsTurnIDCacheMigration,
+                changedPriorityTurnIDs: frozenChangedTurnIDs,
+                shouldRefresh: shouldRefresh)
+        }
+
         func canUseWarmDeltaManifest(
             plan: CodexRefreshPlan,
-            cache: CostUsageCache) -> Bool
+            cache: CostUsageCache,
+            range: CostUsageDayRange) -> Bool
         {
-            !options.forceRescan
+            guard let lastSuccessfulRequestSinceKey =
+                cache.codexLastSuccessfulRequestScanSinceKey,
+                  cache.codexLastSuccessfulRequestScanUntilKey != nil
+            else { return false }
+            let expandsEarlierThanLastRequest =
+                range.scanSinceKey < lastSuccessfulRequestSinceKey
+            return !options.forceRescan
                 && !cache.files.isEmpty
                 && cache.lastScanUnixMs > 0
-                && cache.scanSinceKey != nil
                 && cache.scanUntilKey != nil
                 && !plan.rootsChanged
-                && !plan.windowExpanded
+                // A normal day rollover only extends the trailing edge. The
+                // warm inventory already includes files modified since the
+                // last publication plus today's partition, so reopening the
+                // entire retained history is unnecessary. Expanding backward
+                // still needs a cold manifest to discover older sessions.
+                && !expandsEarlierThanLastRequest
                 && !plan.needsCostCacheMigration
-                && !plan.needsTurnIDCacheMigration
+                && (!plan.needsTurnIDCacheMigration || !plan.priorityTurnsChanged)
                 && !plan.pricingChanged
                 && !plan.priorityMetadataChanged
-                && !plan.priorityTurnsChanged
+                && (!plan.priorityTurnsChanged || !plan.changedPriorityTurnIDs.isEmpty)
         }
 
         func frozenManifest(
@@ -3471,7 +3986,12 @@ enum CostUsageScanner {
             range: CostUsageDayRange,
             plan: CodexRefreshPlan,
             cache: CostUsageCache,
-            useWarmDelta: Bool) -> [String: CodexFrozenFile]
+            useWarmDelta: Bool,
+            useLegacyTurnIDBootstrap: Bool = false,
+            useLegacyColdInventory: Bool = false,
+            allowTurnIDBackfill: Bool = false,
+            additionalChangedPriorityTurnIDs: Set<String> = [],
+            modifiedSinceUnixMs: Int64? = nil) -> CodexManifestCapture
         {
             var seenPaths: Set<String> = []
             var files: [URL] = []
@@ -3482,10 +4002,11 @@ enum CostUsageScanner {
                     files.append(fileURL)
                 }
             }
-            if useWarmDelta {
+            if useWarmDelta || (useLegacyTurnIDBootstrap && !useLegacyColdInventory) {
                 let currentDayKey = CostUsageDayRange.dayKey(from: now)
+                let modifiedSinceMs = modifiedSinceUnixMs ?? cache.lastScanUnixMs
                 let lastSuccessfulScan = Date(
-                    timeIntervalSince1970: Double(max(Int64(0), cache.lastScanUnixMs)) / 1000)
+                    timeIntervalSince1970: Double(max(Int64(0), modifiedSinceMs)) / 1000)
                 // Existing cache already owns the historical total. Only files
                 // written since the last published scan need a content pass;
                 // the small overlap tolerates coarse filesystem timestamps.
@@ -3497,14 +4018,22 @@ enum CostUsageScanner {
                         scanUntilKey: range.scanUntilKey,
                         modifiedSince: modifiedSince,
                         includeLegacyRecursive: false))
-                    appendUnique(Self.listCodexSessionFiles(
+                    // Flat roots are inventoried by the bounded cursor below.
+                    // Listing them here would synchronously stat the complete
+                    // archive before the scan deadline starts.
+                    appendUnique(Self.listCodexSessionFilesByDatePartition(
                         root: root,
                         scanSinceKey: currentDayKey,
-                        scanUntilKey: currentDayKey,
-                        includeRecursive: false))
+                        scanUntilKey: currentDayKey))
                 }
+                let affectedPriorityTurnIDs = plan.changedPriorityTurnIDs
+                    .union(additionalChangedPriorityTurnIDs)
                 appendUnique(cache.files.compactMap { path, usage in
-                    guard usage.days[currentDayKey] != nil || usage.codexScanComplete == false
+                    let ownsChangedPriorityTurn = usage.codexTurnIDs?.contains(
+                        where: affectedPriorityTurnIDs.contains) == true
+                    guard usage.days[currentDayKey] != nil
+                            || usage.codexScanComplete == false
+                            || ownsChangedPriorityTurn
                     else { return nil }
                     let fileURL = URL(fileURLWithPath: path).standardizedFileURL
                     guard FileManager.default.fileExists(atPath: fileURL.path),
@@ -3539,20 +4068,163 @@ enum CostUsageScanner {
                     excludingPaths: seenPaths))
             }
 
-            return frozenManifest(files: files, plan: plan, cache: cache)
+            let liveManifest = frozenManifest(files: files, plan: plan, cache: cache)
+            guard useWarmDelta || useLegacyTurnIDBootstrap else {
+                return CodexManifestCapture(files: liveManifest, turnIDBackfillPaths: [])
+            }
+
+            let affectedPriorityTurnIDs = plan.changedPriorityTurnIDs
+                .union(additionalChangedPriorityTurnIDs)
+            let numericManifest = liveManifest.filter { path, target in
+                guard let usage = cache.files[path] else { return true }
+                let ownsChangedPriorityTurn = usage.codexTurnIDs?.contains(
+                    where: affectedPriorityTurnIDs.contains) == true
+                let needsSessionIdentity = usage.sessionId == nil
+                    && usage.codexParseResumeState == nil
+                return (useWarmDelta && plan.requestMovesBeyondSuccessfulFrontier)
+                    || usage.mtimeUnixMs != target.mtimeUnixMs
+                    || usage.size != target.targetEOF
+                    || usage.codexScanFileId != target.fileId
+                    || usage.codexScanContentFingerprint == nil
+                    || usage.codexScanContentFingerprint != target.contentFingerprint
+                    || usage.codexScanComplete == false
+                    || needsSessionIdentity
+                    || Self.needsCodexCostCache(usage, range: range)
+                    || ownsChangedPriorityTurn
+            }
+            guard numericManifest.isEmpty,
+                  allowTurnIDBackfill,
+                  plan.needsTurnIDCacheMigration,
+                  !plan.priorityTurnsChanged
+            else {
+                return CodexManifestCapture(files: numericManifest, turnIDBackfillPaths: [])
+            }
+
+            let candidates: [(URL, CostUsageFileUsage)] = cache.files.compactMap {
+                path, usage -> (URL, CostUsageFileUsage)? in
+                guard usage.codexTurnIDs == nil,
+                      usage.touchesCodexScanWindow(
+                          sinceKey: range.scanSinceKey,
+                          untilKey: range.scanUntilKey)
+                else { return nil }
+                let fileURL = URL(fileURLWithPath: path).standardizedFileURL
+                guard FileManager.default.fileExists(atPath: fileURL.path),
+                      Self.isWithinCodexRoots(fileURL: fileURL, roots: plan.roots)
+                else { return nil }
+                return (fileURL, usage)
+            }.sorted { $0.0.path > $1.0.path }
+
+            var selectedFiles: [URL] = []
+            var selectedBytes: Int64 = 0
+            for (fileURL, usage) in candidates {
+                guard selectedFiles.count < Self.codexTurnIDBackfillFileLimit else { break }
+                let candidateBytes = max(Int64(0), usage.size)
+                if !selectedFiles.isEmpty,
+                   selectedBytes > Self.codexTurnIDBackfillByteLimit - min(
+                       candidateBytes,
+                       Self.codexTurnIDBackfillByteLimit)
+                {
+                    break
+                }
+                selectedFiles.append(fileURL)
+                selectedBytes = min(
+                    Self.codexTurnIDBackfillByteLimit,
+                    selectedBytes + min(candidateBytes, Self.codexTurnIDBackfillByteLimit))
+            }
+
+            let selectedManifest = frozenManifest(
+                files: selectedFiles,
+                plan: plan,
+                cache: cache)
+            var backfillPaths: Set<String> = []
+            var changedFrontier: [String: CodexFrozenFile] = [:]
+            for (path, target) in selectedManifest {
+                guard let usage = cache.files[path] else { continue }
+                let isTrustedUnchangedTarget = usage.mtimeUnixMs == target.mtimeUnixMs
+                    && usage.size == target.targetEOF
+                    && usage.codexScanFileId == target.fileId
+                    && usage.codexScanContentFingerprint != nil
+                    && usage.codexScanContentFingerprint == target.contentFingerprint
+                    && usage.codexScanComplete != false
+                    && !Self.needsCodexCostCache(usage, range: range)
+                if isTrustedUnchangedTarget {
+                    backfillPaths.insert(path)
+                } else {
+                    changedFrontier[path] = target
+                }
+            }
+            if let changedPath = changedFrontier.keys.sorted(by: >).first,
+               let changedTarget = changedFrontier[changedPath]
+            {
+                // A legacy entry whose bytes no longer match the committed
+                // receipt must use the normal numeric lane by itself.
+                return CodexManifestCapture(
+                    files: [changedPath: changedTarget],
+                    turnIDBackfillPaths: [])
+            }
+            return CodexManifestCapture(
+                files: selectedManifest.filter { backfillPaths.contains($0.key) },
+                turnIDBackfillPaths: backfillPaths)
         }
 
         let requestedGeneration = semanticGeneration(for: requestedPlan)
         let usesWarmDeltaManifest = canUseWarmDeltaManifest(
             plan: requestedPlan,
-            cache: committedCache)
+            cache: committedCache,
+            range: range)
+        let canUseLegacyTurnIDBootstrap: Bool = if let cachedSince = committedCache.scanSinceKey,
+                                                   let cachedUntil = committedCache.scanUntilKey
+        {
+            !usesWarmDeltaManifest
+                && !options.forceRescan
+                && !committedCache.files.isEmpty
+                && committedCache.lastScanUnixMs > 0
+                && committedCache.codexLastSuccessfulRequestScanSinceKey == nil
+                && committedCache.codexLastSuccessfulRequestScanUntilKey == nil
+                && cachedSince <= range.scanSinceKey
+                && cachedUntil >= range.scanUntilKey
+                && committedCache.roots == requestedPlan.rootsFingerprint
+                && committedCache.codexPricingKey == requestedPlan.codexPricingKey
+                && committedCache.codexPriorityMetadataKey
+                    == requestedPlan.codexPriorityMetadataKey
+                && !requestedPlan.rootsChanged
+                && !requestedPlan.needsCostCacheMigration
+                && !requestedPlan.pricingChanged
+                && !requestedPlan.priorityMetadataChanged
+                && !requestedPlan.priorityTurnsChanged
+        } else {
+            false
+        }
+        let usesLegacyTurnIDBootstrap = canUseLegacyTurnIDBootstrap
+            && committedCache.codexNeedsLegacyColdInventory != true
+        let usesLegacyColdInventory = canUseLegacyTurnIDBootstrap
+            && committedCache.codexNeedsLegacyColdInventory == true
+        let pendingTurnIDBackfillPaths =
+            committedCache.codexPendingTurnIDBackfillPaths ?? []
+        let pendingTurnIDBackfillPathSet = Set(pendingTurnIDBackfillPaths)
+        let pendingTurnIDBackfillPathsAreCanonical =
+            pendingTurnIDBackfillPathSet.count == pendingTurnIDBackfillPaths.count
+                && pendingTurnIDBackfillPaths.allSatisfy {
+                    URL(fileURLWithPath: $0).standardizedFileURL.path == $0
+                }
         let hasResumablePendingEpisode = !options.forceRescan
             && committedCache.codexPendingScanGeneration == requestedGeneration
+            && committedCache.codexPendingManifestContractVersion
+                == Self.codexPendingManifestContractVersion
             && committedCache.codexPendingScanSinceKey != nil
             && committedCache.codexPendingScanUntilKey != nil
+            && committedCache.codexPendingManifestCapturedUnixMs != nil
+            && committedCache.codexPendingNeedsFlatReconciliation != nil
             && committedCache.codexPendingFileManifest != nil
+            && committedCache.codexPendingTurnIDBackfillPaths != nil
+            && pendingTurnIDBackfillPathsAreCanonical
+            && pendingTurnIDBackfillPathSet.isSubset(
+                of: Set((committedCache.codexPendingFileManifest ?? [:]).keys))
             && committedCache.codexPendingFiles != nil
             && committedCache.codexPendingDays != nil
+            && (!requestedPlan.hasPriorityMetadata
+                || Self.decodeCodexPendingPriorityTurns(
+                    committedCache.codexPendingPriorityTurnsPayload) != nil)
             && Self.codexFrozenManifestUsesCanonicalPaths(
                 committedCache.codexPendingFileManifest ?? [:])
         let scanRange = if hasResumablePendingEpisode {
@@ -3562,14 +4234,37 @@ enum CostUsageScanner {
         } else {
             range
         }
-        let plan = hasResumablePendingEpisode
-            ? Self.makeCodexRefreshPlan(
+        let scanManifestCapturedUnixMs = hasResumablePendingEpisode
+            ? committedCache.codexPendingManifestCapturedUnixMs!
+            : nowMs
+        // Resolve Priority once for the union of the requested and pending
+        // windows. Filtering that immutable snapshot is both cheaper and safer
+        // than reopening SQLite before every bounded resume pass.
+        let liveScanRangePlan = if hasResumablePendingEpisode {
+            freezingPriorityAdmission(
+                in: requestedPlan,
+                turnsPayload: Self.encodeCodexPendingPriorityTurns(
+                    requestedPlan.priorityTurns),
+                cursorPayload: requestedPlan.priorityTurnsCursorPayload,
                 cache: committedCache,
-                range: scanRange,
-                now: now,
-                nowMs: nowMs,
-                options: options)
-            : requestedPlan
+                range: scanRange) ?? requestedPlan
+        } else {
+            requestedPlan
+        }
+        let plan = if hasResumablePendingEpisode {
+            freezingPriorityAdmission(
+                // The pending generation was admitted by `requestedPlan` and
+                // its persisted payload. A second live lookup may fail or see
+                // a replaced DB; neither may change the frozen generation or
+                // silently reprice its files as standard usage.
+                in: requestedPlan,
+                turnsPayload: committedCache.codexPendingPriorityTurnsPayload,
+                cursorPayload: committedCache.codexPendingPriorityTurnsCursorPayload,
+                cache: committedCache,
+                range: scanRange) ?? requestedPlan
+        } else {
+            requestedPlan
+        }
 
         if plan.shouldRefresh {
             try checkCancellation?()
@@ -3588,10 +4283,16 @@ enum CostUsageScanner {
                 cache = CostUsageCache()
             }
             cache.codexPendingScanGeneration = nil
+            cache.codexPendingManifestContractVersion = nil
+            cache.codexPendingPriorityTurnsCursorPayload = nil
+            cache.codexPendingPriorityTurnsPayload = nil
             cache.codexPendingScanSinceKey = nil
             cache.codexPendingScanUntilKey = nil
+            cache.codexPendingManifestCapturedUnixMs = nil
+            cache.codexPendingNeedsFlatReconciliation = nil
             cache.codexPendingFileManifest = nil
             cache.codexPendingFileOrder = nil
+            cache.codexPendingTurnIDBackfillPaths = nil
             cache.codexPendingFlatDiscoveryOffsets = nil
             cache.codexPendingFlatDiscoveryProgress = nil
             cache.codexPendingFiles = nil
@@ -3601,16 +4302,33 @@ enum CostUsageScanner {
 
             let cachedSinceKey = cache.scanSinceKey
             let cachedUntilKey = cache.scanUntilKey
-            var fileManifest = resumesPendingGeneration
-                ? (committedCache.codexPendingFileManifest ?? [:])
+            let manifestCapture = resumesPendingGeneration
+                ? CodexManifestCapture(
+                    files: committedCache.codexPendingFileManifest ?? [:],
+                    turnIDBackfillPaths: Set(
+                        committedCache.codexPendingTurnIDBackfillPaths ?? []))
                 : captureFileManifest(
                     range: scanRange,
                     plan: plan,
                     cache: cache,
-                    useWarmDelta: usesWarmDeltaManifest)
+                    useWarmDelta: usesWarmDeltaManifest,
+                    useLegacyTurnIDBootstrap: canUseLegacyTurnIDBootstrap,
+                    useLegacyColdInventory: usesLegacyColdInventory,
+                    allowTurnIDBackfill: usesLegacyColdInventory)
+            var fileManifest = manifestCapture.files
+            let turnIDBackfillPaths = manifestCapture.turnIDBackfillPaths
+            if !resumesPendingGeneration {
+                // Deterministic generation IDs can match a prior completed
+                // refresh. Clear only when seeding/reseeding the episode;
+                // resumed partial files must keep their parser checkpoint.
+                for path in fileManifest.keys {
+                    cache.files[path]?.codexScanGeneration = nil
+                    cache.files[path]?.codexScanComplete = false
+                }
+            }
             var flatDiscoveryOffsets: [String: Int64]? = if resumesPendingGeneration {
                 committedCache.codexPendingFlatDiscoveryOffsets
-            } else if usesWarmDeltaManifest {
+            } else if usesWarmDeltaManifest && turnIDBackfillPaths.isEmpty {
                 Dictionary(uniqueKeysWithValues: plan.roots.map {
                     ($0.standardizedFileURL.path, Int64(0))
                 })
@@ -3748,27 +4466,44 @@ enum CostUsageScanner {
             for fileURL in scheduledFiles {
                 if let scanDeadline, Date() >= scanDeadline { scanTruncated = true; break }
                 guard let target = fileManifest[fileURL.path] else { continue }
-                let fileOutcome = try Self.scanCodexFile(
-                    fileURL: fileURL,
-                    target: target,
-                    context: CodexFileScanContext(
-                        range: scanRange,
-                        forceFullScan: options
-                            .forceRescan || plan.windowExpanded || plan.pricingChanged || plan.priorityMetadataChanged
-                            || plan.needsCostCacheMigration,
-                        dropDeferredCodexRows: options.forceRescan || plan.pricingChanged || plan
-                            .priorityMetadataChanged
-                            || plan.needsTurnIDCacheMigration
-                            || plan.needsCostCacheMigration,
-                        requiresTurnIDCache: plan.needsTurnIDCacheMigration,
-                        changedPriorityTurnIDs: plan.changedPriorityTurnIDs,
-                        resources: resources,
+                let fileOutcome: CodexFileScanOutcome
+                if turnIDBackfillPaths.contains(fileURL.path),
+                   let committed = committedCache.files[fileURL.path]
+                {
+                    fileOutcome = try Self.scanCodexTurnIDBackfill(
+                        fileURL: fileURL,
+                        target: target,
+                        committed: committed,
+                        working: cache.files[fileURL.path],
                         checkCancellation: checkCancellation,
                         shouldStop: shouldStop,
                         scanGeneration: scanGeneration,
-                        roots: plan.roots),
-                    cache: &cache,
-                    state: &scanState)
+                        roots: plan.roots,
+                        cache: &cache,
+                        state: &scanState)
+                } else {
+                    fileOutcome = try Self.scanCodexFile(
+                        fileURL: fileURL,
+                        target: target,
+                        context: CodexFileScanContext(
+                            range: scanRange,
+                            forceFullScan: options
+                                .forceRescan || plan.windowExpanded || plan.pricingChanged
+                                || plan.priorityMetadataChanged || plan.needsCostCacheMigration,
+                            dropDeferredCodexRows: options.forceRescan || plan.pricingChanged || plan
+                                .priorityMetadataChanged
+                                || plan.needsTurnIDCacheMigration
+                                || plan.needsCostCacheMigration,
+                            requiresTurnIDCache: plan.needsTurnIDCacheMigration,
+                            changedPriorityTurnIDs: plan.changedPriorityTurnIDs,
+                            resources: resources,
+                            checkCancellation: checkCancellation,
+                            shouldStop: shouldStop,
+                            scanGeneration: scanGeneration,
+                            roots: plan.roots),
+                        cache: &cache,
+                        state: &scanState)
+                }
                 if case .unavailable = fileOutcome {
                     // The immutable target disappeared or changed. Finish the
                     // bounded pass, then roll the whole publishable snapshot
@@ -3802,10 +4537,23 @@ enum CostUsageScanner {
 
             if scanTruncated, !sawUnavailableFrozenTarget {
                 committedCache.codexPendingScanGeneration = scanSemanticGeneration
+                committedCache.codexPendingManifestContractVersion =
+                    Self.codexPendingManifestContractVersion
+                committedCache.codexPendingPriorityTurnsCursorPayload =
+                    plan.priorityTurnsCursorPayload
+                        ?? committedCache.codexPriorityTurnsCursorPayload
+                committedCache.codexPendingPriorityTurnsPayload =
+                    Self.encodeCodexPendingPriorityTurns(plan.priorityTurns)
                 committedCache.codexPendingScanSinceKey = scanRange.scanSinceKey
                 committedCache.codexPendingScanUntilKey = scanRange.scanUntilKey
+                committedCache.codexPendingManifestCapturedUnixMs = scanManifestCapturedUnixMs
+                committedCache.codexPendingNeedsFlatReconciliation = resumesPendingGeneration
+                    ? committedCache.codexPendingNeedsFlatReconciliation
+                    : (usesWarmDeltaManifest || usesLegacyTurnIDBootstrap)
                 committedCache.codexPendingFileManifest = fileManifest
                 committedCache.codexPendingFileOrder = pendingFileOrder
+                committedCache.codexPendingTurnIDBackfillPaths =
+                    turnIDBackfillPaths.sorted()
                 committedCache.codexPendingFlatDiscoveryOffsets = flatDiscoveryOffsets
                 committedCache.codexPendingFlatDiscoveryProgress = flatDiscoveryProgress
                 committedCache.codexPendingFiles = cache.files
@@ -3824,11 +4572,15 @@ enum CostUsageScanner {
                         cache: &committedCache)
                 }
 
-                let currentManifest = captureFileManifest(
+                let currentCapture = captureFileManifest(
                     range: range,
                     plan: requestedPlan,
                     cache: committedCache,
-                    useWarmDelta: usesWarmDeltaManifest)
+                    useWarmDelta: usesWarmDeltaManifest,
+                    useLegacyTurnIDBootstrap: canUseLegacyTurnIDBootstrap,
+                    useLegacyColdInventory: usesLegacyColdInventory,
+                    allowTurnIDBackfill: usesLegacyColdInventory)
+                let currentManifest = currentCapture.files
                 var catchUpFiles = committedCache.files
                 for key in currentManifest.keys {
                     catchUpFiles[key]?.codexScanGeneration = nil
@@ -3847,12 +4599,25 @@ enum CostUsageScanner {
                     catchUpFiles[key]?.codexScanComplete = false
                 }
                 committedCache.codexPendingScanGeneration = requestedGeneration
+                committedCache.codexPendingManifestContractVersion =
+                    Self.codexPendingManifestContractVersion
+                committedCache.codexPendingPriorityTurnsCursorPayload =
+                    requestedPlan.priorityTurnsCursorPayload
+                        ?? committedCache.codexPriorityTurnsCursorPayload
+                committedCache.codexPendingPriorityTurnsPayload =
+                    Self.encodeCodexPendingPriorityTurns(requestedPlan.priorityTurns)
                 committedCache.codexPendingScanSinceKey = range.scanSinceKey
                 committedCache.codexPendingScanUntilKey = range.scanUntilKey
+                committedCache.codexPendingManifestCapturedUnixMs = nowMs
+                committedCache.codexPendingNeedsFlatReconciliation = usesWarmDeltaManifest
                 committedCache.codexPendingFileManifest = currentManifest
                 committedCache.codexPendingFileOrder = Self.reconciledCodexPendingFileOrder(
                     persistedOrder: nil,
                     eligiblePaths: Set(currentManifest.keys))
+                committedCache.codexPendingTurnIDBackfillPaths = currentCapture
+                    .turnIDBackfillPaths
+                    .intersection(currentManifest.keys)
+                    .sorted()
                 committedCache.codexPendingFlatDiscoveryOffsets = Dictionary(
                     uniqueKeysWithValues: requestedPlan.roots.map {
                         ($0.standardizedFileURL.path, Int64(0))
@@ -3908,6 +4673,21 @@ enum CostUsageScanner {
                 cache.roots = plan.rootsFingerprint
                 cache.scanSinceKey = retainedSinceKey
                 cache.scanUntilKey = retainedUntilKey
+                let completedLegacyLiveBootstrap = usesLegacyTurnIDBootstrap
+                    && !usesLegacyColdInventory
+                if completedLegacyLiveBootstrap {
+                    // This finite live episode intentionally trusts the
+                    // retained legacy coverage only long enough to publish
+                    // current usage. Exact coverage is withheld until the
+                    // next background pass inventories the full corpus.
+                    cache.codexLastSuccessfulRequestScanSinceKey = nil
+                    cache.codexLastSuccessfulRequestScanUntilKey = nil
+                    cache.codexNeedsLegacyColdInventory = true
+                } else {
+                    cache.codexLastSuccessfulRequestScanSinceKey = scanRange.scanSinceKey
+                    cache.codexLastSuccessfulRequestScanUntilKey = scanRange.scanUntilKey
+                    cache.codexNeedsLegacyColdInventory = nil
+                }
                 cache.codexPricingKey = plan.codexPricingKey
                 cache.codexPriorityMetadataKey = plan.codexPriorityMetadataKey
                 if plan.hasPriorityMetadata {
@@ -3923,13 +4703,26 @@ enum CostUsageScanner {
                         range: scanRange,
                         retainedSinceKey: retainedSinceKey,
                         retainedUntilKey: retainedUntilKey)
+                    if let payload = plan.priorityTurnsCursorPayload {
+                        // Promote the trace cursor with the same frozen
+                        // Priority admission and numeric usage generation.
+                        // A newer live cursor remains in the pending journal
+                        // until its own generation commits.
+                        cache.codexPriorityTurnsCursorPayload = payload
+                    }
                 }
                 cache.lastScanUnixMs = nowMs
                 cache.codexPendingScanGeneration = nil
+                cache.codexPendingManifestContractVersion = nil
+                cache.codexPendingPriorityTurnsCursorPayload = nil
+                cache.codexPendingPriorityTurnsPayload = nil
                 cache.codexPendingScanSinceKey = nil
                 cache.codexPendingScanUntilKey = nil
+                cache.codexPendingManifestCapturedUnixMs = nil
+                cache.codexPendingNeedsFlatReconciliation = nil
                 cache.codexPendingFileManifest = nil
                 cache.codexPendingFileOrder = nil
+                cache.codexPendingTurnIDBackfillPaths = nil
                 cache.codexPendingFlatDiscoveryOffsets = nil
                 cache.codexPendingFlatDiscoveryProgress = nil
                 cache.codexPendingFiles = nil
@@ -3938,40 +4731,138 @@ enum CostUsageScanner {
                 cache.codexPendingParentDiscoveries = nil
                 committedCache = cache
                 committedGenerationCompleted = true
+                committedUsageGenerationCompleted = turnIDBackfillPaths.isEmpty
 
-                // A warm delta publishes exactly the EOF captured for this
-                // refresh. Later appends belong to the next bounded warm pass
-                // instead of creating an endless live chase.
-                if !usesWarmDeltaManifest {
-                    let currentRequestIsCovered = range.scanSinceKey >= (cache.scanSinceKey ?? "")
-                        && range.untilKey <= (cache.scanUntilKey ?? "")
-                    let currentManifest = captureFileManifest(
-                        range: range,
-                        plan: requestedPlan,
+                if completedLegacyLiveBootstrap {
+                    // Make the foreground handoff observable as incomplete so
+                    // the single background driver immediately starts the
+                    // cold inventory episode without delaying this report.
+                    scanTruncated = true
+                } else {
+                    // A finite episode publishes exactly its frozen EOF. When
+                    // it spans multiple passes, reconcile from the original
+                    // capture time so writes made during the episode enter one
+                    // new finite generation instead of being hidden by
+                    // `lastScanUnixMs`.
+                    let priorityAdmissionChangedDuringEpisode = hasResumablePendingEpisode
+                        && plan.priorityTurnKeys != liveScanRangePlan.priorityTurnKeys
+                    let currentRangeDiffers = range.scanSinceKey != scanRange.scanSinceKey
+                        || range.scanUntilKey != scanRange.scanUntilKey
+                    let turnIDMigrationRemaining = requestedPlan.hasPriorityMetadata
+                        && cache.files.values.contains {
+                            $0.codexTurnIDs == nil && $0.touchesCodexScanWindow(
+                                sinceKey: range.scanSinceKey,
+                                untilKey: range.scanUntilKey)
+                        }
+                    let mustReconcileCompletedEpisode = hasResumablePendingEpisode
+                        || currentRangeDiffers
+                        || priorityAdmissionChangedDuringEpisode
+                        || turnIDMigrationRemaining
+                        || !usesWarmDeltaManifest
+                    if mustReconcileCompletedEpisode {
+                    let requestExpandsEarlierThanCompletedEpisode =
+                        range.scanSinceKey < scanRange.scanSinceKey
+                    let reconciliationPlan = freezingPriorityAdmission(
+                        in: requestedPlan,
+                        turnsPayload: Self.encodeCodexPendingPriorityTurns(
+                            requestedPlan.priorityTurns),
+                        cursorPayload: requestedPlan.priorityTurnsCursorPayload,
                         cache: cache,
-                        useWarmDelta: false)
-                    if !currentRequestIsCovered
-                        || !Self.codexFrozenManifestsHaveSameFrontier(fileManifest, currentManifest)
-                    {
-                        let catchUpManifest = captureFileManifest(
-                            range: range,
-                            plan: requestedPlan,
+                        range: range) ?? requestedPlan
+                    let reconciliationUsesWarmDelta = !requestExpandsEarlierThanCompletedEpisode
+                        && canUseWarmDeltaManifest(
+                            plan: reconciliationPlan,
                             cache: cache,
-                            useWarmDelta: true)
+                            range: range)
+                    // Compare against the frozen admission that was just
+                    // promoted, not the pre-episode committed cache. A
+                    // Priority-only change keeps the same file EOF/inode, so
+                    // this semantic invalidation must survive frontier filters.
+                    let reconciliationChangedPriorityTurnIDs = Self.changedPriorityTurnIDs(
+                        old: cache.codexPriorityTurnIDsByDay,
+                        new: requestedPlan.priorityTurnIDsByDay,
+                        oldKeys: cache.codexPriorityTurnKeys,
+                        newKeys: requestedPlan.priorityTurnKeys,
+                        range: range)
+                    let captured = captureFileManifest(
+                        range: range,
+                        plan: reconciliationPlan,
+                        cache: cache,
+                        useWarmDelta: reconciliationUsesWarmDelta,
+                        useLegacyTurnIDBootstrap: canUseLegacyTurnIDBootstrap,
+                        useLegacyColdInventory: usesLegacyColdInventory,
+                        allowTurnIDBackfill: true,
+                        additionalChangedPriorityTurnIDs: reconciliationChangedPriorityTurnIDs,
+                        modifiedSinceUnixMs: scanManifestCapturedUnixMs)
+                    let capturedManifest = captured.files
+                    let catchUpManifest: [String: CodexFrozenFile]
+                    if requestExpandsEarlierThanCompletedEpisode
+                        || !reconciliationChangedPriorityTurnIDs.isEmpty
+                    {
+                        // Existing file receipts may only contain the narrower
+                        // episode's days, so every target in the newly opened
+                        // history must remain eligible. Priority admission is
+                        // also semantic: the candidate set must be repriced
+                        // even when every file frontier is byte-identical.
+                        catchUpManifest = capturedManifest
+                    } else {
+                        catchUpManifest = capturedManifest.filter { path, target in
+                            guard let usage = cache.files[path] else { return true }
+                            return captured.turnIDBackfillPaths.contains(path)
+                                || usage.codexScanComplete != true
+                                || usage.codexScanTargetSize != target.targetEOF
+                                || usage.codexScanFileId != target.fileId
+                                || usage.codexScanContentFingerprint != target.contentFingerprint
+                        }
+                    }
+                    let coldFrontierChanged = !reconciliationUsesWarmDelta
+                        && !Self.codexFrozenManifestsHaveSameFrontier(
+                            fileManifest,
+                            capturedManifest)
+                    let needsFlatReconciliation = pendingNeedsFlatReconciliation
+                        || (!hasResumablePendingEpisode
+                            && (usesWarmDeltaManifest || usesLegacyTurnIDBootstrap))
+                    let continuesTurnIDBackfill = !captured.turnIDBackfillPaths.isEmpty
+                        && Set(catchUpManifest.keys).isSubset(
+                            of: captured.turnIDBackfillPaths)
+                    let shouldSeedCatchUp = currentRangeDiffers
+                        || priorityAdmissionChangedDuringEpisode
+                        || !catchUpManifest.isEmpty
+                        || coldFrontierChanged
+                        || needsFlatReconciliation
+                    if shouldSeedCatchUp {
                         var catchUpFiles = cache.files
                         for key in catchUpManifest.keys {
                             catchUpFiles[key]?.codexScanGeneration = nil
                             catchUpFiles[key]?.codexScanComplete = nil
                         }
                         committedCache.codexPendingScanGeneration = requestedGeneration
+                        committedCache.codexPendingManifestContractVersion =
+                            Self.codexPendingManifestContractVersion
+                        committedCache.codexPendingPriorityTurnsCursorPayload =
+                            requestedPlan.priorityTurnsCursorPayload
+                                ?? cache.codexPriorityTurnsCursorPayload
+                        committedCache.codexPendingPriorityTurnsPayload =
+                            Self.encodeCodexPendingPriorityTurns(requestedPlan.priorityTurns)
                         committedCache.codexPendingScanSinceKey = range.scanSinceKey
                         committedCache.codexPendingScanUntilKey = range.scanUntilKey
+                        committedCache.codexPendingManifestCapturedUnixMs =
+                            continuesTurnIDBackfill || needsFlatReconciliation
+                                ? scanManifestCapturedUnixMs
+                                : nowMs
+                        committedCache.codexPendingNeedsFlatReconciliation =
+                            continuesTurnIDBackfill && needsFlatReconciliation
                         committedCache.codexPendingFileManifest = catchUpManifest
                         committedCache.codexPendingFileOrder = Self.reconciledCodexPendingFileOrder(
                             persistedOrder: nil,
                             eligiblePaths: Set(catchUpManifest.keys))
-                        committedCache.codexPendingFlatDiscoveryOffsets = Dictionary(
-                            uniqueKeysWithValues: requestedPlan.roots.map {
+                        committedCache.codexPendingTurnIDBackfillPaths = captured
+                            .turnIDBackfillPaths
+                            .intersection(catchUpManifest.keys)
+                            .sorted()
+                        committedCache.codexPendingFlatDiscoveryOffsets = continuesTurnIDBackfill
+                            ? nil
+                            : Dictionary(uniqueKeysWithValues: requestedPlan.roots.map {
                                 ($0.standardizedFileURL.path, Int64(0))
                             })
                         committedCache.codexPendingFlatDiscoveryProgress = nil
@@ -3983,13 +4874,16 @@ enum CostUsageScanner {
                     }
                 }
             }
+            }
             try checkCancellation?()
             let cachePersisted = CostUsageCacheIO.save(
                 provider: .codex,
                 cache: committedCache,
                 cacheRoot: options.cacheRoot)
             if committedGenerationCompleted {
-                committedGenerationPersisted = cachePersisted && !sawUnavailableFrozenTarget
+                committedGenerationPersisted = cachePersisted
+                    && !sawUnavailableFrozenTarget
+                    && committedUsageGenerationCompleted
             }
         }
 

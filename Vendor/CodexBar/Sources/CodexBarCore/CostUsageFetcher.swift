@@ -71,7 +71,21 @@ public struct CostUsageFetcher: Sendable {
         let options = self.scannerOptionsOverride() ?? CostUsageScanner.Options()
         return try? await CostUsageScanExecutor.run { _ in
             let cache = CostUsageCacheIO.load(provider: .codex, cacheRoot: options.cacheRoot)
-            guard let generation = cache.codexPendingScanGeneration else { return nil }
+            guard let generation = cache.codexPendingScanGeneration else {
+                guard cache.codexNeedsLegacyColdInventory == true else { return nil }
+                let stage = [
+                    "legacy-cold-inventory-v1",
+                    cache.scanSinceKey ?? "",
+                    cache.scanUntilKey ?? "",
+                    cache.producerKey ?? "",
+                ].joined(separator: "|")
+                let opaqueStage = CostUsageScanner.codexOpaquePendingGeneration(stage)
+                return CodexPendingScanStatus(
+                    generation: opaqueStage,
+                    parsedBytes: 0,
+                    incompleteFiles: 1,
+                    progressFingerprint: "stage:\(opaqueStage)")
+            }
             let manifest = cache.codexPendingFileManifest ?? [:]
             let pendingFiles = cache.codexPendingFiles ?? [:]
             let parentScans = cache.codexPendingParentScans ?? [:]
@@ -123,6 +137,7 @@ public struct CostUsageFetcher: Sendable {
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
         historyDays: Int = 30,
+        refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true) async throws -> CostUsageTokenSnapshot
     {
         try await Self.loadTokenSnapshot(
@@ -133,6 +148,7 @@ public struct CostUsageFetcher: Sendable {
             allowVertexClaudeFallback: allowVertexClaudeFallback,
             codexHomePath: codexHomePath,
             historyDays: historyDays,
+            refreshPricing: refreshPricing,
             refreshPricingInBackground: refreshPricingInBackground,
             scannerOptions: self.scannerOptionsOverride())
     }
@@ -146,6 +162,7 @@ public struct CostUsageFetcher: Sendable {
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
         historyDays: Int = 30,
+        refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true,
         automaticCodexScanByteLimit _: Int64?) async throws -> CostUsageTokenSnapshot
     {
@@ -157,6 +174,7 @@ public struct CostUsageFetcher: Sendable {
             allowVertexClaudeFallback: allowVertexClaudeFallback,
             codexHomePath: codexHomePath,
             historyDays: historyDays,
+            refreshPricing: refreshPricing,
             refreshPricingInBackground: refreshPricingInBackground)
     }
 
@@ -172,6 +190,7 @@ public struct CostUsageFetcher: Sendable {
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
         historyDays: Int = 30,
+        refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true,
         includePiSessions: Bool = false,
         scannerOptions overrideScannerOptions: CostUsageScanner.Options? = nil,
@@ -207,9 +226,12 @@ public struct CostUsageFetcher: Sendable {
         // work owns a durable queue and continues through background catch-up.
         // Explicit scanner options retain their test/caller-defined budget.
         if provider == .codex, overrideScannerOptions == nil, options.maxScanWallClock == nil {
-            options.maxScanWallClock = 2
+            // Keep the visible refresh comfortably below two seconds on large
+            // histories. The durable journal resumes every unfinished byte in
+            // background passes, so this bounds latency without dropping data.
+            options.maxScanWallClock = 0.5
         }
-        if provider == .codex || provider == .claude {
+        if refreshPricing && (provider == .codex || provider == .claude) {
             let pricingCacheRoot = options.cacheRoot
             if refreshPricingInBackground {
                 Task.detached(priority: .utility) {

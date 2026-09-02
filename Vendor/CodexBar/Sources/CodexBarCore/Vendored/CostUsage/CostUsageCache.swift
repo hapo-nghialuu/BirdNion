@@ -145,19 +145,53 @@ struct CostUsageCache: Codable {
     var lastScanUnixMs: Int64 = 0
     var scanSinceKey: String?
     var scanUntilKey: String?
+    /// Exact request window completed by the most recent finite Codex episode.
+    /// `scanSinceKey`/`scanUntilKey` may retain a wider historical cache, so
+    /// they cannot decide whether a later request expands into uninventoried
+    /// history after a wide -> narrow -> wide sequence.
+    var codexLastSuccessfulRequestScanSinceKey: String?
+    var codexLastSuccessfulRequestScanUntilKey: String?
+    /// One-shot compatibility barrier for caches written before exact request
+    /// coverage was persisted. The live delta publishes first; the following
+    /// background pass performs the complete legacy inventory before this is
+    /// cleared and exact coverage is trusted.
+    var codexNeedsLegacyColdInventory: Bool?
     var timeZoneIdentifier: String?
     var codexPricingKey: String?
     var codexPriorityMetadataKey: String?
     var codexProjectMetadataVersion: Int?
     var codexPriorityTurnKeys: [String: String]?
     var codexPriorityTurnIDsByDay: [String: [String]]?
+    /// JSON-wrapped durable cursor for `logs_2.sqlite`. Keeping the payload as
+    /// a string makes cursor decoding best-effort: a malformed/newer cursor
+    /// cannot make the complete usage cache fail to decode.
+    var codexPriorityTurnsCursorPayload: String?
     /// Multi-pass bounded scan that has not finalized global metadata yet.
     var codexPendingScanGeneration: String?
+    /// Identifies the admission rules used to build the pending manifest.
+    /// Missing means an older writer whose oversized queue cannot be resumed
+    /// safely; the scanner will rebuild it from the last committed snapshot.
+    var codexPendingManifestContractVersion: Int?
+    /// Frozen trace cursor whose Priority turns define this finite episode's
+    /// admission and pricing context. Later trace rows belong to a catch-up
+    /// episode instead of invalidating already-checkpointed file progress.
+    var codexPendingPriorityTurnsCursorPayload: String?
+    /// Always-present frozen turn map, including for bounded historical trace
+    /// queries that intentionally do not create an incremental SQLite cursor.
+    var codexPendingPriorityTurnsPayload: String?
     /// Immutable scan window for the pending episode. A caller may move its
     /// requested window while this episode runs; the episode still finishes
     /// against these bounds before a catch-up episode is seeded.
     var codexPendingScanSinceKey: String?
     var codexPendingScanUntilKey: String?
+    /// Wall-clock frontier captured before the immutable manifest was built.
+    /// A post-episode warm reconciliation must look back to this timestamp,
+    /// not the newly published `lastScanUnixMs`, or writes during a long
+    /// multi-pass episode can be skipped.
+    var codexPendingManifestCapturedUnixMs: Int64?
+    /// One-shot marker for a warm episode whose flat archived roots must be
+    /// inventoried again after its immutable snapshot is published.
+    var codexPendingNeedsFlatReconciliation: Bool?
     /// Immutable file membership and byte frontier for one bounded episode.
     /// Appends and newly-created files are captured by a later catch-up episode.
     var codexPendingFileManifest: [String: CodexFrozenFile]?
@@ -165,6 +199,9 @@ struct CostUsageCache: Codable {
     /// scheduling contract: a partial file must move behind every waiter so a
     /// continuously-growing session cannot starve the rest of the generation.
     var codexPendingFileOrder: [String]?
+    /// Explicit lane receipt for metadata-only turn-ID work. An empty array is
+    /// meaningful: v7 journals never infer this semantic lane after relaunch.
+    var codexPendingTurnIDBackfillPaths: [String]?
     /// Flat-root inventory cursors. A key remains until that root reaches EOF;
     /// scanning/pruning starts only after every cursor has drained.
     var codexPendingFlatDiscoveryOffsets: [String: Int64]?
@@ -216,10 +253,16 @@ struct CostUsageCache: Codable {
         // An incomplete journal has no trustworthy immutable corpus boundary.
         // Discard only journal state and seed a new finite generation next time.
         self.codexPendingScanGeneration = nil
+        self.codexPendingManifestContractVersion = nil
+        self.codexPendingPriorityTurnsCursorPayload = nil
+        self.codexPendingPriorityTurnsPayload = nil
         self.codexPendingScanSinceKey = nil
         self.codexPendingScanUntilKey = nil
+        self.codexPendingManifestCapturedUnixMs = nil
+        self.codexPendingNeedsFlatReconciliation = nil
         self.codexPendingFileManifest = nil
         self.codexPendingFileOrder = nil
+        self.codexPendingTurnIDBackfillPaths = nil
         self.codexPendingFlatDiscoveryOffsets = nil
         self.codexPendingFlatDiscoveryProgress = nil
         self.codexPendingFiles = nil
@@ -283,6 +326,9 @@ struct CostUsageFileUsage: Codable {
     var codexScanComplete: Bool?
     var codexScanGeneration: String?
     var codexParseResumeState: CodexParseResumeState?
+    /// Pending-only cursor state for metadata-only turn-ID backfill. A complete
+    /// backfill restores the original numeric/parser fields and clears this.
+    var codexTurnIDBackfillDiscardingTruncatedLine: Bool? = nil
 }
 
 /// Parser locals that influence Codex cumulative/fork delta semantics. A byte
