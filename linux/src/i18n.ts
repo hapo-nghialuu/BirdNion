@@ -66,7 +66,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     vi: "Không tìm thấy log chi phí Claude, Codex, Grok, Kiro, Oh My Pi hoặc Pi.",
     en: "No Claude, Codex, Grok, Kiro, Oh My Pi, or Pi cost logs found.",
   },
-  scanningSources: { vi: "Đang quét {names}…", en: "Scanning {names}…" },
+  scanningSources: { vi: "Đang tính lịch sử {names}…", en: "Calculating history for {names}…" },
   grokFootnote: {
     vi: "Ước tính từ log Grok Build cục bộ (~/.grok/sessions).",
     en: "Estimated from local Grok Build logs (~/.grok/sessions).",

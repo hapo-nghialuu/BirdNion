@@ -696,12 +696,6 @@ struct AllUsageOverview: View {
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
-    private var pendingSources: [String] {
-        AllUsageSourceAuthorization.pendingSourceLabels(
-            authorizedSources: authorizedSources,
-            loadingSources: loadingSources)
-    }
-
     private var readySources: Set<CostHistoryStore.Source> {
         var sources: Set<CostHistoryStore.Source> = []
         if claude != nil { sources.insert(.claude) }
@@ -740,7 +734,6 @@ struct AllUsageOverview: View {
 
             AllAgentsOverview(
                 report: report,
-                pendingSources: pendingSources,
                 visibleRecords: visibleAgentRecords,
                 aggregateAgentCount: report.includedSourceCount,
                 quotaRows: quotaRows,
