@@ -1610,8 +1610,8 @@ final class NewProviderTests: XCTestCase {
 
     func testKiroBuildReportPreservesGlobalTopAndDailyModelTotals() {
         let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let now = cal.date(byAdding: .hour, value: 9, to: today)!
+        let now = Date()
+        let today = cal.startOfDay(for: now)
         var sessions: [KiroCostScanner.SessionPoint] = []
         for offset in 0..<30 {
             let day = cal.date(byAdding: .day, value: -offset, to: today)!
