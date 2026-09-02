@@ -18,7 +18,7 @@
 //! fork-of-a-fork's raw cumulative total already reflects its own parent's
 //! full history.
 
-use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -27,6 +27,18 @@ use walkdir::WalkDir;
 
 use crate::project_cost_history::{ProjectContribution, ProjectModel, ProjectRetraction};
 use crate::usage::{DailyModel, DailyUsage, HourlyUsage, UsageReport};
+
+mod coordinator;
+mod incremental;
+mod incremental_spool;
+mod journal;
+mod priority;
+mod schema;
+
+pub use coordinator::{
+    current as current_scan, try_begin as try_begin_scan, update as update_scan_progress,
+    ActiveScan,
+};
 
 /// Trailing daily window for charts / heatmap (macOS CombinedUsageReport 120d).
 pub const HISTORY_DAYS: i64 = 120;
@@ -59,7 +71,7 @@ impl Price {
     }
 }
 
-fn price_for(model: &str) -> Option<Price> {
+fn normalized_model(model: &str) -> &str {
     // Strip the provider prefix and a trailing "-YYYY-MM-DD" date suffix,
     // same as CodexBar's normalizeCodexModel.
     let mut key = model.trim().strip_prefix("openai/").unwrap_or(model.trim());
@@ -75,7 +87,11 @@ fn price_for(model: &str) -> Option<Price> {
             key = base;
         }
     }
-    let p = match key {
+    key
+}
+
+fn price_for(model: &str) -> Option<Price> {
+    let p = match normalized_model(model) {
         "gpt-5" | "gpt-5-codex" | "gpt-5.1" | "gpt-5.1-codex" | "gpt-5.1-codex-max" => {
             Price::flat(1.25e-6, 1.25e-7, 1e-5)
         }
@@ -159,6 +175,26 @@ fn cost_usd(model: &str, input: i64, cached: i64, output: i64) -> f64 {
     non_cached as f64 * ir + cached as f64 * cr + output.max(0) as f64 * or
 }
 
+fn priority_cost_usd(model: &str, input: i64, cached: i64, output: i64) -> f64 {
+    let rates = match normalized_model(model) {
+        "gpt-5.4" => Some((5e-6, 5e-7, 3e-5)),
+        "gpt-5.4-mini" => Some((1.5e-6, 1.5e-7, 9e-6)),
+        "gpt-5.5" => Some((1.25e-5, 1.25e-6, 7.5e-5)),
+        _ => None,
+    };
+    let Some((input_rate, cache_rate, output_rate)) = rates else {
+        return cost_usd(model, input, cached, output);
+    };
+    if input.max(0) > 272_000 {
+        return cost_usd(model, input, cached, output);
+    }
+    let cached = cached.clamp(0, input.max(0));
+    let priority = (input - cached).max(0) as f64 * input_rate
+        + cached as f64 * cache_rate
+        + output.max(0) as f64 * output_rate;
+    priority.max(cost_usd(model, input, cached, output))
+}
+
 /// A `token_count` event's input/cached/output/total fields, read from
 /// either `last_token_usage` (a turn's own delta) or `total_token_usage`
 /// (the session's running cumulative counter) — same shape, different
@@ -204,6 +240,7 @@ struct CodexTokenEvent {
     model: String,
     last: CodexTotals,
     total: Option<CodexTotals>,
+    turn_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -216,6 +253,13 @@ pub struct CodexUsageScan {
     pub usage: UsageReport,
     pub projects: Vec<ProjectContribution>,
     pub retractions: Vec<ProjectRetraction>,
+    pub progress_fingerprint: Option<String>,
+}
+
+pub enum GenerationOutcome {
+    Pending,
+    Complete(CodexUsageScan),
+    Failed,
 }
 
 /// One rollout file's parsed identity + event stream. `session_id` is this
@@ -232,6 +276,139 @@ struct CodexFileScan {
     retraction_project: Option<ProjectIdentity>,
     retraction_events: Vec<CodexTokenEvent>,
     events: Vec<CodexTokenEvent>,
+    precomputed_retraction_id: Option<String>,
+}
+
+fn scan_from_safe_records(records: &[incremental::SafeRecord]) -> CodexFileScan {
+    let mut scan = CodexFileScan::default();
+    let mut model = String::from("gpt-5");
+    let mut current_turn = None;
+    for record in records {
+        apply_safe_record(&mut scan, &mut model, &mut current_turn, record);
+    }
+    scan
+}
+
+fn apply_safe_record(
+    scan: &mut CodexFileScan,
+    model: &mut String,
+    current_turn: &mut Option<String>,
+    record: &incremental::SafeRecord,
+) {
+    match record {
+        incremental::SafeRecord::Meta {
+            session,
+            parent,
+            timestamp_ms,
+            project_key,
+            project_name,
+            retraction_id,
+        } => {
+            if scan.session_id.is_none() {
+                scan.session_id = session.clone();
+            }
+            if scan.forked_from_id.is_none() && parent.is_some() {
+                scan.forked_from_id = parent.clone();
+                scan.fork_ts = timestamp_ms.and_then(|v| Local.timestamp_millis_opt(v).single());
+            }
+            let project = project_key
+                .as_ref()
+                .zip(project_name.as_ref())
+                .map(|(key, name)| ProjectIdentity {
+                    key: key.clone(),
+                    display_name: name.clone(),
+                });
+            if project.is_some() {
+                update_file_project(scan, project);
+            }
+            if scan.precomputed_retraction_id.is_none() {
+                scan.precomputed_retraction_id = retraction_id.clone();
+            }
+        }
+        incremental::SafeRecord::ProjectInvalid => update_file_project(scan, None),
+        incremental::SafeRecord::Model(value) => *model = value.clone(),
+        incremental::SafeRecord::CurrentTurn(value) => *current_turn = Some(value.clone()),
+        incremental::SafeRecord::Token {
+            timestamp_ms,
+            input,
+            cached,
+            output,
+            total,
+            cumulative,
+            turn,
+        } => {
+            let Some(ts) = Local.timestamp_millis_opt(*timestamp_ms).single() else {
+                return;
+            };
+            scan.events.push(CodexTokenEvent {
+                ts,
+                model: model.clone(),
+                last: CodexTotals {
+                    input: *input,
+                    cached: *cached,
+                    output: *output,
+                    total: *total,
+                },
+                total: cumulative.map(|v| CodexTotals {
+                    input: v.0,
+                    cached: v.1,
+                    output: v.2,
+                    total: v.3,
+                }),
+                turn_hash: turn.clone().or_else(|| current_turn.clone()),
+            });
+        }
+    }
+}
+
+fn ingest_file_scan(
+    mut file_scan: CodexFileScan,
+    scans: &mut Vec<CodexFileScan>,
+    id_index: &mut HashMap<String, usize>,
+) {
+    if let Some(id) = file_scan.session_id.clone() {
+        if let Some(existing_index) = id_index.get(&id).copied() {
+            let existing = &scans[existing_index];
+            let invalid = existing.project_ambiguous || file_scan.project_ambiguous;
+            let conflicts = matches!((existing.project.as_ref(), file_scan.project.as_ref()), (Some(a),Some(b)) if a.key != b.key);
+            let retraction_project = existing
+                .retraction_project
+                .clone()
+                .or_else(|| {
+                    (invalid || conflicts)
+                        .then(|| existing.project.clone())
+                        .flatten()
+                })
+                .or_else(|| file_scan.retraction_project.clone());
+            let retraction_events = if existing.retraction_project.is_some() {
+                existing.retraction_events.clone()
+            } else if (invalid || conflicts) && existing.project.is_some() {
+                existing.events.clone()
+            } else {
+                file_scan.retraction_events.clone()
+            };
+            let (project, ambiguous) = reconcile_project_identity(
+                existing.project.as_ref(),
+                file_scan.project.clone(),
+                invalid,
+            );
+            if file_scan.events.len() > existing.events.len() {
+                file_scan.project = project;
+                file_scan.project_ambiguous = ambiguous;
+                file_scan.retraction_project = retraction_project;
+                file_scan.retraction_events = retraction_events;
+                scans[existing_index] = file_scan;
+            } else {
+                scans[existing_index].project = project;
+                scans[existing_index].project_ambiguous = ambiguous;
+                scans[existing_index].retraction_project = retraction_project;
+                scans[existing_index].retraction_events = retraction_events;
+            }
+            return;
+        }
+        id_index.insert(id, scans.len());
+    }
+    scans.push(file_scan);
 }
 
 /// Extracts a `session_meta` line's own identity, fork parent, and
@@ -403,8 +580,796 @@ pub fn usage_scan() -> Option<CodexUsageScan> {
     scan_with_projects(&default_roots(), Local::now())
 }
 
+fn save_compact_scan_marker(state: &schema::ScanJournal) -> bool {
+    let compact = schema::ScanJournal {
+        version: state.version,
+        producer: state.producer.clone(),
+        timezone: state.timezone.clone(),
+        committed: state
+            .committed
+            .as_ref()
+            .map(|committed| schema::CommittedGeneration {
+                id: committed.id,
+                completed_at_ms: committed.completed_at_ms,
+                priority: None,
+                engine: None,
+            }),
+        pending: None,
+    };
+    // Dropping reusable cursors is safe: persisted cost history stays the
+    // last-good report and the next generation performs a clean rebuild.
+    journal::save(&compact).is_ok()
+}
+
+/// Runs one finite background generation. The manifest is frozen before the
+/// existing exact aggregator runs, so files appended during this generation
+/// are picked up by the next one instead of extending the current tail.
+pub fn usage_scan_generation(generation: u64) -> GenerationOutcome {
+    let mut pending = false;
+    match usage_scan_generation_inner(generation, &mut pending) {
+        Some(scan) => GenerationOutcome::Complete(scan),
+        None if pending => GenerationOutcome::Pending,
+        None => GenerationOutcome::Failed,
+    }
+}
+
+fn usage_scan_generation_inner(
+    generation: u64,
+    pending_episode: &mut bool,
+) -> Option<CodexUsageScan> {
+    use schema::{CommittedGeneration, PendingGeneration, ScanJournal};
+
+    let roots = default_roots();
+    let episode_started = std::time::Instant::now();
+    let episode_budget = std::time::Duration::from_secs(2);
+    let mut spool = incremental_spool::Spool::open_default().ok()?;
+    let now = Local::now();
+    let fresh_modified_since = now - Duration::days(HISTORY_DAYS);
+    let previous = journal::load();
+    let committed = previous.as_ref().and_then(|value| value.committed.clone());
+    let resumed_priority = previous
+        .as_ref()
+        .and_then(|value| value.pending.as_ref())
+        .and_then(|pending| pending.priority.clone());
+    let resumed_cutoff = previous
+        .as_ref()
+        .and_then(|value| value.pending.as_ref())
+        .and_then(|pending| pending.engine.as_ref())
+        .and_then(|engine| engine.modified_since_ms)
+        .and_then(|millis| Local.timestamp_millis_opt(millis).single());
+    let resumed = previous
+        .as_ref()
+        .and_then(|value| value.pending.as_ref())
+        .and_then(|pending| pending.engine.clone())
+        .and_then(|mut saved| {
+            incremental::hydrate(&mut saved, &roots, resumed_cutoff).then_some(saved)
+        });
+    let mut engine = if let Some(saved) = resumed {
+        saved
+    } else if let Some(committed_engine) =
+        committed.as_ref().and_then(|value| value.engine.as_ref())
+    {
+        incremental::refresh(
+            generation,
+            &roots,
+            committed_engine,
+            Some(fresh_modified_since),
+        )
+        .ok()?
+    } else {
+        incremental::discover(generation, &roots, Some(fresh_modified_since)).ok()?
+    };
+    engine.generation = generation;
+    let modified_since = engine
+        .modified_since_ms
+        .and_then(|millis| Local.timestamp_millis_opt(millis).single())
+        .unwrap_or(fresh_modified_since);
+    // Pending owns the complete resumable engine. Keeping a second full copy
+    // under committed doubles large journals and can make every checkpoint
+    // exceed the 64 MiB privacy/safety bound. The persisted cost history is
+    // the last-good user-facing commit while this generation is pending.
+    let mut checkpoint_committed = committed.clone();
+    if let Some(entry) = checkpoint_committed.as_mut() {
+        entry.engine = None;
+    }
+    let mut state = ScanJournal {
+        version: schema::JOURNAL_VERSION,
+        producer: schema::JOURNAL_PRODUCER.into(),
+        timezone: Local::now().offset().to_string(),
+        committed: checkpoint_committed,
+        pending: Some(PendingGeneration {
+            id: generation,
+            completed: 0,
+            progress_fingerprint: engine.fingerprint.clone(),
+            priority: resumed_priority,
+            engine: Some(engine),
+        }),
+    };
+    let engine = state.pending.as_ref()?.engine.as_ref()?;
+    update_scan_progress(
+        generation,
+        engine.completed.len(),
+        engine.completed.len() + engine.queue.len(),
+        engine.fingerprint.clone(),
+    );
+    // Checkpoint once at an episode boundary, not after every 500 ms pass.
+    // SQLite batches are idempotent, so a crash before the boundary safely
+    // replays work without repeatedly serializing the whole manifest.
+    loop {
+        let outcome = {
+            let engine = state.pending.as_mut()?.engine.as_mut()?;
+            incremental::run_pass(engine, &roots, &mut spool)
+        };
+        match outcome {
+            incremental::PassOutcome::Incomplete => {
+                state.pending = None;
+                state.committed = committed.clone();
+                if journal::save(&state).is_err() {
+                    let _ = save_compact_scan_marker(&state);
+                }
+                return None;
+            }
+            outcome => {
+                let engine = state.pending.as_ref()?.engine.as_ref()?;
+                let completed = engine.completed.len();
+                let total = completed + engine.queue.len();
+                let fingerprint = engine.fingerprint.clone();
+                let pending = state.pending.as_mut()?;
+                pending.completed = completed.min(u32::MAX as usize) as u32;
+                pending.progress_fingerprint = fingerprint.clone();
+                update_scan_progress(generation, completed, total, fingerprint);
+                if episode_started.elapsed() >= episode_budget {
+                    if journal::save(&state).is_ok() {
+                        // Pending journal + SQLite rows are durable. The next
+                        // episode resumes instead of monopolizing a worker.
+                        *pending_episode = true;
+                        return None;
+                    }
+                    let _ = save_compact_scan_marker(&state);
+                    // A failed checkpoint must never turn a bounded episode
+                    // into an unbounded worker. Keep last-good and fail closed.
+                    return None;
+                }
+                if outcome == incremental::PassOutcome::Complete {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        }
+    }
+    let priority_path = crate::platform::paths::codex_home().map(|home| home.join("logs_2.sqlite"));
+    let mut priority_cursor = state
+        .pending
+        .as_ref()
+        .and_then(|value| value.priority.clone())
+        .or_else(|| {
+            state
+                .committed
+                .as_ref()
+                .and_then(|value| value.priority.clone())
+        });
+    let mut priority_turns: HashMap<String, Option<String>> = HashMap::new();
+    let priority = match priority_path {
+        Some(path) => loop {
+            match priority::read(&path, priority_cursor.as_ref(), modified_since.timestamp()) {
+                priority::ReadOutcome::Partial(cursor, _) => {
+                    if let Some(pending) = state.pending.as_mut() {
+                        pending.priority = Some(cursor.clone());
+                    }
+                    let priority_progress =
+                        format!("priority-{}-{}", cursor.last_rowid, cursor.target_rowid);
+                    update_scan_progress(
+                        generation,
+                        cursor.last_rowid.max(0) as usize,
+                        cursor.target_rowid.max(0) as usize,
+                        priority_progress,
+                    );
+                    priority_cursor = Some(cursor);
+                    if episode_started.elapsed() >= episode_budget {
+                        if journal::save(&state).is_ok() {
+                            *pending_episode = true;
+                            return None;
+                        }
+                        let _ = save_compact_scan_marker(&state);
+                        return None;
+                    }
+                    std::thread::yield_now();
+                }
+                priority::ReadOutcome::Complete(cursor, _) => {
+                    priority_turns.extend(cursor.turns.clone());
+                    if let Some(pending) = state.pending.as_mut() {
+                        pending.priority = Some(cursor.clone());
+                    }
+                    if episode_started.elapsed() >= episode_budget {
+                        if journal::save(&state).is_ok() {
+                            *pending_episode = true;
+                            return None;
+                        }
+                        let _ = save_compact_scan_marker(&state);
+                        return None;
+                    }
+                    break Some(cursor);
+                }
+                priority::ReadOutcome::Absent => {
+                    if episode_started.elapsed() >= episode_budget {
+                        if journal::save(&state).is_ok() {
+                            *pending_episode = true;
+                            return None;
+                        }
+                        let _ = save_compact_scan_marker(&state);
+                        return None;
+                    }
+                    break None;
+                }
+                priority::ReadOutcome::Incomplete => {
+                    state.pending = None;
+                    state.committed = committed.clone();
+                    if journal::save(&state).is_err() {
+                        let _ = save_compact_scan_marker(&state);
+                    }
+                    return None;
+                }
+            }
+        },
+        None => None,
+    };
+    let engine = state.pending.as_ref()?.engine.as_ref()?;
+    let aggregation_deadline = episode_started + episode_budget;
+    let scan = scan_with_spool(
+        &roots,
+        Local::now(),
+        &priority_turns,
+        engine,
+        &spool,
+        aggregation_deadline,
+    )?;
+    let progress_fingerprint = engine.fingerprint.clone();
+    let engine = state.pending.as_mut()?.engine.take()?;
+    state.pending = None;
+    state.committed = Some(CommittedGeneration {
+        id: generation,
+        completed_at_ms: Local::now().timestamp_millis(),
+        priority,
+        engine: Some(engine),
+    });
+    let committed_durable = if journal::save(&state).is_ok() {
+        true
+    } else {
+        // Preserve generation/priority metadata even when the reusable JSONL
+        // cache cannot fit the bounded journal. The completed report is still
+        // valid and must be published; the next generation will rediscover.
+        if let Some(committed) = state.committed.as_mut() {
+            committed.engine = None;
+        }
+        journal::save(&state).is_ok() || save_compact_scan_marker(&state)
+    };
+    if !committed_durable {
+        // The prior pending journal may still reference spool rows. Never
+        // prune or publish a generation whose commit marker is not durable.
+        return None;
+    }
+    let retained_generations = state
+        .committed
+        .as_ref()
+        .and_then(|committed| committed.engine.as_ref())
+        .map(|engine| {
+            engine
+                .files
+                .iter()
+                .map(|file| (file.record_generation, incremental::file_key(file)))
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+    if spool.prune_unreferenced(&retained_generations).is_err() {
+        // Retention cleanup is part of the privacy contract. The durable
+        // journal can be retried, but this generation is not published.
+        return None;
+    }
+    Some(CodexUsageScan {
+        progress_fingerprint: Some(progress_fingerprint),
+        ..scan
+    })
+}
+
+fn scan_with_spool(
+    roots: &[PathBuf],
+    now: DateTime<Local>,
+    priority_turns: &HashMap<String, Option<String>>,
+    engine: &incremental::State,
+    spool: &incremental_spool::Spool,
+    deadline: std::time::Instant,
+) -> Option<CodexUsageScan> {
+    let mut scans: Vec<incremental_spool::FileSummary> = Vec::new();
+    let mut id_index = HashMap::new();
+    let mut files = engine
+        .files
+        .iter()
+        .map(|file| incremental::resolved_path(file, roots).map(|path| (path, file)))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    for (_, file) in files {
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        let key = incremental::file_key(file);
+        let scan = spool
+            .summarize_file(file.record_generation, key, deadline)
+            .ok()?;
+        ingest_spool_summary(scan, &mut scans, &mut id_index);
+    }
+    if !roots.iter().any(|root| root.is_dir()) {
+        return None;
+    }
+    aggregate_spool(scans, now, priority_turns, spool, deadline).ok()
+}
+
+fn ingest_spool_summary(
+    mut incoming: incremental_spool::FileSummary,
+    scans: &mut Vec<incremental_spool::FileSummary>,
+    id_index: &mut HashMap<String, usize>,
+) {
+    let Some(id) = incoming.session_id.clone() else {
+        scans.push(incoming);
+        return;
+    };
+    let Some(index) = id_index.get(&id).copied() else {
+        id_index.insert(id, scans.len());
+        scans.push(incoming);
+        return;
+    };
+    let existing = &mut scans[index];
+    let invalid = existing.project_ambiguous || incoming.project_ambiguous;
+    let conflicts = matches!(
+        (existing.project.as_ref(), incoming.project.as_ref()),
+        (Some(left), Some(right)) if left.key != right.key
+    );
+    let retraction_project = existing
+        .retraction_project
+        .clone()
+        .or_else(|| {
+            (invalid || conflicts)
+                .then(|| existing.project.clone())
+                .flatten()
+        })
+        .or_else(|| incoming.retraction_project.clone());
+    let retraction_source = if existing.retraction_project.is_some() {
+        existing.retraction_source.take()
+    } else if (invalid || conflicts) && existing.project.is_some() {
+        Some(incremental_spool::RetractionSource {
+            generation: existing.generation,
+            file_key: existing.file_key.clone(),
+            token_limit: existing.token_count,
+            retraction_id: existing.precomputed_retraction_id.clone(),
+        })
+    } else {
+        incoming.retraction_source.take()
+    };
+    let (project, ambiguous) =
+        reconcile_project_identity(existing.project.as_ref(), incoming.project.clone(), invalid);
+    if incoming.token_count > existing.token_count {
+        incoming.project = project;
+        incoming.project_ambiguous = ambiguous;
+        incoming.retraction_project = retraction_project;
+        incoming.retraction_source = retraction_source;
+        *existing = incoming;
+    } else {
+        existing.project = project;
+        existing.project_ambiguous = ambiguous;
+        existing.retraction_project = retraction_project;
+        existing.retraction_source = retraction_source;
+    }
+}
+
+#[derive(Default)]
+struct StreamingDay {
+    usd: f64,
+    tokens: i64,
+    models: HashMap<String, (f64, i64)>,
+}
+
+#[derive(Default)]
+struct StreamingProjectDay {
+    display_name: String,
+    usd: f64,
+    tokens: i64,
+    models: HashMap<String, (f64, i64)>,
+}
+
+struct StreamingAggregate {
+    now: DateTime<Local>,
+    buckets: HashMap<NaiveDate, StreamingDay>,
+    hours: HashMap<(NaiveDate, u32), (f64, i64)>,
+    models: HashMap<String, (f64, i64)>,
+    projects: HashMap<(String, NaiveDate), StreamingProjectDay>,
+    retractions: HashMap<(String, NaiveDate), StreamingProjectDay>,
+    today_usd: f64,
+    today_tokens: i64,
+    month_usd: f64,
+    month_tokens: i64,
+}
+
+impl StreamingAggregate {
+    fn new(now: DateTime<Local>) -> Self {
+        Self {
+            now,
+            buckets: HashMap::new(),
+            hours: HashMap::new(),
+            models: HashMap::new(),
+            projects: HashMap::new(),
+            retractions: HashMap::new(),
+            today_usd: 0.0,
+            today_tokens: 0,
+            month_usd: 0.0,
+            month_tokens: 0,
+        }
+    }
+
+    fn add(
+        &mut self,
+        event: &CodexTokenEvent,
+        counted: CodexTotals,
+        project: Option<&ProjectIdentity>,
+        retraction: Option<(&str, &ProjectIdentity)>,
+        priority_turns: &HashMap<String, Option<String>>,
+    ) {
+        let cutoff = self.now - Duration::days(HISTORY_DAYS);
+        if event.ts < cutoff || event.ts > self.now {
+            return;
+        }
+        let priced_model = event
+            .turn_hash
+            .as_ref()
+            .and_then(|turn| priority_turns.get(turn))
+            .and_then(|model| model.as_deref())
+            .filter(|model| price_for(model).is_some())
+            .unwrap_or(&event.model);
+        let usd = if event
+            .turn_hash
+            .as_ref()
+            .is_some_and(|turn| priority_turns.contains_key(turn))
+        {
+            priority_cost_usd(priced_model, counted.input, counted.cached, counted.output)
+        } else {
+            cost_usd(&event.model, counted.input, counted.cached, counted.output)
+        };
+        if usd == 0.0 && counted.total == 0 {
+            return;
+        }
+        let day = event.ts.date_naive();
+        if let Some((id, project)) = retraction {
+            Self::add_project(
+                &mut self.retractions,
+                Some(id),
+                project,
+                day,
+                event,
+                usd,
+                counted.total,
+            );
+            return;
+        }
+        let daily = self.buckets.entry(day).or_default();
+        daily.usd += usd;
+        daily.tokens += counted.total;
+        let model = daily.models.entry(event.model.clone()).or_default();
+        model.0 += usd;
+        model.1 += counted.total;
+        if let Some(project) = project {
+            Self::add_project(
+                &mut self.projects,
+                None,
+                project,
+                day,
+                event,
+                usd,
+                counted.total,
+            );
+        }
+        if event.ts >= self.now - Duration::days(30) {
+            self.month_usd += usd;
+            self.month_tokens += counted.total;
+            let model = self.models.entry(event.model.clone()).or_default();
+            model.0 += usd;
+            model.1 += counted.total;
+        }
+        if day >= self.now.date_naive() {
+            self.today_usd += usd;
+            self.today_tokens += counted.total;
+        }
+        if event.ts >= self.now - Duration::hours(24) {
+            let hour = self.hours.entry((day, event.ts.hour())).or_default();
+            hour.0 += usd;
+            hour.1 += counted.total;
+        }
+    }
+
+    fn add_project(
+        target: &mut HashMap<(String, NaiveDate), StreamingProjectDay>,
+        retraction_id: Option<&str>,
+        project: &ProjectIdentity,
+        day: NaiveDate,
+        event: &CodexTokenEvent,
+        usd: f64,
+        tokens: i64,
+    ) {
+        let key = retraction_id
+            .map(|id| format!("{id}\0{}", project.key))
+            .unwrap_or_else(|| project.key.clone());
+        let value = target.entry((key, day)).or_default();
+        value.display_name = project.display_name.clone();
+        value.usd += usd;
+        value.tokens += tokens;
+        let model = value.models.entry(event.model.clone()).or_default();
+        model.0 += usd;
+        model.1 += tokens;
+    }
+
+    fn finish(self) -> CodexUsageScan {
+        let mut daily = Vec::with_capacity(HISTORY_DAYS as usize);
+        for offset in (0..HISTORY_DAYS).rev() {
+            let date = self.now.date_naive() - Duration::days(offset);
+            let (usd, tokens, mut models) = self.buckets.get(&date).map_or_else(
+                || (0.0, 0, Vec::new()),
+                |day| {
+                    (
+                        day.usd,
+                        day.tokens,
+                        day.models
+                            .iter()
+                            .map(|(name, value)| DailyModel {
+                                name: name.clone(),
+                                usd: value.0,
+                                tokens: value.1,
+                            })
+                            .collect(),
+                    )
+                },
+            );
+            models.sort_by(|a, b| b.usd.total_cmp(&a.usd));
+            models.truncate(5);
+            daily.push(DailyUsage {
+                date: date.to_string(),
+                usd,
+                tokens,
+                models,
+            });
+        }
+        let mut hourly = Vec::with_capacity(24);
+        for offset in (0..24).rev() {
+            let time = self.now - Duration::hours(offset);
+            let (usd, tokens) = self
+                .hours
+                .get(&(time.date_naive(), time.hour()))
+                .copied()
+                .unwrap_or_default();
+            hourly.push(HourlyUsage {
+                hour: format!("{}T{:02}:00", time.date_naive(), time.hour()),
+                usd,
+                tokens,
+            });
+        }
+        let top_model = self
+            .models
+            .into_iter()
+            .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0).then_with(|| a.1 .1.cmp(&b.1 .1)))
+            .map(|row| row.0);
+        let projects = streaming_projects(self.projects);
+        let mut grouped: HashMap<(String, String), Vec<ProjectContribution>> = HashMap::new();
+        for ((combined, date), day) in self.retractions {
+            let Some((id, key)) = combined.split_once('\0') else {
+                continue;
+            };
+            grouped
+                .entry((id.into(), key.into()))
+                .or_default()
+                .push(streaming_project(key.into(), date, day));
+        }
+        let mut retractions = grouped
+            .into_iter()
+            .map(|((retraction_id, project_key), mut contributions)| {
+                contributions.sort_by(|a, b| a.date.cmp(&b.date));
+                ProjectRetraction {
+                    retraction_id,
+                    project_key,
+                    contributions,
+                }
+            })
+            .collect::<Vec<_>>();
+        retractions.sort_by(|a, b| a.retraction_id.cmp(&b.retraction_id));
+        CodexUsageScan {
+            usage: UsageReport {
+                today_usd: self.today_usd,
+                today_tokens: self.today_tokens,
+                last30_usd: self.month_usd,
+                last30_tokens: self.month_tokens,
+                daily,
+                hourly,
+                top_model,
+                ..Default::default()
+            },
+            projects,
+            retractions,
+            progress_fingerprint: None,
+        }
+    }
+}
+
+fn streaming_project(
+    key: String,
+    date: NaiveDate,
+    day: StreamingProjectDay,
+) -> ProjectContribution {
+    let mut models = day
+        .models
+        .into_iter()
+        .map(|(name, value)| ProjectModel {
+            name,
+            usd: value.0,
+            tokens: value.1,
+        })
+        .collect::<Vec<_>>();
+    models.sort_by(|a, b| {
+        b.usd
+            .total_cmp(&a.usd)
+            .then_with(|| b.tokens.cmp(&a.tokens))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    models.truncate(5);
+    ProjectContribution {
+        project_key: key,
+        display_name: day.display_name,
+        capability: "exact".into(),
+        date: date.to_string(),
+        usd: day.usd,
+        tokens: day.tokens,
+        models,
+    }
+}
+
+fn streaming_projects(
+    source: HashMap<(String, NaiveDate), StreamingProjectDay>,
+) -> Vec<ProjectContribution> {
+    let mut values = source
+        .into_iter()
+        .filter(|(_, day)| day.usd > 0.0 || day.tokens > 0)
+        .map(|((key, date), day)| streaming_project(key, date, day))
+        .collect::<Vec<_>>();
+    values.sort_by(|a, b| {
+        a.date
+            .cmp(&b.date)
+            .then_with(|| a.project_key.cmp(&b.project_key))
+    });
+    values
+}
+
+fn aggregate_spool(
+    scans: Vec<incremental_spool::FileSummary>,
+    now: DateTime<Local>,
+    priority_turns: &HashMap<String, Option<String>>,
+    spool: &incremental_spool::Spool,
+    deadline: std::time::Instant,
+) -> Result<CodexUsageScan, String> {
+    let mut index = HashMap::new();
+    for (position, scan) in scans.iter().enumerate() {
+        if let Some(id) = scan.session_id.as_ref() {
+            index.insert(id.clone(), position);
+        }
+    }
+    let baselines = fork_baselines(&scans, &index, spool, deadline)?;
+    let mut output = StreamingAggregate::new(now);
+    for (scan_index, scan) in scans.iter().enumerate() {
+        if std::time::Instant::now() >= deadline {
+            return Err("Codex aggregation deadline exceeded".into());
+        }
+        let baseline = baselines[scan_index];
+        let mut previous = CodexTotals::default();
+        spool.stream_file(scan.generation, &scan.file_key, deadline, |event| {
+            let counted = adjusted_tokens(&event, baseline, &mut previous);
+            output.add(&event, counted, scan.project.as_ref(), None, priority_turns);
+            Ok(())
+        })?;
+        if let Some(project) = scan.retraction_project.as_ref() {
+            let id = scan
+                .retraction_source
+                .as_ref()
+                .and_then(|source| source.retraction_id.clone());
+            if let (Some(id), Some(source)) = (id, scan.retraction_source.as_ref()) {
+                let mut seen = 0_u64;
+                let mut previous = CodexTotals::default();
+                spool.stream_file(source.generation, &source.file_key, deadline, |event| {
+                    if seen < source.token_limit {
+                        let counted = adjusted_tokens(&event, baseline, &mut previous);
+                        output.add(&event, counted, None, Some((&id, project)), priority_turns);
+                    }
+                    seen += 1;
+                    Ok(())
+                })?;
+            }
+        }
+    }
+    Ok(output.finish())
+}
+
+fn fork_baselines(
+    scans: &[incremental_spool::FileSummary],
+    index: &HashMap<String, usize>,
+    spool: &incremental_spool::Spool,
+    deadline: std::time::Instant,
+) -> Result<Vec<Option<CodexTotals>>, String> {
+    let mut requests: HashMap<usize, Vec<(DateTime<Local>, usize)>> = HashMap::new();
+    for (child_index, scan) in scans.iter().enumerate() {
+        if let Some((parent_index, fork_ts)) = scan
+            .forked_from_id
+            .as_ref()
+            .and_then(|id| index.get(id).copied())
+            .zip(scan.fork_ts)
+        {
+            requests
+                .entry(parent_index)
+                .or_default()
+                .push((fork_ts, child_index));
+        }
+    }
+    let mut baselines = vec![None; scans.len()];
+    for (parent_index, mut children) in requests {
+        children.sort_by_key(|(timestamp, _)| *timestamp);
+        let parent = &scans[parent_index];
+        let mut next_child = 0;
+        let mut latest = None;
+        spool.stream_file(parent.generation, &parent.file_key, deadline, |event| {
+            while next_child < children.len() && children[next_child].0 < event.ts {
+                baselines[children[next_child].1] = latest;
+                next_child += 1;
+            }
+            if let Some(total) = event.total {
+                latest = Some(total);
+            }
+            Ok(())
+        })?;
+        while next_child < children.len() {
+            baselines[children[next_child].1] = latest;
+            next_child += 1;
+        }
+    }
+    Ok(baselines)
+}
+
+fn adjusted_tokens(
+    event: &CodexTokenEvent,
+    baseline: Option<CodexTotals>,
+    previous: &mut CodexTotals,
+) -> CodexTotals {
+    match (baseline, event.total) {
+        (Some(base), Some(total)) => {
+            let adjusted = total.saturating_sub(&base);
+            let delta = adjusted.saturating_sub(previous);
+            *previous = adjusted;
+            delta
+        }
+        _ => event.last,
+    }
+}
+
 /// Returns None only when no sessions root is readable.
 pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<CodexUsageScan> {
+    scan_with_projects_and_priority(roots, now, &HashMap::new())
+}
+
+fn scan_with_projects_and_priority(
+    roots: &[PathBuf],
+    now: DateTime<Local>,
+    priority_turns: &HashMap<String, Option<String>>,
+) -> Option<CodexUsageScan> {
+    scan_with_inputs(roots, now, priority_turns, None)
+}
+
+fn scan_with_inputs(
+    roots: &[PathBuf],
+    now: DateTime<Local>,
+    priority_turns: &HashMap<String, Option<String>>,
+    preloaded: Option<&HashMap<PathBuf, Vec<incremental::SafeRecord>>>,
+) -> Option<CodexUsageScan> {
     let cutoff = now - Duration::days(HISTORY_DAYS);
     let last30_cutoff = now - Duration::days(30);
     let hour_cutoff = now - Duration::hours(24);
@@ -444,139 +1409,114 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
     let mut scans: Vec<CodexFileScan> = Vec::new();
     let mut id_index: HashMap<String, usize> = HashMap::new();
 
-    for root in roots {
-        if !root.is_dir() {
-            continue;
+    if let Some(preloaded) = preloaded {
+        any_root = roots.iter().any(|root| root.is_dir());
+        let mut entries: Vec<_> = preloaded.iter().collect();
+        entries.sort_by(|left, right| left.0.cmp(right.0));
+        for (_, records) in entries {
+            ingest_file_scan(scan_from_safe_records(records), &mut scans, &mut id_index);
         }
-        any_root = true;
-        let mut files: Vec<PathBuf> = WalkDir::new(root)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                e.path()
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
-            })
-            .filter(|e| {
-                e.metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .is_some_and(|m| DateTime::<Local>::from(m) >= cutoff)
-            })
-            .map(|e| e.into_path())
-            .collect();
-        files.sort();
-
-        for file in files {
-            let Ok(content) = std::fs::read_to_string(&file) else {
+    } else {
+        for root in roots {
+            if !root.is_dir() {
                 continue;
-            };
-            let mut file_scan = CodexFileScan::default();
-            // Model comes from the most recent turn_context line in the file.
-            let mut model = String::from("gpt-5");
-            for line in content.lines() {
-                let Ok(obj) = serde_json::from_str::<Value>(line) else {
+            }
+            any_root = true;
+            let mut files: Vec<PathBuf> = WalkDir::new(root)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_file())
+                .filter(|e| {
+                    e.path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+                })
+                .filter(|e| {
+                    e.metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .is_some_and(|m| DateTime::<Local>::from(m) >= cutoff)
+                })
+                .map(|e| e.into_path())
+                .collect();
+            files.sort();
+
+            for file in files {
+                let owned = std::fs::read_to_string(&file).ok();
+                let Some(content) = owned.as_deref() else {
                     continue;
                 };
-                if let Some((id, forked_from_id, ts_str, cwd)) = parse_codex_session_meta(&obj) {
-                    if file_scan.session_id.is_none() {
-                        file_scan.session_id = id;
-                    }
-                    if file_scan.forked_from_id.is_none() && forked_from_id.is_some() {
-                        file_scan.forked_from_id = forked_from_id;
-                        file_scan.fork_ts = ts_str
-                            .as_deref()
-                            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                            .map(|d| d.with_timezone(&Local));
-                    }
-                    if let Some(raw_cwd) = cwd {
-                        let incoming = codex_project_identity(&raw_cwd);
-                        update_file_project(&mut file_scan, incoming);
-                    }
-                    continue;
-                }
-                let payload = obj.get("payload");
-                match obj.get("type").and_then(Value::as_str) {
-                    Some("turn_context") => {
-                        if let Some(m) =
-                            payload.and_then(|p| p.get("model")).and_then(Value::as_str)
-                        {
-                            model = m.to_string();
-                        }
-                    }
-                    Some("event_msg") => {
-                        let Some(p) = payload else { continue };
-                        if p.get("type").and_then(Value::as_str) != Some("token_count") {
-                            continue;
-                        }
-                        let Some(info) = p.get("info") else { continue };
-                        let Some(last) = info.get("last_token_usage") else {
-                            continue;
-                        };
-                        let ts = obj
-                            .get("timestamp")
-                            .and_then(Value::as_str)
-                            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                            .map(|d| d.with_timezone(&Local));
-                        let Some(ts) = ts else { continue };
-                        file_scan.events.push(CodexTokenEvent {
-                            ts,
-                            model: model.clone(),
-                            last: CodexTotals::from_value(last),
-                            total: info.get("total_token_usage").map(CodexTotals::from_value),
-                        });
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(id) = file_scan.session_id.clone() {
-                if let Some(existing_index) = id_index.get(&id).copied() {
-                    let existing = &scans[existing_index];
-                    let invalid = existing.project_ambiguous || file_scan.project_ambiguous;
-                    let conflicts = match (existing.project.as_ref(), file_scan.project.as_ref()) {
-                        (Some(current), Some(next)) => current.key != next.key,
-                        _ => false,
+                let mut file_scan = CodexFileScan::default();
+                // Model comes from the most recent turn_context line in the file.
+                let mut model = String::from("gpt-5");
+                for line in content.lines() {
+                    let Ok(obj) = serde_json::from_str::<Value>(line) else {
+                        continue;
                     };
-                    let retraction_project = existing
-                        .retraction_project
-                        .clone()
-                        .or_else(|| {
-                            (invalid || conflicts)
-                                .then(|| existing.project.clone())
-                                .flatten()
-                        })
-                        .or_else(|| file_scan.retraction_project.clone());
-                    let retraction_events = if existing.retraction_project.is_some() {
-                        existing.retraction_events.clone()
-                    } else if (invalid || conflicts) && existing.project.is_some() {
-                        existing.events.clone()
-                    } else {
-                        file_scan.retraction_events.clone()
-                    };
-                    let (project, ambiguous) = reconcile_project_identity(
-                        existing.project.as_ref(),
-                        file_scan.project.clone(),
-                        invalid,
-                    );
-                    if file_scan.events.len() > existing.events.len() {
-                        file_scan.project = project;
-                        file_scan.project_ambiguous = ambiguous;
-                        file_scan.retraction_project = retraction_project;
-                        file_scan.retraction_events = retraction_events;
-                        scans[existing_index] = file_scan;
-                    } else {
-                        scans[existing_index].project = project;
-                        scans[existing_index].project_ambiguous = ambiguous;
-                        scans[existing_index].retraction_project = retraction_project;
-                        scans[existing_index].retraction_events = retraction_events;
+                    if let Some((id, forked_from_id, ts_str, cwd)) = parse_codex_session_meta(&obj)
+                    {
+                        if file_scan.session_id.is_none() {
+                            file_scan.session_id = id;
+                        }
+                        if file_scan.forked_from_id.is_none() && forked_from_id.is_some() {
+                            file_scan.forked_from_id = forked_from_id;
+                            file_scan.fork_ts = ts_str
+                                .as_deref()
+                                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                                .map(|d| d.with_timezone(&Local));
+                        }
+                        if let Some(raw_cwd) = cwd {
+                            let incoming = codex_project_identity(&raw_cwd);
+                            update_file_project(&mut file_scan, incoming);
+                        }
+                        continue;
                     }
-                    continue;
+                    let payload = obj.get("payload");
+                    match obj.get("type").and_then(Value::as_str) {
+                        Some("turn_context") => {
+                            if let Some(m) =
+                                payload.and_then(|p| p.get("model")).and_then(Value::as_str)
+                            {
+                                model = m.to_string();
+                            }
+                        }
+                        Some("event_msg") => {
+                            let Some(p) = payload else { continue };
+                            if p.get("type").and_then(Value::as_str) != Some("token_count") {
+                                continue;
+                            }
+                            let Some(info) = p.get("info") else { continue };
+                            let Some(last) = info.get("last_token_usage") else {
+                                continue;
+                            };
+                            let ts = obj
+                                .get("timestamp")
+                                .and_then(Value::as_str)
+                                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                                .map(|d| d.with_timezone(&Local));
+                            let Some(ts) = ts else { continue };
+                            file_scan.events.push(CodexTokenEvent {
+                                ts,
+                                model: model.clone(),
+                                last: CodexTotals::from_value(last),
+                                total: info.get("total_token_usage").map(CodexTotals::from_value),
+                                turn_hash: p
+                                    .get("turn_id")
+                                    .or_else(|| p.get("turnId"))
+                                    .or_else(|| p.get("id"))
+                                    .or_else(|| info.get("turn_id"))
+                                    .or_else(|| info.get("turnId"))
+                                    .or_else(|| info.get("id"))
+                                    .and_then(Value::as_str)
+                                    .map(priority::turn_digest),
+                            });
+                        }
+                        _ => {}
+                    }
                 }
-                id_index.insert(id, scans.len());
+                ingest_file_scan(file_scan, &mut scans, &mut id_index);
             }
-            scans.push(file_scan);
         }
     }
     if !any_root {
@@ -599,7 +1539,15 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
             .session_id
             .as_deref()
             .zip(scans[scan_index].retraction_project.as_ref())
-            .map(|(session_id, project)| (codex_retraction_id(session_id, &project.key), project));
+            .map(|(session_id, project)| {
+                (
+                    scans[scan_index]
+                        .precomputed_retraction_id
+                        .clone()
+                        .unwrap_or_else(|| codex_retraction_id(session_id, &project.key)),
+                    project,
+                )
+            });
         for ev in &scans[scan_index].events {
             // Unresolved baseline (parent outside the scan window, or no
             // fork at all) falls back to the turn's own delta — identical
@@ -617,7 +1565,22 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
             if ev.ts < cutoff || ev.ts > now {
                 continue;
             }
-            let usd = cost_usd(&ev.model, counted.input, counted.cached, counted.output);
+            let priced_model = ev
+                .turn_hash
+                .as_ref()
+                .and_then(|turn| priority_turns.get(turn))
+                .and_then(|model| model.as_deref())
+                .filter(|model| price_for(model).is_some())
+                .unwrap_or(&ev.model);
+            let usd = if ev
+                .turn_hash
+                .as_ref()
+                .is_some_and(|turn| priority_turns.contains_key(turn))
+            {
+                priority_cost_usd(priced_model, counted.input, counted.cached, counted.output)
+            } else {
+                cost_usd(&ev.model, counted.input, counted.cached, counted.output)
+            };
             let tokens = counted.total;
             if usd == 0.0 && tokens == 0 {
                 continue;
@@ -678,7 +1641,22 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
                 if ev.ts < cutoff || ev.ts > now {
                     continue;
                 }
-                let usd = cost_usd(&ev.model, counted.input, counted.cached, counted.output);
+                let priced_model = ev
+                    .turn_hash
+                    .as_ref()
+                    .and_then(|turn| priority_turns.get(turn))
+                    .and_then(|model| model.as_deref())
+                    .filter(|model| price_for(model).is_some())
+                    .unwrap_or(&ev.model);
+                let usd = if ev
+                    .turn_hash
+                    .as_ref()
+                    .is_some_and(|turn| priority_turns.contains_key(turn))
+                {
+                    priority_cost_usd(priced_model, counted.input, counted.cached, counted.output)
+                } else {
+                    cost_usd(&ev.model, counted.input, counted.cached, counted.output)
+                };
                 let tokens = counted.total;
                 if usd == 0.0 && tokens == 0 {
                     continue;
@@ -836,6 +1814,7 @@ pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<Cod
         usage,
         projects,
         retractions,
+        progress_fingerprint: None,
     })
 }
 
@@ -956,6 +1935,19 @@ mod tests {
         assert!(cost_usd("gpt-5.6-sol", 1_000_000, 0, 0) > 0.0);
         // Unknown models cost $0.
         assert_eq!(cost_usd("mystery-model", 1_000_000, 0, 0), 0.0);
+    }
+
+    #[test]
+    fn priority_pricing_uses_exact_models_rates_and_272k_ceiling() {
+        assert!((priority_cost_usd("gpt-5.4", 272_000, 0, 0) - 1.36).abs() < 1e-9);
+        assert!((priority_cost_usd("gpt-5.4", 272_001, 0, 0) - 1.360_005).abs() < 1e-9);
+        assert!(
+            (priority_cost_usd("openai/gpt-5.5-2026-01-01", 100_000, 0, 0) - 1.25).abs() < 1e-9
+        );
+        assert_eq!(
+            priority_cost_usd("gpt-5.6-sol", 100_000, 0, 0),
+            cost_usd("gpt-5.6-sol", 100_000, 0, 0)
+        );
     }
 
     #[test]
@@ -1256,5 +2248,161 @@ mod tests {
         );
         assert_eq!(report.last30_tokens, 1_050_000);
         fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn incremental_generation_preserves_exact_fork_and_project_math() {
+        let base = temp_base("incremental-parity");
+        let root = base.join("sessions");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        write_lines(
+            &root,
+            "rollout-parent.jsonl",
+            &[
+                session_meta_with_cwd(&ts, "parent", None, Some("/work/repo")),
+                turn_context("gpt-5"),
+                token_count_cumulative(&ts, (100_000, 0, 0, 100_000), (100_000, 0, 0, 100_000)),
+            ],
+        );
+        write_lines(
+            &root,
+            "rollout-fork.jsonl",
+            &[
+                session_meta_with_cwd(&ts, "fork", Some("parent"), Some("/work/repo")),
+                turn_context("gpt-5"),
+                token_count_cumulative(&ts, (100_000, 0, 0, 100_000), (100_000, 0, 0, 100_000)),
+                token_count_cumulative(&ts, (10_000, 0, 0, 10_000), (110_000, 0, 0, 110_000)),
+            ],
+        );
+        write_lines(
+            &root,
+            "rollout-duplicate-a.jsonl",
+            &[
+                session_meta_with_cwd(&ts, "duplicate", None, Some("/work/alpha")),
+                token_count(&ts, 20, 0, 0, 20),
+            ],
+        );
+        write_lines(
+            &root,
+            "rollout-duplicate-b.jsonl",
+            &[
+                session_meta_with_cwd(&ts, "duplicate", None, Some("/work/beta")),
+                token_count(&ts, 20, 0, 0, 20),
+                token_count(&ts, 30, 0, 0, 30),
+            ],
+        );
+        for name in [
+            "rollout-parent.jsonl",
+            "rollout-fork.jsonl",
+            "rollout-duplicate-a.jsonl",
+            "rollout-duplicate-b.jsonl",
+        ] {
+            let path = root.join(name);
+            let mut content = fs::read_to_string(&path).unwrap();
+            content.push('\n');
+            fs::write(path, content).unwrap();
+        }
+        let exact = scan_with_projects(std::slice::from_ref(&root), now).unwrap();
+        let mut state = incremental::discover(1, std::slice::from_ref(&root), None).unwrap();
+        let mut spool = incremental_spool::Spool::open_memory().unwrap();
+        while incremental::run_pass(&mut state, std::slice::from_ref(&root), &mut spool)
+            == incremental::PassOutcome::Progress
+        {}
+        let bounded = scan_with_spool(
+            std::slice::from_ref(&root),
+            now,
+            &HashMap::new(),
+            &state,
+            &spool,
+            std::time::Instant::now() + std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(bounded.usage, exact.usage);
+        assert_eq!(bounded.projects, exact.projects);
+        assert_eq!(bounded.retractions, exact.retractions);
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn priority_completion_model_changes_cost_but_preserves_rollout_labels() {
+        let base = temp_base("priority-rate");
+        let root = base.join("sessions");
+        fs::create_dir_all(&root).unwrap();
+        let now = Local::now();
+        let turn = priority::turn_digest("turn-1");
+        let project = codex_project_identity("/work/repo").unwrap();
+        let records = vec![
+            incremental::SafeRecord::Meta {
+                session: Some("safe-session-hash".into()),
+                parent: None,
+                timestamp_ms: Some(now.timestamp_millis()),
+                project_key: Some(project.key),
+                project_name: Some(project.display_name),
+                retraction_id: Some("safe-retraction-hash".into()),
+            },
+            incremental::SafeRecord::Model("gpt-5".into()),
+            incremental::SafeRecord::CurrentTurn(turn.clone()),
+            incremental::SafeRecord::Token {
+                timestamp_ms: now.timestamp_millis(),
+                input: 100_000,
+                cached: 0,
+                output: 0,
+                total: 100_000,
+                cumulative: None,
+                turn: None,
+            },
+        ];
+        let loaded = HashMap::from([(root.join("rollout.jsonl"), records)]);
+        let priority_turns = HashMap::from([(turn, Some("gpt-5.4".into()))]);
+        let scan = scan_with_inputs(
+            std::slice::from_ref(&root),
+            now,
+            &priority_turns,
+            Some(&loaded),
+        )
+        .unwrap();
+        assert!((scan.usage.today_usd - 0.5).abs() < 1e-9);
+        assert_eq!(scan.usage.today_tokens, 100_000);
+        // Vendored macOS semantics: completion model chooses the Priority
+        // rate, while UI buckets retain the rollout model label.
+        assert_eq!(scan.usage.top_model.as_deref(), Some("gpt-5"));
+        assert_eq!(scan.usage.daily.last().unwrap().models[0].name, "gpt-5");
+        assert_eq!(scan.projects[0].models[0].name, "gpt-5");
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn unknown_priority_completion_model_falls_back_to_rollout_price() {
+        let base = temp_base("priority-unknown-model");
+        let root = base.join("sessions");
+        fs::create_dir_all(&root).unwrap();
+        let now = Local::now();
+        let turn = priority::turn_digest("turn-unknown");
+        let records = vec![
+            incremental::SafeRecord::Model("gpt-5".into()),
+            incremental::SafeRecord::CurrentTurn(turn.clone()),
+            incremental::SafeRecord::Token {
+                timestamp_ms: now.timestamp_millis(),
+                input: 100_000,
+                cached: 0,
+                output: 0,
+                total: 100_000,
+                cumulative: None,
+                turn: None,
+            },
+        ];
+        let loaded = HashMap::from([(root.join("rollout.jsonl"), records)]);
+        let priority_turns = HashMap::from([(turn, Some("future-unknown-model".into()))]);
+        let scan = scan_with_inputs(
+            std::slice::from_ref(&root),
+            now,
+            &priority_turns,
+            Some(&loaded),
+        )
+        .unwrap();
+        assert!((scan.usage.today_usd - 0.125).abs() < 1e-9);
+        assert_eq!(scan.usage.today_tokens, 100_000);
+        fs::remove_dir_all(base).ok();
     }
 }

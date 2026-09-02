@@ -1822,6 +1822,8 @@ fn build_report(points: Vec<SessionPoint>, now: DateTime<Local>) -> Option<Usage
         included: true,
         live: true,
         scanned_at: None,
+        scan_pending: None,
+        scan_progress: None,
     })
 }
 

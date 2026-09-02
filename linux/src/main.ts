@@ -104,6 +104,7 @@ const TAB_KEY = "birdnion.selectedTab";
  * `dueProviderIds`. 10s gives per-provider overrides reasonable resolution
  * without the fixed-cost cadence of the global setting driving every tick. */
 const TICK_MS = 10_000;
+const CODEX_USAGE_UPDATED_EVENT = "birdnion-codex-usage-updated";
 
 type ProviderCfg = {
   id: string; enabled?: boolean | null; refreshInterval?: number | null;
@@ -228,6 +229,114 @@ type LocalUsageRefreshDependencies = {
   authorizeRefresh?: (sources: ReadonlySet<ScanSource>) => void;
   publishSource: (source: ScanSource, report: UsageReport | null) => void;
 };
+
+type CodexUsageCompletionDependencies = {
+  readCanonicalSources: () => Promise<ReadonlySet<ScanSource> | null>;
+  publish: (report: UsageReport) => void;
+};
+
+function codexScanGeneration(report: UsageReport | null): number | null {
+  const generation = report?.scanProgress?.generation;
+  return typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0
+    ? generation
+    : null;
+}
+
+function codexCompletionKey(report: UsageReport): string | null {
+  const generation = codexScanGeneration(report);
+  const fingerprint = report.scanProgress?.fingerprint;
+  return generation !== null && typeof fingerprint === "string" && fingerprint.length > 0
+    ? `${generation}:${fingerprint}`
+    : null;
+}
+
+/** Bridges a seed-first Codex command result to its later completion event.
+ * A frontend request epoch fences settings/account changes; the backend scan
+ * generation fences late events from an older bounded scan. */
+export function createCodexUsageCompletionCoordinator(
+  dependencies: CodexUsageCompletionDependencies,
+) {
+  let requestEpoch = 0;
+  let requestOpen = false;
+  let expectedGeneration: number | null = null;
+  let bufferedCompletion: UsageReport | null = null;
+  let latestPublishedGeneration = -1;
+  let latestPublishedKey: string | null = null;
+
+  const invalidate = () => {
+    requestEpoch += 1;
+    requestOpen = false;
+    expectedGeneration = null;
+    bufferedCompletion = null;
+  };
+
+  const publishCompletion = async (
+    report: UsageReport,
+    epoch: number,
+  ): Promise<boolean> => {
+    const generation = codexScanGeneration(report);
+    const key = codexCompletionKey(report);
+    if (epoch !== requestEpoch || expectedGeneration === null
+        || generation !== expectedGeneration || generation < latestPublishedGeneration
+        || key === null || key === latestPublishedKey || report.scanPending === true) return false;
+
+    const canonical = await dependencies.readCanonicalSources().catch(() => null);
+    if (epoch !== requestEpoch || expectedGeneration !== generation
+        || canonical?.has("codex") !== true) return false;
+
+    latestPublishedGeneration = generation;
+    latestPublishedKey = key;
+    expectedGeneration = null;
+    requestOpen = false;
+    bufferedCompletion = null;
+    dependencies.publish(report);
+    return true;
+  };
+
+  return {
+    beginRequest: () => {
+      requestEpoch += 1;
+      requestOpen = true;
+      expectedGeneration = null;
+      bufferedCompletion = null;
+    },
+    invalidate,
+    observeReport: async (report: UsageReport | null): Promise<boolean> => {
+      const epoch = requestEpoch;
+      const generation = codexScanGeneration(report);
+      if (report !== null && report.scanPending !== true && generation !== null
+          && generation >= latestPublishedGeneration) {
+        latestPublishedGeneration = generation;
+        latestPublishedKey = codexCompletionKey(report);
+      }
+      if (!requestOpen || report?.scanPending !== true || generation === null
+          || generation < latestPublishedGeneration) {
+        requestOpen = false;
+        expectedGeneration = null;
+        bufferedCompletion = null;
+        return false;
+      }
+      expectedGeneration = generation;
+      const buffered = bufferedCompletion;
+      bufferedCompletion = null;
+      return buffered ? publishCompletion(buffered, epoch) : false;
+    },
+    handleCompletion: async (report: UsageReport): Promise<boolean> => {
+      const epoch = requestEpoch;
+      if (!requestOpen) return false;
+      if (expectedGeneration === null) {
+        const bufferedGeneration = codexScanGeneration(bufferedCompletion);
+        const incomingGeneration = codexScanGeneration(report);
+        if (incomingGeneration !== null
+            && (bufferedGeneration === null || incomingGeneration >= bufferedGeneration)) {
+          bufferedCompletion = report;
+        }
+        return false;
+      }
+      return publishCompletion(report, epoch);
+    },
+  };
+}
 
 /** Owns local-usage refresh generations. Starting a refresh invalidates every
  * older completion; each current completion also resolves the canonical set
@@ -2189,12 +2298,26 @@ async function readCanonicalLocalUsageSources(): Promise<Set<ScanSource>> {
     SCAN_SOURCES.includes(id as ScanSource)));
 }
 
+const codexUsageCompletionCoordinator = createCodexUsageCompletionCoordinator({
+  readCanonicalSources: readCanonicalLocalUsageSources,
+  publish: (report) => {
+    state.scanning.delete("codex");
+    state.authorizedScanning.delete("codex");
+    state.codex = report;
+    render();
+  },
+});
+
 const refreshLocalUsageReports = createLocalUsageRefreshCoordinator({
   sources: SCAN_SOURCES,
   readCanonicalSources: readCanonicalLocalUsageSources,
-  scanSource: (source) => invoke<UsageReport | null>(`${source}_usage_report`),
+  scanSource: (source) => {
+    if (source === "codex") codexUsageCompletionCoordinator.beginRequest();
+    return invoke<UsageReport | null>(`${source}_usage_report`);
+  },
   previousReport: (source) => state[source],
   beginRefresh: () => {
+    codexUsageCompletionCoordinator.invalidate();
     state.scanning = new Set(SCAN_SOURCES);
     state.authorizedScanning = new Set<ScanSource>();
     render();
@@ -2204,10 +2327,16 @@ const refreshLocalUsageReports = createLocalUsageRefreshCoordinator({
     render();
   },
   publishSource: (source, report) => {
-    state.scanning.delete(source);
-    state.authorizedScanning.delete(source);
+    const backgroundPending = source === "codex" && report?.scanPending === true;
+    if (!backgroundPending) {
+      state.scanning.delete(source);
+      state.authorizedScanning.delete(source);
+    }
     state[source] = report;
     render();
+    if (source === "codex") {
+      void codexUsageCompletionCoordinator.observeReport(report);
+    }
   },
 });
 
@@ -2663,6 +2792,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Codex fetch, queued behind an existing load/tick/refetch when necessary.
   try {
     await awaitProviderCoordinatorListeners([
+      listen<UsageReport>(CODEX_USAGE_UPDATED_EVENT, (event) => {
+        void codexUsageCompletionCoordinator.handleCompletion(event.payload);
+      }),
       listen(CODEX_ACCOUNT_CHANGED_EVENT, onCodexAccountChanged),
       listen(ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, onAntigravityAccountChanged),
       listen<CopilotAccountChange>(COPILOT_ACCOUNT_CHANGED_EVENT, (event) =>
@@ -2670,6 +2802,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       listen(QUOTA_AGENDA_PROVIDER_SELECTED_EVENT, onQuotaAgendaProviderSelected),
       // Settings webview → main: rebuild tab order and reconcile local usage.
       listen(PROVIDERS_CHANGED_EVENT, () => {
+        codexUsageCompletionCoordinator.invalidate();
         void reconcileProviderSettingsChange();
       }),
     ]);

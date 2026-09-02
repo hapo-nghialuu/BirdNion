@@ -372,6 +372,8 @@ pub fn scan_pi_usage(now: DateTime<Local>) -> PiUsageScan {
             included: true,
             live: true,
             scanned_at: None,
+            scan_pending: None,
+            scan_progress: None,
         },
         projects,
     }

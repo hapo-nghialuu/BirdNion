@@ -59,6 +59,7 @@ const {
   awaitProviderCoordinatorListeners,
   canonicalProviderFetchIdentities,
   commitAgainstLatestProviderState,
+  createCodexUsageCompletionCoordinator,
   createLocalUsageRefreshCoordinator,
   createProviderIdentityRefreshCoordinator,
   failClosedUnavailableProviderSettings,
@@ -90,6 +91,119 @@ test("retains last-good usage only when canonical authorization is proven", () =
 test("replaces last-good usage with a fresh report", () => {
   const fresh = { ...prior, todayUsd: 5 };
   assert.equal(resolveRefreshedUsageReport(prior, fresh, true), fresh);
+});
+
+const pendingCodexReport = (generation, todayUsd = 3) => ({
+  ...prior,
+  todayUsd,
+  scanPending: true,
+  scanProgress: {
+    generation,
+    completed: 1,
+    total: 2,
+    fingerprint: `pending-${generation}`,
+  },
+});
+
+const completedCodexReport = (generation, todayUsd = 5) => ({
+  ...pendingCodexReport(generation, todayUsd),
+  scanPending: false,
+  scanProgress: {
+    generation,
+    completed: 2,
+    total: 2,
+    fingerprint: `complete-${generation}`,
+  },
+});
+
+test("pending Codex seed remains visible while its background scan runs", () => {
+  const seed = pendingCodexReport(4);
+  assert.equal(resolveRefreshedUsageReport(prior, seed, true), seed);
+});
+
+test("Codex completion publishes exactly once and rejects its duplicate", async () => {
+  const published = [];
+  const coordinator = createCodexUsageCompletionCoordinator({
+    readCanonicalSources: async () => new Set(["codex"]),
+    publish: (report) => published.push(report),
+  });
+  coordinator.beginRequest();
+  assert.equal(await coordinator.observeReport(pendingCodexReport(5)), false);
+
+  const completed = completedCodexReport(5);
+  assert.equal(await coordinator.handleCompletion(completed), true);
+  assert.equal(await coordinator.handleCompletion(completed), false);
+  assert.deepEqual(published, [completed]);
+});
+
+test("Codex completion arriving before its seed response is buffered", async () => {
+  const published = [];
+  const coordinator = createCodexUsageCompletionCoordinator({
+    readCanonicalSources: async () => new Set(["codex"]),
+    publish: (report) => published.push(report),
+  });
+  coordinator.beginRequest();
+  const completed = completedCodexReport(6);
+  assert.equal(await coordinator.handleCompletion(completed), false);
+  assert.equal(await coordinator.observeReport(pendingCodexReport(6)), true);
+  assert.deepEqual(published, [completed]);
+});
+
+test("Codex completion rejects an older generation after settings invalidation", async () => {
+  const published = [];
+  const coordinator = createCodexUsageCompletionCoordinator({
+    readCanonicalSources: async () => new Set(["codex"]),
+    publish: (report) => published.push(report),
+  });
+  coordinator.beginRequest();
+  await coordinator.observeReport(pendingCodexReport(7));
+  coordinator.invalidate();
+  coordinator.beginRequest();
+  await coordinator.observeReport(pendingCodexReport(8));
+
+  assert.equal(await coordinator.handleCompletion(completedCodexReport(7, 99)), false);
+  assert.equal(await coordinator.handleCompletion(completedCodexReport(8, 8)), true);
+  assert.deepEqual(published.map((report) => report.todayUsd), [8]);
+});
+
+test("Codex completion fails closed when canonical authorization disappears", async () => {
+  const published = [];
+  const coordinator = createCodexUsageCompletionCoordinator({
+    readCanonicalSources: async () => null,
+    publish: (report) => published.push(report),
+  });
+  coordinator.beginRequest();
+  await coordinator.observeReport(pendingCodexReport(9));
+
+  assert.equal(await coordinator.handleCompletion(completedCodexReport(9)), false);
+  assert.deepEqual(published, []);
+});
+
+test("older Codex response without optional scan fields remains completed", async () => {
+  const published = [];
+  const coordinator = createCodexUsageCompletionCoordinator({
+    readCanonicalSources: async () => new Set(["codex"]),
+    publish: (report) => published.push(report),
+  });
+  coordinator.beginRequest();
+  assert.equal(await coordinator.observeReport(prior), false);
+  assert.equal(await coordinator.handleCompletion(completedCodexReport(10)), false);
+  assert.deepEqual(published, []);
+});
+
+test("completed Codex command response advances the stale-generation floor", async () => {
+  const published = [];
+  const coordinator = createCodexUsageCompletionCoordinator({
+    readCanonicalSources: async () => new Set(["codex"]),
+    publish: (report) => published.push(report),
+  });
+  coordinator.beginRequest();
+  await coordinator.observeReport(completedCodexReport(12));
+  coordinator.beginRequest();
+  await coordinator.observeReport(pendingCodexReport(11));
+
+  assert.equal(await coordinator.handleCompletion(completedCodexReport(11, 99)), false);
+  assert.deepEqual(published, []);
 });
 
 test("canonical authorization read failure scans nothing and clears prior usage", async () => {

@@ -2,16 +2,16 @@
 //! app's `ClaudeUsageReport`/`CodexUsageReport` so both platforms speak the
 //! same numbers (daily 120-day window, strict 30-day totals, 24 hour buckets).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DailyModel {
     pub name: String,
     pub usd: f64,
     pub tokens: i64,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DailyUsage {
     /// Local calendar day, "YYYY-MM-DD".
     pub date: String,
@@ -22,7 +22,7 @@ pub struct DailyUsage {
     pub models: Vec<DailyModel>,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct HourlyUsage {
     /// Local clock hour, "YYYY-MM-DDTHH:00".
     pub hour: String,
@@ -30,7 +30,7 @@ pub struct HourlyUsage {
     pub tokens: i64,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageReport {
     pub today_usd: f64,
@@ -57,4 +57,18 @@ pub struct UsageReport {
     /// source, persisted so a history-only cycle can still report when the
     /// data was last fresh. `None` when no live scan has ever succeeded.
     pub scanned_at: Option<i64>,
+    /// Optional Linux incremental-scanner state. Older frontends ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_pending: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_progress: Option<ScanProgress>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgress {
+    pub generation: u64,
+    pub completed: u32,
+    pub total: u32,
+    pub fingerprint: String,
 }
