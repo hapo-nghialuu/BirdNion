@@ -183,6 +183,54 @@ final class CodexForkBaselineTests: XCTestCase {
         XCTAssertEqual(forkDay?.totalTokens ?? -1, 65_000, accuracy: 1_000)
     }
 
+    /// `codex resume` writes a `source: "cli"` rollout that names a parent but
+    /// runs its own counter from zero. Subtracting the parent's lifetime totals
+    /// there erased the session and the day reported nothing at all.
+    func testCLIForkWithOwnCounterIgnoresParentBaseline() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-cli-fork-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try write(
+            tmp.appendingPathComponent("sessions/2026/01/05/rollout-parent.jsonl"),
+            [
+                sessionMeta(id: "parent", timestamp: "2026-01-05T00:00:00.000Z"),
+                tokenCount(timestamp: "2026-01-05T00:00:01.000Z", totalTokens: 9_000_000,
+                           lastTokens: 9_000_000),
+            ])
+        // No ancestor metadata, and the first cumulative row equals its own last
+        // usage — both signals agree the counter started at zero.
+        let cliMeta = sessionMeta(id: "cli-fork", forkedFrom: "parent",
+                                  timestamp: "2026-01-15T00:00:00.000Z")
+            .replacingOccurrences(
+                of: "\"id\":\"cli-fork\"",
+                with: "\"id\":\"cli-fork\",\"source\":\"cli\"")
+        try write(
+            tmp.appendingPathComponent("sessions/2026/01/15/rollout-cli-fork.jsonl"),
+            [
+                cliMeta,
+                tokenCount(timestamp: "2026-01-15T00:00:01.000Z", totalTokens: 120_000,
+                           lastTokens: 120_000),
+                tokenCount(timestamp: "2026-01-15T00:00:02.000Z", totalTokens: 300_000,
+                           lastTokens: 180_000),
+            ])
+
+        let snapshot = try await CostUsageFetcher(cacheRoot: tmp.appendingPathComponent("cache"))
+            .loadTokenSnapshot(
+                provider: .codex,
+                now: DateComponents(calendar: .init(identifier: .gregorian),
+                                    timeZone: TimeZone(identifier: "UTC"),
+                                    year: 2026, month: 1, day: 20).date!,
+                forceRefresh: true,
+                codexHomePath: tmp.path,
+                historyDays: 30)
+
+        XCTAssertEqual(
+            snapshot.daily.first { $0.date == "2026-01-15" }?.totalTokens ?? -1,
+            300_000, accuracy: 1_000,
+            "a CLI fork running its own counter must keep every token it reports")
+    }
+
     func testForkParserContinuationMatchesSinglePassTotals() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-fork-resume-\(UUID().uuidString)")

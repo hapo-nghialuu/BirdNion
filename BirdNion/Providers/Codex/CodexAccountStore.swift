@@ -346,7 +346,7 @@ enum CodexAccountStore {
     }
 
     /// Derive the home from the UUID, reject root/home links, and (for
-    /// deletion) reject links/special files anywhere below it before staging.
+    /// deletion) reject special files anywhere below it before staging.
     private static func validatedManagedHome(
         id: String,
         inspectContents: Bool = false
@@ -365,7 +365,18 @@ enum CodexAccountStore {
             rootIdentity: root.identity,
             identity: CodexAuthStore.FileIdentity(homeInfo))
         guard inspectContents else { return validated }
+        try validateManagedHomeContents(at: home)
+        return validated
+    }
 
+    /// Pre-flight for deletion: every entry below a managed home must be a
+    /// regular file, a directory, or a symlink. Symlinks are allowed because
+    /// the Codex CLI plants them under `tmp/arg0` and removal unlinks them
+    /// without ever following one (`AT_SYMLINK_NOFOLLOW` / `O_NOFOLLOW`);
+    /// the enumerator likewise does not descend into them. Sockets, fifos and
+    /// device nodes never belong in a credential home, so those still fail
+    /// closed rather than being deleted.
+    static func validateManagedHomeContents(at home: URL) throws {
         var traversalFailed = false
         guard let enumerator = FileManager.default.enumerator(
             at: home,
@@ -381,12 +392,13 @@ enum CodexAccountStore {
                 throw AccountError.persistenceFailed
             }
             let kind = info.st_mode & mode_t(S_IFMT)
-            guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFDIR) else {
+            guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFDIR)
+                || kind == mode_t(S_IFLNK)
+            else {
                 throw AccountError.persistenceFailed
             }
         }
         guard !traversalFailed else { throw AccountError.persistenceFailed }
-        return validated
     }
 
     private static func safeManagedHome(id: String) -> URL? {
@@ -1027,8 +1039,30 @@ enum CodexAccountStore {
 
     // MARK: - codex login
 
+    private static let binaryCacheLock = NSLock()
+    private static var cachedBinary: (path: String?, resolvedAt: Date)?
+    private static let binaryCacheTTL: TimeInterval = 60
+
     /// Path to the `codex` executable, if installed.
+    ///
+    /// Resolution spawns one `codex --version` per candidate path, so the
+    /// result is memoized: `ProvidersPane.detectOnboardingSource` calls this
+    /// from a SwiftUI body, and probing on every view update stalled the main
+    /// thread for seconds. The TTL still picks up a `codex` installed while
+    /// the app is running.
     static func codexBinary() -> String? {
+        binaryCacheLock.lock()
+        defer { binaryCacheLock.unlock() }
+        if let cached = cachedBinary,
+           Date().timeIntervalSince(cached.resolvedAt) < binaryCacheTTL {
+            return cached.path
+        }
+        let resolved = resolveCodexBinary()
+        cachedBinary = (resolved, Date())
+        return resolved
+    }
+
+    private static func resolveCodexBinary() -> String? {
         for candidate in orderedCodexBinaryCandidates() where isUsableCodexBinary(candidate) {
             return candidate
         }
@@ -1036,6 +1070,23 @@ enum CodexAccountStore {
             return shellPath
         }
         return nil
+    }
+
+    /// `Process.waitUntilExit()` pumps the current run loop while it waits. On
+    /// the main thread that re-enters SwiftUI's update cycle mid-body and
+    /// crashes AttributeGraph with a null dereference, so wait on the
+    /// termination handler instead. The timeout keeps a wedged `codex` from
+    /// freezing the UI outright.
+    /// Internal for testing.
+    static func runAndWait(_ process: Process, timeout: TimeInterval = 5) -> Bool {
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        do { try process.run() } catch { return false }
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            return false
+        }
+        return process.terminationStatus == 0
     }
 
     static func orderedCodexBinaryCandidates(home: String = NSHomeDirectory(),
@@ -1125,13 +1176,7 @@ enum CodexAccountStore {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-        guard process.terminationStatus == 0 else { return nil }
+        guard runAndWait(process) else { return nil }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         return firstAbsolutePath(from: String(data: data, encoding: .utf8) ?? "")
     }
@@ -1167,13 +1212,7 @@ enum CodexAccountStore {
         process.environment = environment
         process.standardOutput = Pipe()
         process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        return runAndWait(process)
     }
 
     /// Runs `codex login` with its cwd installed from the bound directory FD.

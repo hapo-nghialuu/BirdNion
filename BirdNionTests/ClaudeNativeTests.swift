@@ -599,6 +599,37 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(full?.daily.map(\.tokens).reduce(0, +), 450)
     }
 
+    /// Model-specific rates must win over the family prefixes they contain,
+    /// and must match CodexBar's models.dev catalog (provider `anthropic`).
+    func testClaudeFamilyPricesMatchCatalog() throws {
+        let sonnet5 = try XCTUnwrap(ClaudeModelPrice.price(for: "claude-sonnet-5"))
+        XCTAssertEqual(sonnet5.inputPerM, 2.0, accuracy: 0.0001)
+        XCTAssertEqual(sonnet5.cacheWritePerM, 2.50, accuracy: 0.0001)
+        XCTAssertEqual(sonnet5.cacheReadPerM, 0.20, accuracy: 0.0001)
+        XCTAssertEqual(sonnet5.outputPerM, 10.0, accuracy: 0.0001)
+
+        let sonnet45 = try XCTUnwrap(ClaudeModelPrice.price(for: "claude-sonnet-4-5"))
+        XCTAssertEqual(sonnet45.inputPerM, 3.0, accuracy: 0.0001)
+        XCTAssertEqual(sonnet45.outputPerM, 15.0, accuracy: 0.0001)
+
+        // Opus 4 / 4.1 kept the original card; 4.8 and 5 are the cheaper tier.
+        for legacy in ["claude-opus-4-1", "claude-opus-4-20250514"] {
+            let price = try XCTUnwrap(ClaudeModelPrice.price(for: legacy))
+            XCTAssertEqual(price.inputPerM, 15.0, accuracy: 0.0001, legacy)
+            XCTAssertEqual(price.outputPerM, 75.0, accuracy: 0.0001, legacy)
+        }
+        for cheap in ["claude-opus-4-8", "claude-opus-5"] {
+            let price = try XCTUnwrap(ClaudeModelPrice.price(for: cheap))
+            XCTAssertEqual(price.inputPerM, 5.0, accuracy: 0.0001, cheap)
+            XCTAssertEqual(price.outputPerM, 25.0, accuracy: 0.0001, cheap)
+        }
+
+        let fable51 = try XCTUnwrap(ClaudeModelPrice.price(for: "claude-fable-5-1"))
+        XCTAssertEqual(fable51.cacheReadPerM, 0.25, accuracy: 0.0001)
+        let fable5 = try XCTUnwrap(ClaudeModelPrice.price(for: "claude-fable-5"))
+        XCTAssertEqual(fable5.cacheReadPerM, 1.0, accuracy: 0.0001)
+    }
+
     func testHapoModelPricesAndPricingRevision() throws {
         let luna = try XCTUnwrap(ClaudeModelPrice.price(for: "openai.gpt-5.6-luna"))
         XCTAssertEqual(luna.inputPerM, 1.0, accuracy: 0.0001)

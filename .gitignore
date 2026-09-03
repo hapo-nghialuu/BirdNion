@@ -40,3 +40,6 @@ specs/_shared/
 .cafekit.lock
 .opencode/
 .git-wip/
+
+# Upstream CodexBar reference files (local only, not part of the build)
+.codexbar-ref/
