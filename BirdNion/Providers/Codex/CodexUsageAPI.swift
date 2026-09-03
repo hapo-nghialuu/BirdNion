@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Codex usage payload from `chatgpt.com/backend-api/wham/usage`.
 ///
@@ -279,6 +280,8 @@ enum CodexConfigTOML {
 /// Fetches Codex usage over the ChatGPT backend API using an OAuth access token.
 /// Mirrors CodexBar's `CodexOAuthUsageFetcher.fetchUsage` but over `URLSession`.
 enum CodexUsageAPI {
+    private static let log = Logger(subsystem: "com.local.birdnion", category: "provider.codex")
+
     /// Hardcoded fallback kept for legacy callers / tests; production callers use
     /// `resolvedUsageURL()` which honours `chatgpt_base_url` from config.toml.
     static let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
@@ -315,9 +318,31 @@ enum CodexUsageAPI {
             }
             return decoded
         case 401, 403:
+            logFailure(http, data: data, request: request, accountId: accountId)
             throw CodexUsageError.unauthorized
         default:
+            logFailure(http, data: data, request: request, accountId: accountId)
             throw CodexUsageError.serverError(http.statusCode)
         }
+    }
+
+    /// The provider collapses every rejection into one user-facing string, so
+    /// without this the reason for a 401 is unrecoverable after the fact.
+    /// Logs the status, host/path and a short body excerpt — never the bearer
+    /// token or the account id itself.
+    private static func logFailure(
+        _ http: HTTPURLResponse,
+        data: Data,
+        request: URLRequest,
+        accountId: String?
+    ) {
+        let body = String(decoding: data.prefix(240), as: UTF8.self)
+            .replacingOccurrences(of: "\n", with: " ")
+        log.error("""
+            usage \(http.statusCode, privacy: .public) \
+            url=\(request.url?.absoluteString ?? "?", privacy: .public) \
+            accountIdSent=\(accountId?.isEmpty == false, privacy: .public) \
+            body=\(body, privacy: .public)
+            """)
     }
 }
