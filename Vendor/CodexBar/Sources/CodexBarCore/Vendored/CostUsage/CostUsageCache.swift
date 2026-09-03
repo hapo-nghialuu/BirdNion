@@ -354,6 +354,12 @@ struct CodexParseResumeState: Codable {
     /// Resume inside an oversized record that has already been classified as
     /// ignored. Bytes are discarded until its newline, never parsed as suffix.
     var discardingTruncatedLine: Bool? = nil
+    /// Monotonic high watermark of observed cumulative totals, and whether a drop
+    /// below it has latched interleaved mode. Both must survive an incremental
+    /// resume, otherwise a fragmented scan recounts the gap that a single-pass
+    /// scan contains. Optional so older cached states still decode.
+    var rawTotalsWatermark: CostUsageCodexTotals? = nil
+    var sawInterleavedTotals: Bool? = nil
 }
 
 struct CodexParentSnapshot: Codable, Equatable {
