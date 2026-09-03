@@ -52,6 +52,29 @@ cannot be refreshed by overwriting it with upstream:
   `ClaudeConfigPaths`, `ClaudeDesktopProjectsLocator`, `CostProvenance` and
   `CodexPriorityDatabasePath`, none of which are vendored.
 
+## Deliberate divergences
+
+**Codex CLI forks keep their own counter.** Upstream decides counter semantics
+(`CodexSubagentRolloutShape`) only for subagent threads — the classifier is gated
+behind `metadata.isSubagentThread`. A `source: "cli"` rollout that names a
+`forked_from_id` therefore always has the parent's lifetime totals subtracted.
+`codex resume` writes exactly that shape while running its own counter from zero,
+so the subtraction erased whole sessions: on this user's machine the main rollout
+counted 263M of the 904M it actually reported, and the current day showed nothing
+at all.
+
+BirdNion bypasses the inherited baseline when two independent signals agree, the
+same discipline upstream applies to subagents:
+
+1. no `session_meta` for an ancestor (every copied-prefix rollout observed on
+   disk carries that metadata, always ahead of its first `token_count`);
+2. the first `token_count` reports `total == last`, which holds only when the
+   cumulative counter started at zero.
+
+A rollout with no `source` field is untouched, so upstream-shaped fixtures keep
+their behavior. Upstream has the same bug for CLI forks; drop this divergence if
+it ever fixes it.
+
 ## Sync policy
 
 Cherry-pick individual upstream changes; do not overwrite the tree. Keep the

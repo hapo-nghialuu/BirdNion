@@ -360,6 +360,10 @@ struct CodexParseResumeState: Codable {
     /// scan contains. Optional so older cached states still decode.
     var rawTotalsWatermark: CostUsageCodexTotals? = nil
     var sawInterleavedTotals: Bool? = nil
+    /// Settled counter semantics for a `source: "cli"` fork: true when the
+    /// rollout runs its own counter from zero, so the parent's lifetime totals
+    /// must not be subtracted. Nil means not classified yet.
+    var countsItsOwnTokens: Bool? = nil
 }
 
 struct CodexParentSnapshot: Codable, Equatable {
