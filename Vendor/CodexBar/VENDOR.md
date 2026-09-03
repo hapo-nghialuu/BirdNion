@@ -101,4 +101,6 @@ dedup keyed on `messageId` alone counts more accurately here than upstream's
 Any change to counting semantics must also rotate
 `Sources/CodexBarCore/Generated/CodexParserHash.generated.swift`; the cache is keyed
 on that hash, so a fix that skips the rotation silently never runs against files
-already recorded as fully parsed.
+already recorded as fully parsed. Run `Scripts/regenerate-codex-parser-hash.sh`
+and commit the result with the change — `CodexParserHashTests` fails the build
+until you do.

@@ -187,6 +187,7 @@
 		CPFL0003000000000000B002 /* CodexRateWindowNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPFL0004000000000000F002 /* CodexRateWindowNormalizer.swift */; };
 		C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0008000000000000F004 /* CodexProviderTests.swift */; };
 		CCST0001000000000000B001 /* CodexCostScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCST0002000000000000F001 /* CodexCostScannerTests.swift */; };
+		CPHT0001000000000000B001 /* CodexParserHashTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPHT0002000000000000F001 /* CodexParserHashTests.swift */; };
 		CWDT0001000000000000B001 /* CodexWebDashboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CWDT0002000000000000F001 /* CodexWebDashboardTests.swift */; };
 		CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLNT0002000000000000F001 /* ClaudeNativeTests.swift */; };
 		NPT00001000000000000B01 /* NewProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPT00002000000000000F01 /* NewProviderTests.swift */; };
@@ -244,6 +245,7 @@
 		CCCC000E000000000000F007 /* StubURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/StubURLProtocol.swift; sourceTree = "<group>"; };
 		C0DE0008000000000000F004 /* CodexProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexProviderTests.swift; sourceTree = "<group>"; };
 		CCST0002000000000000F001 /* CodexCostScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexCostScannerTests.swift; sourceTree = "<group>"; };
+		CPHT0002000000000000F001 /* CodexParserHashTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexParserHashTests.swift; sourceTree = "<group>"; };
 		CWDT0002000000000000F001 /* CodexWebDashboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexWebDashboardTests.swift; sourceTree = "<group>"; };
 		CLNT0002000000000000F001 /* ClaudeNativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ClaudeNativeTests.swift; sourceTree = "<group>"; };
 		NPT00002000000000000F01 /* NewProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/NewProviderTests.swift; sourceTree = "<group>"; };
@@ -456,6 +458,7 @@
 				CCCC000D000000000000B007 /* StubURLProtocol.swift in Sources */,
 				C0DE0007000000000000B004 /* CodexProviderTests.swift in Sources */,
 				CCST0001000000000000B001 /* CodexCostScannerTests.swift in Sources */,
+				CPHT0001000000000000B001 /* CodexParserHashTests.swift in Sources */,
 				CURT0001000000000000B001 /* CombinedUsageReportTests.swift in Sources */,
 				UPDT0001000000000000B001 /* UpdateCheckerTests.swift in Sources */,
 				PECT0001000000000000B001 /* ProviderErrorClassifierTests.swift in Sources */,
