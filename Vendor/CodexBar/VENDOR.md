@@ -75,6 +75,22 @@ A rollout with no `source` field is untouched, so upstream-shaped fixtures keep
 their behavior. Upstream has the same bug for CLI forks; drop this divergence if
 it ever fixes it.
 
+**Interleave containment stays off the streaming path — on purpose.**
+`CodexTotalsTracker`, `codexContainedTotalDelta` and `codexPostLatchEventDelta`
+are wired into the `JSONSerialization` parser only. Real rollouts are read by the
+fast byte parser, so that guard does not run, and it must not be "fixed" by
+wiring it in: measured on this user's logs it cut the main rollout from
+903,403,399 to 643,884,558 (71% of the 904,469,133 the file actually reports) and
+collapsed the current day from 3,205,117 tokens to 31,291.
+
+The guard is built for ultra-mode, where several fork lineages interleave inside
+one file and the gap between them is not real work. A rollout resumed eight times
+by `codex resume` looks identical to the watermark — every restart dips below it —
+but there each dip *is* real work. Upstream accepts that trade ("smaller lineage
+below the watermark is an accepted Phase 1 undercount"); at this scale it is not
+acceptable. The `cached`/`reasoning` parsing fixes from the same change do run on
+the streaming path and are unaffected.
+
 ## Sync policy
 
 Cherry-pick individual upstream changes; do not overwrite the tree. Keep the
