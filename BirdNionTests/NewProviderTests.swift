@@ -4640,4 +4640,37 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(parsed.modelRoles.smol, "gpt-5.2-mini")
         XCTAssertTrue(parsed.prewalkEnabled)
     }
+    /// The store never shrinks a day, so a corrected formula must be able to
+    /// re-derive the whole window — and an older build must never merge its
+    /// numbers back over history a newer one already rewrote.
+    func testOMPAndPiCountingScanPlanCoversAllThreeCases() {
+        let inc = 3
+        for label in ["omp", "pi"] {
+            let rev = label == "omp"
+                ? OMPCostScanner.countingRevision : PiCostScanner.countingRevision
+            let window = label == "omp"
+                ? OMPCostScanner.chartWindowDays : PiCostScanner.chartWindowDays
+            func plan(_ stored: Int) -> (windowDays: Int, replacing: Bool, historyOnly: Bool) {
+                label == "omp"
+                    ? OMPCostScanner.countingScanPlan(
+                        storedRevision: stored, incrementalDays: inc)
+                    : PiCostScanner.countingScanPlan(
+                        storedRevision: stored, incrementalDays: inc)
+            }
+            let stale = plan(rev - 1)
+            XCTAssertTrue(stale.replacing, label)
+            XCTAssertFalse(stale.historyOnly, label)
+            XCTAssertEqual(stale.windowDays, window, label)
+
+            let current = plan(rev)
+            XCTAssertFalse(current.replacing, label)
+            XCTAssertFalse(current.historyOnly, label)
+            XCTAssertEqual(current.windowDays, inc, label)
+
+            let newer = plan(rev + 1)
+            XCTAssertTrue(newer.historyOnly, label)
+            XCTAssertFalse(newer.replacing, label)
+        }
+    }
+
 }

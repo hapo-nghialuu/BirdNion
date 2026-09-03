@@ -38,6 +38,11 @@ enum PiCostScanner {
 
     static let chartWindowDays = 120
     static let incrementalDays = 3
+    /// Bump when the counting formula changes. `CostHistoryStore` never shrinks
+    /// a day on its own, so without this a corrected formula leaves the old
+    /// inflated numbers frozen in history forever.
+    static let countingRevision = 1
+    private static let countingRevisionKey = "piCostCountingRevision"
     private static let cacheTTL: TimeInterval = 300 // 5 minutes
     private static let sessionReadChunkBytes = 64 * 1024
     private static let maxSessionFileBytes = 64 * 1024 * 1024
@@ -72,6 +77,20 @@ enum PiCostScanner {
 
     // MARK: - Public API
 
+    /// Decides the scan window from the revision recorded in history.
+    /// Pure so the three cases can be tested without touching disk.
+    static func countingScanPlan(
+        storedRevision: Int,
+        incrementalDays: Int
+    ) -> (windowDays: Int, replacing: Bool, historyOnly: Bool) {
+        if storedRevision > countingRevision {
+            return (incrementalDays, false, true)
+        }
+        let replacing = storedRevision < countingRevision
+        return (replacing ? chartWindowDays : incrementalDays, replacing, false)
+    }
+
+
     static func loadReport(
         now: Date = Date(),
         calendar: Calendar = .current,
@@ -95,12 +114,32 @@ enum PiCostScanner {
             return CostHistoryStore.makePiReport(window: window, confidence: confidence)
         }
 
-        let scanDays = CostHistoryStore.scanBackDays(
+        let storedRevision = max(
+            UserDefaults.standard.integer(forKey: countingRevisionKey),
+            CostHistoryStore.storedCountingRevision(source: .pi))
+        let incremental = CostHistoryStore.scanBackDays(
             source: .pi,
             now: now,
             calendar: calendar,
             minDays: incrementalDays,
             maxDays: chartWindowDays)
+        let plan = countingScanPlan(
+            storedRevision: storedRevision, incrementalDays: incremental)
+        if plan.historyOnly {
+            // A newer build already wrote this source's history under a later
+            // formula. Merging this build's older numbers back over it would
+            // undo that correction, so serve history untouched.
+            let window = CostHistoryStore.window(
+                source: .pi,
+                now: now,
+                calendar: calendar,
+                windowDays: chartWindowDays)
+            let confidence = CostHistoryStore.confidence(
+                source: .pi, liveScanSucceeded: false)
+            return CostHistoryStore.makePiReport(window: window, confidence: confidence)
+        }
+        let replacing = plan.replacing
+        let scanDays = plan.windowDays
 
         let result = await scanSessions(
             root: root,
@@ -120,7 +159,12 @@ enum PiCostScanner {
                 now: now,
                 calendar: calendar,
                 windowDays: chartWindowDays,
-                liveScanSucceeded: true)
+                replacingSource: replacing,
+                liveScanSucceeded: true,
+                countingRevision: countingRevision)
+            if applied.persisted {
+                UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
+            }
             receipt = applied
             window = applied.window
         } else {
