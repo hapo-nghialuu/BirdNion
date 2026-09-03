@@ -1039,8 +1039,30 @@ enum CodexAccountStore {
 
     // MARK: - codex login
 
+    private static let binaryCacheLock = NSLock()
+    private static var cachedBinary: (path: String?, resolvedAt: Date)?
+    private static let binaryCacheTTL: TimeInterval = 60
+
     /// Path to the `codex` executable, if installed.
+    ///
+    /// Resolution spawns one `codex --version` per candidate path, so the
+    /// result is memoized: `ProvidersPane.detectOnboardingSource` calls this
+    /// from a SwiftUI body, and probing on every view update stalled the main
+    /// thread for seconds. The TTL still picks up a `codex` installed while
+    /// the app is running.
     static func codexBinary() -> String? {
+        binaryCacheLock.lock()
+        defer { binaryCacheLock.unlock() }
+        if let cached = cachedBinary,
+           Date().timeIntervalSince(cached.resolvedAt) < binaryCacheTTL {
+            return cached.path
+        }
+        let resolved = resolveCodexBinary()
+        cachedBinary = (resolved, Date())
+        return resolved
+    }
+
+    private static func resolveCodexBinary() -> String? {
         for candidate in orderedCodexBinaryCandidates() where isUsableCodexBinary(candidate) {
             return candidate
         }
@@ -1048,6 +1070,23 @@ enum CodexAccountStore {
             return shellPath
         }
         return nil
+    }
+
+    /// `Process.waitUntilExit()` pumps the current run loop while it waits. On
+    /// the main thread that re-enters SwiftUI's update cycle mid-body and
+    /// crashes AttributeGraph with a null dereference, so wait on the
+    /// termination handler instead. The timeout keeps a wedged `codex` from
+    /// freezing the UI outright.
+    /// Internal for testing.
+    static func runAndWait(_ process: Process, timeout: TimeInterval = 5) -> Bool {
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        do { try process.run() } catch { return false }
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            return false
+        }
+        return process.terminationStatus == 0
     }
 
     static func orderedCodexBinaryCandidates(home: String = NSHomeDirectory(),
@@ -1137,13 +1176,7 @@ enum CodexAccountStore {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-        guard process.terminationStatus == 0 else { return nil }
+        guard runAndWait(process) else { return nil }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         return firstAbsolutePath(from: String(data: data, encoding: .utf8) ?? "")
     }
@@ -1179,13 +1212,7 @@ enum CodexAccountStore {
         process.environment = environment
         process.standardOutput = Pipe()
         process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        return runAndWait(process)
     }
 
     /// Runs `codex login` with its cwd installed from the bound directory FD.

@@ -2031,6 +2031,43 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertNoThrow(try CodexAccountStore.validateManagedHomeContents(at: home))
     }
 
+    // MARK: - Subprocess wait
+
+    /// `Process.waitUntilExit()` pumps the run loop, which re-entered SwiftUI's
+    /// update cycle from `QuotaOverview.body` (via `codexBinary()`) and crashed
+    /// AttributeGraph with SIGSEGV. The replacement must never run the loop.
+    func testRunAndWaitDoesNotPumpTheMainRunLoop() {
+        var observerFired = false
+        let observer = CFRunLoopObserverCreateWithHandler(
+            nil,
+            CFRunLoopActivity.allActivities.rawValue,
+            true, 0) { _, _ in observerFired = true }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .defaultMode)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .defaultMode) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["0.3"]
+        XCTAssertTrue(CodexAccountStore.runAndWait(process))
+        XCTAssertFalse(
+            observerFired,
+            "waiting must not run the main run loop — that re-enters SwiftUI mid-body")
+    }
+
+    func testRunAndWaitTimesOutInsteadOfBlockingForever() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["30"]
+        let started = Date()
+        XCTAssertFalse(CodexAccountStore.runAndWait(process, timeout: 0.4))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+        // terminate() is asynchronous, so poll rather than sampling once: the
+        // point is that the timed-out child is killed, not left running for 30s.
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning, Date() < deadline { usleep(50_000) }
+        XCTAssertFalse(process.isRunning, "timed-out process must be terminated")
+    }
+
     func testManagedHomeContentsRejectSpecialFiles() throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-home-fifo-\(UUID().uuidString)", isDirectory: true)
