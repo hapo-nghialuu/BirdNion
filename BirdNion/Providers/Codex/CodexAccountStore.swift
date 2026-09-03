@@ -346,7 +346,7 @@ enum CodexAccountStore {
     }
 
     /// Derive the home from the UUID, reject root/home links, and (for
-    /// deletion) reject links/special files anywhere below it before staging.
+    /// deletion) reject special files anywhere below it before staging.
     private static func validatedManagedHome(
         id: String,
         inspectContents: Bool = false
@@ -365,7 +365,18 @@ enum CodexAccountStore {
             rootIdentity: root.identity,
             identity: CodexAuthStore.FileIdentity(homeInfo))
         guard inspectContents else { return validated }
+        try validateManagedHomeContents(at: home)
+        return validated
+    }
 
+    /// Pre-flight for deletion: every entry below a managed home must be a
+    /// regular file, a directory, or a symlink. Symlinks are allowed because
+    /// the Codex CLI plants them under `tmp/arg0` and removal unlinks them
+    /// without ever following one (`AT_SYMLINK_NOFOLLOW` / `O_NOFOLLOW`);
+    /// the enumerator likewise does not descend into them. Sockets, fifos and
+    /// device nodes never belong in a credential home, so those still fail
+    /// closed rather than being deleted.
+    static func validateManagedHomeContents(at home: URL) throws {
         var traversalFailed = false
         guard let enumerator = FileManager.default.enumerator(
             at: home,
@@ -381,12 +392,13 @@ enum CodexAccountStore {
                 throw AccountError.persistenceFailed
             }
             let kind = info.st_mode & mode_t(S_IFMT)
-            guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFDIR) else {
+            guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFDIR)
+                || kind == mode_t(S_IFLNK)
+            else {
                 throw AccountError.persistenceFailed
             }
         }
         guard !traversalFailed else { throw AccountError.persistenceFailed }
-        return validated
     }
 
     private static func safeManagedHome(id: String) -> URL? {

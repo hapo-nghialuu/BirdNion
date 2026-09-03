@@ -2004,4 +2004,41 @@ final class CodexProviderTests: XCTestCase {
         let json = #"{"credits":[],"available_count":-1}"#.data(using: .utf8)!
         XCTAssertThrowsError(try CodexResetCreditsAPI.decode(json, now: Date()))
     }
+
+    // MARK: - Managed home removal pre-flight
+
+    /// The Codex CLI plants symlinks to its binary under `tmp/arg0/...` inside
+    /// every managed home, which made deletion fail for all accounts.
+    func testManagedHomeContentsAcceptSymlinksPlantedByCodexCLI() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-home-symlink-\(UUID().uuidString)", isDirectory: true)
+        let arg0 = home.appendingPathComponent("tmp/arg0/codex-arg0Test", isDirectory: true)
+        try FileManager.default.createDirectory(at: arg0, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try Data(#"{"tokens":{"access_token":"a"}}"#.utf8)
+            .write(to: home.appendingPathComponent("auth.json"))
+        try Data().write(to: arg0.appendingPathComponent(".lock"))
+        for name in ["apply_patch", "applypatch", "codex-execve-wrapper"] {
+            try FileManager.default.createSymbolicLink(
+                at: arg0.appendingPathComponent(name),
+                withDestinationURL: URL(fileURLWithPath: "/opt/homebrew/bin/codex"))
+        }
+        // A dangling link must not fail either — the target is never resolved.
+        try FileManager.default.createSymbolicLink(
+            at: arg0.appendingPathComponent("gone"),
+            withDestinationURL: home.appendingPathComponent("missing"))
+
+        XCTAssertNoThrow(try CodexAccountStore.validateManagedHomeContents(at: home))
+    }
+
+    func testManagedHomeContentsRejectSpecialFiles() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-home-fifo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fifo = home.appendingPathComponent("pipe")
+        XCTAssertEqual(fifo.path.withCString { mkfifo($0, 0o600) }, 0)
+
+        XCTAssertThrowsError(try CodexAccountStore.validateManagedHomeContents(at: home))
+    }
 }
