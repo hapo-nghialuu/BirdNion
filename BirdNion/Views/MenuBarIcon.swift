@@ -353,7 +353,10 @@ enum MenuBarIconRenderer {
         }
         let gemini = semantic.filter { pool($0.label) == "gemini" }
         let claudeGPT = semantic.filter { pool($0.label) == "claudeGPT" }
-        let candidates = gemini.isEmpty ? claudeGPT : gemini
+        // OAuth model buckets use labels such as Pro/Flash rather than the
+        // grouped Gemini/Claude labels. Keep a conservative single readout
+        // instead of hiding Antigravity when no semantic group is available.
+        let candidates = gemini.isEmpty ? (claudeGPT.isEmpty ? windows : claudeGPT) : gemini
         let selected = candidates.max { lhs, rhs in
             if lhs.usedPct != rhs.usedPct { return lhs.usedPct < rhs.usedPct }
             func intervalRank(_ label: String) -> Int {

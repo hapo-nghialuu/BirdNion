@@ -3461,6 +3461,26 @@ final class NewProviderTests: XCTestCase {
         }
     }
 
+    func testAntigravityOAuthModelLabelsFallBackToSingleConservativeValue() {
+        let windows = [
+            QuotaWindow(label: "Pro", usedPct: 30, remainingPct: 70),
+            QuotaWindow(label: "Flash", usedPct: 60, remainingPct: 40),
+            QuotaWindow(label: "Flash Lite", usedPct: 35, remainingPct: 65),
+        ]
+
+        for metric in AntigravityMenuBarMetric.allCases {
+            withAntigravityMenuBarMetric(metric) {
+                XCTAssertEqual(
+                    antigravityMenuBarFrames(for: windows),
+                    [.provider(
+                        id: "antigravity",
+                        name: "Antigravity",
+                        percents: [40],
+                        text: nil)])
+            }
+        }
+    }
+
     func testAntigravityMenuBarMetricUsesDedicatedDefaultsKey() {
         withAntigravityMenuBarMetric(.claudeGPT, genericPreference: .primary) {
             XCTAssertEqual(AntigravityMenuBarMetric.current, .claudeGPT)
@@ -3641,6 +3661,8 @@ final class NewProviderTests: XCTestCase {
         let windows = [
             QuotaWindow(label: "5 giờ", usedPct: 7, remainingPct: 93),
             QuotaWindow(label: "Tuần", usedPct: 18, remainingPct: 82),
+            QuotaWindow(label: "Codex Spark 5 giờ", usedPct: 30, remainingPct: 70),
+            QuotaWindow(label: "Codex Spark Tuần", usedPct: 36, remainingPct: 64),
         ]
 
         withCodexMenuBarPreferences(metric: .session) {

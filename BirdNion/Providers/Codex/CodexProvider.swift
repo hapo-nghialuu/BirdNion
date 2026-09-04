@@ -669,11 +669,9 @@ enum CodexMenuBarMetric: String, CaseIterable, Identifiable {
         case .automatic:
             return windows
         case .session:
-            let m = windows.filter { !$0.label.contains("Tuần") }
-            return m.isEmpty ? windows : m
+            return windows.first { $0.label == "5 giờ" }.map { [$0] } ?? windows
         case .weekly:
-            let m = windows.filter { $0.label.contains("Tuần") }
-            return m.isEmpty ? windows : m
+            return windows.first { $0.label == "Tuần" }.map { [$0] } ?? windows
         }
     }
 }
