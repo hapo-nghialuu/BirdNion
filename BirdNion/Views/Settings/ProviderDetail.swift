@@ -1368,6 +1368,31 @@ extension ProvidersPane {
         }
     }
 
+    func antigravityMenuBarMetricName(_ metric: AntigravityMenuBarMetric) -> String {
+        switch metric {
+        case .automatic: return L10n.t("metric.automatic", language)
+        case .gemini: return "Gemini"
+        case .claudeGPT: return "Claude/GPT"
+        }
+    }
+
+    @ViewBuilder
+    func dedicatedMenuBarMetricRow(
+        options: [(String, String)],
+        selection: Binding<String>
+    ) -> some View {
+        HStack(spacing: 12) {
+            Text(L10n.t("provider.menuBarMetric", language))
+                .font(.plexSans(13, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
+            Spacer(minLength: 8)
+            InstrumentMenuSelect(options: options, selection: selection)
+                .frame(width: 150)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
     func miniMaxRegionName(_ region: MiniMaxRegion) -> String {
         switch region {
         case .io: return "Global (platform.minimax.io)"
@@ -1732,41 +1757,50 @@ extension ProvidersPane {
     @ViewBuilder
     func menuBarDisplaySection(for id: String) -> some View {
         let hasCodex = id == "codex"
+        let hasAntigravity = id == "antigravity"
         let hasGeneric = id == "gemini" || id == "kiro" || id == "bedrock"
         let hasKiroValue = id == "kiro"
-        if hasCodex || hasGeneric || hasKiroValue {
+        if hasCodex || hasAntigravity || hasGeneric || hasKiroValue {
             InstrumentSection(header: L10n.t("settings.section.menuBarDisplay", language)) {
                 if hasCodex {
-                    HStack(spacing: 12) {
-                        Text(L10n.t("provider.menuBarMetric", language))
-                            .font(.plexSans(13, weight: .semibold))
-                            .foregroundStyle(SettingsTheme.primary)
-                        Spacer(minLength: 8)
-                        InstrumentMenuSelect(
-                            options: CodexMenuBarMetric.allCases.map {
-                                ($0.rawValue, codexMenuBarMetricName($0))
-                            },
-                            selection: Binding(
-                                get: { settings.codexMenuBarMetric },
-                                set: {
-                                    settings.codexMenuBarMetric = $0
-                                    // Re-fetch so the menu bar rebuilds its frames with
-                                    // the newly selected window.
-                                    NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
-                                }
-                            )
+                    dedicatedMenuBarMetricRow(
+                        options: CodexMenuBarMetric.allCases.map {
+                            ($0.rawValue, codexMenuBarMetricName($0))
+                        },
+                        selection: Binding(
+                            get: { settings.codexMenuBarMetric },
+                            set: {
+                                settings.codexMenuBarMetric = $0
+                                // Re-fetch so the menu bar rebuilds its frames with
+                                // the newly selected window.
+                                NotificationCenter.default.post(name: .birdnionRefresh, object: nil)
+                            }
                         )
-                        .frame(width: 150)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    )
+                }
+                if hasAntigravity {
+                    if hasCodex { HairlineRule() }
+                    dedicatedMenuBarMetricRow(
+                        options: AntigravityMenuBarMetric.allCases.map {
+                            ($0.rawValue, antigravityMenuBarMetricName($0))
+                        },
+                        selection: Binding(
+                            get: { settings.antigravityMenuBarMetric },
+                            set: {
+                                settings.antigravityMenuBarMetric = $0
+                                NotificationCenter.default.post(
+                                    name: .menuBarVisibilityChanged,
+                                    object: "antigravity")
+                            }
+                        )
+                    )
                 }
                 if hasGeneric {
-                    if hasCodex { HairlineRule() }
+                    if hasCodex || hasAntigravity { HairlineRule() }
                     menuBarMetricPicker(for: id)
                 }
                 if hasKiroValue {
-                    if hasCodex || hasGeneric { HairlineRule() }
+                    if hasCodex || hasAntigravity || hasGeneric { HairlineRule() }
                     kiroMenuBarValuePicker()
                 }
             }

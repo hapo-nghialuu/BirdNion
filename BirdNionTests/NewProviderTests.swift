@@ -15,6 +15,97 @@ private actor KiroScanInvocationCounter {
 /// hooks; these cover the three hand-written API-key parsers.
 @MainActor
 final class NewProviderTests: XCTestCase {
+    private func withCodexMenuBarPreferences(
+        metric: CodexMenuBarMetric,
+        genericPreference: MenuBarMetricPreference? = nil,
+        _ body: () -> Void
+    ) {
+        let defaults = UserDefaults.standard
+        let metricKey = CodexMenuBarMetric.defaultsKey
+        let preferencesKey = "menuBarMetricPreferencesJSON"
+        let previousMetric = defaults.object(forKey: metricKey)
+        let previousPreferences = defaults.object(forKey: preferencesKey)
+
+        defer {
+            if let previousMetric {
+                defaults.set(previousMetric, forKey: metricKey)
+            } else {
+                defaults.removeObject(forKey: metricKey)
+            }
+            if let previousPreferences {
+                defaults.set(previousPreferences, forKey: preferencesKey)
+            } else {
+                defaults.removeObject(forKey: preferencesKey)
+            }
+        }
+
+        defaults.set(metric.rawValue, forKey: metricKey)
+        if let genericPreference {
+            defaults.set("{\"codex\":\"\(genericPreference.rawValue)\"}", forKey: preferencesKey)
+        } else {
+            defaults.set("{}", forKey: preferencesKey)
+        }
+        body()
+    }
+
+    private func codexMenuBarFrames(for windows: [QuotaWindow]) -> [MenuBarIconRenderer.Frame] {
+        let status = ProviderStatus(
+            id: "codex",
+            displayName: "Codex",
+            windows: windows,
+            lastUpdated: Date())
+        return MenuBarIconRenderer.frames(
+            from: [status],
+            showPercent: true,
+            visibility: { _ in true })
+    }
+
+    private func withAntigravityMenuBarMetric(
+        _ metric: AntigravityMenuBarMetric,
+        genericPreference: MenuBarMetricPreference? = nil,
+        _ body: () -> Void
+    ) {
+        let defaults = UserDefaults.standard
+        let metricKey = AntigravityMenuBarMetric.defaultsKey
+        let preferencesKey = "menuBarMetricPreferencesJSON"
+        let previousMetric = defaults.object(forKey: metricKey)
+        let previousPreferences = defaults.object(forKey: preferencesKey)
+
+        defer {
+            if let previousMetric {
+                defaults.set(previousMetric, forKey: metricKey)
+            } else {
+                defaults.removeObject(forKey: metricKey)
+            }
+            if let previousPreferences {
+                defaults.set(previousPreferences, forKey: preferencesKey)
+            } else {
+                defaults.removeObject(forKey: preferencesKey)
+            }
+        }
+
+        defaults.set(metric.rawValue, forKey: metricKey)
+        if let genericPreference {
+            defaults.set(
+                "{\"antigravity\":\"\(genericPreference.rawValue)\"}",
+                forKey: preferencesKey)
+        }
+        body()
+    }
+
+    private func antigravityMenuBarFrames(
+        for windows: [QuotaWindow]
+    ) -> [MenuBarIconRenderer.Frame] {
+        let status = ProviderStatus(
+            id: "antigravity",
+            displayName: "Antigravity",
+            windows: windows,
+            lastUpdated: Date())
+        return MenuBarIconRenderer.frames(
+            from: [status],
+            showPercent: true,
+            visibility: { _ in true })
+    }
 
     func testKiroReportCacheCoalescesConcurrentLoads() async {
         let cache = KiroCostScanner.Cache()
@@ -3291,6 +3382,110 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(QuotaBarLayout.compactHeight, 4, accuracy: 0.001)
     }
 
+    func testAntigravityAutomaticMenuBarPreservesSingleGeminiRepresentative() {
+        withAntigravityMenuBarMetric(.automatic, genericPreference: .secondary) {
+            XCTAssertEqual(
+                antigravityMenuBarFrames(for: [
+                    QuotaWindow(label: "Claude/GPT weekly", usedPct: 75, remainingPct: 25),
+                    QuotaWindow(label: "Gemini weekly", usedPct: 40, remainingPct: 60),
+                    QuotaWindow(label: "Claude/GPT 5-hour", usedPct: 55, remainingPct: 45),
+                    QuotaWindow(label: "Gemini 5-hour", usedPct: 20, remainingPct: 80),
+                ]),
+                [.provider(
+                    id: "antigravity",
+                    name: "Antigravity",
+                    percents: [60],
+                    text: nil)])
+        }
+    }
+
+    func testAntigravityAutomaticMenuBarFallsBackToSingleClaudeGPTRepresentative() {
+        withAntigravityMenuBarMetric(.automatic) {
+            XCTAssertEqual(
+                antigravityMenuBarFrames(for: [
+                    QuotaWindow(label: "Claude/GPT weekly", usedPct: 75, remainingPct: 25),
+                    QuotaWindow(label: "Claude/GPT 5-hour", usedPct: 55, remainingPct: 45),
+                ]),
+                [.provider(
+                    id: "antigravity",
+                    name: "Antigravity",
+                    percents: [25],
+                    text: nil)])
+        }
+    }
+
+    func testAntigravityExplicitClaudeGPTMenuBarShowsOnlySelectedGroup() {
+        withAntigravityMenuBarMetric(.claudeGPT) {
+            XCTAssertEqual(
+                antigravityMenuBarFrames(for: [
+                    QuotaWindow(label: "Gemini 5-hour", usedPct: 20, remainingPct: 80),
+                    QuotaWindow(label: "Gemini weekly", usedPct: 40, remainingPct: 60),
+                    QuotaWindow(label: "Claude/GPT 5-hour", usedPct: 55, remainingPct: 45),
+                    QuotaWindow(label: "Claude/GPT weekly", usedPct: 75, remainingPct: 25),
+                ]),
+                [.provider(
+                    id: "antigravity",
+                    name: "Antigravity",
+                    percents: [45, 25],
+                    text: nil)])
+        }
+    }
+
+    func testAntigravityExplicitGroupSupportsOneWindowWithoutCrossStacking() {
+        withAntigravityMenuBarMetric(.gemini) {
+            XCTAssertEqual(
+                antigravityMenuBarFrames(for: [
+                    QuotaWindow(label: "Gemini weekly", usedPct: 40, remainingPct: 60),
+                    QuotaWindow(label: "Claude/GPT 5-hour", usedPct: 55, remainingPct: 45),
+                ]),
+                [.provider(
+                    id: "antigravity",
+                    name: "Antigravity",
+                    percents: [60],
+                    text: nil)])
+        }
+    }
+
+    func testAntigravityMissingExplicitGroupFallsBackToAutomatic() {
+        withAntigravityMenuBarMetric(.gemini) {
+            XCTAssertEqual(
+                antigravityMenuBarFrames(for: [
+                    QuotaWindow(label: "Claude/GPT weekly", usedPct: 75, remainingPct: 25),
+                    QuotaWindow(label: "Claude/GPT 5-hour", usedPct: 55, remainingPct: 45),
+                ]),
+                [.provider(
+                    id: "antigravity",
+                    name: "Antigravity",
+                    percents: [25],
+                    text: nil)])
+        }
+    }
+
+    func testAntigravityMenuBarMetricUsesDedicatedDefaultsKey() {
+        withAntigravityMenuBarMetric(.claudeGPT, genericPreference: .primary) {
+            XCTAssertEqual(AntigravityMenuBarMetric.current, .claudeGPT)
+            XCTAssertEqual(
+                UserDefaults.standard.string(forKey: "menuBarMetricPreferencesJSON"),
+                "{\"antigravity\":\"primary\"}")
+        }
+    }
+
+    func testAntigravityMenuBarMetricDefaultsToAutomatic() {
+        let defaults = UserDefaults.standard
+        let key = AntigravityMenuBarMetric.defaultsKey
+        let previous = defaults.object(forKey: key)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        defaults.removeObject(forKey: key)
+        XCTAssertEqual(AntigravityMenuBarMetric.current, .automatic)
+    }
+
     func testMenuBarFramesRenderConfiguredPrimaryAndSecondaryValues() {
         let key = "menuBarMetricPreferencesJSON"
         let previous = UserDefaults.standard.object(forKey: key)
@@ -3407,6 +3602,57 @@ final class NewProviderTests: XCTestCase {
             MenuBarIconRenderer.frames(
                 from: [status], showPercent: true, visibility: { _ in true }),
             [.provider(id: "claude", name: "Claude", percents: [82], text: nil)])
+    }
+
+    func testCodexAutomaticMenuBarFramesShowFiveHourAndWeeklyValues() {
+        withCodexMenuBarPreferences(metric: .automatic, genericPreference: .primary) {
+            XCTAssertEqual(
+                codexMenuBarFrames(for: [
+                    QuotaWindow(label: "5 giờ", usedPct: 0, remainingPct: 100),
+                    QuotaWindow(label: "Tuần", usedPct: 18, remainingPct: 82),
+                    QuotaWindow(label: "Codex Spark Tuần", usedPct: 36, remainingPct: 64),
+                ]),
+                [.provider(id: "codex", name: "Codex", percents: [100, 82], text: nil)])
+        }
+    }
+
+    func testCodexAutomaticMenuBarFramesKeepWeeklyOnlyBehavior() {
+        withCodexMenuBarPreferences(metric: .automatic) {
+            XCTAssertEqual(
+                codexMenuBarFrames(for: [
+                    QuotaWindow(label: "Tuần", usedPct: 18, remainingPct: 82),
+                ]),
+                [.provider(id: "codex", name: "Codex", percents: [82], text: nil)])
+        }
+    }
+
+    func testCodexAutomaticMenuBarFramesDoNotPromoteSparkToCanonicalWeekly() {
+        withCodexMenuBarPreferences(metric: .automatic) {
+            XCTAssertEqual(
+                codexMenuBarFrames(for: [
+                    QuotaWindow(label: "5 giờ", usedPct: 7, remainingPct: 93),
+                    QuotaWindow(label: "Codex Spark Tuần", usedPct: 36, remainingPct: 64),
+                ]),
+                [.provider(id: "codex", name: "Codex", percents: [64], text: nil)])
+        }
+    }
+
+    func testCodexExplicitMenuBarMetricsStaySingleValue() {
+        let windows = [
+            QuotaWindow(label: "5 giờ", usedPct: 7, remainingPct: 93),
+            QuotaWindow(label: "Tuần", usedPct: 18, remainingPct: 82),
+        ]
+
+        withCodexMenuBarPreferences(metric: .session) {
+            XCTAssertEqual(
+                codexMenuBarFrames(for: windows),
+                [.provider(id: "codex", name: "Codex", percents: [93], text: nil)])
+        }
+        withCodexMenuBarPreferences(metric: .weekly) {
+            XCTAssertEqual(
+                codexMenuBarFrames(for: windows),
+                [.provider(id: "codex", name: "Codex", percents: [82], text: nil)])
+        }
     }
 
     func testMenuBarProviderLogosAreMonochromeTemplates() {

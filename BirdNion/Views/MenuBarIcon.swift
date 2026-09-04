@@ -174,9 +174,10 @@ enum MenuBarIconRenderer {
         visibility: (String) -> Bool
     ) -> Frame? {
         guard visibility(status.id) else { return nil }
+        let codexMetric = status.id == "codex" ? CodexMenuBarMetric.current : nil
         let windows: [QuotaWindow]
-        if status.id == "codex" {
-            windows = CodexMenuBarMetric.current.filter(status.windows)
+        if let codexMetric {
+            windows = codexMetric.filter(status.windows)
         } else if status.id == "antigravity" {
             windows = status.windows
         } else {
@@ -195,7 +196,9 @@ enum MenuBarIconRenderer {
             // Keep existing special handling
         } else {
             let settings = ServicesContainer.shared?.settings ?? SettingsStore()
-            let pref = settings.metricPreference(for: status.id)
+            let pref = status.id == "codex"
+                ? MenuBarMetricPreference.automatic
+                : settings.metricPreference(for: status.id)
             let caps = settings.providerCapabilities(for: status.id)
             let hasMonthlyPlan = caps.hasMonthlyPlan
 
@@ -204,12 +207,19 @@ enum MenuBarIconRenderer {
                 return .provider(id: status.id, name: status.displayName, percents: [avg], text: L10n.f("menuBar.avg", nil, "\(avg)"))
             }
 
-            let canonicalClaudeWindows = status.id == "claude" && pref == .automatic
-                ? claudeAutomaticWindows(windows)
-                : []
+            let canonicalAutomaticWindows: [QuotaWindow]
+            if pref != .automatic {
+                canonicalAutomaticWindows = []
+            } else if status.id == "claude" {
+                canonicalAutomaticWindows = claudeAutomaticWindows(windows)
+            } else if status.id == "codex", codexMetric == .automatic {
+                canonicalAutomaticWindows = codexAutomaticWindows(windows)
+            } else {
+                canonicalAutomaticWindows = []
+            }
             let selectedWindows: [QuotaWindow]?
-            if !canonicalClaudeWindows.isEmpty {
-                selectedWindows = canonicalClaudeWindows
+            if !canonicalAutomaticWindows.isEmpty {
+                selectedWindows = canonicalAutomaticWindows
             } else {
                 selectedWindows = MenuBarMetricResolver.resolve(
                     windows: windows,
@@ -234,7 +244,9 @@ enum MenuBarIconRenderer {
         if status.id == "freemodel" {
             percents = freemodelMenuBarPercents(windows)
         } else if status.id == "antigravity" {
-            percents = antigravityMenuBarPercents(windows)
+            percents = antigravityMenuBarPercents(
+                windows,
+                metric: AntigravityMenuBarMetric.current)
         } else {
             percents = windows.map { $0.remainingPct }
         }
@@ -247,48 +259,37 @@ enum MenuBarIconRenderer {
         )
     }
 
-    /// Antigravity follows CodexBar's single semantic representative: choose
-    /// the most-used Gemini window, then Claude/GPT, then the lowest known pool.
-    static func antigravityMenuBarPercents(_ windows: [QuotaWindow]) -> [Int] {
-        let semantic = windows.filter { window in
-            !window.isSupplementary && [
-                "Gemini 5-hour",
-                "Gemini weekly",
-                "Claude/GPT 5-hour",
-                "Claude/GPT weekly",
-                "Gemini",
-                "Claude/GPT",
-            ].contains(window.label)
-        }
-        guard !semantic.isEmpty else { return [] }
-
-        func pool(_ label: String) -> String? {
-            if label.hasPrefix("Gemini") { return "gemini" }
-            if label.hasPrefix("Claude/GPT") { return "claudeGPT" }
-            return nil
-        }
-
-        func intervalRank(_ label: String) -> Int {
-            label.hasSuffix("5-hour") ? 0 : label.hasSuffix("weekly") ? 1 : 2
-        }
-
-        func representative(_ candidates: [QuotaWindow]) -> QuotaWindow? {
-            candidates.max { lhs, rhs in
-                if lhs.usedPct != rhs.usedPct { return lhs.usedPct < rhs.usedPct }
-                let lhsRank = intervalRank(lhs.label)
-                let rhsRank = intervalRank(rhs.label)
-                if lhsRank != rhsRank { return lhsRank < rhsRank }
-                return lhs.remainingPct > rhs.remainingPct
+    /// Automatic preserves Antigravity's original single representative.
+    /// Explicit groups keep a stable 5-hour → weekly stacked order.
+    static func antigravityMenuBarPercents(
+        _ windows: [QuotaWindow],
+        metric: AntigravityMenuBarMetric = .current
+    ) -> [Int] {
+        let available = windows.filter { !$0.isSupplementary }
+        let gemini = antigravityGroup(
+            prefix: "Gemini",
+            aggregateLabel: "Gemini",
+            windows: available
+        )
+        let claudeGPT = antigravityGroup(
+            prefix: "Claude/GPT",
+            aggregateLabel: "Claude/GPT",
+            windows: available
+        )
+        switch metric {
+        case .automatic:
+            return antigravityAutomaticPercent(available)
+        case .gemini:
+            guard !gemini.isEmpty else {
+                return antigravityAutomaticPercent(available)
             }
+            return gemini.map { max(0, min(100, $0.remainingPct)) }
+        case .claudeGPT:
+            guard !claudeGPT.isEmpty else {
+                return antigravityAutomaticPercent(available)
+            }
+            return claudeGPT.map { max(0, min(100, $0.remainingPct)) }
         }
-
-        let gemini = semantic.filter { pool($0.label) == "gemini" }
-        let claudeGPT = semantic.filter { pool($0.label) == "claudeGPT" }
-        let selected = representative(gemini)
-            ?? representative(claudeGPT)
-            ?? semantic.min { lhs, rhs in lhs.remainingPct < rhs.remainingPct }
-        guard let selected else { return [] }
-        return [max(0, min(100, selected.remainingPct))]
     }
 
     /// FreeModel: the bonus "Số dư" window stays out of the menu bar (it is
@@ -320,6 +321,60 @@ enum MenuBarIconRenderer {
         ["5 giờ", "Tuần"].compactMap { label in
             windows.first { $0.label == label }
         }
+    }
+
+    private static func antigravityGroup(
+        prefix: String,
+        aggregateLabel: String,
+        windows: [QuotaWindow]
+    ) -> [QuotaWindow] {
+        let canonical = ["\(prefix) 5-hour", "\(prefix) weekly"].compactMap { label in
+            windows.first { $0.label == label }
+        }
+        if !canonical.isEmpty { return canonical }
+        return windows.first { $0.label == aggregateLabel }.map { [$0] } ?? []
+    }
+
+    private static func antigravityAutomaticPercent(_ windows: [QuotaWindow]) -> [Int] {
+        let semantic = windows.filter { window in
+            [
+                "Gemini 5-hour",
+                "Gemini weekly",
+                "Claude/GPT 5-hour",
+                "Claude/GPT weekly",
+                "Gemini",
+                "Claude/GPT",
+            ].contains(window.label)
+        }
+        func pool(_ label: String) -> String? {
+            if label.hasPrefix("Gemini") { return "gemini" }
+            if label.hasPrefix("Claude/GPT") { return "claudeGPT" }
+            return nil
+        }
+        let gemini = semantic.filter { pool($0.label) == "gemini" }
+        let claudeGPT = semantic.filter { pool($0.label) == "claudeGPT" }
+        let candidates = gemini.isEmpty ? claudeGPT : gemini
+        let selected = candidates.max { lhs, rhs in
+            if lhs.usedPct != rhs.usedPct { return lhs.usedPct < rhs.usedPct }
+            func intervalRank(_ label: String) -> Int {
+                label.hasSuffix("5-hour") ? 0 : label.hasSuffix("weekly") ? 1 : 2
+            }
+            let lhsRank = intervalRank(lhs.label)
+            let rhsRank = intervalRank(rhs.label)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.remainingPct > rhs.remainingPct
+        }
+        return selected.map { [max(0, min(100, $0.remainingPct))] } ?? []
+    }
+
+    /// Codex mirrors Claude's stacked recurring-budget readout only when both
+    /// canonical windows exist. Weekly-only Pro accounts and partial data keep
+    /// the existing single representative selected by the generic resolver.
+    static func codexAutomaticWindows(_ windows: [QuotaWindow]) -> [QuotaWindow] {
+        let canonical = ["5 giờ", "Tuần"].compactMap { label in
+            windows.first { $0.label == label }
+        }
+        return canonical.count == 2 ? canonical : []
     }
 
     // MARK: - Kiro menu-bar display mode

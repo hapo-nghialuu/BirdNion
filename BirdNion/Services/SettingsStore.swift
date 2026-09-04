@@ -27,6 +27,23 @@ enum MenuBarPercentDisplay {
     }
 }
 
+/// Which Antigravity model group supplies the menu-bar quota readout.
+enum AntigravityMenuBarMetric: String, CaseIterable, Identifiable {
+    case automatic
+    case gemini
+    case claudeGPT
+
+    static let defaultsKey = "antigravityMenuBarMetric"
+
+    var id: String { rawValue }
+
+    static var current: AntigravityMenuBarMetric {
+        AntigravityMenuBarMetric(
+            rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? ""
+        ) ?? .automatic
+    }
+}
+
 /// Central user-preferences store. Each property uses `@AppStorage` so SwiftUI
 /// views bind directly and values persist in UserDefaults automatically.
 ///
@@ -181,6 +198,8 @@ final class SettingsStore: ObservableObject {
     @AppStorage(CodexUsageSource.defaultsKey) var codexUsageSource: String = CodexUsageSource.auto.rawValue
     /// Antigravity usage source (auto/app/ide/cli/oauth). `AntigravityProvider` reads the same key.
     @AppStorage(AntigravityUsageSource.defaultsKey) var antigravityUsageSource: String = AntigravityUsageSource.auto.rawValue
+    /// Which Antigravity model group supplies the menu-bar quota readout.
+    @AppStorage(AntigravityMenuBarMetric.defaultsKey) var antigravityMenuBarMetric: String = AntigravityMenuBarMetric.automatic.rawValue
     /// Kilo usage source (auto/api/cli). `KiloProvider` reads the same key.
     @AppStorage(KiloUsageSource.defaultsKey) var kiloUsageDataSource: String = KiloUsageSource.auto.rawValue
     /// Selected Kilo quota scope: org id + cached name ("" = personal account).
