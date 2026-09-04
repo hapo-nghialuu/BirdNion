@@ -29,7 +29,7 @@ compute() {
   local file
   # LC_ALL=C so the order is byte order: a locale-aware sort ignores the `+`
   # in "CostUsageScanner+CacheHelpers.swift" and yields a different digest.
-  for file in $(find "$SOURCES" -maxdepth 1 -name '*.swift' | LC_ALL=C sort); do
+  find "$SOURCES" -maxdepth 1 -name '*.swift' | LC_ALL=C sort | while IFS= read -r file; do
     printf '%s' "$(basename "$file")"
     cat "$file"
   done | shasum -a 256 | cut -c1-16

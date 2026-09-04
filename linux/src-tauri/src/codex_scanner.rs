@@ -19,6 +19,7 @@
 //! full history.
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -27,6 +28,56 @@ use walkdir::WalkDir;
 
 use crate::project_cost_history::{ProjectContribution, ProjectModel, ProjectRetraction};
 use crate::usage::{DailyModel, DailyUsage, HourlyUsage, UsageReport};
+
+pub(super) mod local_datetime {
+    use super::*;
+
+    pub fn serialize<S>(value: &DateTime<Local>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_i64(value.timestamp_millis())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Local>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let millis = i64::deserialize(deserializer)?;
+        Local
+            .timestamp_millis_opt(millis)
+            .single()
+            .ok_or_else(|| serde::de::Error::custom("invalid local timestamp"))
+    }
+}
+
+pub(super) mod optional_local_datetime {
+    use super::*;
+
+    pub fn serialize<S>(value: &Option<DateTime<Local>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        value
+            .map(|date| date.timestamp_millis())
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<DateTime<Local>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let millis = Option::<i64>::deserialize(deserializer)?;
+        millis
+            .map(|value| {
+                Local
+                    .timestamp_millis_opt(value)
+                    .single()
+                    .ok_or_else(|| serde::de::Error::custom("invalid local timestamp"))
+            })
+            .transpose()
+    }
+}
 
 mod coordinator;
 mod incremental;
@@ -199,7 +250,7 @@ fn priority_cost_usd(model: &str, input: i64, cached: i64, output: i64) -> f64 {
 /// either `last_token_usage` (a turn's own delta) or `total_token_usage`
 /// (the session's running cumulative counter) — same shape, different
 /// semantics depending on which JSON object it was read from.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct CodexTotals {
     input: i64,
     cached: i64,
@@ -210,9 +261,10 @@ struct CodexTotals {
 impl CodexTotals {
     fn from_value(v: &Value) -> Self {
         let get = |k: &str| v.get(k).and_then(Value::as_i64).unwrap_or(0);
+        let cached = get("cached_input_tokens").max(get("cache_read_input_tokens"));
         Self {
             input: get("input_tokens"),
-            cached: get("cached_input_tokens"),
+            cached,
             output: get("output_tokens"),
             total: get("total_tokens"),
         }
@@ -234,8 +286,9 @@ impl CodexTotals {
 /// that point, the turn's own delta (`last`), and the session's cumulative
 /// counter at that point (`total`, when the line carries `total_token_usage`
 /// — real Codex CLI output always does, but older/malformed lines might not).
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct CodexTokenEvent {
+    #[serde(with = "local_datetime")]
     ts: DateTime<Local>,
     model: String,
     last: CodexTotals,
@@ -243,7 +296,7 @@ struct CodexTokenEvent {
     turn_hash: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct ProjectIdentity {
     key: String,
     display_name: String,
@@ -266,10 +319,11 @@ pub enum GenerationOutcome {
 /// file's own identity (see `parse_codex_session_meta` for why `id` must be
 /// checked before the `session_id` JSON key); `forked_from_id`/`fork_ts`
 /// are populated only when this file is a fork/resume of another session.
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct CodexFileScan {
     session_id: Option<String>,
     forked_from_id: Option<String>,
+    #[serde(with = "optional_local_datetime")]
     fork_ts: Option<DateTime<Local>>,
     project: Option<ProjectIdentity>,
     project_ambiguous: bool,
@@ -277,6 +331,35 @@ struct CodexFileScan {
     retraction_events: Vec<CodexTokenEvent>,
     events: Vec<CodexTokenEvent>,
     precomputed_retraction_id: Option<String>,
+    session_source_is_cli: bool,
+    leaf_session_id: Option<String>,
+    saw_ancestor_session_meta: bool,
+    counts_its_own_tokens: Option<bool>,
+}
+
+impl CodexFileScan {
+    fn observe_session_meta(&mut self, id: Option<&str>, source_is_cli: Option<bool>) {
+        if let Some(source_is_cli) = source_is_cli {
+            self.session_source_is_cli = source_is_cli;
+        }
+        let Some(id) = id.filter(|value| !value.is_empty()) else {
+            return;
+        };
+        match self.leaf_session_id.as_deref() {
+            None => self.leaf_session_id = Some(id.to_string()),
+            Some(leaf) if leaf != id => self.saw_ancestor_session_meta = true,
+            _ => {}
+        }
+    }
+
+    fn observe_first_cumulative(&mut self, last: CodexTotals, total: Option<CodexTotals>) {
+        if self.counts_its_own_tokens.is_some() {
+            return;
+        }
+        let Some(total) = total else { return };
+        self.counts_its_own_tokens =
+            Some(self.session_source_is_cli && !self.saw_ancestor_session_meta && last == total);
+    }
 }
 
 fn scan_from_safe_records(records: &[incremental::SafeRecord]) -> CodexFileScan {
@@ -303,7 +386,9 @@ fn apply_safe_record(
             project_key,
             project_name,
             retraction_id,
+            source_is_cli,
         } => {
+            scan.observe_session_meta(session.as_deref(), *source_is_cli);
             if scan.session_id.is_none() {
                 scan.session_id = session.clone();
             }
@@ -340,21 +425,24 @@ fn apply_safe_record(
             let Some(ts) = Local.timestamp_millis_opt(*timestamp_ms).single() else {
                 return;
             };
+            let last = CodexTotals {
+                input: *input,
+                cached: *cached,
+                output: *output,
+                total: *total,
+            };
+            let cumulative = cumulative.map(|v| CodexTotals {
+                input: v.0,
+                cached: v.1,
+                output: v.2,
+                total: v.3,
+            });
+            scan.observe_first_cumulative(last, cumulative);
             scan.events.push(CodexTokenEvent {
                 ts,
                 model: model.clone(),
-                last: CodexTotals {
-                    input: *input,
-                    cached: *cached,
-                    output: *output,
-                    total: *total,
-                },
-                total: cumulative.map(|v| CodexTotals {
-                    input: v.0,
-                    cached: v.1,
-                    output: v.2,
-                    total: v.3,
-                }),
+                last,
+                total: cumulative,
                 turn_hash: turn.clone().or_else(|| current_turn.clone()),
             });
         }
@@ -428,6 +516,7 @@ fn parse_codex_session_meta(
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<bool>,
 )> {
     if obj.get("type").and_then(Value::as_str) != Some("session_meta") {
         return None;
@@ -442,7 +531,9 @@ fn parse_codex_session_meta(
     let forked_from_id = field(payload, &["forked_from_id", "forkedFromId"]);
     let timestamp = field(payload, &["timestamp"]).or_else(|| field(obj, &["timestamp"]));
     let cwd = field(payload, &["cwd"]);
-    Some((id, forked_from_id, timestamp, cwd))
+    let source_is_cli =
+        field(payload, &["source"]).map(|value| value.trim().eq_ignore_ascii_case("cli"));
+    Some((id, forked_from_id, timestamp, cwd, source_is_cli))
 }
 
 fn normalized_absolute_path(raw: &str) -> Option<PathBuf> {
@@ -814,15 +905,26 @@ fn usage_scan_generation_inner(
         None => None,
     };
     let engine = state.pending.as_ref()?.engine.as_ref()?;
-    let aggregation_deadline = episode_started + episode_budget;
-    let scan = scan_with_spool(
+    let scan = match aggregate_spool_episode(
         &roots,
         Local::now(),
         &priority_turns,
         engine,
         &spool,
-        aggregation_deadline,
-    )?;
+        AGGREGATION_WORK_QUOTA,
+    )
+    .ok()?
+    {
+        AggregationEpisode::Pending => {
+            if journal::save(&state).is_ok() {
+                *pending_episode = true;
+            } else {
+                let _ = save_compact_scan_marker(&state);
+            }
+            return None;
+        }
+        AggregationEpisode::Complete(scan) => scan,
+    };
     let progress_fingerprint = engine.fingerprint.clone();
     let engine = state.pending.as_mut()?.engine.take()?;
     state.pending = None;
@@ -863,6 +965,9 @@ fn usage_scan_generation_inner(
     if spool.prune_unreferenced(&retained_generations).is_err() {
         // Retention cleanup is part of the privacy contract. The durable
         // journal can be retried, but this generation is not published.
+        return None;
+    }
+    if spool.clear_aggregation(generation).is_err() {
         return None;
     }
     Some(CodexUsageScan {
@@ -961,14 +1066,14 @@ fn ingest_spool_summary(
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct StreamingDay {
     usd: f64,
     tokens: i64,
     models: HashMap<String, (f64, i64)>,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct StreamingProjectDay {
     display_name: String,
     usd: f64,
@@ -976,13 +1081,15 @@ struct StreamingProjectDay {
     models: HashMap<String, (f64, i64)>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct StreamingAggregate {
+    #[serde(with = "local_datetime")]
     now: DateTime<Local>,
-    buckets: HashMap<NaiveDate, StreamingDay>,
-    hours: HashMap<(NaiveDate, u32), (f64, i64)>,
+    buckets: HashMap<String, StreamingDay>,
+    hours: HashMap<String, (f64, i64)>,
     models: HashMap<String, (f64, i64)>,
-    projects: HashMap<(String, NaiveDate), StreamingProjectDay>,
-    retractions: HashMap<(String, NaiveDate), StreamingProjectDay>,
+    projects: HashMap<String, StreamingProjectDay>,
+    retractions: HashMap<String, StreamingProjectDay>,
     today_usd: f64,
     today_tokens: i64,
     month_usd: f64,
@@ -1049,7 +1156,7 @@ impl StreamingAggregate {
             );
             return;
         }
-        let daily = self.buckets.entry(day).or_default();
+        let daily = self.buckets.entry(day.to_string()).or_default();
         daily.usd += usd;
         daily.tokens += counted.total;
         let model = daily.models.entry(event.model.clone()).or_default();
@@ -1078,14 +1185,17 @@ impl StreamingAggregate {
             self.today_tokens += counted.total;
         }
         if event.ts >= self.now - Duration::hours(24) {
-            let hour = self.hours.entry((day, event.ts.hour())).or_default();
+            let hour = self
+                .hours
+                .entry(format!("{day}\0{:02}", event.ts.hour()))
+                .or_default();
             hour.0 += usd;
             hour.1 += counted.total;
         }
     }
 
     fn add_project(
-        target: &mut HashMap<(String, NaiveDate), StreamingProjectDay>,
+        target: &mut HashMap<String, StreamingProjectDay>,
         retraction_id: Option<&str>,
         project: &ProjectIdentity,
         day: NaiveDate,
@@ -1094,9 +1204,9 @@ impl StreamingAggregate {
         tokens: i64,
     ) {
         let key = retraction_id
-            .map(|id| format!("{id}\0{}", project.key))
-            .unwrap_or_else(|| project.key.clone());
-        let value = target.entry((key, day)).or_default();
+            .map(|id| format!("{id}\0{}\0{day}", project.key))
+            .unwrap_or_else(|| format!("{}\0{day}", project.key));
+        let value = target.entry(key).or_default();
         value.display_name = project.display_name.clone();
         value.usd += usd;
         value.tokens += tokens;
@@ -1109,7 +1219,7 @@ impl StreamingAggregate {
         let mut daily = Vec::with_capacity(HISTORY_DAYS as usize);
         for offset in (0..HISTORY_DAYS).rev() {
             let date = self.now.date_naive() - Duration::days(offset);
-            let (usd, tokens, mut models) = self.buckets.get(&date).map_or_else(
+            let (usd, tokens, mut models) = self.buckets.get(&date.to_string()).map_or_else(
                 || (0.0, 0, Vec::new()),
                 |day| {
                     (
@@ -1140,7 +1250,7 @@ impl StreamingAggregate {
             let time = self.now - Duration::hours(offset);
             let (usd, tokens) = self
                 .hours
-                .get(&(time.date_naive(), time.hour()))
+                .get(&format!("{}\0{:02}", time.date_naive(), time.hour()))
                 .copied()
                 .unwrap_or_default();
             hourly.push(HourlyUsage {
@@ -1156,8 +1266,13 @@ impl StreamingAggregate {
             .map(|row| row.0);
         let projects = streaming_projects(self.projects);
         let mut grouped: HashMap<(String, String), Vec<ProjectContribution>> = HashMap::new();
-        for ((combined, date), day) in self.retractions {
-            let Some((id, key)) = combined.split_once('\0') else {
+        for (combined, day) in self.retractions {
+            let mut parts = combined.splitn(3, '\0');
+            let (Some(id), Some(key), Some(date)) = (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let Ok(date) = date.parse::<NaiveDate>() else {
                 continue;
             };
             grouped
@@ -1227,13 +1342,14 @@ fn streaming_project(
     }
 }
 
-fn streaming_projects(
-    source: HashMap<(String, NaiveDate), StreamingProjectDay>,
-) -> Vec<ProjectContribution> {
+fn streaming_projects(source: HashMap<String, StreamingProjectDay>) -> Vec<ProjectContribution> {
     let mut values = source
         .into_iter()
         .filter(|(_, day)| day.usd > 0.0 || day.tokens > 0)
-        .map(|((key, date), day)| streaming_project(key, date, day))
+        .filter_map(|(combined, day)| {
+            let (key, date) = combined.rsplit_once('\0')?;
+            Some(streaming_project(key.into(), date.parse().ok()?, day))
+        })
         .collect::<Vec<_>>();
     values.sort_by(|a, b| {
         a.date
@@ -1241,6 +1357,456 @@ fn streaming_projects(
             .then_with(|| a.project_key.cmp(&b.project_key))
     });
     values
+}
+
+const AGGREGATION_WORK_QUOTA: usize = 4_096;
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+enum AggregationPhase {
+    Summaries,
+    Baseline,
+    Events,
+    Retraction,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SummaryAccumulator {
+    scan: CodexFileScan,
+    token_count: u64,
+    retraction_token_count: Option<u64>,
+}
+
+impl Default for SummaryAccumulator {
+    fn default() -> Self {
+        Self {
+            scan: CodexFileScan::default(),
+            token_count: 0,
+            retraction_token_count: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct AggregationState {
+    phase: AggregationPhase,
+    file_index: usize,
+    next_sequence: u64,
+    summaries: Vec<incremental_spool::FileSummary>,
+    summary: SummaryAccumulator,
+    baseline: Option<CodexTotals>,
+    model: String,
+    current_turn: Option<String>,
+    previous: CodexTotals,
+    retraction_seen: u64,
+    output: StreamingAggregate,
+    completed_work: u64,
+}
+
+impl AggregationState {
+    fn new(now: DateTime<Local>) -> Self {
+        Self {
+            phase: AggregationPhase::Summaries,
+            file_index: 0,
+            next_sequence: 0,
+            summaries: Vec::new(),
+            summary: SummaryAccumulator::default(),
+            baseline: None,
+            model: "gpt-5".into(),
+            current_turn: None,
+            previous: CodexTotals::default(),
+            retraction_seen: 0,
+            output: StreamingAggregate::new(now),
+            completed_work: 0,
+        }
+    }
+
+    fn reset_stream(&mut self) {
+        self.next_sequence = 0;
+        self.model = "gpt-5".into();
+        self.current_turn = None;
+        self.previous = CodexTotals::default();
+        self.retraction_seen = 0;
+    }
+}
+
+enum AggregationEpisode {
+    Pending,
+    Complete(CodexUsageScan),
+}
+
+fn summarize_record(summary: &mut SummaryAccumulator, record: &incremental::SafeRecord) {
+    match record {
+        incremental::SafeRecord::Meta {
+            project_key,
+            project_name,
+            ..
+        } => {
+            let incoming = project_key
+                .as_ref()
+                .zip(project_name.as_ref())
+                .map(|(key, name)| ProjectIdentity {
+                    key: key.clone(),
+                    display_name: name.clone(),
+                });
+            let invalid = incoming.is_none();
+            let conflicts = matches!(
+                (summary.scan.project.as_ref(), incoming.as_ref()),
+                (Some(current), Some(next)) if current.key != next.key
+            ) || (summary.scan.project.is_some() && invalid);
+            if summary.retraction_token_count.is_none()
+                && !summary.scan.project_ambiguous
+                && (invalid || conflicts)
+            {
+                summary.retraction_token_count = Some(summary.token_count);
+            }
+            let mut model = String::new();
+            let mut turn = None;
+            apply_safe_record(&mut summary.scan, &mut model, &mut turn, record);
+        }
+        incremental::SafeRecord::ProjectInvalid => {
+            if summary.retraction_token_count.is_none()
+                && !summary.scan.project_ambiguous
+                && summary.scan.project.is_some()
+            {
+                summary.retraction_token_count = Some(summary.token_count);
+            }
+            update_file_project(&mut summary.scan, None);
+        }
+        incremental::SafeRecord::Token {
+            input,
+            cached,
+            output,
+            total,
+            cumulative,
+            ..
+        } => {
+            summary.token_count += 1;
+            summary.scan.observe_first_cumulative(
+                CodexTotals {
+                    input: *input,
+                    cached: *cached,
+                    output: *output,
+                    total: *total,
+                },
+                cumulative.map(|value| CodexTotals {
+                    input: value.0,
+                    cached: value.1,
+                    output: value.2,
+                    total: value.3,
+                }),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn finish_summary(
+    generation: u64,
+    file_key: String,
+    value: SummaryAccumulator,
+) -> incremental_spool::FileSummary {
+    let scan = value.scan;
+    let retraction_source =
+        value
+            .retraction_token_count
+            .map(|limit| incremental_spool::RetractionSource {
+                generation,
+                file_key: file_key.clone(),
+                token_limit: limit,
+                retraction_id: scan.precomputed_retraction_id.clone(),
+            });
+    incremental_spool::FileSummary {
+        generation,
+        file_key,
+        session_id: scan.session_id,
+        forked_from_id: scan.forked_from_id,
+        fork_ts: scan.fork_ts,
+        project: scan.project,
+        project_ambiguous: scan.project_ambiguous,
+        retraction_project: scan.retraction_project,
+        retraction_source,
+        precomputed_retraction_id: scan.precomputed_retraction_id,
+        token_count: value.token_count,
+        counts_its_own_tokens: scan.counts_its_own_tokens.unwrap_or(false),
+    }
+}
+
+fn token_event_from_record(
+    record: incremental::SafeRecord,
+    model: &mut String,
+    current_turn: &mut Option<String>,
+) -> Option<CodexTokenEvent> {
+    match record {
+        incremental::SafeRecord::Model(value) => *model = value,
+        incremental::SafeRecord::CurrentTurn(value) => *current_turn = Some(value),
+        incremental::SafeRecord::Token {
+            timestamp_ms,
+            input,
+            cached,
+            output,
+            total,
+            cumulative,
+            turn,
+        } => {
+            let ts = Local.timestamp_millis_opt(timestamp_ms).single()?;
+            return Some(CodexTokenEvent {
+                ts,
+                model: model.clone(),
+                last: CodexTotals {
+                    input,
+                    cached,
+                    output,
+                    total,
+                },
+                total: cumulative.map(|value| CodexTotals {
+                    input: value.0,
+                    cached: value.1,
+                    output: value.2,
+                    total: value.3,
+                }),
+                turn_hash: turn.or_else(|| current_turn.clone()),
+            });
+        }
+        _ => {}
+    }
+    None
+}
+
+fn aggregate_spool_episode(
+    roots: &[PathBuf],
+    now: DateTime<Local>,
+    priority_turns: &HashMap<String, Option<String>>,
+    engine: &incremental::State,
+    spool: &incremental_spool::Spool,
+    work_quota: usize,
+) -> Result<AggregationEpisode, String> {
+    if !roots.iter().any(|root| root.is_dir()) {
+        return Err("Codex sessions root unavailable".into());
+    }
+    let mut files = engine
+        .files
+        .iter()
+        .map(|file| {
+            incremental::resolved_path(file, roots)
+                .map(|path| (path, file.record_generation, incremental::file_key(file)))
+                .map_err(|_| "Codex frozen file unavailable".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut state = spool
+        .load_aggregation(engine.generation, &engine.fingerprint)?
+        .unwrap_or_else(|| AggregationState::new(now));
+    let mut work = 0_usize;
+    let quota = work_quota.max(1);
+
+    while work < quota {
+        match state.phase {
+            AggregationPhase::Summaries => {
+                if state.file_index >= files.len() {
+                    state.phase = AggregationPhase::Baseline;
+                    state.file_index = 0;
+                    state.reset_stream();
+                    state.baseline = None;
+                    work += 1;
+                    continue;
+                }
+                let (_, generation, file_key) = &files[state.file_index];
+                let rows =
+                    spool.read_chunk(*generation, file_key, state.next_sequence, quota - work)?;
+                if rows.is_empty() {
+                    let summary = finish_summary(
+                        *generation,
+                        file_key.clone(),
+                        std::mem::take(&mut state.summary),
+                    );
+                    let mut index = state
+                        .summaries
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, value)| value.session_id.clone().map(|id| (id, index)))
+                        .collect::<HashMap<_, _>>();
+                    ingest_spool_summary(summary, &mut state.summaries, &mut index);
+                    state.file_index += 1;
+                    state.next_sequence = 0;
+                    work += 1;
+                    continue;
+                }
+                for (sequence, record) in rows {
+                    summarize_record(&mut state.summary, &record);
+                    state.next_sequence = sequence.saturating_add(1);
+                    work += 1;
+                }
+            }
+            AggregationPhase::Baseline => {
+                if state.file_index >= state.summaries.len() {
+                    let replacement = StreamingAggregate::new(state.output.now);
+                    return Ok(AggregationEpisode::Complete(
+                        std::mem::replace(&mut state.output, replacement).finish(),
+                    ));
+                }
+                let current = &state.summaries[state.file_index];
+                if state.next_sequence == 0 {
+                    state.baseline = None;
+                    if current.counts_its_own_tokens
+                        || current.forked_from_id.is_none()
+                        || current.fork_ts.is_none()
+                    {
+                        state.phase = AggregationPhase::Events;
+                        state.reset_stream();
+                        work += 1;
+                        continue;
+                    }
+                }
+                let parent = current.forked_from_id.as_ref().and_then(|parent_id| {
+                    state
+                        .summaries
+                        .iter()
+                        .find(|candidate| candidate.session_id.as_ref() == Some(parent_id))
+                });
+                let Some(parent) = parent else {
+                    state.phase = AggregationPhase::Events;
+                    state.reset_stream();
+                    work += 1;
+                    continue;
+                };
+                let fork_ts = current.fork_ts.expect("checked above");
+                let rows = spool.read_chunk(
+                    parent.generation,
+                    &parent.file_key,
+                    state.next_sequence,
+                    quota - work,
+                )?;
+                if rows.is_empty() {
+                    state.phase = AggregationPhase::Events;
+                    state.reset_stream();
+                    work += 1;
+                    continue;
+                }
+                for (sequence, record) in rows {
+                    if let incremental::SafeRecord::Token {
+                        timestamp_ms,
+                        cumulative: Some(value),
+                        ..
+                    } = record
+                    {
+                        if Local
+                            .timestamp_millis_opt(timestamp_ms)
+                            .single()
+                            .is_some_and(|timestamp| timestamp <= fork_ts)
+                        {
+                            state.baseline = Some(CodexTotals {
+                                input: value.0,
+                                cached: value.1,
+                                output: value.2,
+                                total: value.3,
+                            });
+                        }
+                    }
+                    state.next_sequence = sequence.saturating_add(1);
+                    work += 1;
+                }
+            }
+            AggregationPhase::Events => {
+                let scan = state.summaries[state.file_index].clone();
+                let rows = spool.read_chunk(
+                    scan.generation,
+                    &scan.file_key,
+                    state.next_sequence,
+                    quota - work,
+                )?;
+                if rows.is_empty() {
+                    if scan.retraction_project.is_some() && scan.retraction_source.is_some() {
+                        state.phase = AggregationPhase::Retraction;
+                        state.reset_stream();
+                    } else {
+                        state.file_index += 1;
+                        state.phase = AggregationPhase::Baseline;
+                        state.reset_stream();
+                        state.baseline = None;
+                    }
+                    work += 1;
+                    continue;
+                }
+                for (sequence, record) in rows {
+                    if let Some(event) =
+                        token_event_from_record(record, &mut state.model, &mut state.current_turn)
+                    {
+                        let counted = adjusted_tokens(&event, state.baseline, &mut state.previous);
+                        state.output.add(
+                            &event,
+                            counted,
+                            scan.project.as_ref(),
+                            None,
+                            priority_turns,
+                        );
+                    }
+                    state.next_sequence = sequence.saturating_add(1);
+                    work += 1;
+                }
+            }
+            AggregationPhase::Retraction => {
+                let scan = state.summaries[state.file_index].clone();
+                let Some(source) = scan.retraction_source.as_ref() else {
+                    state.file_index += 1;
+                    state.phase = AggregationPhase::Baseline;
+                    state.reset_stream();
+                    state.baseline = None;
+                    work += 1;
+                    continue;
+                };
+                if state.retraction_seen >= source.token_limit {
+                    state.file_index += 1;
+                    state.phase = AggregationPhase::Baseline;
+                    state.reset_stream();
+                    state.baseline = None;
+                    work += 1;
+                    continue;
+                }
+                let rows = spool.read_chunk(
+                    source.generation,
+                    &source.file_key,
+                    state.next_sequence,
+                    quota - work,
+                )?;
+                if rows.is_empty() {
+                    state.file_index += 1;
+                    state.phase = AggregationPhase::Baseline;
+                    state.reset_stream();
+                    state.baseline = None;
+                    work += 1;
+                    continue;
+                }
+                for (sequence, record) in rows {
+                    if let Some(event) =
+                        token_event_from_record(record, &mut state.model, &mut state.current_turn)
+                    {
+                        if state.retraction_seen < source.token_limit {
+                            let counted =
+                                adjusted_tokens(&event, state.baseline, &mut state.previous);
+                            if let (Some(id), Some(project)) = (
+                                source.retraction_id.as_deref(),
+                                scan.retraction_project.as_ref(),
+                            ) {
+                                state.output.add(
+                                    &event,
+                                    counted,
+                                    None,
+                                    Some((id, project)),
+                                    priority_turns,
+                                );
+                            }
+                        }
+                        state.retraction_seen += 1;
+                    }
+                    state.next_sequence = sequence.saturating_add(1);
+                    work += 1;
+                }
+            }
+        }
+    }
+    state.completed_work = state.completed_work.saturating_add(work as u64);
+    spool.save_aggregation(engine.generation, &engine.fingerprint, &state)?;
+    Ok(AggregationEpisode::Pending)
 }
 
 fn aggregate_spool(
@@ -1299,6 +1865,9 @@ fn fork_baselines(
 ) -> Result<Vec<Option<CodexTotals>>, String> {
     let mut requests: HashMap<usize, Vec<(DateTime<Local>, usize)>> = HashMap::new();
     for (child_index, scan) in scans.iter().enumerate() {
+        if scan.counts_its_own_tokens {
+            continue;
+        }
         if let Some((parent_index, fork_ts)) = scan
             .forked_from_id
             .as_ref()
@@ -1454,8 +2023,10 @@ fn scan_with_inputs(
                     let Ok(obj) = serde_json::from_str::<Value>(line) else {
                         continue;
                     };
-                    if let Some((id, forked_from_id, ts_str, cwd)) = parse_codex_session_meta(&obj)
+                    if let Some((id, forked_from_id, ts_str, cwd, source_is_cli)) =
+                        parse_codex_session_meta(&obj)
                     {
+                        file_scan.observe_session_meta(id.as_deref(), source_is_cli);
                         if file_scan.session_id.is_none() {
                             file_scan.session_id = id;
                         }
@@ -1496,11 +2067,14 @@ fn scan_with_inputs(
                                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                                 .map(|d| d.with_timezone(&Local));
                             let Some(ts) = ts else { continue };
+                            let last = CodexTotals::from_value(last);
+                            let total = info.get("total_token_usage").map(CodexTotals::from_value);
+                            file_scan.observe_first_cumulative(last, total);
                             file_scan.events.push(CodexTokenEvent {
                                 ts,
                                 model: model.clone(),
-                                last: CodexTotals::from_value(last),
-                                total: info.get("total_token_usage").map(CodexTotals::from_value),
+                                last,
+                                total,
                                 turn_hash: p
                                     .get("turn_id")
                                     .or_else(|| p.get("turnId"))
@@ -1526,13 +2100,17 @@ fn scan_with_inputs(
     // Pass 2: bucket each file's events, subtracting a resolved fork
     // baseline from cumulative totals where applicable (see module docs).
     for scan_index in 0..scans.len() {
-        let baseline = scans[scan_index]
-            .forked_from_id
-            .as_deref()
-            .zip(scans[scan_index].fork_ts)
-            .and_then(|(parent_id, fork_ts)| {
-                resolve_codex_fork_baseline(&scans, &id_index, parent_id, fork_ts)
-            });
+        let baseline = if scans[scan_index].counts_its_own_tokens.unwrap_or(false) {
+            None
+        } else {
+            scans[scan_index]
+                .forked_from_id
+                .as_deref()
+                .zip(scans[scan_index].fork_ts)
+                .and_then(|(parent_id, fork_ts)| {
+                    resolve_codex_fork_baseline(&scans, &id_index, parent_id, fork_ts)
+                })
+        };
 
         let mut previous_adjusted = CodexTotals::default();
         let retraction = scans[scan_index]
@@ -1870,6 +2448,20 @@ mod tests {
             .unwrap_or_default();
         format!(
             r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"{id}","timestamp":"{ts}"{fork_field}{cwd_field}}}}}"#
+        )
+    }
+
+    fn session_meta_with_source(
+        ts: &str,
+        id: &str,
+        forked_from_id: Option<&str>,
+        source: &str,
+    ) -> String {
+        let fork_field = forked_from_id
+            .map(|parent| format!(r#","forked_from_id":"{parent}""#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"timestamp":"{ts}","type":"session_meta","payload":{{"id":"{id}","timestamp":"{ts}","source":"{source}"{fork_field}}}}}"#
         )
     }
 
@@ -2325,6 +2917,219 @@ mod tests {
     }
 
     #[test]
+    fn cli_resume_with_own_counter_skips_parent_baseline_exact_and_incremental() {
+        let base = temp_base("cli-resume-own-counter");
+        let root = base.join("sessions");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        write_lines(
+            &root,
+            "rollout-parent.jsonl",
+            &[
+                session_meta(&ts, "parent", None),
+                token_count_cumulative(&ts, (100_000, 0, 0, 100_000), (100_000, 0, 0, 100_000)),
+            ],
+        );
+        write_lines(
+            &root,
+            "rollout-resume.jsonl",
+            &[
+                session_meta_with_source(&ts, "resume", Some("parent"), "cli"),
+                token_count_cumulative(&ts, (10_000, 0, 0, 10_000), (10_000, 0, 0, 10_000)),
+            ],
+        );
+        write_lines(
+            &root,
+            "rollout-replayed-fork.jsonl",
+            &[
+                session_meta_with_source(&ts, "replayed", Some("parent"), "cli"),
+                session_meta_with_source(&ts, "parent", None, "cli"),
+                token_count_cumulative(&ts, (100_000, 0, 0, 100_000), (100_000, 0, 0, 100_000)),
+                token_count_cumulative(&ts, (10_000, 0, 0, 10_000), (110_000, 0, 0, 110_000)),
+            ],
+        );
+        for name in [
+            "rollout-parent.jsonl",
+            "rollout-resume.jsonl",
+            "rollout-replayed-fork.jsonl",
+        ] {
+            let path = root.join(name);
+            let mut content = fs::read_to_string(&path).unwrap();
+            content.push('\n');
+            fs::write(path, content).unwrap();
+        }
+
+        let exact = scan_with_projects(std::slice::from_ref(&root), now).unwrap();
+        assert_eq!(exact.usage.today_tokens, 120_000);
+
+        let mut engine = incremental::discover(11, std::slice::from_ref(&root), None).unwrap();
+        let mut spool = incremental_spool::Spool::open_memory().unwrap();
+        loop {
+            match incremental::run_pass(&mut engine, std::slice::from_ref(&root), &mut spool) {
+                incremental::PassOutcome::Progress => continue,
+                incremental::PassOutcome::Complete => break,
+                incremental::PassOutcome::Incomplete => panic!("incremental scan incomplete"),
+            }
+        }
+        let incremental = loop {
+            match aggregate_spool_episode(
+                std::slice::from_ref(&root),
+                now,
+                &HashMap::new(),
+                &engine,
+                &spool,
+                2,
+            )
+            .unwrap()
+            {
+                AggregationEpisode::Pending => continue,
+                AggregationEpisode::Complete(scan) => break scan,
+            }
+        };
+        assert_eq!(incremental.usage, exact.usage);
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn cache_read_input_alias_matches_cached_input_in_exact_and_incremental() {
+        let base = temp_base("cache-read-alias");
+        let root = base.join("sessions");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        let token = serde_json::json!({
+            "timestamp": ts,
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 100_000,
+                        "cache_read_input_tokens": 80_000,
+                        "output_tokens": 0,
+                        "total_tokens": 100_000
+                    }
+                }
+            }
+        })
+        .to_string();
+        write_lines(
+            &root,
+            "rollout-cache.jsonl",
+            &[session_meta(&ts, "cache", None), token],
+        );
+        let path = root.join("rollout-cache.jsonl");
+        let mut content = fs::read_to_string(&path).unwrap();
+        content.push('\n');
+        fs::write(path, content).unwrap();
+
+        let exact = scan_with_projects(std::slice::from_ref(&root), now).unwrap();
+        assert!((exact.usage.today_usd - 0.035).abs() < 1e-9);
+        let mut engine = incremental::discover(12, std::slice::from_ref(&root), None).unwrap();
+        let mut spool = incremental_spool::Spool::open_memory().unwrap();
+        loop {
+            match incremental::run_pass(&mut engine, std::slice::from_ref(&root), &mut spool) {
+                incremental::PassOutcome::Progress => continue,
+                incremental::PassOutcome::Complete => break,
+                incremental::PassOutcome::Incomplete => panic!("incremental scan incomplete"),
+            }
+        }
+        let incremental = loop {
+            match aggregate_spool_episode(
+                std::slice::from_ref(&root),
+                now,
+                &HashMap::new(),
+                &engine,
+                &spool,
+                3,
+            )
+            .unwrap()
+            {
+                AggregationEpisode::Pending => continue,
+                AggregationEpisode::Complete(scan) => break scan,
+            }
+        };
+        assert_eq!(incremental.usage, exact.usage);
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn aggregation_quota_one_resumes_monotonically_across_spool_reopen() {
+        let base = temp_base("aggregation-restart");
+        let root = base.join("sessions");
+        let now = Local::now();
+        let ts = now.to_rfc3339();
+        write_lines(
+            &root,
+            "rollout-restart.jsonl",
+            &[
+                session_meta(&ts, "session", None),
+                turn_context("gpt-5"),
+                token_count_cumulative(&ts, (10, 0, 0, 10), (10, 0, 0, 10)),
+                token_count_cumulative(&ts, (20, 0, 0, 20), (30, 0, 0, 30)),
+            ],
+        );
+        let path = root.join("rollout-restart.jsonl");
+        let mut content = fs::read_to_string(&path).unwrap();
+        content.push('\n');
+        fs::write(path, content).unwrap();
+        let exact = scan_with_projects(std::slice::from_ref(&root), now).unwrap();
+        let mut engine = incremental::discover(13, std::slice::from_ref(&root), None).unwrap();
+        let spool_path = base.join("spool.sqlite");
+        {
+            let mut spool = incremental_spool::Spool::open(&spool_path).unwrap();
+            loop {
+                match incremental::run_pass(&mut engine, std::slice::from_ref(&root), &mut spool) {
+                    incremental::PassOutcome::Progress => continue,
+                    incremental::PassOutcome::Complete => break,
+                    incremental::PassOutcome::Incomplete => panic!("incremental scan incomplete"),
+                }
+            }
+            assert_eq!(engine.files.len(), 1);
+            assert_eq!(
+                spool.count(
+                    engine.files[0].record_generation,
+                    &incremental::file_key(&engine.files[0])
+                ),
+                4
+            );
+        }
+
+        let mut last_work = 0;
+        let mut pending_count = 0;
+        let completed = loop {
+            let spool = incremental_spool::Spool::open(&spool_path).unwrap();
+            match aggregate_spool_episode(
+                std::slice::from_ref(&root),
+                now,
+                &HashMap::new(),
+                &engine,
+                &spool,
+                1,
+            )
+            .unwrap()
+            {
+                AggregationEpisode::Pending => {
+                    let saved: AggregationState = spool
+                        .load_aggregation(engine.generation, &engine.fingerprint)
+                        .unwrap()
+                        .unwrap();
+                    assert!(saved.completed_work > last_work);
+                    last_work = saved.completed_work;
+                    pending_count += 1;
+                }
+                AggregationEpisode::Complete(scan) => break scan,
+            }
+        };
+        assert!(pending_count >= 4);
+        assert_eq!(completed.usage.today_tokens, exact.usage.today_tokens);
+        assert_eq!(completed.usage.last30_tokens, exact.usage.last30_tokens);
+        assert!((completed.usage.today_usd - exact.usage.today_usd).abs() < 1e-12);
+        assert!((completed.usage.last30_usd - exact.usage.last30_usd).abs() < 1e-12);
+        assert_eq!(completed.projects, exact.projects);
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
     fn priority_completion_model_changes_cost_but_preserves_rollout_labels() {
         let base = temp_base("priority-rate");
         let root = base.join("sessions");
@@ -2340,6 +3145,7 @@ mod tests {
                 project_key: Some(project.key),
                 project_name: Some(project.display_name),
                 retraction_id: Some("safe-retraction-hash".into()),
+                source_is_cli: None,
             },
             incremental::SafeRecord::Model("gpt-5".into()),
             incremental::SafeRecord::CurrentTurn(turn.clone()),

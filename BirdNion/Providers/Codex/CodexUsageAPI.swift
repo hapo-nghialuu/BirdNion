@@ -318,31 +318,34 @@ enum CodexUsageAPI {
             }
             return decoded
         case 401, 403:
-            logFailure(http, data: data, request: request, accountId: accountId)
+            logFailure(http, responseBytes: data.count, accountId: accountId)
             throw CodexUsageError.unauthorized
         default:
-            logFailure(http, data: data, request: request, accountId: accountId)
+            logFailure(http, responseBytes: data.count, accountId: accountId)
             throw CodexUsageError.serverError(http.statusCode)
         }
     }
 
-    /// The provider collapses every rejection into one user-facing string, so
-    /// without this the reason for a 401 is unrecoverable after the fact.
-    /// Logs the status, host/path and a short body excerpt — never the bearer
-    /// token or the account id itself.
+    /// Public diagnostic text is deliberately built only from scalar metadata.
+    /// The request URL can contain configured proxy credentials/query values,
+    /// while an arbitrary error body can echo tokens or account data.
+    static func failureLogMessage(
+        statusCode: Int,
+        responseBytes: Int,
+        accountIdSent: Bool
+    ) -> String {
+        "usage \(statusCode) accountIdSent=\(accountIdSent) responseBytes=\(responseBytes)"
+    }
+
     private static func logFailure(
         _ http: HTTPURLResponse,
-        data: Data,
-        request: URLRequest,
+        responseBytes: Int,
         accountId: String?
     ) {
-        let body = String(decoding: data.prefix(240), as: UTF8.self)
-            .replacingOccurrences(of: "\n", with: " ")
-        log.error("""
-            usage \(http.statusCode, privacy: .public) \
-            url=\(request.url?.absoluteString ?? "?", privacy: .public) \
-            accountIdSent=\(accountId?.isEmpty == false, privacy: .public) \
-            body=\(body, privacy: .public)
-            """)
+        let message = failureLogMessage(
+            statusCode: http.statusCode,
+            responseBytes: responseBytes,
+            accountIdSent: accountId?.isEmpty == false)
+        log.error("\(message, privacy: .public)")
     }
 }

@@ -4,9 +4,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::incremental::SafeRecord;
+use serde::{Deserialize, Serialize};
+
 use super::{CodexFileScan, CodexTokenEvent, CodexTotals, ProjectIdentity};
 
 const DB_NAME: &str = "codex-scan-spool.sqlite";
+const MAX_DATABASE_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(super) struct Spool {
     connection: Connection,
@@ -77,8 +80,20 @@ impl Spool {
                    PRIMARY KEY (generation, file_key, sequence)
                  ) WITHOUT ROWID;
                  CREATE INDEX IF NOT EXISTS records_by_file
-                   ON records(generation, file_key, sequence);",
+                   ON records(generation, file_key, sequence);
+                 CREATE TABLE IF NOT EXISTS aggregation_state (
+                   generation INTEGER PRIMARY KEY,
+                   fingerprint TEXT NOT NULL,
+                   payload BLOB NOT NULL
+                 );",
             )
+            .map_err(|error| error.to_string())?;
+        let page_size: u64 = connection
+            .pragma_query_value(None, "page_size", |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        let max_page_count = (MAX_DATABASE_BYTES / page_size.max(1)).max(1);
+        connection
+            .pragma_update(None, "max_page_count", max_page_count)
             .map_err(|error| error.to_string())?;
         if let Some(path) = path {
             set_private_permissions(path)?;
@@ -169,6 +184,93 @@ impl Spool {
             consume(record)?;
         }
         Ok(())
+    }
+
+    pub(super) fn read_chunk(
+        &self,
+        generation: u64,
+        file_key: &str,
+        next_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, SafeRecord)>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT sequence,payload FROM records
+                 WHERE generation=?1 AND file_key=?2 AND sequence>=?3
+                 ORDER BY sequence LIMIT ?4",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map(
+                params![
+                    generation as i64,
+                    file_key,
+                    next_sequence as i64,
+                    limit.max(1) as i64
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .map_err(|error| error.to_string())?;
+        rows.map(|row| {
+            let (sequence, payload) = row.map_err(|error| error.to_string())?;
+            let sequence = u64::try_from(sequence).map_err(|_| "negative sequence".to_string())?;
+            let record = serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+            Ok((sequence, record))
+        })
+        .collect()
+    }
+
+    pub(super) fn load_aggregation<T: serde::de::DeserializeOwned>(
+        &self,
+        generation: u64,
+        fingerprint: &str,
+    ) -> Result<Option<T>, String> {
+        let row = self.connection.query_row(
+            "SELECT fingerprint,payload FROM aggregation_state WHERE generation=?1",
+            params![generation as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        );
+        match row {
+            Ok((saved_fingerprint, payload)) if saved_fingerprint == fingerprint => {
+                serde_json::from_slice(&payload)
+                    .map(Some)
+                    .map_err(|error| error.to_string())
+            }
+            Ok(_) => {
+                self.clear_aggregation(generation)?;
+                Ok(None)
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    pub(super) fn save_aggregation<T: Serialize>(
+        &self,
+        generation: u64,
+        fingerprint: &str,
+        state: &T,
+    ) -> Result<(), String> {
+        let payload = serde_json::to_vec(state).map_err(|error| error.to_string())?;
+        self.connection
+            .execute(
+                "INSERT INTO aggregation_state(generation,fingerprint,payload) VALUES(?1,?2,?3)
+                 ON CONFLICT(generation) DO UPDATE SET fingerprint=excluded.fingerprint,payload=excluded.payload",
+                params![generation as i64, fingerprint, payload],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn clear_aggregation(&self, generation: u64) -> Result<(), String> {
+        self.connection
+            .execute(
+                "DELETE FROM aggregation_state WHERE generation=?1",
+                params![generation as i64],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     pub(super) fn stream_file<F>(
@@ -278,7 +380,13 @@ impl Spool {
                     }
                     super::update_file_project(&mut scan, None);
                 }
-                SafeRecord::Token { .. } => token_count += 1,
+                SafeRecord::Token { .. } => {
+                    token_count += 1;
+                    let mut model = String::new();
+                    let mut turn = None;
+                    super::apply_safe_record(&mut scan, &mut model, &mut turn, &record);
+                    scan.events.clear();
+                }
                 _ => {}
             }
             Ok(())
@@ -301,6 +409,7 @@ impl Spool {
             retraction_source,
             precomputed_retraction_id: scan.precomputed_retraction_id,
             token_count,
+            counts_its_own_tokens: scan.counts_its_own_tokens.unwrap_or(false),
         })
     }
 
@@ -335,6 +444,31 @@ impl Spool {
                     .map_err(|error| error.to_string())?;
             }
         }
+        let retained_generations = retained
+            .iter()
+            .map(|(generation, _)| *generation)
+            .collect::<std::collections::HashSet<_>>();
+        let aggregation_generations = {
+            let mut statement = transaction
+                .prepare("SELECT generation FROM aggregation_state")
+                .map_err(|error| error.to_string())?;
+            let generations = statement
+                .query_map([], |row| row.get::<_, i64>(0))
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            generations
+        };
+        for generation in aggregation_generations {
+            if generation >= 0 && !retained_generations.contains(&(generation as u64)) {
+                transaction
+                    .execute(
+                        "DELETE FROM aggregation_state WHERE generation=?1",
+                        params![generation],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+        }
         transaction.commit().map_err(|error| error.to_string())
     }
 
@@ -350,6 +484,7 @@ impl Spool {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct RetractionSource {
     pub generation: u64,
     pub file_key: String,
@@ -357,11 +492,13 @@ pub(super) struct RetractionSource {
     pub retraction_id: Option<String>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct FileSummary {
     pub generation: u64,
     pub file_key: String,
     pub session_id: Option<String>,
     pub forked_from_id: Option<String>,
+    #[serde(with = "super::optional_local_datetime")]
     pub fork_ts: Option<chrono::DateTime<chrono::Local>>,
     pub project: Option<ProjectIdentity>,
     pub project_ambiguous: bool,
@@ -369,6 +506,7 @@ pub(super) struct FileSummary {
     pub retraction_source: Option<RetractionSource>,
     pub precomputed_retraction_id: Option<String>,
     pub token_count: u64,
+    pub counts_its_own_tokens: bool,
 }
 
 #[cfg(unix)]
@@ -491,6 +629,30 @@ mod tests {
         assert_eq!(spool.count(1, "keep"), 1);
         assert_eq!(spool.count(1, "stale"), 0);
         assert_eq!(spool.count(2, "keep"), 0);
+    }
+
+    #[test]
+    fn full_spool_rolls_back_batch_without_corrupting_aggregation_checkpoint() {
+        let mut spool = Spool::open_memory().unwrap();
+        let checkpoint = serde_json::json!({"cursor": 17, "phase": "events"});
+        spool
+            .save_aggregation(7, "fingerprint", &checkpoint)
+            .unwrap();
+        let pages: u32 = spool
+            .connection
+            .pragma_query_value(None, "page_count", |row| row.get(0))
+            .unwrap();
+        spool
+            .connection
+            .pragma_update(None, "max_page_count", pages + 1)
+            .unwrap();
+        let records =
+            std::iter::repeat_n(SafeRecord::Model("x".repeat(160)), 10_000).collect::<Vec<_>>();
+        assert!(spool.append(7, "oversized", 0, &records).is_err());
+        assert_eq!(spool.count(7, "oversized"), 0);
+        let restored: serde_json::Value =
+            spool.load_aggregation(7, "fingerprint").unwrap().unwrap();
+        assert_eq!(restored, checkpoint);
     }
 
     #[cfg(unix)]

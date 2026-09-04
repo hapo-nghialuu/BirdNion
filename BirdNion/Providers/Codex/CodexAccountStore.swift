@@ -1084,6 +1084,10 @@ enum CodexAccountStore {
         do { try process.run() } catch { return false }
         guard finished.wait(timeout: .now() + timeout) == .success else {
             process.terminate()
+            if finished.wait(timeout: .now() + 1) != .success {
+                _ = kill(process.processIdentifier, SIGKILL)
+                _ = finished.wait(timeout: .now() + 1)
+            }
             return false
         }
         return process.terminationStatus == 0

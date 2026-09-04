@@ -95,6 +95,14 @@ pub(super) struct ParsedFile {
     pub active_model: String,
     pub current_turn: Option<String>,
     pub next_sequence: u64,
+    #[serde(default)]
+    pub source_is_cli: bool,
+    #[serde(default)]
+    pub leaf_session_hash: Option<String>,
+    #[serde(default)]
+    pub saw_ancestor_session_meta: bool,
+    #[serde(default)]
+    pub counts_its_own_tokens: Option<bool>,
     #[cfg(test)]
     #[serde(skip)]
     pub records: Vec<SafeRecord>,
@@ -109,6 +117,10 @@ impl Default for ParsedFile {
             active_model: "gpt-5".into(),
             current_turn: None,
             next_sequence: 0,
+            source_is_cli: false,
+            leaf_session_hash: None,
+            saw_ancestor_session_meta: false,
+            counts_its_own_tokens: None,
             #[cfg(test)]
             records: Vec::new(),
         }
@@ -156,6 +168,8 @@ pub(super) enum SafeRecord {
         project_key: Option<String>,
         project_name: Option<String>,
         retraction_id: Option<String>,
+        #[serde(default)]
+        source_is_cli: Option<bool>,
     },
     ProjectInvalid,
     Model(String),
@@ -740,6 +754,10 @@ fn valid_parsed(parsed: &ParsedFile) -> bool {
             .fork_parent_hash
             .as_ref()
             .is_none_or(|value| is_digest(value))
+        && parsed
+            .leaf_session_hash
+            .as_ref()
+            .is_none_or(|value| is_digest(value))
         && parsed.next_sequence <= i64::MAX as u64
 }
 
@@ -879,6 +897,18 @@ fn parse_value_into(
                     |keys: &[&str]| keys.iter().find_map(|k| p.get(*k).and_then(Value::as_str));
                 let raw_session = field(&["id", "session_id", "sessionId"]);
                 let session = raw_session.map(session_hash);
+                let source_is_cli =
+                    field(&["source"]).map(|value| value.trim().eq_ignore_ascii_case("cli"));
+                if let Some(value) = source_is_cli {
+                    out.source_is_cli = value;
+                }
+                if let Some(value) = session.as_ref() {
+                    match out.leaf_session_hash.as_deref() {
+                        None => out.leaf_session_hash = Some(value.clone()),
+                        Some(leaf) if leaf != value => out.saw_ancestor_session_meta = true,
+                        _ => {}
+                    }
+                }
                 if out.session_hash.is_none() {
                     out.session_hash = session.clone();
                 }
@@ -902,6 +932,7 @@ fn parse_value_into(
                         project_key: incoming.as_ref().map(|v| v.key.clone()),
                         project_name: incoming.as_ref().map(|v| v.basename.clone()),
                         retraction_id,
+                        source_is_cli,
                     },
                 )?;
                 if field(&["cwd"]).is_some() && incoming.is_none() {
@@ -959,6 +990,16 @@ fn parse_value_into(
                     .and_then(Value::as_str);
                 let turn_hash = raw_turn.map(turn_hash).or_else(|| out.current_turn.clone());
                 let (input, cached, output, total) = totals(last);
+                let cumulative = info.get("total_token_usage").map(totals);
+                if out.counts_its_own_tokens.is_none() {
+                    if let Some(cumulative) = cumulative {
+                        out.counts_its_own_tokens = Some(
+                            out.source_is_cli
+                                && !out.saw_ancestor_session_meta
+                                && cumulative == (input, cached, output, total),
+                        );
+                    }
+                }
                 push_record(
                     records,
                     SafeRecord::Token {
@@ -967,7 +1008,7 @@ fn parse_value_into(
                         cached,
                         output,
                         total,
-                        cumulative: info.get("total_token_usage").map(totals),
+                        cumulative,
                         turn: turn_hash,
                     },
                 )?;
@@ -1266,7 +1307,7 @@ fn totals(v: &Value) -> (i64, i64, i64, i64) {
     let get = |k| v.get(k).and_then(Value::as_i64).unwrap_or(0);
     (
         get("input_tokens"),
-        get("cached_input_tokens"),
+        get("cached_input_tokens").max(get("cache_read_input_tokens")),
         get("output_tokens"),
         get("total_tokens"),
     )

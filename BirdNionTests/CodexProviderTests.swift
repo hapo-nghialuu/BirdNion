@@ -1651,6 +1651,15 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertEqual(status?.error, "Token Codex hết hạn — chạy `codex` để đăng nhập lại")
     }
 
+    func testUsageFailureLogContainsOnlyNonSensitiveScalarMetadata() {
+        XCTAssertEqual(
+            CodexUsageAPI.failureLogMessage(
+                statusCode: 401,
+                responseBytes: 240,
+                accountIdSent: true),
+            "usage 401 accountIdSent=true responseBytes=240")
+    }
+
     func testFetchRejectsRefreshCommitAfterExternalReauthentication() async throws {
         let url = tempURL()
         try FileManager.default.createDirectory(
@@ -2066,6 +2075,17 @@ final class CodexProviderTests: XCTestCase {
         let deadline = Date().addingTimeInterval(5)
         while process.isRunning, Date() < deadline { usleep(50_000) }
         XCTAssertFalse(process.isRunning, "timed-out process must be terminated")
+    }
+
+    func testRunAndWaitForceKillsChildThatIgnoresTerminate() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "trap '' TERM; exec sleep 30"]
+        let started = Date()
+
+        XCTAssertFalse(CodexAccountStore.runAndWait(process, timeout: 0.2))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertFalse(process.isRunning, "SIGKILL fallback must reap a child that ignores SIGTERM")
     }
 
     func testManagedHomeContentsRejectSpecialFiles() throws {
