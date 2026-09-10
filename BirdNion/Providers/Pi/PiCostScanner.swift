@@ -45,7 +45,12 @@ enum PiCostScanner {
     private static let countingRevisionKey = "piCostCountingRevision"
     private static let cacheTTL: TimeInterval = 300 // 5 minutes
     private static let sessionReadChunkBytes = 64 * 1024
-    private static let maxSessionFileBytes = 64 * 1024 * 1024
+    /// Runaway-file guard only. The line parser streams and trims the bytes it
+    /// has consumed, so memory is bounded by the read buffer rather than by the
+    /// file, and a large session is safe to parse in full. A real OMP session on
+    /// disk has already passed 72 MB, so the old 64 MB ceiling was reachable.
+    /// Internal for testing.
+    static let maxSessionFileBytes = 256 * 1024 * 1024
 
     private actor Cache {
         static let shared = Cache()
@@ -249,7 +254,9 @@ enum PiCostScanner {
 
             guard let enumerator = fileManager.enumerator(
                 at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                includingPropertiesForKeys: [
+                    .contentModificationDateKey, .isRegularFileKey, .fileSizeKey,
+                ],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants],
                 errorHandler: { _, _ in
                     completed = false
@@ -277,7 +284,9 @@ enum PiCostScanner {
                 visitedEntries += 1
                 guard let fileURL = nextObj as? URL else { continue }
                 guard fileURL.pathExtension.lowercased() == "jsonl" else { continue }
-                guard let attrs = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
+                guard let attrs = try? fileURL.resourceValues(forKeys: [
+                    .contentModificationDateKey, .isRegularFileKey, .fileSizeKey,
+                ])
                 else {
                     completed = false
                     continue
@@ -287,6 +296,11 @@ enum PiCostScanner {
                       let mtime = attrs.contentModificationDate,
                       mtime >= cutoff
                 else { continue }
+                // One oversized session must not discard the whole scan: a
+                // single 72 MB file used to fail `parseSessionFile`, which
+                // marked the pass incomplete and threw away every other file's
+                // turns, freezing this provider's history.
+                if let size = attrs.fileSize, size > maxSessionFileBytes { continue }
 
                 if !parseSessionFile(
                     fileURL: fileURL,

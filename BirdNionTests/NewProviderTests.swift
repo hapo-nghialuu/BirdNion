@@ -4774,6 +4774,43 @@ final class NewProviderTests: XCTestCase {
         XCTAssertFalse(result.wasTruncated)
     }
 
+    /// A single session past the size guard used to fail `parseSessionFile`,
+    /// which marked the whole pass incomplete — so every other file's turns were
+    /// thrown away and the provider's history froze. The oversized file must be
+    /// skipped on its own while the rest of the scan still counts.
+    func testOMPOversizedSessionIsSkippedWithoutFailingTheScan() async throws {
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "omp_session_sample",
+                withExtension: "jsonl"))
+        let fixtureDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-omp-oversize-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDir) }
+        try FileManager.default.copyItem(
+            at: sourceFixture,
+            to: fixtureDir.appendingPathComponent(sourceFixture.lastPathComponent))
+
+        // Sparse file: past the guard on disk without writing 256 MB.
+        let oversized = fixtureDir.appendingPathComponent("oversized.jsonl")
+        XCTAssertTrue(FileManager.default.createFile(atPath: oversized.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: oversized)
+        try handle.truncate(atOffset: UInt64(OMPCostScanner.maxSessionFileBytes) + 1)
+        try handle.close()
+
+        let result = await OMPCostScanner.scanSessions(
+            roots: [fixtureDir],
+            scanDays: 30,
+            now: ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z") ?? Date())
+
+        XCTAssertTrue(
+            result.completed,
+            "an oversized neighbour must not discard the whole scan")
+        XCTAssertEqual(
+            result.dailyBuckets.reduce(0) { $0 + $1.tokens }, 4000,
+            "the normal session's turns must still be counted")
+    }
+
     func testOMPScannerHonorsEntryLimit() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-omp-limit-\(UUID().uuidString)", isDirectory: true)
