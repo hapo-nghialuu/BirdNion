@@ -220,42 +220,54 @@ enum KiroCostScanner {
         replacingSource: Bool = false,
         liveScanSucceeded: Bool = true
     ) -> KiroUsageReport {
-        let receipt: CostHistoryStore.ApplyReceipt?
-        let window: [CostHistoryStore.DayBucket]
-        if liveScanSucceeded {
-            let liveDays = live.daily.map {
-                ($0.date, $0.usd, $0.tokens,
-                 $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
+        let liveDays = live.daily.map {
+            ($0.date, $0.usd, $0.tokens,
+             $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
+        }
+        let hasLiveUsage = live.daily.contains { day in
+            if day.usd > 0 || day.tokens > 0 { return true }
+            return day.models.contains { model in
+                model.usd > 0 || model.tokens > 0
             }
-            let applied = CostHistoryStore.applyWithReceipt(
-                source: .kiro,
-                liveDays: liveDays,
-                now: now,
-                windowDays: chartWindowDays,
-                url: historyURL,
-                replacingSource: replacingSource,
-                liveScanSucceeded: true,
-                updateTopModel: true,
-                topModel: live.topModel,
-                countingRevision: countingRevision)
-            receipt = applied
-            window = applied.window
-        } else {
-            receipt = nil
-            window = CostHistoryStore.window(
+        }
+        if !liveScanSucceeded, !hasLiveUsage {
+            let window = CostHistoryStore.window(
                 source: .kiro,
                 now: now,
                 windowDays: chartWindowDays,
                 url: historyURL)
+            let confidence = CostHistoryStore.confidence(
+                source: .kiro,
+                liveScanSucceeded: false,
+                url: historyURL)
+            return CostHistoryStore.makeKiroReport(
+                window: window,
+                persistedTopModel: CostHistoryStore.storedTopModel(
+                    source: .kiro, url: historyURL),
+                confidence: confidence)
         }
+        // Partial scans still contain real usage. The store's high-water merge
+        // publishes it safely; only a complete pass may replace history or
+        // stamp freshness/counting semantics.
+        let receipt = CostHistoryStore.applyWithReceipt(
+            source: .kiro,
+            liveDays: liveDays,
+            now: now,
+            windowDays: chartWindowDays,
+            url: historyURL,
+            replacingSource: replacingSource && liveScanSucceeded,
+            liveScanSucceeded: liveScanSucceeded,
+            updateTopModel: true,
+            topModel: live.topModel,
+            countingRevision: countingRevision)
         let confidence = CostHistoryStore.confidence(
             source: .kiro,
-            liveScanSucceeded: receipt?.persisted == true,
+            liveScanSucceeded: liveScanSucceeded && receipt.persisted,
             url: historyURL)
         let persistedTopModel = CostHistoryStore.storedTopModel(
             source: .kiro, url: historyURL)
         return CostHistoryStore.makeKiroReport(
-            window: window,
+            window: receipt.window,
             persistedTopModel: persistedTopModel,
             confidence: confidence)
     }

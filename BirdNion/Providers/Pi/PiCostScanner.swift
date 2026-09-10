@@ -45,10 +45,10 @@ enum PiCostScanner {
     private static let countingRevisionKey = "piCostCountingRevision"
     private static let cacheTTL: TimeInterval = 300 // 5 minutes
     private static let sessionReadChunkBytes = 64 * 1024
-    /// Runaway-file guard only. The line parser streams and trims the bytes it
-    /// has consumed, so memory is bounded by the read buffer rather than by the
-    /// file, and a large session is safe to parse in full. A real OMP session on
-    /// disk has already passed 72 MB, so the old 64 MB ceiling was reachable.
+    static let maxSessionLineBytes = 8 * 1024 * 1024
+    /// Runaway-file guard only. The parser streams consumed lines and separately
+    /// caps an individual JSONL line, so a multi-line session can safely exceed
+    /// the old 64 MB ceiling without allowing one record to consume the file cap.
     /// Internal for testing.
     static let maxSessionFileBytes = 256 * 1024 * 1024
 
@@ -101,13 +101,15 @@ enum PiCostScanner {
         calendar: Calendar = .current,
         forceRescan: Bool = false,
         /// Test seam; production always uses the shared history file.
-        historyURL: URL = CostHistoryStore.historyURL()
+        historyURL: URL = CostHistoryStore.historyURL(),
+        sessionsRoot: URL? = nil,
+        maxEntries: Int = 20_000
     ) async -> PiUsageReport {
         if !forceRescan, let report = await Cache.shared.validReport(now: now, ttl: cacheTTL) {
             return report
         }
 
-        let root = defaultSessionsDirectory
+        let root = sessionsRoot ?? defaultSessionsDirectory
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
             let window = CostHistoryStore.apply(
@@ -116,6 +118,7 @@ enum PiCostScanner {
                 now: now,
                 calendar: calendar,
                 windowDays: chartWindowDays,
+                url: historyURL,
                 liveScanSucceeded: false)
             let confidence = CostHistoryStore.confidence(source: .pi, liveScanSucceeded: false, url: historyURL)
             return CostHistoryStore.makePiReport(window: window, confidence: confidence)
@@ -154,7 +157,8 @@ enum PiCostScanner {
             root: root,
             scanDays: scanDays,
             now: now,
-            calendar: calendar)
+            calendar: calendar,
+            maxEntries: maxEntries)
 
         // A partial pass still carries real turns, and the store merges by
         // high-water, so publish what was scanned rather than discarding it.
@@ -305,7 +309,10 @@ enum PiCostScanner {
                 // single 72 MB file used to fail `parseSessionFile`, which
                 // marked the pass incomplete and threw away every other file's
                 // turns, freezing this provider's history.
-                if let size = attrs.fileSize, size > maxSessionFileBytes { continue }
+                if let size = attrs.fileSize, size > maxSessionFileBytes {
+                    completed = false
+                    continue
+                }
 
                 if !parseSessionFile(
                     fileURL: fileURL,
@@ -358,6 +365,7 @@ enum PiCostScanner {
             totalBytes += chunk.count
             guard totalBytes <= maxSessionFileBytes else { return false }
             buffer.append(chunk)
+            guard buffer.count - lineStartOffset <= maxSessionLineBytes else { return false }
 
             while searchOffset < buffer.count {
                 guard !Task.isCancelled else { return false }

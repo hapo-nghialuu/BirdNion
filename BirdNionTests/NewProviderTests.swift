@@ -2965,7 +2965,7 @@ final class NewProviderTests: XCTestCase {
         XCTAssertGreaterThan(walResult.report.todayTokens, 0)
     }
 
-    func testKiroIncompleteScanDoesNotMergePartialUsage() throws {
+    func testKiroIncompleteScanMergesPartialUsageWithoutClaimingLive() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-kiro-partial-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -2990,9 +2990,12 @@ final class NewProviderTests: XCTestCase {
             historyURL: historyURL,
             liveScanSucceeded: false)
 
-        XCTAssertEqual(merged.todayTokens, 100)
-        XCTAssertEqual(merged.todayUSD, 1.0, accuracy: 0.001)
+        XCTAssertEqual(merged.todayTokens, 9_000)
+        XCTAssertEqual(merged.todayUSD, 90, accuracy: 0.001)
         XCTAssertFalse(merged.scanConfidence.live)
+        XCTAssertEqual(
+            CostHistoryStore.storedCountingRevision(source: .kiro, url: historyURL),
+            0)
     }
 
     /// Parse a conversation history fixture into daily session points.
@@ -4778,7 +4781,7 @@ final class NewProviderTests: XCTestCase {
     /// which marked the whole pass incomplete — so every other file's turns were
     /// thrown away and the provider's history froze. The oversized file must be
     /// skipped on its own while the rest of the scan still counts.
-    func testOMPOversizedSessionIsSkippedWithoutFailingTheScan() async throws {
+    func testOMPOversizedSessionIsSkippedAndMarksScanIncomplete() async throws {
         let sourceFixture = try XCTUnwrap(
             Bundle(for: NewProviderTests.self).url(
                 forResource: "omp_session_sample",
@@ -4803,11 +4806,43 @@ final class NewProviderTests: XCTestCase {
             scanDays: 30,
             now: ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z") ?? Date())
 
-        XCTAssertTrue(
+        XCTAssertFalse(
             result.completed,
-            "an oversized neighbour must not discard the whole scan")
+            "skipping any session must withhold destructive completion privileges")
         XCTAssertEqual(
             result.dailyBuckets.reduce(0) { $0 + $1.tokens }, 4000,
+            "the normal session's turns must still be counted")
+    }
+
+    func testPiOversizedSessionIsSkippedAndMarksScanIncomplete() async throws {
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "pi_session_sample",
+                withExtension: "jsonl"))
+        let fixtureDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-pi-oversize-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDir) }
+        try FileManager.default.copyItem(
+            at: sourceFixture,
+            to: fixtureDir.appendingPathComponent(sourceFixture.lastPathComponent))
+
+        let oversized = fixtureDir.appendingPathComponent("oversized.jsonl")
+        XCTAssertTrue(FileManager.default.createFile(atPath: oversized.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: oversized)
+        try handle.truncate(atOffset: UInt64(PiCostScanner.maxSessionFileBytes) + 1)
+        try handle.close()
+
+        let result = await PiCostScanner.scanSessions(
+            root: fixtureDir,
+            scanDays: 30,
+            now: ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z") ?? Date())
+
+        XCTAssertFalse(
+            result.completed,
+            "skipping any session must withhold destructive completion privileges")
+        XCTAssertEqual(
+            result.dailyBuckets.reduce(0) { $0 + $1.tokens }, 2000,
             "the normal session's turns must still be counted")
     }
 
@@ -4836,48 +4871,80 @@ final class NewProviderTests: XCTestCase {
         let now = try XCTUnwrap(
             ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z"))
 
-        // maxEntries: 1 stops the walk immediately — the pass is incomplete by
-        // construction, exactly the shape that used to publish nothing at all.
-        let partial = await OMPCostScanner.scanSessions(
-            roots: [roots], scanDays: 30, now: now, maxEntries: 1)
-        XCTAssertFalse(partial.completed, "fixture must produce an incomplete pass")
-        XCTAssertGreaterThan(
-            partial.dailyBuckets.reduce(0) { $0 + $1.tokens }, 0,
-            "a partial pass still carries the turns it managed to read")
-
         let full = await OMPCostScanner.scanSessions(roots: [roots], scanDays: 30, now: now)
         XCTAssertTrue(full.completed)
         XCTAssertEqual(full.dailyBuckets.reduce(0) { $0 + $1.tokens }, 4000)
 
-        // A complete pass writes days and stamps the revision.
+        let priorScan = now.addingTimeInterval(-3600)
         _ = CostHistoryStore.applyWithReceipt(
             source: .omp,
-            liveDays: full.dailyBuckets.map {
-                ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
-            },
-            now: now,
+            liveDays: [(now, 0.01, 100, [("seed", 0.01, 100)])],
+            now: priorScan,
             windowDays: OMPCostScanner.chartWindowDays,
             url: historyURL,
             replacingSource: true,
             liveScanSucceeded: true,
             countingRevision: OMPCostScanner.countingRevision)
-        XCTAssertEqual(
-            CostHistoryStore.storedCountingRevision(source: .omp, url: historyURL),
-            OMPCostScanner.countingRevision)
+        let stampedBefore = CostHistoryStore.read(url: historyURL).scannedAt?["omp"]
 
-        // An empty partial pass must merge, never replace: the day survives.
-        let afterPartial = CostHistoryStore.applyWithReceipt(
-            source: .omp,
-            liveDays: [],
+        let report = await OMPCostScanner.loadReport(
             now: now,
-            windowDays: OMPCostScanner.chartWindowDays,
-            url: historyURL,
-            replacingSource: false,
-            liveScanSucceeded: false,
-            countingRevision: OMPCostScanner.countingRevision)
+            forceRescan: true,
+            historyURL: historyURL,
+            scanRoots: [roots],
+            maxEntries: 1)
+
+        XCTAssertEqual(report.last30Tokens, 4000)
+        XCTAssertFalse(report.scanConfidence.live)
         XCTAssertEqual(
-            afterPartial.window.reduce(0) { $0 + $1.tokens }, 4000,
-            "merging a partial pass must not erase days a complete pass wrote")
+            CostHistoryStore.read(url: historyURL).scannedAt?["omp"],
+            stampedBefore,
+            "a partial pass must not stamp scan freshness")
+    }
+
+    func testPiPartialScanStillPublishesTurns() async throws {
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "pi_session_sample",
+                withExtension: "jsonl"))
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-pi-partial-\(UUID().uuidString)", isDirectory: true)
+        let sessions = tmp.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        for name in ["a.jsonl", "b.jsonl"] {
+            try FileManager.default.copyItem(
+                at: sourceFixture, to: sessions.appendingPathComponent(name))
+        }
+
+        let historyURL = tmp.appendingPathComponent("cost-history.json")
+        let now = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z"))
+        let priorScan = now.addingTimeInterval(-3600)
+        _ = CostHistoryStore.applyWithReceipt(
+            source: .pi,
+            liveDays: [(now, 0.01, 100, [("seed", 0.01, 100)])],
+            now: priorScan,
+            windowDays: PiCostScanner.chartWindowDays,
+            url: historyURL,
+            replacingSource: true,
+            liveScanSucceeded: true,
+            countingRevision: PiCostScanner.countingRevision)
+        let stampedBefore = CostHistoryStore.read(url: historyURL).scannedAt?["pi"]
+
+        let report = await PiCostScanner.loadReport(
+            now: now,
+            forceRescan: true,
+            historyURL: historyURL,
+            sessionsRoot: sessions,
+            maxEntries: 1)
+
+        XCTAssertEqual(report.last30Tokens, 2000)
+        XCTAssertFalse(report.scanConfidence.live)
+        XCTAssertEqual(
+            CostHistoryStore.read(url: historyURL).scannedAt?["pi"],
+            stampedBefore,
+            "a partial pass must not stamp scan freshness")
     }
 
     func testOMPScannerHonorsEntryLimit() async throws {
@@ -4971,6 +5038,26 @@ final class NewProviderTests: XCTestCase {
 
         XCTAssertTrue(omp.completed)
         XCTAssertTrue(pi.completed)
+    }
+
+    func testOMPPiRejectSingleLinePastMemoryGuard() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-jsonl-line-guard-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("large-line.jsonl")
+        XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(OMPCostScanner.maxSessionLineBytes) + 1)
+        try handle.close()
+
+        let omp = await OMPCostScanner.scanSessions(roots: [root], scanDays: 30)
+        let pi = await PiCostScanner.scanSessions(root: root, scanDays: 30)
+
+        XCTAssertFalse(omp.completed)
+        XCTAssertFalse(pi.completed)
+        XCTAssertTrue(omp.dailyBuckets.isEmpty)
+        XCTAssertTrue(pi.dailyBuckets.isEmpty)
     }
 
     func testOMPPiInvalidDuplicateDoesNotBlockValidUsage() async throws {
