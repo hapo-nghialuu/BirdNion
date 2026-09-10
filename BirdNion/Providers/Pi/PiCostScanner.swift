@@ -99,7 +99,9 @@ enum PiCostScanner {
     static func loadReport(
         now: Date = Date(),
         calendar: Calendar = .current,
-        forceRescan: Bool = false
+        forceRescan: Bool = false,
+        /// Test seam; production always uses the shared history file.
+        historyURL: URL = CostHistoryStore.historyURL()
     ) async -> PiUsageReport {
         if !forceRescan, let report = await Cache.shared.validReport(now: now, ttl: cacheTTL) {
             return report
@@ -115,19 +117,20 @@ enum PiCostScanner {
                 calendar: calendar,
                 windowDays: chartWindowDays,
                 liveScanSucceeded: false)
-            let confidence = CostHistoryStore.confidence(source: .pi, liveScanSucceeded: false)
+            let confidence = CostHistoryStore.confidence(source: .pi, liveScanSucceeded: false, url: historyURL)
             return CostHistoryStore.makePiReport(window: window, confidence: confidence)
         }
 
         let storedRevision = max(
             UserDefaults.standard.integer(forKey: countingRevisionKey),
-            CostHistoryStore.storedCountingRevision(source: .pi))
+            CostHistoryStore.storedCountingRevision(source: .pi, url: historyURL))
         let incremental = CostHistoryStore.scanBackDays(
             source: .pi,
             now: now,
             calendar: calendar,
             minDays: incrementalDays,
-            maxDays: chartWindowDays)
+            maxDays: chartWindowDays,
+            url: historyURL)
         let plan = countingScanPlan(
             storedRevision: storedRevision, incrementalDays: incremental)
         if plan.historyOnly {
@@ -138,9 +141,10 @@ enum PiCostScanner {
                 source: .pi,
                 now: now,
                 calendar: calendar,
-                windowDays: chartWindowDays)
+                windowDays: chartWindowDays,
+                url: historyURL)
             let confidence = CostHistoryStore.confidence(
-                source: .pi, liveScanSucceeded: false)
+                source: .pi, liveScanSucceeded: false, url: historyURL)
             return CostHistoryStore.makePiReport(window: window, confidence: confidence)
         }
         let replacing = plan.replacing
@@ -152,37 +156,38 @@ enum PiCostScanner {
             now: now,
             calendar: calendar)
 
-        let receipt: CostHistoryStore.ApplyReceipt?
-        let window: [CostHistoryStore.DayBucket]
-        if result.completed {
-            let liveDays = result.dailyBuckets.map {
-                ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
-            }
-            let applied = CostHistoryStore.applyWithReceipt(
-                source: .pi,
-                liveDays: liveDays,
-                now: now,
-                calendar: calendar,
-                windowDays: chartWindowDays,
-                replacingSource: replacing,
-                liveScanSucceeded: true,
-                countingRevision: countingRevision)
-            if applied.persisted {
-                UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
-            }
-            receipt = applied
-            window = applied.window
-        } else {
-            receipt = nil
-            window = CostHistoryStore.window(
-                source: .pi,
-                now: now,
-                calendar: calendar,
-                windowDays: chartWindowDays)
+        // A partial pass still carries real turns, and the store merges by
+        // high-water, so publish what was scanned rather than discarding it.
+        // Throwing the whole pass away on any hiccup is what froze this
+        // provider's history for days behind a single oversized file.
+        //
+        // Only a fully covered pass earns the two destructive privileges:
+        // replacing history outright, and stamping `countingRevision` (which
+        // would otherwise mark a formula migration done from partial data).
+        let liveDays = result.dailyBuckets.map {
+            ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
         }
+        let applied = CostHistoryStore.applyWithReceipt(
+            source: .pi,
+            liveDays: liveDays,
+            now: now,
+            calendar: calendar,
+            windowDays: chartWindowDays,
+            url: historyURL,
+            replacingSource: replacing && result.completed,
+            liveScanSucceeded: result.completed,
+            countingRevision: countingRevision)
+        if result.completed, applied.persisted {
+            UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
+        }
+        let receipt: CostHistoryStore.ApplyReceipt? = applied
+        let window: [CostHistoryStore.DayBucket] = applied.window
+        // A partial pass publishes its turns but must not claim LIVE freshness:
+        // the footer would then hide that some sessions went unread.
         let confidence = CostHistoryStore.confidence(
             source: .pi,
-            liveScanSucceeded: receipt?.persisted == true)
+            liveScanSucceeded: result.completed && receipt?.persisted == true,
+            url: historyURL)
         let report = CostHistoryStore.makePiReport(window: window, confidence: confidence)
 
         if receipt?.persisted == true {

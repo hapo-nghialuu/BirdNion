@@ -187,10 +187,13 @@ enum KiroCostScanner {
             let scan = await Task.detached(priority: .utility) {
                 scanFullResult(now: now, windowDays: plan.windowDays)
             }.value
+            // Replacing history from a pass that could not read every source
+            // would delete the days those sources own. Merge instead until a
+            // pass covers everything.
             let report = mergeLiveReport(
                 scan.report,
                 now: now,
-                replacingSource: plan.replacing,
+                replacingSource: plan.replacing && scan.completed,
                 liveScanSucceeded: scan.completed)
             if plan.replacing, report.scanConfidence.live {
                 UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)

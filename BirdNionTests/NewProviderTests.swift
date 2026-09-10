@@ -4811,6 +4811,75 @@ final class NewProviderTests: XCTestCase {
             "the normal session's turns must still be counted")
     }
 
+    /// A pass that could not read everything still holds real turns. Discarding
+    /// it left this provider's history frozen for days behind one bad file, so a
+    /// partial pass must publish what it read — while never being allowed to
+    /// replace history or stamp the counting revision from incomplete data.
+    func testOMPPartialScanStillPublishesTurns() async throws {
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "omp_session_sample",
+                withExtension: "jsonl"))
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-omp-partial-\(UUID().uuidString)", isDirectory: true)
+        let roots = tmp.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: roots, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        // Two sessions so the walk can stop after the first one and still have
+        // read real turns — that is what "partial" means here.
+        for name in ["a.jsonl", "b.jsonl"] {
+            try FileManager.default.copyItem(
+                at: sourceFixture, to: roots.appendingPathComponent(name))
+        }
+
+        let historyURL = tmp.appendingPathComponent("cost-history.json")
+        let now = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z"))
+
+        // maxEntries: 1 stops the walk immediately — the pass is incomplete by
+        // construction, exactly the shape that used to publish nothing at all.
+        let partial = await OMPCostScanner.scanSessions(
+            roots: [roots], scanDays: 30, now: now, maxEntries: 1)
+        XCTAssertFalse(partial.completed, "fixture must produce an incomplete pass")
+        XCTAssertGreaterThan(
+            partial.dailyBuckets.reduce(0) { $0 + $1.tokens }, 0,
+            "a partial pass still carries the turns it managed to read")
+
+        let full = await OMPCostScanner.scanSessions(roots: [roots], scanDays: 30, now: now)
+        XCTAssertTrue(full.completed)
+        XCTAssertEqual(full.dailyBuckets.reduce(0) { $0 + $1.tokens }, 4000)
+
+        // A complete pass writes days and stamps the revision.
+        _ = CostHistoryStore.applyWithReceipt(
+            source: .omp,
+            liveDays: full.dailyBuckets.map {
+                ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
+            },
+            now: now,
+            windowDays: OMPCostScanner.chartWindowDays,
+            url: historyURL,
+            replacingSource: true,
+            liveScanSucceeded: true,
+            countingRevision: OMPCostScanner.countingRevision)
+        XCTAssertEqual(
+            CostHistoryStore.storedCountingRevision(source: .omp, url: historyURL),
+            OMPCostScanner.countingRevision)
+
+        // An empty partial pass must merge, never replace: the day survives.
+        let afterPartial = CostHistoryStore.applyWithReceipt(
+            source: .omp,
+            liveDays: [],
+            now: now,
+            windowDays: OMPCostScanner.chartWindowDays,
+            url: historyURL,
+            replacingSource: false,
+            liveScanSucceeded: false,
+            countingRevision: OMPCostScanner.countingRevision)
+        XCTAssertEqual(
+            afterPartial.window.reduce(0) { $0 + $1.tokens }, 4000,
+            "merging a partial pass must not erase days a complete pass wrote")
+    }
+
     func testOMPScannerHonorsEntryLimit() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-omp-limit-\(UUID().uuidString)", isDirectory: true)
