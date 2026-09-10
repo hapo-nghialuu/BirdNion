@@ -140,8 +140,11 @@ if [[ "$SKIP_BUILD" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
   esac
 
   echo "--> macOS build + test (Debug)"
+  TEST_DERIVED_DATA="$(mktemp -d "${TMPDIR:-/tmp}/birdnion-release-gate.XXXXXX")"
+  trap '/usr/bin/trash "$TEST_DERIVED_DATA" >/dev/null 2>&1 || true' EXIT
   xcodebuild test -project "$REPO_ROOT/BirdNion.xcodeproj" -scheme BirdNion \
     -configuration Debug -destination "platform=macOS,arch=$TEST_ARCH" \
+    -derivedDataPath "$TEST_DERIVED_DATA" \
     -parallel-testing-enabled NO
 
   echo "--> Linux: npm ci + tests + build (tsc + vite)"
