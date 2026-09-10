@@ -4947,6 +4947,33 @@ final class NewProviderTests: XCTestCase {
             "a partial pass must not stamp scan freshness")
     }
 
+    /// `agy` runs with an isolated HOME so each account keeps its own `.gemini`
+    /// login. The legacy Keychain API resolves the login keychain through
+    /// `$HOME/Library/Keychains`, so without a link back macOS puts up a modal
+    /// "A keychain cannot be found to store 'antigravity'" on every switch.
+    func testIsolatedAgyHomeExposesTheRealKeychainDirectory() throws {
+        let isolated = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-agy-home-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: isolated, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: isolated) }
+
+        let link = isolated.appendingPathComponent("Library/Keychains")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: link.path))
+
+        AntigravityIsolatedAgy.linkRealKeychains(into: isolated.path)
+
+        let destination = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+        XCTAssertEqual(
+            URL(fileURLWithPath: destination).standardizedFileURL,
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Keychains", isDirectory: true).standardizedFileURL)
+
+        // Idempotent: a later spawn must not disturb what is already there.
+        AntigravityIsolatedAgy.linkRealKeychains(into: isolated.path)
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: link.path), destination)
+    }
+
     func testOMPScannerHonorsEntryLimit() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-omp-limit-\(UUID().uuidString)", isDirectory: true)

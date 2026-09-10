@@ -576,6 +576,13 @@ private enum AgCLIWarmSession {
         env["PWD"] = effectiveHome
         if let homeOverride {
             env["HOME"] = homeOverride
+            // The legacy Keychain API resolves the login keychain through
+            // `$HOME/Library/Keychains`, so an isolated HOME leaves `agy` with
+            // no default keychain and macOS puts up a modal "A keychain cannot
+            // be found to store 'antigravity'" the moment it saves credentials.
+            // Isolation only needs to cover `.gemini`, so point the keychain
+            // directory back at the real one.
+            AntigravityIsolatedAgy.linkRealKeychains(into: homeOverride)
         }
 
         let envStrings = env.map { "\($0.key)=\($0.value)" }
@@ -663,6 +670,24 @@ private enum AgCLIWarmSession {
 // login vào thư mục này (luồng đăng nhập lần đầu) nằm ngoài phạm vi file này —
 // ở đây chỉ đọc, và không bao giờ bịa quota khi chưa có login cô lập.
 enum AntigravityIsolatedAgy {
+    /// Makes the user's login keychain reachable from an isolated agy HOME.
+    /// Best effort: a missing link only brings the modal back, never breaks the
+    /// spawn, and anything already at that path is left exactly as it is.
+    static func linkRealKeychains(into isolatedHome: String) {
+        let fileManager = FileManager.default
+        let realKeychains = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Keychains", isDirectory: true)
+        guard fileManager.fileExists(atPath: realKeychains.path) else { return }
+        let library = URL(fileURLWithPath: isolatedHome, isDirectory: true)
+            .appendingPathComponent("Library", isDirectory: true)
+        let link = library.appendingPathComponent("Keychains", isDirectory: true)
+        guard !fileManager.fileExists(atPath: link.path),
+              (try? fileManager.destinationOfSymbolicLink(atPath: link.path)) == nil
+        else { return }
+        try? fileManager.createDirectory(at: library, withIntermediateDirectories: true)
+        try? fileManager.createSymbolicLink(at: link, withDestinationURL: realKeychains)
+    }
+
     private static let subdirName = "agy-accounts"
     private static let loginTokenRelativePath = ".gemini/jetski-standalone-oauth-token"
 
