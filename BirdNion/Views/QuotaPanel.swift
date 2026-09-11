@@ -247,7 +247,9 @@ struct QuotaOverview: View {
         // owned by each section's padding/rules (body pad 16).
         VStack(alignment: .leading, spacing: 0) {
             ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
-            if s.error == nil, !s.windows.isEmpty {
+            // Antigravity lists every account below, the active one included,
+            // so the hero would just repeat that account's first row.
+            if s.error == nil, !s.windows.isEmpty, s.id != "antigravity" {
                 QuotaSummaryStrip(status: s)
             }
             ProviderCard(status: s)
@@ -5267,13 +5269,32 @@ struct AntigravityAllAccountsQuotaCard: View {
         return "\(family) · \(period)".uppercased()
     }
 
+    /// Time left until this window resets, as a bare duration ("4H 59M").
+    /// `L10n.resetCountdown`'s "Reset trong …" prefix does not fit a
+    /// single-line row, and repeating it on every row is what made the block
+    /// unreadable. Falls back to `lastUpdated + windowSeconds` the same way
+    /// `WindowRow` does, so a response without a reset timestamp still shows one.
+    private func resetIn(_ window: QuotaWindow, lastUpdated: Date) -> String {
+        let target: Date? = window.resetDate
+            ?? window.windowSeconds.flatMap {
+                $0 > 0 ? lastUpdated.addingTimeInterval(TimeInterval($0)) : nil
+            }
+        guard let target else { return "" }
+        let seconds = max(0, Int(target.timeIntervalSinceNow))
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3_600
+        let minutes = (seconds % 3_600) / 60
+        if days > 0 { return "\(days)D \(hours)H" }
+        if hours > 0 { return "\(hours)H \(minutes)M" }
+        return "\(minutes)M"
+    }
+
     var body: some View {
         // Read so this card re-renders when the background per-account refresh
         // lands: the snapshots come from a file SwiftUI cannot observe.
         let _ = quota.accountSnapshotsRevision
         if !store.accounts.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                PopoverInsetHairline()
                 HStack(alignment: .firstTextBaseline) {
                     Text(L10n.t("antigravity.popover.allAccounts", lang).uppercased())
                         .font(.plexMono(10, weight: .medium))
@@ -5288,7 +5309,8 @@ struct AntigravityAllAccountsQuotaCard: View {
                 .padding(.top, 6)
                 .padding(.bottom, 2)
 
-                ForEach(store.accounts, id: \.label) { account in
+                ForEach(Array(store.accounts.enumerated()), id: \.element.label) { index, account in
+                    if index > 0 { PopoverInsetHairline() }
                     accountBlock(account)
                 }
             }
@@ -5303,8 +5325,8 @@ struct AntigravityAllAccountsQuotaCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(shortName(account))
-                    .font(.plexMono(11, weight: .medium))
-                    .foregroundStyle(VocabbyTheme.secondary)
+                    .font(.plexMono(11, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if account.label == store.activeLabel {
@@ -5320,50 +5342,38 @@ struct AntigravityAllAccountsQuotaCard: View {
                 }
             }
             .popoverContentInset()
-            .padding(.top, 6)
-            .padding(.bottom, windows.isEmpty ? 6 : 2)
+            .padding(.top, 10)
+            .padding(.bottom, windows.isEmpty ? 10 : 4)
 
             ForEach(windows) { window in
+                let reset = resetIn(window, lastUpdated: snapshot?.lastUpdated ?? Date())
                 HStack(alignment: .center, spacing: 8) {
                     Text(rowLabel(window))
                         .font(.plexMono(9))
                         .foregroundStyle(VocabbyTheme.tertiary)
                         .tracking(0.4)
-                        .frame(width: 116, alignment: .leading)
+                        .frame(width: 118, alignment: .leading)
                         .lineLimit(1)
-                    CompactQuotaBar(remainingPct: window.remainingPct)
+                    Text(reset)
+                        .font(.plexMono(9))
+                        .foregroundStyle(VocabbyTheme.muted)
+                        .frame(width: 44, alignment: .trailing)
+                        .lineLimit(1)
+                    AntigravityQuotaBar(remainingPct: window.remainingPct)
                     Text("\(window.remainingPct)%")
                         .font(.plexMono(10, weight: .semibold))
                         .foregroundStyle(VocabbyTheme.quotaColor(remaining: window.remainingPct))
                         .frame(width: 34, alignment: .trailing)
                 }
                 .popoverContentInset()
-                .padding(.vertical, 3)
+                .padding(.vertical, 2)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
                     "\(shortName(account)), \(rowLabel(window)), "
-                        + "\(window.remainingPct) percent left")
+                        + "\(window.remainingPct) percent left"
+                        + (reset.isEmpty ? "" : ", resets in \(reset)"))
             }
-            .padding(.bottom, 4)
+            .padding(.bottom, 8)
         }
-    }
-}
-
-/// 4pt bar for the multi-account summary — deliberately plainer than
-/// `AntigravityQuotaBar` so a dense list stays readable.
-private struct CompactQuotaBar: View {
-    let remainingPct: Int
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(VocabbyTheme.segment)
-                Capsule()
-                    .fill(VocabbyTheme.quotaColor(remaining: remainingPct))
-                    .frame(
-                        width: max(0, min(1, Double(remainingPct) / 100)) * geo.size.width)
-            }
-        }
-        .frame(height: 4)
     }
 }
