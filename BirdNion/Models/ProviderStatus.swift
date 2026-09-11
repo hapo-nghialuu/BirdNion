@@ -55,7 +55,7 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
     }
 
     /// Custom decode so cached snapshots written before these fields existed
-    /// (`CodexAccountSnapshotStore`'s on-disk JSON) still decode — missing
+    /// (`AccountSnapshotStore`'s on-disk JSON) still decode — missing
     /// keys default to `false` instead of failing the whole decode.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

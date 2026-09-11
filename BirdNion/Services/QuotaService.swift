@@ -55,6 +55,12 @@ final class QuotaService: ObservableObject {
     @Published private(set) var displayStatuses: [ProviderStatus] = []
     @Published private(set) var isRefreshing: Bool = false
 
+    /// Bumped when the background per-account Antigravity refresh stores a new
+    /// snapshot. The popover's all-accounts card reads `AccountSnapshotStore`
+    /// directly — SwiftUI cannot observe that file, so this publish is what
+    /// puts the freshly fetched rows on screen.
+    @Published private(set) var accountSnapshotsRevision: Int = 0
+
     /// Always-fully-populated status array used by the popover UI. Contains
     /// one entry per provider in `providers`, even if a fetch is still
     /// in-flight — missing entries get a placeholder so the tabs + cards
@@ -95,6 +101,7 @@ final class QuotaService: ObservableObject {
     private var loopTask: Task<Void, Never>?
     private var notificationObservers: [NSObjectProtocol] = []
     private var refreshPassIsRunning = false
+    private var antigravityAccountRefreshTask: Task<Void, Never>?
     private var pendingRefreshRequested = false
     private var pendingForceProviderIDs: Set<String> = []
     private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
@@ -114,12 +121,15 @@ final class QuotaService: ObservableObject {
     typealias AllFailureNotificationCleanup = @MainActor () -> Void
     typealias CodexSnapshotSave = (_ status: ProviderStatus, _ accountID: String) -> Void
     typealias CodexSnapshotRemove = (_ accountID: String) -> Void
+    typealias AntigravitySnapshotSave =
+        (_ status: ProviderStatus, _ accountLabel: String) -> Void
     private let failureNotificationPost: FailureNotificationPost
     private let failureNotificationRemove: FailureNotificationRemove
     private let legacyFailureNotificationCleanup: LegacyFailureNotificationCleanup
     private let allFailureNotificationCleanup: AllFailureNotificationCleanup
     private let codexSnapshotSave: CodexSnapshotSave
     private let codexSnapshotRemove: CodexSnapshotRemove
+    private let antigravitySnapshotSave: AntigravitySnapshotSave
     private let failureNotificationNow: () -> Date
     private let settingsRefreshDebounceNanoseconds: UInt64
     private var didSweepFailureNotifications = false
@@ -150,10 +160,13 @@ final class QuotaService: ObservableObject {
         statusCacheURL: URL? = nil,
         settingsRefreshDebounceNanoseconds: UInt64 = 350_000_000,
         codexSnapshotRemove: @escaping CodexSnapshotRemove = {
-            _ = CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: $0)
+            _ = AccountSnapshotStore.codex.removeSnapshot(forAccount: $0)
         },
         codexSnapshotSave: @escaping CodexSnapshotSave = {
-            CodexAccountSnapshotStore.shared.save($0, forAccount: $1)
+            AccountSnapshotStore.codex.save($0, forAccount: $1)
+        },
+        antigravitySnapshotSave: @escaping AntigravitySnapshotSave = {
+            AccountSnapshotStore.antigravity.save($0, forAccount: $1)
         }
     ) {
         self.providers = providers
@@ -165,6 +178,7 @@ final class QuotaService: ObservableObject {
         self.allFailureNotificationCleanup = allFailureNotificationCleanup
         self.codexSnapshotSave = codexSnapshotSave
         self.codexSnapshotRemove = codexSnapshotRemove
+        self.antigravitySnapshotSave = antigravitySnapshotSave
         self.failureNotificationNow = failureNotificationNow
         self.settingsRefreshDebounceNanoseconds = settingsRefreshDebounceNanoseconds
     }
@@ -457,7 +471,7 @@ final class QuotaService: ObservableObject {
     /// account switch shows its last-known numbers immediately, before the
     /// refetch completes. No-op when nothing is cached for that account.
     func applyCachedCodexStatus() {
-        guard let cached = CodexAccountSnapshotStore.shared.currentSnapshot() else { return }
+        guard let cached = AccountSnapshotStore.codex.currentCodexSnapshot() else { return }
         // A different account's cached snapshot is a fresh context — any
         // stale-data warning attached to the previous account no longer
         // applies here.
@@ -688,16 +702,21 @@ final class QuotaService: ObservableObject {
                 let interaction: ProviderInteraction =
                     forceProviderIDs.contains(p.id) ? .userInitiated : .background
                 let contextGeneration = providerContextGenerations[p.id] ?? 0
-                let codexSnapshotAccountID = p.id == "codex"
-                    ? CodexAccountStore.activeSelection().id
-                    : nil
+                // Key under which this fetch's result is cached per account, so
+                // the popover can show every account's last known quota without
+                // paying for a fetch per account.
+                let snapshotAccountKey: String? = switch p.id {
+                case "codex": CodexAccountStore.activeSelection().id
+                case "antigravity": AntigravityOAuthStore.load().activeLabel
+                default: nil
+                }
                 group.addTask {
                     let t0 = Date()
                     let providerIdentity = ObjectIdentifier(p)
                     let status = await ProviderInteractionContext.$current
                         .withValue(interaction) { await p.fetchWithDeadline() }
                     return (
-                        p.id, providerIdentity, contextGeneration, codexSnapshotAccountID,
+                        p.id, providerIdentity, contextGeneration, snapshotAccountKey,
                         status, Date().timeIntervalSince(t0))
                 }
             }
@@ -705,7 +724,7 @@ final class QuotaService: ObservableObject {
             var firstCompletionAt: Date?
             for await (
                 id, providerIdentity, contextGeneration,
-                codexSnapshotAccountID, status, elapsed
+                snapshotAccountKey, status, elapsed
             ) in group {
                 guard providers.contains(where: {
                     $0.id == id && ObjectIdentifier($0) == providerIdentity
@@ -713,11 +732,15 @@ final class QuotaService: ObservableObject {
                     log.info("discard removed, replaced, or stale-context provider result: \(id, privacy: .public)")
                     continue
                 }
-                if let codexSnapshotAccountID,
+                if let snapshotAccountKey,
                    status.error == nil,
                    status.isRenderableSnapshot
                 {
-                    codexSnapshotSave(status, codexSnapshotAccountID)
+                    switch id {
+                    case "codex": codexSnapshotSave(status, snapshotAccountKey)
+                    case "antigravity": antigravitySnapshotSave(status, snapshotAccountKey)
+                    default: break
+                    }
                 }
                 reconcilePendingWithCurrentContexts()
                 let previous = pending[id]
@@ -797,8 +820,28 @@ final class QuotaService: ObservableObject {
         statuses = providers.compactMap { pending[$0.id] }
         rebuildDisplayStatuses()
         persistStatuses()
+        scheduleAntigravityAccountSnapshotRefresh()
         await runWeeklyDigestIfDue()
         return successfulProviderGenerations
+    }
+
+    /// Tops up the popover's all-accounts Antigravity card in the background.
+    /// The pass above only probes the ACTIVE account, so every other account
+    /// would read "no data" until the user switched to it. Deliberately NOT
+    /// awaited: it makes three HTTPS round trips per account and must not hold
+    /// up the refresh pass. Coalesced — never more than one in flight.
+    private func scheduleAntigravityAccountSnapshotRefresh() {
+        guard antigravityAccountRefreshTask == nil,
+              let provider = providers.first(where: { $0.id == "antigravity" })
+                  as? AntigravityProvider
+        else { return }
+        antigravityAccountRefreshTask = Task { [weak self] in
+            let stored = await AntigravityAccountSnapshotRefresher
+                .refreshStaleAccounts(provider: provider)
+            guard let self else { return }
+            antigravityAccountRefreshTask = nil
+            if stored { accountSnapshotsRevision &+= 1 }
+        }
     }
 
     // MARK: - Weekly Digest (rolling 7-day cost/token summary notification)

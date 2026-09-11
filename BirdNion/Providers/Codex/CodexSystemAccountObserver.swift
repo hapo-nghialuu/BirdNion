@@ -53,7 +53,7 @@ final class CodexSystemAccountObserver {
         // Fence an in-flight fetch before any delayed refresh can observe the
         // replacement credential. The system snapshot is identity-bound too.
         CodexAuthStore.invalidateCredential(at: CodexAccountStore.systemAuthURL())
-        _ = CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: "system")
+        _ = AccountSnapshotStore.codex.removeSnapshot(forAccount: "system")
         NotificationCenter.default.post(name: .birdnionRefresh, object: "codex")
 
         guard rearm else { return }

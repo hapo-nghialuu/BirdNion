@@ -1546,53 +1546,63 @@ struct ProviderCard: View {
             : String(format: "%.2f", credits)
     }
 
+    /// Same classifier semantics as the Settings self-test
+    /// (`ProvidersPane.classifiedMessage`): show the actionable hint, not the
+    /// raw string — the raw text stays reachable via `.help()`. Retry is always
+    /// available for a provider error; Fix only shows when the kind is
+    /// something Settings can actually fix (config/credential/cookie), never
+    /// for a rate-limit or network error.
+    @ViewBuilder
+    private func errorBlock(_ err: String) -> some View {
+        let kind = classify(rawError: err) ?? .unknown
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VocabbyTheme.critical)
+                Text(L10n.t(kind.hintKey, settings.appLanguage))
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.critical)
+                    .lineLimit(2)
+                    .help(L10n.providerText(err, preference: settings.appLanguage))
+            }
+            HStack(spacing: 8) {
+                Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Thử lại" : "Retry") {
+                    Task { await quota.refresh(forceProviderIDs: [status.id]) }
+                }
+                .controlSize(.small)
+                if let target = remediationTarget(providerID: status.id, kind: kind) {
+                    Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Sửa" : "Fix") {
+                        openProviderSettings(status.id, target: target)
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+        .popoverContentInset()
+        .padding(.vertical, 10)
+    }
+
     var body: some View {
         // Design: windows list under hairline; optional CREDITS last row.
         VStack(alignment: .leading, spacing: 0) {
-            if let err = status.error {
-                // Same classifier semantics as the Settings self-test
-                // (`ProvidersPane.classifiedMessage`): show the actionable hint,
-                // not the raw string — the raw text stays reachable via
-                // `.help()`. Retry is always available for a provider error;
-                // Fix only shows when the kind is something Settings can
-                // actually fix (config/credential/cookie), never for a
-                // rate-limit or network error.
-                let kind = classify(rawError: err) ?? .unknown
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(VocabbyTheme.critical)
-                        Text(L10n.t(kind.hintKey, settings.appLanguage))
-                            .font(.plexSans(11))
-                            .foregroundStyle(VocabbyTheme.critical)
-                            .lineLimit(2)
-                            .help(L10n.providerText(err, preference: settings.appLanguage))
-                    }
-                    HStack(spacing: 8) {
-                        Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Thử lại" : "Retry") {
-                            Task { await quota.refresh(forceProviderIDs: [status.id]) }
-                        }
-                        .controlSize(.small)
-                        if let target = remediationTarget(providerID: status.id, kind: kind) {
-                            Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Sửa" : "Fix") {
-                                openProviderSettings(status.id, target: target)
-                            }
-                            .controlSize(.small)
-                        }
-                    }
+            if status.id == "antigravity" {
+                // Antigravity is listed per account, not per window: the card
+                // renders cached per-account snapshots, so it must survive an
+                // error or a still-running refresh of the *active* account —
+                // otherwise one bad probe hides every other account's quota.
+                if let err = status.error {
+                    errorBlock(err)
+                } else if let warning = quota.staleWarning(for: status.id) {
+                    StaleQuotaBanner(providerID: status.id, warning: warning)
                 }
-                .popoverContentInset()
-                .padding(.vertical, 10)
+                AntigravityAllAccountsQuotaCard()
+            } else if let err = status.error {
+                errorBlock(err)
             } else if status.windows.isEmpty {
                 LoadingQuotaSkeleton()
                     .popoverContentInset()
                     .padding(.vertical, 8)
-            } else if status.id == "antigravity" {
-                if let warning = quota.staleWarning(for: status.id) {
-                    StaleQuotaBanner(providerID: status.id, warning: warning)
-                }
-                AntigravitySemanticQuotaRows(windows: status.windows, lastUpdated: status.lastUpdated)
             } else {
                 if let warning = quota.staleWarning(for: status.id) {
                     StaleQuotaBanner(providerID: status.id, warning: warning)
@@ -1941,7 +1951,7 @@ struct CodexAccountsPopoverSection: View {
     }
 
     private func accountQuotaBadge(for account: CodexAccount) -> AccountQuotaBadge {
-        guard let snapshot = CodexAccountSnapshotStore.shared.snapshot(forAccount: account.id),
+        guard let snapshot = AccountSnapshotStore.codex.snapshot(forAccount: account.id),
               let lowest = ProviderStatusSummary.lowestWindow(snapshot)
         else {
             return AccountQuotaBadge(
@@ -3089,11 +3099,6 @@ struct AntigravityAccountsPopoverSection: View {
                     .accessibilityLabel(
                         L10n.f("provider.removeAccountTitle", settings.appLanguage, name))
                 }
-            }
-            if AntigravityIsolatedAgy.hasLogin(forAccountLabel: account.label),
-               accountPendingRemoval?.label != account.label,
-               agyLoginTargetLabel != account.label {
-                agyApplyRow(for: account)
             }
             if agyLoginTargetLabel == account.label {
                 agyLoginPanel(for: account)
@@ -5217,5 +5222,148 @@ struct EmptyProvidersState: View {
         .padding(.top, 10)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// Compact read-only summary of EVERY Antigravity account and all of its quota
+/// windows — this is Antigravity's only quota surface in the popover, so it
+/// lists every logged-in account, single account included.
+///
+/// Read-only on purpose: fetching an account costs an isolated `agy` spawn
+/// (10-20s), so this renders the per-account snapshots in
+/// `AccountSnapshotStore.antigravity` rather than polling. They are filled by
+/// the refresh pass (active account) and by
+/// `AntigravityAccountSnapshotRefresher` (one stale account per pass) — an
+/// account with no isolated agy login shows "no data yet" until it has one.
+struct AntigravityAllAccountsQuotaCard: View {
+    @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var quota: QuotaService
+
+    /// Re-read on every quota refresh so newly cached accounts appear.
+    private var store: AntigravityOAuthStore.Store { AntigravityOAuthStore.load() }
+
+    private var lang: String { settings.appLanguage }
+
+    private func shortName(_ account: AntigravityOAuthStore.Account) -> String {
+        let raw = account.email ?? account.label
+        return raw.split(separator: "@").first.map(String.init) ?? raw
+    }
+
+    /// "Gemini 5-hour" → "GEMINI · 5 GIỜ"; keeps the family so two accounts'
+    /// rows stay comparable at a glance. A window that carries neither period
+    /// keeps its own label — the cloud fallback names model tiers ("Pro",
+    /// "Flash"), and relabelling those as a family would be a lie.
+    private func rowLabel(_ window: QuotaWindow) -> String {
+        let raw = window.label.lowercased()
+        let period: String? = if raw.contains("5-hour") || raw.contains("5 hour") {
+            L10n.windowLabel("5 giờ", preference: lang)
+        } else if raw.contains("week") {
+            L10n.windowLabel("Tuần", preference: lang)
+        } else {
+            nil
+        }
+        guard let period else { return window.label.uppercased() }
+        let family = raw.hasPrefix("gemini") ? "Gemini" : "Claude/GPT"
+        return "\(family) · \(period)".uppercased()
+    }
+
+    var body: some View {
+        // Read so this card re-renders when the background per-account refresh
+        // lands: the snapshots come from a file SwiftUI cannot observe.
+        let _ = quota.accountSnapshotsRevision
+        if !store.accounts.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                PopoverInsetHairline()
+                HStack(alignment: .firstTextBaseline) {
+                    Text(L10n.t("antigravity.popover.allAccounts", lang).uppercased())
+                        .font(.plexMono(10, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.muted)
+                        .tracking(0.6)
+                    Spacer(minLength: 8)
+                    Text("\(store.accounts.count)")
+                        .font(.plexMono(10, weight: .medium))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+                .popoverContentInset()
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+
+                ForEach(store.accounts, id: \.label) { account in
+                    accountBlock(account)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func accountBlock(_ account: AntigravityOAuthStore.Account) -> some View {
+        let snapshot = AccountSnapshotStore.antigravity.snapshot(forAccount: account.label)
+        let windows = snapshot?.windows.filter { !$0.isSupplementary } ?? []
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(shortName(account))
+                    .font(.plexMono(11, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if account.label == store.activeLabel {
+                    Circle()
+                        .fill(VocabbyTheme.antigravity)
+                        .frame(width: 5, height: 5)
+                }
+                Spacer(minLength: 8)
+                if windows.isEmpty {
+                    Text(L10n.t("antigravity.popover.accountNoQuota", lang))
+                        .font(.plexMono(10))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+            }
+            .popoverContentInset()
+            .padding(.top, 6)
+            .padding(.bottom, windows.isEmpty ? 6 : 2)
+
+            ForEach(windows) { window in
+                HStack(alignment: .center, spacing: 8) {
+                    Text(rowLabel(window))
+                        .font(.plexMono(9))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                        .tracking(0.4)
+                        .frame(width: 116, alignment: .leading)
+                        .lineLimit(1)
+                    CompactQuotaBar(remainingPct: window.remainingPct)
+                    Text("\(window.remainingPct)%")
+                        .font(.plexMono(10, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.quotaColor(remaining: window.remainingPct))
+                        .frame(width: 34, alignment: .trailing)
+                }
+                .popoverContentInset()
+                .padding(.vertical, 3)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "\(shortName(account)), \(rowLabel(window)), "
+                        + "\(window.remainingPct) percent left")
+            }
+            .padding(.bottom, 4)
+        }
+    }
+}
+
+/// 4pt bar for the multi-account summary — deliberately plainer than
+/// `AntigravityQuotaBar` so a dense list stays readable.
+private struct CompactQuotaBar: View {
+    let remainingPct: Int
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(VocabbyTheme.segment)
+                Capsule()
+                    .fill(VocabbyTheme.quotaColor(remaining: remainingPct))
+                    .frame(
+                        width: max(0, min(1, Double(remainingPct) / 100)) * geo.size.width)
+            }
+        }
+        .frame(height: 4)
     }
 }

@@ -795,7 +795,7 @@ final class CodexProviderTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-snap-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = CodexAccountSnapshotStore(fileURL: tmp)
+        let store = AccountSnapshotStore(fileURL: tmp)
         let status = ProviderStatus(
             id: "codex", displayName: "Codex",
             windows: [QuotaWindow(label: "5 giờ", usedPct: 40, remainingPct: 60)],
@@ -804,7 +804,7 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertEqual(store.snapshot(forAccount: "acc-1")?.accountLabel, "a@x.com")
         XCTAssertNil(store.snapshot(forAccount: "other"))
         // Persisted: a fresh instance on the same file reloads it.
-        let reopened = CodexAccountSnapshotStore(fileURL: tmp)
+        let reopened = AccountSnapshotStore(fileURL: tmp)
         XCTAssertEqual(reopened.snapshot(forAccount: "acc-1")?.windows.first?.usedPct, 40)
     }
 
@@ -812,7 +812,7 @@ final class CodexProviderTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-snap-remove-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = CodexAccountSnapshotStore(fileURL: tmp)
+        let store = AccountSnapshotStore(fileURL: tmp)
         let status = ProviderStatus(
             id: "codex", displayName: "Codex",
             windows: [QuotaWindow(label: "5 giờ", usedPct: 40, remainingPct: 60)],
@@ -822,7 +822,7 @@ final class CodexProviderTests: XCTestCase {
         store.removeSnapshot(forAccount: "account-x")
 
         XCTAssertNil(store.snapshot(forAccount: "account-x"))
-        XCTAssertNil(CodexAccountSnapshotStore(fileURL: tmp).snapshot(forAccount: "account-x"))
+        XCTAssertNil(AccountSnapshotStore(fileURL: tmp).snapshot(forAccount: "account-x"))
     }
 
     func testSnapshotStoreDoesNotFollowSymlinkOnLoadOrSave() throws {
@@ -836,7 +836,7 @@ final class CodexProviderTests: XCTestCase {
         let link = directory.appendingPathComponent("snapshots.json")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
 
-        let store = CodexAccountSnapshotStore(fileURL: link)
+        let store = AccountSnapshotStore(fileURL: link)
         XCTAssertNil(store.snapshot(forAccount: "account-x"))
         store.save(ProviderStatus(
             id: "codex", displayName: "Codex",
@@ -844,7 +844,7 @@ final class CodexProviderTests: XCTestCase {
             lastUpdated: Date()), forAccount: "account-x")
 
         XCTAssertEqual(try Data(contentsOf: target), original)
-        XCTAssertNil(CodexAccountSnapshotStore(fileURL: link).snapshot(forAccount: "account-x"))
+        XCTAssertNil(AccountSnapshotStore(fileURL: link).snapshot(forAccount: "account-x"))
     }
 
     func testSnapshotStoreRejectsFIFOAndOversizedFileWithoutBlocking() throws {
@@ -855,14 +855,14 @@ final class CodexProviderTests: XCTestCase {
 
         let fifo = directory.appendingPathComponent("snapshots-fifo.json")
         XCTAssertEqual(fifo.path.withCString { Darwin.mkfifo($0, 0o600) }, 0)
-        XCTAssertNil(CodexAccountSnapshotStore(fileURL: fifo).snapshot(forAccount: "account-x"))
+        XCTAssertNil(AccountSnapshotStore(fileURL: fifo).snapshot(forAccount: "account-x"))
 
         let oversized = directory.appendingPathComponent("snapshots-large.json")
         FileManager.default.createFile(atPath: oversized.path, contents: Data())
         let handle = try FileHandle(forWritingTo: oversized)
         try handle.truncate(atOffset: UInt64(2 * 1024 * 1024 + 1))
         try handle.close()
-        XCTAssertNil(CodexAccountSnapshotStore(fileURL: oversized).snapshot(forAccount: "account-x"))
+        XCTAssertNil(AccountSnapshotStore(fileURL: oversized).snapshot(forAccount: "account-x"))
     }
 
     func testCurrentSnapshotDoesNotNormalizeVanishedManagedAccountToSystem() {
@@ -878,7 +878,7 @@ final class CodexProviderTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-snap-fallback-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = CodexAccountSnapshotStore(fileURL: tmp)
+        let store = AccountSnapshotStore(fileURL: tmp)
         store.save(ProviderStatus(
             id: "codex", displayName: "Codex",
             windows: [QuotaWindow(label: "5 giờ", usedPct: 10, remainingPct: 90)],
@@ -890,14 +890,44 @@ final class CodexProviderTests: XCTestCase {
             lastUpdated: Date(), accountLabel: "system@example.com"),
             forAccount: "system")
 
-        XCTAssertEqual(store.currentSnapshot()?.accountLabel, "stale@example.com")
+        XCTAssertEqual(store.currentCodexSnapshot()?.accountLabel, "stale@example.com")
+    }
+
+    /// Codex and Antigravity share the store but must never share a key space:
+    /// Codex keys by account id, Antigravity by account label, and a collision
+    /// would show one provider's quota under the other's account.
+    func testSnapshotStoresAreIsolatedPerProvider() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-snapshot-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let codex = AccountSnapshotStore(fileURL: dir.appendingPathComponent("codex.json"))
+        let antigravity = AccountSnapshotStore(
+            fileURL: dir.appendingPathComponent("antigravity.json"))
+
+        func status(_ label: String) -> ProviderStatus {
+            ProviderStatus(
+                id: "x", displayName: "X",
+                windows: [QuotaWindow(label: "Tuần", usedPct: 10, remainingPct: 90)],
+                lastUpdated: Date(), accountLabel: label)
+        }
+        // Same key on purpose: the two stores must not see each other's entry.
+        codex.save(status("codex@example.com"), forAccount: "shared-key")
+        antigravity.save(status("agy@example.com"), forAccount: "shared-key")
+
+        XCTAssertEqual(
+            codex.snapshot(forAccount: "shared-key")?.accountLabel, "codex@example.com")
+        XCTAssertEqual(
+            antigravity.snapshot(forAccount: "shared-key")?.accountLabel, "agy@example.com")
+        XCTAssertNil(antigravity.snapshot(forAccount: "absent"))
     }
 
     func testSnapshotStoreIgnoresErrorAndEmpty() {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-snap-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = CodexAccountSnapshotStore(fileURL: tmp)
+        let store = AccountSnapshotStore(fileURL: tmp)
         store.save(ProviderStatus(id: "codex", displayName: "Codex", windows: [],
                                   lastUpdated: Date(), error: "boom"), forAccount: "e")
         XCTAssertNil(store.snapshot(forAccount: "e"))   // error status ignored

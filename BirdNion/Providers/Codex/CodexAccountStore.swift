@@ -457,7 +457,7 @@ enum CodexAccountStore {
         activeID: String,
         cliSwitchedID: String?,
         purgeSnapshot: (String) throws -> Void = {
-            guard CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: $0) else {
+            guard AccountSnapshotStore.codex.removeSnapshot(forAccount: $0) else {
                 throw AccountError.persistenceFailed
             }
         },
@@ -938,7 +938,7 @@ enum CodexAccountStore {
             throw AccountError.loginFailed
         }
         CodexAuthStore.invalidateCredential(binding: binding)
-        guard CodexAccountSnapshotStore.shared.removeSnapshot(forAccount: id) else {
+        guard AccountSnapshotStore.codex.removeSnapshot(forAccount: id) else {
             throw AccountError.persistenceFailed
         }
         notifyAccountChanged()
