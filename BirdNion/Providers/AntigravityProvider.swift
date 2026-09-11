@@ -1935,8 +1935,11 @@ enum AntigravityAccountCloudQuota {
     /// The endpoint is picky about the caller: it stalls on the default
     /// URLSession agent and answers immediately for the one `agy` sends.
     private static let userAgent = "antigravity-cli"
+    /// `PLATFORM_UNSPECIFIED` rather than a concrete triple: a wrong triple is
+    /// rejected with 400 (measured with `LINUX_X64`), so naming the host
+    /// architecture would break the call on any Mac that is not arm64.
     private static let loadCodeAssistBody = Data(
-        #"{"metadata":{"ideType":"ANTIGRAVITY","platform":"DARWIN_ARM64","pluginType":"GEMINI"}}"#.utf8)
+        #"{"metadata":{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}"#.utf8)
 
     /// Raw `groups` from RetrieveUserQuotaSummary, shaped exactly like the
     /// local language server's, so `quotaWindowsFromSummary` maps both.
