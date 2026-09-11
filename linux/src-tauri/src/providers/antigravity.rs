@@ -45,6 +45,8 @@ const QUOTA_SUMMARY_PATH: &str =
 const USER_STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const WARM_SPAWN_TIMEOUT: Duration = Duration::from_secs(7);
+const CLOUD_QUOTA_TIMEOUT: Duration = Duration::from_secs(30);
+const CLOUD_QUOTA_TIMEOUT_ERROR: &str = "Antigravity Cloud: timeout sau 30s";
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const OAUTH_QUOTA_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
 const OAUTH_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
@@ -57,8 +59,7 @@ const AGY_CLI_CLIENT_ID: &str =
 /// Split so GitHub's secret scanner sees no contiguous literal — the same
 /// convention the Swift constant uses. Google desktop-app secrets ship inside
 /// the `agy` binary and are not real secrets.
-const AGY_CLI_CLIENT_SECRET_PARTS: [&str; 4] =
-    ["GOCSPX-", "K58FWR486", "LdLJ1mLB8sXC", "4z6qDAf"];
+const AGY_CLI_CLIENT_SECRET_PARTS: [&str; 4] = ["GOCSPX-", "K58FWR486", "LdLJ1mLB8sXC", "4z6qDAf"];
 /// The host `agy` itself calls; plain `cloudcode-pa` answers 429 for the same
 /// session.
 const CLOUD_QUOTA_HOST: &str = "https://daily-cloudcode-pa.googleapis.com";
@@ -67,17 +68,29 @@ const CLOUD_QUOTA_HOST: &str = "https://daily-cloudcode-pa.googleapis.com";
 const CLOUD_USER_AGENT: &str = "antigravity-cli";
 /// `PLATFORM_UNSPECIFIED` rather than a concrete triple — `LINUX_X64` is
 /// rejected with 400.
-const LOAD_CODE_ASSIST_BODY: &str =
-    r#"{"metadata":{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}"#;
+const LOAD_CODE_ASSIST_BODY: &str = r#"{"metadata":{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}"#;
 
 struct ProcessInfo {
     pid: i32,
     csrf_token: String,
 }
 
+enum CloudQuotaOutcome {
+    Unavailable,
+    Status(ProviderStatus),
+}
+
+#[derive(Debug, PartialEq)]
+enum AgyCloudIdentityExpectation {
+    AnySignedInAccount,
+    Exact(String),
+    UnsafeSelection,
+}
+
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     let mut account_mismatch = None;
+    let mut cloud_failure = None;
 
     if let Some(status) = fetch_from_running_process(cfg, &name).await {
         if !is_account_mismatch_status(&status) {
@@ -93,17 +106,35 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     }
     // `agy`'s own token reaches the quota RPC; the stored OAuth token cannot
     // (wrong client, no `aicode` scope). Try it before falling back.
-    if let Some(status) = fetch_via_agy_cloud_quota(cfg, &name).await {
-        if !is_account_mismatch_status(&status) {
+    let cloud_outcome =
+        tokio::time::timeout(CLOUD_QUOTA_TIMEOUT, fetch_via_agy_cloud_quota(cfg, &name))
+            .await
+            .unwrap_or_else(|_| {
+                CloudQuotaOutcome::Status(ProviderStatus::failure(
+                    &cfg.id,
+                    &name,
+                    CLOUD_QUOTA_TIMEOUT_ERROR,
+                ))
+            });
+    if let CloudQuotaOutcome::Status(status) = cloud_outcome {
+        if status.error.is_none() {
             return status;
         }
-        account_mismatch = Some(status);
+        if is_account_mismatch_status(&status) {
+            account_mismatch = Some(status);
+        } else {
+            cloud_failure = Some(status);
+        }
     }
     if let Some(status) = fetch_via_oauth(cfg, &name).await {
-        return status;
+        if status.error.is_none() {
+            return status;
+        }
+        return select_terminal_failure(account_mismatch, cloud_failure, Some(status))
+            .expect("OAuth failure is present");
     }
 
-    if let Some(status) = account_mismatch {
+    if let Some(status) = select_terminal_failure(account_mismatch, cloud_failure, None) {
         return status;
     }
 
@@ -112,6 +143,14 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         &name,
         "Antigravity: cần IDE đang chạy, agy CLI, hoặc đăng nhập Google",
     )
+}
+
+fn select_terminal_failure(
+    account_mismatch: Option<ProviderStatus>,
+    cloud_failure: Option<ProviderStatus>,
+    oauth_failure: Option<ProviderStatus>,
+) -> Option<ProviderStatus> {
+    account_mismatch.or(cloud_failure).or(oauth_failure)
 }
 
 /// Probe an already-running `language_server`/`agy` process found via `ps`.
@@ -939,7 +978,16 @@ fn parse_quota_summary(json: &Value) -> Option<Vec<Value>> {
             return None;
         }
     }
-    let summary = json.get("quotaSummary").unwrap_or(json);
+    let summary = ["quotaSummary", "response", "summary"]
+        .iter()
+        .filter_map(|key| json.get(key))
+        .find(|wrapper| {
+            wrapper
+                .get("groups")
+                .and_then(Value::as_array)
+                .is_some_and(|groups| !groups.is_empty())
+        })
+        .unwrap_or(json);
     Some(
         summary
             .get("groups")
@@ -1277,9 +1325,7 @@ fn non_empty(s: Option<&str>) -> Option<String> {
 /// configured (so the fallback chain can end with the generic error), an
 /// error status when the fetch itself fails.
 /// Refresh token written by an `agy` login. `agy` stores it in the real
-/// `~/.gemini`, so this reads whichever account `agy` is currently signed in
-/// as — the account-match guard in `build_status` rejects it when that is not
-/// the account BirdNion has selected.
+/// `~/.gemini`, so this reads whichever account `agy` is currently signed in.
 fn agy_refresh_token() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     let path = std::path::PathBuf::from(home).join(".gemini/jetski-standalone-oauth-token");
@@ -1291,33 +1337,93 @@ fn agy_refresh_token() -> Option<String> {
 
 /// Quota straight from Google using the `agy` login's own token — no `agy`
 /// process, so this works headless and when the warm session never opens a
-/// port. Returns `None` when `agy` has not been signed in or a call fails, so
-/// the caller keeps falling through.
+/// port. A selected BirdNion account without a verifiable email must not use
+/// this global token because it may belong to another account.
 ///
 /// `loadCodeAssist` MUST run before the quota call: skipping it, the very same
 /// token answers 429 RESOURCE_EXHAUSTED.
-async fn fetch_via_agy_cloud_quota(
-    cfg: &config::Provider,
-    name: &str,
-) -> Option<ProviderStatus> {
-    let refresh_token = agy_refresh_token()?;
+async fn fetch_via_agy_cloud_quota(cfg: &config::Provider, name: &str) -> CloudQuotaOutcome {
+    let store = load_oauth_store();
+    let expectation = agy_cloud_identity_expectation(store.as_ref(), cfg.account_label.as_deref());
+    if expectation == AgyCloudIdentityExpectation::UnsafeSelection {
+        return CloudQuotaOutcome::Unavailable;
+    }
+    let Some(refresh_token) = agy_refresh_token() else {
+        return CloudQuotaOutcome::Unavailable;
+    };
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
-        .ok()?;
+        .map_err(|error| format!("không tạo được HTTP client: {error}"));
+    let client = match client {
+        Ok(client) => client,
+        Err(error) => return cloud_failure(cfg, name, error),
+    };
     let secret = AGY_CLI_CLIENT_SECRET_PARTS.concat();
     let access_token =
-        refresh_access_token(&client, &refresh_token, AGY_CLI_CLIENT_ID, &secret)
-            .await
-            .ok()?;
-    cloud_post(&client, "loadCodeAssist", LOAD_CODE_ASSIST_BODY, &access_token).await?;
-    let summary = cloud_post(&client, "retrieveUserQuotaSummary", "{}", &access_token).await?;
-    let windows = map_summary_windows(&parse_quota_summary(&summary)?);
-    if windows.is_empty() {
-        return None;
+        match refresh_access_token(&client, &refresh_token, AGY_CLI_CLIENT_ID, &secret).await {
+            Ok(token) => token,
+            Err(error) => return cloud_failure(cfg, name, error),
+        };
+    let email = match cloud_identity_email(&client, &access_token).await {
+        Ok(email) => email,
+        Err(error) => return cloud_failure(cfg, name, error),
+    };
+    if let AgyCloudIdentityExpectation::Exact(expected) = &expectation {
+        if let Some(error) = account_mismatch_error(Some(expected), Some(&email)) {
+            return CloudQuotaOutcome::Status(ProviderStatus::failure(&cfg.id, name, error));
+        }
     }
-    let email = cloud_identity_email(&client, &access_token).await;
-    Some(build_status(cfg, name, windows, email))
+    if let Err(error) = cloud_post(
+        &client,
+        "loadCodeAssist",
+        LOAD_CODE_ASSIST_BODY,
+        &access_token,
+    )
+    .await
+    {
+        return cloud_failure(cfg, name, error);
+    }
+    let summary = match cloud_post(&client, "retrieveUserQuotaSummary", "{}", &access_token).await {
+        Ok(summary) => summary,
+        Err(error) => return cloud_failure(cfg, name, error),
+    };
+    let Some(groups) = parse_quota_summary(&summary) else {
+        return cloud_failure(cfg, name, "quota response không hợp lệ");
+    };
+    let windows = map_summary_windows(&groups);
+    if windows.is_empty() {
+        return cloud_failure(cfg, name, "quota response không có cửa sổ hợp lệ");
+    }
+    CloudQuotaOutcome::Status(build_status(cfg, name, windows, Some(email)))
+}
+
+fn agy_cloud_identity_expectation(
+    store: Option<&OAuthStore>,
+    config_label: Option<&str>,
+) -> AgyCloudIdentityExpectation {
+    if let Some(account) = store.and_then(active_account) {
+        return non_empty(account.email.as_deref())
+            .filter(|email| email.contains('@'))
+            .map(AgyCloudIdentityExpectation::Exact)
+            .unwrap_or(AgyCloudIdentityExpectation::UnsafeSelection);
+    }
+    non_empty(config_label)
+        .filter(|label| label.contains('@'))
+        .map(AgyCloudIdentityExpectation::Exact)
+        .unwrap_or(AgyCloudIdentityExpectation::AnySignedInAccount)
+}
+
+fn cloud_failure(
+    cfg: &config::Provider,
+    name: &str,
+    error: impl std::fmt::Display,
+) -> CloudQuotaOutcome {
+    CloudQuotaOutcome::Status(ProviderStatus::failure(
+        &cfg.id,
+        name,
+        format!("Antigravity Cloud: {error}"),
+    ))
 }
 
 async fn cloud_post(
@@ -1325,7 +1431,7 @@ async fn cloud_post(
     method: &str,
     body: &'static str,
     access_token: &str,
-) -> Option<Value> {
+) -> Result<Value, String> {
     let resp = client
         .post(format!("{CLOUD_QUOTA_HOST}/v1internal:{method}"))
         .bearer_auth(access_token)
@@ -1334,28 +1440,46 @@ async fn cloud_post(
         .body(body)
         .send()
         .await
-        .ok()?;
+        .map_err(|error| format!("Network: {error}"))?;
     if resp.status().as_u16() != 200 {
-        return None;
+        return Err(format!("HTTP {}", resp.status().as_u16()));
     }
-    resp.json::<Value>().await.ok()
+    resp.json::<Value>()
+        .await
+        .map_err(|error| format!("Invalid JSON: {error}"))
 }
 
-/// Which account the `agy` token actually belongs to. Best-effort: `None` only
-/// weakens the match guard to what it already does for a missing email.
-async fn cloud_identity_email(client: &reqwest::Client, access_token: &str) -> Option<String> {
+/// Which account the global `agy` token actually belongs to. Identity is
+/// mandatory: accepting quota without it can display another account's data.
+async fn cloud_identity_email(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<String, String> {
     let resp = client
         .get(OAUTH_USERINFO_URL)
         .bearer_auth(access_token)
         .send()
         .await
-        .ok()?;
+        .map_err(|error| format!("không xác minh được tài khoản agy: {error}"))?;
     if resp.status().as_u16() != 200 {
-        return None;
+        return Err(format!(
+            "không xác minh được tài khoản agy: HTTP {}",
+            resp.status().as_u16()
+        ));
     }
-    let json = resp.json::<Value>().await.ok()?;
-    let email = json.get("email")?.as_str()?.trim();
-    (!email.is_empty()).then(|| email.to_string())
+    let json = resp
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("không xác minh được tài khoản agy: {error}"))?;
+    let email = json
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if email.is_empty() {
+        return Err("không xác minh được tài khoản agy: thiếu email".to_string());
+    }
+    Ok(email.to_string())
 }
 
 async fn fetch_via_oauth(cfg: &config::Provider, name: &str) -> Option<ProviderStatus> {
@@ -1603,6 +1727,83 @@ mod tests {
     }
 
     #[test]
+    fn selected_account_without_email_cannot_use_global_agy_token() {
+        let store = OAuthStore {
+            active_label: Some("work".into()),
+            accounts: vec![OAuthAccount {
+                label: "work".into(),
+                email: None,
+                refresh_token: "rt".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            agy_cloud_identity_expectation(Some(&store), None),
+            AgyCloudIdentityExpectation::UnsafeSelection
+        );
+    }
+
+    #[test]
+    fn selected_account_email_must_match_global_agy_identity() {
+        let store = OAuthStore {
+            active_label: Some("work".into()),
+            accounts: vec![OAuthAccount {
+                label: "work".into(),
+                email: Some("work@example.com".into()),
+                refresh_token: "rt".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            agy_cloud_identity_expectation(Some(&store), Some("legacy@example.com")),
+            AgyCloudIdentityExpectation::Exact("work@example.com".into())
+        );
+    }
+
+    #[test]
+    fn global_agy_identity_is_allowed_when_no_account_is_selected() {
+        assert_eq!(
+            agy_cloud_identity_expectation(None, None),
+            AgyCloudIdentityExpectation::AnySignedInAccount
+        );
+        assert_eq!(
+            agy_cloud_identity_expectation(None, Some("legacy@example.com")),
+            AgyCloudIdentityExpectation::Exact("legacy@example.com".into())
+        );
+    }
+
+    #[test]
+    fn terminal_failure_prefers_mismatch_then_cloud_then_oauth() {
+        let mismatch = ProviderStatus::failure("ag", "Antigravity", "Account không khớp");
+        let cloud = ProviderStatus::failure("ag", "Antigravity", "Antigravity Cloud: HTTP 429");
+        let oauth = ProviderStatus::failure("ag", "Antigravity", "Antigravity OAuth: HTTP 403");
+
+        let selected = select_terminal_failure(
+            Some(mismatch.clone()),
+            Some(cloud.clone()),
+            Some(oauth.clone()),
+        )
+        .unwrap();
+        assert_eq!(selected.error, mismatch.error);
+
+        let selected =
+            select_terminal_failure(None, Some(cloud.clone()), Some(oauth.clone())).unwrap();
+        assert_eq!(selected.error, cloud.error);
+
+        let selected = select_terminal_failure(None, None, Some(oauth.clone())).unwrap();
+        assert_eq!(selected.error, oauth.error);
+    }
+
+    #[test]
+    fn cloud_deadline_error_preserves_last_good_quota() {
+        assert!(
+            crate::providers::error_classifier::is_transient_for_last_good(Some(
+                CLOUD_QUOTA_TIMEOUT_ERROR
+            ))
+        );
+    }
+
+    #[test]
     fn parses_user_status_with_model_configs() {
         let body = json!({
             "userStatus": {
@@ -1708,6 +1909,19 @@ mod tests {
         assert_eq!(windows[0].label, "Gemini weekly");
         assert_eq!(windows[0].remaining_pct, 60);
         assert_eq!(windows[0].window_seconds, Some(604_800));
+    }
+
+    #[test]
+    fn parses_all_supported_quota_summary_wrappers() {
+        for body in [
+            json!({"groups": [{"displayName": "root"}]}),
+            json!({"quotaSummary": {"groups": [{"displayName": "quotaSummary"}]}}),
+            json!({"response": {"groups": [{"displayName": "response"}]}}),
+            json!({"summary": {"groups": [{"displayName": "summary"}]}}),
+        ] {
+            let groups = parse_quota_summary(&body).unwrap();
+            assert_eq!(groups.len(), 1, "body: {body}");
+        }
     }
 
     #[test]
