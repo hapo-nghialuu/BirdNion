@@ -1,15 +1,23 @@
 import Foundation
 
-/// Persists the last successful Codex `ProviderStatus` per account so switching
+/// Persists the last successful `ProviderStatus` per account so switching
 /// accounts shows the previous numbers immediately (instead of a blank card)
 /// and survives across relaunches. Mirrors CodexBar's per-account usage
 /// snapshot store.
 ///
-/// Keyed by `CodexAccountStore` account id ("system" or a managed UUID).
-/// Best-effort: any read/write failure is swallowed — this is a UX nicety, not
-/// a source of truth.
-final class CodexAccountSnapshotStore: @unchecked Sendable {
-    static let shared = CodexAccountSnapshotStore()
+/// Shared by every provider that has more than one account; each gets its own
+/// file and its own key space (Codex uses account ids, Antigravity uses account
+/// labels). Best-effort: any read/write failure is swallowed — this is a UX
+/// nicety, not a source of truth.
+final class AccountSnapshotStore: @unchecked Sendable {
+    /// Keyed by `CodexAccountStore` account id ("system" or a managed UUID).
+    static let codex = AccountSnapshotStore(fileName: "codex-account-snapshots.json")
+
+    /// Keyed by `AntigravityOAuth` account label. Fetching another account costs
+    /// a fresh `agy` spawn, so the popover renders these cached snapshots rather
+    /// than polling every account on every cycle.
+    static let antigravity = AccountSnapshotStore(
+        fileName: "antigravity-account-snapshots.json")
     private static let maxStoredBytes = 2 * 1024 * 1024
 
     private let lock = NSLock()
@@ -17,13 +25,13 @@ final class CodexAccountSnapshotStore: @unchecked Sendable {
     private var cache: [String: ProviderStatus] = [:]
     private let fileURL: URL
 
-    /// `fileURL` is injectable for tests; production uses the App Support path.
-    init(fileURL: URL? = nil) {
+    /// `fileURL` is injectable for tests; production derives it from `fileName`.
+    init(fileURL: URL? = nil, fileName: String = "codex-account-snapshots.json") {
         self.fileURL = fileURL ?? {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             return base
                 .appendingPathComponent("BirdNion", isDirectory: true)
-                .appendingPathComponent("codex-account-snapshots.json")
+                .appendingPathComponent(fileName)
         }()
     }
 
@@ -33,11 +41,6 @@ final class CodexAccountSnapshotStore: @unchecked Sendable {
         defer { lock.unlock() }
         loadIfNeeded()
         return cache[id]
-    }
-
-    /// Snapshot for the currently active account.
-    func currentSnapshot() -> ProviderStatus? {
-        snapshot(forAccount: CodexAccountStore.activeSelection().id)
     }
 
     /// Store a successful status for `id` and persist to disk. Error statuses
@@ -92,5 +95,13 @@ final class CodexAccountSnapshotStore: @unchecked Sendable {
         } catch {
             return false
         }
+    }
+}
+
+extension AccountSnapshotStore {
+    /// Snapshot for the account Codex is currently fetching. Codex-only: it
+    /// resolves the id through `CodexAccountStore`.
+    func currentCodexSnapshot() -> ProviderStatus? {
+        snapshot(forAccount: CodexAccountStore.activeSelection().id)
     }
 }

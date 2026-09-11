@@ -5134,4 +5134,41 @@ final class NewProviderTests: XCTestCase {
         }
     }
 
+    // MARK: - Antigravity per-account snapshot refresh
+
+    private func agAccount(_ label: String) -> AntigravityOAuthStore.Account {
+        AntigravityOAuthStore.Account(label: label, email: label, refreshToken: "t-\(label)")
+    }
+
+    func testAntigravityStaleAccountsIncludeNeverFetchedAccount() {
+        let now = Date()
+        let cached: [String: Date] = ["a@x.com": now]
+        let due = AntigravityAccountSnapshotRefresher.staleAccounts(
+            accounts: [agAccount("a@x.com"), agAccount("b@x.com")],
+            now: now,
+            cachedAt: { cached[$0] })
+        XCTAssertEqual(due.map(\.label), ["b@x.com"])
+    }
+
+    func testAntigravityStaleAccountsReturnsEveryAgedOutAccount() {
+        let now = Date()
+        let old = now.addingTimeInterval(-AntigravityAccountSnapshotRefresher.maxSnapshotAge - 1)
+        let cached: [String: Date] = ["a@x.com": old, "b@x.com": old]
+        let due = AntigravityAccountSnapshotRefresher.staleAccounts(
+            accounts: [agAccount("a@x.com"), agAccount("b@x.com")],
+            now: now,
+            cachedAt: { cached[$0] })
+        XCTAssertEqual(due.map(\.label), ["a@x.com", "b@x.com"])
+    }
+
+    func testAntigravityStaleAccountsSkipsFreshSnapshots() {
+        let now = Date()
+        let fresh = now.addingTimeInterval(-AntigravityAccountSnapshotRefresher.maxSnapshotAge + 1)
+        let cached: [String: Date] = ["a@x.com": fresh, "b@x.com": fresh]
+        XCTAssertTrue(
+            AntigravityAccountSnapshotRefresher.staleAccounts(
+                accounts: [agAccount("a@x.com"), agAccount("b@x.com")],
+                now: now,
+                cachedAt: { cached[$0] }).isEmpty)
+    }
 }

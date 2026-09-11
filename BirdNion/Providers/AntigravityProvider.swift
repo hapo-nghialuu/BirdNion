@@ -719,6 +719,23 @@ enum AntigravityIsolatedAgy {
         return fileManager.fileExists(atPath: tokenPath)
     }
 
+    /// Refresh token minted for THIS account by the isolated agy login (client
+    /// 1071, agy scopes). It is the only per-account credential on disk the
+    /// quota RPC accepts: the token in `AntigravityOAuthStore` was minted by
+    /// the cloud-platform client and `retrieveUserQuotaSummary` rejects it.
+    static func agyRefreshToken(
+        forAccountLabel label: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> String? {
+        let url = homeDir(forAccountLabel: label, home: home, env: env, fileManager: fileManager)
+            .appendingPathComponent(loginTokenRelativePath)
+        let token = AntigravityJetskiToken.load(url)?.token.refreshToken
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (token?.isEmpty == false) ? token : nil
+    }
+
     /// Seed một login `agy` cô lập TỪ bộ token OAuth (client 1071 + scope agy)
     /// mà KHÔNG cần chạy `agy` login: ghi đúng bộ file agy cần để coi account
     /// này đã đăng nhập + onboard xong. Đã kiểm chứng trên máy thật — agy chấp
@@ -1448,6 +1465,13 @@ final class AntigravityProvider: QuotaProvider {
                     return isolatedStatus
                 }
             }
+            // agy xác định danh tính từ keychain dùng chung của user, KHÔNG
+            // theo HOME, nên spawn cô lập ở trên có thể trả về account khác.
+            // RPC cloud thì khoá theo đúng refresh token của account này, nên
+            // đây là đường duy nhất luôn trả lời đúng account đang chọn.
+            if let cloudStatus = await fetchViaAccountCloudQuota() {
+                return cloudStatus
+            }
             // OAuth (cloud) CHỈ hợp lệ khi lấy được quota thật. Với account mà
             // agy không đăng nhập, cloud luôn 403 — đừng để lỗi đó che thông báo
             // "account không khớp" (rõ ràng, đúng việc cần làm). Ưu tiên:
@@ -1464,6 +1488,26 @@ final class AntigravityProvider: QuotaProvider {
             }
             return failure("Antigravity: cần IDE đang chạy, agy CLI, hoặc đăng nhập Google")
         }
+    }
+
+    /// Quota for the SELECTED account straight from Google, bypassing `agy`
+    /// entirely — see `AntigravityAccountCloudQuota` for why `agy` cannot
+    /// answer for a non-keychain account. Returns nil when the account has no
+    /// isolated agy login (no agy-scoped token on disk) or the RPC fails, so
+    /// `auto` keeps falling through.
+    private func fetchViaAccountCloudQuota() async -> ProviderStatus? {
+        let store = AntigravityOAuthStore.load()
+        guard let account = AntigravityOAuthStore.activeAccount(in: store),
+              let refreshToken = AntigravityIsolatedAgy.agyRefreshToken(
+                  forAccountLabel: account.label),
+              let groups = try? await AntigravityAccountCloudQuota.fetchQuotaGroups(
+                  refreshToken: refreshToken)
+        else { return nil }
+        let windows = quotaWindowsFromSummary(groups)
+        guard !windows.isEmpty else { return nil }
+        return ProviderStatus(
+            id: id, displayName: displayName, windows: windows, lastUpdated: Date(),
+            error: nil, accountLabel: account.email ?? account.label, sourceLabel: "Cloud")
     }
 
     /// OAuth remote path: uses the active stored Google account to fetch quota
@@ -1865,5 +1909,156 @@ final class AntigravityProvider: QuotaProvider {
         guard let configured = configLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
               configured.contains("@") else { return nil }
         return configured
+    }
+}
+
+/// Per-account Antigravity quota read straight from Google, with no `agy`
+/// process involved.
+///
+/// `agy` resolves its identity from a user-global keychain, NOT from `HOME`:
+/// measured on a two-account machine, isolated spawns under two different HOMEs
+/// both reported the same token, the same expiry and the same email. An
+/// isolated HOME therefore can never read a second account's quota — it always
+/// answers for whichever account last logged in, and BirdNion's account-match
+/// guard (correctly) rejects that as a mismatch. The cloud RPC has no such
+/// problem: it is keyed purely on the refresh token the isolated login already
+/// stored for that one account.
+///
+/// `loadCodeAssist` MUST run before the quota call. Skipping it, the very same
+/// token answers 429 RESOURCE_EXHAUSTED or 403 SUBSCRIPTION_REQUIRED; with it
+/// both accounts answer 200 carrying their own buckets.
+enum AntigravityAccountCloudQuota {
+    private static let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
+    /// The host `agy` itself calls (seen in its `cli.log`); the plain
+    /// `cloudcode-pa` host answers 429 for the same session.
+    private static let host = "daily-cloudcode-pa.googleapis.com"
+    /// The endpoint is picky about the caller: it stalls on the default
+    /// URLSession agent and answers immediately for the one `agy` sends.
+    private static let userAgent = "antigravity-cli"
+    private static let loadCodeAssistBody = Data(
+        #"{"metadata":{"ideType":"ANTIGRAVITY","platform":"DARWIN_ARM64","pluginType":"GEMINI"}}"#.utf8)
+
+    /// Raw `groups` from RetrieveUserQuotaSummary, shaped exactly like the
+    /// local language server's, so `quotaWindowsFromSummary` maps both.
+    static func fetchQuotaGroups(
+        refreshToken: String,
+        timeout: TimeInterval = 20
+    ) async throws -> [[String: Any]] {
+        let accessToken = try await refreshAccessToken(
+            refreshToken: refreshToken, timeout: timeout)
+        _ = try await post(
+            method: "loadCodeAssist", body: loadCodeAssistBody,
+            accessToken: accessToken, timeout: timeout)
+        let data = try await post(
+            method: "retrieveUserQuotaSummary", body: Data("{}".utf8),
+            accessToken: accessToken, timeout: timeout)
+        return try AgResponseParser.parseQuotaSummary(data).groups
+    }
+
+    private static func refreshAccessToken(
+        refreshToken: String, timeout: TimeInterval
+    ) async throws -> String {
+        var req = URLRequest(url: tokenURL)
+        req.httpMethod = "POST"
+        req.timeoutInterval = timeout
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var comps = URLComponents()
+        comps.queryItems = [
+            URLQueryItem(name: "client_id", value: AntigravityOAuthLogin.agyCliClientID),
+            URLQueryItem(name: "client_secret", value: AntigravityOAuthLogin.agyCliClientSecret),
+            URLQueryItem(name: "refresh_token", value: refreshToken),
+            URLQueryItem(name: "grant_type", value: "refresh_token"),
+        ]
+        req.httpBody = comps.query?.data(using: .utf8)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard code == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = json["access_token"] as? String
+        else {
+            throw AntigravityProviderError.apiError(
+                "Antigravity: không làm mới được token agy (HTTP \(code))")
+        }
+        return token
+    }
+
+    private static func post(
+        method: String, body: Data, accessToken: String, timeout: TimeInterval
+    ) async throws -> Data {
+        guard let url = URL(string: "https://\(host)/v1internal:\(method)") else {
+            throw AntigravityProviderError.apiError("Antigravity: URL không hợp lệ (\(method))")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.httpBody = body
+        req.timeoutInterval = timeout
+        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard code == 200 else {
+            throw AntigravityProviderError.apiError("Antigravity \(method): HTTP \(code)")
+        }
+        return data
+    }
+}
+
+/// Keeps `AccountSnapshotStore.antigravity` populated for EVERY logged-in
+/// account. A refresh pass only ever probes the active one, so without this the
+/// popover's all-accounts card would read "no data" for every account the user
+/// has not switched to.
+///
+/// One account costs three HTTPS round trips and no process, so every stale
+/// account is refreshed on each pass; `maxSnapshotAge` only stops a burst of
+/// forced refreshes from hammering Google.
+enum AntigravityAccountSnapshotRefresher {
+    static let maxSnapshotAge: TimeInterval = 60
+
+    /// Internal for testing. Accounts whose cached snapshot has aged out; one
+    /// that was never fetched is always due.
+    static func staleAccounts(
+        accounts: [AntigravityOAuthStore.Account],
+        now: Date,
+        maxAge: TimeInterval = maxSnapshotAge,
+        cachedAt: (String) -> Date?
+    ) -> [AntigravityOAuthStore.Account] {
+        accounts.filter { account in
+            cachedAt(account.label).map { now.timeIntervalSince($0) >= maxAge } ?? true
+        }
+    }
+
+    /// Refreshes every stale account. Returns whether any snapshot was stored —
+    /// the caller uses that to republish, since the card reads the snapshot
+    /// store directly and SwiftUI cannot observe it.
+    static func refreshStaleAccounts(
+        provider: AntigravityProvider,
+        snapshots: AccountSnapshotStore = .antigravity,
+        now: Date = Date()
+    ) async -> Bool {
+        let store = AntigravityOAuthStore.load()
+        var stored = false
+        for account in staleAccounts(
+            accounts: store.accounts, now: now,
+            cachedAt: { snapshots.snapshot(forAccount: $0)?.lastUpdated })
+        {
+            // No isolated login means no agy-scoped token for this account; it
+            // keeps showing "no data" until the user signs it in to agy.
+            guard let refreshToken = AntigravityIsolatedAgy.agyRefreshToken(
+                      forAccountLabel: account.label),
+                  let groups = try? await AntigravityAccountCloudQuota.fetchQuotaGroups(
+                      refreshToken: refreshToken)
+            else { continue }
+            let windows = provider.quotaWindowsFromSummary(groups)
+            guard !windows.isEmpty else { continue }
+            snapshots.save(
+                ProviderStatus(
+                    id: provider.id, displayName: provider.displayName, windows: windows,
+                    lastUpdated: Date(), error: nil,
+                    accountLabel: account.email ?? account.label, sourceLabel: "Cloud"),
+                forAccount: account.label)
+            stored = true
+        }
+        return stored
     }
 }
