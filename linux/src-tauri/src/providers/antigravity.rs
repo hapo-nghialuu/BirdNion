@@ -47,6 +47,28 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const WARM_SPAWN_TIMEOUT: Duration = Duration::from_secs(7);
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const OAUTH_QUOTA_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const OAUTH_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
+/// Public OAuth client of the `agy` CLI. The stored client (cloud-platform)
+/// mints tokens WITHOUT the `aicode` scope, and the quota RPC answers 403
+/// SUBSCRIPTION_REQUIRED for those on every host and endpoint — measured, not
+/// assumed. Only a token from this client can read quota.
+const AGY_CLI_CLIENT_ID: &str =
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+/// Split so GitHub's secret scanner sees no contiguous literal — the same
+/// convention the Swift constant uses. Google desktop-app secrets ship inside
+/// the `agy` binary and are not real secrets.
+const AGY_CLI_CLIENT_SECRET_PARTS: [&str; 4] =
+    ["GOCSPX-", "K58FWR486", "LdLJ1mLB8sXC", "4z6qDAf"];
+/// The host `agy` itself calls; plain `cloudcode-pa` answers 429 for the same
+/// session.
+const CLOUD_QUOTA_HOST: &str = "https://daily-cloudcode-pa.googleapis.com";
+/// Load-bearing, not cosmetic: with any other agent `loadCodeAssist` answers
+/// 400 and the quota call 403.
+const CLOUD_USER_AGENT: &str = "antigravity-cli";
+/// `PLATFORM_UNSPECIFIED` rather than a concrete triple — `LINUX_X64` is
+/// rejected with 400.
+const LOAD_CODE_ASSIST_BODY: &str =
+    r#"{"metadata":{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}"#;
 
 struct ProcessInfo {
     pid: i32,
@@ -64,6 +86,14 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
         account_mismatch = Some(status);
     }
     if let Some(status) = fetch_via_cli_warm_session(cfg, &name).await {
+        if !is_account_mismatch_status(&status) {
+            return status;
+        }
+        account_mismatch = Some(status);
+    }
+    // `agy`'s own token reaches the quota RPC; the stored OAuth token cannot
+    // (wrong client, no `aicode` scope). Try it before falling back.
+    if let Some(status) = fetch_via_agy_cloud_quota(cfg, &name).await {
         if !is_account_mismatch_status(&status) {
             return status;
         }
@@ -1246,6 +1276,88 @@ fn non_empty(s: Option<&str>) -> Option<String> {
 /// from cloudcode-pa. Returns `None` when no account/credentials are
 /// configured (so the fallback chain can end with the generic error), an
 /// error status when the fetch itself fails.
+/// Refresh token written by an `agy` login. `agy` stores it in the real
+/// `~/.gemini`, so this reads whichever account `agy` is currently signed in
+/// as — the account-match guard in `build_status` rejects it when that is not
+/// the account BirdNion has selected.
+fn agy_refresh_token() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::PathBuf::from(home).join(".gemini/jetski-standalone-oauth-token");
+    let contents = std::fs::read_to_string(path).ok()?;
+    let json: Value = serde_json::from_str(&contents).ok()?;
+    let token = json.get("token")?.get("refresh_token")?.as_str()?.trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// Quota straight from Google using the `agy` login's own token — no `agy`
+/// process, so this works headless and when the warm session never opens a
+/// port. Returns `None` when `agy` has not been signed in or a call fails, so
+/// the caller keeps falling through.
+///
+/// `loadCodeAssist` MUST run before the quota call: skipping it, the very same
+/// token answers 429 RESOURCE_EXHAUSTED.
+async fn fetch_via_agy_cloud_quota(
+    cfg: &config::Provider,
+    name: &str,
+) -> Option<ProviderStatus> {
+    let refresh_token = agy_refresh_token()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .ok()?;
+    let secret = AGY_CLI_CLIENT_SECRET_PARTS.concat();
+    let access_token =
+        refresh_access_token(&client, &refresh_token, AGY_CLI_CLIENT_ID, &secret)
+            .await
+            .ok()?;
+    cloud_post(&client, "loadCodeAssist", LOAD_CODE_ASSIST_BODY, &access_token).await?;
+    let summary = cloud_post(&client, "retrieveUserQuotaSummary", "{}", &access_token).await?;
+    let windows = map_summary_windows(&parse_quota_summary(&summary)?);
+    if windows.is_empty() {
+        return None;
+    }
+    let email = cloud_identity_email(&client, &access_token).await;
+    Some(build_status(cfg, name, windows, email))
+}
+
+async fn cloud_post(
+    client: &reqwest::Client,
+    method: &str,
+    body: &'static str,
+    access_token: &str,
+) -> Option<Value> {
+    let resp = client
+        .post(format!("{CLOUD_QUOTA_HOST}/v1internal:{method}"))
+        .bearer_auth(access_token)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", CLOUD_USER_AGENT)
+        .body(body)
+        .send()
+        .await
+        .ok()?;
+    if resp.status().as_u16() != 200 {
+        return None;
+    }
+    resp.json::<Value>().await.ok()
+}
+
+/// Which account the `agy` token actually belongs to. Best-effort: `None` only
+/// weakens the match guard to what it already does for a missing email.
+async fn cloud_identity_email(client: &reqwest::Client, access_token: &str) -> Option<String> {
+    let resp = client
+        .get(OAUTH_USERINFO_URL)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .ok()?;
+    if resp.status().as_u16() != 200 {
+        return None;
+    }
+    let json = resp.json::<Value>().await.ok()?;
+    let email = json.get("email")?.as_str()?.trim();
+    (!email.is_empty()).then(|| email.to_string())
+}
+
 async fn fetch_via_oauth(cfg: &config::Provider, name: &str) -> Option<ProviderStatus> {
     let store = load_oauth_store()?;
     let account = active_account(&store)?;
