@@ -5140,6 +5140,47 @@ final class NewProviderTests: XCTestCase {
         AntigravityOAuthStore.Account(label: label, email: label, refreshToken: "t-\(label)")
     }
 
+    func testAntigravityAccountCardFallsBackWhenNoOAuthAccountsExist() {
+        XCTAssertFalse(AntigravityAccountQuotaPresentation.usesAccountCard(accountCount: 0))
+        XCTAssertTrue(AntigravityAccountQuotaPresentation.usesAccountCard(accountCount: 1))
+    }
+
+    func testAntigravityAccountDisplayNameKeepsDomainDistinct() {
+        let work = AntigravityOAuthStore.Account(
+            label: "work", email: "alex@work.com", refreshToken: "work-token")
+        let personal = AntigravityOAuthStore.Account(
+            label: "personal", email: "alex@gmail.com", refreshToken: "personal-token")
+
+        XCTAssertEqual(
+            AntigravityAccountQuotaPresentation.displayName(for: work), "alex@work.com")
+        XCTAssertEqual(
+            AntigravityAccountQuotaPresentation.displayName(for: personal), "alex@gmail.com")
+    }
+
+    func testAntigravityAccountMustRemainAuthorizedBeforeSnapshotSave() {
+        let account = agAccount("a@x.com")
+        XCTAssertTrue(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
+            account,
+            in: AntigravityOAuthStore.Store(accounts: [account]),
+            resolvedRefreshToken: "isolated-token",
+            usedRefreshToken: "isolated-token"))
+        XCTAssertFalse(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
+            account,
+            in: AntigravityOAuthStore.Store(accounts: []),
+            resolvedRefreshToken: "isolated-token",
+            usedRefreshToken: "isolated-token"))
+        XCTAssertFalse(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
+            account,
+            in: AntigravityOAuthStore.Store(accounts: [account]),
+            resolvedRefreshToken: nil,
+            usedRefreshToken: "isolated-token"))
+        XCTAssertFalse(AntigravityAccountSnapshotRefresher.accountStillAuthorized(
+            account,
+            in: AntigravityOAuthStore.Store(accounts: [account]),
+            resolvedRefreshToken: "rotated-token",
+            usedRefreshToken: "isolated-token"))
+    }
+
     func testAntigravityStaleAccountsIncludeNeverFetchedAccount() {
         let now = Date()
         let cached: [String: Date] = ["a@x.com": now]

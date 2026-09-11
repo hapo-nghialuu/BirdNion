@@ -808,6 +808,37 @@ final class CodexProviderTests: XCTestCase {
         XCTAssertEqual(reopened.snapshot(forAccount: "acc-1")?.windows.first?.usedPct, 40)
     }
 
+    func testFreshSnapshotRejectsAgedQuota() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-snap-fresh-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = AccountSnapshotStore(fileURL: tmp)
+        let now = Date()
+        store.save(ProviderStatus(
+            id: "antigravity", displayName: "Antigravity",
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 40, remainingPct: 60)],
+            lastUpdated: now.addingTimeInterval(-61)), forAccount: "account-x")
+
+        XCTAssertNil(store.freshSnapshot(
+            forAccount: "account-x", now: now, maxAge: 60))
+        XCTAssertNotNil(store.snapshot(forAccount: "account-x"))
+    }
+
+    func testFreshSnapshotReturnsRecentQuota() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-snap-recent-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = AccountSnapshotStore(fileURL: tmp)
+        let now = Date()
+        store.save(ProviderStatus(
+            id: "antigravity", displayName: "Antigravity",
+            windows: [QuotaWindow(label: "5 giờ", usedPct: 40, remainingPct: 60)],
+            lastUpdated: now.addingTimeInterval(-59)), forAccount: "account-x")
+
+        XCTAssertNotNil(store.freshSnapshot(
+            forAccount: "account-x", now: now, maxAge: 60))
+    }
+
     func testSnapshotRemovalPersistsAcrossReload() {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-snap-remove-\(UUID().uuidString).json")

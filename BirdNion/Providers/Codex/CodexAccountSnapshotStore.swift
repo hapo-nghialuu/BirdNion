@@ -43,6 +43,20 @@ final class AccountSnapshotStore: @unchecked Sendable {
         return cache[id]
     }
 
+    /// Returns a snapshot only while it is recent enough to be presented as
+    /// live quota. The persisted value remains available for a later refresh,
+    /// but a failed poll can never make old percentages look current forever.
+    func freshSnapshot(
+        forAccount id: String,
+        now: Date = Date(),
+        maxAge: TimeInterval
+    ) -> ProviderStatus? {
+        guard let snapshot = snapshot(forAccount: id),
+              now.timeIntervalSince(snapshot.lastUpdated) < maxAge
+        else { return nil }
+        return snapshot
+    }
+
     /// Store a successful status for `id` and persist to disk. Error statuses
     /// are ignored so a transient failure never overwrites good cached data.
     func save(_ status: ProviderStatus, forAccount id: String) {

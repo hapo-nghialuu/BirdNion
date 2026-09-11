@@ -102,6 +102,7 @@ final class QuotaService: ObservableObject {
     private var notificationObservers: [NSObjectProtocol] = []
     private var refreshPassIsRunning = false
     private var antigravityAccountRefreshTask: Task<Void, Never>?
+    private var antigravityAccountRefreshGeneration: UInt = 0
     private var pendingRefreshRequested = false
     private var pendingForceProviderIDs: Set<String> = []
     private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
@@ -209,6 +210,12 @@ final class QuotaService: ObservableObject {
         let keep = Set(newProviders.map(\.id))
         let removedIDs = Set(providers.map(\.id)).subtracting(keep)
         removedIDs.forEach(cleanupRemovedProvider)
+        if let current = providers.first(where: { $0.id == "antigravity" }),
+           let replacement = newProviders.first(where: { $0.id == "antigravity" }),
+           ObjectIdentifier(current) != ObjectIdentifier(replacement)
+        {
+            cancelAntigravityAccountSnapshotRefresh()
+        }
         providers = newProviders
         statuses = statuses.filter { keep.contains($0.id) }
         // Drop cached last-fetched timestamps for providers no longer in
@@ -260,6 +267,9 @@ final class QuotaService: ObservableObject {
     }
 
     private func cleanupRemovedProvider(_ id: String) {
+        if id == "antigravity" {
+            cancelAntigravityAccountSnapshotRefresh()
+        }
         failureNotificationRemove(Self.failureNotificationID(for: id))
         legacyFailureNotificationCleanup(id)
         failureEpisode.removeValue(forKey: id)
@@ -355,6 +365,7 @@ final class QuotaService: ObservableObject {
     func stop() {
         loopTask?.cancel()
         loopTask = nil
+        cancelAntigravityAccountSnapshotRefresh()
         settingsRefreshTask?.cancel()
         settingsRefreshTask = nil
         pendingSettingsRefreshProviderIDs.removeAll()
@@ -535,6 +546,9 @@ final class QuotaService: ObservableObject {
     /// prior account/configuration. Runtime and persisted status from that
     /// context are cleared so last-good data never crosses identities.
     func invalidateProviderContext(for providerID: String) {
+        if providerID == "antigravity" {
+            cancelAntigravityAccountSnapshotRefresh()
+        }
         providerContextGenerations[providerID] =
             (providerContextGenerations[providerID] ?? 0) &+ 1
         providerLastFetched.removeValue(forKey: providerID)
@@ -835,13 +849,31 @@ final class QuotaService: ObservableObject {
               let provider = providers.first(where: { $0.id == "antigravity" })
                   as? AntigravityProvider
         else { return }
+        let providerIdentity = ObjectIdentifier(provider)
+        let contextGeneration = providerContextGenerations[provider.id] ?? 0
+        antigravityAccountRefreshGeneration &+= 1
+        let refreshGeneration = antigravityAccountRefreshGeneration
         antigravityAccountRefreshTask = Task { [weak self] in
             let stored = await AntigravityAccountSnapshotRefresher
                 .refreshStaleAccounts(provider: provider)
-            guard let self else { return }
+            guard let self,
+                  refreshGeneration == antigravityAccountRefreshGeneration
+            else { return }
             antigravityAccountRefreshTask = nil
+            guard !Task.isCancelled,
+                  providerContextGenerations[provider.id] ?? 0 == contextGeneration,
+                  providers.contains(where: {
+                      $0.id == provider.id && ObjectIdentifier($0) == providerIdentity
+                  })
+            else { return }
             if stored { accountSnapshotsRevision &+= 1 }
         }
+    }
+
+    private func cancelAntigravityAccountSnapshotRefresh() {
+        antigravityAccountRefreshGeneration &+= 1
+        antigravityAccountRefreshTask?.cancel()
+        antigravityAccountRefreshTask = nil
     }
 
     // MARK: - Weekly Digest (rolling 7-day cost/token summary notification)

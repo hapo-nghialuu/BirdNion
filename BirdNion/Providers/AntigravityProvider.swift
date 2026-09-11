@@ -2014,6 +2014,7 @@ enum AntigravityAccountCloudQuota {
 /// forced refreshes from hammering Google.
 enum AntigravityAccountSnapshotRefresher {
     static let maxSnapshotAge: TimeInterval = 60
+    static let presentationMaxAge: TimeInterval = 5 * 60
 
     /// Internal for testing. Accounts whose cached snapshot has aged out; one
     /// that was never fetched is always due.
@@ -2042,15 +2043,32 @@ enum AntigravityAccountSnapshotRefresher {
             accounts: store.accounts, now: now,
             cachedAt: { snapshots.snapshot(forAccount: $0)?.lastUpdated })
         {
+            guard !Task.isCancelled else { return stored }
             // No isolated login means no agy-scoped token for this account; it
             // keeps showing "no data" until the user signs it in to agy.
             guard let refreshToken = AntigravityIsolatedAgy.agyRefreshToken(
-                      forAccountLabel: account.label),
-                  let groups = try? await AntigravityAccountCloudQuota.fetchQuotaGroups(
-                      refreshToken: refreshToken)
+                forAccountLabel: account.label)
+            else {
+                stored = snapshots.removeSnapshot(forAccount: account.label) || stored
+                continue
+            }
+            guard let groups = try? await AntigravityAccountCloudQuota.fetchQuotaGroups(
+                refreshToken: refreshToken)
             else { continue }
+            guard !Task.isCancelled else { return stored }
             let windows = provider.quotaWindowsFromSummary(groups)
             guard !windows.isEmpty else { continue }
+            let currentStore = AntigravityOAuthStore.load()
+            guard accountStillAuthorized(
+                account, in: currentStore,
+                resolvedRefreshToken: AntigravityIsolatedAgy.agyRefreshToken(
+                    forAccountLabel: account.label),
+                usedRefreshToken: refreshToken)
+            else {
+                stored = snapshots.removeSnapshot(forAccount: account.label) || stored
+                continue
+            }
+            guard !Task.isCancelled else { return stored }
             snapshots.save(
                 ProviderStatus(
                     id: provider.id, displayName: provider.displayName, windows: windows,
@@ -2060,5 +2078,16 @@ enum AntigravityAccountSnapshotRefresher {
             stored = true
         }
         return stored
+    }
+
+    static func accountStillAuthorized(
+        _ account: AntigravityOAuthStore.Account,
+        in store: AntigravityOAuthStore.Store,
+        resolvedRefreshToken: String?,
+        usedRefreshToken: String
+    ) -> Bool {
+        store.accounts.contains {
+            $0.label == account.label && $0.refreshToken == account.refreshToken
+        } && resolvedRefreshToken == usedRefreshToken
     }
 }

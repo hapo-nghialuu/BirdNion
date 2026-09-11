@@ -1588,7 +1588,10 @@ struct ProviderCard: View {
     var body: some View {
         // Design: windows list under hairline; optional CREDITS last row.
         VStack(alignment: .leading, spacing: 0) {
-            if status.id == "antigravity" {
+            if status.id == "antigravity",
+               AntigravityAccountQuotaPresentation.usesAccountCard(
+                   accountCount: AntigravityOAuthStore.load().accounts.count)
+            {
                 // Antigravity is listed per account, not per window: the card
                 // renders cached per-account snapshots, so it must survive an
                 // error or a still-running refresh of the *active* account —
@@ -5237,6 +5240,16 @@ struct EmptyProvidersState: View {
 /// the refresh pass (active account) and by
 /// `AntigravityAccountSnapshotRefresher` (one stale account per pass) — an
 /// account with no isolated agy login shows "no data yet" until it has one.
+enum AntigravityAccountQuotaPresentation {
+    static func usesAccountCard(accountCount: Int) -> Bool {
+        accountCount > 0
+    }
+
+    static func displayName(for account: AntigravityOAuthStore.Account) -> String {
+        account.email ?? account.label
+    }
+}
+
 struct AntigravityAllAccountsQuotaCard: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var quota: QuotaService
@@ -5245,11 +5258,6 @@ struct AntigravityAllAccountsQuotaCard: View {
     private var store: AntigravityOAuthStore.Store { AntigravityOAuthStore.load() }
 
     private var lang: String { settings.appLanguage }
-
-    private func shortName(_ account: AntigravityOAuthStore.Account) -> String {
-        let raw = account.email ?? account.label
-        return raw.split(separator: "@").first.map(String.init) ?? raw
-    }
 
     /// "Gemini 5-hour" → "GEMINI · 5 GIỜ"; keeps the family so two accounts'
     /// rows stay comparable at a glance. A window that carries neither period
@@ -5320,11 +5328,13 @@ struct AntigravityAllAccountsQuotaCard: View {
 
     @ViewBuilder
     private func accountBlock(_ account: AntigravityOAuthStore.Account) -> some View {
-        let snapshot = AccountSnapshotStore.antigravity.snapshot(forAccount: account.label)
+        let snapshot = AccountSnapshotStore.antigravity.freshSnapshot(
+            forAccount: account.label,
+            maxAge: AntigravityAccountSnapshotRefresher.presentationMaxAge)
         let windows = snapshot?.windows.filter { !$0.isSupplementary } ?? []
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(shortName(account))
+                Text(AntigravityAccountQuotaPresentation.displayName(for: account))
                     .font(.plexMono(11, weight: .semibold))
                     .foregroundStyle(VocabbyTheme.primary)
                     .lineLimit(1)
@@ -5369,7 +5379,8 @@ struct AntigravityAllAccountsQuotaCard: View {
                 .padding(.vertical, 2)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
-                    "\(shortName(account)), \(rowLabel(window)), "
+                    "\(AntigravityAccountQuotaPresentation.displayName(for: account)), "
+                        + "\(rowLabel(window)), "
                         + "\(window.remainingPct) percent left"
                         + (reset.isEmpty ? "" : ", resets in \(reset)"))
             }
