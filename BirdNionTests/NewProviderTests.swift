@@ -5212,4 +5212,88 @@ final class NewProviderTests: XCTestCase {
                 now: now,
                 cachedAt: { cached[$0] }).isEmpty)
     }
+
+    // MARK: - CommandCode: balance is not a quota
+
+    private func commandCodeCredits(
+        monthly: Double, purchased: Double = 0, premium: Double = 0
+    ) -> Data {
+        Data("""
+        {"credits":{"monthlyCredits":\(monthly),"purchasedCredits":\(purchased),\
+        "premiumMonthlyCredits":\(premium),"opensourceMonthlyCredits":0}}
+        """.utf8)
+    }
+
+    /// The plan lookup is what supplies the denominator; without it there is no
+    /// percentage, so the balance must not be dressed up as a full window.
+    func testCommandCodeUnknownPlanPublishesBalanceNotFullWindow() {
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: commandCodeCredits(monthly: 60.97),
+            subscriptionData: Data(#"{"success":true,"data":null}"#.utf8))
+        XCTAssertNil(status.error)
+        XCTAssertTrue(status.windows.isEmpty, "a balance has no percentage to chart")
+        XCTAssertEqual(status.creditsRemaining ?? 0, 60.97, accuracy: 0.001)
+        XCTAssertNil(status.cost)
+    }
+
+    func testCommandCodeUnknownPlanSumsEveryBalance() {
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: commandCodeCredits(monthly: 10, purchased: 5, premium: 2.5),
+            subscriptionData: nil)
+        XCTAssertTrue(status.windows.isEmpty)
+        XCTAssertEqual(status.creditsRemaining ?? 0, 17.5, accuracy: 0.001)
+    }
+
+    /// A known plan still charts the monthly grant — top-ups stay a balance
+    /// because they have no allowance of their own to divide by.
+    func testCommandCodeKnownPlanChartsGrantAndKeepsTopUpsAsBalance() {
+        let subscription = Data(#"""
+        {"success":true,"data":{"planId":"individual-pro","status":"active",        "currentPeriodEnd":"2099-08-01T00:00:00.000Z"}}
+        """#.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: commandCodeCredits(monthly: 12, purchased: 7),
+            subscriptionData: subscription)
+        XCTAssertEqual(status.planName, "Pro")
+        XCTAssertEqual(status.windows.count, 1)
+        let window = try? XCTUnwrap(status.windows.first)
+        XCTAssertEqual(window?.label, "Tháng")
+        // $12 left of the $30 Pro grant → 60% spent.
+        XCTAssertEqual(window?.usedPct, 60)
+        XCTAssertEqual(window?.remainingPct, 40)
+        XCTAssertEqual(status.creditsRemaining ?? 0, 7, accuracy: 0.001)
+        XCTAssertEqual(status.cost?.used ?? 0, 18, accuracy: 0.001)
+    }
+
+    func testCommandCodeNoCreditsAtAllIsAnError() {
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: commandCodeCredits(monthly: 0),
+            subscriptionData: nil)
+        XCTAssertNotNil(status.error)
+        XCTAssertTrue(status.windows.isEmpty)
+    }
+
+    /// The header spinner and the card skeleton share this predicate; keying
+    /// either on `windows.isEmpty` alone left a balance-only provider stuck on
+    /// "Đang tải…" forever next to its own populated credits row.
+    func testBalanceOnlyStatusIsNotAwaitingContent() {
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: commandCodeCredits(monthly: 60.97),
+            subscriptionData: nil)
+        XCTAssertTrue(status.windows.isEmpty)
+        XCTAssertEqual(status.renderableCreditsBalance ?? 0, 60.97, accuracy: 0.001)
+        XCTAssertFalse(status.popoverIsAwaitingFirstContent)
+    }
+
+    func testStatusWithNothingFetchedIsAwaitingContent() {
+        let pending = ProviderStatus(
+            id: "commandcode", displayName: "Command Code", windows: [], lastUpdated: Date())
+        XCTAssertTrue(pending.popoverIsAwaitingFirstContent)
+    }
+
+    func testErroredStatusIsNotAwaitingContent() {
+        let failed = ProviderStatus(
+            id: "commandcode", displayName: "Command Code", windows: [],
+            lastUpdated: Date(), error: "boom")
+        XCTAssertFalse(failed.popoverIsAwaitingFirstContent, "an error card is not a spinner")
+    }
 }

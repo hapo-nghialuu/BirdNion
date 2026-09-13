@@ -145,10 +145,22 @@ final class CommandCodeProvider: QuotaProvider {
             }
         }
 
-        // --- windows ---
+        // --- windows vs balance ---
+        //
+        // A window carries a percentage, so one may only be built when the plan
+        // total is known — that is the denominator. `/credits` reports the
+        // REMAINING dollars and nothing else, so without a plan there is no
+        // percentage to compute.
+        //
+        // Everything without a denominator is a balance, not a quota, and goes
+        // to `creditsRemaining` (the popover's CREDITS row). Upstream publishes
+        // these as a 100%-remaining window instead ("surface 100% so the bar
+        // renders empty"), which paints a full green bar, a "used 0%" line and
+        // a 100% headline over a number nobody measured — the balance was the
+        // only real figure on screen. Deliberate divergence.
         var windows: [QuotaWindow] = []
+        var spendableBalance: Double = 0
 
-        // Monthly grant window.
         if let total = monthlyTotal, total > 0 {
             let used = max(0, min(total, total - monthly))
             let usedPct = Int((used / total * 100).rounded())
@@ -162,33 +174,14 @@ final class CommandCodeProvider: QuotaProvider {
                 resetDate: periodEnd,
                 windowSeconds: 30 * 24 * 3600))
         } else if monthly > 0 {
-            // Free tier or unknown plan — show remaining balance, no %.
-            windows.append(QuotaWindow(
-                label: "Số dư tháng",
-                usedPct: 0,
-                remainingPct: 100,
-                subtitle: Self.usd(monthly)))
+            spendableBalance += monthly
         }
 
-        // Purchased credits window.
-        if purchased > 0 {
-            windows.append(QuotaWindow(
-                label: "Credits mua thêm",
-                usedPct: 0,
-                remainingPct: 100,
-                subtitle: Self.usd(purchased)))
-        }
+        // Top-ups never have an allowance to divide by, so they are a balance
+        // even when the monthly plan IS known.
+        spendableBalance += max(0, purchased) + max(0, premium)
 
-        // Premium grant window (non-zero).
-        if premium > 0 {
-            windows.append(QuotaWindow(
-                label: "Premium",
-                usedPct: 0,
-                remainingPct: 100,
-                subtitle: Self.usd(premium)))
-        }
-
-        if windows.isEmpty {
+        if windows.isEmpty, spendableBalance <= 0 {
             return failure("Không có dữ liệu credits")
         }
 
@@ -211,6 +204,7 @@ final class CommandCodeProvider: QuotaProvider {
             lastUpdated: Date(),
             error: nil,
             accountLabel: accountLabel,
+            creditsRemaining: spendableBalance > 0 ? spendableBalance : nil,
             planName: planName,
             cost: cost)
     }

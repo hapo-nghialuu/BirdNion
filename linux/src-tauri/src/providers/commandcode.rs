@@ -174,7 +174,14 @@ fn parse_status(
 
     let plan = plan_id.as_deref().and_then(plan_catalog);
 
+    // A window carries a percentage, so one may only be built when the plan
+    // total is known — that is the denominator. `/credits` reports the
+    // REMAINING dollars and nothing else, so without a plan there is no
+    // percentage to compute, and anything left over is a balance rather than a
+    // quota: it goes to `credits_remaining` instead of a full-looking bar.
+    // Mirrors the Swift provider.
     let mut windows = Vec::new();
+    let mut spendable_balance = 0.0;
 
     if let Some(p) = &plan {
         let total = p.monthly_credits_usd;
@@ -197,51 +204,20 @@ fn parse_status(
             resets_at: None,
             window_seconds: None,
         });
-    } else {
-        windows.push(QuotaWindow {
-            semantic_key: None,
-            semantic_kind: None,
-            label: "Số dư tháng".to_string(),
-            used_pct: 0,
-            remaining_pct: 100,
-            subtitle: Some(format!("${monthly:.2} còn lại")),
-            resets_at: None,
-            window_seconds: None,
-        });
+    } else if monthly > 0.0 {
+        spendable_balance += monthly;
     }
 
-    if purchased > 0.0 {
-        windows.push(QuotaWindow {
-            semantic_key: None,
-            semantic_kind: None,
-            label: "Credits mua thêm".to_string(),
-            used_pct: 0,
-            remaining_pct: 100,
-            subtitle: Some(format!("${purchased:.2}")),
-            resets_at: None,
-            window_seconds: None,
-        });
-    }
-
-    if premium > 0.0 {
-        windows.push(QuotaWindow {
-            semantic_key: None,
-            semantic_kind: None,
-            label: "Premium".to_string(),
-            used_pct: 0,
-            remaining_pct: 100,
-            subtitle: Some(format!("${premium:.2}")),
-            resets_at: None,
-            window_seconds: None,
-        });
-    }
+    // Top-ups never have an allowance to divide by, so they stay a balance even
+    // when the monthly plan IS known.
+    spendable_balance += purchased.max(0.0) + premium.max(0.0);
 
     Ok(ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        credits_remaining: Some(monthly + purchased + premium),
+        credits_remaining: (spendable_balance > 0.0).then_some(spendable_balance),
         ..Default::default()
     })
 }
@@ -264,13 +240,16 @@ mod tests {
             .contains("Pro"));
     }
 
+    /// The plan lookup supplies the denominator; without it there is no
+    /// percentage, so the balance must not be dressed up as a full window.
     #[test]
-    fn parses_credits_without_plan_uses_balance_fallback() {
+    fn parses_credits_without_plan_publishes_balance_not_full_window() {
         let credits = r#"{"credits":{"monthlyCredits":5.0,"purchasedCredits":0.0,"premiumMonthlyCredits":0.0}}"#;
         let subscriptions = r#"{"success":true,"data":null}"#;
         let status =
             parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
-        assert_eq!(status.windows[0].label, "Số dư tháng");
+        assert!(status.windows.is_empty(), "a balance has no percentage to chart");
+        assert_eq!(status.credits_remaining, Some(5.0));
     }
 
     #[test]
@@ -279,10 +258,26 @@ mod tests {
     }
 
     #[test]
-    fn purchased_and_premium_windows_added_when_positive() {
+    fn every_balance_without_a_plan_is_summed() {
         let credits = r#"{"credits":{"monthlyCredits":5.0,"purchasedCredits":10.0,"premiumMonthlyCredits":3.0}}"#;
         let status = parse_status("commandcode", "Command Code", credits, None).unwrap();
-        assert_eq!(status.windows.len(), 3);
+        assert!(status.windows.is_empty());
+        assert_eq!(status.credits_remaining, Some(18.0));
+    }
+
+    /// A known plan still charts the monthly grant — top-ups stay a balance
+    /// because they have no allowance of their own to divide by.
+    #[test]
+    fn known_plan_charts_grant_and_keeps_top_ups_as_balance() {
+        let credits = r#"{"credits":{"monthlyCredits":12.0,"purchasedCredits":7.0,"premiumMonthlyCredits":0.0}}"#;
+        let subscriptions = r#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#;
+        let status =
+            parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
+        assert_eq!(status.windows.len(), 1);
+        assert_eq!(status.windows[0].label, "Tháng");
+        // $12 left of the $30 Pro grant -> 60% spent.
+        assert_eq!(status.windows[0].used_pct, 60);
+        assert_eq!(status.credits_remaining, Some(7.0));
     }
 
     #[test]
