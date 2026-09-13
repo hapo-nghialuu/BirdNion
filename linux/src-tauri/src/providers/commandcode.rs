@@ -145,14 +145,17 @@ fn plan_catalog(plan_id: &str) -> Option<PlanInfo> {
 /// One `windowLimits` entry -> a quota window. `cap` is the denominator and
 /// `resetAt` is epoch milliseconds. `None` when the entry carries no usable cap,
 /// so a partial payload drops one row rather than charting a zero.
-fn window_limit_quota(value: Option<&Value>, label: &str, window_seconds: i64) -> Option<QuotaWindow> {
+fn window_limit_quota(
+    value: Option<&Value>,
+    label: &str,
+    window_seconds: i64,
+) -> Option<QuotaWindow> {
     let entry = value?;
-    let cap = entry.get("cap").and_then(Value::as_f64).filter(|c| *c > 0.0)?;
-    let used = entry
-        .get("used")
+    let cap = entry
+        .get("cap")
         .and_then(Value::as_f64)
-        .unwrap_or(0.0)
-        .clamp(0.0, cap);
+        .filter(|c| *c > 0.0)?;
+    let used = entry.get("used").and_then(Value::as_f64)?.clamp(0.0, cap);
     let used_pct = ((used / cap) * 100.0).round().clamp(0.0, 100.0) as i32;
     let resets_at = entry
         .get("resetAt")
@@ -270,6 +273,10 @@ fn parse_status(
     // when the monthly plan IS known.
     spendable_balance += purchased.max(0.0) + premium.max(0.0);
 
+    if windows.is_empty() && spendable_balance <= 0.0 {
+        return Err("Không có dữ liệu credits".to_string());
+    }
+
     Ok(ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
@@ -306,7 +313,10 @@ mod tests {
         let subscriptions = r#"{"success":true,"data":null}"#;
         let status =
             parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
-        assert!(status.windows.is_empty(), "a balance has no percentage to chart");
+        assert!(
+            status.windows.is_empty(),
+            "a balance has no percentage to chart"
+        );
         assert_eq!(status.credits_remaining, Some(5.0));
     }
 
@@ -323,12 +333,27 @@ mod tests {
         assert_eq!(status.credits_remaining, Some(18.0));
     }
 
+    #[test]
+    fn zero_balance_without_quota_is_error() {
+        let credits = r#"{"credits":{"monthlyCredits":0.0,"purchasedCredits":0.0,"premiumMonthlyCredits":0.0}}"#;
+        assert!(parse_status("commandcode", "Command Code", credits, None).is_err());
+    }
+
+    #[test]
+    fn window_limit_without_measured_usage_is_dropped() {
+        let credits = r#"{"credits":{"monthlyCredits":5.0,"purchasedCredits":0.0,"premiumMonthlyCredits":0.0},"windowLimits":{"limited":true,"fiveHour":{"cap":14.0}}}"#;
+        let status = parse_status("commandcode", "Command Code", credits, None).unwrap();
+        assert!(status.windows.is_empty());
+        assert_eq!(status.credits_remaining, Some(5.0));
+    }
+
     /// A known plan still charts the monthly grant — top-ups stay a balance
     /// because they have no allowance of their own to divide by.
     #[test]
     fn known_plan_charts_grant_and_keeps_top_ups_as_balance() {
         let credits = r#"{"credits":{"monthlyCredits":12.0,"purchasedCredits":7.0,"premiumMonthlyCredits":0.0}}"#;
-        let subscriptions = r#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#;
+        let subscriptions =
+            r#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#;
         let status =
             parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
         assert_eq!(status.windows.len(), 1);
@@ -347,7 +372,8 @@ mod tests {
             "windowLimits":{"limited":true,
             "fiveHour":{"used":0.185009678,"cap":14,"resetAt":1789293206298},
             "weekly":{"used":9.174532213,"cap":35,"resetAt":1789703513267}}}"#;
-        let subscriptions = r#"{"success":true,"data":{"planId":"individual-goat","status":"active"}}"#;
+        let subscriptions =
+            r#"{"success":true,"data":{"planId":"individual-goat","status":"active"}}"#;
         let status =
             parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
         let labels: Vec<&str> = status.windows.iter().map(|w| w.label.as_str()).collect();
@@ -365,7 +391,8 @@ mod tests {
     fn granted_total_overrides_plan_catalog() {
         let credits = r#"{"credits":{"monthlyCredits":20,"purchasedCredits":0,
             "premiumMonthlyCredits":0,"monthlyCreditsGranted":50}}"#;
-        let subscriptions = r#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#;
+        let subscriptions =
+            r#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#;
         let status =
             parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
         // 20 of 50 granted -> 60% spent, not the catalog's $30 Pro figure.

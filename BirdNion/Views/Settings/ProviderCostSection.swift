@@ -16,14 +16,16 @@ extension ProvidersPane {
                 .plexEyebrow(color: SettingsTheme.secondary)
                 .padding(.bottom, 4)
 
-            if let s, !s.windows.isEmpty {
-                ForEach(s.windows) { w in
-                    quotaWindowRow(w)
+            if let s, s.hasRenderableQuotaContent {
+                if !s.windows.isEmpty {
+                    ForEach(s.windows) { w in
+                        quotaWindowRow(w)
+                    }
                 }
                 if s.creditsRemaining != nil || s.creditsUnlimited {
                     creditsRow(s.creditsRemaining, unlimited: s.creditsUnlimited)
                 }
-            } else if s == nil || s?.windows.isEmpty == true {
+            } else {
                 // Empty placeholder only when there's truly no data — cost /
                 // extras below can still render so the panel stays useful
                 // even when OAuth fails.

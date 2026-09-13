@@ -5282,12 +5282,14 @@ final class NewProviderTests: XCTestCase {
         XCTAssertTrue(status.windows.isEmpty)
         XCTAssertEqual(status.renderableCreditsBalance ?? 0, 60.97, accuracy: 0.001)
         XCTAssertFalse(status.popoverIsAwaitingFirstContent)
+        XCTAssertTrue(status.hasRenderableQuotaContent)
     }
 
     func testStatusWithNothingFetchedIsAwaitingContent() {
         let pending = ProviderStatus(
             id: "commandcode", displayName: "Command Code", windows: [], lastUpdated: Date())
         XCTAssertTrue(pending.popoverIsAwaitingFirstContent)
+        XCTAssertFalse(pending.hasRenderableQuotaContent)
     }
 
     func testErroredStatusIsNotAwaitingContent() {
@@ -5295,6 +5297,25 @@ final class NewProviderTests: XCTestCase {
             id: "commandcode", displayName: "Command Code", windows: [],
             lastUpdated: Date(), error: "boom")
         XCTAssertFalse(failed.popoverIsAwaitingFirstContent, "an error card is not a spinner")
+        XCTAssertFalse(failed.hasRenderableQuotaContent)
+    }
+
+    func testCommandCodeRejectsNonFiniteNumericStrings() {
+        let credits = Data(#"{"credits":{"monthlyCredits":60.97,"purchasedCredits":0,"premiumMonthlyCredits":0,"monthlyCreditsGranted":"Infinity"}}"#.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: credits, subscriptionData: nil)
+        XCTAssertNil(status.error)
+        XCTAssertTrue(status.windows.isEmpty)
+        XCTAssertEqual(status.creditsRemaining ?? 0, 60.97, accuracy: 0.001)
+    }
+
+    func testCommandCodeDropsWindowLimitWithoutMeasuredUsage() {
+        let credits = Data(#"{"credits":{"monthlyCredits":5,"purchasedCredits":0,"premiumMonthlyCredits":0},"windowLimits":{"limited":true,"fiveHour":{"cap":14}}}"#.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: credits, subscriptionData: nil)
+        XCTAssertNil(status.error)
+        XCTAssertTrue(status.windows.isEmpty)
+        XCTAssertEqual(status.creditsRemaining ?? 0, 5, accuracy: 0.001)
     }
 
     /// Production payload shape: the grant total and the rolling caps both ship

@@ -138,6 +138,15 @@ export function lowestWindow(status: ProviderStatus): QuotaWindow | null {
   return primaryWindows(status.windows).reduce((a, b) => (a.remainingPct < b.remainingPct ? a : b));
 }
 
+/** True when a successful probe returned quota rows or a finite positive
+ * balance. A balance-only provider has no denominator and therefore no window. */
+export function hasRenderableProviderContent(status: ProviderStatus): boolean {
+  return !status.error && (
+    status.windows.length > 0
+    || (Number.isFinite(status.creditsRemaining) && (status.creditsRemaining ?? 0) > 0)
+  );
+}
+
 /** Design window row: LABEL · % / bar / used · reset. */
 function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
   const row = el("div", "window-row");
@@ -204,14 +213,19 @@ function quotaSummaryStrip(status: ProviderStatus): HTMLElement {
 /** Codex web-dashboard extras not surfaced as quota windows — port of the
  * macOS `detailParts` second metadata line. Empty for providers/sources
  * that leave these fields undefined. */
+export function providerCreditsText(status: ProviderStatus): string | null {
+  const balance = status.creditsRemaining;
+  if (balance === undefined || !Number.isFinite(balance)) return null;
+  // Preserve the existing Codex USD row and add CommandCode's documented USD
+  // balance. Other providers carry mixed units and render them in their own rows.
+  if (status.id !== "codex" && status.id !== "commandcode") return null;
+  return `$${balance.toFixed(2)} credits`;
+}
+
 function extrasParts(status: ProviderStatus): string[] {
   const parts: string[] = [];
-  if (status.creditsRemaining !== undefined) {
-    // Any provider that reports a spendable balance: for CommandCode this is
-    // the ONLY figure when the plan is unknown, so scoping it to Codex would
-    // drop the number entirely.
-    parts.push(`$${status.creditsRemaining.toFixed(2)} credits`);
-  }
+  const creditsText = providerCreditsText(status);
+  if (creditsText) parts.push(creditsText);
   if (status.codeReviewRemainingPercent !== undefined) {
     parts.push(`Code review ${status.codeReviewRemainingPercent}%`);
   }
@@ -518,6 +532,8 @@ function providerBodyCard(
       .catch(() => {});
     return card;
   }
+  if (staleWarning) card.append(staleQuotaBanner(staleWarning, onRetry));
+
   if (status.windows.length === 0) {
     // A credit balance is data, not an empty card — a provider reporting only
     // dollars has no window to list but still has something to show.
@@ -530,14 +546,12 @@ function providerBodyCard(
   }
 
   if (status.id === "antigravity") {
-    if (staleWarning) card.append(staleQuotaBanner(staleWarning, onRetry));
     for (const win of status.windows.slice(0, 4)) {
       card.append(windowRow(win, status.lastUpdated));
     }
     return card;
   }
 
-  if (staleWarning) card.append(staleQuotaBanner(staleWarning, onRetry));
   card.append(quotaSummaryStrip(status));
   card.append(el("div", "provider-divider", ""));
   for (const win of status.windows) {

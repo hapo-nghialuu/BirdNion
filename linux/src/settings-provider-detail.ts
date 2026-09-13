@@ -7,7 +7,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t, currentLang } from "./i18n";
-import type { ProviderStatus, QuotaWindow } from "./provider-tab";
+import {
+  hasRenderableProviderContent,
+  type ProviderStatus,
+  type QuotaWindow,
+} from "./provider-tab";
 import type { UsageReport } from "./usage";
 import { tokensShort } from "./usage";
 import {
@@ -365,7 +369,7 @@ export function usageSection(id: string, enabled: boolean, st: ProviderStatus | 
 
   if (st && st.windows.length > 0) {
     for (const w of st.windows) body.append(usageWindowBlock(id, w));
-  } else {
+  } else if (!st || !hasRenderableProviderContent(st)) {
     body.append(el("div", "pp-usage-empty", enabled ? t("provider.noData") : t("provider.disabledNoData")));
   }
 

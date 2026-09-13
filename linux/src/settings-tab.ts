@@ -10,6 +10,7 @@ import { t, currentLang } from "./i18n";
 import { reorderControls } from "./settings-provider-row";
 import { logoMark } from "./logos";
 import {
+  hasRenderableProviderContent,
   lowestWindow,
   type ProviderRemediationTarget,
   type ProviderStatus,
@@ -59,6 +60,13 @@ type GuidedSetupResult = {
   remediationTarget?: ProviderRemediationTarget;
   feedbackKey?: string;
 };
+
+export function balanceOnlyProviderSubtitle(status: ProviderStatus): string | null {
+  const balance = status.creditsRemaining;
+  return Number.isFinite(balance) && (balance ?? 0) > 0
+    ? `${balance!.toFixed(2)} credits`
+    : null;
+}
 const ONBOARDING_IDS = new Set(["claude", "codex", "grok"]);
 const REMEDIATION_TARGETS = new Set<ProviderRemediationTarget>([
   "setupSource", "credential", "cookieSource",
@@ -715,6 +723,10 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
         quotaClass,
       };
     }
+    if (st && hasRenderableProviderContent(st)) {
+      const balanceSubtitle = balanceOnlyProviderSubtitle(st);
+      if (balanceSubtitle) return { text: balanceSubtitle, isError: false };
+    }
     return { text: t("provider.noDataShort"), isError: false };
   };
 
@@ -877,7 +889,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
         if (rejectStaleCompletion()) return;
         await emit(GUIDED_SETUP_STATUS_EVENT, result).catch(() => {});
         if (rejectStaleCompletion()) return;
-        if (result.error || result.windows.length === 0) {
+        if (!hasRenderableProviderContent(result)) {
           firstLiveAttemptIDs.delete(providerId);
           onboardingTests.set(providerId, {
             state: "failed",
@@ -1032,7 +1044,7 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
         let resultClass = "pp-selftest-result pass";
         let resultText = t("provider.selfTest.pass");
         let resultTitle = "";
-        if (res.error || res.windows.length === 0) {
+        if (!hasRenderableProviderContent(res)) {
           const raw = res.error || (vi ? "Provider không trả dữ liệu quota." : "Provider returned no quota data.");
           const suffix = (await invoke<string | null>("classify_provider_error", { raw }).catch(() => null)) ?? "unknown";
           resultClass = "pp-selftest-result fail";

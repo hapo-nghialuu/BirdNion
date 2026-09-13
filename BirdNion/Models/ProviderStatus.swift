@@ -466,11 +466,18 @@ extension ProviderStatus {
         return credits
     }
 
+    /// Quota content that proves an explicit provider probe succeeded.
+    /// Balance-only providers have no percentage window but still returned
+    /// meaningful live data.
+    var hasRenderableQuotaContent: Bool {
+        error == nil && (!windows.isEmpty || renderableCreditsBalance != nil)
+    }
+
     /// True while the provider card would have no content to draw — the one
     /// condition that should show a spinner or a skeleton. Checking
     /// `windows.isEmpty` alone claims a balance-only provider is still loading,
     /// forever.
     var popoverIsAwaitingFirstContent: Bool {
-        error == nil && windows.isEmpty && renderableCreditsBalance == nil
+        error == nil && !hasRenderableQuotaContent
     }
 }

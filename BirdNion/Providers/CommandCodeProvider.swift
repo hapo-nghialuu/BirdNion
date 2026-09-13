@@ -310,7 +310,10 @@ final class CommandCodeProvider: QuotaProvider {
             let d = n.doubleValue
             return d.isFinite ? d : nil
         case let s as String:
-            return Double(s.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard let d = Double(s.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  d.isFinite
+            else { return nil }
+            return d
         default:
             return nil
         }
@@ -339,9 +342,10 @@ final class CommandCodeProvider: QuotaProvider {
         _ value: Any?, label: String, windowSeconds: Int
     ) -> QuotaWindow? {
         guard let dict = value as? [String: Any],
-              let cap = double(from: dict["cap"]), cap > 0
+              let cap = double(from: dict["cap"]), cap > 0,
+              let rawUsed = double(from: dict["used"])
         else { return nil }
-        let used = max(0, min(cap, double(from: dict["used"]) ?? 0))
+        let used = max(0, min(cap, rawUsed))
         let usedPct = Int((used / cap * 100).rounded())
         let resetDate = double(from: dict["resetAt"])
             .map { Date(timeIntervalSince1970: $0 / 1000) }

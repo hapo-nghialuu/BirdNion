@@ -22,6 +22,7 @@ registerHooks({
 });
 
 const {
+  balanceOnlyProviderSubtitle,
   changedProviderSettingsStatusIds,
   clearProviderSettingsStatus,
   createProviderSettingsGenerationGate,
@@ -30,6 +31,30 @@ const {
   reconcileCanonicalSettingsSnapshot,
   reconcileCompletedSettingsSave,
 } = await import("../src/settings-tab.ts");
+const {
+  hasRenderableProviderContent,
+  providerCreditsText,
+} = await import("../src/provider-tab.ts");
+
+test("balance-only provider content passes Settings self-test contract", () => {
+  const base = {
+    id: "commandcode",
+    displayName: "Command Code",
+    windows: [],
+    lastUpdated: Date.now(),
+  };
+  assert.equal(hasRenderableProviderContent({ ...base, creditsRemaining: 60.97 }), true);
+  assert.equal(hasRenderableProviderContent(base), false);
+  assert.equal(hasRenderableProviderContent({ ...base, creditsRemaining: Number.NaN }), false);
+  assert.equal(hasRenderableProviderContent({ ...base, creditsRemaining: 0 }), false);
+  assert.equal(hasRenderableProviderContent({ ...base, windows: [{ label: "5 giờ", usedPct: 1, remainingPct: 99 }] }), true);
+  assert.equal(hasRenderableProviderContent({ ...base, creditsRemaining: 60.97, error: "boom" }), false);
+  assert.equal(balanceOnlyProviderSubtitle({ ...base, creditsRemaining: 60.97 }), "60.97 credits");
+  assert.equal(providerCreditsText({ ...base, creditsRemaining: 60.97 }), "$60.97 credits");
+  assert.equal(providerCreditsText({ ...base, id: "codex", creditsRemaining: 10 }), "$10.00 credits");
+  assert.equal(providerCreditsText({ ...base, id: "kiro", creditsRemaining: 29 }), null);
+  assert.equal(providerCreditsText({ ...base, id: "mimo", creditsRemaining: 12.5 }), null);
+});
 
 test("Linux Settings roster exposes xAI in the macOS provider position", () => {
   const ids = [...NAME_BY_ID.keys()];

@@ -397,7 +397,7 @@ extension ProvidersPane {
             quota.applySelfTestStatus(status)
             if let err = status.error, !err.isEmpty {
                 selfTestState[id] = .fail(kind: classify(rawError: err) ?? .unknown, raw: err)
-            } else if status.windows.isEmpty {
+            } else if !status.hasRenderableQuotaContent {
                 let raw = onboardingCopy(
                     "Provider không trả dữ liệu quota.",
                     "Provider returned no quota data.")
