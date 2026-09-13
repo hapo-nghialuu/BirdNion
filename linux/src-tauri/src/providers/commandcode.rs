@@ -134,8 +134,40 @@ fn plan_catalog(plan_id: &str) -> Option<PlanInfo> {
             display_name: "Ultra",
             monthly_credits_usd: 300.0,
         }),
+        "individual-goat" => Some(PlanInfo {
+            display_name: "Goat",
+            monthly_credits_usd: 70.0,
+        }),
         _ => None,
     }
+}
+
+/// One `windowLimits` entry -> a quota window. `cap` is the denominator and
+/// `resetAt` is epoch milliseconds. `None` when the entry carries no usable cap,
+/// so a partial payload drops one row rather than charting a zero.
+fn window_limit_quota(value: Option<&Value>, label: &str, window_seconds: i64) -> Option<QuotaWindow> {
+    let entry = value?;
+    let cap = entry.get("cap").and_then(Value::as_f64).filter(|c| *c > 0.0)?;
+    let used = entry
+        .get("used")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .clamp(0.0, cap);
+    let used_pct = ((used / cap) * 100.0).round().clamp(0.0, 100.0) as i32;
+    let resets_at = entry
+        .get("resetAt")
+        .and_then(Value::as_f64)
+        .map(|ms| (ms / 1000.0) as i64);
+    Some(QuotaWindow {
+        semantic_key: None,
+        semantic_kind: None,
+        label: label.to_string(),
+        used_pct,
+        remaining_pct: 100 - used_pct,
+        subtitle: Some(format!("${rem:.2} / ${cap:.2}", rem = cap - used)),
+        resets_at,
+        window_seconds: Some(window_seconds),
+    })
 }
 
 fn parse_status(
@@ -174,10 +206,40 @@ fn parse_status(
 
     let plan = plan_id.as_deref().and_then(plan_catalog);
 
-    let mut windows = Vec::new();
+    // A window carries a percentage, so one may only be built when the plan
+    // total is known — that is the denominator. `/credits` reports the
+    // REMAINING dollars and nothing else, so without a plan there is no
+    // percentage to compute, and anything left over is a balance rather than a
+    // quota: it goes to `credits_remaining` instead of a full-looking bar.
+    // Mirrors the Swift provider.
+    // The grant total ships in this very payload. The plan catalog only fills in
+    // for responses that omit it — keying the denominator on a hardcoded plan
+    // list means any plan the list has not heard of (`individual-goat`, seen in
+    // production) silently loses its chart.
+    let granted_total = credits
+        .get("monthlyCreditsGranted")
+        .and_then(Value::as_f64)
+        .filter(|v| *v > 0.0);
 
-    if let Some(p) = &plan {
-        let total = p.monthly_credits_usd;
+    let mut windows = Vec::new();
+    let mut spendable_balance = 0.0;
+
+    // Rolling caps, when the account is subject to them. Real quotas with their
+    // own denominators, independent of the monthly grant.
+    if let Some(limits) = credits_json.get("windowLimits") {
+        if limits.get("limited").and_then(Value::as_bool) != Some(false) {
+            if let Some(w) = window_limit_quota(limits.get("fiveHour"), "5 giờ", 5 * 3600) {
+                windows.push(w);
+            }
+            if let Some(w) = window_limit_quota(limits.get("weekly"), "Tuần", 7 * 24 * 3600) {
+                windows.push(w);
+            }
+        }
+    }
+
+    let monthly_total = granted_total.or_else(|| plan.as_ref().map(|p| p.monthly_credits_usd));
+
+    if let Some(total) = monthly_total.filter(|t| *t > 0.0) {
         let used = (total - monthly).max(0.0);
         let used_pct = if total > 0.0 {
             ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32
@@ -190,58 +252,30 @@ fn parse_status(
             label: "Tháng".to_string(),
             used_pct,
             remaining_pct: 100 - used_pct,
-            subtitle: Some(format!(
-                "{p_name} · ${monthly:.2} còn lại",
-                p_name = p.display_name
-            )),
+            subtitle: Some(match plan.as_ref() {
+                Some(p) => format!(
+                    "{p_name} · ${monthly:.2} / ${total:.2}",
+                    p_name = p.display_name
+                ),
+                None => format!("${monthly:.2} / ${total:.2}"),
+            }),
             resets_at: None,
             window_seconds: None,
         });
-    } else {
-        windows.push(QuotaWindow {
-            semantic_key: None,
-            semantic_kind: None,
-            label: "Số dư tháng".to_string(),
-            used_pct: 0,
-            remaining_pct: 100,
-            subtitle: Some(format!("${monthly:.2} còn lại")),
-            resets_at: None,
-            window_seconds: None,
-        });
+    } else if monthly > 0.0 {
+        spendable_balance += monthly;
     }
 
-    if purchased > 0.0 {
-        windows.push(QuotaWindow {
-            semantic_key: None,
-            semantic_kind: None,
-            label: "Credits mua thêm".to_string(),
-            used_pct: 0,
-            remaining_pct: 100,
-            subtitle: Some(format!("${purchased:.2}")),
-            resets_at: None,
-            window_seconds: None,
-        });
-    }
-
-    if premium > 0.0 {
-        windows.push(QuotaWindow {
-            semantic_key: None,
-            semantic_kind: None,
-            label: "Premium".to_string(),
-            used_pct: 0,
-            remaining_pct: 100,
-            subtitle: Some(format!("${premium:.2}")),
-            resets_at: None,
-            window_seconds: None,
-        });
-    }
+    // Top-ups never have an allowance to divide by, so they stay a balance even
+    // when the monthly plan IS known.
+    spendable_balance += purchased.max(0.0) + premium.max(0.0);
 
     Ok(ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
         windows,
         last_updated: chrono::Utc::now().timestamp(),
-        credits_remaining: Some(monthly + purchased + premium),
+        credits_remaining: (spendable_balance > 0.0).then_some(spendable_balance),
         ..Default::default()
     })
 }
@@ -264,13 +298,16 @@ mod tests {
             .contains("Pro"));
     }
 
+    /// The plan lookup supplies the denominator; without it there is no
+    /// percentage, so the balance must not be dressed up as a full window.
     #[test]
-    fn parses_credits_without_plan_uses_balance_fallback() {
+    fn parses_credits_without_plan_publishes_balance_not_full_window() {
         let credits = r#"{"credits":{"monthlyCredits":5.0,"purchasedCredits":0.0,"premiumMonthlyCredits":0.0}}"#;
         let subscriptions = r#"{"success":true,"data":null}"#;
         let status =
             parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
-        assert_eq!(status.windows[0].label, "Số dư tháng");
+        assert!(status.windows.is_empty(), "a balance has no percentage to chart");
+        assert_eq!(status.credits_remaining, Some(5.0));
     }
 
     #[test]
@@ -279,10 +316,70 @@ mod tests {
     }
 
     #[test]
-    fn purchased_and_premium_windows_added_when_positive() {
+    fn every_balance_without_a_plan_is_summed() {
         let credits = r#"{"credits":{"monthlyCredits":5.0,"purchasedCredits":10.0,"premiumMonthlyCredits":3.0}}"#;
         let status = parse_status("commandcode", "Command Code", credits, None).unwrap();
-        assert_eq!(status.windows.len(), 3);
+        assert!(status.windows.is_empty());
+        assert_eq!(status.credits_remaining, Some(18.0));
+    }
+
+    /// A known plan still charts the monthly grant — top-ups stay a balance
+    /// because they have no allowance of their own to divide by.
+    #[test]
+    fn known_plan_charts_grant_and_keeps_top_ups_as_balance() {
+        let credits = r#"{"credits":{"monthlyCredits":12.0,"purchasedCredits":7.0,"premiumMonthlyCredits":0.0}}"#;
+        let subscriptions = r#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#;
+        let status =
+            parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
+        assert_eq!(status.windows.len(), 1);
+        assert_eq!(status.windows[0].label, "Tháng");
+        // $12 left of the $30 Pro grant -> 60% spent.
+        assert_eq!(status.windows[0].used_pct, 60);
+        assert_eq!(status.credits_remaining, Some(7.0));
+    }
+
+    /// Production payload shape: the grant total and the rolling caps both ship
+    /// inside `/credits`, so a plan the catalog never heard of still charts.
+    #[test]
+    fn uses_granted_total_and_window_limits() {
+        let credits = r#"{"credits":{"monthlyCredits":60.825467787,"purchasedCredits":0,
+            "premiumMonthlyCredits":0,"monthlyCreditsGranted":70},
+            "windowLimits":{"limited":true,
+            "fiveHour":{"used":0.185009678,"cap":14,"resetAt":1789293206298},
+            "weekly":{"used":9.174532213,"cap":35,"resetAt":1789703513267}}}"#;
+        let subscriptions = r#"{"success":true,"data":{"planId":"individual-goat","status":"active"}}"#;
+        let status =
+            parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
+        let labels: Vec<&str> = status.windows.iter().map(|w| w.label.as_str()).collect();
+        assert_eq!(labels, ["5 giờ", "Tuần", "Tháng"]);
+        assert_eq!(status.windows[0].used_pct, 1);
+        assert_eq!(status.windows[1].used_pct, 26);
+        assert_eq!(status.windows[2].used_pct, 13);
+        assert!(status.windows[0].resets_at.is_some());
+        assert_eq!(status.credits_remaining, None);
+    }
+
+    /// The granted total must win over the catalog: a plan whose real allowance
+    /// has changed would otherwise be charted against a stale constant.
+    #[test]
+    fn granted_total_overrides_plan_catalog() {
+        let credits = r#"{"credits":{"monthlyCredits":20,"purchasedCredits":0,
+            "premiumMonthlyCredits":0,"monthlyCreditsGranted":50}}"#;
+        let subscriptions = r#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#;
+        let status =
+            parse_status("commandcode", "Command Code", credits, Some(subscriptions)).unwrap();
+        // 20 of 50 granted -> 60% spent, not the catalog's $30 Pro figure.
+        assert_eq!(status.windows[0].used_pct, 60);
+    }
+
+    #[test]
+    fn skips_window_limits_when_not_limited() {
+        let credits = r#"{"credits":{"monthlyCredits":10,"purchasedCredits":0,
+            "premiumMonthlyCredits":0,"monthlyCreditsGranted":20},
+            "windowLimits":{"limited":false,"fiveHour":{"used":1,"cap":14}}}"#;
+        let status = parse_status("commandcode", "Command Code", credits, None).unwrap();
+        let labels: Vec<&str> = status.windows.iter().map(|w| w.label.as_str()).collect();
+        assert_eq!(labels, ["Tháng"]);
     }
 
     #[test]

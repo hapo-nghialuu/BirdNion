@@ -246,7 +246,7 @@ struct QuotaOverview: View {
         // (+ credits) → optional charts / accounts. Spacing
         // owned by each section's padding/rules (body pad 16).
         VStack(alignment: .leading, spacing: 0) {
-            ProviderHeaderCard(status: s, isPlaceholder: s.windows.isEmpty && s.error == nil)
+            ProviderHeaderCard(status: s, isPlaceholder: s.popoverIsAwaitingFirstContent)
             // Antigravity lists every account below, the active one included,
             // so the hero would just repeat that account's first row.
             if s.error == nil, !s.windows.isEmpty, s.id != "antigravity" {
@@ -1520,14 +1520,7 @@ struct ProviderCard: View {
 
     /// Finite credit balance shown as design `CREDITS` row (Codex today;
     /// any provider with remaining credits can share this chrome).
-    private var creditsBalance: Double? {
-        guard !status.creditsUnlimited,
-              let credits = status.creditsRemaining,
-              credits.isFinite,
-              credits > 0
-        else { return nil }
-        return credits
-    }
+    private var creditsBalance: Double? { status.renderableCreditsBalance }
 
     /// Popover window list. Optional model-specific rows honor Settings toggles
     /// (Codex Spark / Claude Fable, default on); other surfaces keep full data.
@@ -1604,7 +1597,11 @@ struct ProviderCard: View {
                 AntigravityAllAccountsQuotaCard()
             } else if let err = status.error {
                 errorBlock(err)
-            } else if status.windows.isEmpty {
+            } else if status.popoverIsAwaitingFirstContent {
+                // A provider whose only figure is a credit balance has no
+                // windows to list, and the CREDITS row below already carries
+                // that figure — the skeleton would claim data is still loading
+                // and never resolve.
                 LoadingQuotaSkeleton()
                     .popoverContentInset()
                     .padding(.vertical, 8)

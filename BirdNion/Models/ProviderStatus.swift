@@ -451,3 +451,26 @@ struct ClaudeExtraRateWindow: Codable, Equatable, Identifiable, Sendable {
         self.windowMinutes = windowMinutes
     }
 }
+
+extension ProviderStatus {
+    /// Finite, non-zero credit balance the popover renders as its `CREDITS`
+    /// row. Some providers report only a balance and no window at all
+    /// (CommandCode without a resolvable plan), so this is the difference
+    /// between "nothing fetched yet" and "fetched, and the answer is dollars".
+    var renderableCreditsBalance: Double? {
+        guard !creditsUnlimited,
+              let credits = creditsRemaining,
+              credits.isFinite,
+              credits > 0
+        else { return nil }
+        return credits
+    }
+
+    /// True while the provider card would have no content to draw — the one
+    /// condition that should show a spinner or a skeleton. Checking
+    /// `windows.isEmpty` alone claims a balance-only provider is still loading,
+    /// forever.
+    var popoverIsAwaitingFirstContent: Bool {
+        error == nil && windows.isEmpty && renderableCreditsBalance == nil
+    }
+}

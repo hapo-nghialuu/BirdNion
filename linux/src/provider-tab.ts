@@ -206,7 +206,10 @@ function quotaSummaryStrip(status: ProviderStatus): HTMLElement {
  * that leave these fields undefined. */
 function extrasParts(status: ProviderStatus): string[] {
   const parts: string[] = [];
-  if (status.id === "codex" && status.creditsRemaining !== undefined) {
+  if (status.creditsRemaining !== undefined) {
+    // Any provider that reports a spendable balance: for CommandCode this is
+    // the ONLY figure when the plan is unknown, so scoping it to Codex would
+    // drop the number entirely.
     parts.push(`$${status.creditsRemaining.toFixed(2)} credits`);
   }
   if (status.codeReviewRemainingPercent !== undefined) {
@@ -516,7 +519,13 @@ function providerBodyCard(
     return card;
   }
   if (status.windows.length === 0) {
-    card.append(el("div", "footnote", t("noQuota")));
+    // A credit balance is data, not an empty card — a provider reporting only
+    // dollars has no window to list but still has something to show.
+    const balanceOnly = extrasParts(status);
+    card.append(
+      balanceOnly.length > 0
+        ? el("div", "provider-extras", balanceOnly.join(" · "))
+        : el("div", "footnote", t("noQuota")));
     return card;
   }
 
