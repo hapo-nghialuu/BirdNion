@@ -120,6 +120,12 @@ final class CommandCodeProvider: QuotaProvider {
         }
         let purchased = Self.double(from: creditsObj["purchasedCredits"]) ?? 0
         let premium = Self.double(from: creditsObj["premiumMonthlyCredits"]) ?? 0
+        // The grant total ships in this very payload. The plan catalog only
+        // fills in for responses that omit it — keying the denominator on a
+        // hardcoded plan list means any plan the list has not heard of
+        // (`individual-goat`, seen in production) silently loses its chart.
+        let grantedTotal = Self.double(from: creditsObj["monthlyCreditsGranted"])
+            .flatMap { $0 > 0 ? $0 : nil }
 
         // --- subscriptions (optional) ---
         var planName: String? = nil
@@ -161,7 +167,24 @@ final class CommandCodeProvider: QuotaProvider {
         var windows: [QuotaWindow] = []
         var spendableBalance: Double = 0
 
-        if let total = monthlyTotal, total > 0 {
+        // Rolling caps, when the account is subject to them. These are real
+        // quotas with their own denominators, independent of the monthly grant.
+        if let limits = creditsRoot["windowLimits"] as? [String: Any],
+           (limits["limited"] as? Bool) != false
+        {
+            if let window = Self.windowLimitQuota(
+                limits["fiveHour"], label: "5 giờ", windowSeconds: 5 * 3600)
+            {
+                windows.append(window)
+            }
+            if let window = Self.windowLimitQuota(
+                limits["weekly"], label: "Tuần", windowSeconds: 7 * 24 * 3600)
+            {
+                windows.append(window)
+            }
+        }
+
+        if let total = grantedTotal ?? monthlyTotal, total > 0 {
             let used = max(0, min(total, total - monthly))
             let usedPct = Int((used / total * 100).rounded())
             let remainingPct = 100 - usedPct
@@ -186,7 +209,7 @@ final class CommandCodeProvider: QuotaProvider {
         }
 
         // Cost snapshot — used = spent this month, limit = plan total (if known).
-        let cost: ProviderCostSnapshot? = monthlyTotal.map { total in
+        let cost: ProviderCostSnapshot? = (grantedTotal ?? monthlyTotal).map { total in
             let used = max(0, total - monthly)
             return ProviderCostSnapshot(
                 used: used,
@@ -309,6 +332,28 @@ final class CommandCodeProvider: QuotaProvider {
         UsageFormatter.usdString(value)
     }
 
+    /// One `windowLimits` entry → a quota window. `cap` is the denominator and
+    /// `resetAt` is epoch milliseconds. nil when the entry carries no usable
+    /// cap, so a partial payload drops one row rather than charting a zero.
+    private static func windowLimitQuota(
+        _ value: Any?, label: String, windowSeconds: Int
+    ) -> QuotaWindow? {
+        guard let dict = value as? [String: Any],
+              let cap = double(from: dict["cap"]), cap > 0
+        else { return nil }
+        let used = max(0, min(cap, double(from: dict["used"]) ?? 0))
+        let usedPct = Int((used / cap * 100).rounded())
+        let resetDate = double(from: dict["resetAt"])
+            .map { Date(timeIntervalSince1970: $0 / 1000) }
+        return QuotaWindow(
+            label: label,
+            usedPct: usedPct,
+            remainingPct: 100 - usedPct,
+            subtitle: "\(usd(cap - used)) / \(usd(cap))",
+            resetDate: resetDate,
+            windowSeconds: windowSeconds)
+    }
+
     // MARK: - Embedded plan catalog (hand-ported from CommandCodePlanCatalog)
 
     struct Plan {
@@ -322,6 +367,7 @@ final class CommandCodeProvider: QuotaProvider {
         Plan(id: "individual-pro",   displayName: "Pro",   monthlyCreditsUSD: 30),
         Plan(id: "individual-max",   displayName: "Max",   monthlyCreditsUSD: 150),
         Plan(id: "individual-ultra", displayName: "Ultra", monthlyCreditsUSD: 300),
+        Plan(id: "individual-goat",  displayName: "Goat",  monthlyCreditsUSD: 70),
     ]
 
     private static func plan(forID planID: String) -> Plan? {

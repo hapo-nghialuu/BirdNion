@@ -5296,4 +5296,64 @@ final class NewProviderTests: XCTestCase {
             lastUpdated: Date(), error: "boom")
         XCTAssertFalse(failed.popoverIsAwaitingFirstContent, "an error card is not a spinner")
     }
+
+    /// Production payload shape: the grant total and the rolling caps both ship
+    /// inside `/credits`, so a plan the catalog never heard of still charts.
+    func testCommandCodeUsesGrantedTotalAndWindowLimits() {
+        let credits = Data("""
+        {"credits":{"monthlyCredits":60.825467787,"purchasedCredits":0,
+        "premiumMonthlyCredits":0,"monthlyCreditsGranted":70},
+        "windowLimits":{"limited":true,"exceeded":null,
+        "fiveHour":{"used":0.185009678,"cap":14,"exceeded":false,"resetAt":1789293206298},
+        "weekly":{"used":9.174532213,"cap":35,"exceeded":false,"resetAt":1789703513267}}}
+        """.utf8)
+        let subscription = Data(#"{"success":true,"data":{"planId":"individual-goat","status":"active"}}"#.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: credits, subscriptionData: subscription)
+
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.label), ["5 giờ", "Tuần", "Tháng"])
+        // 0.185 of 14 → 1% spent; 9.17 of 35 → 26%; 60.83 of a 70 grant → 13%.
+        XCTAssertEqual(status.windows[0].usedPct, 1)
+        XCTAssertEqual(status.windows[1].usedPct, 26)
+        XCTAssertEqual(status.windows[2].usedPct, 13)
+        XCTAssertEqual(status.windows[2].remainingPct, 87)
+        XCTAssertNotNil(status.windows[0].resetDate)
+        XCTAssertEqual(status.cost?.limit ?? 0, 70, accuracy: 0.001)
+        XCTAssertNil(status.creditsRemaining, "the grant is charted, not a balance")
+    }
+
+    /// The granted total must win over the catalog: a plan whose real allowance
+    /// has changed would otherwise be charted against a stale constant.
+    func testCommandCodeGrantedTotalOverridesPlanCatalog() {
+        let credits = Data("""
+        {"credits":{"monthlyCredits":20,"purchasedCredits":0,
+        "premiumMonthlyCredits":0,"monthlyCreditsGranted":50}}
+        """.utf8)
+        let subscription = Data(#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: credits, subscriptionData: subscription)
+        XCTAssertEqual(status.planName, "Pro")
+        // 20 of 50 granted → 60% spent, NOT the catalog's $30 Pro figure (33%).
+        XCTAssertEqual(status.windows.first?.usedPct, 60)
+    }
+
+    /// No `monthlyCreditsGranted` (older response) still falls back to the plan.
+    func testCommandCodeFallsBackToCatalogWhenGrantAbsent() {
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: commandCodeCredits(monthly: 12),
+            subscriptionData: Data(#"{"success":true,"data":{"planId":"individual-pro","status":"active"}}"#.utf8))
+        XCTAssertEqual(status.windows.first?.usedPct, 60)
+    }
+
+    func testCommandCodeSkipsWindowLimitsWhenNotLimited() {
+        let credits = Data("""
+        {"credits":{"monthlyCredits":10,"purchasedCredits":0,"premiumMonthlyCredits":0,
+        "monthlyCreditsGranted":20},
+        "windowLimits":{"limited":false,"fiveHour":{"used":1,"cap":14}}}
+        """.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: credits, subscriptionData: nil)
+        XCTAssertEqual(status.windows.map(\.label), ["Tháng"])
+    }
 }
