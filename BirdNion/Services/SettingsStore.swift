@@ -398,6 +398,11 @@ final class SettingsStore: ObservableObject {
             caps.hasSecondary = true
         case "antigravity":
             caps.hasSecondary = true
+        case "commandcode", "opencodego":
+            // Both publish 5-hour + weekly + monthly rate windows.
+            caps.hasSecondary = true
+            caps.hasTertiary = true
+            caps.hasMonthlyPlan = true
         default:
             caps.hasSecondary = false
         }

@@ -34,11 +34,96 @@ const BILLING_SERVER_ID: &str = "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7d
 const BILLING_SCALE: f64 = 100_000_000.0;
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 const ALLOWED_COOKIE_NAMES: &[&str] = &["auth", "__Host-auth"];
+/// Usage over the Zen API, reachable with a plain API key. Only the Go tier
+/// exposes one: every path under `/zen/v1` (usage, me, balance, credits,
+/// subscription) answers 404, measured against a live key.
+const API_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
+
+/// Resolved Zen API key: env var first (so a shell already configured for the
+/// OpenCode CLI needs no re-entry), then the provider entry in the config file.
+fn resolved_api_key(cfg: &crate::config::Provider) -> Option<String> {
+    for name in ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"] {
+        if let Ok(value) = std::env::var(name) {
+            let trimmed = value.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+    cfg.api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// Surface the server's own wording. "OpenCode Go subscription required" tells
+/// the user what to do; "HTTP 403" sends them hunting.
+fn api_error_message(body: &str, status: u16) -> String {
+    if let Ok(root) = serde_json::from_str::<Value>(body) {
+        let message = root
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .or_else(|| root.get("message"))
+            .and_then(Value::as_str);
+        if let Some(message) = message.map(str::trim).filter(|m| !m.is_empty()) {
+            return format!("{message} (HTTP {status})");
+        }
+    }
+    format!("HTTP {status}")
+}
+
+async fn fetch_via_api_key(
+    client: &reqwest::Client,
+    id: &str,
+    name: &str,
+    key: &str,
+) -> Result<ProviderStatus, String> {
+    let resp = client
+        .get(API_USAGE_URL)
+        .bearer_auth(key)
+        .header("Accept", "application/json")
+        // Cloudflare fronts opencode.ai and answers 403 (code 1010) to a request
+        // with no browser agent, before it ever reaches the API. Measured.
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| format!("OpenCode Go API: {e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    if status != 200 {
+        return Err(format!(
+            "OpenCode Go API: {}",
+            api_error_message(&body, status)
+        ));
+    }
+    let parsed = parse_page(&body, None)
+        .ok_or_else(|| "Không thể phân tích dữ liệu usage OpenCode Go".to_string())?;
+    Ok(ProviderStatus {
+        id: id.to_string(),
+        display_name: name.to_string(),
+        source_label: Some("API key".to_string()),
+        ..parsed
+    })
+}
 
 pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     let name = display_name(cfg);
     let id = cfg.id.clone();
     let cfg_clone = cfg.clone();
+
+    // A key is the direct path: one request, no browser session and no workspace
+    // lookup. Cookies stay as the fallback rather than being replaced, because
+    // the endpoint is entitlement-gated — a key from an account without an
+    // OpenCode Go subscription cannot read usage at all, while that account's
+    // browser session still can.
+    let mut api_key_error: Option<String> = None;
+    if let Some(key) = resolved_api_key(cfg) {
+        match fetch_via_api_key(&crate::providers::shared_client(), &id, &name, &key).await {
+            Ok(status) => return status,
+            Err(e) => api_key_error = Some(e),
+        }
+    }
 
     let raw_header = match tauri::async_runtime::spawn_blocking(move || {
         browser_cookies::cookie_header(&["opencode.ai"], &cfg_clone)
@@ -51,10 +136,14 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     };
 
     let Some(cookie_header) = filtered_cookie_header(&raw_header) else {
+        // With a key configured its rejection is the actionable message; "no
+        // browser cookie" would send the user to the wrong place entirely.
         return ProviderStatus::failure(
             &id,
             &name,
-            "Không tìm thấy cookie đăng nhập OpenCode Go (cần auth hoặc __Host-auth)",
+            api_key_error.unwrap_or_else(|| {
+                "Không tìm thấy cookie đăng nhập OpenCode Go (cần auth hoặc __Host-auth)".to_string()
+            }),
         );
     };
 
@@ -714,6 +803,30 @@ fn find_billing_balance(v: &Value) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// The server's own wording is the actionable part; "HTTP 403" is not.
+    fn api_error_surfaces_server_message() {
+        let body = r#"{"type":"error","error":{"type":"EntitlementError","message":"OpenCode Go subscription required."}}"#;
+        assert_eq!(
+            api_error_message(body, 403),
+            "OpenCode Go subscription required. (HTTP 403)"
+        );
+        assert_eq!(api_error_message("not json", 500), "HTTP 500");
+    }
+
+    #[test]
+    /// The key path feeds the same tolerant parser as the cookie path, so a
+    /// plain JSON usage body charts without a shape of its own.
+    fn parses_plain_json_usage_body() {
+        let json = r#"{"rollingUsage":{"usagePercent":67.3,"resetInSec":12600},
+                       "weeklyUsage":{"usagePercent":34.1,"resetInSec":345600}}"#;
+        let status = parse_page(json, None).expect("parses");
+        let labels: Vec<&str> = status.windows.iter().map(|w| w.label.as_str()).collect();
+        assert_eq!(labels, ["Rolling", "Tuần"]);
+        assert_eq!(status.windows[0].used_pct, 67);
+        assert_eq!(status.windows[1].used_pct, 34);
+    }
 
     #[test]
     fn parses_json_page_with_monthly_window() {

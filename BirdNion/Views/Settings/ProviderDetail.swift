@@ -1012,6 +1012,24 @@ extension ProvidersPane {
                 // Manual / Off) + an optional manual Cookie-header field, mirroring
                 // CodexBar (no token box).
                 cookieProviderControls(row.id)
+                if row.id == "opencodego" {
+                    // OpenCode Go also accepts a Zen API key, which skips the
+                    // browser session and the workspace lookup entirely. Shown
+                    // ALONGSIDE the cookie picker, not instead of it: the key
+                    // endpoint is entitlement-gated, so an account without an
+                    // OpenCode Go subscription still needs the cookie path.
+                    HairlineRule()
+                    TokenField(
+                        providerID: row.id,
+                        onSaved: {
+                            reloadProviderRows()
+                            providerFetchIdentityDidChange(row.id)
+                        }
+                    )
+                    .id(ProviderRemediationTarget.credential)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
             } else if row.id == "elevenlabs" || row.id == "hiyo" {
                 // Multi-key store (ElevenLabsKeyStore / HiyoKeyStore) — managed
                 // in the card below settingsSection; skip the single TokenField.

@@ -5377,4 +5377,122 @@ final class NewProviderTests: XCTestCase {
             creditsData: credits, subscriptionData: nil)
         XCTAssertEqual(status.windows.map(\.label), ["Tháng"])
     }
+
+    // MARK: - OpenCode Go: API key source
+
+    func testOpenCodeGoKeyPrefersEnvOverConfig() {
+        XCTAssertEqual(
+            OpenCodeGoProvider.resolvedAPIKey(
+                env: ["OPENCODE_API_KEY": "sk-env"], configKey: "sk-config"),
+            "sk-env")
+        XCTAssertEqual(
+            OpenCodeGoProvider.resolvedAPIKey(
+                env: ["OPENCODE_ZEN_API_KEY": "sk-zen"], configKey: nil),
+            "sk-zen")
+        XCTAssertEqual(
+            OpenCodeGoProvider.resolvedAPIKey(env: [:], configKey: "  sk-config  "),
+            "sk-config")
+    }
+
+    /// A blank entry must read as "no key" so the provider falls through to the
+    /// cookie path instead of sending `Bearer ` and failing.
+    func testOpenCodeGoBlankKeyResolvesToNil() {
+        XCTAssertNil(OpenCodeGoProvider.resolvedAPIKey(env: ["OPENCODE_API_KEY": "   "], configKey: "  "))
+        XCTAssertNil(OpenCodeGoProvider.resolvedAPIKey(env: [:], configKey: nil))
+    }
+
+    /// The server's own wording is the actionable part; "HTTP 403" is not.
+    func testOpenCodeGoAPIErrorSurfacesServerMessage() {
+        let body = Data(#"{"type":"error","error":{"type":"EntitlementError","message":"OpenCode Go subscription required."}}"#.utf8)
+        XCTAssertEqual(
+            OpenCodeGoProvider.apiErrorMessage(body, status: 403),
+            "OpenCode Go subscription required. (HTTP 403)")
+        XCTAssertEqual(
+            OpenCodeGoProvider.apiErrorMessage(Data("not json".utf8), status: 500),
+            "HTTP 500")
+    }
+
+    /// The key path feeds the same tolerant parser as the cookie path, so a
+    /// plain JSON usage body charts without a shape of its own.
+    func testOpenCodeGoParsesPlainJSONUsageBody() {
+        let json = """
+        {"rollingUsage":{"usagePercent":67.3,"resetInSec":12600},
+         "weeklyUsage":{"usagePercent":34.1,"resetInSec":345600}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.label), ["Rolling", "Tuần"])
+        XCTAssertEqual(status.windows[0].usedPct, 67)
+        XCTAssertEqual(status.windows[1].usedPct, 34)
+    }
+
+    /// `used`/`limit` instead of a percent is one of the shapes the parser
+    /// already accepts — the API body may use either.
+    func testOpenCodeGoParsesUsedOverLimitUsageBody() {
+        let json = """
+        {"usage":{"rolling":{"used":25,"limit":100,"resetInSec":600},
+                  "weekly":{"used":10,"limit":40,"resetInSec":86400}}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows[0].usedPct, 25)
+        XCTAssertEqual(status.windows[1].usedPct, 25)
+    }
+
+    // MARK: - Menu bar: 5-hour + weekly for CommandCode / OpenCode Go
+
+    private func rateWindow(_ label: String, remaining: Int, seconds: Int) -> QuotaWindow {
+        QuotaWindow(
+            label: label, usedPct: 100 - remaining, remainingPct: remaining,
+            windowSeconds: seconds)
+    }
+
+    /// Matching on LENGTH, not label: the same 18 000-second budget is called
+    /// "5 giờ" by CommandCode and "Rolling" by OpenCode Go.
+    func testRollingAndWeeklyPicksBothLabelSchemes() {
+        let commandCode = [
+            rateWindow("5 giờ", remaining: 100, seconds: 5 * 3600),
+            rateWindow("Tuần", remaining: 21, seconds: 7 * 24 * 3600),
+            rateWindow("Tháng", remaining: 60, seconds: 30 * 24 * 3600),
+        ]
+        XCTAssertEqual(
+            MenuBarIconRenderer.rollingAndWeeklyWindows(commandCode).map(\.remainingPct),
+            [100, 21])
+
+        let openCodeGo = [
+            rateWindow("Rolling", remaining: 100, seconds: 5 * 3600),
+            rateWindow("Tuần", remaining: 80, seconds: 7 * 24 * 3600),
+            rateWindow("Tháng", remaining: 84, seconds: 30 * 24 * 3600),
+        ]
+        XCTAssertEqual(
+            MenuBarIconRenderer.rollingAndWeeklyWindows(openCodeGo).map(\.remainingPct),
+            [100, 80])
+    }
+
+    /// Order is 5-hour → weekly regardless of the order the provider emits,
+    /// and the monthly row must never stand in for the weekly one.
+    func testRollingAndWeeklyIsOrderedAndSkipsMonthly() {
+        let shuffled = [
+            rateWindow("Tháng", remaining: 60, seconds: 30 * 24 * 3600),
+            rateWindow("Tuần", remaining: 21, seconds: 7 * 24 * 3600),
+            rateWindow("Rolling", remaining: 90, seconds: 5 * 3600),
+        ]
+        XCTAssertEqual(
+            MenuBarIconRenderer.rollingAndWeeklyWindows(shuffled).map(\.label),
+            ["Rolling", "Tuần"])
+
+        let monthlyOnly = [rateWindow("Tháng", remaining: 60, seconds: 30 * 24 * 3600)]
+        XCTAssertTrue(MenuBarIconRenderer.rollingAndWeeklyWindows(monthlyOnly).isEmpty)
+    }
+
+    /// The explicit picker entries must be offered too, not just the new default.
+    func testCommandCodeAndOpenCodeGoExposeSecondaryMetrics() {
+        let settings = SettingsStore()
+        for id in ["commandcode", "opencodego"] {
+            let caps = settings.providerCapabilities(for: id)
+            XCTAssertTrue(caps.hasSecondary, id)
+            XCTAssertTrue(caps.hasTertiary, id)
+            XCTAssertTrue(settings.supportsMetric(.primaryAndSecondary, for: id), id)
+        }
+    }
 }
