@@ -5377,4 +5377,65 @@ final class NewProviderTests: XCTestCase {
             creditsData: credits, subscriptionData: nil)
         XCTAssertEqual(status.windows.map(\.label), ["Tháng"])
     }
+
+    // MARK: - OpenCode Go: API key source
+
+    func testOpenCodeGoKeyPrefersEnvOverConfig() {
+        XCTAssertEqual(
+            OpenCodeGoProvider.resolvedAPIKey(
+                env: ["OPENCODE_API_KEY": "sk-env"], configKey: "sk-config"),
+            "sk-env")
+        XCTAssertEqual(
+            OpenCodeGoProvider.resolvedAPIKey(
+                env: ["OPENCODE_ZEN_API_KEY": "sk-zen"], configKey: nil),
+            "sk-zen")
+        XCTAssertEqual(
+            OpenCodeGoProvider.resolvedAPIKey(env: [:], configKey: "  sk-config  "),
+            "sk-config")
+    }
+
+    /// A blank entry must read as "no key" so the provider falls through to the
+    /// cookie path instead of sending `Bearer ` and failing.
+    func testOpenCodeGoBlankKeyResolvesToNil() {
+        XCTAssertNil(OpenCodeGoProvider.resolvedAPIKey(env: ["OPENCODE_API_KEY": "   "], configKey: "  "))
+        XCTAssertNil(OpenCodeGoProvider.resolvedAPIKey(env: [:], configKey: nil))
+    }
+
+    /// The server's own wording is the actionable part; "HTTP 403" is not.
+    func testOpenCodeGoAPIErrorSurfacesServerMessage() {
+        let body = Data(#"{"type":"error","error":{"type":"EntitlementError","message":"OpenCode Go subscription required."}}"#.utf8)
+        XCTAssertEqual(
+            OpenCodeGoProvider.apiErrorMessage(body, status: 403),
+            "OpenCode Go subscription required. (HTTP 403)")
+        XCTAssertEqual(
+            OpenCodeGoProvider.apiErrorMessage(Data("not json".utf8), status: 500),
+            "HTTP 500")
+    }
+
+    /// The key path feeds the same tolerant parser as the cookie path, so a
+    /// plain JSON usage body charts without a shape of its own.
+    func testOpenCodeGoParsesPlainJSONUsageBody() {
+        let json = """
+        {"rollingUsage":{"usagePercent":67.3,"resetInSec":12600},
+         "weeklyUsage":{"usagePercent":34.1,"resetInSec":345600}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.label), ["Rolling", "Tuần"])
+        XCTAssertEqual(status.windows[0].usedPct, 67)
+        XCTAssertEqual(status.windows[1].usedPct, 34)
+    }
+
+    /// `used`/`limit` instead of a percent is one of the shapes the parser
+    /// already accepts — the API body may use either.
+    func testOpenCodeGoParsesUsedOverLimitUsageBody() {
+        let json = """
+        {"usage":{"rolling":{"used":25,"limit":100,"resetInSec":600},
+                  "weekly":{"used":10,"limit":40,"resetInSec":86400}}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows[0].usedPct, 25)
+        XCTAssertEqual(status.windows[1].usedPct, 25)
+    }
 }

@@ -46,6 +46,11 @@ final class OpenCodeGoProvider: QuotaProvider {
     // Billing balance raw unit divisor (1 USD = 100_000_000 raw units).
     private static let billingScale = 100_000_000.0
 
+    /// Usage over the Zen API, reachable with a plain API key. Only the Go tier
+    /// exposes one: every path under `/zen/v1` (usage, me, balance, credits,
+    /// subscription) answers 404, measured against a live key.
+    private static let apiUsageURL = URL(string: "https://opencode.ai/zen/go/v1/usage")!
+
     private static let requestTimeout: TimeInterval = 15
     private static let userAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
@@ -60,10 +65,25 @@ final class OpenCodeGoProvider: QuotaProvider {
     // MARK: - QuotaProvider
 
     func fetch() async throws -> ProviderStatus {
+        // A key is the direct path: one request, no browser session and no
+        // workspace lookup. Cookies stay as the fallback rather than being
+        // replaced, because the endpoint is entitlement-gated — a key from an
+        // account without an OpenCode Go subscription cannot read usage at all,
+        // while that account's browser session still can.
+        var apiKeyError: String?
+        if let key = Self.resolvedAPIKey() {
+            let status = await fetchViaAPIKey(key)
+            if status.error == nil { return status }
+            apiKeyError = status.error
+        }
+
         guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(providerID: id, domain: Self.cookieDomain),
               !rawHeader.isEmpty
         else {
-            return failure("Chưa đăng nhập OpenCode Go trên trình duyệt")
+            // With a key configured its rejection is the actionable message;
+            // "not signed in to the browser" would send the user to the wrong
+            // place entirely.
+            return failure(apiKeyError ?? "Chưa đăng nhập OpenCode Go trên trình duyệt")
         }
 
         guard let cookieHeader = Self.filteredCookieHeader(from: rawHeader) else {
@@ -99,6 +119,71 @@ final class OpenCodeGoProvider: QuotaProvider {
         let zenBalance = try? await zenTask
 
         return parse(text: usageText, zenBalance: zenBalance, accountLabel: accountLabel)
+    }
+
+    // MARK: - API key path
+
+    /// Resolved Zen API key: env var first (so a shell already configured for
+    /// the OpenCode CLI needs no re-entry), then the provider entry in the
+    /// BirdNion config file. Internal for testing.
+    static func resolvedAPIKey(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        configKey: String? = BirdNionConfigStore.apiKey(provider: "opencodego")
+    ) -> String? {
+        for name in ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"] {
+            if let value = env[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty
+            {
+                return value
+            }
+        }
+        guard let configKey = configKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !configKey.isEmpty
+        else { return nil }
+        return configKey
+    }
+
+    private func fetchViaAPIKey(_ key: String) async -> ProviderStatus {
+        var request = URLRequest(url: Self.apiUsageURL)
+        request.timeoutInterval = Self.requestTimeout
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Cloudflare fronts opencode.ai and answers 403 (code 1010) to a request
+        // with no browser agent, before it ever reaches the API. Measured.
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            return failure("OpenCode Go API: \(error.localizedDescription)")
+        }
+        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard code == 200 else {
+            return failure("OpenCode Go API: \(Self.apiErrorMessage(data, status: code))")
+        }
+
+        let accountLabel = BirdNionConfigStore.accountLabel(provider: id) ?? "opencodego"
+        let status = parse(
+            text: String(data: data, encoding: .utf8) ?? "",
+            zenBalance: nil,
+            accountLabel: accountLabel)
+        return status.error == nil ? status.withSourceLabel("API key") : status
+    }
+
+    /// Surface the server's own wording. "OpenCode Go subscription required"
+    /// tells the user what to do; "HTTP 403" sends them hunting. Internal for
+    /// testing.
+    static func apiErrorMessage(_ data: Data, status: Int) -> String {
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let nested = root["error"] as? [String: Any]
+            let message = (nested?["message"] as? String) ?? (root["message"] as? String)
+            if let message, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "\(message) (HTTP \(status))"
+            }
+        }
+        return "HTTP \(status)"
     }
 
     // MARK: - Parse (exposed for testing — no network I/O)

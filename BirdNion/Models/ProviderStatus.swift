@@ -293,6 +293,19 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
             cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
             claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
     }
+
+    /// Which path actually produced this snapshot, for providers that have more
+    /// than one (API key vs browser cookie). Surfaced in the providers panel.
+    func withSourceLabel(_ sourceLabel: String?) -> ProviderStatus {
+        ProviderStatus(
+            id: id, displayName: displayName, windows: windows, lastUpdated: lastUpdated,
+            error: error, accountLabel: accountLabel, planType: planType,
+            creditsRemaining: creditsRemaining, creditsUnlimited: creditsUnlimited,
+            version: version, serviceStatus: serviceStatus, serviceStatusLevel: serviceStatusLevel,
+            accountID: accountID, planName: planName, resetCreditsAvailable: resetCreditsAvailable,
+            cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
+            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
+    }
 }
 
 /// Structured Kiro usage consumed by the menu-bar display-mode picker and the
