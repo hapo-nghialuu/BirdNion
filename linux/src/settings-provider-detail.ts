@@ -134,7 +134,7 @@ export type CodexProfileLite = {
 /** Providers whose auth is a pasted API key. */
 export const KEYED = new Set([
   "minimax", "hapo", "openrouter", "tryapi", "deepseek", "zai", "elevenlabs", "hiyo",
-  "deepgram", "groq", "kiro", "kilo", "alibaba", "bedrock", "openai", "ollama",
+  "deepgram", "groq", "kiro", "kilo", "alibaba", "bedrock", "openai", "ollama", "opencodego",
 ]);
 /** Providers that can use browser cookies. */
 export const COOKIED = new Set([

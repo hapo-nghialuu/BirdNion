@@ -87,7 +87,7 @@ final class OpenCodeGoProvider: QuotaProvider {
         }
 
         guard let cookieHeader = Self.filteredCookieHeader(from: rawHeader) else {
-            return failure("Không tìm thấy cookie đăng nhập OpenCode Go (cần auth hoặc __Host-auth)")
+            return failure(apiKeyError ?? "Không tìm thấy cookie đăng nhập OpenCode Go (cần auth hoặc __Host-auth)")
         }
 
         let accountLabel = BirdNionConfigStore.accountLabel(provider: id) ?? "opencodego"

@@ -131,8 +131,18 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
     .await
     {
         Ok(Ok(h)) => h,
-        Ok(Err(e)) => return ProviderStatus::failure(&id, &name, e),
-        Err(_) => return ProviderStatus::failure(&id, &name, "Lỗi nội bộ khi đọc cookie"),
+        Ok(Err(e)) => {
+            return ProviderStatus::failure(&id, &name, api_key_error.clone().unwrap_or(e));
+        }
+        Err(_) => {
+            return ProviderStatus::failure(
+                &id,
+                &name,
+                api_key_error
+                    .clone()
+                    .unwrap_or_else(|| "Lỗi nội bộ khi đọc cookie".to_string()),
+            );
+        }
     };
 
     let Some(cookie_header) = filtered_cookie_header(&raw_header) else {
@@ -142,7 +152,8 @@ pub async fn fetch(cfg: &crate::config::Provider) -> ProviderStatus {
             &id,
             &name,
             api_key_error.unwrap_or_else(|| {
-                "Không tìm thấy cookie đăng nhập OpenCode Go (cần auth hoặc __Host-auth)".to_string()
+                "Không tìm thấy cookie đăng nhập OpenCode Go (cần auth hoặc __Host-auth)"
+                    .to_string()
             }),
         );
     };
@@ -535,11 +546,11 @@ fn build_windows_from_dict(
 
     let now = chrono::Utc::now().timestamp();
     let mut windows = vec![
-        make_window("Rolling", &rolling_win, now),
-        make_window("Tuần", &weekly_win, now),
+        make_window("Rolling", &rolling_win, now, Some(5 * 3600)),
+        make_window("Tuần", &weekly_win, now, Some(7 * 24 * 3600)),
     ];
     if let Some(m) = monthly_win {
-        windows.push(make_window("Tháng", &m, now));
+        windows.push(make_window("Tháng", &m, now, Some(30 * 24 * 3600)));
     }
 
     let renews_at = RENEW_KEYS
@@ -569,6 +580,7 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
                 reset_sec: rolling_reset,
             },
             now,
+            Some(5 * 3600),
         ),
         make_window(
             "Tuần",
@@ -577,6 +589,7 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
                 reset_sec: weekly_reset,
             },
             now,
+            Some(7 * 24 * 3600),
         ),
     ];
 
@@ -593,13 +606,19 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
                 reset_sec: r,
             },
             now,
+            Some(30 * 24 * 3600),
         ));
     }
 
     Some(windows)
 }
 
-fn make_window(label: &str, result: &WindowResult, now: i64) -> QuotaWindow {
+fn make_window(
+    label: &str,
+    result: &WindowResult,
+    now: i64,
+    window_seconds: Option<i64>,
+) -> QuotaWindow {
     let used = (result.percent.round() as i32).clamp(0, 100);
     QuotaWindow {
         semantic_key: None,
@@ -609,7 +628,7 @@ fn make_window(label: &str, result: &WindowResult, now: i64) -> QuotaWindow {
         remaining_pct: 100 - used,
         subtitle: Some(format!("{used}%")),
         resets_at: Some(now + result.reset_sec),
-        window_seconds: None,
+        window_seconds,
     }
 }
 

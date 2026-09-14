@@ -644,7 +644,10 @@ enum MenuBarMetricResolver {
             return nil
         case .monthlyPlan:
             return windows.first { w in
-                w.label.localizedCaseInsensitiveContains("monthly") || w.label.localizedCaseInsensitiveContains("plan")
+                w.windowSeconds == 30 * 24 * 3600
+                    || w.label.localizedCaseInsensitiveContains("monthly")
+                    || w.label.localizedCaseInsensitiveContains("plan")
+                    || w.label.localizedCaseInsensitiveContains("tháng")
             }.map { [$0] }
         }
     }
