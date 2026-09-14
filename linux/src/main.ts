@@ -24,6 +24,7 @@ import {
   lowestWindow,
   serviceStatusStrip,
   ProviderStatus,
+  type QuotaWindow,
   StaleQuotaWarning,
   type ProviderRemediationTarget,
 } from "./provider-tab";
@@ -1737,6 +1738,19 @@ function resolveTrayMetric(s: ProviderStatus, metricPref: string | null | undefi
     const out = s.windows.filter((w) => w.label !== "Số dư").map((w) => w.remainingPct);
     if (out.length === 0 && balance) return [balance.remainingPct];
     return out;
+  }
+
+  // CommandCode / OpenCode Go publish 5-hour + weekly + monthly rate windows;
+  // the default readout shows the two recurring budgets, matching Claude.
+  // Selected by window LENGTH, not label: CommandCode calls its rolling window
+  // "5 giờ" while OpenCode Go calls the same 18 000-second window "Rolling",
+  // and matching on position would let the monthly row stand in for the weekly.
+  if ((s.id === "commandcode" || s.id === "opencodego")
+      && (!metricPref || metricPref === "automatic")) {
+    const pair = [5 * 3600, 7 * 24 * 3600]
+      .map((secs) => s.windows.find((w) => w.windowSeconds === secs && !w.isInactive))
+      .filter((w): w is QuotaWindow => w !== undefined);
+    if (pair.length > 0) return pair.map((w) => clampPct(w.remainingPct));
   }
 
   // Generic providers: resolve metric preference

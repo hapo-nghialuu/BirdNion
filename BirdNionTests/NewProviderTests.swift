@@ -5438,4 +5438,61 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows[0].usedPct, 25)
         XCTAssertEqual(status.windows[1].usedPct, 25)
     }
+
+    // MARK: - Menu bar: 5-hour + weekly for CommandCode / OpenCode Go
+
+    private func rateWindow(_ label: String, remaining: Int, seconds: Int) -> QuotaWindow {
+        QuotaWindow(
+            label: label, usedPct: 100 - remaining, remainingPct: remaining,
+            windowSeconds: seconds)
+    }
+
+    /// Matching on LENGTH, not label: the same 18 000-second budget is called
+    /// "5 giờ" by CommandCode and "Rolling" by OpenCode Go.
+    func testRollingAndWeeklyPicksBothLabelSchemes() {
+        let commandCode = [
+            rateWindow("5 giờ", remaining: 100, seconds: 5 * 3600),
+            rateWindow("Tuần", remaining: 21, seconds: 7 * 24 * 3600),
+            rateWindow("Tháng", remaining: 60, seconds: 30 * 24 * 3600),
+        ]
+        XCTAssertEqual(
+            MenuBarIconRenderer.rollingAndWeeklyWindows(commandCode).map(\.remainingPct),
+            [100, 21])
+
+        let openCodeGo = [
+            rateWindow("Rolling", remaining: 100, seconds: 5 * 3600),
+            rateWindow("Tuần", remaining: 80, seconds: 7 * 24 * 3600),
+            rateWindow("Tháng", remaining: 84, seconds: 30 * 24 * 3600),
+        ]
+        XCTAssertEqual(
+            MenuBarIconRenderer.rollingAndWeeklyWindows(openCodeGo).map(\.remainingPct),
+            [100, 80])
+    }
+
+    /// Order is 5-hour → weekly regardless of the order the provider emits,
+    /// and the monthly row must never stand in for the weekly one.
+    func testRollingAndWeeklyIsOrderedAndSkipsMonthly() {
+        let shuffled = [
+            rateWindow("Tháng", remaining: 60, seconds: 30 * 24 * 3600),
+            rateWindow("Tuần", remaining: 21, seconds: 7 * 24 * 3600),
+            rateWindow("Rolling", remaining: 90, seconds: 5 * 3600),
+        ]
+        XCTAssertEqual(
+            MenuBarIconRenderer.rollingAndWeeklyWindows(shuffled).map(\.label),
+            ["Rolling", "Tuần"])
+
+        let monthlyOnly = [rateWindow("Tháng", remaining: 60, seconds: 30 * 24 * 3600)]
+        XCTAssertTrue(MenuBarIconRenderer.rollingAndWeeklyWindows(monthlyOnly).isEmpty)
+    }
+
+    /// The explicit picker entries must be offered too, not just the new default.
+    func testCommandCodeAndOpenCodeGoExposeSecondaryMetrics() {
+        let settings = SettingsStore()
+        for id in ["commandcode", "opencodego"] {
+            let caps = settings.providerCapabilities(for: id)
+            XCTAssertTrue(caps.hasSecondary, id)
+            XCTAssertTrue(caps.hasTertiary, id)
+            XCTAssertTrue(settings.supportsMetric(.primaryAndSecondary, for: id), id)
+        }
+    }
 }

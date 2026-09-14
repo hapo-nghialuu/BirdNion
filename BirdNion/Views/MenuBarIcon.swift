@@ -214,6 +214,8 @@ enum MenuBarIconRenderer {
                 canonicalAutomaticWindows = claudeAutomaticWindows(windows)
             } else if status.id == "codex", codexMetric == .automatic {
                 canonicalAutomaticWindows = codexAutomaticWindows(windows)
+            } else if status.id == "commandcode" || status.id == "opencodego" {
+                canonicalAutomaticWindows = rollingAndWeeklyWindows(windows)
             } else {
                 canonicalAutomaticWindows = []
             }
@@ -320,6 +322,17 @@ enum MenuBarIconRenderer {
     static func claudeAutomaticWindows(_ windows: [QuotaWindow]) -> [QuotaWindow] {
         ["5 giờ", "Tuần"].compactMap { label in
             windows.first { $0.label == label }
+        }
+    }
+
+    /// Same two canonical budgets for providers that publish a 5-hour, a weekly
+    /// AND a monthly window. Selected by window LENGTH, not label: CommandCode
+    /// calls its rolling window "5 giờ" while OpenCode Go calls the same
+    /// 18 000-second window "Rolling", and matching on position would let the
+    /// monthly row stand in for the weekly one.
+    static func rollingAndWeeklyWindows(_ windows: [QuotaWindow]) -> [QuotaWindow] {
+        [5 * 3600, 7 * 24 * 3600].compactMap { seconds in
+            windows.first { $0.windowSeconds == seconds && !$0.isInactive }
         }
     }
 
