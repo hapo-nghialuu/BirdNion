@@ -723,6 +723,50 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
     }
 
+    // MARK: - Extra CODEX_HOME
+
+    func testExtraHomesNormalizeTrimsExpandsAndDedupes() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(CodexExtraHomes.normalize(["  /a/b  ", "/a/b", ""]), ["/a/b"])
+        XCTAssertEqual(CodexExtraHomes.normalize(["~/x"]), [home + "/x"])
+        XCTAssertEqual(CodexExtraHomes.normalize(["/a/b/../c"]), ["/a/c"])
+        // Thứ tự user nhập được giữ nguyên — danh sách Settings không tự sắp lại.
+        XCTAssertEqual(CodexExtraHomes.normalize(["/z", "/a"]), ["/z", "/a"])
+    }
+
+    func testExtraHomesAddingSkipsSystemHomeAndDuplicates() {
+        let system = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex").path
+        // Home hệ thống đã nằm trong scan mặc định → khai báo lại bị bỏ, tránh
+        // double-count và tránh làm user tưởng phải tự thêm ~/.codex.
+        XCTAssertEqual(CodexExtraHomes.adding("~/.codex", to: ["/a"], systemHome: system), ["/a"])
+        XCTAssertEqual(CodexExtraHomes.adding("/a", to: ["/a"], systemHome: system), ["/a"])
+        XCTAssertEqual(CodexExtraHomes.adding("/new", to: ["/a"], systemHome: system), ["/a", "/new"])
+    }
+
+    func testExtraHomePathsReadsJSONSetting() {
+        let key = CodexCostScanner.extraHomePathsKey
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(CodexCostScanner.extraHomePaths, [])      // unset → không có home phụ
+        UserDefaults.standard.set("[\"/a\", \"/a\", \" \"]", forKey: key)
+        XCTAssertEqual(CodexCostScanner.extraHomePaths, ["/a"])  // chuẩn hoá khi đọc
+        UserDefaults.standard.set("not json", forKey: key)
+        XCTAssertEqual(CodexCostScanner.extraHomePaths, [])      // JSON hỏng → không làm sập scan
+    }
+
+    /// Không khai báo home phụ thì tập roots phải y hệt trước khi có tính năng.
+    func testScannerRootsUnchangedWithoutExtraHomes() throws {
+        let root = URL(fileURLWithPath: "/tmp/birdnion-test-home/sessions")
+        let options = CostUsageScanner.Options(codexSessionsRoot: root)
+        XCTAssertEqual(options.codexExtraSessionsRoots, [])
+        XCTAssertEqual(options.codexSessionsRoot, root)
+    }
+
     func testHistoryDaysDefaultsAndClamps() {
         let key = CodexCostScanner.historyDaysKey
         let previous = UserDefaults.standard.object(forKey: key)

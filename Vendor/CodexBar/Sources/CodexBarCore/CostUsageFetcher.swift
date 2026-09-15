@@ -136,6 +136,7 @@ public struct CostUsageFetcher: Sendable {
         forceRefresh: Bool = false,
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
+        codexExtraHomePaths: [String] = [],
         historyDays: Int = 30,
         refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true) async throws -> CostUsageTokenSnapshot
@@ -147,6 +148,7 @@ public struct CostUsageFetcher: Sendable {
             forceRefresh: forceRefresh,
             allowVertexClaudeFallback: allowVertexClaudeFallback,
             codexHomePath: codexHomePath,
+            codexExtraHomePaths: codexExtraHomePaths,
             historyDays: historyDays,
             refreshPricing: refreshPricing,
             refreshPricingInBackground: refreshPricingInBackground,
@@ -189,6 +191,7 @@ public struct CostUsageFetcher: Sendable {
         forceRefresh: Bool = false,
         allowVertexClaudeFallback: Bool = false,
         codexHomePath: String? = nil,
+        codexExtraHomePaths: [String] = [],
         historyDays: Int = 30,
         refreshPricing: Bool = true,
         refreshPricingInBackground: Bool = true,
@@ -221,6 +224,20 @@ public struct CostUsageFetcher: Sendable {
         {
             options.codexSessionsRoot = URL(fileURLWithPath: codexHomePath, isDirectory: true)
                 .appendingPathComponent("sessions", isDirectory: true)
+        }
+        if provider == .codex {
+            // Home phụ: mỗi path là một CODEX_HOME đầy đủ, sessions nằm trong
+            // `<home>/sessions` giống home mặc định.
+            let extraRoots = codexExtraHomePaths
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .map {
+                    URL(fileURLWithPath: $0, isDirectory: true)
+                        .appendingPathComponent("sessions", isDirectory: true)
+                }
+            if !extraRoots.isEmpty {
+                options.codexExtraSessionsRoots += extraRoots
+            }
         }
         // Keep the foreground pass off the popover's critical path. Remaining
         // work owns a durable queue and continues through background catch-up.

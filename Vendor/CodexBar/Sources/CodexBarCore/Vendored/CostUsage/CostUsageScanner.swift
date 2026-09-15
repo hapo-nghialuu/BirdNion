@@ -30,6 +30,11 @@ enum CostUsageScanner {
 
     struct Options {
         var codexSessionsRoot: URL?
+        /// Sessions roots phụ, quét cùng lúc với home mặc định. Tool khác có
+        /// thể spawn Codex CLI với `CODEX_HOME` riêng (vd Orca dùng
+        /// `~/Library/Application Support/orca/codex-runtime-home/home`), nên
+        /// log của những phiên đó không nằm trong `~/.codex`.
+        var codexExtraSessionsRoots: [URL] = []
         var claudeProjectsRoots: [URL]?
         var cacheRoot: URL?
         var codexTraceDatabaseURL: URL?
@@ -51,6 +56,7 @@ enum CostUsageScanner {
 
         init(
             codexSessionsRoot: URL? = nil,
+            codexExtraSessionsRoots: [URL] = [],
             claudeProjectsRoots: [URL]? = nil,
             cacheRoot: URL? = nil,
             codexTraceDatabaseURL: URL? = nil,
@@ -59,6 +65,7 @@ enum CostUsageScanner {
             maxScanWallClock: TimeInterval? = nil)
         {
             self.codexSessionsRoot = codexSessionsRoot
+            self.codexExtraSessionsRoots = codexExtraSessionsRoots
             self.claudeProjectsRoots = claudeProjectsRoots
             self.cacheRoot = cacheRoot
             self.codexTraceDatabaseURL = codexTraceDatabaseURL
@@ -1234,11 +1241,23 @@ enum CostUsageScanner {
     }
 
     private static func codexSessionsRoots(options: Options) -> [URL] {
-        let root = self.defaultCodexSessionsRoot(options: options).standardizedFileURL
-        if let archived = self.codexArchivedSessionsRoot(sessionsRoot: root) {
-            return [root, archived.standardizedFileURL]
+        var out: [URL] = []
+        var seen: Set<String> = []
+        func append(_ url: URL) {
+            let canonical = url.standardizedFileURL
+            guard seen.insert(canonical.path).inserted else { return }
+            out.append(canonical)
         }
-        return [root]
+        let roots = [self.defaultCodexSessionsRoot(options: options)]
+            + options.codexExtraSessionsRoots
+        for root in roots {
+            let canonical = root.standardizedFileURL
+            append(canonical)
+            if let archived = self.codexArchivedSessionsRoot(sessionsRoot: canonical) {
+                append(archived)
+            }
+        }
+        return out
     }
 
     private static func codexArchivedSessionsRoot(sessionsRoot: URL) -> URL? {

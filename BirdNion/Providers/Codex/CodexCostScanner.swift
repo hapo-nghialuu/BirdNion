@@ -66,9 +66,10 @@ struct CodexUsageReport: Equatable {
 /// local Codex log sources (native `~/.codex/sessions` + `archived_sessions`,
 /// plus supported pi sessions), uses `turn_context` model markers as the
 /// authoritative model bucket, and prices each model. Always scans the system
-/// `~/.codex` home — the only place the CLI writes session logs, whichever
-/// login is installed. Results are cached briefly so toggling the Settings
-/// pane doesn't rescan on every open.
+/// `~/.codex` home, whichever login is installed, plus any extra CODEX_HOME the
+/// user declared in Settings (`extraHomePaths`) for sessions a wrapper tool
+/// spawned outside `~/.codex`. Results are cached briefly so toggling the
+/// Settings pane doesn't rescan on every open.
 enum CodexCostScanner {
     private static let cacheTTL: TimeInterval = 300
     /// The wrapper yields a stable report quickly, then asks the core for a
@@ -83,11 +84,31 @@ enum CodexCostScanner {
     /// only drives `summary()`.
     static let chartWindowDays = 120
 
+    /// Bỏ cache sau khi danh sách CODEX_HOME đổi, để lần đọc kế tiếp quét lại
+    /// đúng tập roots mới.
+    static func invalidateCaches() async {
+        await Cache.shared.invalidateScanResults()
+    }
+
     /// Rolling history window in days (1...365). Defaults to 30 when unset.
     /// `SettingsStore` writes the same key.
     static var historyDays: Int {
         let raw = UserDefaults.standard.integer(forKey: historyDaysKey)
         return raw == 0 ? 30 : max(1, min(365, raw))
+    }
+
+    static let extraHomePathsKey = "codexExtraHomePathsJSON"
+
+    /// CODEX_HOME phụ do user khai báo trong Settings. Cần vì một tool khác có
+    /// thể spawn Codex CLI với `CODEX_HOME` riêng — phiên đó ghi session log ra
+    /// ngoài `~/.codex` nên scan mặc định không thấy, cost hiện 0 dù quota tụt.
+    /// `SettingsStore` ghi cùng key (JSON array các path).
+    static var extraHomePaths: [String] {
+        guard let raw = UserDefaults.standard.string(forKey: extraHomePathsKey),
+              let data = raw.data(using: .utf8),
+              let paths = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return CodexExtraHomes.normalize(paths)
     }
 
     /// Result of one bounded report episode. Pending results may carry the
@@ -196,6 +217,14 @@ enum CodexCostScanner {
         }
         func store(_ value: CodexCostSummary, at: Date, windowDays: Int) {
             entry = (at, windowDays, value)
+        }
+
+        /// Xoá kết quả đã memo hoá khi tập roots đổi (user thêm/bớt CODEX_HOME
+        /// phụ). Không xoá thì chart giữ số cũ đến hết TTL (5 phút) dù nguồn
+        /// quét đã khác hẳn.
+        func invalidateScanResults() {
+            entry = nil
+            reportEntry = nil
         }
         func lastSummary(
             windowDays: Int,
@@ -537,12 +566,14 @@ enum CodexCostScanner {
         // session logs there regardless of which login is installed, and
         // managed homes only ever hold auth.json (no session history). Scoping
         // to the viewed account made freshly-added accounts show an empty
-        // chart and zero out the All-tab Codex column.
+        // chart and zero out the All-tab Codex column. Homes phụ đi kèm vì một
+        // wrapper có thể chạy Codex với CODEX_HOME khác.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
         guard let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,
             codexHomePath: codexHome,
+            codexExtraHomePaths: extraHomePaths,
             historyDays: sharedScanWindowDays)
         else { return nil }
         guard !snapshot.scanIncomplete else {
@@ -790,8 +821,8 @@ enum CodexCostScanner {
         now: Date,
         forceRefresh: Bool = false,
         refreshPricing: Bool = true) async -> ReportLoad {
-        // Same as `summary()`: the machine-wide ~/.codex is the only place
-        // session logs actually accumulate.
+        // Same as `summary()`: machine-wide ~/.codex plus các home phụ user
+        // khai báo, vì wrapper tool có thể chạy Codex với CODEX_HOME riêng.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
         let fetcher = CostUsageFetcher()
         let sharedScanWindowDays = scanWindowDays(requestedWindowDays: historyDays)
@@ -800,6 +831,7 @@ enum CodexCostScanner {
             now: now,
             forceRefresh: forceRefresh,
             codexHomePath: codexHome,
+            codexExtraHomePaths: extraHomePaths,
             historyDays: sharedScanWindowDays,
             refreshPricing: refreshPricing)
         // A non-cancellation parser I/O failure intentionally throws without
@@ -1088,5 +1120,35 @@ enum CodexCostScanner {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > 26 else { return trimmed }
         return String(trimmed.prefix(25)) + "…"
+    }
+}
+
+/// Chuẩn hoá danh sách CODEX_HOME phụ. Thuần chuỗi, không chạm filesystem, để
+/// test được và để một home tạm thời offline (ổ ngoài chưa mount) không bị âm
+/// thầm xoá khỏi Settings.
+enum CodexExtraHomes {
+    /// Bỏ khoảng trắng thừa, mở `~`, rút gọn `..`, bỏ trùng, giữ nguyên thứ tự
+    /// user nhập.
+    static func normalize(_ paths: [String]) -> [String] {
+        var out: [String] = []
+        var seen: Set<String> = []
+        for raw in paths {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let expanded = (trimmed as NSString).expandingTildeInPath
+            let canonical = URL(fileURLWithPath: expanded, isDirectory: true)
+                .standardizedFileURL.path
+            guard seen.insert(canonical).inserted else { continue }
+            out.append(canonical)
+        }
+        return out
+    }
+
+    /// Thêm một home, bỏ qua nếu trùng home hệ thống (`~/.codex`) — scan mặc
+    /// định đã phủ, khai báo lại chỉ gây nhầm lẫn khi đọc Settings.
+    static func adding(_ path: String, to existing: [String], systemHome: String) -> [String] {
+        let systemCanonical = normalize([systemHome]).first
+        let candidates = normalize(existing + [path])
+        return candidates.filter { $0 != systemCanonical }
     }
 }
