@@ -5495,4 +5495,68 @@ final class NewProviderTests: XCTestCase {
             XCTAssertTrue(settings.supportsMetric(.primaryAndSecondary, for: id), id)
         }
     }
+
+    // MARK: - Antigravity OAuth loopback: one-shot continuation
+
+    /// Counts how many callers believed they settled the continuation.
+    private final class SettleCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func increment() { lock.lock(); count += 1; lock.unlock() }
+        var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    }
+
+    /// The crash: two connection callbacks both reached `resume`, and resuming
+    /// a CheckedContinuation twice traps the runtime. Only the first caller may
+    /// win, and it must be told so it alone tears the listener down.
+    func testOneShotContinuationSettlesExactlyOnce() async throws {
+        let winners = SettleCounter()
+        let value: Int = try await withCheckedThrowingContinuation { cont in
+            let once = OneShotContinuation(cont)
+            XCTAssertFalse(once.isSettled)
+            if once.resume(with: .success(1)) { winners.increment() }
+            XCTAssertTrue(once.isSettled)
+            // Every later attempt must be refused rather than trap.
+            if once.resume(with: .success(2)) { winners.increment() }
+            if once.resume(with: .failure(AntigravityOAuthError.codeMissing)) { winners.increment() }
+        }
+        XCTAssertEqual(value, 1)
+        XCTAssertEqual(winners.value, 1)
+    }
+
+    /// Concurrent callbacks are the real shape of the bug — `NWConnection`
+    /// delivers them on a concurrent global queue, so the guard has to be
+    /// atomic, not just correctly placed.
+    func testOneShotContinuationIsSafeUnderConcurrentResumes() async throws {
+        let winners = SettleCounter()
+        let value: Int = try await withCheckedThrowingContinuation { cont in
+            let once = OneShotContinuation(cont)
+            DispatchQueue.concurrentPerform(iterations: 64) { index in
+                if once.resume(with: .success(index)) { winners.increment() }
+            }
+        }
+        XCTAssertTrue((0..<64).contains(value))
+        XCTAssertEqual(winners.value, 1, "exactly one caller may resume")
+    }
+
+    /// `/favicon.ico` arrives on its own connection right after the redirect
+    /// page renders. Treating it as "no code" used to fail the whole login.
+    func testLoopbackIgnoresRequestsWithoutCallbackParams() {
+        let favicon = "GET /favicon.ico HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        XCTAssertEqual(
+            AntigravityOAuthLogin.callbackOutcome(fromRequest: favicon), .unrelated)
+        let bare = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        XCTAssertEqual(AntigravityOAuthLogin.callbackOutcome(fromRequest: bare), .unrelated)
+    }
+
+    func testLoopbackReadsCodeAndDenial() {
+        let ok = "GET /?code=4%2F0AX&scope=email HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        XCTAssertEqual(
+            AntigravityOAuthLogin.callbackOutcome(fromRequest: ok), .code("4/0AX"))
+
+        // A denial must fail fast instead of waiting out the 120s timeout.
+        let denied = "GET /?error=access_denied HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        XCTAssertEqual(
+            AntigravityOAuthLogin.callbackOutcome(fromRequest: denied), .denied("access_denied"))
+    }
 }

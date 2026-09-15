@@ -6,10 +6,46 @@ import CodexBarCore
 
 // MARK: - Errors
 
+/// Resumes a `CheckedContinuation` exactly once, from whichever queue reaches
+/// it first. `NWConnection` callbacks for several accepted connections run
+/// concurrently on a global queue; an unsynchronised `var settled` both races
+/// and fails to prevent a second `resume`, which traps the Swift runtime
+/// (`EXC_BREAKPOINT` in `CheckedContinuation.resume`).
+final class OneShotContinuation<Success>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Success, Error>?
+
+    init(_ continuation: CheckedContinuation<Success, Error>) {
+        self.continuation = continuation
+    }
+
+    var isSettled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return continuation == nil
+    }
+
+    /// Returns whether THIS call settled it, so the caller can do the one-time
+    /// teardown (cancelling the listener) exactly once too.
+    @discardableResult
+    func resume(with result: Result<Success, Error>) -> Bool {
+        lock.lock()
+        guard let continuation else {
+            lock.unlock()
+            return false
+        }
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(with: result)
+        return true
+    }
+}
+
 enum AntigravityOAuthError: LocalizedError {
     case missingCredentials
     case timeout
     case codeMissing
+    case denied(String)
     case tokenExchangeFailed(String)
     case refreshFailed(String)
     case quotaFetchFailed(String)
@@ -23,6 +59,8 @@ enum AntigravityOAuthError: LocalizedError {
             return "Antigravity OAuth: timeout chờ callback từ browser."
         case .codeMissing:
             return "Antigravity OAuth: không nhận được authorization code."
+        case .denied(let reason):
+            return "Antigravity OAuth: đăng nhập bị từ chối – \(reason)"
         case .tokenExchangeFailed(let msg):
             return "Antigravity OAuth: đổi token thất bại – \(msg)"
         case .refreshFailed(let msg):
@@ -630,41 +668,54 @@ enum AntigravityOAuthLogin {
             // Connection acceptance task
             group.addTask {
                 return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
-                    var settled = false
+                    // A browser opens SEVERAL connections to the loopback: a
+                    // preconnect, the redirect itself, then `/favicon.ico` once
+                    // the response page renders. Each one gets its own receive
+                    // callback on a concurrent global queue, so the settle state
+                    // must be atomic and must be checked at the point of
+                    // resuming — not only when the connection is accepted.
+                    // Resuming a CheckedContinuation twice traps the runtime.
+                    let once = OneShotContinuation(cont)
                     listener.newConnectionHandler = { connection in
-                        guard !settled else {
+                        guard !once.isSettled else {
                             connection.cancel()
                             return
                         }
                         connection.start(queue: .global(qos: .userInitiated))
-                        // Receive HTTP GET request
                         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, error in
-                            defer {
-                                settled = true
-                                listener.cancel()
-                            }
-                            if let error {
-                                cont.resume(throwing: error)
+                            // A failure on ONE connection is not a failed login
+                            // — the favicon request can fail while the redirect
+                            // carrying the code is still in flight. Drop this
+                            // connection and keep listening; the timeout task
+                            // still bounds the wait.
+                            guard error == nil,
+                                  let data,
+                                  let request = String(data: data, encoding: .utf8)
+                            else {
+                                connection.cancel()
                                 return
                             }
-                            guard let data, let request = String(data: data, encoding: .utf8) else {
-                                cont.resume(throwing: AntigravityOAuthError.codeMissing)
-                                return
-                            }
-                            // Send success response before parsing so the browser closes cleanly
+
+                            // Answer before parsing so the browser tab closes cleanly.
                             let message = L10n.t("oauth.closeTab")
                             let body = "<html><body><p>\(message)</p></body></html>"
                             let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
-                            let responseData = Data(response.utf8)
-                            connection.send(content: responseData, completion: .contentProcessed { _ in
+                            connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
                                 connection.cancel()
                             })
 
-                            // Extract code from GET line: "GET /?code=...&... HTTP/1.1"
-                            if let code = extractCode(fromRequest: request) {
-                                cont.resume(returning: code)
-                            } else {
-                                cont.resume(throwing: AntigravityOAuthError.codeMissing)
+                            // Only the request actually carrying the callback
+                            // settles the login. `/favicon.ico` carries neither
+                            // parameter and must not fail the flow.
+                            switch Self.callbackOutcome(fromRequest: request) {
+                            case .code(let code):
+                                if once.resume(with: .success(code)) { listener.cancel() }
+                            case .denied(let reason):
+                                if once.resume(with: .failure(AntigravityOAuthError.denied(reason))) {
+                                    listener.cancel()
+                                }
+                            case .unrelated:
+                                break
                             }
                         }
                     }
@@ -678,15 +729,44 @@ enum AntigravityOAuthLogin {
         }
     }
 
-    private static func extractCode(fromRequest request: String) -> String? {
-        // First line: "GET /?code=4/0A...&scope=... HTTP/1.1"
+    /// What an inbound loopback request means for the login.
+    enum CallbackOutcome: Equatable {
+        case code(String)
+        /// Google redirected with `?error=` — surface it instead of waiting out
+        /// the full timeout.
+        case denied(String)
+        /// Anything without either parameter (favicon, preconnect probe).
+        case unrelated
+    }
+
+    /// Internal for testing.
+    static func callbackOutcome(fromRequest request: String) -> CallbackOutcome {
+        if let code = extractCode(fromRequest: request) { return .code(code) }
+        if let reason = extractQueryValue("error", fromRequest: request) { return .denied(reason) }
+        return .unrelated
+    }
+
+    /// Reads one query parameter out of the request line
+    /// ("GET /?code=4%2F0A...&scope=... HTTP/1.1").
+    ///
+    /// Assigns `percentEncodedQuery`, not `query`: the request line is ALREADY
+    /// percent-encoded, and the `query` setter encodes it a second time, so
+    /// `%2F` came back out as a literal `%2F` and the code was handed to the
+    /// token exchange still escaped.
+    private static func extractQueryValue(_ name: String, fromRequest request: String) -> String? {
         guard let firstLine = request.components(separatedBy: "\r\n").first else { return nil }
         let parts = firstLine.components(separatedBy: " ")
         guard parts.count >= 2 else { return nil }
-        let path = parts[1]
         var comps = URLComponents()
-        comps.query = path.components(separatedBy: "?").dropFirst().joined(separator: "?")
-        return comps.queryItems?.first(where: { $0.name == "code" })?.value
+        comps.percentEncodedQuery = parts[1]
+            .components(separatedBy: "?")
+            .dropFirst()
+            .joined(separator: "?")
+        return comps.queryItems?.first(where: { $0.name == name })?.value
+    }
+
+    private static func extractCode(fromRequest request: String) -> String? {
+        extractQueryValue("code", fromRequest: request)
     }
 
     // MARK: - Token exchange
