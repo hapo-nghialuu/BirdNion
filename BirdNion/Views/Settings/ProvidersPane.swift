@@ -1401,6 +1401,77 @@ struct CodexAutoPrimeCard: View {
 }
 
 
+/// Khai báo các `CODEX_HOME` phụ để cost scan nhìn thấy phiên Codex do tool
+/// khác spawn. Mặc định scanner chỉ quét `~/.codex`; một wrapper chạy Codex với
+/// `CODEX_HOME` riêng sẽ ghi session log ra ngoài đó, khiến chart hiện $0 dù
+/// quota vẫn tụt. Card này chỉ sửa key `@AppStorage` mà `CodexCostScanner` đọc.
+struct CodexExtraHomesCard: View {
+    @EnvironmentObject var settings: SettingsStore
+    @State private var paths: [String] = []
+
+    private var lang: String { settings.appLanguage }
+
+    var body: some View {
+        SettingsCard(header: L10n.t("settings.codex.extraHomes.title", lang)) {
+            SettingsLabeledRow(
+                title: L10n.t("settings.codex.extraHomes.add", lang),
+                subtitle: L10n.t("settings.codex.extraHomes.addSubtitle", lang)
+            ) {
+                Button(L10n.t("settings.codex.extraHomes.choose", lang)) { chooseHome() }
+                    .buttonStyle(.instrumentOutline)
+            }
+
+            ForEach(paths, id: \.self) { path in
+                SettingsRowDivider()
+                SettingsLabeledRow(title: display(path), subtitle: warning(for: path)) {
+                    Button(L10n.t("settings.codex.extraHomes.remove", lang)) { remove(path) }
+                        .buttonStyle(.instrumentInline)
+                }
+            }
+        }
+        .onAppear { paths = settings.codexExtraHomePaths }
+    }
+
+    /// Rút gọn `$HOME` thành `~` cho dễ đọc; giữ nguyên phần còn lại.
+    private func display(_ path: String) -> String {
+        (path as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// Cảnh báo khi thư mục chọn không có `sessions/` — gần như chắc chắn user
+    /// đã trỏ nhầm cấp (chọn `sessions` thay vì chính CODEX_HOME, hoặc chọn
+    /// nhầm thư mục khác).
+    private func warning(for path: String) -> String? {
+        let sessions = URL(fileURLWithPath: path, isDirectory: true)
+            .appendingPathComponent("sessions", isDirectory: true)
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: sessions.path, isDirectory: &isDir)
+        guard !(exists && isDir.boolValue) else { return nil }
+        return L10n.t("settings.codex.extraHomes.noSessions", lang)
+    }
+
+    private func chooseHome() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.t("settings.codex.extraHomes.choose", lang)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let systemHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
+        apply(CodexExtraHomes.adding(url.path, to: paths, systemHome: systemHome))
+    }
+
+    private func remove(_ path: String) {
+        apply(paths.filter { $0 != path })
+    }
+
+    private func apply(_ next: [String]) {
+        settings.codexExtraHomePaths = next
+        paths = settings.codexExtraHomePaths
+        Task { await CodexCostScanner.invalidateCaches() }
+    }
+}
+
+
 /// Cache kết quả dò nguồn đăng nhập cho khối "Kết nối provider".
 ///
 /// `ProvidersPane.detectOnboardingSource` chạm đĩa VÀ spawn process

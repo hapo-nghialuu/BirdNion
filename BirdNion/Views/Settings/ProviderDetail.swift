@@ -626,6 +626,7 @@ extension ProvidersPane {
                 if rows[idx].id == "codex" {
                     CodexAccountsCard()
                     CodexAutoPrimeCard()
+                    CodexExtraHomesCard()
                 }
                 if rows[idx].id == "elevenlabs" {
                     ElevenLabsKeysCard()

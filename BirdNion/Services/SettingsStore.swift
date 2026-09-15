@@ -219,9 +219,27 @@ final class SettingsStore: ObservableObject {
     @AppStorage(CodexWebDashboard.enabledKey) var codexOpenAIWebEnabled: Bool = false
     @AppStorage(CodexWebDashboard.cookieSourceKey) var codexCookieSource: String = "auto"
     @AppStorage(CodexWebDashboard.manualCookieKey) var codexManualCookieHeader: String = ""
+    /// CODEX_HOME phụ (JSON array) cho các phiên Codex do tool khác spawn với
+    /// `CODEX_HOME` riêng — không khai báo thì cost của những phiên đó không
+    /// được tính. `CodexCostScanner` đọc thẳng key này.
+    @AppStorage(CodexCostScanner.extraHomePathsKey) var codexExtraHomePathsJSON: String = "[]"
+
     /// Show Codex Spark model-specific windows in the provider popover.
     /// On by default; Settings / All-tab surfaces stay unchanged when off.
     @AppStorage("codexShowSparkInPopover") var codexShowSparkInPopover: Bool = true
+
+    /// Danh sách home phụ đã chuẩn hoá. Setter ghi lại JSON nên UI chỉ cần thao
+    /// tác trên mảng.
+    var codexExtraHomePaths: [String] {
+        get { CodexCostScanner.extraHomePaths }
+        set {
+            let normalized = CodexExtraHomes.normalize(newValue)
+            guard let data = try? JSONEncoder().encode(normalized),
+                  let json = String(data: data, encoding: .utf8)
+            else { return }
+            codexExtraHomePathsJSON = json
+        }
+    }
     /// Show Claude Fable (model-scoped weekly) in the provider popover.
     /// On by default; Settings cost / All-tab stay unchanged when off.
     @AppStorage("claudeShowFableInPopover") var claudeShowFableInPopover: Bool = true
