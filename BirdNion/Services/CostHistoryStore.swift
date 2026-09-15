@@ -612,26 +612,88 @@ enum CostHistoryStore {
         return buildWindow(byDay: byDay, now: now, calendar: calendar, windowDays: windowDays)
     }
 
-    /// Days the live scan must cover so no day slips between persisted
-    /// history and the fresh scan: distance from the source's newest stored
-    /// day to today (that day is rescanned too — it may still grow), clamped
-    /// to [minDays, maxDays]. Sources without history scan the full maxDays.
+    /// Floor for a routine refresh. The persisted history supplies every older
+    /// day, so a normal pass only has to cover logs that can still change:
+    /// today plus two days of slack for a turn written just after midnight or
+    /// flushed after the machine woke up.
+    ///
+    /// This used to be 7, which meant a daily user (newest stored day == today,
+    /// so the computed gap is 0) re-read a week of session files every single
+    /// refresh — the dominant cost of the All tab on a busy machine. Matches
+    /// the value OMP and Pi already used for their own incremental window.
+    static let routineScanDays = 3
+
+    /// How far a periodic deep pass reaches back. Covers the case the narrow
+    /// window cannot: a session flushed late (machine slept, CLI wrote
+    /// yesterday's turn this morning). Without it those days would keep their
+    /// stale numbers forever, because the store never shrinks a day on its own.
+    static let deepScanDays = 30
+
+    /// Cadence of that deep pass.
+    static let deepScanInterval: TimeInterval = 24 * 3_600
+
+    /// Scoped by the history file it describes, not just by source. The stamp
+    /// is a property of one dataset: a probe or a test pointed at another file
+    /// must not consume — or be consumed by — the real store's deep-scan slot.
+    private static func deepScanKey(_ source: Source, url: URL) -> String {
+        "costHistoryDeepScanAt_\(source.rawValue)_\(url.standardizedFileURL.path)"
+    }
+
+    /// Internal for testing. Decides how far back to scan and whether this pass
+    /// is the deep one, from facts only — no I/O.
+    ///
+    /// - Parameter daysSinceLatestStoredDay: nil when the source has no stored
+    ///   history at all (cold start ⇒ full window).
+    static func scanBackPlan(
+        daysSinceLatestStoredDay: Int?,
+        lastDeepScan: Date?,
+        now: Date,
+        minDays: Int = routineScanDays,
+        maxDays: Int = 90,
+        deepDays: Int = deepScanDays,
+        deepInterval: TimeInterval = deepScanInterval
+    ) -> (days: Int, isDeep: Bool) {
+        guard let gap = daysSinceLatestStoredDay else { return (maxDays, true) }
+        let routine = min(max(gap + 1, minDays), maxDays)
+        let deepIsDue = lastDeepScan.map { now.timeIntervalSince($0) >= deepInterval } ?? true
+        guard deepIsDue else { return (routine, false) }
+        return (min(max(routine, deepDays), maxDays), true)
+    }
+
+    /// Days the live scan must cover so no day slips between persisted history
+    /// and the fresh scan. Normally just `routineScanDays`; once every
+    /// `deepScanInterval` it widens to `deepScanDays` to re-read days a late
+    /// flush may have changed. Sources without history scan the full maxDays.
+    ///
+    /// Stamps the deep-pass clock as a side effect, so a caller that widens the
+    /// window actually resets the cadence.
     static func scanBackDays(
         source: Source,
         now: Date = Date(),
         calendar: Calendar = .current,
-        minDays: Int = 7,
+        minDays: Int = routineScanDays,
         maxDays: Int = 90,
         url: URL = historyURL()) -> Int
     {
         ioLock.lock()
         defer { ioLock.unlock() }
         let byDay = read(url: url).sources?[source.rawValue] ?? [:]
-        guard let latest = byDay.keys.compactMap({ parseDayKey($0, calendar: calendar) }).max()
-        else { return maxDays }
-        let days = calendar.dateComponents(
-            [.day], from: latest, to: calendar.startOfDay(for: now)).day ?? maxDays
-        return min(max(days + 1, minDays), maxDays)
+        let latest = byDay.keys.compactMap { parseDayKey($0, calendar: calendar) }.max()
+        let gap = latest.flatMap {
+            calendar.dateComponents([.day], from: $0, to: calendar.startOfDay(for: now)).day
+        }
+        let key = deepScanKey(source, url: url)
+        let stamped = UserDefaults.standard.object(forKey: key) as? Date
+        let plan = scanBackPlan(
+            daysSinceLatestStoredDay: latest == nil ? nil : (gap ?? maxDays),
+            lastDeepScan: stamped,
+            now: now,
+            minDays: minDays,
+            maxDays: maxDays)
+        if plan.isDeep {
+            UserDefaults.standard.set(now, forKey: key)
+        }
+        return plan.days
     }
 
     // MARK: - Report rebuilders

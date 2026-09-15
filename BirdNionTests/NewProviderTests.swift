@@ -1082,14 +1082,25 @@ final class NewProviderTests: XCTestCase {
 
         let fresh = dir.appendingPathComponent("fresh.json")
         store(latestDaysAgo: 0, url: fresh)
+        // Lần đầu trên một kho chưa từng quét sâu → nới rộng để bắt ghi trễ.
         XCTAssertEqual(
-            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: fresh), 7)
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: fresh),
+            CostHistoryStore.deepScanDays)
+        // Lần kế tiếp đã có dấu → về cửa sổ thường ngày.
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: fresh),
+            CostHistoryStore.routineScanDays)
         // Same file, source without history → still full scan.
         XCTAssertEqual(
             CostHistoryStore.scanBackDays(source: .codex, now: now, calendar: cal, url: fresh), 90)
 
         let stale = dir.appendingPathComponent("stale.json")
         store(latestDaysAgo: 20, url: stale)
+        // Lần đầu là quét sâu: 30 đã phủ trọn khoảng trống 20 ngày.
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: stale),
+            CostHistoryStore.deepScanDays)
+        // Sau khi đã quét sâu, khoảng trống thật quyết định — không bị bóp về sàn.
         XCTAssertEqual(
             CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: stale), 21)
 
@@ -1948,7 +1959,9 @@ final class NewProviderTests: XCTestCase {
             calendar: calendar,
             maxDays: KiroCostScanner.chartWindowDays,
             url: historyURL)
-        XCTAssertEqual(incrementalDays, 7)
+        // Kho tạm chưa có dấu quét sâu nên lần gọi đầu nới rộng; điều test quan
+        // tâm là `replacing`, không phải con số cửa sổ.
+        XCTAssertEqual(incrementalDays, CostHistoryStore.deepScanDays)
         let plan = KiroCostScanner.countingScanPlan(
             storedRevision: KiroCostScanner.countingRevision - 1,
             incrementalDays: incrementalDays)
@@ -5611,5 +5624,70 @@ final class NewProviderTests: XCTestCase {
         let piEmpty = await PiCostScanner.seededReport(now: now, calendar: cal, url: missing)
         XCTAssertNil(ompEmpty)
         XCTAssertNil(piEmpty)
+    }
+
+    // MARK: - Cửa sổ quét: thường ngày hẹp + quét sâu định kỳ
+
+    /// Người dùng hằng ngày: ngày mới nhất đã lưu CHÍNH LÀ hôm nay nên khoảng
+    /// cách = 0. Trước đây sàn 7 khiến mỗi lần refresh đọc lại cả tuần file.
+    func testRoutinePassStaysNarrowForDailyUser() {
+        let now = Date()
+        let plan = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: 0,
+            lastDeepScan: now.addingTimeInterval(-3_600),
+            now: now)
+        XCTAssertEqual(plan.days, CostHistoryStore.routineScanDays)
+        XCTAssertEqual(plan.days, 3)
+        XCTAssertFalse(plan.isDeep)
+    }
+
+    /// Quá hạn thì nới rộng để bắt lại phiên ghi trễ — thứ mà cửa sổ hẹp bỏ sót
+    /// và store never-shrink không bao giờ tự sửa.
+    func testDeepPassWidensWhenDue() {
+        let now = Date()
+        let due = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: 0,
+            lastDeepScan: now.addingTimeInterval(-CostHistoryStore.deepScanInterval - 60),
+            now: now)
+        XCTAssertEqual(due.days, CostHistoryStore.deepScanDays)
+        XCTAssertTrue(due.isDeep)
+
+        let never = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: 0, lastDeepScan: nil, now: now)
+        XCTAssertTrue(never.isDeep)
+    }
+
+    /// Không có lịch sử = khởi động lạnh: phải quét đủ maxDays, không được rơi
+    /// xuống cửa sổ hẹp rồi mất sạch ngày cũ.
+    func testColdStartScansFullWindow() {
+        let plan = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: nil, lastDeepScan: Date(), now: Date(), maxDays: 90)
+        XCTAssertEqual(plan.days, 90)
+        XCTAssertTrue(plan.isDeep)
+    }
+
+    /// Nghỉ dài ngày: khoảng trống thật phải thắng cả sàn lẫn cửa sổ sâu, và
+    /// vẫn bị maxDays chặn trên.
+    func testLongGapWinsAndIsCappedByMaxDays() {
+        let now = Date()
+        let recentDeep = now.addingTimeInterval(-60)
+        let gap = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: 40, lastDeepScan: recentDeep, now: now)
+        XCTAssertEqual(gap.days, 41, "phải phủ đúng khoảng trống, không bị bóp về sàn")
+
+        let huge = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: 500, lastDeepScan: recentDeep, now: now, maxDays: 90)
+        XCTAssertEqual(huge.days, 90)
+    }
+
+    /// Nguồn truyền sàn riêng vẫn được tôn trọng.
+    func testCallerSuppliedMinDaysIsHonoured() {
+        let now = Date()
+        let plan = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: 0,
+            lastDeepScan: now.addingTimeInterval(-60),
+            now: now,
+            minDays: 10)
+        XCTAssertEqual(plan.days, 10)
     }
 }

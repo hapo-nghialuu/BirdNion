@@ -37,7 +37,8 @@ struct PiUsageReport: Equatable, Sendable {
 enum PiCostScanner {
 
     static let chartWindowDays = 120
-    static let incrementalDays = 3
+    /// Cùng một nơi quyết định cửa sổ quét thường ngày cho mọi nguồn.
+    static let incrementalDays = CostHistoryStore.routineScanDays
     /// Bump when the counting formula changes. `CostHistoryStore` never shrinks
     /// a day on its own, so without this a corrected formula leaves the old
     /// inflated numbers frozen in history forever.
