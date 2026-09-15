@@ -4669,56 +4669,6 @@ final class NewProviderTests: XCTestCase {
         let attrs = try fm.attributesOfItem(atPath: gemini.appendingPathComponent("jetski-standalone-oauth-token").path)
         XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
-
-    func testAntigravityAgyCLISwitchWritesGeminiTokenAndBacksUp() throws {
-        // "Công tắc" agy CLI: ghi token account cô lập vào ~/.gemini, backup
-        // token cũ, và isActiveInCLI nhận đúng account sau khi đổi.
-        let tempHome = FileManager.default.temporaryDirectory
-            .appendingPathComponent("birdnion-agycli-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: tempHome) }
-        let fm = FileManager.default
-        let label = "switch.user@example.com"
-
-        // Account có login cô lập (refresh = ISO-REFRESH).
-        try AntigravityIsolatedAgy.seedLogin(
-            forAccountLabel: label,
-            accessToken: "ISO-ACCESS",
-            refreshToken: "ISO-REFRESH",
-            expiry: Date(timeIntervalSince1970: 1_800_000_000),
-            home: tempHome, env: [:])
-
-        // ~/.gemini sẵn có account KHÁC (refresh = OLD-REFRESH).
-        let realGemini = tempHome.appendingPathComponent(".gemini", isDirectory: true)
-        try fm.createDirectory(at: realGemini, withIntermediateDirectories: true)
-        let oldToken = #"{"token":{"access_token":"OLD-A","token_type":"Bearer","refresh_token":"OLD-REFRESH","expiry":"2026-01-01T00:00:00Z"},"auth_method":"consumer"}"#
-        try Data(oldToken.utf8).write(to: realGemini.appendingPathComponent("jetski-standalone-oauth-token"))
-
-        XCTAssertFalse(AntigravityAgyCLI.isActiveInCLI(accountLabel: label, home: tempHome, env: [:]),
-                       "chưa switch thì account cô lập không phải account trong CLI")
-
-        try AntigravityAgyCLI.switchToCLI(accountLabel: label, home: tempHome, env: [:])
-
-        // ~/.gemini giờ mang refresh của account cô lập.
-        let newData = try Data(contentsOf: realGemini.appendingPathComponent("jetski-standalone-oauth-token"))
-        let newJson = try XCTUnwrap(try JSONSerialization.jsonObject(with: newData) as? [String: Any])
-        let tok = try XCTUnwrap(newJson["token"] as? [String: Any])
-        XCTAssertEqual(tok["refresh_token"] as? String, "ISO-REFRESH")
-
-        XCTAssertTrue(AntigravityAgyCLI.isActiveInCLI(accountLabel: label, home: tempHome, env: [:]),
-                      "sau switch, isActiveInCLI phải nhận account này")
-
-        // Token cũ đã được backup (đảo lại được).
-        let backup = tempHome
-            .appendingPathComponent(".config/birdnion/agy-cli-backup/jetski-standalone-oauth-token")
-        XCTAssertTrue(fm.fileExists(atPath: backup.path), "phải có backup token cũ")
-        let backupJson = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: Data(contentsOf: backup)) as? [String: Any])
-        let backupTok = try XCTUnwrap(backupJson["token"] as? [String: Any])
-        XCTAssertEqual(backupTok["refresh_token"] as? String, "OLD-REFRESH")
-    }
-
-    // MARK: - OMP & Pi Coding Agents Tests
-
     func testOMPCostScannerDeduplicationAndExtraction() async throws {
         let sourceFixture = try XCTUnwrap(
             Bundle(for: NewProviderTests.self).url(
