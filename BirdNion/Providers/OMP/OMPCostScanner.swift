@@ -71,6 +71,28 @@ enum OMPCostScanner {
         func storeReport(_ value: OMPUsageReport, at: Date) { reportEntry = (at, value) }
     }
 
+    /// Report dựng THUẦN từ lịch sử đã lưu — không đọc file session nào, nên
+    /// trả về gần như tức thì. Dùng để vẽ ngay trong lúc lần quét thật còn
+    /// chạy nền; `usageReport`/`loadReport` sẽ ghi đè khi xong.
+    ///
+    /// Thiếu bước này thì phần đóng góp của nguồn này vắng khỏi tab All cho tới
+    /// khi quét xong, nên tổng NHẢY LÊN thay vì được tinh chỉnh dần.
+    static func seededReport(
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        url: URL = CostHistoryStore.historyURL()
+    ) async -> OMPUsageReport? {
+        await Task.detached(priority: .userInitiated) {
+            let window = CostHistoryStore.window(
+                source: .omp, now: now, calendar: calendar,
+                windowDays: chartWindowDays, url: url)
+            guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
+            let confidence = CostHistoryStore.confidence(
+                source: .omp, liveScanSucceeded: false, url: url)
+            return CostHistoryStore.makeOMPReport(window: window, confidence: confidence)
+        }.value
+    }
+
     // MARK: - Public API
 
     /// Decides the scan window from the revision recorded in history.

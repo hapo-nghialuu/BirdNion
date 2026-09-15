@@ -63,6 +63,28 @@ enum PiCostScanner {
         func storeReport(_ value: PiUsageReport, at: Date) { reportEntry = (at, value) }
     }
 
+    /// Report dựng THUẦN từ lịch sử đã lưu — không đọc file session nào, nên
+    /// trả về gần như tức thì. Dùng để vẽ ngay trong lúc lần quét thật còn
+    /// chạy nền; `usageReport`/`loadReport` sẽ ghi đè khi xong.
+    ///
+    /// Thiếu bước này thì phần đóng góp của nguồn này vắng khỏi tab All cho tới
+    /// khi quét xong, nên tổng NHẢY LÊN thay vì được tinh chỉnh dần.
+    static func seededReport(
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        url: URL = CostHistoryStore.historyURL()
+    ) async -> PiUsageReport? {
+        await Task.detached(priority: .userInitiated) {
+            let window = CostHistoryStore.window(
+                source: .pi, now: now, calendar: calendar,
+                windowDays: chartWindowDays, url: url)
+            guard window.contains(where: { $0.tokens > 0 || $0.usd > 0 }) else { return nil }
+            let confidence = CostHistoryStore.confidence(
+                source: .pi, liveScanSucceeded: false, url: url)
+            return CostHistoryStore.makePiReport(window: window, confidence: confidence)
+        }.value
+    }
+
     // MARK: - Path Resolution
 
     static var defaultSessionsDirectory: URL {

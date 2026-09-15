@@ -5575,4 +5575,41 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(Set(order).count, order.count)
         XCTAssertGreaterThanOrEqual(order.count, 8)
     }
+
+    /// OMP/Pi trước đây thiếu seed nên tổng tab All NHẢY khi chúng quét xong.
+    func testOMPAndPiSeedFromStoredHistory() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        for source in [CostHistoryStore.Source.omp, .pi] {
+            _ = CostHistoryStore.apply(
+                source: source,
+                liveDays: [
+                    (yesterday, 4.0, 400, [("m", 4.0, 400)]),
+                    (today, 1.0, 100, [("m", 1.0, 100)]),
+                ],
+                now: now, calendar: cal, windowDays: 90, url: url)
+        }
+
+        let omp = await OMPCostScanner.seededReport(now: now, calendar: cal, url: url)
+        XCTAssertEqual(omp?.todayTokens, 100)
+        XCTAssertEqual(omp?.last30Tokens, 500)
+
+        let pi = await PiCostScanner.seededReport(now: now, calendar: cal, url: url)
+        XCTAssertEqual(pi?.todayTokens, 100)
+
+        // Kho rỗng → nil để UI giữ skeleton thay vì vẽ số 0.
+        let missing = dir.appendingPathComponent("nope.json")
+        let ompEmpty = await OMPCostScanner.seededReport(now: now, calendar: cal, url: missing)
+        let piEmpty = await PiCostScanner.seededReport(now: now, calendar: cal, url: missing)
+        XCTAssertNil(ompEmpty)
+        XCTAssertNil(piEmpty)
+    }
 }

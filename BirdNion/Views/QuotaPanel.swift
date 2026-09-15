@@ -598,7 +598,24 @@ struct QuotaOverview: View {
             return
         }
         loadingCostSources.insert(.omp)
+        let needsSeed = ompReport == nil
         Task {
+            // Seed instantly from persisted history; the live scan overwrites.
+            // Without it this source is simply absent from the All tab until
+            // its scan lands, so the combined total JUMPS instead of settling.
+            if needsSeed, let seed = await OMPCostScanner.seededReport() {
+                await MainActor.run {
+                    guard AllUsageSourceAuthorization.acceptsCompletion(
+                        for: .omp,
+                        providerID: effectiveSelectedId(),
+                        taskID: taskId,
+                        currentTaskID: ompReportTaskId,
+                        authorizedSources: authorizedCostSources),
+                        ompReport == nil
+                    else { return }
+                    ompReport = seed
+                }
+            }
             let report = await OMPCostScanner.loadReport()
             await MainActor.run {
                 guard AllUsageSourceAuthorization.acceptsCompletion(
@@ -733,7 +750,24 @@ struct QuotaOverview: View {
             return
         }
         loadingCostSources.insert(.pi)
+        let needsSeed = piReport == nil
         Task {
+            // Seed instantly from persisted history; the live scan overwrites.
+            // Without it this source is simply absent from the All tab until
+            // its scan lands, so the combined total JUMPS instead of settling.
+            if needsSeed, let seed = await PiCostScanner.seededReport() {
+                await MainActor.run {
+                    guard AllUsageSourceAuthorization.acceptsCompletion(
+                        for: .pi,
+                        providerID: effectiveSelectedId(),
+                        taskID: taskId,
+                        currentTaskID: piReportTaskId,
+                        authorizedSources: authorizedCostSources),
+                        piReport == nil
+                    else { return }
+                    piReport = seed
+                }
+            }
             let report = await PiCostScanner.loadReport()
             await MainActor.run {
                 guard AllUsageSourceAuthorization.acceptsCompletion(
