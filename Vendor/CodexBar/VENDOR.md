@@ -15,7 +15,7 @@ redo that archaeology.
 
 ## This is a fork, not a mirror
 
-Thirteen BirdNion commits have edited the vendored tree since it was imported, so it
+Fourteen BirdNion commits have edited the vendored tree since it was imported, so it
 cannot be refreshed by overwriting it with upstream:
 
 | Commit | Subject |
@@ -33,6 +33,7 @@ cannot be refreshed by overwriting it with upstream:
 | `b5f0554a` | fix(codex): make usage scans incremental and restart-safe |
 | `eeaf4a32` | perf(codex): make usage scans fast and resilient |
 | `70742fe4` | fix(codex): canonicalize pending priority state |
+| `2c6751c` | feat(codex): quét thêm CODEX_HOME phụ cho cost scan |
 
 ## Why a wholesale re-vendor breaks the build
 
