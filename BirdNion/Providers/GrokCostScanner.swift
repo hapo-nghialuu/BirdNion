@@ -170,6 +170,22 @@ enum GrokCostScanner {
     }
 
     /// Cached full report (120 daily buckets + strict 30-day totals).
+    /// Skip a single session file larger than this instead of loading it whole.
+    /// Matches the cap Claude / OMP / Pi apply — the first scan reads every
+    /// file, so one oversized transcript there takes the whole pass down.
+    static let maxSessionFileBytes = 256 * 1024 * 1024
+
+    /// `Data(contentsOf:)` guarded by that cap. nil when the file is missing or
+    /// too large to read safely.
+    static func boundedData(at url: URL) -> Data? {
+        if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+           size > maxSessionFileBytes
+        {
+            return nil
+        }
+        return try? Data(contentsOf: url)
+    }
+
     /// Merges with `CostHistoryStore` so deleted `~/.grok/sessions` do not
     /// wipe past All-tab bars.
     static func usageReport(now: Date = Date()) async -> GrokUsageReport? {
@@ -460,7 +476,7 @@ enum GrokCostScanner {
         var activeAt = mtime
         var gitRootDir: String?
 
-        if let data = try? Data(contentsOf: summaryURL),
+        if let data = boundedData(at: summaryURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {
             if let mid = (json["current_model_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -476,7 +492,7 @@ enum GrokCostScanner {
             gitRootDir = json["git_root_dir"] as? String
         }
 
-        guard let data = try? Data(contentsOf: signalsURL),
+        guard let data = boundedData(at: signalsURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 
@@ -544,7 +560,7 @@ enum GrokCostScanner {
         calendar: Calendar) -> [Date: Int]
     {
         let eventsURL = sessionDir.appendingPathComponent("events.jsonl")
-        guard let data = try? Data(contentsOf: eventsURL),
+        guard let data = boundedData(at: eventsURL),
               let text = String(data: data, encoding: .utf8)
         else { return [:] }
 

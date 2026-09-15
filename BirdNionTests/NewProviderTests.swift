@@ -5589,43 +5589,6 @@ final class NewProviderTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(order.count, 8)
     }
 
-    /// OMP/Pi trước đây thiếu seed nên tổng tab All NHẢY khi chúng quét xong.
-    func testOMPAndPiSeedFromStoredHistory() async throws {
-        let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("cost-history.json")
-        let cal = Calendar.current
-        let now = Date()
-        let today = cal.startOfDay(for: now)
-        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
-
-        for source in [CostHistoryStore.Source.omp, .pi] {
-            _ = CostHistoryStore.apply(
-                source: source,
-                liveDays: [
-                    (yesterday, 4.0, 400, [("m", 4.0, 400)]),
-                    (today, 1.0, 100, [("m", 1.0, 100)]),
-                ],
-                now: now, calendar: cal, windowDays: 90, url: url)
-        }
-
-        let omp = await OMPCostScanner.seededReport(now: now, calendar: cal, url: url)
-        XCTAssertEqual(omp?.todayTokens, 100)
-        XCTAssertEqual(omp?.last30Tokens, 500)
-
-        let pi = await PiCostScanner.seededReport(now: now, calendar: cal, url: url)
-        XCTAssertEqual(pi?.todayTokens, 100)
-
-        // Kho rỗng → nil để UI giữ skeleton thay vì vẽ số 0.
-        let missing = dir.appendingPathComponent("nope.json")
-        let ompEmpty = await OMPCostScanner.seededReport(now: now, calendar: cal, url: missing)
-        let piEmpty = await PiCostScanner.seededReport(now: now, calendar: cal, url: missing)
-        XCTAssertNil(ompEmpty)
-        XCTAssertNil(piEmpty)
-    }
-
     // MARK: - Cửa sổ quét: thường ngày hẹp + quét sâu định kỳ
 
     /// Người dùng hằng ngày: ngày mới nhất đã lưu CHÍNH LÀ hôm nay nên khoảng
@@ -5652,6 +5615,7 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(due.days, CostHistoryStore.deepScanDays)
         XCTAssertTrue(due.isDeep)
 
+        // Chưa từng quét sâu cũng tính là tới hạn.
         let never = CostHistoryStore.scanBackPlan(
             daysSinceLatestStoredDay: 0, lastDeepScan: nil, now: now)
         XCTAssertTrue(never.isDeep)
@@ -5689,5 +5653,78 @@ final class NewProviderTests: XCTestCase {
             now: now,
             minDays: 10)
         XCTAssertEqual(plan.days, 10)
+    }
+
+    /// OMP/Pi trước đây thiếu seed nên tổng tab All NHẢY khi chúng quét xong.
+    func testOMPAndPiSeedFromStoredHistory() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+
+        for source in [CostHistoryStore.Source.omp, .pi] {
+            _ = CostHistoryStore.apply(
+                source: source,
+                liveDays: [
+                    (yesterday, 4.0, 400, [("m", 4.0, 400)]),
+                    (today, 1.0, 100, [("m", 1.0, 100)]),
+                ],
+                now: now, calendar: cal, windowDays: 90, url: url)
+        }
+
+        let omp = await OMPCostScanner.seededReport(now: now, calendar: cal, url: url)
+        XCTAssertEqual(omp?.todayTokens, 100)
+        XCTAssertEqual(omp?.last30Tokens, 500)
+
+        let pi = await PiCostScanner.seededReport(now: now, calendar: cal, url: url)
+        XCTAssertEqual(pi?.todayTokens, 100)
+
+        // Kho rỗng → nil để UI giữ skeleton thay vì vẽ số 0.
+        let missing = dir.appendingPathComponent("nope.json")
+        let ompEmpty = await OMPCostScanner.seededReport(now: now, calendar: cal, url: missing)
+        let piEmpty = await PiCostScanner.seededReport(now: now, calendar: cal, url: missing)
+        XCTAssertNil(ompEmpty)
+        XCTAssertNil(piEmpty)
+    }
+
+    // MARK: - Quét lần đầu: chặn file khổng lồ
+
+    /// Lần quét đầu đọc MỌI file vì chưa có gì trong cache, nên một transcript
+    /// quá khổ ở đó kéo sập cả lượt. Cap phải bằng nhau giữa các scanner để
+    /// không có nguồn nào thành lỗ hổng.
+    func testAllScannersShareTheSameOversizeCap() {
+        let cap = 256 * 1024 * 1024
+        XCTAssertEqual(ClaudeCostScanner.maxSessionFileBytes, cap)
+        XCTAssertEqual(GrokCostScanner.maxSessionFileBytes, cap)
+        XCTAssertEqual(OMPCostScanner.maxSessionFileBytes, cap)
+        XCTAssertEqual(PiCostScanner.maxSessionFileBytes, cap)
+    }
+
+    /// File dưới ngưỡng vẫn đọc bình thường; quá ngưỡng trả nil thay vì nạp
+    /// nguyên khối vào RAM.
+    func testGrokBoundedDataRejectsOversizeFile() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        let small = dir.appendingPathComponent("small.json")
+        try Data("{}".utf8).write(to: small)
+        XCTAssertEqual(GrokCostScanner.boundedData(at: small)?.count, 2)
+
+        // File thưa: chiếm đúng 1 byte trên đĩa nhưng khai kích thước lớn.
+        let huge = dir.appendingPathComponent("huge.jsonl")
+        fm.createFile(atPath: huge.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: huge)
+        try handle.truncate(atOffset: UInt64(GrokCostScanner.maxSessionFileBytes) + 1)
+        try handle.close()
+        XCTAssertNil(GrokCostScanner.boundedData(at: huge), "file quá khổ phải bị bỏ qua")
+
+        XCTAssertNil(GrokCostScanner.boundedData(at: dir.appendingPathComponent("nope.json")))
     }
 }

@@ -222,6 +222,9 @@ enum ClaudeCostScanner {
     /// All tab). The `last30*` totals keep their own 30-day cutoff so the
     /// Claude tab numbers don't change with this window.
     static let historyDays = 120
+    /// Skip a single transcript larger than this instead of loading it whole.
+    /// Matches the cap OMP and Pi already apply.
+    static let maxSessionFileBytes = 256 * 1024 * 1024
     /// Bump when model pricing or counting semantics change. Existing
     /// persisted days need one full rescan; `usageReport` then applies with
     /// `replacingSource: true` so inflated high-water marks are replaced
@@ -619,17 +622,33 @@ enum ClaudeCostScanner {
                                         root: URL,
                                         cutoff: Date,
                                         calendar: Calendar) -> [DayEntry] {
+        // One oversized transcript must not take the whole pass down with it.
+        // The first scan on a busy machine is exactly when this bites: nothing
+        // is cached yet, so every file is read.
+        if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+           size > maxSessionFileBytes
+        {
+            return []
+        }
         guard let content = try? String(contentsOf: url, encoding: .utf8) else {
             return []
         }
         var entries: [DayEntry] = []
-        var lines: [String] = []
-        content.enumerateLines { line, _ in lines.append(line) }
-        let cwd = lines.lazy.compactMap(topLevelCWD).first
+        // Deliberately NOT materialising a `[String]` of every line: that held
+        // a second full copy of the file alongside `content`, so peak memory
+        // was twice the transcript. Two streaming passes cost a little CPU and
+        // bound the footprint to the file itself.
+        var cwd: String?
+        content.enumerateLines { line, stop in
+            if let found = topLevelCWD(line) {
+                cwd = found
+                stop = true
+            }
+        }
         let identity = ProjectIdentity.claude(
             cwd: cwd,
             fallbackDirectory: sessionDirectoryToken(fileURL: url, root: root))
-        for line in lines {
+        content.enumerateLines { line, _ in
             Self.parseLineIntoDay(line,
                                   project: identity,
                                   calendar: calendar,
