@@ -43,6 +43,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
             for: AgentDetailPanelRoot(snapshot: snapshot, initialTab: initialTab)
                 .environmentObject(settings)
         )
+        refit(panel: detailPanel)
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
         if pinned { detailPanel.makeKeyAndOrderFront(nil) } else { detailPanel.orderFront(nil) }
@@ -69,6 +70,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
             for: ActivityPanelRoot(window: snapshot.overall, dayModels: dayModels)
                 .environmentObject(settings)
         )
+        refit(panel: detailPanel)
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
         if pinned { detailPanel.makeKeyAndOrderFront(nil) } else { detailPanel.orderFront(nil) }
@@ -101,6 +103,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
                 windowUSD: windowUSD, windowLabel: windowLabel)
                 .environmentObject(settings)
         )
+        refit(panel: detailPanel)
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
         // orderFront (không makeKey) để hover không giật focus khỏi popover.
@@ -128,6 +131,7 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
             for: ModelOverflowPanelRoot(items: items, mode: mode)
                 .environmentObject(settings)
         )
+        refit(panel: detailPanel)
         position(detailPanel, beside: parent)
         applyPanelChrome(detailPanel)
         detailPanel.orderFront(nil)
@@ -202,6 +206,8 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
             for: AgentDetailPanelRoot(snapshot: snapshot)
                 .environmentObject(settings)
         )
+        refit(panel: panel)
+        if let parentWindow { position(panel, beside: parentWindow) }
         applyPanelChrome(panel)
     }
 
@@ -274,6 +280,11 @@ final class AgentDetailPanelCoordinator: NSObject, NSWindowDelegate {
         )
     }
 
+    /// Gán `contentViewController` làm frame của window sập về 0×0 cho tới khi
+    /// AppKit khôi phục theo fitting size — và resize của NSWindow neo ở góc
+    /// dưới-trái nên window nở NGƯỢC LÊN TRÊN. Nếu `position()` đo trúng lúc
+    /// frame còn 0, panel bị neo đáy ngay dưới menu bar rồi tràn khỏi mép trên
+    /// màn hình. Vì vậy mọi path đổi content phải refit trước khi định vị.
     private func refit(panel: NSPanel) {
         guard let view = panel.contentViewController?.view else { return }
         view.layoutSubtreeIfNeeded()
