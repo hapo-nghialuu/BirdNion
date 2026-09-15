@@ -32,7 +32,7 @@ final class OpenCodeProvider: QuotaProvider {
     // opencode.ai sets `auth` / `__Host-auth` cookies.
     static let cookieDomain = "opencode.ai"
     // Cookies we forward to the API (filter out unrelated noise).
-    private static let allowedCookieNames: Set<String> = ["auth", "__Host-auth"]
+    static let allowedCookieNames: Set<String> = ["auth", "__Host-auth"]
 
     private static let baseURL = URL(string: "https://opencode.ai")!
     private static let serverURL = URL(string: "https://opencode.ai/_server")!
@@ -56,7 +56,12 @@ final class OpenCodeProvider: QuotaProvider {
     // MARK: - QuotaProvider
 
     func fetch() async throws -> ProviderStatus {
-        guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(providerID: id, domain: Self.cookieDomain),
+        // Name the session cookie so a browser whose login has expired loses to
+        // one that is still signed in — a stale analytics cookie must not win.
+        guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(
+                  providerID: id,
+                  domain: Self.cookieDomain,
+                  matchingSession: { Self.allowedCookieNames.contains($0) }),
               !rawHeader.isEmpty
         else {
             return failure("Chưa đăng nhập OpenCode trên trình duyệt")

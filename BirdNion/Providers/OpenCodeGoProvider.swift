@@ -35,7 +35,7 @@ final class OpenCodeGoProvider: QuotaProvider {
 
     // Same domain as OpenCode — cookies are shared under opencode.ai.
     static let cookieDomain = "opencode.ai"
-    private static let allowedCookieNames: Set<String> = ["auth", "__Host-auth"]
+    static let allowedCookieNames: Set<String> = ["auth", "__Host-auth"]
 
     private static let baseURL = URL(string: "https://opencode.ai")!
     private static let serverURL = URL(string: "https://opencode.ai/_server")!
@@ -77,7 +77,12 @@ final class OpenCodeGoProvider: QuotaProvider {
             apiKeyError = status.error
         }
 
-        guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(providerID: id, domain: Self.cookieDomain),
+        // Name the session cookie so a browser whose login has expired loses to
+        // one that is still signed in — a stale analytics cookie must not win.
+        guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(
+                  providerID: id,
+                  domain: Self.cookieDomain,
+                  matchingSession: { Self.allowedCookieNames.contains($0) }),
               !rawHeader.isEmpty
         else {
             // With a key configured its rejection is the actionable message;

@@ -56,15 +56,39 @@ enum ProviderCookieReader {
     ///   leftovers in another browser) are skipped. nil keeps the legacy
     ///   "first store with any cookie wins" behavior.
     static func cookieHeader(domain: String, requiredCookie: String? = nil) -> String? {
+        cookieHeader(
+            domain: domain,
+            matchingSession: requiredCookie.map { name in { $0 == name } })
+    }
+
+    /// Same, but the session cookie is identified by a predicate — for providers
+    /// whose session cookie name varies by deployment (CommandCode ships three
+    /// prefixes, OpenCode two).
+    static func cookieHeader(
+        domain: String,
+        matchingSession: ((String) -> Bool)?
+    ) -> String? {
         BrowserCookieSerialGate.lock.lock()
         defer { BrowserCookieSerialGate.lock.unlock() }
-        return extractFromBrowsers(domain: domain, requiredCookie: requiredCookie)
+        return extractFromBrowsers(domain: domain, matchesSession: matchingSession)
     }
 
     /// Resolves the cookie header honoring the provider's "cookie source"
     /// preference (UserDefaults `<providerID>CookieSource`: auto/manual/off).
     /// `manual` reads a user-pasted Cookie header from `<providerID>ManualCookie`.
     static func resolvedCookieHeader(providerID: String, domain: String, requiredCookie: String? = nil) -> String? {
+        resolvedCookieHeader(
+            providerID: providerID,
+            domain: domain,
+            matchingSession: requiredCookie.map { name in { $0 == name } })
+    }
+
+    /// Same, with a predicate instead of an exact session cookie name.
+    static func resolvedCookieHeader(
+        providerID: String,
+        domain: String,
+        matchingSession: ((String) -> Bool)?
+    ) -> String? {
         let source = UserDefaults.standard.string(forKey: "\(providerID)CookieSource") ?? "auto"
         switch source {
         case "off":
@@ -74,7 +98,7 @@ enum ProviderCookieReader {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return (raw?.isEmpty ?? true) ? nil : raw
         default:
-            return cookieHeader(domain: domain, requiredCookie: requiredCookie)
+            return cookieHeader(domain: domain, matchingSession: matchingSession)
         }
     }
 
@@ -108,9 +132,11 @@ enum ProviderCookieReader {
                     let pairs: [CookiePair] = store.records.map { rec in
                         CookiePair(
                             name: String(decoding: Array(rec.name.utf8), as: UTF8.self),
-                            value: String(decoding: Array(rec.value.utf8), as: UTF8.self))
+                            value: String(decoding: Array(rec.value.utf8), as: UTF8.self),
+                            expires: rec.expires)
                     }
-                    guard !pairs.isEmpty, pairs.contains(where: { $0.name == requiredCookie }) else { continue }
+                    guard firstUsableStore([pairs], matchesSession: { $0 == requiredCookie }) != nil
+                    else { continue }
                     sessions.append(BrowserSession(
                         browserID: browser.rawValue,
                         browserName: browser.displayName,
@@ -124,10 +150,7 @@ enum ProviderCookieReader {
             }
         }
 
-        collect(.safari)
-        for browser in Browser.defaultImportOrder where browser != .safari {
-            collect(browser)
-        }
+        for browser in browserSearchOrder { collect(browser) }
         return sessions
     }
 
@@ -141,7 +164,28 @@ enum ProviderCookieReader {
 
     // MARK: - Browser iteration
 
-    private static func extractFromBrowsers(domain: String, requiredCookie: String?) -> String? {
+    /// Browser precedence for cookie reads: Safari first because it is the one
+    /// store that needs no Keychain prompt, then Brave ahead of Chrome, then
+    /// SweetCookieKit's order. Rank only breaks ties — a browser without a live
+    /// session is skipped no matter how early it sits.
+    static let browserSearchOrder: [Browser] = {
+        var order: [Browser] = [.safari, .brave]
+        for browser in Browser.defaultImportOrder where !order.contains(browser) {
+            order.append(browser)
+        }
+        return order
+    }()
+
+    /// Internal for testing: the search order as stable ids. The test target
+    /// does not link SweetCookieKit, so it cannot name `Browser` itself.
+    static var browserSearchOrderIDs: [String] {
+        browserSearchOrder.map(\.rawValue)
+    }
+
+    private static func extractFromBrowsers(
+        domain: String,
+        matchesSession: ((String) -> Bool)?
+    ) -> String? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: [domain])
 
@@ -159,27 +203,14 @@ enum ProviderCookieReader {
                     store.records.map { rec in
                         CookiePair(
                             name: String(decoding: Array(rec.name.utf8), as: UTF8.self),
-                            value: String(decoding: Array(rec.value.utf8), as: UTF8.self))
+                            value: String(decoding: Array(rec.value.utf8), as: UTF8.self),
+                            expires: rec.expires)
                     }
                 }
-                guard let requiredCookie else {
-                    // Legacy path: first store with any cookie wins.
-                    if let first = stores.first, !first.isEmpty {
-                        return buildCookieHeader(from: first)
-                    }
-                    return nil
-                }
-                // Session-aware path: only accept a store that actually holds the
-                // required cookie. A browser carrying just stale analytics/Stripe
-                // cookies for this domain is skipped — we never return a header that
-                // is missing the required cookie (the parameter name promises it is
-                // present, so callers may rely on that).
-                for store in stores where !store.isEmpty {
-                    if store.contains(where: { $0.name == requiredCookie }) {
-                        return buildCookieHeader(from: store)
-                    }
-                }
-                return nil
+                guard let store = firstUsableStore(stores, matchesSession: matchesSession)
+                else { return nil }
+                let header = buildCookieHeader(from: store)
+                return header.isEmpty ? nil : header
             } catch let error as BrowserCookieError {
                 recordCooldownIfNeeded(error, domain: domain)
             } catch {
@@ -188,12 +219,10 @@ enum ProviderCookieReader {
             return nil
         }
 
-        // Safari first — no Keychain prompt needed.
-        if let header = tryBrowser(.safari) { return header }
-        for browser in Browser.defaultImportOrder where browser != .safari {
+        for browser in browserSearchOrder {
             if let header = tryBrowser(browser) { return header }
         }
-        // No browser carried the required cookie (or any cookie on the legacy path).
+        // No browser carried a live session cookie for this domain.
         return nil
     }
 
@@ -202,13 +231,54 @@ enum ProviderCookieReader {
     /// A detached snapshot of a single cookie's name+value. Holds no reference to
     /// SweetCookieKit storage, so it is safe to use after the source records array
     /// has been (potentially) freed/corrupted by the dependency.
-    private struct CookiePair {
+    struct CookiePair {
         let name: String
         let value: String
+        /// nil = session cookie (dies with the browser process, never stale on
+        /// disk). A past date = the browser would no longer send it either.
+        let expires: Date?
+
+        init(name: String, value: String, expires: Date? = nil) {
+            self.name = name
+            self.value = value
+            self.expires = expires
+        }
+
+        func isLive(now: Date = Date()) -> Bool {
+            guard let expires else { return true }
+            return expires > now
+        }
     }
 
-    private static func buildCookieHeader(from records: [CookiePair]) -> String {
-        records.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+    /// Internal for testing. The first store that still holds a LIVE session
+    /// cookie.
+    ///
+    /// "Has some cookie for this domain" is NOT evidence of a usable session:
+    /// Chromium keeps expired rows in the store, and long-lived analytics
+    /// cookies (`_ga`, `__stripe_mid`) outlive the login by months. Picking a
+    /// store on that basis let a browser the user signed out of hours ago beat
+    /// the one they are actually signed in to — measured on commandcode.ai,
+    /// where Chrome's session died at 20:17 while Brave's was good for six more
+    /// days.
+    static func firstUsableStore(
+        _ stores: [[CookiePair]],
+        matchesSession: ((String) -> Bool)?,
+        now: Date = Date()
+    ) -> [CookiePair]? {
+        stores.first { store in
+            store.contains { pair in
+                pair.isLive(now: now) && (matchesSession?(pair.name) ?? true)
+            }
+        }
+    }
+
+    /// Expired cookies are dropped: a real browser would not send them, and
+    /// including one lets a dead session token shadow a live one.
+    private static func buildCookieHeader(from records: [CookiePair], now: Date = Date()) -> String {
+        records
+            .filter { $0.isLive(now: now) }
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
     }
 
     // MARK: - 6-hour cooldown gate

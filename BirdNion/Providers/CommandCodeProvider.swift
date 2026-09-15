@@ -41,6 +41,12 @@ final class CommandCodeProvider: QuotaProvider {
         "better-auth.session_token",
     ]
 
+    /// The deployment decides the prefix, so match on the stable suffix — the
+    /// same rule `filteredCookieHeader` uses to accept a header.
+    static func isSessionCookieName(_ name: String) -> Bool {
+        name.localizedCaseInsensitiveContains("session_token")
+    }
+
     private static let apiBase = URL(string: "https://api.commandcode.ai")!
     private static let creditsPath = "/internal/billing/credits"
     private static let subscriptionsPath = "/internal/billing/subscriptions"
@@ -59,7 +65,13 @@ final class CommandCodeProvider: QuotaProvider {
     // MARK: - QuotaProvider
 
     func fetch() async throws -> ProviderStatus {
-        guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(providerID: id, domain: Self.cookieDomain),
+        // Name the session cookie so a browser whose login has EXPIRED loses to
+        // one that is still signed in. Without it any store holding a stray
+        // `_ga`/`__stripe_mid` won on rank alone.
+        guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(
+                  providerID: id,
+                  domain: Self.cookieDomain,
+                  matchingSession: Self.isSessionCookieName),
               !rawHeader.isEmpty
         else {
             return failure("Chưa đăng nhập CommandCode trên trình duyệt")

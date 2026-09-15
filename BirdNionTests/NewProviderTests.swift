@@ -5509,4 +5509,70 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(
             AntigravityOAuthLogin.callbackOutcome(fromRequest: denied), .denied("access_denied"))
     }
+
+    // MARK: - Cookie reader: browser chọn theo phiên CÒN SỐNG
+
+    private func pair(_ name: String, _ value: String, inDays: Double?) -> ProviderCookieReader.CookiePair {
+        ProviderCookieReader.CookiePair(
+            name: name, value: value,
+            expires: inDays.map { Date().addingTimeInterval($0 * 86_400) })
+    }
+
+    /// Bug đã gặp: Chrome hết phiên lúc 20:17 nhưng vẫn còn `_ga`/`__stripe_mid`
+    /// hạn dài, nên nó thắng Brave — nơi người dùng thực sự đang đăng nhập.
+    func testStoreWithExpiredSessionLosesToSignedInBrowser() {
+        let chrome = [
+            pair("__Secure-commandcode_prod_.session_token", "dead", inDays: -0.1),
+            pair("_ga", "GA1.1", inDays: 400),
+            pair("__stripe_mid", "x", inDays: 365),
+        ]
+        let brave = [
+            pair("__Secure-commandcode_prod_.session_token", "alive", inDays: 6),
+            pair("_ga", "GA1.1", inDays: 400),
+        ]
+        let picked = ProviderCookieReader.firstUsableStore(
+            [chrome, brave], matchesSession: CommandCodeProvider.isSessionCookieName)
+        XCTAssertEqual(
+            picked?.first(where: { $0.name.contains("session_token") })?.value, "alive")
+    }
+
+    /// Không có matcher thì cookie sống bất kỳ cũng tính — giữ hành vi cũ cho
+    /// provider chưa khai báo cookie phiên.
+    func testWithoutMatcherAnyLiveCookieQualifies() {
+        let stores = [[pair("_ga", "x", inDays: -1)], [pair("_ga", "y", inDays: 30)]]
+        XCTAssertEqual(
+            ProviderCookieReader.firstUsableStore(stores, matchesSession: nil)?.first?.value, "y")
+    }
+
+    /// Cookie phiên không có `expires` (chết theo tiến trình trình duyệt) vẫn
+    /// phải tính là còn sống — nếu không thì mọi phiên kiểu đó bị loại oan.
+    func testSessionCookieWithoutExpiryCountsAsLive() {
+        let store = [pair("better-auth.session_token", "v", inDays: nil)]
+        XCTAssertNotNil(
+            ProviderCookieReader.firstUsableStore(
+                [store], matchesSession: CommandCodeProvider.isSessionCookieName))
+    }
+
+    func testNoBrowserHasLiveSessionYieldsNil() {
+        let dead = [[pair("__Secure-commandcode_prod_.session_token", "d", inDays: -2)]]
+        XCTAssertNil(
+            ProviderCookieReader.firstUsableStore(
+                dead, matchesSession: CommandCodeProvider.isSessionCookieName))
+    }
+
+    /// Brave đứng trước Chrome theo yêu cầu; Safari giữ vị trí sớm vì là store
+    /// duy nhất không cần prompt Keychain.
+    func testBraveLeadsBrowserSearchOrder() throws {
+        let order = ProviderCookieReader.browserSearchOrderIDs
+        // Safari → Brave → Chrome → phần còn lại.
+        XCTAssertEqual(Array(order.prefix(3)), ["safari", "brave", "chrome"])
+        let safari = try XCTUnwrap(order.firstIndex(of: "safari"))
+        let brave = try XCTUnwrap(order.firstIndex(of: "brave"))
+        let chrome = try XCTUnwrap(order.firstIndex(of: "chrome"))
+        XCTAssertLessThan(safari, brave)
+        XCTAssertLessThan(brave, chrome)
+        // Không lặp, và không nuốt mất trình duyệt nào.
+        XCTAssertEqual(Set(order).count, order.count)
+        XCTAssertGreaterThanOrEqual(order.count, 8)
+    }
 }
