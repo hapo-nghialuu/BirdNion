@@ -108,9 +108,19 @@ enum VocabbyTheme {
     static let chartCodex  = dyn(0x3C7FB5, 0x62A5DE)  // --codex
     static let chartClaude = dyn(0xB5643F, 0xD98A63)  // --claude
     static let chartGrok   = dyn(0x4A4A4A, 0xC8CCD6)  // --grok
-    static let chartOMP    = dyn(0xE0A020, 0xF5C64A)  // --omp (Gold) — tách khỏi tím Kiro và xanh lá của khối quota
+    static let chartOMP    = dyn(0xBC52C8, 0xCE7FD8)  // --omp — điểm giữa của chartOMPBar, cho dot nhỏ và tint logo
     static let chartPi     = dyn(0x06B6D4, 0x22D3EE)  // --pi (Cyan)
     static let chartKiro   = dyn(0x8B47F9, 0xA766FF)  // --kiro (Violet)
+
+    /// OMP vẽ bằng gradient tím → hồng ở những mảng đủ lớn để thấy dải màu
+    /// (cột chart, thanh tỉ trọng, mini bar). Dot 6px, tint logo và icon vẫn
+    /// dùng `chartOMP` đặc — ở kích thước đó gradient chỉ thành một màu trung bình.
+    static func chartOMPBar(vertical: Bool = false) -> LinearGradient {
+        LinearGradient(
+            colors: [dyn(0x8B5CF6, 0xA78BFA), dyn(0xEC4899, 0xF472B6)],
+            startPoint: vertical ? .top : .leading,
+            endPoint: vertical ? .bottom : .trailing)
+    }
     // Values mirror CodexBar's ProviderBranding.color exactly (see
     // docs/provider-parity). Near-black brands (Grok, CommandCode) flip to a
     // light neutral in dark mode; ElevenLabs keeps following `primary`.
@@ -145,7 +155,7 @@ enum VocabbyTheme {
     static let googleGreen = fixed(0x34A853)
     static let bedrock    = fixed(0xFF9900)    // AWS
     static let hiyo       = fixed(0x00A8E8)
-    static let omp        = dyn(0xE0A020, 0xF5C64A)
+    static let omp        = dyn(0xBC52C8, 0xCE7FD8)
     static let pi         = dyn(0x06B6D4, 0x22D3EE)
     /// Brand tint for a provider id; nil → caller falls back to default styling.
     static func providerTint(_ id: String) -> Color? {

@@ -1370,7 +1370,7 @@ struct CombinedChartCard: View {
                                 Rectangle().fill(VocabbyTheme.chartCodex).frame(height: codexHeight)
                                 Rectangle().fill(VocabbyTheme.chartGrok).frame(height: grokHeight)
                                 Rectangle().fill(VocabbyTheme.chartKiro).frame(height: kiroHeight)
-                                Rectangle().fill(VocabbyTheme.chartOMP).frame(height: ompHeight)
+                                Rectangle().fill(VocabbyTheme.chartOMPBar(vertical: true)).frame(height: ompHeight)
                                 Rectangle().fill(VocabbyTheme.chartPi).frame(height: piHeight)
                             } else {
                                 Rectangle().fill(VocabbyTheme.hairline).frame(height: 1)
@@ -1526,24 +1526,24 @@ struct DayDetailPanelRoot: View {
     private struct AgentSlice: Identifiable {
         let id: String
         let name: String
-        let color: Color
+        let color: AnyShapeStyle
         let usd: Double
         let tokens: Int
     }
 
     private var slices: [AgentSlice] {
         [
-            AgentSlice(id: "claude", name: "Claude Code", color: VocabbyTheme.chartClaude,
+            AgentSlice(id: "claude", name: "Claude Code", color: AnyShapeStyle(VocabbyTheme.chartClaude),
                        usd: day.claudeUSD, tokens: day.claudeTokens),
-            AgentSlice(id: "codex", name: "Codex CLI", color: VocabbyTheme.chartCodex,
+            AgentSlice(id: "codex", name: "Codex CLI", color: AnyShapeStyle(VocabbyTheme.chartCodex),
                        usd: day.codexUSD, tokens: day.codexTokens),
-            AgentSlice(id: "grok", name: "Grok CLI", color: VocabbyTheme.chartGrok,
+            AgentSlice(id: "grok", name: "Grok CLI", color: AnyShapeStyle(VocabbyTheme.chartGrok),
                        usd: day.grokUSD, tokens: day.grokTokens),
-            AgentSlice(id: "kiro", name: "Kiro", color: VocabbyTheme.chartKiro,
+            AgentSlice(id: "kiro", name: "Kiro", color: AnyShapeStyle(VocabbyTheme.chartKiro),
                        usd: day.kiroUSD, tokens: day.kiroTokens),
-            AgentSlice(id: "omp", name: "Oh My Pi", color: VocabbyTheme.chartOMP,
+            AgentSlice(id: "omp", name: "Oh My Pi", color: AnyShapeStyle(VocabbyTheme.chartOMPBar()),
                        usd: day.ompUSD, tokens: day.ompTokens),
-            AgentSlice(id: "pi", name: "Pi Agent", color: VocabbyTheme.chartPi,
+            AgentSlice(id: "pi", name: "Pi Agent", color: AnyShapeStyle(VocabbyTheme.chartPi),
                        usd: day.piUSD, tokens: day.piTokens),
         ]
         .filter { $0.usd > 0 || $0.tokens > 0 }
@@ -1767,15 +1767,15 @@ struct DayDetailPanelRoot: View {
         .padding(.vertical, 12)
     }
 
-    private func sliceColor(_ source: String) -> Color {
+    private func sliceColor(_ source: String) -> AnyShapeStyle {
         switch source {
-        case "claude": return VocabbyTheme.chartClaude
-        case "codex": return VocabbyTheme.chartCodex
-        case "grok": return VocabbyTheme.chartGrok
-        case "kiro": return VocabbyTheme.chartKiro
-        case "omp": return VocabbyTheme.chartOMP
-        case "pi": return VocabbyTheme.chartPi
-        default: return VocabbyTheme.chartCodex
+        case "claude": return AnyShapeStyle(VocabbyTheme.chartClaude)
+        case "codex": return AnyShapeStyle(VocabbyTheme.chartCodex)
+        case "grok": return AnyShapeStyle(VocabbyTheme.chartGrok)
+        case "kiro": return AnyShapeStyle(VocabbyTheme.chartKiro)
+        case "omp": return AnyShapeStyle(VocabbyTheme.chartOMPBar())
+        case "pi": return AnyShapeStyle(VocabbyTheme.chartPi)
+        default: return AnyShapeStyle(VocabbyTheme.chartCodex)
         }
     }
 }
@@ -1871,15 +1871,15 @@ struct CombinedTopModelsCard: View {
         }
     }
 
-    private func sourceColor(_ source: String) -> Color {
+    private func sourceColor(_ source: String) -> AnyShapeStyle {
         switch source {
-        case "claude": VocabbyTheme.chartClaude
-        case "codex": VocabbyTheme.chartCodex
-        case "grok": VocabbyTheme.chartGrok
-        case "kiro": VocabbyTheme.chartKiro
-        case "omp": VocabbyTheme.chartOMP
-        case "pi": VocabbyTheme.chartPi
-        default: VocabbyTheme.tertiary
+        case "claude": AnyShapeStyle(VocabbyTheme.chartClaude)
+        case "codex": AnyShapeStyle(VocabbyTheme.chartCodex)
+        case "grok": AnyShapeStyle(VocabbyTheme.chartGrok)
+        case "kiro": AnyShapeStyle(VocabbyTheme.chartKiro)
+        case "omp": AnyShapeStyle(VocabbyTheme.chartOMPBar())
+        case "pi": AnyShapeStyle(VocabbyTheme.chartPi)
+        default: AnyShapeStyle(VocabbyTheme.tertiary)
         }
     }
 }

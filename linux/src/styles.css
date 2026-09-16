@@ -43,7 +43,8 @@
   --claude: #B5643F;
   --codex: #3C7FB5;
   --grok: #4A4A4A;
-  --omp: #E0A020;
+  --omp: linear-gradient(90deg, #8B5CF6, #EC4899);
+  --omp-v: linear-gradient(180deg, #8B5CF6, #EC4899);
   --pi: #06B6D4;
   --kiro: #8B47F9;
   /* Một chiều cao control cho mọi pane Settings (macOS InstrumentMetrics). */
@@ -105,7 +106,8 @@
   --card-shadow: none;
 
   --grok: #C8CCD6;
-  --omp: #F5C64A;
+  --omp: linear-gradient(90deg, #A78BFA, #F472B6);
+  --omp-v: linear-gradient(180deg, #A78BFA, #F472B6);
   --pi: #22D3EE;
   --kiro: #A766FF;
   --commandcode: #F2F0E8;
@@ -1371,7 +1373,7 @@ html.popover-capped .app-body {
 .bar-seg.codex { background: var(--codex); }
   .bar-seg.grok { background: var(--grok); }
   .bar-seg.kiro { background: var(--kiro); }
-  .bar-seg.omp { background: var(--omp); }
+  .bar-seg.omp { background: var(--omp-v); }
   .bar-seg.pi { background: var(--pi); }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
 
