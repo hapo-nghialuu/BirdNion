@@ -108,7 +108,7 @@ enum VocabbyTheme {
     static let chartCodex  = dyn(0x3C7FB5, 0x62A5DE)  // --codex
     static let chartClaude = dyn(0xB5643F, 0xD98A63)  // --claude
     static let chartGrok   = dyn(0x4A4A4A, 0xC8CCD6)  // --grok
-    static let chartOMP    = dyn(0xC2477E, 0xEE7FB0)  // --omp (Magenta) — tách khỏi tím Kiro
+    static let chartOMP    = dyn(0x4A8B2C, 0x74C74A)  // --omp (Green) — tách khỏi tím Kiro và họ màu ấm của Claude
     static let chartPi     = dyn(0x06B6D4, 0x22D3EE)  // --pi (Cyan)
     static let chartKiro   = dyn(0x8B47F9, 0xA766FF)  // --kiro (Violet)
     // Values mirror CodexBar's ProviderBranding.color exactly (see
@@ -145,7 +145,7 @@ enum VocabbyTheme {
     static let googleGreen = fixed(0x34A853)
     static let bedrock    = fixed(0xFF9900)    // AWS
     static let hiyo       = fixed(0x00A8E8)
-    static let omp        = dyn(0xC2477E, 0xEE7FB0)
+    static let omp        = dyn(0x4A8B2C, 0x74C74A)
     static let pi         = dyn(0x06B6D4, 0x22D3EE)
     /// Brand tint for a provider id; nil → caller falls back to default styling.
     static func providerTint(_ id: String) -> Color? {
