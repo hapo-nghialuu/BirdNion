@@ -1,0 +1,78 @@
+# CodeRabbit — AI review cho pull request.
+# Public repo nên gói free áp dụng vĩnh viễn, không cần đăng ký duyệt.
+# Tham chiếu schema: https://docs.coderabbit.ai/reference/configuration
+language: vi-VN
+
+tone_instructions: >-
+  Trả lời bằng tiếng Việt, trực tiếp và kỹ thuật. Nêu rõ đánh đổi và giả định
+  khi chúng ảnh hưởng tới quyết định. Không khen xã giao, không nhắc lại những
+  gì diff đã nói rõ.
+
+reviews:
+  profile: assertive
+  # Không tự đặt "Request changes": người review vẫn là người chốt.
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+
+  path_filters:
+    # Ảnh, icon, asset — diff nhị phân không review được.
+    - "!Assets.xcassets/**"
+    - "!linux/public/**"
+    - "!linux/dist/**"
+    # Spec đã lưu trữ: giữ làm lịch sử, không phải code đang chạy.
+    - "!specs/archive/**"
+
+  path_instructions:
+    # --- Bẫy đã thực sự xảy ra trên repo này ---
+    - path: "Vendor/CodexBar/Sources/CodexBarCore/Vendored/CostUsage/**"
+      instructions: >-
+        Đây là HARD FORK của CodexBar upstream, không phải mirror. Bất kỳ thay
+        đổi nào trong thư mục này BẮT BUỘC phải kèm việc xoay
+        Vendor/CodexBar/Sources/CodexBarCore/Generated/CodexParserHash.generated.swift
+        (chạy Scripts/regenerate-codex-parser-hash.sh và commit kết quả). Cache
+        cost của Codex khoá theo hash đó, nên quên xoay thì thay đổi KHÔNG BAO
+        GIỜ chạy trên file đã được đánh dấu là đã parse xong, và test
+        CodexParserHashTests sẽ đỏ. Nếu PR sửa thư mục này mà không đụng file
+        hash, hãy báo là lỗi chặn merge.
+
+    - path: "BirdNion/Providers/**"
+      instructions: >-
+        Bản Linux (linux/src-tauri/src/providers/) là bản port ngang hàng. Khi
+        PR sửa logic provider ở macOS, hãy hỏi xem thay đổi tương ứng bên Linux
+        đã có chưa, hoặc nêu rõ vì sao không cần (ví dụ tính năng chỉ có ở
+        macOS). Đừng giả định im lặng là đã đồng bộ.
+
+    - path: "BirdNion/Providers/**/*CostScanner*.swift"
+      instructions: >-
+        Cost scanner ghi vào CostHistoryStore theo luật NEVER-SHRINK: một ngày
+        chỉ được cập nhật khi số mới cao hơn. Hệ quả: quét dở/thất bại KHÔNG
+        được ghi đè bằng số thấp hơn hoặc rỗng, và đổi công thức đếm hay bảng
+        giá thì phải bump countingRevision / pricingRevision, nếu không ngày đã
+        lưu giữ nguyên số cũ vĩnh viễn. Kiểm tra kỹ các nhánh `completed == false`.
+
+    - path: "BirdNion/**/*.swift"
+      instructions: >-
+        Project dùng file pbxproj thủ công, KHÔNG có synced group. File .swift
+        mới phải được thêm vào BirdNion.xcodeproj/project.pbxproj trong cùng PR,
+        nếu không nó sẽ không được biên dịch. Nếu PR thêm file .swift mà pbxproj
+        không đổi, hãy báo.
+
+    - path: "**/*Tests*.swift"
+      instructions: >-
+        Không chấp nhận test bị làm yếu đi hay xoá để cho qua. Với sửa lỗi, hãy
+        hỏi test có thật sự tái hiện được lỗi hay không — test chỉ khẳng định
+        hằng số mới thì không chứng minh được gì.
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+      - ".claude/rules/*.md"
+      - "Vendor/CodexBar/VENDOR.md"
