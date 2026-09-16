@@ -570,6 +570,17 @@ function providerBodyCard(
 ): HTMLElement {
   const card = el("section", "card provider-body-card");
 
+  // Quota của các tài khoản Antigravity KHÁC không phụ thuộc vào tài khoản
+  // đang dùng, nên khối này phải hiện cả khi tài khoản active lỗi hoặc không
+  // có cửa sổ nào — hai nhánh return sớm bên dưới. Ngang với bản macOS, nơi
+  // Antigravity có nhánh riêng để card sống sót qua lỗi.
+  const appendAllAccounts = () => {
+    if (status.id !== "antigravity") return;
+    const allAccounts = el("div", "antigravity-all-accounts");
+    card.append(allAccounts);
+    loadAntigravityAllAccounts(allAccounts);
+  };
+
   if (status.pending) {
     card.append(loadingSkeleton());
     return card;
@@ -607,6 +618,7 @@ function providerBodyCard(
         actions.append(fix);
       })
       .catch(() => {});
+    appendAllAccounts();
     return card;
   }
   if (staleWarning) card.append(staleQuotaBanner(staleWarning, onRetry));
@@ -619,6 +631,7 @@ function providerBodyCard(
       balanceOnly.length > 0
         ? el("div", "provider-extras", balanceOnly.join(" · "))
         : el("div", "footnote", t("noQuota")));
+    appendAllAccounts();
     return card;
   }
 
@@ -628,9 +641,7 @@ function providerBodyCard(
     }
     // Khối tất-cả-tài-khoản nạp sau: lệnh có thể phải gọi mạng cho tài khoản
     // quá hạn, không được chặn phần quota của tài khoản đang dùng.
-    const allAccounts = el("div", "antigravity-all-accounts");
-    card.append(allAccounts);
-    loadAntigravityAllAccounts(allAccounts);
+    appendAllAccounts();
     return card;
   }
 

@@ -1177,14 +1177,17 @@ static ACCOUNT_QUOTA_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 /// chết giữa chừng, vừa để hai lệnh chạy song song xoá kết quả của nhau. File
 /// chứa email và quota nên cũng phải mang mode riêng tư — dùng đúng helper mà
 /// `save_oauth_store_at` ngay bên cạnh vẫn dùng.
-fn merge_account_quota_snapshots(path: &std::path::Path, incoming: Vec<AccountQuotaSnapshot>) {
-    if incoming.is_empty() {
-        return;
-    }
+fn merge_account_quota_snapshots(
+    path: &std::path::Path,
+    incoming: Vec<AccountQuotaSnapshot>,
+) -> AccountQuotaStore {
     let _guard = ACCOUNT_QUOTA_STORE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut store = load_account_quota_store(path);
+    if incoming.is_empty() {
+        return store;
+    }
     for snapshot in incoming {
         store.snapshots.retain(|s| s.label != snapshot.label);
         store.snapshots.push(snapshot);
@@ -1195,6 +1198,10 @@ fn merge_account_quota_snapshots(path: &std::path::Path, incoming: Vec<AccountQu
             json.as_bytes(),
         );
     }
+    // Trả về bản trong bộ nhớ chứ không để caller đọc lại từ đĩa: ghi hỏng
+    // (hết dung lượng, sai quyền) thì quota vừa tải về vẫn phải hiện được,
+    // chỉ mất phần lưu nên lần mở sau tải lại.
+    store
 }
 
 /// Bỏ bản ghi của một tài khoản — gọi khi tài khoản bị xoá để nhãn được dùng
@@ -1385,6 +1392,7 @@ pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
 
     let mut failures: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut fresh_snapshots: Vec<AccountQuotaSnapshot> = Vec::new();
+    let mut merged: Option<AccountQuotaStore> = None;
 
     if !stale.is_empty() {
         match reqwest::Client::builder()
@@ -1437,12 +1445,12 @@ pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
                         }
                     }
                 }
-                merge_account_quota_snapshots(&path, fresh_snapshots);
+                merged = Some(merge_account_quota_snapshots(&path, fresh_snapshots));
             }
         }
     }
 
-    let fresh = load_account_quota_store(&path);
+    let fresh = merged.unwrap_or_else(|| load_account_quota_store(&path));
     store
         .accounts
         .iter()
@@ -1952,7 +1960,6 @@ mod tests {
         assert_eq!(a.fetched_at, 2, "bản ghi cùng nhãn phải bị thay, không nhân đôi");
         assert!(store.snapshots.iter().any(|s| s.label == "b"));
 
-        forget_account_quota_snapshot("a");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
