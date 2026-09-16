@@ -1086,7 +1086,12 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(
             CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: fresh),
             CostHistoryStore.deepScanDays)
-        // Lần kế tiếp đã có dấu → về cửa sổ thường ngày.
+        // Lập plan không được tiêu nhịp khi scan/persist chưa thành công.
+        XCTAssertEqual(
+            CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: fresh),
+            CostHistoryStore.deepScanDays)
+        CostHistoryStore.markDeepScanSucceeded(source: .claude, at: now, url: fresh)
+        // Chỉ sau acknowledgement thành công mới về cửa sổ thường ngày.
         XCTAssertEqual(
             CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: fresh),
             CostHistoryStore.routineScanDays)
@@ -1100,6 +1105,7 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(
             CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: stale),
             CostHistoryStore.deepScanDays)
+        CostHistoryStore.markDeepScanSucceeded(source: .claude, at: now, url: stale)
         // Sau khi đã quét sâu, khoảng trống thật quyết định — không bị bóp về sàn.
         XCTAssertEqual(
             CostHistoryStore.scanBackDays(source: .claude, now: now, calendar: cal, url: stale), 21)
@@ -1291,6 +1297,77 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(result.projects.first?.attribution, .derived)
         XCTAssertEqual(result.projects.first?.daily.first?.tokens, report.last30Tokens)
         XCTAssertFalse(result.projects.first?.displayName.contains("/Users/alice") == true)
+        XCTAssertTrue(result.completed)
+    }
+
+    /// events.jsonl bị từ chối không phải là "không có event". Không được
+    /// dồn toàn bộ lifetime token vào ngày active rồi công bố scan complete.
+    func testGrokOversizedEventsMarksScanIncompleteWithoutLifetimeFallback() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let session = base.appendingPathComponent("sessions/project/session")
+        try fm.createDirectory(at: session, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let now = Date()
+        let iso = ISO8601DateFormatter().string(from: now)
+        try Data("""
+        {"contextTokensUsed":1000000,"primaryModelId":"grok-4.5"}
+        """.utf8).write(to: session.appendingPathComponent("signals.json"))
+        try Data("""
+        {"last_active_at":"\(iso)","git_root_dir":"/tmp/project"}
+        """.utf8).write(to: session.appendingPathComponent("summary.json"))
+
+        let events = session.appendingPathComponent("events.jsonl")
+        XCTAssertTrue(fm.createFile(atPath: events.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: events)
+        try handle.truncate(atOffset: UInt64(GrokCostScanner.maxSessionFileBytes + 1))
+        try handle.close()
+
+        let result = GrokCostScanner.scanFullWithProjects(
+            homeURL: base, now: now, windowDays: 30)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.report.last30Tokens, 0)
+        XCTAssertTrue(result.projects.isEmpty)
+    }
+
+    /// Claude phải trả partial/incomplete nếu transcript vượt giới hạn,
+    /// không được coi projection rỗng là một full scan thành công.
+    func testClaudeOversizedTranscriptMarksScanIncomplete() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let transcript = root.appendingPathComponent("oversized.jsonl")
+        XCTAssertTrue(fm.createFile(atPath: transcript.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: transcript)
+        try handle.truncate(atOffset: UInt64(ClaudeCostScanner.maxSessionFileBytes + 1))
+        try handle.close()
+
+        let result = try XCTUnwrap(
+            ClaudeCostScanner.scanFullWithProjects(roots: [root], now: Date(), scanDays: 30))
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.report.isEmpty)
+        XCTAssertTrue(result.projects.isEmpty)
+    }
+
+    /// Traversal budget phải đếm mọi entry, kể cả file không phải JSONL;
+    /// nếu không một cây rác lớn vẫn có thể walk vô hạn.
+    func testClaudeTraversalBudgetCountsNonTranscriptEntries() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        try Data().write(to: root.appendingPathComponent("first.txt"))
+        try Data().write(to: root.appendingPathComponent("second.txt"))
+
+        let result = try XCTUnwrap(ClaudeCostScanner.scanFullWithProjects(
+            roots: [root], now: Date(), scanDays: 30, maxWalkEntries: 1))
+
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.report.isEmpty)
     }
 
     func testGrokProjectFallbackKeepsAggregateAndHidesEncodedDirectory() throws {
@@ -5619,6 +5696,13 @@ final class NewProviderTests: XCTestCase {
         let never = CostHistoryStore.scanBackPlan(
             daysSinceLatestStoredDay: 0, lastDeepScan: nil, now: now)
         XCTAssertTrue(never.isDeep)
+
+        // Clock rollback/corrupt future stamp must not suppress deep scans.
+        let future = CostHistoryStore.scanBackPlan(
+            daysSinceLatestStoredDay: 0,
+            lastDeepScan: now.addingTimeInterval(3_600),
+            now: now)
+        XCTAssertTrue(future.isDeep)
     }
 
     /// Không có lịch sử = khởi động lạnh: phải quét đủ maxDays, không được rơi

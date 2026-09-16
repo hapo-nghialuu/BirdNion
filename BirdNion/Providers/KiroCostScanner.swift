@@ -171,13 +171,13 @@ enum KiroCostScanner {
     /// do not wipe past bars.
     static func usageReport(now: Date = Date()) async -> KiroUsageReport? {
         await Cache.shared.report(now: now, ttl: cacheTTL) {
-            let incrementalDays = CostHistoryStore.scanBackDays(
+            let scanBackPlan = CostHistoryStore.scanBackPlan(
                 source: .kiro, now: now, maxDays: chartWindowDays)
             let plan = countingScanPlan(
                 storedRevision: max(
                     UserDefaults.standard.integer(forKey: countingRevisionKey),
                     CostHistoryStore.storedCountingRevision(source: .kiro)),
-                incrementalDays: incrementalDays)
+                incrementalDays: scanBackPlan.days)
             if plan.historyOnly {
                 // A newer app already owns the persisted counting semantics.
                 // Do not reinterpret or stamp those days with this build's
@@ -197,6 +197,9 @@ enum KiroCostScanner {
                 liveScanSucceeded: scan.completed)
             if plan.replacing, report.scanConfidence.live {
                 UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
+            }
+            if scanBackPlan.isDeep, report.scanConfidence.live {
+                CostHistoryStore.markDeepScanSucceeded(source: .kiro, at: now)
             }
             return report
         }

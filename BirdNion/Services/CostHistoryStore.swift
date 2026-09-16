@@ -639,6 +639,11 @@ enum CostHistoryStore {
         "costHistoryDeepScanAt_\(source.rawValue)_\(url.standardizedFileURL.path)"
     }
 
+    struct ScanBackPlan: Equatable, Sendable {
+        let days: Int
+        let isDeep: Bool
+    }
+
     /// Internal for testing. Decides how far back to scan and whether this pass
     /// is the deep one, from facts only — no I/O.
     ///
@@ -652,28 +657,28 @@ enum CostHistoryStore {
         maxDays: Int = 90,
         deepDays: Int = deepScanDays,
         deepInterval: TimeInterval = deepScanInterval
-    ) -> (days: Int, isDeep: Bool) {
-        guard let gap = daysSinceLatestStoredDay else { return (maxDays, true) }
+    ) -> ScanBackPlan {
+        guard let gap = daysSinceLatestStoredDay else {
+            return ScanBackPlan(days: maxDays, isDeep: true)
+        }
         let routine = min(max(gap + 1, minDays), maxDays)
-        let deepIsDue = lastDeepScan.map { now.timeIntervalSince($0) >= deepInterval } ?? true
-        guard deepIsDue else { return (routine, false) }
-        return (min(max(routine, deepDays), maxDays), true)
+        let deepIsDue = lastDeepScan.map {
+            $0 > now || now.timeIntervalSince($0) >= deepInterval
+        } ?? true
+        guard deepIsDue else { return ScanBackPlan(days: routine, isDeep: false) }
+        return ScanBackPlan(days: min(max(routine, deepDays), maxDays), isDeep: true)
     }
 
-    /// Days the live scan must cover so no day slips between persisted history
-    /// and the fresh scan. Normally just `routineScanDays`; once every
-    /// `deepScanInterval` it widens to `deepScanDays` to re-read days a late
-    /// flush may have changed. Sources without history scan the full maxDays.
-    ///
-    /// Stamps the deep-pass clock as a side effect, so a caller that widens the
-    /// window actually resets the cadence.
-    static func scanBackDays(
+    /// Plans how far the next live scan must reach without consuming the deep
+    /// scan slot. Call `markDeepScanSucceeded` only after a planned deep scan
+    /// has completed and its result has been persisted successfully.
+    static func scanBackPlan(
         source: Source,
         now: Date = Date(),
         calendar: Calendar = .current,
         minDays: Int = routineScanDays,
         maxDays: Int = 90,
-        url: URL = historyURL()) -> Int
+        url: URL = historyURL()) -> ScanBackPlan
     {
         ioLock.lock()
         defer { ioLock.unlock() }
@@ -690,10 +695,39 @@ enum CostHistoryStore {
             now: now,
             minDays: minDays,
             maxDays: maxDays)
-        if plan.isDeep {
-            UserDefaults.standard.set(now, forKey: key)
-        }
-        return plan.days
+        return plan
+    }
+
+    /// Acknowledges a successfully completed deep scan. Planning is deliberately
+    /// read-only so a failed or cancelled scan remains due on the next refresh.
+    static func markDeepScanSucceeded(
+        source: Source,
+        at date: Date = Date(),
+        url: URL = historyURL())
+    {
+        ioLock.lock()
+        defer { ioLock.unlock() }
+        UserDefaults.standard.set(date, forKey: deepScanKey(source, url: url))
+    }
+
+    /// Compatibility wrapper for callers that only need the day count. This is
+    /// now read-only; new callers should retain `scanBackPlan` and acknowledge a
+    /// successful deep scan explicitly.
+    static func scanBackDays(
+        source: Source,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        minDays: Int = routineScanDays,
+        maxDays: Int = 90,
+        url: URL = historyURL()) -> Int
+    {
+        scanBackPlan(
+            source: source,
+            now: now,
+            calendar: calendar,
+            minDays: minDays,
+            maxDays: maxDays,
+            url: url).days
     }
 
     // MARK: - Report rebuilders

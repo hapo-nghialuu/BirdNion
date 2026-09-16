@@ -170,27 +170,94 @@ enum GrokCostScanner {
     }
 
     /// Cached full report (120 daily buckets + strict 30-day totals).
-    /// Skip a single session file larger than this instead of loading it whole.
-    /// Matches the cap Claude / OMP / Pi apply — the first scan reads every
-    /// file, so one oversized transcript there takes the whole pass down.
+    /// Hard per-file and per-pass bounds keep a corrupt or adversarial session
+    /// tree from turning an All-tab refresh into an unbounded allocation/walk.
     static let maxSessionFileBytes = 256 * 1024 * 1024
+    static let maxScanEntries = 100_000
+    static let maxScanReadFiles = 25_000
+    static let maxScanReadBytes = 512 * 1024 * 1024
 
-    /// `Data(contentsOf:)` guarded by that cap. nil when the file is missing or
-    /// too large to read safely.
-    static func boundedData(at url: URL) -> Data? {
-        if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
-           size > maxSessionFileBytes
-        {
-            return nil
+    private enum BoundedRead {
+        case missing
+        case data(Data)
+        case rejected
+    }
+
+    private final class ScanBudget {
+        private(set) var remainingFiles: Int
+        private(set) var remainingBytes: Int
+
+        init(files: Int = maxScanReadFiles, bytes: Int = maxScanReadBytes) {
+            self.remainingFiles = files
+            self.remainingBytes = bytes
         }
-        return try? Data(contentsOf: url)
+
+        func allowance(perFileLimit: Int) -> Int? {
+            guard remainingFiles > 0, remainingBytes > 0 else { return nil }
+            remainingFiles -= 1
+            return min(perFileLimit, remainingBytes)
+        }
+
+        func consume(_ bytes: Int) {
+            remainingBytes = max(0, remainingBytes - bytes)
+        }
+    }
+
+    /// Reads at most `limit + 1` bytes through `FileHandle`. Resource metadata
+    /// is only an early rejection; the bounded read is the TOCTOU-safe limit.
+    private static func boundedRead(
+        at url: URL,
+        limit: Int = maxSessionFileBytes,
+        budget: ScanBudget? = nil
+    ) -> BoundedRead {
+        let values: URLResourceValues
+        do {
+            values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        } catch {
+            return FileManager.default.fileExists(atPath: url.path) ? .rejected : .missing
+        }
+        guard values.isRegularFile == true else { return .rejected }
+
+        let allowance: Int
+        if let budget {
+            guard let claimed = budget.allowance(perFileLimit: limit) else { return .rejected }
+            allowance = claimed
+        } else {
+            allowance = limit
+        }
+        guard values.fileSize.map({ $0 <= allowance }) != false else { return .rejected }
+
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            var data = Data()
+            data.reserveCapacity(min(allowance, values.fileSize ?? 0))
+            while data.count <= allowance {
+                let remaining = allowance + 1 - data.count
+                guard remaining > 0 else { break }
+                let chunk = try handle.read(upToCount: min(64 * 1024, remaining)) ?? Data()
+                if chunk.isEmpty { break }
+                data.append(chunk)
+            }
+            budget?.consume(data.count)
+            guard data.count <= allowance else { return .rejected }
+            return .data(data)
+        } catch {
+            return .rejected
+        }
+    }
+
+    /// Compatibility wrapper used by focused scanner tests.
+    static func boundedData(at url: URL) -> Data? {
+        guard case let .data(data) = boundedRead(at: url) else { return nil }
+        return data
     }
 
     /// Merges with `CostHistoryStore` so deleted `~/.grok/sessions` do not
     /// wipe past All-tab bars.
     static func usageReport(now: Date = Date()) async -> GrokUsageReport? {
         if let cached = await Cache.shared.validReport(now: now, ttl: cacheTTL) { return cached }
-        let value = await Task.detached(priority: .utility) {
+        let outcome = await Task.detached(priority: .utility) {
             guard availableSessionsRoot(
                 env: ProcessInfo.processInfo.environment, fileManager: .default, homeURL: nil) != nil
             else {
@@ -204,21 +271,23 @@ enum GrokCostScanner {
                     source: .grok, liveDays: [], now: now, windowDays: chartWindowDays,
                     liveScanSucceeded: false)
                 let confidence = CostHistoryStore.confidence(source: .grok, liveScanSucceeded: false)
-                return CostHistoryStore.makeGrokReport(window: window, confidence: confidence)
+                return (
+                    report: CostHistoryStore.makeGrokReport(window: window, confidence: confidence),
+                    cacheable: false)
             }
 
             // Only rescan days that can still change persisted history; the
             // store supplies the older days. On a counting-revision bump, scan
             // the full chart window once so `replacingSource` can rebuild
             // every day from clean full-T last-active attribution.
-            let incrementalDays = CostHistoryStore.scanBackDays(source: .grok, now: now)
+            let scanPlan = CostHistoryStore.scanBackPlan(source: .grok, now: now)
             let storedRevision = max(
                 UserDefaults.standard.integer(forKey: countingRevisionKey),
                 CostHistoryStore.storedCountingRevision(source: .grok))
             let replacing = storedRevision < countingRevision
             let needsProjectBootstrap = ProjectCostHistoryStore.read()
                 .sources?[ProjectUsageSource.grok.rawValue]?.isEmpty != false
-            let scanDays = (replacing || needsProjectBootstrap) ? chartWindowDays : incrementalDays
+            let scanDays = (replacing || needsProjectBootstrap) ? chartWindowDays : scanPlan.days
             // The root's existence was just confirmed, so the plain
             // (nonoptional) `scanFull` is safe to call directly here.
             let live = scanFullWithProjects(now: now, windowDays: scanDays)
@@ -231,24 +300,31 @@ enum GrokCostScanner {
                 liveDays: liveDays,
                 now: now,
                 windowDays: chartWindowDays,
-                replacingSource: replacing,
-                liveScanSucceeded: true,
+                replacingSource: replacing && live.completed,
+                liveScanSucceeded: live.completed,
                 countingRevision: countingRevision)
-            _ = ProjectCostHistoryStore.apply(
-                source: .grok,
-                liveProjects: live.projects,
-                now: now,
-                replacingSource: replacing)
-            if receipt.persisted {
+            if live.completed {
+                _ = ProjectCostHistoryStore.apply(
+                    source: .grok,
+                    liveProjects: live.projects,
+                    now: now,
+                    replacingSource: replacing)
+            }
+            if live.completed, receipt.persisted {
                 UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
+                if scanPlan.isDeep {
+                    CostHistoryStore.markDeepScanSucceeded(source: .grok, at: now)
+                }
             }
             let confidence = CostHistoryStore.confidence(
                 source: .grok,
-                liveScanSucceeded: receipt.persisted)
-            return CostHistoryStore.makeGrokReport(window: receipt.window, confidence: confidence)
+                liveScanSucceeded: live.completed && receipt.persisted)
+            return (
+                report: CostHistoryStore.makeGrokReport(window: receipt.window, confidence: confidence),
+                cacheable: live.completed && receipt.persisted)
         }.value
-        await Cache.shared.storeReport(value, at: now)
-        return value
+        if outcome.cacheable { await Cache.shared.storeReport(outcome.report, at: now) }
+        return outcome.report
     }
 
     /// Instant chart seed from persisted history — no session scan. Nil when
@@ -283,6 +359,7 @@ enum GrokCostScanner {
     struct ScanResult: Equatable {
         let report: GrokUsageReport
         let projects: [ProjectUsageRecord]
+        let completed: Bool
     }
 
     /// One filesystem walk yields both aggregate usage and privacy-safe
@@ -300,7 +377,8 @@ enum GrokCostScanner {
             root: root, fileManager: fileManager, now: now, windowDays: windowDays)
         return ScanResult(
             report: buildReport(sessions: sessions.report, now: now, windowDays: windowDays),
-            projects: buildProjects(sessions: sessions.projects, calendar: .current))
+            projects: buildProjects(sessions: sessions.projects, calendar: .current),
+            completed: sessions.completed)
     }
 
     /// The sessions root, but only when it actually exists as a directory —
@@ -356,6 +434,7 @@ enum GrokCostScanner {
     struct SessionsBundle: Equatable {
         let report: [SessionPoint]
         let projects: [SessionPoint]
+        let completed: Bool
     }
 
     /// Unsplit, per-session facts shared by the report split (`parseSession`)
@@ -385,11 +464,16 @@ enum GrokCostScanner {
         windowDays: Int = chartWindowDays,
         calendar: Calendar = .current) -> SessionsBundle
     {
+        var completed = true
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles])
-        else { return SessionsBundle(report: [], projects: []) }
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, _ in
+                completed = false
+                return true
+            })
+        else { return SessionsBundle(report: [], projects: [], completed: false) }
 
         let startOfToday = calendar.startOfDay(for: now)
         let cutoff = calendar.date(byAdding: .day, value: -(windowDays - 1), to: startOfToday)
@@ -398,20 +482,34 @@ enum GrokCostScanner {
 
         var report: [SessionPoint] = []
         var projects: [SessionPoint] = []
+        var visitedEntries = 0
+        let budget = ScanBudget()
         while let url = enumerator.nextObject() as? URL {
+            if Task.isCancelled || visitedEntries >= maxScanEntries {
+                completed = false
+                enumerator.skipDescendants()
+                break
+            }
+            visitedEntries += 1
             guard url.lastPathComponent == "signals.json" else { continue }
-            guard let raw = parseRawSession(
-                signalsURL: url, sessionsRoot: root, fileManager: fileManager)
-            else { continue }
+            let rawRead = parseRawSession(
+                signalsURL: url, sessionsRoot: root, fileManager: fileManager, budget: budget)
+            if !rawRead.completed { completed = false }
+            guard let raw = rawRead.raw else { continue }
 
             let day = calendar.startOfDay(for: raw.activeAt)
             guard day >= cutoffDay else { continue }
 
             let sessionDir = url.deletingLastPathComponent()
-            report.append(contentsOf: reportPoints(
+            let pointRead = reportPoints(
                 raw: raw, sessionDir: sessionDir, day: day,
                 cutoffDay: cutoffDay, today: startOfToday,
-                fileManager: fileManager, calendar: calendar))
+                fileManager: fileManager, calendar: calendar, budget: budget)
+            if !pointRead.completed {
+                completed = false
+                continue
+            }
+            report.append(contentsOf: pointRead.points)
 
             if let project = raw.project {
                 projects.append(SessionPoint(
@@ -423,7 +521,7 @@ enum GrokCostScanner {
                     projectName: project.displayName))
             }
         }
-        return SessionsBundle(report: report, projects: projects)
+        return SessionsBundle(report: report, projects: projects, completed: completed)
     }
 
     /// Parse one session into report points — one per apportioned day. A
@@ -444,7 +542,8 @@ enum GrokCostScanner {
         cutoff: Date) -> [SessionPoint]
     {
         guard let raw = parseRawSession(
-            signalsURL: signalsURL, sessionsRoot: sessionsRoot, fileManager: fileManager)
+            signalsURL: signalsURL, sessionsRoot: sessionsRoot,
+            fileManager: fileManager, budget: nil).raw
         else { return [] }
 
         let cutoffDay = calendar.startOfDay(for: cutoff)
@@ -456,7 +555,7 @@ enum GrokCostScanner {
         return reportPoints(
             raw: raw, sessionDir: sessionDir, day: day,
             cutoffDay: cutoffDay, today: today,
-            fileManager: fileManager, calendar: calendar)
+            fileManager: fileManager, calendar: calendar, budget: nil).points
     }
 
     /// Read `summary.json` (model / last-active day / git root) and
@@ -465,7 +564,8 @@ enum GrokCostScanner {
     private static func parseRawSession(
         signalsURL: URL,
         sessionsRoot: URL,
-        fileManager: FileManager) -> RawSession?
+        fileManager: FileManager,
+        budget: ScanBudget?) -> (raw: RawSession?, completed: Bool)
     {
         let attrs = try? signalsURL.resourceValues(forKeys: [.contentModificationDateKey])
         let mtime = attrs?.contentModificationDate ?? Date.distantPast
@@ -476,7 +576,8 @@ enum GrokCostScanner {
         var activeAt = mtime
         var gitRootDir: String?
 
-        if let data = boundedData(at: summaryURL),
+        let summaryRead = boundedRead(at: summaryURL, budget: budget)
+        if case let .data(data) = summaryRead,
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {
             if let mid = (json["current_model_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -492,9 +593,19 @@ enum GrokCostScanner {
             gitRootDir = json["git_root_dir"] as? String
         }
 
-        guard let data = boundedData(at: signalsURL),
+        let summaryCompleted: Bool
+        switch summaryRead {
+        case .missing:
+            summaryCompleted = true
+        case let .data(data):
+            summaryCompleted = (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
+        case .rejected:
+            summaryCompleted = false
+        }
+        let signalsRead = boundedRead(at: signalsURL, budget: budget)
+        guard case let .data(data) = signalsRead,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
+        else { return (nil, false) }
 
         // Prefer explicit model from signals when present.
         if let primary = (json["primaryModelId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -510,12 +621,14 @@ enum GrokCostScanner {
         let before = intValue(json["totalTokensBeforeCompaction"])
         let context = intValue(json["contextTokensUsed"])
         let lifetime = max(0, before + context)
-        guard lifetime > 0 else { return nil }
+        guard lifetime > 0 else { return (nil, summaryCompleted) }
 
         let project = encodedDirectory(sessionsRoot: sessionsRoot, signalsURL: signalsURL)
             .flatMap { ProjectIdentity.grok(encodedDirectory: $0, gitRootDir: gitRootDir) }
 
-        return RawSession(model: model, activeAt: activeAt, lifetime: lifetime, project: project)
+        return (
+            RawSession(model: model, activeAt: activeAt, lifetime: lifetime, project: project),
+            summaryCompleted)
     }
 
     /// Apportion `raw.lifetime` across the days `events.jsonl` shows
@@ -529,22 +642,30 @@ enum GrokCostScanner {
         cutoffDay: Date,
         today: Date,
         fileManager: FileManager,
-        calendar: Calendar) -> [SessionPoint]
+        calendar: Calendar,
+        budget: ScanBudget?) -> (points: [SessionPoint], completed: Bool)
     {
-        let weights = inferenceDayCounts(
-            sessionDir: sessionDir, fileManager: fileManager, calendar: calendar)
-        let spread: [(day: Date, tokens: Int)] = weights.isEmpty
-            ? [(day, raw.lifetime)]
-            : apportion(total: raw.lifetime, weights: weights)
+        let eventRead = inferenceDayCounts(
+            sessionDir: sessionDir, fileManager: fileManager,
+            calendar: calendar, budget: budget)
+        let spread: [(day: Date, tokens: Int)]
+        switch eventRead {
+        case .fallback:
+            spread = [(day, raw.lifetime)]
+        case let .weights(weights):
+            spread = apportion(total: raw.lifetime, weights: weights)
+        case .rejected:
+            return ([], false)
+        }
 
-        return spread.compactMap { part in
+        return (spread.compactMap { part in
             guard part.day >= cutoffDay, part.day <= today, part.tokens > 0 else { return nil }
             return SessionPoint(
                 day: part.day,
                 tokens: part.tokens,
                 usd: GrokModelPrice.estimateUSD(tokens: part.tokens, model: raw.model),
                 model: raw.model)
-        }
+        }, true)
     }
 
     /// Count of `"type":"first_token"` events per LOCAL calendar day, read
@@ -554,28 +675,40 @@ enum GrokCostScanner {
     /// (one turn can contain several tool-call round-trips). Empty when the
     /// file is missing or has no usable events — callers then fall back to
     /// the last-active-day attribution.
+    private enum EventTimelineRead {
+        case fallback
+        case weights([Date: Int])
+        case rejected
+    }
+
     private static func inferenceDayCounts(
         sessionDir: URL,
         fileManager: FileManager,
-        calendar: Calendar) -> [Date: Int]
+        calendar: Calendar,
+        budget: ScanBudget?) -> EventTimelineRead
     {
         let eventsURL = sessionDir.appendingPathComponent("events.jsonl")
-        guard let data = boundedData(at: eventsURL),
-              let text = String(data: data, encoding: .utf8)
-        else { return [:] }
+        switch boundedRead(at: eventsURL, budget: budget) {
+        case .missing:
+            return .fallback
+        case .rejected:
+            return .rejected
+        case let .data(data):
+            guard let text = String(data: data, encoding: .utf8) else { return .rejected }
 
-        var counts: [Date: Int] = [:]
-        text.enumerateLines { line, _ in
-            guard let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  json["type"] as? String == "first_token",
-                  let ts = json["ts"] as? String,
-                  let parsed = parseISO8601(ts)
-            else { return }
-            let day = calendar.startOfDay(for: parsed)
-            counts[day, default: 0] += 1
+            var counts: [Date: Int] = [:]
+            text.enumerateLines { line, _ in
+                guard let lineData = line.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      json["type"] as? String == "first_token",
+                      let ts = json["ts"] as? String,
+                      let parsed = parseISO8601(ts)
+                else { return }
+                let day = calendar.startOfDay(for: parsed)
+                counts[day, default: 0] += 1
+            }
+            return counts.isEmpty ? .fallback : .weights(counts)
         }
-        return counts
     }
 
     /// Split `total` across days weighted by `weights`, preserving the exact

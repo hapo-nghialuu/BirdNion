@@ -140,7 +140,7 @@ enum OMPCostScanner {
         let storedRevision = max(
             UserDefaults.standard.integer(forKey: countingRevisionKey),
             CostHistoryStore.storedCountingRevision(source: .omp, url: historyURL))
-        let incremental = CostHistoryStore.scanBackDays(
+        let scanBackPlan = CostHistoryStore.scanBackPlan(
             source: .omp,
             now: now,
             calendar: calendar,
@@ -148,7 +148,7 @@ enum OMPCostScanner {
             maxDays: chartWindowDays,
             url: historyURL)
         let plan = countingScanPlan(
-            storedRevision: storedRevision, incrementalDays: incremental)
+            storedRevision: storedRevision, incrementalDays: scanBackPlan.days)
         if plan.historyOnly {
             // A newer build already wrote this source's history under a later
             // formula. Merging this build's older numbers back over it would
@@ -196,6 +196,10 @@ enum OMPCostScanner {
             countingRevision: countingRevision)
         if result.completed, applied.persisted {
             UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
+            if scanBackPlan.isDeep {
+                CostHistoryStore.markDeepScanSucceeded(
+                    source: .omp, at: now, url: historyURL)
+            }
         }
         let receipt: CostHistoryStore.ApplyReceipt? = applied
         let window: [CostHistoryStore.DayBucket] = applied.window

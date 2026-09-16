@@ -84,6 +84,10 @@ struct ClaudeUsageReport: Equatable {
 struct ClaudeProjectScanResult: Equatable {
     let report: ClaudeUsageReport
     let projects: [ProjectUsageRecord]
+    /// False when any input was skipped or the bounded pass stopped early.
+    /// Callers may high-water merge the aggregate, but must not publish it as
+    /// a complete live snapshot or replace persisted history/project data.
+    let completed: Bool
 }
 
 /// Per-million-token prices (USD) for models recorded by Claude Code. Claude
@@ -225,6 +229,13 @@ enum ClaudeCostScanner {
     /// Skip a single transcript larger than this instead of loading it whole.
     /// Matches the cap OMP and Pi already apply.
     static let maxSessionFileBytes = 256 * 1024 * 1024
+    /// Bound one refresh even when the Claude projects tree is unexpectedly
+    /// large. Hitting any limit produces a useful partial result, never a
+    /// falsely fresh/replacement snapshot.
+    private static let maxScanFiles = 20_000
+    private static let maxScanWalkEntries = 100_000
+    private static let maxScanBytes = 1024 * 1024 * 1024
+    private static let maxScanEntries = 2_000_000
     /// Bump when model pricing or counting semantics change. Existing
     /// persisted days need one full rescan; `usageReport` then applies with
     /// `replacingSource: true` so inflated high-water marks are replaced
@@ -302,10 +313,18 @@ enum ClaudeCostScanner {
     /// Cached, off-main scan. Returns nil only if no projects root is readable.
     static func summary(roots: [URL] = defaultProjectsRoots(), now: Date = Date()) async -> ClaudeCostSummary? {
         if let cached = await Cache.shared.valid(now: now, ttl: cacheTTL) { return cached }
-        let value = await Task.detached(priority: .utility) {
-            scan(roots: roots, now: now)
-        }.value
-        if let value { await Cache.shared.store(value, at: now) }
+        let scanTask = Task.detached(priority: .utility) {
+            scanFullWithProjects(roots: roots, now: now)
+        }
+        let result = await withTaskCancellationHandler {
+            await scanTask.value
+        } onCancel: {
+            scanTask.cancel()
+        }
+        let value = result?.report.asSummary
+        if let value, result?.completed == true {
+            await Cache.shared.store(value, at: now)
+        }
         return value
     }
 
@@ -318,21 +337,22 @@ enum ClaudeCostScanner {
         if let cached = await Cache.shared.validFullReport(now: now, ttl: cacheTTL) {
             return cached
         }
-        let value = await Task.detached(priority: .utility) {
+        let scanTask = Task.detached(priority: .utility) {
             // Live scan may be empty after the user deletes session jsonls —
             // merge with CostHistoryStore so past All-tab bars survive.
             // Only rescan logs that can still change persisted history; the
             // store supplies the older days.
-            let incrementalDays = CostHistoryStore.scanBackDays(source: .claude, now: now)
+            let scanPlan = CostHistoryStore.scanBackPlan(source: .claude, now: now)
             let storedPricingRevision = UserDefaults.standard.integer(forKey: pricingRevisionKey)
             let hasStoredClaudeProjects = ProjectCostHistoryStore.read()
                 .sources?[ProjectUsageSource.claude.rawValue]?.isEmpty == false
             let scanDays = scanDaysForProjectHistory(
                 storedPricingRevision: storedPricingRevision,
-                incrementalDays: incrementalDays,
+                incrementalDays: scanPlan.days,
                 hasStoredClaudeProjects: hasStoredClaudeProjects)
             let projectScan = scanFullWithProjects(roots: roots, now: now, scanDays: scanDays)
             let live = projectScan?.report
+            let completed = projectScan?.completed == true
             let liveDays = (live?.daily ?? []).map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
@@ -340,8 +360,8 @@ enum ClaudeCostScanner {
             // Revision bump + successful scan: replace Claude days in one
             // atomic write. If live is nil, keep prior history and leave
             // revision unset so the next run can still rescan.
-            let replacing = storedPricingRevision < pricingRevision && live != nil
-            let liveScanSucceeded = live != nil
+            let replacing = storedPricingRevision < pricingRevision && live != nil && completed
+            let liveScanSucceeded = live != nil && completed
             let receipt = CostHistoryStore.applyWithReceipt(
                 source: .claude,
                 liveDays: liveDays,
@@ -354,20 +374,28 @@ enum ClaudeCostScanner {
                 liveScanSucceeded: liveScanSucceeded && receipt.persisted)
             let report = CostHistoryStore.makeClaudeReport(
                 window: receipt.window,
-                hourly: receipt.persisted ? (live?.hourly ?? []) : [],
+                hourly: receipt.persisted && completed ? (live?.hourly ?? []) : [],
                 now: now,
                 confidence: confidence)
-            if let projectScan {
+            if let projectScan, projectScan.completed {
                 _ = ProjectCostHistoryStore.apply(
                     source: .claude, liveProjects: projectScan.projects,
                     now: now, replacingSource: replacing)
             }
-            if live != nil, receipt.persisted {
+            if live != nil, completed, receipt.persisted {
                 UserDefaults.standard.set(pricingRevision, forKey: pricingRevisionKey)
+                if scanPlan.isDeep {
+                    CostHistoryStore.markDeepScanSucceeded(source: .claude, at: now)
+                }
             }
             // Nil only when history + live are both empty (first run, no logs).
             return report.isEmpty && live == nil ? nil : report
-        }.value
+        }
+        let value = await withTaskCancellationHandler {
+            await scanTask.value
+        } onCancel: {
+            scanTask.cancel()
+        }
         if let value, value.scanConfidence.live {
             await Cache.shared.storeFull(value, at: now)
         }
@@ -409,7 +437,10 @@ enum ClaudeCostScanner {
     /// Same filesystem walk as `scanFull`, with a privacy-safe project split
     /// emitted for the optional project history store.
     static func scanFullWithProjects(
-        roots: [URL], now: Date, scanDays: Int = historyDays
+        roots: [URL],
+        now: Date,
+        scanDays: Int = historyDays,
+        maxWalkEntries: Int = maxScanWalkEntries
     ) -> ClaudeProjectScanResult? {
         let fm = FileManager.default
         let calendar = Calendar.current
@@ -428,25 +459,107 @@ enum ClaudeCostScanner {
         var keyed: [String: DayEntry] = [:]
         var unkeyed: [DayEntry] = []
         var anyRoot = false
+        var completed = true
+        var scannedFiles = 0
+        var walkedEntries = 0
+        var scannedBytes = 0
+        var scannedEntries = 0
 
+        rootLoop:
         for root in roots {
+            if Task.isCancelled {
+                completed = false
+                break
+            }
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: root.path, isDirectory: &isDirectory) else { continue }
+            guard isDirectory.boolValue else {
+                completed = false
+                continue
+            }
+            var enumerationFailed = false
             guard let enumerator = fm.enumerator(
-                at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
+                at: root,
+                includingPropertiesForKeys: [
+                    .contentModificationDateKey, .fileSizeKey, .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                ],
+                options: [.skipsHiddenFiles],
+                errorHandler: { _, _ in
+                    enumerationFailed = true
+                    return true
+                })
+            else {
+                completed = false
+                continue
+            }
             anyRoot = true
-            var files: [URL] = []
+            var files: [(url: URL, size: Int)] = []
+            var fileBudgetExhausted = false
             for case let url as URL in enumerator {
+                if Task.isCancelled {
+                    completed = false
+                    break rootLoop
+                }
+                if walkedEntries >= maxWalkEntries {
+                    completed = false
+                    fileBudgetExhausted = true
+                    enumerator.skipDescendants()
+                    break
+                }
+                walkedEntries += 1
                 guard url.pathExtension == "jsonl" else { continue }
-                let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
-                    .contentModificationDate) ?? .distantPast
+                if scannedFiles + files.count >= maxScanFiles {
+                    completed = false
+                    fileBudgetExhausted = true
+                    break
+                }
+                guard let values = try? url.resourceValues(forKeys: [
+                    .contentModificationDateKey, .fileSizeKey, .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                ]),
+                    values.isRegularFile == true,
+                    values.isSymbolicLink != true,
+                    let size = values.fileSize,
+                    size >= 0,
+                    let mtime = values.contentModificationDate
+                else {
+                    completed = false
+                    continue
+                }
                 // Fast-path skip: files untouched inside the scan window hold
                 // no usable line (a file's mtime is >= its newest entry).
                 guard mtime >= cutoff else { continue }
-                files.append(url)
+                if size > maxSessionFileBytes {
+                    completed = false
+                    continue
+                }
+                files.append((url, size))
             }
+            if enumerationFailed { completed = false }
             // Sorted so keep-last dedup is deterministic across runs.
-            for url in files.sorted(by: { $0.path < $1.path }) {
-                for entry in scanFileWithDay(
-                    url, root: root, cutoff: cutoff, calendar: calendar) {
+            for file in files.sorted(by: { $0.url.path < $1.url.path }) {
+                if Task.isCancelled
+                    || scannedFiles >= maxScanFiles
+                    || scannedBytes > maxScanBytes - file.size
+                    || scannedEntries >= maxScanEntries
+                {
+                    completed = false
+                    break rootLoop
+                }
+                let fileScan = scanFileWithDay(
+                    file.url,
+                    root: root,
+                    calendar: calendar,
+                    entryLimit: maxScanEntries - scannedEntries,
+                    byteLimit: min(
+                        maxSessionFileBytes,
+                        maxScanBytes - scannedBytes))
+                scannedFiles += 1
+                scannedBytes += fileScan.bytesRead
+                scannedEntries += fileScan.entries.count
+                if !fileScan.completed { completed = false }
+                for entry in fileScan.entries {
                     if let key = entry.key {
                         if let current = keyed[key] {
                             let resolution = reconciledProject(
@@ -462,8 +575,12 @@ enum ClaudeCostScanner {
                     }
                 }
             }
+            if fileBudgetExhausted { break rootLoop }
         }
-        guard anyRoot else { return nil }
+        // Missing optional roots are normal. A cancelled/failed attempt still
+        // returns an explicit incomplete result so callers cannot mistake the
+        // empty projection for a complete scan.
+        guard anyRoot || !completed else { return nil }
 
         var todayUSD = 0.0, todayTokens = 0
         var monthUSD = 0.0, monthTokens = 0
@@ -561,7 +678,7 @@ enum ClaudeCostScanner {
                             .sorted { $0.tokens > $1.tokens }.prefix(5).map { $0 })
                 })
         }.sorted { $0.projectKey < $1.projectKey }
-        return ClaudeProjectScanResult(report: report, projects: projects)
+        return ClaudeProjectScanResult(report: report, projects: projects, completed: completed)
     }
 
     /// One model's running totals within a day.
@@ -620,18 +737,37 @@ enum ClaudeCostScanner {
     /// can fold straight into a `[Date: DailyAccumulator]`.
     private static func scanFileWithDay(_ url: URL,
                                         root: URL,
-                                        cutoff: Date,
-                                        calendar: Calendar) -> [DayEntry] {
-        // One oversized transcript must not take the whole pass down with it.
-        // The first scan on a busy machine is exactly when this bites: nothing
-        // is cached yet, so every file is read.
-        if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
-           size > maxSessionFileBytes
-        {
-            return []
+                                        calendar: Calendar,
+                                        entryLimit: Int,
+                                        byteLimit: Int) -> (
+                                            entries: [DayEntry],
+                                            bytesRead: Int,
+                                            completed: Bool
+                                        ) {
+        guard entryLimit > 0, byteLimit > 0 else { return ([], 0, false) }
+        let data: Data
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            var bounded = Data()
+            while bounded.count <= byteLimit {
+                if Task.isCancelled { return ([], bounded.count, false) }
+                let remaining = byteLimit + 1 - bounded.count
+                guard remaining > 0,
+                      let chunk = try handle.read(upToCount: min(1024 * 1024, remaining)),
+                      !chunk.isEmpty
+                else { break }
+                bounded.append(chunk)
+            }
+            guard bounded.count <= byteLimit else {
+                return ([], bounded.count, false)
+            }
+            data = bounded
+        } catch {
+            return ([], 0, false)
         }
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
-            return []
+        guard let content = String(data: data, encoding: .utf8) else {
+            return ([], data.count, false)
         }
         var entries: [DayEntry] = []
         // Deliberately NOT materialising a `[String]` of every line: that held
@@ -648,13 +784,19 @@ enum ClaudeCostScanner {
         let identity = ProjectIdentity.claude(
             cwd: cwd,
             fallbackDirectory: sessionDirectoryToken(fileURL: url, root: root))
-        content.enumerateLines { line, _ in
+        var completed = true
+        content.enumerateLines { line, stop in
+            if Task.isCancelled || entries.count >= entryLimit {
+                completed = false
+                stop = true
+                return
+            }
             Self.parseLineIntoDay(line,
                                   project: identity,
                                   calendar: calendar,
                                   into: &entries)
         }
-        return entries
+        return (entries, data.count, completed)
     }
 
     /// Per-line JSON parse + bucket — factored out so Swift's type checker

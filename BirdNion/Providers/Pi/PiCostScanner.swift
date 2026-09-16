@@ -150,7 +150,7 @@ enum PiCostScanner {
         let storedRevision = max(
             UserDefaults.standard.integer(forKey: countingRevisionKey),
             CostHistoryStore.storedCountingRevision(source: .pi, url: historyURL))
-        let incremental = CostHistoryStore.scanBackDays(
+        let scanBackPlan = CostHistoryStore.scanBackPlan(
             source: .pi,
             now: now,
             calendar: calendar,
@@ -158,7 +158,7 @@ enum PiCostScanner {
             maxDays: chartWindowDays,
             url: historyURL)
         let plan = countingScanPlan(
-            storedRevision: storedRevision, incrementalDays: incremental)
+            storedRevision: storedRevision, incrementalDays: scanBackPlan.days)
         if plan.historyOnly {
             // A newer build already wrote this source's history under a later
             // formula. Merging this build's older numbers back over it would
@@ -206,6 +206,10 @@ enum PiCostScanner {
             countingRevision: countingRevision)
         if result.completed, applied.persisted {
             UserDefaults.standard.set(countingRevision, forKey: countingRevisionKey)
+            if scanBackPlan.isDeep {
+                CostHistoryStore.markDeepScanSucceeded(
+                    source: .pi, at: now, url: historyURL)
+            }
         }
         let receipt: CostHistoryStore.ApplyReceipt? = applied
         let window: [CostHistoryStore.DayBucket] = applied.window
