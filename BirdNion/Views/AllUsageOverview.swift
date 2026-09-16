@@ -1550,13 +1550,21 @@ struct DayDetailPanelRoot: View {
         // Xếp theo TOKEN, không theo tiền: giá mỗi model chênh nhau hàng chục
         // lần nên thứ tự theo tiền che mất nơi khối lượng thật sự nằm ở đâu.
         // Tiền vẫn hiện trong phần chữ của từng dòng.
-        .sorted { $0.tokens > $1.tokens }
+        .sorted {
+            // Token bằng nhau thì chốt bằng tiền: sorted của Swift không ổn định
+            // nên thiếu tiêu chí phụ là thứ hạng bất định, lệch với bản Linux.
+            if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+            return $0.usd > $1.usd
+        }
     }
 
     private var models: [CombinedModelCost] {
         day.models
             .filter { !$0.isKiroSyntheticAggregate }
-            .sorted { $0.tokens > $1.tokens }
+            .sorted {
+                if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+                return $0.usd > $1.usd
+            }
     }
     private static let maxModelRows = 10
 
@@ -1681,9 +1689,9 @@ struct DayDetailPanelRoot: View {
                             Rectangle()
                                 .fill(slice.color)
                                 .frame(
-                                    width: max(
-                                        1,
-                                        CGFloat(Double(slice.tokens) / Double(day.tokens)) * 312))
+                                    width: slice.tokens > 0
+                                        ? max(1, CGFloat(Double(slice.tokens) / Double(day.tokens)) * 312)
+                                        : 0)
                         }
                     }
                 }
@@ -1740,9 +1748,9 @@ struct DayDetailPanelRoot: View {
                             Rectangle()
                                 .fill(sliceColor(m.source))
                                 .frame(
-                                    width: max(
-                                        2,
-                                        CGFloat(Double(m.tokens) / Double(maxTokens)) * 312),
+                                    width: m.tokens > 0
+                                        ? max(2, CGFloat(Double(m.tokens) / Double(maxTokens)) * 312)
+                                        : 0,
                                     height: 3)
                         }
                 }
