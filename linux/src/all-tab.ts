@@ -326,7 +326,7 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
   // Compact: merge all models by cost (no per-source headers) — macOS 986f49a8.
   const models = day.models
     .filter((model) => !isKiroSyntheticAggregate(model))
-    .sort((a, b) => (b.usd - a.usd) || (b.tokens - a.tokens));
+    .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
   if (models.length === 0) {
     // Fallback: source totals when model detail missing.
     for (const source of USAGE_SOURCE_IDS) {
