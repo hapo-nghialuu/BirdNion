@@ -326,7 +326,7 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
   // Compact: merge all models by cost (no per-source headers) — macOS 986f49a8.
   const models = day.models
     .filter((model) => !isKiroSyntheticAggregate(model))
-    .sort((a, b) => (b.usd - a.usd) || (b.tokens - a.tokens));
+    .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
   if (models.length === 0) {
     // Fallback: source totals when model detail missing.
     for (const source of USAGE_SOURCE_IDS) {
@@ -726,7 +726,11 @@ export function topModelsCard(combined: Combined): HTMLElement {
       row.append(left);
       const track = el("div", "model-track");
       const fill = el("div", `model-fill ${model.source}`);
-      fill.style.width = `${Math.max((model.tokens / windowTokens) * 100, 1)}%`;
+      // Thanh đo bằng token: model 0 token (chỉ có USD) phải rộng 0,
+      // không được ăn sàn tối thiểu rồi trông như có khối lượng.
+      fill.style.width = model.tokens > 0
+        ? `${Math.max((model.tokens / windowTokens) * 100, 1)}%`
+        : "0%";
       track.append(fill);
       row.append(track);
       row.append(el("span", "top-model-amount", tokensAndUsd(model.tokens, model.usd)));

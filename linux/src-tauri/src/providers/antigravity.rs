@@ -1109,6 +1109,145 @@ pub struct OAuthAccountsState {
     pub active_label: Option<String>,
 }
 
+/// Quota đã đọc được của MỘT tài khoản, lưu trên đĩa để popover vẽ ngay mà
+/// không phải chờ gọi mạng cho từng tài khoản.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuotaSnapshot {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub windows: Vec<QuotaWindow>,
+    /// epoch giây của lần đọc thành công gần nhất.
+    pub fetched_at: i64,
+    /// Vân tay của refresh token đã tạo ra bản ghi này. `label` KHÔNG đủ làm
+    /// danh tính: xoá tài khoản rồi thêm lại bằng credential khác dưới cùng
+    /// nhãn sẽ khiến bản ghi cũ được coi là mới, và UI hiện email + quota của
+    /// credential trước. Vân tay lệch ⇒ coi như chưa có dữ liệu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_fingerprint: Option<String>,
+}
+
+/// Băm refresh token để so sánh danh tính mà không lưu lại chính token đó.
+fn credential_fingerprint(refresh_token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(refresh_token.as_bytes());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Một dòng trong khối "tất cả tài khoản": có quota, hoặc có lý do vì sao chưa.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuotaRow {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub is_active: bool,
+    pub windows: Vec<QuotaWindow>,
+    /// nil khi đọc được; ngược lại là lời giải thích hiển thị cho người dùng.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<i64>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct AccountQuotaStore {
+    #[serde(default)]
+    snapshots: Vec<AccountQuotaSnapshot>,
+}
+
+fn account_quota_store_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::PathBuf::from(home).join(".config/birdnion/antigravity-account-snapshots.json")
+}
+
+fn load_account_quota_store(path: &std::path::Path) -> AccountQuotaStore {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+static ACCOUNT_QUOTA_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Gộp nhiều bản ghi vào kho trong MỘT lần đọc-sửa-ghi, dưới khoá.
+///
+/// Ghi từng bản một bằng `std::fs::write` vừa để lại JSON cắt dở nếu tiến trình
+/// chết giữa chừng, vừa để hai lệnh chạy song song xoá kết quả của nhau. File
+/// chứa email và quota nên cũng phải mang mode riêng tư — dùng đúng helper mà
+/// `save_oauth_store_at` ngay bên cạnh vẫn dùng.
+fn merge_account_quota_snapshots(
+    path: &std::path::Path,
+    incoming: Vec<AccountQuotaSnapshot>,
+) -> AccountQuotaStore {
+    let _guard = ACCOUNT_QUOTA_STORE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = load_account_quota_store(path);
+    if incoming.is_empty() {
+        return store;
+    }
+    for snapshot in incoming {
+        store.snapshots.retain(|s| s.label != snapshot.label);
+        store.snapshots.push(snapshot);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&store) {
+        let _ = crate::platform::atomic_file::write_private_json_atomic::<AccountQuotaStore>(
+            path,
+            json.as_bytes(),
+        );
+    }
+    // Trả về bản trong bộ nhớ chứ không để caller đọc lại từ đĩa: ghi hỏng
+    // (hết dung lượng, sai quyền) thì quota vừa tải về vẫn phải hiện được,
+    // chỉ mất phần lưu nên lần mở sau tải lại.
+    store
+}
+
+/// Bỏ bản ghi của một tài khoản — gọi khi tài khoản bị xoá để nhãn được dùng
+/// lại không thừa hưởng quota cũ.
+pub fn forget_account_quota_snapshot(label: &str) {
+    let path = account_quota_store_path();
+    let _guard = ACCOUNT_QUOTA_STORE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = load_account_quota_store(&path);
+    let before = store.snapshots.len();
+    store.snapshots.retain(|s| s.label != label);
+    if store.snapshots.len() == before {
+        return;
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&store) {
+        let _ = crate::platform::atomic_file::write_private_json_atomic::<AccountQuotaStore>(
+            &path,
+            json.as_bytes(),
+        );
+    }
+}
+
+/// Bao lâu thì một snapshot được coi là cũ và cần đọc lại.
+const ACCOUNT_QUOTA_MAX_AGE_SECS: i64 = 15 * 60;
+
+/// Hạn cho TOÀN BỘ lần đọc của một tài khoản. Timeout của reqwest chỉ áp cho
+/// từng request, mà một lần đọc gồm bốn request nối tiếp — không có trần này
+/// thì một tài khoản chậm giữ popover tới hơn một phút.
+const ACCOUNT_QUOTA_READ_BUDGET: Duration = Duration::from_secs(30);
+const ACCOUNT_QUOTA_TIMEOUT_ERROR: &str = "Hết hạn chờ sau 30s";
+
+/// Thuần: tài khoản nào tới hạn đọc lại. Tài khoản chưa từng đọc luôn tới hạn.
+/// Tách riêng để test được mà không chạm mạng hay đĩa.
+pub fn stale_account_labels(
+    accounts: &[(String, Option<i64>)],
+    now: i64,
+    max_age: i64,
+) -> Vec<String> {
+    accounts
+        .iter()
+        .filter(|(_, fetched_at)| fetched_at.is_none_or(|at| now - at >= max_age))
+        .map(|(label, _)| label.clone())
+        .collect()
+}
+
 fn oauth_store_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     std::path::PathBuf::from(home).join(".config/birdnion/antigravity-oauth.json")
@@ -1218,6 +1357,130 @@ fn apply_imported_credentials(
     Ok(())
 }
 
+/// Quota của MỌI tài khoản đã lưu, cho khối "tất cả tài khoản" trong popover.
+///
+/// Đọc snapshot trên đĩa trước rồi mới gọi mạng cho những tài khoản quá hạn,
+/// nên UI vẽ được ngay thay vì chờ N lời gọi mạng nối tiếp.
+///
+/// Giới hạn cần biết: endpoint quota chỉ nhận token mint bằng client agy CLI
+/// (có scope `aicode`). Token client cloud-platform trả 403, nên tài khoản nào
+/// được dán bằng credential loại đó sẽ hiện lý do thay vì số — chứ không im
+/// lặng thành 0.
+pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
+    let Some(store) = load_oauth_store() else {
+        return Vec::new();
+    };
+    let path = account_quota_store_path();
+    let cached = load_account_quota_store(&path);
+    let now = chrono::Utc::now().timestamp();
+
+    // Vân tay lệch ⇒ coi như chưa có dữ liệu: bản ghi thuộc về credential khác.
+    let snapshot_for = |account: &OAuthAccount| -> Option<&AccountQuotaSnapshot> {
+        let fingerprint = credential_fingerprint(&account.refresh_token);
+        cached.snapshots.iter().find(|s| {
+            s.label == account.label
+                && s.credential_fingerprint.as_deref() == Some(fingerprint.as_str())
+        })
+    };
+
+    let ages: Vec<(String, Option<i64>)> = store
+        .accounts
+        .iter()
+        .map(|account| (account.label.clone(), snapshot_for(account).map(|s| s.fetched_at)))
+        .collect();
+    let stale = stale_account_labels(&ages, now, ACCOUNT_QUOTA_MAX_AGE_SECS);
+
+    let mut failures: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut fresh_snapshots: Vec<AccountQuotaSnapshot> = Vec::new();
+    let mut merged: Option<AccountQuotaStore> = None;
+
+    if !stale.is_empty() {
+        match reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+        {
+            Err(error) => {
+                for label in &stale {
+                    failures.insert(label.clone(), format!("không tạo được HTTP client: {error}"));
+                }
+            }
+            Ok(client) => {
+                // Song song, có trần: đọc một tài khoản là BỐN request nối tiếp
+                // (đổi token → userinfo → loadCodeAssist → quota). Chạy tuần tự
+                // qua các tài khoản thì thời gian cộng dồn, mà lệnh này chạy
+                // ngay khi mở popover. Mỗi tài khoản cũng có hạn tổng riêng —
+                // timeout của client chỉ áp cho TỪNG request.
+                let reads = store
+                    .accounts
+                    .iter()
+                    .filter(|a| stale.contains(&a.label))
+                    .map(|account| {
+                        let client = client.clone();
+                        let label = account.label.clone();
+                        let token = account.refresh_token.clone();
+                        async move {
+                            let outcome = tokio::time::timeout(
+                                ACCOUNT_QUOTA_READ_BUDGET,
+                                cloud_quota_for_refresh_token(&client, &token),
+                            )
+                            .await;
+                            let result = match outcome {
+                                Err(_) => Err(ACCOUNT_QUOTA_TIMEOUT_ERROR.to_string()),
+                                Ok(inner) => inner,
+                            };
+                            (label, token, result)
+                        }
+                    });
+                for (label, token, result) in futures::future::join_all(reads).await {
+                    match result {
+                        Ok(reading) => fresh_snapshots.push(AccountQuotaSnapshot {
+                            label,
+                            email: Some(reading.email),
+                            windows: reading.windows,
+                            fetched_at: now,
+                            credential_fingerprint: Some(credential_fingerprint(&token)),
+                        }),
+                        Err(error) => {
+                            failures.insert(label, error);
+                        }
+                    }
+                }
+                merged = Some(merge_account_quota_snapshots(&path, fresh_snapshots));
+            }
+        }
+    }
+
+    let fresh = merged.unwrap_or_else(|| load_account_quota_store(&path));
+    store
+        .accounts
+        .iter()
+        .map(|account| {
+            let fingerprint = credential_fingerprint(&account.refresh_token);
+            let snapshot = fresh.snapshots.iter().find(|s| {
+                s.label == account.label
+                    && s.credential_fingerprint.as_deref() == Some(fingerprint.as_str())
+            });
+            // Lỗi refresh vẫn phải hiện KỂ CẢ khi có bản ghi cũ để vẽ: nếu nuốt
+            // đi, UI trình bày số quá hạn y như số vừa đọc.
+            let failure = failures.remove(&account.label);
+            AccountQuotaRow {
+                label: account.label.clone(),
+                email: snapshot
+                    .and_then(|s| s.email.clone())
+                    .or_else(|| account.email.clone()),
+                is_active: store.active_label.as_deref() == Some(account.label.as_str()),
+                windows: snapshot.map(|s| s.windows.clone()).unwrap_or_default(),
+                unavailable_reason: match (snapshot, failure) {
+                    (_, Some(error)) => Some(error),
+                    (Some(_), None) => None,
+                    (None, None) => Some("Chưa có dữ liệu".to_string()),
+                },
+                fetched_at: snapshot.map(|s| s.fetched_at),
+            }
+        })
+        .collect()
+}
+
 pub fn account_add(
     credential_json: &str,
     label: Option<&str>,
@@ -1267,6 +1530,7 @@ fn remove_account_from_store(store: &mut OAuthStore, label: &str) {
 }
 
 pub fn account_remove(label: &str) -> Result<OAuthAccountsState, String> {
+    forget_account_quota_snapshot(label);
     let _guard = OAUTH_STORE_MUTATION_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1359,43 +1623,52 @@ async fn fetch_via_agy_cloud_quota(cfg: &config::Provider, name: &str) -> CloudQ
         Ok(client) => client,
         Err(error) => return cloud_failure(cfg, name, error),
     };
-    let secret = AGY_CLI_CLIENT_SECRET_PARTS.concat();
-    let access_token =
-        match refresh_access_token(&client, &refresh_token, AGY_CLI_CLIENT_ID, &secret).await {
-            Ok(token) => token,
-            Err(error) => return cloud_failure(cfg, name, error),
-        };
-    let email = match cloud_identity_email(&client, &access_token).await {
-        Ok(email) => email,
+    let reading = match cloud_quota_for_refresh_token(&client, &refresh_token).await {
+        Ok(reading) => reading,
         Err(error) => return cloud_failure(cfg, name, error),
     };
     if let AgyCloudIdentityExpectation::Exact(expected) = &expectation {
-        if let Some(error) = account_mismatch_error(Some(expected), Some(&email)) {
+        if let Some(error) = account_mismatch_error(Some(expected), Some(&reading.email)) {
             return CloudQuotaOutcome::Status(ProviderStatus::failure(&cfg.id, name, error));
         }
     }
-    if let Err(error) = cloud_post(
-        &client,
+    CloudQuotaOutcome::Status(build_status(cfg, name, reading.windows, Some(reading.email)))
+}
+
+/// Quota + danh tính đọc được từ MỘT refresh token cụ thể.
+pub struct CloudQuotaReading {
+    pub email: String,
+    pub windows: Vec<QuotaWindow>,
+}
+
+/// Lõi dùng chung của đường cloud, tách ra khỏi `fetch_via_agy_cloud_quota` để
+/// gọi được cho refresh token BẤT KỲ — không chỉ token toàn cục trong
+/// `~/.gemini`. Đây là thứ cho phép đọc quota của từng tài khoản đã lưu.
+///
+/// `loadCodeAssist` PHẢI chạy trước lời gọi quota: bỏ qua thì chính token đó
+/// trả 429 RESOURCE_EXHAUSTED.
+pub async fn cloud_quota_for_refresh_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<CloudQuotaReading, String> {
+    let secret = AGY_CLI_CLIENT_SECRET_PARTS.concat();
+    let access_token =
+        refresh_access_token(client, refresh_token, AGY_CLI_CLIENT_ID, &secret).await?;
+    let email = cloud_identity_email(client, &access_token).await?;
+    cloud_post(
+        client,
         "loadCodeAssist",
         LOAD_CODE_ASSIST_BODY,
         &access_token,
     )
-    .await
-    {
-        return cloud_failure(cfg, name, error);
-    }
-    let summary = match cloud_post(&client, "retrieveUserQuotaSummary", "{}", &access_token).await {
-        Ok(summary) => summary,
-        Err(error) => return cloud_failure(cfg, name, error),
-    };
-    let Some(groups) = parse_quota_summary(&summary) else {
-        return cloud_failure(cfg, name, "quota response không hợp lệ");
-    };
+    .await?;
+    let summary = cloud_post(client, "retrieveUserQuotaSummary", "{}", &access_token).await?;
+    let groups = parse_quota_summary(&summary).ok_or("quota response không hợp lệ")?;
     let windows = map_summary_windows(&groups);
     if windows.is_empty() {
-        return cloud_failure(cfg, name, "quota response không có cửa sổ hợp lệ");
+        return Err("quota response không có cửa sổ hợp lệ".to_string());
     }
-    CloudQuotaOutcome::Status(build_status(cfg, name, windows, Some(email)))
+    Ok(CloudQuotaReading { email, windows })
 }
 
 fn agy_cloud_identity_expectation(
@@ -1630,6 +1903,70 @@ fn map_buckets_to_windows(buckets: &[Value]) -> Vec<QuotaWindow> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Tài khoản chưa từng đọc luôn tới hạn; đã đọc gần đây thì bỏ qua để
+    /// không gọi mạng N lần mỗi lần mở popover.
+    #[test]
+    fn stale_accounts_include_never_fetched_and_aged_out() {
+        let now = 1_000_000;
+        let max_age = 900;
+        let accounts = vec![
+            ("never".to_string(), None),
+            ("fresh".to_string(), Some(now - 10)),
+            ("aged".to_string(), Some(now - max_age)),
+            ("ancient".to_string(), Some(now - 10_000)),
+        ];
+        assert_eq!(
+            stale_account_labels(&accounts, now, max_age),
+            vec!["never", "aged", "ancient"]
+        );
+    }
+
+    /// Nhãn có thể bị dùng lại sau khi xoá rồi thêm credential khác. Vân tay
+    /// phải đổi theo token, nếu không bản ghi cũ sẽ được coi là của tài khoản mới.
+    #[test]
+    fn credential_fingerprint_tracks_the_token_not_the_label() {
+        let a = credential_fingerprint("1//refresh-token-a");
+        let b = credential_fingerprint("1//refresh-token-b");
+        assert_ne!(a, b);
+        assert_eq!(a, credential_fingerprint("1//refresh-token-a"));
+        // Không được là chính token — đây là thứ ghi xuống đĩa.
+        assert!(!a.contains("refresh-token-a"));
+        assert_eq!(a.len(), 16);
+    }
+
+    /// Gộp phải thay bản ghi cùng nhãn chứ không chồng thêm, và giữ nguyên các
+    /// tài khoản khác.
+    #[test]
+    fn merging_snapshots_replaces_by_label_and_keeps_others() {
+        let dir = std::env::temp_dir().join(format!("bn-aq-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("snapshots.json");
+        let _ = std::fs::remove_file(&path);
+
+        let snap = |label: &str, at: i64| AccountQuotaSnapshot {
+            label: label.to_string(),
+            email: None,
+            windows: Vec::new(),
+            fetched_at: at,
+            credential_fingerprint: Some("ff".to_string()),
+        };
+        merge_account_quota_snapshots(&path, vec![snap("a", 1), snap("b", 1)]);
+        merge_account_quota_snapshots(&path, vec![snap("a", 2)]);
+
+        let store = load_account_quota_store(&path);
+        assert_eq!(store.snapshots.len(), 2);
+        let a = store.snapshots.iter().find(|s| s.label == "a").unwrap();
+        assert_eq!(a.fetched_at, 2, "bản ghi cùng nhãn phải bị thay, không nhân đôi");
+        assert!(store.snapshots.iter().any(|s| s.label == "b"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_accounts_means_nothing_to_refresh() {
+        assert!(stale_account_labels(&[], 0, 900).is_empty());
+    }
 
     #[test]
     fn parses_language_server_process_with_csrf_token() {

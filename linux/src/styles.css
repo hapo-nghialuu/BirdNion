@@ -43,7 +43,8 @@
   --claude: #B5643F;
   --codex: #3C7FB5;
   --grok: #4A4A4A;
-  --omp: #8B5CF6;
+  --omp: linear-gradient(90deg, #8B5CF6, #EC4899);
+  --omp-v: linear-gradient(180deg, #8B5CF6, #EC4899);
   --pi: #06B6D4;
   --kiro: #8B47F9;
   /* Một chiều cao control cho mọi pane Settings (macOS InstrumentMetrics). */
@@ -105,7 +106,8 @@
   --card-shadow: none;
 
   --grok: #C8CCD6;
-  --omp: #A78BFA;
+  --omp: linear-gradient(90deg, #A78BFA, #F472B6);
+  --omp-v: linear-gradient(180deg, #A78BFA, #F472B6);
   --pi: #22D3EE;
   --kiro: #A766FF;
   --commandcode: #F2F0E8;
@@ -1371,7 +1373,7 @@ html.popover-capped .app-body {
 .bar-seg.codex { background: var(--codex); }
   .bar-seg.grok { background: var(--grok); }
   .bar-seg.kiro { background: var(--kiro); }
-  .bar-seg.omp { background: var(--omp); }
+  .bar-seg.omp { background: var(--omp-v); }
   .bar-seg.pi { background: var(--pi); }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
 
@@ -6059,3 +6061,101 @@ body.settings-body-root {
   font-size: 9px;
   color: var(--text3);
 }
+
+/* Khối "tất cả tài khoản" Antigravity — port của AntigravityAllAccountsQuotaCard
+   bên macOS. Mỗi cửa sổ một dòng: nhãn · thanh · phần trăm, cột cố định để các
+   dòng thẳng hàng. Hairline ngăn giữa các tài khoản vì chỉ riêng tên thì không
+   đủ tách bạch khi mỗi tài khoản có bốn dòng trông giống hệt nhau. */
+.aag-block { margin-top: 10px; }
+
+.aag-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.aag-title { font-size: 10px; font-weight: 500; letter-spacing: 0.6px; color: var(--muted); }
+.aag-count { font-size: 10px; font-weight: 500; color: var(--tertiary); }
+
+.aag-account { padding: 8px 0 4px; }
+.aag-account + .aag-account { border-top: 1px solid var(--hairline); }
+
+.aag-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.aag-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aag-active-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+  flex: none;
+}
+
+.aag-reason { font-size: 10px; color: var(--tertiary); margin-left: auto; }
+
+.aag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.aag-win {
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  color: var(--tertiary);
+  width: 118px;
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aag-track {
+  height: 4px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.aag-fill { height: 100%; border-radius: 2px; }
+.aag-fill.ok { background: var(--success); }
+.aag-fill.warning { background: var(--warning-fill); }
+.aag-fill.critical { background: var(--critical); }
+
+.aag-pct {
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  width: 34px;
+  flex: none;
+  text-align: right;
+}
+.aag-pct.ok { color: var(--success); }
+.aag-pct.warning { color: var(--warning); }
+.aag-pct.critical { color: var(--critical); }
+
+.aag-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 11px;
+}
+
+.aag-error-text { color: var(--critical); flex: 1; }

@@ -113,7 +113,7 @@ const PROVIDER_TINT: Record<string, [string, string]> = {
   elevenlabs: ["#16150F", "#F2F0E8"],
   auggie: ["#16150F", "#F2F0E8"],
   pi: ["#06B6D4", "#22D3EE"],
-  omp: ["#8B5CF6", "#A78BFA"],
+  omp: ["#BC52C8", "#CE7FD8"],
   qwen: ["#FF6A00", "#FF6A00"],
 };
 

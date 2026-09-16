@@ -1370,7 +1370,7 @@ struct CombinedChartCard: View {
                                 Rectangle().fill(VocabbyTheme.chartCodex).frame(height: codexHeight)
                                 Rectangle().fill(VocabbyTheme.chartGrok).frame(height: grokHeight)
                                 Rectangle().fill(VocabbyTheme.chartKiro).frame(height: kiroHeight)
-                                Rectangle().fill(VocabbyTheme.chartOMP).frame(height: ompHeight)
+                                Rectangle().fill(VocabbyTheme.chartOMPBar(vertical: true)).frame(height: ompHeight)
                                 Rectangle().fill(VocabbyTheme.chartPi).frame(height: piHeight)
                             } else {
                                 Rectangle().fill(VocabbyTheme.hairline).frame(height: 1)
@@ -1526,37 +1526,57 @@ struct DayDetailPanelRoot: View {
     private struct AgentSlice: Identifiable {
         let id: String
         let name: String
-        let color: Color
+        let color: AnyShapeStyle
         let usd: Double
         let tokens: Int
     }
 
     private var slices: [AgentSlice] {
         [
-            AgentSlice(id: "claude", name: "Claude Code", color: VocabbyTheme.chartClaude,
+            AgentSlice(id: "claude", name: "Claude Code", color: AnyShapeStyle(VocabbyTheme.chartClaude),
                        usd: day.claudeUSD, tokens: day.claudeTokens),
-            AgentSlice(id: "codex", name: "Codex CLI", color: VocabbyTheme.chartCodex,
+            AgentSlice(id: "codex", name: "Codex CLI", color: AnyShapeStyle(VocabbyTheme.chartCodex),
                        usd: day.codexUSD, tokens: day.codexTokens),
-            AgentSlice(id: "grok", name: "Grok CLI", color: VocabbyTheme.chartGrok,
+            AgentSlice(id: "grok", name: "Grok CLI", color: AnyShapeStyle(VocabbyTheme.chartGrok),
                        usd: day.grokUSD, tokens: day.grokTokens),
-            AgentSlice(id: "kiro", name: "Kiro", color: VocabbyTheme.chartKiro,
+            AgentSlice(id: "kiro", name: "Kiro", color: AnyShapeStyle(VocabbyTheme.chartKiro),
                        usd: day.kiroUSD, tokens: day.kiroTokens),
-            AgentSlice(id: "omp", name: "Oh My Pi", color: VocabbyTheme.chartOMP,
+            AgentSlice(id: "omp", name: "Oh My Pi", color: AnyShapeStyle(VocabbyTheme.chartOMPBar()),
                        usd: day.ompUSD, tokens: day.ompTokens),
-            AgentSlice(id: "pi", name: "Pi Agent", color: VocabbyTheme.chartPi,
+            AgentSlice(id: "pi", name: "Pi Agent", color: AnyShapeStyle(VocabbyTheme.chartPi),
                        usd: day.piUSD, tokens: day.piTokens),
         ]
         .filter { $0.usd > 0 || $0.tokens > 0 }
-        .sorted { $0.usd > $1.usd }
+        // Xếp theo TOKEN, không theo tiền: giá mỗi model chênh nhau hàng chục
+        // lần nên thứ tự theo tiền che mất nơi khối lượng thật sự nằm ở đâu.
+        // Tiền vẫn hiện trong phần chữ của từng dòng.
+        .sorted {
+            // Token bằng nhau thì chốt bằng tiền: sorted của Swift không ổn định
+            // nên thiếu tiêu chí phụ là thứ hạng bất định, lệch với bản Linux.
+            if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+            return $0.usd > $1.usd
+        }
     }
 
     private var models: [CombinedModelCost] {
-        day.models.filter { !$0.isKiroSyntheticAggregate }.sorted { $0.usd > $1.usd }
+        day.models
+            .filter { !$0.isKiroSyntheticAggregate }
+            .sorted {
+                if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
+                return $0.usd > $1.usd
+            }
     }
     private static let maxModelRows = 10
 
+    /// Tỉ lệ tiền — vẫn dùng cho dòng "x% của <cửa sổ>" ở đầu panel, nơi câu
+    /// hỏi thật sự là ngày này chiếm bao nhiêu CHI PHÍ của cả kỳ.
     private func pct(_ usd: Double, of total: Double) -> Int {
         total > 0 ? Int((usd / total * 100).rounded()) : 0
+    }
+
+    /// Tỉ lệ token — dùng cho danh sách agent, khớp với thứ tự và thanh.
+    private func tokenPct(_ part: Int, of total: Int) -> Int {
+        total > 0 ? Int((Double(part) / Double(total) * 100).rounded()) : 0
     }
 
     private var weekdayLabel: String {
@@ -1659,15 +1679,19 @@ struct DayDetailPanelRoot: View {
                 .font(.plexMono(10, weight: .medium))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .tracking(0.9)
-            // Thanh phân bố chia theo chi phí trong ngày (312 = 340 - inset 2×14).
-            if day.usd > 0 {
+            // Thanh phân bố chia theo TOKEN trong ngày, khớp với thứ tự bên dưới
+            // (312 = 340 - inset 2×14).
+            if day.tokens > 0 {
                 ZStack(alignment: .leading) {
                     VocabbyTheme.track
                     HStack(spacing: 0) {
                         ForEach(slices) { slice in
                             Rectangle()
                                 .fill(slice.color)
-                                .frame(width: max(1, CGFloat(slice.usd / day.usd) * 312))
+                                .frame(
+                                    width: slice.tokens > 0
+                                        ? max(1, CGFloat(Double(slice.tokens) / Double(day.tokens)) * 312)
+                                        : 0)
                         }
                     }
                 }
@@ -1682,7 +1706,7 @@ struct DayDetailPanelRoot: View {
                         .foregroundStyle(VocabbyTheme.primary)
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    Text("\(pct(slice.usd, of: day.usd))%")
+                    Text("\(tokenPct(slice.tokens, of: day.tokens))%")
                         .font(.plexMono(10))
                         .foregroundStyle(VocabbyTheme.tertiary)
                     Text(AllUsageFormat.tokensAndUSD(slice.tokens, slice.usd))
@@ -1701,7 +1725,7 @@ struct DayDetailPanelRoot: View {
                 .font(.plexMono(10, weight: .medium))
                 .foregroundStyle(VocabbyTheme.tertiary)
                 .tracking(0.9)
-            let maxUSD = max(models.first?.usd ?? 0, 0.0001)
+            let maxTokens = max(models.first?.tokens ?? 0, 1)
             ForEach(Array(models.prefix(Self.maxModelRows))) { m in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
@@ -1723,7 +1747,11 @@ struct DayDetailPanelRoot: View {
                         .overlay(alignment: .leading) {
                             Rectangle()
                                 .fill(sliceColor(m.source))
-                                .frame(width: max(2, CGFloat(m.usd / maxUSD) * 312), height: 3)
+                                .frame(
+                                    width: m.tokens > 0
+                                        ? max(2, CGFloat(Double(m.tokens) / Double(maxTokens)) * 312)
+                                        : 0,
+                                    height: 3)
                         }
                 }
                 .padding(.vertical, 2)
@@ -1747,15 +1775,15 @@ struct DayDetailPanelRoot: View {
         .padding(.vertical, 12)
     }
 
-    private func sliceColor(_ source: String) -> Color {
+    private func sliceColor(_ source: String) -> AnyShapeStyle {
         switch source {
-        case "claude": return VocabbyTheme.chartClaude
-        case "codex": return VocabbyTheme.chartCodex
-        case "grok": return VocabbyTheme.chartGrok
-        case "kiro": return VocabbyTheme.chartKiro
-        case "omp": return VocabbyTheme.chartOMP
-        case "pi": return VocabbyTheme.chartPi
-        default: return VocabbyTheme.chartCodex
+        case "claude": return AnyShapeStyle(VocabbyTheme.chartClaude)
+        case "codex": return AnyShapeStyle(VocabbyTheme.chartCodex)
+        case "grok": return AnyShapeStyle(VocabbyTheme.chartGrok)
+        case "kiro": return AnyShapeStyle(VocabbyTheme.chartKiro)
+        case "omp": return AnyShapeStyle(VocabbyTheme.chartOMPBar())
+        case "pi": return AnyShapeStyle(VocabbyTheme.chartPi)
+        default: return AnyShapeStyle(VocabbyTheme.chartCodex)
         }
     }
 }
@@ -1851,15 +1879,15 @@ struct CombinedTopModelsCard: View {
         }
     }
 
-    private func sourceColor(_ source: String) -> Color {
+    private func sourceColor(_ source: String) -> AnyShapeStyle {
         switch source {
-        case "claude": VocabbyTheme.chartClaude
-        case "codex": VocabbyTheme.chartCodex
-        case "grok": VocabbyTheme.chartGrok
-        case "kiro": VocabbyTheme.chartKiro
-        case "omp": VocabbyTheme.chartOMP
-        case "pi": VocabbyTheme.chartPi
-        default: VocabbyTheme.tertiary
+        case "claude": AnyShapeStyle(VocabbyTheme.chartClaude)
+        case "codex": AnyShapeStyle(VocabbyTheme.chartCodex)
+        case "grok": AnyShapeStyle(VocabbyTheme.chartGrok)
+        case "kiro": AnyShapeStyle(VocabbyTheme.chartKiro)
+        case "omp": AnyShapeStyle(VocabbyTheme.chartOMPBar())
+        case "pi": AnyShapeStyle(VocabbyTheme.chartPi)
+        default: AnyShapeStyle(VocabbyTheme.tertiary)
         }
     }
 }

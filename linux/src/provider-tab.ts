@@ -31,6 +31,19 @@ export type QuotaWindow = {
   isInactive?: boolean;
 };
 
+/** Một dòng trong khối "tất cả tài khoản" Antigravity — port của
+ * `AntigravityAllAccountsQuotaCard` bên macOS. `unavailableReason` mang lời
+ * giải thích thay vì để dòng trống, vì endpoint quota chỉ nhận token mint bằng
+ * client agy CLI: tài khoản dán bằng credential khác sẽ không có số. */
+export type AntigravityAccountQuota = {
+  label: string;
+  email?: string;
+  isActive: boolean;
+  windows: QuotaWindow[];
+  unavailableReason?: string;
+  fetchedAt?: number;
+};
+
 export type ProviderStatus = {
   id: string;
   displayName: string;
@@ -148,6 +161,70 @@ export function hasRenderableProviderContent(status: ProviderStatus): boolean {
 }
 
 /** Design window row: LABEL · % / bar / used · reset. */
+/** Mỗi tài khoản một khối: tên + mọi cửa sổ quota của nó. Chọn cửa sổ theo ĐỘ
+ * DÀI chứ không theo nhãn, giống bản macOS — cùng một budget 18 000 giây được
+ * gọi là "Gemini 5-hour" hay "Rolling" tuỳ nguồn. */
+/** Nạp khối tất-cả-tài-khoản vào `host`. Lỗi phải HIỆN RA kèm nút thử lại:
+ * nuốt lỗi để lại một vùng trống không phân biệt được với trường hợp chỉ có
+ * một tài khoản, và không cho người dùng đường phục hồi nào. */
+function loadAntigravityAllAccounts(host: HTMLElement): void {
+  host.replaceChildren();
+  void invoke<AntigravityAccountQuota[]>("antigravity_account_quotas")
+    .then((rows) => {
+      if (rows.length <= 1) return; // một tài khoản thì khối trên đã nói đủ
+      host.append(antigravityAllAccountsBlock(rows));
+    })
+    .catch((err) => {
+      const failed = el("div", "aag-error");
+      failed.append(el("span", "aag-error-text", `${t("loadError")}: ${err}`));
+      const retry = el("button", "sw-pill-btn", t("retry")) as HTMLButtonElement;
+      retry.type = "button";
+      retry.addEventListener("click", () => loadAntigravityAllAccounts(host));
+      failed.append(retry);
+      host.append(failed);
+    });
+}
+
+function antigravityAllAccountsBlock(rows: AntigravityAccountQuota[]): HTMLElement {
+  const block = el("div", "aag-block");
+  const head = el("div", "aag-head");
+  head.append(el("span", "aag-title", t("antigravityAllAccounts").toUpperCase()));
+  head.append(el("span", "aag-count", String(rows.length)));
+  block.append(head);
+
+  // Chế độ "Ẩn thông tin cá nhân" phải áp cho CẢ đường render này. Header
+  // (providerHeaderCard) đã tôn trọng nó; khối mới bỏ qua thì bật chế độ ẩn
+  // vẫn lộ nguyên danh tính từng tài khoản.
+  const hide = isHidePersonalInfo();
+  rows.forEach((row, index) => {
+    const group = el("div", "aag-account");
+    const name = el("div", "aag-name");
+    const identity = hide
+      ? t("antigravityAccountMasked", { n: index + 1 })
+      : (row.email ?? row.label);
+    name.append(el("span", "aag-label", identity));
+    if (row.isActive) name.append(el("span", "aag-active-dot", ""));
+    if (row.unavailableReason) {
+      name.append(el("span", "aag-reason", row.unavailableReason));
+    }
+    group.append(name);
+
+    for (const win of row.windows) {
+      const line = el("div", "aag-row");
+      line.append(el("span", "aag-win", win.label.toUpperCase()));
+      const track = el("div", "aag-track");
+      const fill = el("div", `aag-fill ${quotaTone(win.remainingPct)}`);
+      fill.style.width = `${Math.max(0, Math.min(100, win.remainingPct))}%`;
+      track.append(fill);
+      line.append(track);
+      line.append(el("span", `aag-pct ${quotaTone(win.remainingPct)}`, `${win.remainingPct}%`));
+      group.append(line);
+    }
+    block.append(group);
+  });
+  return block;
+}
+
 function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
   const row = el("div", "window-row");
   const head = el("div", "window-head");
@@ -493,6 +570,17 @@ function providerBodyCard(
 ): HTMLElement {
   const card = el("section", "card provider-body-card");
 
+  // Quota của các tài khoản Antigravity KHÁC không phụ thuộc vào tài khoản
+  // đang dùng, nên khối này phải hiện cả khi tài khoản active lỗi hoặc không
+  // có cửa sổ nào — hai nhánh return sớm bên dưới. Ngang với bản macOS, nơi
+  // Antigravity có nhánh riêng để card sống sót qua lỗi.
+  const appendAllAccounts = () => {
+    if (status.id !== "antigravity") return;
+    const allAccounts = el("div", "antigravity-all-accounts");
+    card.append(allAccounts);
+    loadAntigravityAllAccounts(allAccounts);
+  };
+
   if (status.pending) {
     card.append(loadingSkeleton());
     return card;
@@ -530,6 +618,7 @@ function providerBodyCard(
         actions.append(fix);
       })
       .catch(() => {});
+    appendAllAccounts();
     return card;
   }
   if (staleWarning) card.append(staleQuotaBanner(staleWarning, onRetry));
@@ -542,6 +631,7 @@ function providerBodyCard(
       balanceOnly.length > 0
         ? el("div", "provider-extras", balanceOnly.join(" · "))
         : el("div", "footnote", t("noQuota")));
+    appendAllAccounts();
     return card;
   }
 
@@ -549,6 +639,9 @@ function providerBodyCard(
     for (const win of status.windows.slice(0, 4)) {
       card.append(windowRow(win, status.lastUpdated));
     }
+    // Khối tất-cả-tài-khoản nạp sau: lệnh có thể phải gọi mạng cho tài khoản
+    // quá hạn, không được chặn phần quota của tài khoản đang dùng.
+    appendAllAccounts();
     return card;
   }
 

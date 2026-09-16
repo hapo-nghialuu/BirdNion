@@ -123,7 +123,7 @@ function dayPanel(payload: Extract<PanelPayload, { kind: "day" }>): HTMLElement 
     label: DAY_AGENT_LABELS[id],
     ...combinedDaySourceUsage(payload.day, id),
   })).filter((agent) => agent.usd > 0 || agent.tokens > 0)
-    .sort((a, b) => b.usd - a.usd);
+    .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
 
   if (agents.length > 0) {
     wrap.append(el("div", "panel-section-title", t("costByAgent").toUpperCase()));
@@ -140,7 +140,7 @@ function dayPanel(payload: Extract<PanelPayload, { kind: "day" }>): HTMLElement 
 
   const models = payload.day.models
     .filter((model) => !isKiroSyntheticAggregate(model))
-    .sort((a, b) => b.usd - a.usd);
+    .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
   if (models.length > 0) {
     wrap.append(el("div", "panel-section-title",
       `${t("costByModel").toUpperCase()} (${models.length})`));

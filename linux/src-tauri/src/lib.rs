@@ -1300,6 +1300,14 @@ fn antigravity_account_add(
     providers::antigravity::account_add(&credential_json, label.as_deref(), email.as_deref())
 }
 
+/// Quota của mọi tài khoản Antigravity đã lưu — nguồn cho khối "tất cả tài
+/// khoản" trong popover. Gọi mạng cho tài khoản quá hạn nên là `async`.
+#[tauri::command]
+async fn antigravity_account_quotas() -> Result<Vec<providers::antigravity::AccountQuotaRow>, String>
+{
+    Ok(providers::antigravity::account_quota_rows().await)
+}
+
 #[tauri::command]
 fn antigravity_account_switch(
     label: String,
@@ -2315,6 +2323,7 @@ pub fn run() {
             codex_account_remove,
             antigravity_accounts_list,
             antigravity_account_add,
+            antigravity_account_quotas,
             antigravity_account_switch,
             antigravity_account_remove,
             freemodel_accounts_list,
