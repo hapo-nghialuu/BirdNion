@@ -6059,3 +6059,91 @@ body.settings-body-root {
   font-size: 9px;
   color: var(--text3);
 }
+
+/* Khối "tất cả tài khoản" Antigravity — port của AntigravityAllAccountsQuotaCard
+   bên macOS. Mỗi cửa sổ một dòng: nhãn · thanh · phần trăm, cột cố định để các
+   dòng thẳng hàng. Hairline ngăn giữa các tài khoản vì chỉ riêng tên thì không
+   đủ tách bạch khi mỗi tài khoản có bốn dòng trông giống hệt nhau. */
+.aag-block { margin-top: 10px; }
+
+.aag-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.aag-title { font-size: 10px; font-weight: 500; letter-spacing: 0.6px; color: var(--muted); }
+.aag-count { font-size: 10px; font-weight: 500; color: var(--tertiary); }
+
+.aag-account { padding: 8px 0 4px; }
+.aag-account + .aag-account { border-top: 1px solid var(--hairline); }
+
+.aag-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.aag-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aag-active-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+  flex: none;
+}
+
+.aag-reason { font-size: 10px; color: var(--tertiary); margin-left: auto; }
+
+.aag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.aag-win {
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  color: var(--tertiary);
+  width: 118px;
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aag-track {
+  height: 4px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.aag-fill { height: 100%; border-radius: 2px; }
+.aag-fill.ok { background: var(--success); }
+.aag-fill.warning { background: var(--warning-fill); }
+.aag-fill.critical { background: var(--critical); }
+
+.aag-pct {
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  width: 34px;
+  flex: none;
+  text-align: right;
+}
+.aag-pct.ok { color: var(--success); }
+.aag-pct.warning { color: var(--warning); }
+.aag-pct.critical { color: var(--critical); }

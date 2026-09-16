@@ -31,6 +31,19 @@ export type QuotaWindow = {
   isInactive?: boolean;
 };
 
+/** Một dòng trong khối "tất cả tài khoản" Antigravity — port của
+ * `AntigravityAllAccountsQuotaCard` bên macOS. `unavailableReason` mang lời
+ * giải thích thay vì để dòng trống, vì endpoint quota chỉ nhận token mint bằng
+ * client agy CLI: tài khoản dán bằng credential khác sẽ không có số. */
+export type AntigravityAccountQuota = {
+  label: string;
+  email?: string;
+  isActive: boolean;
+  windows: QuotaWindow[];
+  unavailableReason?: string;
+  fetchedAt?: number;
+};
+
 export type ProviderStatus = {
   id: string;
   displayName: string;
@@ -148,6 +161,42 @@ export function hasRenderableProviderContent(status: ProviderStatus): boolean {
 }
 
 /** Design window row: LABEL · % / bar / used · reset. */
+/** Mỗi tài khoản một khối: tên + mọi cửa sổ quota của nó. Chọn cửa sổ theo ĐỘ
+ * DÀI chứ không theo nhãn, giống bản macOS — cùng một budget 18 000 giây được
+ * gọi là "Gemini 5-hour" hay "Rolling" tuỳ nguồn. */
+function antigravityAllAccountsBlock(rows: AntigravityAccountQuota[]): HTMLElement {
+  const block = el("div", "aag-block");
+  const head = el("div", "aag-head");
+  head.append(el("span", "aag-title", t("antigravityAllAccounts").toUpperCase()));
+  head.append(el("span", "aag-count", String(rows.length)));
+  block.append(head);
+
+  for (const row of rows) {
+    const group = el("div", "aag-account");
+    const name = el("div", "aag-name");
+    name.append(el("span", "aag-label", row.email ?? row.label));
+    if (row.isActive) name.append(el("span", "aag-active-dot", ""));
+    if (row.unavailableReason) {
+      name.append(el("span", "aag-reason", row.unavailableReason));
+    }
+    group.append(name);
+
+    for (const win of row.windows) {
+      const line = el("div", "aag-row");
+      line.append(el("span", "aag-win", win.label.toUpperCase()));
+      const track = el("div", "aag-track");
+      const fill = el("div", `aag-fill ${quotaTone(win.remainingPct)}`);
+      fill.style.width = `${Math.max(0, Math.min(100, win.remainingPct))}%`;
+      track.append(fill);
+      line.append(track);
+      line.append(el("span", `aag-pct ${quotaTone(win.remainingPct)}`, `${win.remainingPct}%`));
+      group.append(line);
+    }
+    block.append(group);
+  }
+  return block;
+}
+
 function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
   const row = el("div", "window-row");
   const head = el("div", "window-head");
@@ -549,6 +598,16 @@ function providerBodyCard(
     for (const win of status.windows.slice(0, 4)) {
       card.append(windowRow(win, status.lastUpdated));
     }
+    // Khối tất-cả-tài-khoản nạp sau: lệnh có thể phải gọi mạng cho tài khoản
+    // quá hạn, không được chặn phần quota của tài khoản đang dùng.
+    const allAccounts = el("div", "antigravity-all-accounts");
+    card.append(allAccounts);
+    void invoke<AntigravityAccountQuota[]>("antigravity_account_quotas")
+      .then((rows) => {
+        if (rows.length <= 1) return; // một tài khoản thì khối trên đã nói đủ
+        allAccounts.append(antigravityAllAccountsBlock(rows));
+      })
+      .catch(() => {});
     return card;
   }
 

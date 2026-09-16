@@ -76,6 +76,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     en: "Real billed credits from Kiro CLI logs; tokens from legacy storage are estimated.",
   },
   noQuota: { vi: "Không có dữ liệu quota.", en: "No quota data." },
+  antigravityAllAccounts: { vi: "Tất cả tài khoản", en: "All accounts" },
   creditsHistoryCount: { vi: "{n} giao dịch credit", en: "{n} credit events" },
   providerResetCredits: { vi: "Reset khả dụng", en: "Resets available" },
   providerResetBadge: { vi: "{n} lượt đặt lại", en: "{n} resets" },

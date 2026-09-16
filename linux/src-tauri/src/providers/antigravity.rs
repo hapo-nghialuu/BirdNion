@@ -1109,6 +1109,84 @@ pub struct OAuthAccountsState {
     pub active_label: Option<String>,
 }
 
+/// Quota đã đọc được của MỘT tài khoản, lưu trên đĩa để popover vẽ ngay mà
+/// không phải chờ gọi mạng cho từng tài khoản.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuotaSnapshot {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub windows: Vec<QuotaWindow>,
+    /// epoch giây của lần đọc thành công gần nhất.
+    pub fetched_at: i64,
+}
+
+/// Một dòng trong khối "tất cả tài khoản": có quota, hoặc có lý do vì sao chưa.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuotaRow {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub is_active: bool,
+    pub windows: Vec<QuotaWindow>,
+    /// nil khi đọc được; ngược lại là lời giải thích hiển thị cho người dùng.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<i64>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct AccountQuotaStore {
+    #[serde(default)]
+    snapshots: Vec<AccountQuotaSnapshot>,
+}
+
+fn account_quota_store_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::PathBuf::from(home).join(".config/birdnion/antigravity-account-snapshots.json")
+}
+
+fn load_account_quota_store(path: &std::path::Path) -> AccountQuotaStore {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Ghi đè bản ghi của một tài khoản. Best-effort: hỏng đĩa chỉ làm mất tiện
+/// nghi hiển thị, không phải nguồn sự thật.
+fn save_account_quota_snapshot(path: &std::path::Path, snapshot: AccountQuotaSnapshot) {
+    let mut store = load_account_quota_store(path);
+    store.snapshots.retain(|s| s.label != snapshot.label);
+    store.snapshots.push(snapshot);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(raw) = serde_json::to_string_pretty(&store) {
+        let _ = std::fs::write(path, raw);
+    }
+}
+
+/// Bao lâu thì một snapshot được coi là cũ và cần đọc lại.
+const ACCOUNT_QUOTA_MAX_AGE_SECS: i64 = 15 * 60;
+
+/// Thuần: tài khoản nào tới hạn đọc lại. Tài khoản chưa từng đọc luôn tới hạn.
+/// Tách riêng để test được mà không chạm mạng hay đĩa.
+pub fn stale_account_labels(
+    accounts: &[(String, Option<i64>)],
+    now: i64,
+    max_age: i64,
+) -> Vec<String> {
+    accounts
+        .iter()
+        .filter(|(_, fetched_at)| fetched_at.is_none_or(|at| now - at >= max_age))
+        .map(|(label, _)| label.clone())
+        .collect()
+}
+
 fn oauth_store_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     std::path::PathBuf::from(home).join(".config/birdnion/antigravity-oauth.json")
@@ -1216,6 +1294,89 @@ fn apply_imported_credentials(
         store.active_label = Some(selected_label);
     }
     Ok(())
+}
+
+/// Quota của MỌI tài khoản đã lưu, cho khối "tất cả tài khoản" trong popover.
+///
+/// Đọc snapshot trên đĩa trước rồi mới gọi mạng cho những tài khoản quá hạn,
+/// nên UI vẽ được ngay thay vì chờ N lời gọi mạng nối tiếp.
+///
+/// Giới hạn cần biết: endpoint quota chỉ nhận token mint bằng client agy CLI
+/// (có scope `aicode`). Token client cloud-platform trả 403, nên tài khoản nào
+/// được dán bằng credential loại đó sẽ hiện lý do thay vì số — chứ không im
+/// lặng thành 0.
+pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
+    let Some(store) = load_oauth_store() else {
+        return Vec::new();
+    };
+    let path = account_quota_store_path();
+    let cached = load_account_quota_store(&path);
+    let now = chrono::Utc::now().timestamp();
+
+    let ages: Vec<(String, Option<i64>)> = store
+        .accounts
+        .iter()
+        .map(|account| {
+            let at = cached
+                .snapshots
+                .iter()
+                .find(|s| s.label == account.label)
+                .map(|s| s.fetched_at);
+            (account.label.clone(), at)
+        })
+        .collect();
+    let stale = stale_account_labels(&ages, now, ACCOUNT_QUOTA_MAX_AGE_SECS);
+
+    let mut failures: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if !stale.is_empty() {
+        if let Ok(client) = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+        {
+            for account in store.accounts.iter().filter(|a| stale.contains(&a.label)) {
+                match cloud_quota_for_refresh_token(&client, &account.refresh_token).await {
+                    Ok(reading) => save_account_quota_snapshot(
+                        &path,
+                        AccountQuotaSnapshot {
+                            label: account.label.clone(),
+                            email: Some(reading.email),
+                            windows: reading.windows,
+                            fetched_at: now,
+                        },
+                    ),
+                    Err(error) => {
+                        failures.insert(account.label.clone(), error);
+                    }
+                }
+            }
+        }
+    }
+
+    let fresh = load_account_quota_store(&path);
+    store
+        .accounts
+        .iter()
+        .map(|account| {
+            let snapshot = fresh.snapshots.iter().find(|s| s.label == account.label);
+            AccountQuotaRow {
+                label: account.label.clone(),
+                email: snapshot
+                    .and_then(|s| s.email.clone())
+                    .or_else(|| account.email.clone()),
+                is_active: store.active_label.as_deref() == Some(account.label.as_str()),
+                windows: snapshot.map(|s| s.windows.clone()).unwrap_or_default(),
+                unavailable_reason: match snapshot {
+                    Some(_) => None,
+                    None => Some(
+                        failures
+                            .remove(&account.label)
+                            .unwrap_or_else(|| "Chưa có dữ liệu".to_string()),
+                    ),
+                },
+                fetched_at: snapshot.map(|s| s.fetched_at),
+            }
+        })
+        .collect()
 }
 
 pub fn account_add(
@@ -1359,43 +1520,52 @@ async fn fetch_via_agy_cloud_quota(cfg: &config::Provider, name: &str) -> CloudQ
         Ok(client) => client,
         Err(error) => return cloud_failure(cfg, name, error),
     };
-    let secret = AGY_CLI_CLIENT_SECRET_PARTS.concat();
-    let access_token =
-        match refresh_access_token(&client, &refresh_token, AGY_CLI_CLIENT_ID, &secret).await {
-            Ok(token) => token,
-            Err(error) => return cloud_failure(cfg, name, error),
-        };
-    let email = match cloud_identity_email(&client, &access_token).await {
-        Ok(email) => email,
+    let reading = match cloud_quota_for_refresh_token(&client, &refresh_token).await {
+        Ok(reading) => reading,
         Err(error) => return cloud_failure(cfg, name, error),
     };
     if let AgyCloudIdentityExpectation::Exact(expected) = &expectation {
-        if let Some(error) = account_mismatch_error(Some(expected), Some(&email)) {
+        if let Some(error) = account_mismatch_error(Some(expected), Some(&reading.email)) {
             return CloudQuotaOutcome::Status(ProviderStatus::failure(&cfg.id, name, error));
         }
     }
-    if let Err(error) = cloud_post(
-        &client,
+    CloudQuotaOutcome::Status(build_status(cfg, name, reading.windows, Some(reading.email)))
+}
+
+/// Quota + danh tính đọc được từ MỘT refresh token cụ thể.
+pub struct CloudQuotaReading {
+    pub email: String,
+    pub windows: Vec<QuotaWindow>,
+}
+
+/// Lõi dùng chung của đường cloud, tách ra khỏi `fetch_via_agy_cloud_quota` để
+/// gọi được cho refresh token BẤT KỲ — không chỉ token toàn cục trong
+/// `~/.gemini`. Đây là thứ cho phép đọc quota của từng tài khoản đã lưu.
+///
+/// `loadCodeAssist` PHẢI chạy trước lời gọi quota: bỏ qua thì chính token đó
+/// trả 429 RESOURCE_EXHAUSTED.
+pub async fn cloud_quota_for_refresh_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<CloudQuotaReading, String> {
+    let secret = AGY_CLI_CLIENT_SECRET_PARTS.concat();
+    let access_token =
+        refresh_access_token(client, refresh_token, AGY_CLI_CLIENT_ID, &secret).await?;
+    let email = cloud_identity_email(client, &access_token).await?;
+    cloud_post(
+        client,
         "loadCodeAssist",
         LOAD_CODE_ASSIST_BODY,
         &access_token,
     )
-    .await
-    {
-        return cloud_failure(cfg, name, error);
-    }
-    let summary = match cloud_post(&client, "retrieveUserQuotaSummary", "{}", &access_token).await {
-        Ok(summary) => summary,
-        Err(error) => return cloud_failure(cfg, name, error),
-    };
-    let Some(groups) = parse_quota_summary(&summary) else {
-        return cloud_failure(cfg, name, "quota response không hợp lệ");
-    };
+    .await?;
+    let summary = cloud_post(client, "retrieveUserQuotaSummary", "{}", &access_token).await?;
+    let groups = parse_quota_summary(&summary).ok_or("quota response không hợp lệ")?;
     let windows = map_summary_windows(&groups);
     if windows.is_empty() {
-        return cloud_failure(cfg, name, "quota response không có cửa sổ hợp lệ");
+        return Err("quota response không có cửa sổ hợp lệ".to_string());
     }
-    CloudQuotaOutcome::Status(build_status(cfg, name, windows, Some(email)))
+    Ok(CloudQuotaReading { email, windows })
 }
 
 fn agy_cloud_identity_expectation(
@@ -1630,6 +1800,29 @@ fn map_buckets_to_windows(buckets: &[Value]) -> Vec<QuotaWindow> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Tài khoản chưa từng đọc luôn tới hạn; đã đọc gần đây thì bỏ qua để
+    /// không gọi mạng N lần mỗi lần mở popover.
+    #[test]
+    fn stale_accounts_include_never_fetched_and_aged_out() {
+        let now = 1_000_000;
+        let max_age = 900;
+        let accounts = vec![
+            ("never".to_string(), None),
+            ("fresh".to_string(), Some(now - 10)),
+            ("aged".to_string(), Some(now - max_age)),
+            ("ancient".to_string(), Some(now - 10_000)),
+        ];
+        assert_eq!(
+            stale_account_labels(&accounts, now, max_age),
+            vec!["never", "aged", "ancient"]
+        );
+    }
+
+    #[test]
+    fn no_accounts_means_nothing_to_refresh() {
+        assert!(stale_account_labels(&[], 0, 900).is_empty());
+    }
 
     #[test]
     fn parses_language_server_process_with_csrf_token() {
