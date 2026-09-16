@@ -164,6 +164,27 @@ export function hasRenderableProviderContent(status: ProviderStatus): boolean {
 /** Mỗi tài khoản một khối: tên + mọi cửa sổ quota của nó. Chọn cửa sổ theo ĐỘ
  * DÀI chứ không theo nhãn, giống bản macOS — cùng một budget 18 000 giây được
  * gọi là "Gemini 5-hour" hay "Rolling" tuỳ nguồn. */
+/** Nạp khối tất-cả-tài-khoản vào `host`. Lỗi phải HIỆN RA kèm nút thử lại:
+ * nuốt lỗi để lại một vùng trống không phân biệt được với trường hợp chỉ có
+ * một tài khoản, và không cho người dùng đường phục hồi nào. */
+function loadAntigravityAllAccounts(host: HTMLElement): void {
+  host.replaceChildren();
+  void invoke<AntigravityAccountQuota[]>("antigravity_account_quotas")
+    .then((rows) => {
+      if (rows.length <= 1) return; // một tài khoản thì khối trên đã nói đủ
+      host.append(antigravityAllAccountsBlock(rows));
+    })
+    .catch((err) => {
+      const failed = el("div", "aag-error");
+      failed.append(el("span", "aag-error-text", `${t("loadError")}: ${err}`));
+      const retry = el("button", "sw-pill-btn", t("retry")) as HTMLButtonElement;
+      retry.type = "button";
+      retry.addEventListener("click", () => loadAntigravityAllAccounts(host));
+      failed.append(retry);
+      host.append(failed);
+    });
+}
+
 function antigravityAllAccountsBlock(rows: AntigravityAccountQuota[]): HTMLElement {
   const block = el("div", "aag-block");
   const head = el("div", "aag-head");
@@ -171,10 +192,17 @@ function antigravityAllAccountsBlock(rows: AntigravityAccountQuota[]): HTMLEleme
   head.append(el("span", "aag-count", String(rows.length)));
   block.append(head);
 
-  for (const row of rows) {
+  // Chế độ "Ẩn thông tin cá nhân" phải áp cho CẢ đường render này. Header
+  // (providerHeaderCard) đã tôn trọng nó; khối mới bỏ qua thì bật chế độ ẩn
+  // vẫn lộ nguyên danh tính từng tài khoản.
+  const hide = isHidePersonalInfo();
+  rows.forEach((row, index) => {
     const group = el("div", "aag-account");
     const name = el("div", "aag-name");
-    name.append(el("span", "aag-label", row.email ?? row.label));
+    const identity = hide
+      ? t("antigravityAccountMasked", { n: index + 1 })
+      : (row.email ?? row.label);
+    name.append(el("span", "aag-label", identity));
     if (row.isActive) name.append(el("span", "aag-active-dot", ""));
     if (row.unavailableReason) {
       name.append(el("span", "aag-reason", row.unavailableReason));
@@ -193,7 +221,7 @@ function antigravityAllAccountsBlock(rows: AntigravityAccountQuota[]): HTMLEleme
       group.append(line);
     }
     block.append(group);
-  }
+  });
   return block;
 }
 
@@ -602,12 +630,7 @@ function providerBodyCard(
     // quá hạn, không được chặn phần quota của tài khoản đang dùng.
     const allAccounts = el("div", "antigravity-all-accounts");
     card.append(allAccounts);
-    void invoke<AntigravityAccountQuota[]>("antigravity_account_quotas")
-      .then((rows) => {
-        if (rows.length <= 1) return; // một tài khoản thì khối trên đã nói đủ
-        allAccounts.append(antigravityAllAccountsBlock(rows));
-      })
-      .catch(() => {});
+    loadAntigravityAllAccounts(allAccounts);
     return card;
   }
 

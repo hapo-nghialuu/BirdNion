@@ -77,6 +77,8 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   },
   noQuota: { vi: "Không có dữ liệu quota.", en: "No quota data." },
   antigravityAllAccounts: { vi: "Tất cả tài khoản", en: "All accounts" },
+  antigravityAccountMasked: { vi: "Tài khoản {n}", en: "Account {n}" },
+  retry: { vi: "Thử lại", en: "Retry" },
   creditsHistoryCount: { vi: "{n} giao dịch credit", en: "{n} credit events" },
   providerResetCredits: { vi: "Reset khả dụng", en: "Resets available" },
   providerResetBadge: { vi: "{n} lượt đặt lại", en: "{n} resets" },

@@ -1120,6 +1120,19 @@ pub struct AccountQuotaSnapshot {
     pub windows: Vec<QuotaWindow>,
     /// epoch giây của lần đọc thành công gần nhất.
     pub fetched_at: i64,
+    /// Vân tay của refresh token đã tạo ra bản ghi này. `label` KHÔNG đủ làm
+    /// danh tính: xoá tài khoản rồi thêm lại bằng credential khác dưới cùng
+    /// nhãn sẽ khiến bản ghi cũ được coi là mới, và UI hiện email + quota của
+    /// credential trước. Vân tay lệch ⇒ coi như chưa có dữ liệu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_fingerprint: Option<String>,
+}
+
+/// Băm refresh token để so sánh danh tính mà không lưu lại chính token đó.
+fn credential_fingerprint(refresh_token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(refresh_token.as_bytes());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 /// Một dòng trong khối "tất cả tài khoản": có quota, hoặc có lý do vì sao chưa.
@@ -1156,22 +1169,63 @@ fn load_account_quota_store(path: &std::path::Path) -> AccountQuotaStore {
         .unwrap_or_default()
 }
 
-/// Ghi đè bản ghi của một tài khoản. Best-effort: hỏng đĩa chỉ làm mất tiện
-/// nghi hiển thị, không phải nguồn sự thật.
-fn save_account_quota_snapshot(path: &std::path::Path, snapshot: AccountQuotaSnapshot) {
-    let mut store = load_account_quota_store(path);
-    store.snapshots.retain(|s| s.label != snapshot.label);
-    store.snapshots.push(snapshot);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+static ACCOUNT_QUOTA_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Gộp nhiều bản ghi vào kho trong MỘT lần đọc-sửa-ghi, dưới khoá.
+///
+/// Ghi từng bản một bằng `std::fs::write` vừa để lại JSON cắt dở nếu tiến trình
+/// chết giữa chừng, vừa để hai lệnh chạy song song xoá kết quả của nhau. File
+/// chứa email và quota nên cũng phải mang mode riêng tư — dùng đúng helper mà
+/// `save_oauth_store_at` ngay bên cạnh vẫn dùng.
+fn merge_account_quota_snapshots(path: &std::path::Path, incoming: Vec<AccountQuotaSnapshot>) {
+    if incoming.is_empty() {
+        return;
     }
-    if let Ok(raw) = serde_json::to_string_pretty(&store) {
-        let _ = std::fs::write(path, raw);
+    let _guard = ACCOUNT_QUOTA_STORE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = load_account_quota_store(path);
+    for snapshot in incoming {
+        store.snapshots.retain(|s| s.label != snapshot.label);
+        store.snapshots.push(snapshot);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&store) {
+        let _ = crate::platform::atomic_file::write_private_json_atomic::<AccountQuotaStore>(
+            path,
+            json.as_bytes(),
+        );
+    }
+}
+
+/// Bỏ bản ghi của một tài khoản — gọi khi tài khoản bị xoá để nhãn được dùng
+/// lại không thừa hưởng quota cũ.
+pub fn forget_account_quota_snapshot(label: &str) {
+    let path = account_quota_store_path();
+    let _guard = ACCOUNT_QUOTA_STORE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = load_account_quota_store(&path);
+    let before = store.snapshots.len();
+    store.snapshots.retain(|s| s.label != label);
+    if store.snapshots.len() == before {
+        return;
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&store) {
+        let _ = crate::platform::atomic_file::write_private_json_atomic::<AccountQuotaStore>(
+            &path,
+            json.as_bytes(),
+        );
     }
 }
 
 /// Bao lâu thì một snapshot được coi là cũ và cần đọc lại.
 const ACCOUNT_QUOTA_MAX_AGE_SECS: i64 = 15 * 60;
+
+/// Hạn cho TOÀN BỘ lần đọc của một tài khoản. Timeout của reqwest chỉ áp cho
+/// từng request, mà một lần đọc gồm bốn request nối tiếp — không có trần này
+/// thì một tài khoản chậm giữ popover tới hơn một phút.
+const ACCOUNT_QUOTA_READ_BUDGET: Duration = Duration::from_secs(30);
+const ACCOUNT_QUOTA_TIMEOUT_ERROR: &str = "Hết hạn chờ sau 30s";
 
 /// Thuần: tài khoản nào tới hạn đọc lại. Tài khoản chưa từng đọc luôn tới hạn.
 /// Tách riêng để test được mà không chạm mạng hay đĩa.
@@ -1313,41 +1367,77 @@ pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
     let cached = load_account_quota_store(&path);
     let now = chrono::Utc::now().timestamp();
 
+    // Vân tay lệch ⇒ coi như chưa có dữ liệu: bản ghi thuộc về credential khác.
+    let snapshot_for = |account: &OAuthAccount| -> Option<&AccountQuotaSnapshot> {
+        let fingerprint = credential_fingerprint(&account.refresh_token);
+        cached.snapshots.iter().find(|s| {
+            s.label == account.label
+                && s.credential_fingerprint.as_deref() == Some(fingerprint.as_str())
+        })
+    };
+
     let ages: Vec<(String, Option<i64>)> = store
         .accounts
         .iter()
-        .map(|account| {
-            let at = cached
-                .snapshots
-                .iter()
-                .find(|s| s.label == account.label)
-                .map(|s| s.fetched_at);
-            (account.label.clone(), at)
-        })
+        .map(|account| (account.label.clone(), snapshot_for(account).map(|s| s.fetched_at)))
         .collect();
     let stale = stale_account_labels(&ages, now, ACCOUNT_QUOTA_MAX_AGE_SECS);
 
     let mut failures: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut fresh_snapshots: Vec<AccountQuotaSnapshot> = Vec::new();
+
     if !stale.is_empty() {
-        if let Ok(client) = reqwest::Client::builder()
+        match reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
         {
-            for account in store.accounts.iter().filter(|a| stale.contains(&a.label)) {
-                match cloud_quota_for_refresh_token(&client, &account.refresh_token).await {
-                    Ok(reading) => save_account_quota_snapshot(
-                        &path,
-                        AccountQuotaSnapshot {
-                            label: account.label.clone(),
+            Err(error) => {
+                for label in &stale {
+                    failures.insert(label.clone(), format!("không tạo được HTTP client: {error}"));
+                }
+            }
+            Ok(client) => {
+                // Song song, có trần: đọc một tài khoản là BỐN request nối tiếp
+                // (đổi token → userinfo → loadCodeAssist → quota). Chạy tuần tự
+                // qua các tài khoản thì thời gian cộng dồn, mà lệnh này chạy
+                // ngay khi mở popover. Mỗi tài khoản cũng có hạn tổng riêng —
+                // timeout của client chỉ áp cho TỪNG request.
+                let reads = store
+                    .accounts
+                    .iter()
+                    .filter(|a| stale.contains(&a.label))
+                    .map(|account| {
+                        let client = client.clone();
+                        let label = account.label.clone();
+                        let token = account.refresh_token.clone();
+                        async move {
+                            let outcome = tokio::time::timeout(
+                                ACCOUNT_QUOTA_READ_BUDGET,
+                                cloud_quota_for_refresh_token(&client, &token),
+                            )
+                            .await;
+                            let result = match outcome {
+                                Err(_) => Err(ACCOUNT_QUOTA_TIMEOUT_ERROR.to_string()),
+                                Ok(inner) => inner,
+                            };
+                            (label, token, result)
+                        }
+                    });
+                for (label, token, result) in futures::future::join_all(reads).await {
+                    match result {
+                        Ok(reading) => fresh_snapshots.push(AccountQuotaSnapshot {
+                            label,
                             email: Some(reading.email),
                             windows: reading.windows,
                             fetched_at: now,
-                        },
-                    ),
-                    Err(error) => {
-                        failures.insert(account.label.clone(), error);
+                            credential_fingerprint: Some(credential_fingerprint(&token)),
+                        }),
+                        Err(error) => {
+                            failures.insert(label, error);
+                        }
                     }
                 }
+                merge_account_quota_snapshots(&path, fresh_snapshots);
             }
         }
     }
@@ -1357,7 +1447,14 @@ pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
         .accounts
         .iter()
         .map(|account| {
-            let snapshot = fresh.snapshots.iter().find(|s| s.label == account.label);
+            let fingerprint = credential_fingerprint(&account.refresh_token);
+            let snapshot = fresh.snapshots.iter().find(|s| {
+                s.label == account.label
+                    && s.credential_fingerprint.as_deref() == Some(fingerprint.as_str())
+            });
+            // Lỗi refresh vẫn phải hiện KỂ CẢ khi có bản ghi cũ để vẽ: nếu nuốt
+            // đi, UI trình bày số quá hạn y như số vừa đọc.
+            let failure = failures.remove(&account.label);
             AccountQuotaRow {
                 label: account.label.clone(),
                 email: snapshot
@@ -1365,13 +1462,10 @@ pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
                     .or_else(|| account.email.clone()),
                 is_active: store.active_label.as_deref() == Some(account.label.as_str()),
                 windows: snapshot.map(|s| s.windows.clone()).unwrap_or_default(),
-                unavailable_reason: match snapshot {
-                    Some(_) => None,
-                    None => Some(
-                        failures
-                            .remove(&account.label)
-                            .unwrap_or_else(|| "Chưa có dữ liệu".to_string()),
-                    ),
+                unavailable_reason: match (snapshot, failure) {
+                    (_, Some(error)) => Some(error),
+                    (Some(_), None) => None,
+                    (None, None) => Some("Chưa có dữ liệu".to_string()),
                 },
                 fetched_at: snapshot.map(|s| s.fetched_at),
             }
@@ -1428,6 +1522,7 @@ fn remove_account_from_store(store: &mut OAuthStore, label: &str) {
 }
 
 pub fn account_remove(label: &str) -> Result<OAuthAccountsState, String> {
+    forget_account_quota_snapshot(label);
     let _guard = OAUTH_STORE_MUTATION_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1817,6 +1912,48 @@ mod tests {
             stale_account_labels(&accounts, now, max_age),
             vec!["never", "aged", "ancient"]
         );
+    }
+
+    /// Nhãn có thể bị dùng lại sau khi xoá rồi thêm credential khác. Vân tay
+    /// phải đổi theo token, nếu không bản ghi cũ sẽ được coi là của tài khoản mới.
+    #[test]
+    fn credential_fingerprint_tracks_the_token_not_the_label() {
+        let a = credential_fingerprint("1//refresh-token-a");
+        let b = credential_fingerprint("1//refresh-token-b");
+        assert_ne!(a, b);
+        assert_eq!(a, credential_fingerprint("1//refresh-token-a"));
+        // Không được là chính token — đây là thứ ghi xuống đĩa.
+        assert!(!a.contains("refresh-token-a"));
+        assert_eq!(a.len(), 16);
+    }
+
+    /// Gộp phải thay bản ghi cùng nhãn chứ không chồng thêm, và giữ nguyên các
+    /// tài khoản khác.
+    #[test]
+    fn merging_snapshots_replaces_by_label_and_keeps_others() {
+        let dir = std::env::temp_dir().join(format!("bn-aq-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("snapshots.json");
+        let _ = std::fs::remove_file(&path);
+
+        let snap = |label: &str, at: i64| AccountQuotaSnapshot {
+            label: label.to_string(),
+            email: None,
+            windows: Vec::new(),
+            fetched_at: at,
+            credential_fingerprint: Some("ff".to_string()),
+        };
+        merge_account_quota_snapshots(&path, vec![snap("a", 1), snap("b", 1)]);
+        merge_account_quota_snapshots(&path, vec![snap("a", 2)]);
+
+        let store = load_account_quota_store(&path);
+        assert_eq!(store.snapshots.len(), 2);
+        let a = store.snapshots.iter().find(|s| s.label == "a").unwrap();
+        assert_eq!(a.fetched_at, 2, "bản ghi cùng nhãn phải bị thay, không nhân đôi");
+        assert!(store.snapshots.iter().any(|s| s.label == "b"));
+
+        forget_account_quota_snapshot("a");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

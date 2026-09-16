@@ -6147,3 +6147,13 @@ body.settings-body-root {
 .aag-pct.ok { color: var(--success); }
 .aag-pct.warning { color: var(--warning); }
 .aag-pct.critical { color: var(--critical); }
+
+.aag-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 11px;
+}
+
+.aag-error-text { color: var(--critical); flex: 1; }
