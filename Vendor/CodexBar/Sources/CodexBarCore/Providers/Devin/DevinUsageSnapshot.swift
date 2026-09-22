@@ -35,25 +35,83 @@ public struct DevinQuotaWindow: Sendable, Equatable {
     }
 }
 
+/// One day of metered usage from `GET …/billing/usage/daily-usage`.
+/// `amount` is denominated in ACUs for ACU/quota plans.
+public struct DevinDailyUsage: Sendable, Equatable {
+    public let date: Date
+    public let amount: Double
+    public let cumulative: Double
+
+    public init(date: Date, amount: Double, cumulative: Double) {
+        self.date = date
+        self.amount = amount
+        self.cumulative = cumulative
+    }
+}
+
+/// Per-product usage totals ("sessions" / "reviews" / "automations" / …)
+/// from the same `daily-usage` payload.
+public struct DevinProductUsage: Sendable, Equatable {
+    public let view: String
+    public let total: Double
+    public let days: [DevinDailyUsage]
+
+    public init(view: String, total: Double, days: [DevinDailyUsage]) {
+        self.view = view
+        self.total = total
+        self.days = days
+    }
+}
+
+/// Billing-cycle daily usage series (merged `current` + `previous` cycles
+/// when the API says a previous cycle exists).
+public struct DevinUsageHistory: Sendable, Equatable {
+    public let days: [DevinDailyUsage]
+    public let products: [DevinProductUsage]
+    public let cycleStart: Date?
+    public let cycleEnd: Date?
+    public let total: Double
+
+    public init(
+        days: [DevinDailyUsage],
+        products: [DevinProductUsage],
+        cycleStart: Date?,
+        cycleEnd: Date?,
+        total: Double)
+    {
+        self.days = days
+        self.products = products
+        self.cycleStart = cycleStart
+        self.cycleEnd = cycleEnd
+        self.total = total
+    }
+}
+
 public struct DevinUsageSnapshot: Sendable, Equatable {
     public let daily: DevinQuotaWindow?
     public let weekly: DevinQuotaWindow?
     public let planName: String?
     public let organization: String?
     public let updatedAt: Date
+    /// Per-day metered usage for the current (and previous) billing cycle.
+    /// nil when the `billing/usage/daily-usage` probe failed or the plan
+    /// does not expose it — quota windows still render without it.
+    public let usageHistory: DevinUsageHistory?
 
     public init(
         daily: DevinQuotaWindow?,
         weekly: DevinQuotaWindow?,
         planName: String?,
         organization: String?,
-        updatedAt: Date)
+        updatedAt: Date,
+        usageHistory: DevinUsageHistory? = nil)
     {
         self.daily = daily
         self.weekly = weekly
         self.planName = planName
         self.organization = organization
         self.updatedAt = updatedAt
+        self.usageHistory = usageHistory
     }
 
     public func toUsageSnapshot() -> UsageSnapshot {
@@ -316,5 +374,105 @@ public enum DevinUsageParser {
         return cleaned.split(separator: "_").flatMap { $0.split(separator: "-") }.map { part in
             part.prefix(1).uppercased() + String(part.dropFirst())
         }.joined(separator: " ")
+    }
+
+    // MARK: - Daily usage (billing/usage/daily-usage)
+
+    /// Parses one `billing/usage/daily-usage?cycle=…&view=all` payload:
+    /// `{cycle_start, cycle_end, previous_cycle_available, total, days:
+    /// [{date, amount, cumulative}], products: [{view, total, days: […]}]}`.
+    /// Returns nil instead of throwing — the caller treats history as a
+    /// best-effort overlay on top of the quota windows.
+    public static func parseDailyUsage(_ data: Data) -> DevinUsageHistory? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else { return nil }
+        return self.dailyUsageHistory(from: dictionary)
+    }
+
+    static func dailyUsageHistory(from dictionary: [String: Any]) -> DevinUsageHistory? {
+        let days = self.usageDays(from: dictionary["days"])
+        guard !days.isEmpty else { return nil }
+        let products = (dictionary["products"] as? [[String: Any]] ?? []).compactMap { entry -> DevinProductUsage? in
+            guard let view = entry["view"] as? String, !view.isEmpty else { return nil }
+            return DevinProductUsage(
+                view: view,
+                total: self.double(entry["total"]) ?? 0,
+                days: self.usageDays(from: entry["days"]))
+        }
+        return DevinUsageHistory(
+            days: days,
+            products: products,
+            cycleStart: self.date(from: dictionary["cycle_start"]),
+            cycleEnd: self.date(from: dictionary["cycle_end"]),
+            total: self.double(dictionary["total"]) ?? days.reduce(0) { $0 + $1.amount })
+    }
+
+    /// `previous_cycle_available` is read by the fetcher to decide whether a
+    /// second `cycle=previous` request is worthwhile.
+    static func previousCycleAvailable(in dictionary: [String: Any]) -> Bool {
+        (dictionary["previous_cycle_available"] as? Bool) == true
+    }
+
+    static func previousCycleAvailable(in data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else { return false }
+        return self.previousCycleAvailable(in: dictionary)
+    }
+
+    /// Merge two cycle payloads (previous then current) into one series:
+    /// days deduplicated by date, product totals summed per view.
+    public static func mergeCycles(
+        previous: DevinUsageHistory?,
+        current: DevinUsageHistory
+    ) -> DevinUsageHistory {
+        guard let previous else { return current }
+        var daysByDate: [Date: DevinDailyUsage] = [:]
+        for day in previous.days + current.days {
+            daysByDate[day.date] = day
+        }
+        var productDays: [String: [Date: DevinDailyUsage]] = [:]
+        var productOrder: [String] = []
+        for product in previous.products + current.products {
+            if productDays[product.view] == nil { productOrder.append(product.view) }
+            var merged = productDays[product.view] ?? [:]
+            for day in product.days { merged[day.date] = day }
+            productDays[product.view] = merged
+        }
+        let products = productOrder.map { view in
+            let days = (productDays[view] ?? [:]).values.sorted { $0.date < $1.date }
+            return DevinProductUsage(
+                view: view,
+                total: days.reduce(0) { $0 + $1.amount },
+                days: days)
+        }
+        return DevinUsageHistory(
+            days: daysByDate.values.sorted { $0.date < $1.date },
+            products: products,
+            cycleStart: previous.cycleStart ?? current.cycleStart,
+            cycleEnd: current.cycleEnd ?? previous.cycleEnd,
+            total: previous.total + current.total)
+    }
+
+    private static func usageDays(from value: Any?) -> [DevinDailyUsage] {
+        guard let entries = value as? [[String: Any]] else { return [] }
+        return entries.compactMap { entry in
+            guard let raw = entry["date"] as? String,
+                  let date = self.usageDayDate(from: raw)
+            else { return nil }
+            return DevinDailyUsage(
+                date: date,
+                amount: self.double(entry["amount"]) ?? 0,
+                cumulative: self.double(entry["cumulative"]) ?? 0)
+        }
+    }
+
+    private static func usageDayDate(from raw: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: raw)
     }
 }

@@ -5523,6 +5523,83 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(Set(sessions.map(\.accessToken)).count, 1)
     }
 
+    /// `billing/usage/daily-usage?cycle=current&view=all` — shape observed
+    /// live on 2026-09-22: cycle bounds + per-day amount/cumulative rows +
+    /// per-product totals. Parser must keep days, products and the total.
+    func testDevinDailyUsageParser() {
+        let json = """
+        {
+          "cycle_start": "2026-09-22T03:27:08+00:00",
+          "cycle_end": "2026-10-22T03:27:08+00:00",
+          "previous_cycle_available": true,
+          "total": 12.5,
+          "days": [
+            {"date": "2026-09-21", "amount": 0.0, "cumulative": 0.0},
+            {"date": "2026-09-22", "amount": 4.5, "cumulative": 4.5},
+            {"date": "2026-09-23", "amount": 8.0, "cumulative": 12.5}
+          ],
+          "products": [
+            {"view": "sessions", "total": 10.0,
+             "days": [{"date": "2026-09-23", "amount": 8.0, "cumulative": 10.0}]},
+            {"view": "reviews", "total": 2.5, "days": []}
+          ]
+        }
+        """
+        let history = DevinUsageParser.parseDailyUsage(Data(json.utf8))
+        XCTAssertNotNil(history)
+        XCTAssertEqual(history?.days.count, 3)
+        XCTAssertEqual(history?.days[1].amount, 4.5)
+        XCTAssertEqual(history?.days[2].cumulative, 12.5)
+        XCTAssertEqual(history?.products.count, 2)
+        XCTAssertEqual(history?.products.first?.view, "sessions")
+        XCTAssertEqual(history?.products.first?.total, 10.0)
+        XCTAssertEqual(history?.total, 12.5)
+        XCTAssertNotNil(history?.cycleStart)
+        XCTAssertNotNil(history?.cycleEnd)
+        XCTAssertTrue(DevinUsageParser.previousCycleAvailable(in: Data(json.utf8)))
+    }
+
+    /// Garbage payload → nil (chart stays hidden), never a thrown error.
+    func testDevinDailyUsageParserRejectsBadPayload() {
+        XCTAssertNil(DevinUsageParser.parseDailyUsage(Data("{}".utf8)))
+        XCTAssertNil(DevinUsageParser.parseDailyUsage(Data("[]".utf8)))
+        XCTAssertNil(DevinUsageParser.parseDailyUsage(Data("not json".utf8)))
+    }
+
+    /// Previous + current cycle merge: days dedupe by date, product totals
+    /// sum per view, cycle bounds span both.
+    func testDevinDailyUsageMergeCycles() {
+        func day(_ iso: String, _ amount: Double) -> DevinDailyUsage {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = TimeZone(identifier: "UTC")
+            f.dateFormat = "yyyy-MM-dd"
+            return DevinDailyUsage(date: f.date(from: iso)!, amount: amount, cumulative: 0)
+        }
+        let previous = DevinUsageHistory(
+            days: [day("2026-08-23", 1), day("2026-08-24", 2)],
+            products: [DevinProductUsage(view: "sessions", total: 3, days: [day("2026-08-24", 2)])],
+            cycleStart: Date(timeIntervalSince1970: 100),
+            cycleEnd: Date(timeIntervalSince1970: 200),
+            total: 3)
+        let current = DevinUsageHistory(
+            days: [day("2026-09-22", 4)],
+            products: [DevinProductUsage(view: "sessions", total: 4, days: [day("2026-09-22", 4)]),
+                       DevinProductUsage(view: "reviews", total: 1, days: [])],
+            cycleStart: Date(timeIntervalSince1970: 300),
+            cycleEnd: Date(timeIntervalSince1970: 400),
+            total: 4)
+        let merged = DevinUsageParser.mergeCycles(previous: previous, current: current)
+        XCTAssertEqual(merged.days.count, 3)
+        XCTAssertEqual(merged.days.map(\.amount), [1, 2, 4])
+        XCTAssertEqual(merged.total, 7)
+        XCTAssertEqual(merged.cycleStart, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(merged.cycleEnd, Date(timeIntervalSince1970: 400))
+        let sessions = merged.products.first { $0.view == "sessions" }
+        XCTAssertEqual(sessions?.total, 6)
+        XCTAssertEqual(merged.products.count, 2)
+    }
+
     /// `readTextEntries` scans the whole profile LevelDB — unscoped. Without
     /// the origin guard, a foreign auth0 key (e.g. ChatGPT's auth0spajs entry
     /// in the same store) is mistaken for a Devin session: a token with no
@@ -5894,6 +5971,31 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(s.windows[1].windowSeconds, 7 * 24 * 3600)
         XCTAssertEqual(s.accountLabel, "org/acme")
         XCTAssertEqual(s.planName, "Core")
+    }
+
+    /// Snapshot kèm usageHistory → ProviderStatus.devinUsage cho chart card;
+    /// products total=0 bị lọc, còn lại sort giảm dần.
+    func testDevinSnapshotMapsUsageHistory() {
+        let day = DevinDailyUsage(date: Date(), amount: 2.5, cumulative: 2.5)
+        let history = DevinUsageHistory(
+            days: [day],
+            products: [
+                DevinProductUsage(view: "sessions", total: 2.5, days: [day]),
+                DevinProductUsage(view: "reviews", total: 0, days: []),
+            ],
+            cycleStart: nil,
+            cycleEnd: nil,
+            total: 2.5)
+        let snap = DevinUsageSnapshot(
+            daily: DevinQuotaWindow(usedPercent: 10),
+            weekly: nil, planName: nil, organization: nil,
+            updatedAt: Date(), usageHistory: history)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.devinUsage?.days.count, 1)
+        XCTAssertEqual(s.devinUsage?.days.first?.amount, 2.5)
+        XCTAssertEqual(s.devinUsage?.total, 2.5)
+        XCTAssertEqual(s.devinUsage?.products.map(\.view), ["sessions"])
     }
 
     /// Không có window nào → status lỗi thay vì popover trống.

@@ -100,7 +100,20 @@ final class DevinProvider: QuotaProvider {
             error: nil,
             accountLabel: accountLabel ?? snap.organization,
             planName: snap.planName,
-            sourceLabel: sourceLabel)
+            sourceLabel: sourceLabel,
+            devinUsage: Self.usageHistory(from: snap))
+    }
+
+    private static func usageHistory(from snap: DevinUsageSnapshot) -> DevinUsageHistorySnapshot? {
+        guard let history = snap.usageHistory, !history.days.isEmpty else { return nil }
+        return DevinUsageHistorySnapshot(
+            days: history.days.map { .init(date: $0.date, amount: $0.amount) },
+            products: history.products
+                .filter { $0.total > 0 }
+                .sorted { $0.total > $1.total }
+                .map { .init(view: $0.view, total: $0.total) },
+            total: history.total,
+            cycleEnd: history.cycleEnd)
     }
 
     /// Unit-test hook: map a snapshot without network I/O.

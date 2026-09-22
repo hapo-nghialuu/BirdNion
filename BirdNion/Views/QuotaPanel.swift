@@ -385,6 +385,11 @@ struct QuotaOverview: View {
                     daily: kiroBudgetCombined?.daily ?? [],
                     source: .kiro)
             }
+            // Devin: per-day ACU usage for the current (+previous) billing
+            // cycle, fetched alongside the quota payload — not a local scan.
+            if s.id == "devin", let usage = s.devinUsage, !usage.days.isEmpty {
+                DevinUsageChartCard(snapshot: usage)
+            }
             // Status page at the bottom of the provider stack
             // (flat row, same instrument language as credits/meta).
             ServiceStatusStrip(status: s)
@@ -4913,6 +4918,123 @@ struct ClaudeAdminUsageChartCard: View {
 
     private func formatTokens(_ n: Int) -> String {
         AllUsageFormat.tokens(n)
+    }
+}
+
+// MARK: - Devin usage chart
+
+/// Per-day ACU usage for the current (+previous) billing cycle, from
+/// `billing/usage/daily-usage`. Same visual language as the Claude/Codex
+/// cards, but amounts are ACUs — Devin does not report USD here — so the
+/// hero shows "N ACU" rather than a dollar figure.
+struct DevinUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let snapshot: DevinUsageHistorySnapshot
+
+    private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
+    /// The API fills the cycle's remaining days with zero rows — trim the
+    /// chart at today so future empty bars don't dominate.
+    private var visibleDays: [DevinUsageHistorySnapshot.Day] {
+        let today = Calendar.current.startOfDay(for: Date())
+        let cutoff = Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+        return snapshot.days.filter { $0.date < cutoff }
+    }
+    private var maxBarAmount: Double { max(visibleDays.map(\.amount).max() ?? 0, 1) }
+
+    var body: some View {
+        let days = visibleDays
+        let todayACU = days.last?.amount ?? 0
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(vi ? "SỬ DỤNG · CHU KỲ NÀY" : "USAGE · THIS CYCLE")
+                    .font(.plexMono(10, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .tracking(0.4)
+                Spacer(minLength: 8)
+                Text(Self.formatACU(snapshot.total))
+                    .font(.plexMono(16, weight: .bold))
+                    .foregroundStyle(VocabbyTheme.primary)
+            }
+            barChart(days: days).frame(height: 56)
+            HStack {
+                if let first = days.first {
+                    Text(dayLabel(first.date))
+                        .font(.plexMono(9))
+                        .foregroundStyle(VocabbyTheme.tertiary)
+                }
+                Spacer(minLength: 8)
+                Text("\(vi ? "HÔM NAY" : "TODAY") \(Self.formatACU(todayACU))")
+                    .font(.plexMono(9, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+            }
+            if let top = snapshot.products.first {
+                let others = snapshot.products.dropFirst().count
+                Text((vi ? "Nhiều nhất: " : "Top: ")
+                     + "\(Self.productLabel(top.view)) · \(Self.formatACU(top.total))"
+                     + (others > 0 ? (vi ? " · +\(others) nguồn" : " · +\(others) more") : ""))
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.secondary)
+            }
+            Text(vi
+                 ? "Từ API Devin · ACU mỗi ngày trong chu kỳ billing"
+                 : "From the Devin API · ACU per day in the billing cycle")
+                .font(.plexMono(9, weight: .medium))
+                .foregroundStyle(VocabbyTheme.tertiary)
+                .tracking(0.2)
+                .padding(.top, 2)
+        }
+        .popoverContentInset()
+        .padding(.vertical, 12)
+        .popoverHairlineTop(VocabbyTheme.hairline)
+    }
+
+    private func barChart(days: [DevinUsageHistorySnapshot.Day]) -> some View {
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(days) { day in
+                    let fraction = UsageChartScaling.fraction(
+                        value: day.amount, maximum: maxBarAmount)
+                    let barHeight = max(geo.size.height * fraction, day.amount > 0 ? 3 : 1)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        Rectangle()
+                            .fill(day.amount > 0
+                                  ? VocabbyTheme.devin.opacity(day.id == days.last?.id ? 1 : 0.78)
+                                  : VocabbyTheme.track)
+                            .frame(height: barHeight)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .help("\(dayLabel(day.date)): \(Self.formatACU(day.amount))")
+                }
+            }
+        }
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        L10n.dayMonth(date, preference: settings.appLanguage)
+    }
+
+    static func formatACU(_ value: Double) -> String {
+        let rounded = (value * 10).rounded() / 10
+        let text = rounded.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(rounded))
+            : String(format: "%.1f", rounded)
+        return "\(text) ACU"
+    }
+
+    static func productLabel(_ view: String) -> String {
+        switch view {
+        case "sessions": "Sessions"
+        case "reviews": "Reviews"
+        case "automations": "Automations"
+        case "code-scans": "Code scans"
+        case "ask": "Ask"
+        case "wiki": "Wiki"
+        case "desktop": "Desktop"
+        case "cli": "CLI"
+        default: view.capitalized
+        }
     }
 }
 
