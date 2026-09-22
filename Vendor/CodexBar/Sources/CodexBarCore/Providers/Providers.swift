@@ -242,11 +242,11 @@ public enum ProviderBrowserCookieDefaults {
         #endif
     }
 
-    /// Devin sessions are normally in Chrome. Keep automatic import narrow so live probes do not
-    /// touch unrelated browser keychains; users can select another browser explicitly.
+    /// Devin sessions may live in any installed Chromium browser; probe them in the
+    /// catalog order, filtered to browsers with usable profile data on disk.
     public static var devinCookieImportOrder: BrowserCookieImportOrder? {
         #if os(macOS)
-        [.chrome]
+        Browser.defaultImportOrder
         #else
         nil
         #endif
