@@ -99,6 +99,7 @@ final class DevinProvider: QuotaProvider {
             lastUpdated: snap.updatedAt,
             error: nil,
             accountLabel: accountLabel ?? snap.organization,
+            creditsRemaining: snap.overageBalance,
             planName: snap.planName,
             sourceLabel: sourceLabel,
             devinUsage: Self.usageHistory(from: snap))

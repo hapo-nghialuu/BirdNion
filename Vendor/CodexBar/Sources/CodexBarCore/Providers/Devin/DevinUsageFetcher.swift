@@ -118,7 +118,8 @@ public struct DevinUsageFetcher: Sendable {
                     planName: snapshot.planName,
                     organization: snapshot.organization,
                     updatedAt: snapshot.updatedAt,
-                    usageHistory: history)
+                    usageHistory: history,
+                    overageBalance: snapshot.overageBalance)
             }
             return snapshot
         }

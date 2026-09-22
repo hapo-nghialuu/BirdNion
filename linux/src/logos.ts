@@ -110,7 +110,7 @@ const PROVIDER_TINT: Record<string, [string, string]> = {
   opencodego: ["#3B82F6", "#3B82F6"],
   antigravity: ["#60BA7E", "#60BA7E"],
   bedrock: ["#FF9900", "#FF9900"],
-  devin: ["#46B482", "#46B482"],
+  devin: ["#317CFF", "#49B0FF"],
   // elevenlabs/auggie/pi bám màu chữ như macOS (mark gốc gần như đen/trắng).
   elevenlabs: ["#16150F", "#F2F0E8"],
   auggie: ["#16150F", "#F2F0E8"],

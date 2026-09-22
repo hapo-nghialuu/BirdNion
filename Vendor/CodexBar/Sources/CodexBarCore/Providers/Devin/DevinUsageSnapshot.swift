@@ -97,6 +97,9 @@ public struct DevinUsageSnapshot: Sendable, Equatable {
     /// nil when the `billing/usage/daily-usage` probe failed or the plan
     /// does not expose it — quota windows still render without it.
     public let usageHistory: DevinUsageHistory?
+    /// `overage_balance` — prepaid on-demand dollars left once the included
+    /// quota is exhausted. nil when the payload does not carry it.
+    public let overageBalance: Double?
 
     public init(
         daily: DevinQuotaWindow?,
@@ -104,7 +107,8 @@ public struct DevinUsageSnapshot: Sendable, Equatable {
         planName: String?,
         organization: String?,
         updatedAt: Date,
-        usageHistory: DevinUsageHistory? = nil)
+        usageHistory: DevinUsageHistory? = nil,
+        overageBalance: Double? = nil)
     {
         self.daily = daily
         self.weekly = weekly
@@ -112,6 +116,7 @@ public struct DevinUsageSnapshot: Sendable, Equatable {
         self.organization = organization
         self.updatedAt = updatedAt
         self.usageHistory = usageHistory
+        self.overageBalance = overageBalance
     }
 
     public func toUsageSnapshot() -> UsageSnapshot {
@@ -161,7 +166,30 @@ public enum DevinUsageParser {
             weekly: weekly,
             planName: self.findPlanName(in: object),
             organization: self.displayOrganization(from: organization),
-            updatedAt: now)
+            updatedAt: now,
+            overageBalance: self.findOverageBalance(in: object))
+    }
+
+    /// `overage_balance` sits at the payload root today, but keep the same
+    /// deep-search tolerance the quota windows use in case it moves.
+    private static func findOverageBalance(in object: Any) -> Double? {
+        if let dictionary = object as? [String: Any] {
+            for (key, value) in dictionary {
+                let lowered = key.lowercased()
+                if lowered == "overage_balance" || lowered == "overagebalance" {
+                    if let amount = self.double(value) { return amount }
+                }
+            }
+            for value in dictionary.values {
+                if let found = self.findOverageBalance(in: value) { return found }
+            }
+        }
+        if let array = object as? [Any] {
+            for value in array {
+                if let found = self.findOverageBalance(in: value) { return found }
+            }
+        }
+        return nil
     }
 
     private static func currentQuotaWindows(_ dictionary: [String: Any])

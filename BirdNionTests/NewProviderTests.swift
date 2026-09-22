@@ -5973,6 +5973,19 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(s.planName, "Core")
     }
 
+    /// `overage_balance` trong quota payload → snapshot.overageBalance →
+    /// ProviderStatus.creditsRemaining (hàng CREDITS · "$10 còn lại").
+    func testDevinOverageBalanceMapsToCredits() throws {
+        let json = """
+        {"daily_percentage": 48, "weekly_percentage": 24,
+         "overage_balance": 10.0, "is_quota_plan": true}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: "org/acme")
+        XCTAssertEqual(snap.overageBalance, 10.0)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertEqual(s.creditsRemaining, 10.0)
+    }
+
     /// Snapshot kèm usageHistory → ProviderStatus.devinUsage cho chart card;
     /// products total=0 bị lọc, còn lại sort giảm dần.
     func testDevinSnapshotMapsUsageHistory() {

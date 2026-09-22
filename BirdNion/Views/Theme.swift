@@ -155,7 +155,7 @@ enum VocabbyTheme {
     static let googleGreen = fixed(0x34A853)
     static let bedrock    = fixed(0xFF9900)    // AWS
     static let hiyo       = fixed(0x00A8E8)
-    static let devin      = fixed(0x46B482)    // Devin brand (CodexBar ProviderBranding 70,180,130)
+    static let devin      = dyn(0x317CFF, 0x49B0FF)    // devin.ai accent-primary light/dark
     static let omp        = dyn(0xBC52C8, 0xCE7FD8)
     static let pi         = dyn(0x06B6D4, 0x22D3EE)
     /// Brand tint for a provider id; nil → caller falls back to default styling.
