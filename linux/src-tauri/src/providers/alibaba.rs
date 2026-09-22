@@ -455,6 +455,7 @@ fn quota_window(label: &str, used: i64, total: i64, reset: Option<i64>) -> Quota
         .round()
         .clamp(0.0, 100.0) as i32;
     QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -537,6 +538,7 @@ fn parse_token_plan_window(text: &str) -> Option<QuotaWindow> {
     let rem = remaining.unwrap_or((total - used).max(0.0));
 
     Some(QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Token Plan".to_string(),

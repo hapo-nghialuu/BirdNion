@@ -1,0 +1,52 @@
+{
+  "feature_name": "allowance-runway-reset-timeline",
+  "created_at": "2026-09-21T11:03:01+0700",
+  "updated_at": "2026-09-21T11:29:52+0700",
+  "language": "en",
+  "status": "completed",
+  "phase": "review",
+  "current_phase": "review",
+  "priority": "P1",
+  "effort": "M",
+  "tags": ["quota", "allowance", "macos", "linux"],
+  "approvals": {
+    "requirements": {"generated": true, "approved": true},
+    "design": {"generated": true, "approved": true},
+    "tasks": {"generated": true, "approved": true}
+  },
+  "scope_lock": {
+    "source": "Approved roadmap P1, first cross-platform vertical slice requested for development after stale pending plans were removed.",
+    "in_scope": [
+      "Optional typed QuotaAllowance on QuotaWindow across Swift, Rust, and TypeScript",
+      "Exact Hapo Hub USD and ElevenLabs character allowance mappings on macOS and Linux",
+      "Native-unit rendering in provider popover/card and Settings quota rows",
+      "Explicit-reset-only rendering with no duration/label reset invention",
+      "Backward-compatible cache/IPC serialization and focused verification"
+    ],
+    "out_of_scope": [
+      "Declaring full P1 complete",
+      "Overage, top-up, hard-stop, and forecast-confidence semantics",
+      "Bulk provider migration",
+      "Menu-bar, agenda, all-agents, or notification redesign"
+    ],
+    "expansion_policy": "requires-user-approval"
+  },
+  "dependencies": {"blockedBy": [], "blocks": []},
+  "task_files": [
+    "tasks/task-R1-01-native-allowance-contract.md",
+    "tasks/task-R2-01-provider-mapping-and-ui.md",
+    "tasks/task-R3-01-verification-and-roadmap-integrity.md"
+  ],
+  "task_registry": {
+    "tasks/task-R1-01-native-allowance-contract.md": {"id":"R1-01","title":"Native allowance contract","status":"done","dependencies":[],"blocker":null,"started_at":"2026-09-21T11:07:00+0700","completed_at":"2026-09-21T11:12:00+0700","last_updated_at":"2026-09-21T11:29:03+0700"},
+    "tasks/task-R2-01-provider-mapping-and-ui.md": {"id":"R2-01","title":"Provider mapping and cross-platform UI","status":"done","dependencies":["tasks/task-R1-01-native-allowance-contract.md"],"blocker":null,"started_at":"2026-09-21T11:12:00+0700","completed_at":"2026-09-21T11:18:00+0700","last_updated_at":"2026-09-21T11:29:03+0700"},
+    "tasks/task-R3-01-verification-and-roadmap-integrity.md": {"id":"R3-01","title":"Verification and roadmap integrity","status":"done","dependencies":["tasks/task-R1-01-native-allowance-contract.md","tasks/task-R2-01-provider-mapping-and-ui.md"],"blocker":null,"started_at":"2026-09-21T11:18:00+0700","completed_at":"2026-09-21T11:29:03+0700","last_updated_at":"2026-09-21T11:29:03+0700"}
+  },
+  "blocker": null,
+  "progress": {"init":"done","requirements":"done","research":"done","design":"done","tasks":"done","code":"done","test":"done","review":"done"},
+  "timestamps": {"init":"2026-09-21T11:03:01+0700","requirements_done":"2026-09-21T11:03:20+0700","research_done":"2026-09-21T11:04:00+0700","design_done":"2026-09-21T11:05:00+0700","tasks_done":"2026-09-21T11:06:00+0700","code_done":"2026-09-21T11:18:00+0700","test_done":"2026-09-21T11:28:30+0700","review_done":"2026-09-21T11:29:03+0700","validation_done":"2026-09-21T11:29:52+0700"},
+  "design_context": {"discovery_mode":"standard","discovery_reason":"Cross-platform serialized contract and UI change with existing provider adapters.","execution_tier":"standard","validation_recommended":true},
+  "validation": {"status":"completed","session_count":1,"questions_asked":0,"last_validated_at":"2026-09-21T11:29:52+0700"},
+  "translation": {"enabled":false,"language":null,"language_code":null,"dir":null,"sync":"always","last_synced_at":null},
+  "ready_for_implementation": true
+}

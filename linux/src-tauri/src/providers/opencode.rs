@@ -506,6 +506,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
 
     let mut windows = vec![
         QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Rolling".into(),
@@ -516,6 +517,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
             window_seconds: None,
         },
         QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Tuần".into(),
@@ -529,6 +531,7 @@ fn build_status(id: &str, name: &str, snap: &Snapshot) -> ProviderStatus {
 
     if let Some(renew) = snap.renews_at {
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Gia hạn".into(),

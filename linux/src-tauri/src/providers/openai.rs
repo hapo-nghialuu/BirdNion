@@ -183,6 +183,7 @@ pub fn parse_admin_status(
 
 fn spend_window(label: &str, usd: f64) -> QuotaWindow {
     QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: label.into(),
@@ -224,6 +225,7 @@ pub fn parse_credits(id: &str, name: &str, body: &Value) -> ProviderStatus {
         id: id.into(),
         display_name: name.into(),
         windows: vec![QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Credits".into(),

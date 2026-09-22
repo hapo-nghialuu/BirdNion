@@ -646,6 +646,7 @@ fn build_status(
         if let Some(b) = budget.filter(|b| *b > 0.0) {
             let used_pct = ((spend / b) * 100.0).round().clamp(0.0, 100.0) as i32;
             windows.push(QuotaWindow {
+                allowance: None,
                 semantic_key: None,
                 semantic_kind: None,
                 label: "Ngân sách tháng".into(),
@@ -657,6 +658,7 @@ fn build_status(
             });
         } else {
             windows.push(QuotaWindow {
+                allowance: None,
                 semantic_key: None,
                 semantic_kind: None,
                 label: "Ngân sách tháng".into(),
@@ -678,6 +680,7 @@ fn build_status(
             compact_count(output_tokens)
         );
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: format!("14 ngày ({region})"),

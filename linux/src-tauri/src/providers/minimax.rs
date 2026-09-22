@@ -318,6 +318,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
             .filter(|ms| *ms > 0)
             .map(|ms| ms / 1000);
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: format!("{prefix}5 giờ"),
@@ -328,6 +329,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
             window_seconds: None,
         });
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: format!("{prefix}Tuần"),
@@ -356,6 +358,7 @@ pub fn parse_remains(id: &str, name: &str, account_label: &str, body: &Value) ->
         };
         let resets_at = renews_ms.unwrap_or(expires_ms) / 1000;
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: sub_label.into(),

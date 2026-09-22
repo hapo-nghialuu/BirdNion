@@ -888,6 +888,7 @@ fn normalize_candidates(
                 continue;
             };
             windows.push(QuotaWindow {
+                allowance: None,
                 semantic_key: Some(format!(
                     "antigravity-{}-{}",
                     pool.label().to_lowercase().replace('/', "-"),
@@ -1386,7 +1387,12 @@ pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
     let ages: Vec<(String, Option<i64>)> = store
         .accounts
         .iter()
-        .map(|account| (account.label.clone(), snapshot_for(account).map(|s| s.fetched_at)))
+        .map(|account| {
+            (
+                account.label.clone(),
+                snapshot_for(account).map(|s| s.fetched_at),
+            )
+        })
         .collect();
     let stale = stale_account_labels(&ages, now, ACCOUNT_QUOTA_MAX_AGE_SECS);
 
@@ -1401,7 +1407,10 @@ pub async fn account_quota_rows() -> Vec<AccountQuotaRow> {
         {
             Err(error) => {
                 for label in &stale {
-                    failures.insert(label.clone(), format!("không tạo được HTTP client: {error}"));
+                    failures.insert(
+                        label.clone(),
+                        format!("không tạo được HTTP client: {error}"),
+                    );
                 }
             }
             Ok(client) => {
@@ -1632,7 +1641,12 @@ async fn fetch_via_agy_cloud_quota(cfg: &config::Provider, name: &str) -> CloudQ
             return CloudQuotaOutcome::Status(ProviderStatus::failure(&cfg.id, name, error));
         }
     }
-    CloudQuotaOutcome::Status(build_status(cfg, name, reading.windows, Some(reading.email)))
+    CloudQuotaOutcome::Status(build_status(
+        cfg,
+        name,
+        reading.windows,
+        Some(reading.email),
+    ))
 }
 
 /// Quota + danh tính đọc được từ MỘT refresh token cụ thể.
@@ -1957,7 +1971,10 @@ mod tests {
         let store = load_account_quota_store(&path);
         assert_eq!(store.snapshots.len(), 2);
         let a = store.snapshots.iter().find(|s| s.label == "a").unwrap();
-        assert_eq!(a.fetched_at, 2, "bản ghi cùng nhãn phải bị thay, không nhân đôi");
+        assert_eq!(
+            a.fetched_at, 2,
+            "bản ghi cùng nhãn phải bị thay, không nhân đôi"
+        );
         assert!(store.snapshots.iter().any(|s| s.label == "b"));
 
         let _ = std::fs::remove_dir_all(&dir);

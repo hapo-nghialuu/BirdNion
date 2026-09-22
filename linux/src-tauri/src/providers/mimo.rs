@@ -182,6 +182,7 @@ fn parse_status(
     }
 
     let mut windows = vec![QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Số dư".to_string(),
@@ -219,6 +220,7 @@ fn parse_status(
                         .map(|p| format!("Token Plan · {p}"))
                         .unwrap_or_else(|| "Token Plan".to_string());
                     windows.push(QuotaWindow {
+                        allowance: None,
                         semantic_key: None,
                         semantic_kind: None,
                         label,

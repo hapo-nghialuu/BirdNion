@@ -158,6 +158,11 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNil(s.error)
         XCTAssertEqual(s.windows.first?.label, "Credits")
         XCTAssertEqual(s.windows.first?.usedPct, 12)   // 12000 / 100000
+        XCTAssertEqual(s.windows.first?.allowance, QuotaAllowance(
+            used: 12_000,
+            remaining: 88_000,
+            limit: 100_000,
+            unit: .characters))
         XCTAssertEqual(s.planName, "Creator")
         XCTAssertTrue(s.windows.contains { $0.label == "Voice slots" })
     }

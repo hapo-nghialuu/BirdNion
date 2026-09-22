@@ -106,7 +106,10 @@ extension ProvidersPane {
 
             // Pace line: reserve (weekly) on the left, reset countdown on the right.
             let pace = WindowPace(window: w)
-            if pace != nil || (w.subtitle?.isEmpty == false) {
+            let allowanceText = w.allowance.flatMap {
+                QuotaAllowanceFormatter.text($0, language: language)
+            }
+            if pace != nil || allowanceText != nil || (w.subtitle?.isEmpty == false) {
                 HStack(alignment: .firstTextBaseline) {
                     if isWeek, let r = pace?.reservePct, r > 0 {
                         Text(L10n.f("provider.reserve", language, r))
@@ -127,7 +130,11 @@ extension ProvidersPane {
                         .font(.plexSans(10))
                         .foregroundStyle(pace.lastsUntilReset ? SettingsTheme.secondary : SettingsTheme.warning)
                 }
-                if let sub = w.subtitle, !sub.isEmpty {
+                if let allowanceText {
+                    Text(allowanceText)
+                        .font(.plexSans(10))
+                        .foregroundStyle(SettingsTheme.tertiary)
+                } else if let sub = w.subtitle, !sub.isEmpty {
                     Text(L10n.providerText(sub, preference: language))
                         .font(.plexSans(10))
                         .foregroundStyle(SettingsTheme.tertiary)

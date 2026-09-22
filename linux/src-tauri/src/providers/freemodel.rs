@@ -199,6 +199,7 @@ fn persisted_balance_window(now: i64) -> Option<QuotaWindow> {
 
 fn stale_balance_window(window: QuotaWindow) -> QuotaWindow {
     QuotaWindow {
+        allowance: None,
         subtitle: Some(match window.subtitle {
             Some(subtitle) => format!("{subtitle} · số cũ"),
             None => "số cũ".to_string(),
@@ -252,6 +253,7 @@ fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<Q
         subtitle += &format!(" · {count} giới thiệu");
     }
     Some(QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Số dư".to_string(),
@@ -391,6 +393,7 @@ fn cents_window(label: &str, window: &Value) -> Result<QuotaWindow, String> {
         _ => None,
     };
     Ok(QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -419,6 +422,7 @@ mod tests {
 
     fn balance(remaining_pct: i32) -> QuotaWindow {
         QuotaWindow {
+            allowance: None,
             label: "Số dư".to_string(),
             used_pct: 100 - remaining_pct,
             remaining_pct,

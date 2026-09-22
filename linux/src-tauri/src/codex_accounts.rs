@@ -1071,6 +1071,7 @@ mod tests {
             id: "codex".into(),
             display_name: "Codex".into(),
             windows: vec![QuotaWindow {
+                allowance: None,
                 label: "Week".into(),
                 used_pct: 100 - remaining_pct,
                 remaining_pct,

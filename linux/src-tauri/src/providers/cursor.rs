@@ -392,6 +392,7 @@ fn parse_status(
 fn pct_window(label: &str, pct: f64, subtitle: Option<String>) -> QuotaWindow {
     let used = pct.round().clamp(0.0, 100.0) as i32;
     QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),

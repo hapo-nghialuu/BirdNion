@@ -1646,8 +1646,7 @@ struct ProviderCard: View {
                 ForEach(popoverWindows) { win in
                     WindowRow(
                         window: win,
-                        providerID: status.id,
-                        lastUpdated: status.lastUpdated)
+                        providerID: status.id)
                 }
             }
             if let credits = creditsBalance {
@@ -2304,15 +2303,8 @@ struct QuotaSummaryStrip: View {
     }
 
     private var resetText: String {
-        guard let lowest else { return "" }
-        if let d = lowest.resetDate {
-            return L10n.resetCountdown(to: d, preference: settings.appLanguage).uppercased()
-        }
-        if let secs = lowest.windowSeconds, secs > 0 {
-            let estimate = status.lastUpdated.addingTimeInterval(TimeInterval(secs))
-            return L10n.resetCountdown(to: estimate, preference: settings.appLanguage).uppercased()
-        }
-        return ""
+        guard let resetDate = lowest?.resetDate else { return "" }
+        return L10n.resetCountdown(to: resetDate, preference: settings.appLanguage).uppercased()
     }
 
     var body: some View {
@@ -2382,10 +2374,6 @@ struct WindowRow: View {
     /// brand color. The quota percentage still controls the fill length and
     /// the semantic text color remains independent.
     let providerID: String
-    /// Fetch timestamp from the parent `ProviderStatus` — used as the
-    /// anchor for the `lastUpdated + windowSeconds` reset estimate when
-    /// the API didn't return an explicit reset timestamp.
-    let lastUpdated: Date
 
     /// Design: bar + % use semantic remaining tone (critical / warning / success),
     /// not provider brand fill.
@@ -2401,6 +2389,11 @@ struct WindowRow: View {
     /// Linear pace vs the window's elapsed time — powers the CodexBar-style
     /// marker stripe on the bar and the reserve/deficit detail line.
     private var pace: WindowPace? { WindowPace(window: window, now: Date()) }
+
+    private var allowanceText: String? {
+        guard !window.isInactive, let allowance = window.allowance else { return nil }
+        return QuotaAllowanceFormatter.text(allowance, language: settings.appLanguage)
+    }
 
     /// "X% in reserve" / "X% in deficit" / "On pace" — CodexBar wording.
     private func paceLeftText(_ pace: WindowPace) -> String {
@@ -2418,22 +2411,8 @@ struct WindowRow: View {
     }
 
     private var resetText: String {
-        // 1. Use the API-provided reset timestamp when available.
-        if let d = window.resetDate { return formatReset(d) }
-        // 2. Fall back to `lastUpdated + windowSeconds` — the API didn't
-        //    include a reset timestamp (e.g. Codex OAuth response sometimes
-        //    omits it) but we know the window's nominal length. Computes
-        //    against `lastUpdated` so the countdown tracks when the fetch
-        //    happened rather than the absolute wall-clock at render time.
-        if let secs = window.windowSeconds, secs > 0 {
-            let estimate = lastUpdated.addingTimeInterval(TimeInterval(secs))
-            return formatReset(estimate)
-        }
-        // 3. Last-resort label-based fallback for old providers that don't
-        //    surface either resetDate or windowSeconds.
-        if window.label.contains("Tuần") { return L10n.t("quota.resetWeekly", settings.appLanguage) }
-        if window.label.contains("5 giờ") { return L10n.t("quota.resetIn5h", settings.appLanguage) }
-        return ""
+        guard let resetDate = window.resetDate else { return "" }
+        return formatReset(resetDate)
     }
 
     private func formatReset(_ date: Date) -> String {
@@ -2491,7 +2470,12 @@ struct WindowRow: View {
                 }
             }
             .padding(.top, 7)
-            if let sub = window.subtitle, !sub.isEmpty, pace == nil || pace?.isOnTrack == true {
+            if let allowanceText {
+                Text(allowanceText.uppercased())
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .padding(.top, 4)
+            } else if let sub = window.subtitle, !sub.isEmpty, pace == nil || pace?.isOnTrack == true {
                 Text(L10n.providerText(sub, preference: settings.appLanguage).uppercased())
                     .font(.plexMono(10))
                     .foregroundStyle(VocabbyTheme.tertiary)
@@ -5056,17 +5040,11 @@ struct AntigravityAllAccountsQuotaCard: View {
         return "\(family) · \(period)".uppercased()
     }
 
-    /// Time left until this window resets, as a bare duration ("4H 59M").
-    /// `L10n.resetCountdown`'s "Reset trong …" prefix does not fit a
-    /// single-line row, and repeating it on every row is what made the block
-    /// unreadable. Falls back to `lastUpdated + windowSeconds` the same way
-    /// `WindowRow` does, so a response without a reset timestamp still shows one.
-    private func resetIn(_ window: QuotaWindow, lastUpdated: Date) -> String {
-        let target: Date? = window.resetDate
-            ?? window.windowSeconds.flatMap {
-                $0 > 0 ? lastUpdated.addingTimeInterval(TimeInterval($0)) : nil
-            }
-        guard let target else { return "" }
+    /// Time left until an explicitly reported reset, as a bare duration
+    /// ("4H 59M"). `L10n.resetCountdown`'s prefix does not fit a single-line
+    /// row. Missing provider timestamps stay unknown.
+    private func resetIn(_ window: QuotaWindow) -> String {
+        guard let target = window.resetDate else { return "" }
         let seconds = max(0, Int(target.timeIntervalSinceNow))
         let days = seconds / 86_400
         let hours = (seconds % 86_400) / 3_600
@@ -5135,7 +5113,7 @@ struct AntigravityAllAccountsQuotaCard: View {
             .padding(.bottom, windows.isEmpty ? 10 : 4)
 
             ForEach(windows) { window in
-                let reset = resetIn(window, lastUpdated: snapshot?.lastUpdated ?? Date())
+                let reset = resetIn(window)
                 HStack(alignment: .center, spacing: 8) {
                     Text(rowLabel(window))
                         .font(.plexMono(9))

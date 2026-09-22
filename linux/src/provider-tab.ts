@@ -18,6 +18,13 @@ import { logoMark } from "./logos";
 /** Same name as `PROVIDERS_CHANGED_EVENT` in settings-tab (avoid circular import). */
 const PROVIDERS_CHANGED_EVENT = "birdnion-providers-changed";
 
+export type QuotaAllowance = {
+  used?: number;
+  remaining?: number;
+  limit?: number;
+  unit: "usd" | "characters" | "requests" | "credits" | "tokens" | "count";
+};
+
 export type QuotaWindow = {
   label: string;
   usedPct: number;
@@ -26,6 +33,8 @@ export type QuotaWindow = {
   resetsAt?: number;
   /** Window length in seconds (5h/tuần) — drives the settings pace line. */
   windowSeconds?: number;
+  /** Exact native values supplied by the provider contract. */
+  allowance?: QuotaAllowance;
   /** Optional semantic flags used when a provider/backend supplies them. */
   isSupplementary?: boolean;
   isInactive?: boolean;
@@ -94,6 +103,50 @@ function el(tag: string, className: string, text?: string): HTMLElement {
   node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function allowanceValue(value: number, unit: QuotaAllowance["unit"]): string {
+  if (unit === "usd") {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
+  const locale = currentLang() === "en" ? "en-US" : "vi-VN";
+  const number = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+  return `${number} ${t(`allowance.unit.${unit}`)}`;
+}
+
+export function quotaAllowanceText(allowance?: QuotaAllowance): string | null {
+  if (!allowance) return null;
+  const valid = (value: number | undefined) =>
+    value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const used = valid(allowance.used);
+  const remaining = valid(allowance.remaining);
+  const limit = valid(allowance.limit);
+  if (remaining !== undefined && limit !== undefined) {
+    return t("allowance.remainingOf", {
+      remaining: allowanceValue(remaining, allowance.unit),
+      limit: allowanceValue(limit, allowance.unit),
+    });
+  }
+  if (used !== undefined && limit !== undefined) {
+    return t("allowance.usedOf", {
+      used: allowanceValue(used, allowance.unit),
+      limit: allowanceValue(limit, allowance.unit),
+    });
+  }
+  if (remaining !== undefined) {
+    return t("allowance.remaining", { value: allowanceValue(remaining, allowance.unit) });
+  }
+  if (used !== undefined) {
+    return t("allowance.used", { value: allowanceValue(used, allowance.unit) });
+  }
+  if (limit !== undefined) {
+    return t("allowance.limit", { value: allowanceValue(limit, allowance.unit) });
+  }
+  return null;
 }
 
 /**
@@ -225,7 +278,7 @@ function antigravityAllAccountsBlock(rows: AntigravityAccountQuota[]): HTMLEleme
   return block;
 }
 
-function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
+function windowRow(win: QuotaWindow): HTMLElement {
   const row = el("div", "window-row");
   const head = el("div", "window-head");
   head.append(el("span", "window-label", win.label.toUpperCase()));
@@ -236,13 +289,10 @@ function windowRow(win: QuotaWindow, lastUpdated: number): HTMLElement {
   track.append(fill);
   row.append(head, track);
   const foot = el("div", "window-foot");
+  const allowance = quotaAllowanceText(win.allowance);
   foot.append(el("span", "window-subtitle",
-    (win.subtitle ?? t("usedPct", { n: win.usedPct })).toUpperCase()));
-  let resetAt = win.resetsAt && win.resetsAt > 0 ? win.resetsAt * 1000 : 0;
-  if (!resetAt && win.windowSeconds && win.windowSeconds > 0 && lastUpdated > 0) {
-    const base = lastUpdated > 1e12 ? lastUpdated : lastUpdated * 1000;
-    resetAt = base + win.windowSeconds * 1000;
-  }
+    (allowance ?? win.subtitle ?? t("usedPct", { n: win.usedPct })).toUpperCase()));
+  const resetAt = win.resetsAt && win.resetsAt > 0 ? win.resetsAt * 1000 : 0;
   if (resetAt) {
     const mins = Math.max(0, Math.round((resetAt - Date.now()) / 60000));
     const label = mins >= 1440 ? t("resetInDays", { n: Math.round(mins / 1440) })
@@ -265,13 +315,9 @@ function quotaSummaryStrip(status: ProviderStatus): HTMLElement {
   const pct = lowest?.remainingPct ?? 0;
   row.append(el("div", `quota-summary-pct ${quotaTone(pct)}`, `${pct}%`));
   const right = el("div", "quota-summary-right");
-  // Reset estimate when available.
+  // Only an explicit provider reset timestamp is authoritative.
   if (lowest) {
-    let resetAt = lowest.resetsAt && lowest.resetsAt > 0 ? lowest.resetsAt * 1000 : 0;
-    if (!resetAt && lowest.windowSeconds && lowest.windowSeconds > 0 && status.lastUpdated > 0) {
-      const base = status.lastUpdated > 1e12 ? status.lastUpdated : status.lastUpdated * 1000;
-      resetAt = base + lowest.windowSeconds * 1000;
-    }
+    const resetAt = lowest.resetsAt && lowest.resetsAt > 0 ? lowest.resetsAt * 1000 : 0;
     if (resetAt) {
       const mins = Math.max(0, Math.round((resetAt - Date.now()) / 60000));
       const label = mins >= 1440 ? t("resetInDays", { n: Math.round(mins / 1440) })
@@ -637,7 +683,7 @@ function providerBodyCard(
 
   if (status.id === "antigravity") {
     for (const win of status.windows.slice(0, 4)) {
-      card.append(windowRow(win, status.lastUpdated));
+      card.append(windowRow(win));
     }
     // Khối tất-cả-tài-khoản nạp sau: lệnh có thể phải gọi mạng cho tài khoản
     // quá hạn, không được chặn phần quota của tài khoản đang dùng.
@@ -648,7 +694,7 @@ function providerBodyCard(
   card.append(quotaSummaryStrip(status));
   card.append(el("div", "provider-divider", ""));
   for (const win of status.windows) {
-    card.append(windowRow(win, status.lastUpdated));
+    card.append(windowRow(win));
   }
 
   const extras = extrasParts(status);

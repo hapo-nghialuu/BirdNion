@@ -20,7 +20,7 @@ use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config;
-use crate::providers::{shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 /// Compile-time baked endpoints (from the gitignored dev-env.sh at build).
 const BAKED_BASE_URL: Option<&str> = option_env!("HAPO_BASE_URL");
@@ -167,6 +167,12 @@ pub fn parse_budget(id: &str, name: &str, body: &Value) -> ProviderStatus {
         id: id.to_string(),
         display_name: name.to_string(),
         windows: vec![QuotaWindow {
+            allowance: Some(QuotaAllowance {
+                used: Some((weekly_usd - remaining_usd).max(0.0)),
+                remaining: Some(remaining_usd),
+                limit: Some(weekly_usd),
+                unit: "usd".into(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Tuần".into(),
@@ -237,6 +243,11 @@ mod tests {
         assert_eq!(s.windows[0].remaining_pct, 58);
         assert_eq!(s.windows[0].subtitle.as_deref(), Some("$5.80 / $10.00"));
         assert!(s.windows[0].resets_at.is_some());
+        let allowance = s.windows[0].allowance.as_ref().unwrap();
+        assert_eq!(allowance.unit, "usd");
+        assert_eq!(allowance.used, Some(4.2));
+        assert_eq!(allowance.remaining, Some(5.8));
+        assert_eq!(allowance.limit, Some(10.0));
     }
 
     #[test]

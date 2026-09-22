@@ -162,6 +162,7 @@ fn window_limit_quota(
         .and_then(Value::as_f64)
         .map(|ms| (ms / 1000.0) as i64);
     Some(QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -250,6 +251,7 @@ fn parse_status(
             0
         };
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Tháng".to_string(),

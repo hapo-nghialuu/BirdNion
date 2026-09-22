@@ -549,6 +549,7 @@ fn bonus_window(bonus: Option<(f64, f64, Option<i64>)>) -> Option<QuotaWindow> {
     };
     let bonus_expiry = expiry_days.map(|d| chrono::Utc::now().timestamp() + d * 86_400);
     Some(QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Bonus Credits".into(),
@@ -585,6 +586,7 @@ fn overage_window(
         parts.join(" · ")
     };
     Some(QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Vượt hạn mức".into(),
@@ -665,6 +667,7 @@ pub fn parse_usage(
         // Managed plans hide plan credits but may still report bonus and
         // overage — keep those windows instead of dropping them.
         let mut windows = vec![QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Credits".into(),
@@ -719,6 +722,7 @@ pub fn parse_usage(
     }
 
     let mut windows = vec![QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Credits".into(),

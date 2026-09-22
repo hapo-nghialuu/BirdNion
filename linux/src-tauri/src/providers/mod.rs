@@ -41,6 +41,18 @@ pub mod zai;
 use crate::config;
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaAllowance {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
+    pub unit: String,
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaWindow {
@@ -56,6 +68,10 @@ pub struct QuotaWindow {
     /// `resets_at`, drives the settings pace/reserve line (macOS WindowPace).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_seconds: Option<i64>,
+    /// Exact source-native allowance values. Absent when the source exposes
+    /// only a percentage or no authoritative amount/limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowance: Option<QuotaAllowance>,
     /// Stable provider-defined identity for future quota observations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_key: Option<String>,

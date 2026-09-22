@@ -92,6 +92,7 @@ pub fn parse_balance(id: &str, name: &str, account_label: &str, body: &Value) ->
         .map(String::from);
 
     let window = QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Số dư".into(),

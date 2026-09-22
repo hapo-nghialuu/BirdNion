@@ -322,6 +322,7 @@ fn status_from_values(
         display_name: name.to_string(),
         windows: vec![
             QuotaWindow {
+                allowance: None,
                 semantic_key: None,
                 semantic_kind: None,
                 label: "Balance".to_string(),
@@ -332,6 +333,7 @@ fn status_from_values(
                 window_seconds: None,
             },
             QuotaWindow {
+                allowance: None,
                 semantic_key: None,
                 semantic_kind: None,
                 label: spend_label.to_string(),

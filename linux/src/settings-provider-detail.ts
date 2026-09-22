@@ -9,6 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { t, currentLang } from "./i18n";
 import {
   hasRenderableProviderContent,
+  quotaAllowanceText,
   type ProviderStatus,
   type QuotaWindow,
 } from "./provider-tab";
@@ -334,7 +335,9 @@ function usageWindowBlock(providerId: string, w: QuotaWindow): HTMLElement {
     foot.append(el("span", "pp-usage-foot-right", t("provider.resetAfter", { t: formatCountdown(secs) })));
     block.append(foot);
   }
-  if (w.subtitle) block.append(el("div", "pp-usage-sub", w.subtitle));
+  const allowance = quotaAllowanceText(w.allowance);
+  if (allowance) block.append(el("div", "pp-usage-sub", allowance));
+  else if (w.subtitle) block.append(el("div", "pp-usage-sub", w.subtitle));
   void providerId;
   return block;
 }

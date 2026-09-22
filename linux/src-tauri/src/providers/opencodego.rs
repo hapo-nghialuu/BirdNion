@@ -473,6 +473,7 @@ fn parse_page(text: &str, zen_balance: Option<f64>) -> Option<ProviderStatus> {
 
     if let Some(renew) = renews_at {
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Gia hạn".into(),
@@ -621,6 +622,7 @@ fn make_window(
 ) -> QuotaWindow {
     let used = (result.percent.round() as i32).clamp(0, 100);
     QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),

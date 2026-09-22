@@ -184,6 +184,7 @@ pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> P
                 .and_then(Value::as_i64)
                 .map(|ms| ms / 1000);
             QuotaWindow {
+                allowance: None,
                 semantic_key: None,
                 semantic_kind: None,
                 label: label(kind, unit, number, is_primary),
