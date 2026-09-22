@@ -389,9 +389,17 @@ struct QuotaOverview: View {
                     daily: kiroBudgetCombined?.daily ?? [],
                     source: .kiro)
             }
+            // Devin CLI: 30-day token chart from local transcripts — same
+            // parity as the Codex/Grok local-scan cards.
+            if s.id == "devin", let report = devinReport, !report.isEmpty {
+                DevinCLIUsageChartCard(report: report)
+            }
             // Devin: per-day ACU usage for the current (+previous) billing
-            // cycle, fetched alongside the quota payload — not a local scan.
-            if s.id == "devin", let usage = s.devinUsage, !usage.days.isEmpty {
+            // cycle, fetched alongside the quota payload. Only meaningful
+            // for orgs that actually meter ACU — quota-only plans return
+            // all-zero rows, so hide the flat chart instead of showing "0".
+            if s.id == "devin", let usage = s.devinUsage,
+               usage.days.contains(where: { $0.amount != 0 }) {
                 DevinUsageChartCard(snapshot: usage)
             }
             // Status page at the bottom of the provider stack
@@ -4617,15 +4625,23 @@ private struct ProviderDayChartDetail {
              models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
     }
 
+    static func from(day: DevinCLIDailyUsage, language: String) -> ProviderDayChartDetail {
+        make(date: day.date, usd: day.usd, tokens: day.tokens,
+             models: day.models.map { ($0.name, $0.usd, $0.tokens) },
+             language: language, showUSD: false)
+    }
+
     private static func make(date: Date, usd: Double, tokens: Int,
                              models: [(String, Double, Int)],
-                             language: String) -> ProviderDayChartDetail {
+                             language: String,
+                             showUSD: Bool = true) -> ProviderDayChartDetail {
         let sorted = models
             .filter { $0.1 > 0 || $0.2 > 0 }
             .sorted { ($0.2, $0.1) > ($1.2, $1.1) }
             .prefix(6)
             .map { (name: $0.0, usd: $0.1, tokens: $0.2) }
-        let header = "\(L10n.dayMonth(date, preference: language)) · \(AllUsageFormat.tokens(tokens)) · \(AllUsageFormat.usd(usd))"
+        var header = "\(L10n.dayMonth(date, preference: language)) · \(AllUsageFormat.tokens(tokens))"
+        if showUSD { header += " · \(AllUsageFormat.usd(usd))" }
         return ProviderDayChartDetail(header: header, models: Array(sorted))
     }
 }
@@ -4643,6 +4659,10 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
     let dayDetail: ProviderDayChartDetail?
     let footnote: String
     let barTint: Color
+    /// Token-only sources (Devin): replace the USD-first hero/today strings
+    /// so the card never claims a fake "$0.00".
+    var heroText: String? = nil
+    var todayText: String? = nil
     /// Cạnh vẽ hairline. Mặc định TOP (như mọi section popover). Codex đặt
     /// `top:false, bottom:true` để: (1) không đôi line với hairline đáy của
     /// hàng quota ngay trên, (2) tự tạo line ngăn với card ngân sách ngay dưới
@@ -4660,7 +4680,7 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .tracking(0.4)
                 Spacer(minLength: 8)
-                Text(AllUsageFormat.usd(totalUSD))
+                Text(heroText ?? AllUsageFormat.usd(totalUSD))
                     .font(.plexMono(16, weight: .bold))
                     .foregroundStyle(VocabbyTheme.primary)
             }
@@ -4673,7 +4693,7 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
                 Spacer(minLength: 8)
-                Text("\(L10n.t("chart.today", settings.appLanguage).uppercased()) \(AllUsageFormat.usd(todayUSD)) · \(AllUsageFormat.tokensShort(todayTokens))")
+                Text(todayText ?? "\(L10n.t("chart.today", settings.appLanguage).uppercased()) \(AllUsageFormat.usd(todayUSD)) · \(AllUsageFormat.tokensShort(todayTokens))")
                     .font(.plexMono(9, weight: .medium))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .lineLimit(1)
@@ -4875,6 +4895,88 @@ struct GrokUsageChartCard: View {
         if day.tokens <= 0 { return VocabbyTheme.track }
         if day.date == daily30.last?.date { return VocabbyTheme.chartGrok }
         return VocabbyTheme.chartGrok.opacity(0.78)
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        L10n.dayMonth(date, preference: settings.appLanguage)
+    }
+}
+
+// MARK: - Devin CLI usage chart
+
+/// 30-day token chart for Devin CLI, scanned from
+/// `~/.local/share/devin/cli/transcripts`. Same interaction as the
+/// Codex/Grok cards (hover + click-pin model detail), but the hero is
+/// tokens — local transcripts carry no honest USD (Devin bills in ACU).
+struct DevinCLIUsageChartCard: View {
+    @EnvironmentObject var settings: SettingsStore
+
+    let report: DevinCLIUsageReport
+    @State private var hoveredDay: DevinCLIDailyUsage?
+    @State private var pinnedDay: DevinCLIDailyUsage?
+
+    private var daily30: [DevinCLIDailyUsage] { Array(report.daily.suffix(30)) }
+    private var maxBarTokens: Int { max(daily30.map(\.tokens).max() ?? 0, 1) }
+
+    private var dayDetail: ProviderDayChartDetail? {
+        pinnedDay.map { ProviderDayChartDetail.from(day: $0, language: settings.appLanguage) }
+    }
+
+    var body: some View {
+        ProviderCostChartScaffold(
+            title: L10n.f("chart.providerUsage30", settings.appLanguage, "Devin CLI"),
+            totalUSD: report.last30USD,
+            todayUSD: report.todayUSD,
+            todayTokens: report.todayTokens,
+            startLabel: daily30.first.map { dayLabel($0.date) },
+            dayDetail: dayDetail,
+            footnote: L10n.t("chart.estimateDevin", settings.appLanguage),
+            barTint: VocabbyTheme.devin,
+            heroText: AllUsageFormat.tokensShort(report.last30Tokens),
+            todayText: "\(L10n.t("chart.today", settings.appLanguage).uppercased()) \(AllUsageFormat.tokensShort(report.todayTokens))",
+            hairlineTopEdge: false,
+            hairlineBottomEdge: true
+        ) {
+            barChart
+        }
+    }
+
+    private var barChart: some View {
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(daily30) { day in
+                    let hasTokens = day.tokens > 0
+                    let heightFraction = UsageChartScaling.fraction(
+                        value: Double(day.tokens), maximum: Double(maxBarTokens))
+                    let barHeight = max(geo.size.height * heightFraction, hasTokens ? 3 : 1)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        Rectangle()
+                            .fill(barColor(for: day))
+                            .frame(height: barHeight)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background((hoveredDay?.id == day.id || pinnedDay?.id == day.id)
+                                ? VocabbyTheme.selectedSurface.opacity(0.6) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { hoveredDay = day }
+                        else if hoveredDay?.id == day.id { hoveredDay = nil }
+                    }
+                    .onTapGesture {
+                        if pinnedDay?.id == day.id { pinnedDay = nil }
+                        else { pinnedDay = day }
+                    }
+                    .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens))")
+                }
+            }
+        }
+    }
+
+    private func barColor(for day: DevinCLIDailyUsage) -> Color {
+        if day.tokens <= 0 { return VocabbyTheme.track }
+        if day.date == daily30.last?.date { return VocabbyTheme.devin }
+        return VocabbyTheme.devin.opacity(0.78)
     }
 
     private func dayLabel(_ date: Date) -> String {
