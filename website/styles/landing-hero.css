@@ -13,6 +13,10 @@
   grid-column: 1;
   align-self: center;
 }
+.hero-copy,
+.product-proof {
+  min-width: 0;
+}
 
 .hero-copy .eyebrow {
   display: flex;

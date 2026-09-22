@@ -57,6 +57,7 @@
   object-fit: contain;
 }
 
+
 .screen-crop {
   border-radius: 10px 10px 2px 2px;
 }
@@ -71,6 +72,9 @@
 }
 
 .provider-line a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
   color: var(--blue);
   font-weight: 600;
 }
@@ -121,14 +125,16 @@
   color: var(--blue);
 }
 
+
 @media (max-width: 900px) {
   .hero .product-proof { margin-top: 72px; }
 }
 
 @media (max-width: 600px) {
+  .hero .proof-label span:first-child { overflow-wrap: anywhere; }
+  .hero .proof-label span:last-child { display: none; }
   .hero h1 { font-size: clamp(44px, 13vw, 60px); }
   .hero .product-proof { --mascot-size: 112px; }
   .hero-mascot { right: 8px; }
-  .hero .proof-label span:last-child { display: none; }
   .provider-line { font-size: 11px; }
 }

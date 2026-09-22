@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -7,17 +7,35 @@
   <meta name="theme-color" content="#fbfaf7">
   <title>BirdNion — A friendly AI quota companion</title>
   <link rel="canonical" href="https://birdnion.vercel.app/">
+  <link rel="alternate" hreflang="en" href="https://birdnion.vercel.app/">
+  <link rel="alternate" hreflang="vi" href="https://birdnion.vercel.app/vi/">
+  <link rel="alternate" hreflang="x-default" href="https://birdnion.vercel.app/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="BirdNion">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:locale:alternate" content="vi_VN">
+  <meta property="og:title" content="BirdNion — AI coding quotas, one click away">
+  <meta property="og:description" content="See what is left, when it resets, and which source needs attention on macOS or Linux.">
+  <meta property="og:url" content="https://birdnion.vercel.app/">
+  <meta property="og:image" content="https://birdnion.vercel.app/assets/product-hunt-gallery-01-overview.png">
+  <meta property="og:image:alt" content="BirdNion overview card for AI coding quotas, reset windows, and local cost">
+  <meta property="og:image:width" content="1270">
+  <meta property="og:image:height" content="760">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="BirdNion — AI coding quotas, one click away">
+  <meta name="twitter:description" content="See what is left, when it resets, and which source needs attention on macOS or Linux.">
+  <meta name="twitter:image" content="https://birdnion.vercel.app/assets/product-hunt-gallery-01-overview.png">
   <link rel="icon" type="image/png" sizes="128x128" href="assets/birdnion-logo.png">
   <link rel="preload" href="assets/fonts/ibm-plex-sans-regular.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles/design-tokens.css">
   <link rel="stylesheet" href="styles/base-layout.css">
   <link rel="stylesheet" href="styles/landing-hero.css">
-  <link rel="stylesheet" href="styles/first-live-path.css?v=friendly-1">
+  <link rel="stylesheet" href="styles/first-live-path.css?v=public-proof-1">
   <link rel="stylesheet" href="styles/landing-sections.css">
   <link rel="stylesheet" href="styles/landing-utility-sections.css">
-  <link rel="stylesheet" href="styles/friendly-brand.css?v=gpt-bird-1">
+  <link rel="stylesheet" href="styles/friendly-brand.css?v=quota-bird-1">
   <link rel="stylesheet" href="styles/responsive.css">
-  <script src="scripts/install-command-copy.js?v=friendly-1" defer></script>
+  <script src="scripts/install-command-copy.js?v=public-proof-1" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -31,7 +49,10 @@
       <a href="#privacy">What it reads</a>
       <a href="#install">Install</a>
     </nav>
-    <a class="header-link" href="https://github.com/hapo-nghialuu/BirdNion">View source <span aria-hidden="true">↗</span></a>
+    <div class="header-actions">
+      <a class="language-link" href="/vi/" lang="vi">Tiếng Việt</a>
+      <a class="header-link" href="https://github.com/hapo-nghialuu/BirdNion">View source <span aria-hidden="true">↗</span></a>
+    </div>
   </header>
 
   <main id="main">
@@ -57,13 +78,13 @@
           <img src="assets/birdnion-readme-bird-quota-384.png?v=1" width="384" height="384" alt="" fetchpriority="low" decoding="async">
         </div>
         <div class="proof-label">
-          <span>01 / REAL LOCAL COST VIEW</span>
-          <span>macOS capture</span>
+          <span>01 / REPRESENTATIVE PRODUCT UI</span>
+          <span>Rendered sample</span>
         </div>
         <div class="screen-crop">
-          <img src="assets/usage-overview.png" width="840" height="1562" alt="BirdNion macOS local cost overview showing daily activity and model breakdown" fetchpriority="high">
+          <img src="assets/usage-overview.png" width="840" height="1562" alt="Rendered BirdNion local cost interface with representative daily activity and model data" fetchpriority="high">
         </div>
-        <figcaption>Actual BirdNion UI · example cost data · cropped preview</figcaption>
+        <figcaption>Rendered from the current BirdNion interface · representative sample data · not a native platform capture</figcaption>
       </figure>
     </section>
 
@@ -108,10 +129,12 @@
         <p class="eyebrow">STAYS OUT OF YOUR WAY</p>
         <h2 id="platform-title">Glance up without leaving your editor.</h2>
         <p>On macOS, BirdNion lives in the menu bar. On Linux, it lives in the system tray. Open the details when you need them; keep them quiet when you do not.</p>
-        <div class="platform-rows" role="list">
-          <div role="listitem"><span>macOS 14+</span><strong>Universal app · menu bar</strong></div>
-          <div role="listitem"><span>Linux x86_64</span><strong>DEB · RPM · AppImage</strong></div>
-        </div>
+        <!-- Safari/VoiceOver needs an explicit list role when list markers are removed. -->
+        <!-- [html-validate-disable-next no-redundant-role] -->
+        <ul class="platform-rows" role="list">
+          <li><span>macOS 14+</span><strong>Universal app · menu bar</strong></li>
+          <li><span>Linux x86_64</span><strong>DEB · RPM · AppImage</strong></li>
+        </ul>
       </div>
       <figure class="settings-proof">
         <div class="proof-label"><span>02 / CONTROL SURFACE</span><span>Current settings redraw</span></div>
@@ -144,9 +167,10 @@
         <p>macOS 14+ via Homebrew</p>
         <div class="command-row">
           <code id="brew-command">brew install --cask hapo-nghialuu/tap/birdnion</code>
-          <button type="button" data-copy-target="brew-command">Copy</button>
+          <button type="button" data-copy-target="brew-command" data-copy-label="Copy" data-copied-label="Copied" data-selected-label="Selected" data-copied-status="Install command copied to clipboard." data-selected-status="Clipboard unavailable. The command is selected for you.">Copy</button>
         </div>
         <p class="copy-status" aria-live="polite"></p>
+        <p class="signing-note"><strong>Current macOS signing:</strong> the app is ad-hoc signed, not Developer ID notarized. Homebrew removes quarantine during installation.</p>
         <p class="install-fit">Linux x86_64 · MIT licensed · no BirdNion sign-up</p>
         <a class="button button-light" href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Download macOS or Linux <span aria-hidden="true">↗</span></a>
       </div>
@@ -166,7 +190,7 @@
   <footer class="site-footer">
     <div><img class="brand-mark" src="assets/birdnion-logo.png" width="34" height="34" alt=""><strong>BirdNion</strong></div>
     <p>A small, cheerful quota companion.</p>
-    <nav aria-label="Footer navigation"><a href="https://github.com/hapo-nghialuu/BirdNion">GitHub</a><a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Releases</a><a href="https://github.com/hapo-nghialuu/BirdNion/blob/main/LICENSE">MIT License</a></nav>
+    <nav aria-label="Footer navigation"><a href="/vi/" lang="vi">Tiếng Việt</a><a href="https://github.com/hapo-nghialuu/BirdNion">GitHub</a><a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Releases</a><a href="https://github.com/hapo-nghialuu/BirdNion/blob/main/LICENSE">MIT License</a></nav>
   </footer>
 </body>
 </html>
