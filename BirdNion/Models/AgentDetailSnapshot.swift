@@ -228,6 +228,7 @@ extension AgentDetailSnapshot {
         case .kiro: return (day.kiroUSD, day.kiroTokens)
         case .omp: return (day.ompUSD, day.ompTokens)
         case .pi: return (day.piUSD, day.piTokens)
+        case .devin: return (day.devinUSD, day.devinTokens)
         default: return (0, 0)
         }
     }
@@ -243,6 +244,7 @@ extension AgentDetailSnapshot {
         case .kiro: return combined.kiroConfidence
         case .omp: return combined.ompConfidence
         case .pi: return combined.piConfidence
+        case .devin: return combined.devinConfidence
         default: return nil
         }
     }

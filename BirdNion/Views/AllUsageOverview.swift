@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Combined usage model
 
-/// One calendar day of combined Claude Code CLI + Codex + Grok + Kiro + OMP + Pi usage.
+/// One calendar day of combined Claude Code CLI + Codex + Grok + Kiro + OMP + Pi + Devin usage.
 /// Kept per-source so the stacked chart and hover detail can split the bar by origin.
 struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
     let date: Date   // startOfDay in local tz
@@ -18,11 +18,13 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
     let ompTokens: Int
     let piUSD: Double
     let piTokens: Int
+    let devinUSD: Double
+    let devinTokens: Int
     /// Per-model split for this day (all sources, token-sorted).
     var models: [CombinedModelCost] = []
 
-    var usd: Double { claudeUSD + codexUSD + grokUSD + kiroUSD + ompUSD + piUSD }
-    var tokens: Int { claudeTokens + codexTokens + grokTokens + kiroTokens + ompTokens + piTokens }
+    var usd: Double { claudeUSD + codexUSD + grokUSD + kiroUSD + ompUSD + piUSD + devinUSD }
+    var tokens: Int { claudeTokens + codexTokens + grokTokens + kiroTokens + ompTokens + piTokens + devinTokens }
     var isActive: Bool { usd > 0 || tokens > 0 }
     var id: Date { date }
 
@@ -34,6 +36,7 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
         kiroUSD: Double = 0, kiroTokens: Int = 0,
         ompUSD: Double = 0, ompTokens: Int = 0,
         piUSD: Double = 0, piTokens: Int = 0,
+        devinUSD: Double = 0, devinTokens: Int = 0,
         models: [CombinedModelCost] = []
     ) {
         self.date = date
@@ -49,6 +52,8 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
         self.ompTokens = ompTokens
         self.piUSD = piUSD
         self.piTokens = piTokens
+        self.devinUSD = devinUSD
+        self.devinTokens = devinTokens
         self.models = models
     }
 }
@@ -58,7 +63,7 @@ struct CombinedModelCost: Equatable, Identifiable, Sendable {
     let name: String
     let usd: Double
     let tokens: Int
-    /// "claude" | "codex" | "grok" | "kiro" | "omp" | "pi"
+    /// "claude" | "codex" | "grok" | "kiro" | "omp" | "pi" | "devin"
     let source: String
     var id: String { "\(source):\(name)" }
 
@@ -69,7 +74,7 @@ struct CombinedModelCost: Equatable, Identifiable, Sendable {
     }
 }
 
-/// Cross-provider aggregation of the local usage reports across all 6 sources.
+/// Cross-provider aggregation of the local usage reports across all 7 sources.
 struct CombinedUsageReport: Equatable, Sendable {
     let todayUSD: Double
     let todayTokens: Int
@@ -90,17 +95,18 @@ struct CombinedUsageReport: Equatable, Sendable {
     let kiroConfidence: CostHistoryStore.UsageScanConfidence?
     let ompConfidence: CostHistoryStore.UsageScanConfidence?
     let piConfidence: CostHistoryStore.UsageScanConfidence?
+    let devinConfidence: CostHistoryStore.UsageScanConfidence?
     var isEmpty: Bool { activeDays == 0 }
     var hasIncludedCostSource: Bool {
         [claudeConfidence, codexConfidence, grokConfidence,
-         kiroConfidence, ompConfidence, piConfidence]
+         kiroConfidence, ompConfidence, piConfidence, devinConfidence]
             .contains { $0?.included == true }
     }
     /// Sources actually contributing to this report (seeded history counts too).
     /// Drives the "· N agent" hero subtitle so it never reads 0 while cost shows.
     var includedSourceCount: Int {
         [claudeConfidence, codexConfidence, grokConfidence,
-         kiroConfidence, ompConfidence, piConfidence]
+         kiroConfidence, ompConfidence, piConfidence, devinConfidence]
             .filter { $0?.included == true }.count
     }
 
@@ -123,7 +129,8 @@ struct CombinedUsageReport: Equatable, Sendable {
         grokConfidence: CostHistoryStore.UsageScanConfidence? = nil,
         kiroConfidence: CostHistoryStore.UsageScanConfidence? = nil,
         ompConfidence: CostHistoryStore.UsageScanConfidence? = nil,
-        piConfidence: CostHistoryStore.UsageScanConfidence? = nil
+        piConfidence: CostHistoryStore.UsageScanConfidence? = nil,
+        devinConfidence: CostHistoryStore.UsageScanConfidence? = nil
     ) {
         self.todayUSD = todayUSD
         self.todayTokens = todayTokens
@@ -144,6 +151,7 @@ struct CombinedUsageReport: Equatable, Sendable {
         self.kiroConfidence = kiroConfidence
         self.ompConfidence = ompConfidence
         self.piConfidence = piConfidence
+        self.devinConfidence = devinConfidence
     }
 
     static func build(
@@ -153,12 +161,14 @@ struct CombinedUsageReport: Equatable, Sendable {
         kiro: KiroUsageReport? = nil,
         omp: OMPUsageReport? = nil,
         pi: PiUsageReport? = nil,
+        devin: DevinCLIUsageReport? = nil,
         includeClaude: Bool = true,
         includeCodex: Bool = true,
         includeGrok: Bool = true,
         includeKiro: Bool = true,
         includeOMP: Bool = true,
         includePi: Bool = true,
+        includeDevin: Bool = true,
         calendar: Calendar = .current,
         now: Date = Date(),
         windowDays: Int = 120
@@ -170,6 +180,7 @@ struct CombinedUsageReport: Equatable, Sendable {
         let includedKiro = includeKiro ? kiro : nil
         let includedOMP = includeOMP ? omp : nil
         let includedPi = includePi ? pi : nil
+        let includedDevin = includeDevin ? devin : nil
 
         let claudeDays = dayTotals(from: includedClaude?.daily.map {
             ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
@@ -189,6 +200,9 @@ struct CombinedUsageReport: Equatable, Sendable {
         let piDays = dayTotals(from: includedPi?.daily.map {
             ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
         } ?? [], calendar: calendar)
+        let devinDays = dayTotals(from: includedDevin?.daily.map {
+            ($0.date, $0.usd, $0.tokens, $0.models.map { ($0.name, $0.usd, $0.tokens) })
+        } ?? [], calendar: calendar)
 
         var daily: [CombinedDailyUsage] = []
         daily.reserveCapacity(windowDays)
@@ -200,6 +214,7 @@ struct CombinedUsageReport: Equatable, Sendable {
             let k = kiroDays.totals[day] ?? (0, 0)
             let o = ompDays.totals[day] ?? (0, 0)
             let p = piDays.totals[day] ?? (0, 0)
+            let d = devinDays.totals[day] ?? (0, 0)
             daily.append(CombinedDailyUsage(
                 date: day,
                 claudeUSD: c.usd, claudeTokens: c.tokens,
@@ -208,6 +223,7 @@ struct CombinedUsageReport: Equatable, Sendable {
                 kiroUSD: k.usd, kiroTokens: k.tokens,
                 ompUSD: o.usd, ompTokens: o.tokens,
                 piUSD: p.usd, piTokens: p.tokens,
+                devinUSD: d.usd, devinTokens: d.tokens,
                 models: mergedModelCosts(
                     claude: claudeDays.models[day] ?? [:],
                     codex: codexDays.models[day] ?? [:],
@@ -215,6 +231,7 @@ struct CombinedUsageReport: Equatable, Sendable {
                     kiro: kiroDays.models[day] ?? [:],
                     omp: ompDays.models[day] ?? [:],
                     pi: piDays.models[day] ?? [:],
+                    devin: devinDays.models[day] ?? [:],
                     includeKiroAggregate: true)))
         }
 
@@ -243,7 +260,8 @@ struct CombinedUsageReport: Equatable, Sendable {
                 grok: foldModels(grokDays.models),
                 kiro: foldModels(kiroDays.models),
                 omp: foldModels(ompDays.models),
-                pi: foldModels(piDays.models)).prefix(6))
+                pi: foldModels(piDays.models),
+                devin: foldModels(devinDays.models)).prefix(6))
 
         let cUSD = includedClaude?.last30USD ?? 0
         let xUSD = includedCodex?.last30USD ?? 0
@@ -251,7 +269,8 @@ struct CombinedUsageReport: Equatable, Sendable {
         let kUSD = includedKiro?.last30USD ?? 0
         let oUSD = includedOMP?.last30USD ?? 0
         let pUSD = includedPi?.last30USD ?? 0
-        let last30USD = cUSD + xUSD + gUSD + kUSD + oUSD + pUSD
+        let dUSD = includedDevin?.last30USD ?? 0
+        let last30USD = cUSD + xUSD + gUSD + kUSD + oUSD + pUSD + dUSD
 
         let cTokens = includedClaude?.last30Tokens ?? 0
         let xTokens = includedCodex?.last30Tokens ?? 0
@@ -259,7 +278,8 @@ struct CombinedUsageReport: Equatable, Sendable {
         let kTokens = includedKiro?.last30Tokens ?? 0
         let oTokens = includedOMP?.last30Tokens ?? 0
         let pTokens = includedPi?.last30Tokens ?? 0
-        let last30Tokens = cTokens + xTokens + gTokens + kTokens + oTokens + pTokens
+        let dTokens = includedDevin?.last30Tokens ?? 0
+        let last30Tokens = cTokens + xTokens + gTokens + kTokens + oTokens + pTokens + dTokens
 
         return CombinedUsageReport(
             todayUSD: today?.usd ?? 0,
@@ -280,7 +300,8 @@ struct CombinedUsageReport: Equatable, Sendable {
             grokConfidence: includedGrok?.scanConfidence,
             kiroConfidence: includedKiro?.scanConfidence,
             ompConfidence: includedOMP?.scanConfidence,
-            piConfidence: includedPi?.scanConfidence)
+            piConfidence: includedPi?.scanConfidence,
+            devinConfidence: includedDevin?.scanConfidence)
     }
 
     private struct DayIndex {
@@ -319,6 +340,7 @@ struct CombinedUsageReport: Equatable, Sendable {
         kiro: [String: (usd: Double, tokens: Int)] = [:],
         omp: [String: (usd: Double, tokens: Int)] = [:],
         pi: [String: (usd: Double, tokens: Int)] = [:],
+        devin: [String: (usd: Double, tokens: Int)] = [:],
         includeKiroAggregate: Bool = false
     ) -> [CombinedModelCost] {
         var items: [CombinedModelCost] = []
@@ -333,6 +355,7 @@ struct CombinedUsageReport: Equatable, Sendable {
         })
         items.append(contentsOf: omp.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "omp") })
         items.append(contentsOf: pi.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "pi") })
+        items.append(contentsOf: devin.map { CombinedModelCost(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens, source: "devin") })
         items.sort {
             if $0.tokens != $1.tokens { return $0.tokens > $1.tokens }
             return $0.usd > $1.usd
@@ -371,6 +394,8 @@ struct CombinedWindowTotals: Equatable {
     let ompTokens: Int
     let piUSD: Double
     let piTokens: Int
+    let devinUSD: Double
+    let devinTokens: Int
 }
 
 extension CombinedUsageReport {
@@ -390,7 +415,9 @@ extension CombinedUsageReport {
             ompUSD: window.reduce(0) { $0 + $1.ompUSD },
             ompTokens: window.reduce(0) { $0 + $1.ompTokens },
             piUSD: window.reduce(0) { $0 + $1.piUSD },
-            piTokens: window.reduce(0) { $0 + $1.piTokens })
+            piTokens: window.reduce(0) { $0 + $1.piTokens },
+            devinUSD: window.reduce(0) { $0 + $1.devinUSD },
+            devinTokens: window.reduce(0) { $0 + $1.devinTokens })
     }
 
     func topModels(lastDays days: Int, limit: Int = 6) -> (models: [CombinedModelCost], windowTokens: Int) {
@@ -442,7 +469,7 @@ enum BudgetForecastStatus: Equatable {
 typealias MonthlyForecastStatus = BudgetForecastStatus
 
 enum CombinedUsageSource: Equatable {
-    case total, claude, codex, grok, kiro, omp, pi
+    case total, claude, codex, grok, kiro, omp, pi, devin
 }
 
 struct BudgetForecast: Equatable {
@@ -547,6 +574,7 @@ struct BudgetForecast: Equatable {
         case .kiro: return day.kiroUSD
         case .omp: return day.ompUSD
         case .pi: return day.piUSD
+        case .devin: return day.devinUSD
         }
     }
 }
@@ -618,6 +646,7 @@ enum AllUsageSourceAuthorization {
             (.kiro, "Kiro"),
             (.omp, "Oh My Pi"),
             (.pi, "Pi"),
+            (.devin, "Devin"),
         ]
         return labels.compactMap { pending.contains($0.0) ? $0.1 : nil }
     }
@@ -643,6 +672,7 @@ struct AllUsageOverview: View {
     let kiro: KiroUsageReport?
     let omp: OMPUsageReport?
     let pi: PiUsageReport?
+    let devin: DevinCLIUsageReport?
     let visibleAgentRecords: [InstalledAgentRecord]
     let allAgentRecords: [InstalledAgentRecord]
     let providerStatuses: [ProviderStatus]
@@ -663,6 +693,7 @@ struct AllUsageOverview: View {
         kiro: KiroUsageReport? = nil,
         omp: OMPUsageReport? = nil,
         pi: PiUsageReport? = nil,
+        devin: DevinCLIUsageReport? = nil,
         visibleAgentRecords: [InstalledAgentRecord] = [],
         allAgentRecords: [InstalledAgentRecord] = [],
         providerStatuses: [ProviderStatus] = [],
@@ -681,6 +712,7 @@ struct AllUsageOverview: View {
         self.kiro = kiro
         self.omp = omp
         self.pi = pi
+        self.devin = devin
         self.visibleAgentRecords = visibleAgentRecords
         self.allAgentRecords = allAgentRecords
         self.providerStatuses = providerStatuses
@@ -704,6 +736,7 @@ struct AllUsageOverview: View {
         if kiro != nil { sources.insert(.kiro) }
         if omp != nil { sources.insert(.omp) }
         if pi != nil { sources.insert(.pi) }
+        if devin != nil { sources.insert(.devin) }
         return sources
     }
 
@@ -724,12 +757,14 @@ struct AllUsageOverview: View {
                 kiro: kiro,
                 omp: omp,
                 pi: pi,
+                devin: devin,
                 includeClaude: authorizedSources.contains(.claude),
                 includeCodex: authorizedSources.contains(.codex),
                 includeGrok: authorizedSources.contains(.grok),
                 includeKiro: authorizedSources.contains(.kiro),
                 includeOMP: authorizedSources.contains(.omp),
-                includePi: authorizedSources.contains(.pi))
+                includePi: authorizedSources.contains(.pi),
+                includeDevin: authorizedSources.contains(.devin))
             let rows = costRows(daily: report.daily)
 
             AllAgentsOverview(
@@ -816,6 +851,10 @@ struct AllUsageOverview: View {
                 guard let pi else { return nil }
                 let s = sums({ $0.piUSD }, { $0.piTokens })
                 return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: pi.todayUSD, tokens: s.tokens, topModel: pi.topModel)
+            case .devin:
+                guard let devin else { return nil }
+                let s = sums({ $0.devinUSD }, { $0.devinTokens })
+                return AgentCostRow(record: record, periodUSD: s.usd, todayUSD: devin.todayUSD, tokens: s.tokens, topModel: devin.topModel)
             default:
                 return nil
             }
@@ -1220,6 +1259,8 @@ struct CombinedChartCard: View {
     private var ompTodayTokens: Int { report.daily.last?.ompTokens ?? 0 }
     private var piTodayUSD: Double { report.daily.last?.piUSD ?? 0 }
     private var piTodayTokens: Int { report.daily.last?.piTokens ?? 0 }
+    private var devinTodayUSD: Double { report.daily.last?.devinUSD ?? 0 }
+    private var devinTodayTokens: Int { report.daily.last?.devinTokens ?? 0 }
 
     private func periodLabel(_ days: Int) -> String {
         days == 1 ? "24h" : "\(days) \(vi ? "ngày" : "days")"
@@ -1238,13 +1279,13 @@ struct CombinedChartCard: View {
 
     private var periodTotalUSD: Double {
         is24h
-            ? claude24USD + codexTodayUSD + grokTodayUSD + kiroTodayUSD + ompTodayUSD + piTodayUSD
+            ? claude24USD + codexTodayUSD + grokTodayUSD + kiroTodayUSD + ompTodayUSD + piTodayUSD + devinTodayUSD
             : windowTotals.usd
     }
 
     private var periodTotalTokens: Int {
         is24h
-            ? claude24Tokens + codexTodayTokens + grokTodayTokens + kiroTodayTokens + ompTodayTokens + piTodayTokens
+            ? claude24Tokens + codexTodayTokens + grokTodayTokens + kiroTodayTokens + ompTodayTokens + piTodayTokens + devinTodayTokens
             : windowTotals.tokens
     }
 
@@ -1365,13 +1406,15 @@ struct CombinedChartCard: View {
                                 let grokHeight = barHeight * CGFloat(Double(day.grokTokens) / Double(day.tokens))
                                 let kiroHeight = barHeight * CGFloat(Double(day.kiroTokens) / Double(day.tokens))
                                 let ompHeight = barHeight * CGFloat(Double(day.ompTokens) / Double(day.tokens))
-                                let piHeight = max(0, barHeight - claudeHeight - codexHeight - grokHeight - kiroHeight - ompHeight)
+                                let piHeight = barHeight * CGFloat(Double(day.piTokens) / Double(day.tokens))
+                                let devinHeight = max(0, barHeight - claudeHeight - codexHeight - grokHeight - kiroHeight - ompHeight - piHeight)
                                 Rectangle().fill(VocabbyTheme.chartClaude).frame(height: claudeHeight)
                                 Rectangle().fill(VocabbyTheme.chartCodex).frame(height: codexHeight)
                                 Rectangle().fill(VocabbyTheme.chartGrok).frame(height: grokHeight)
                                 Rectangle().fill(VocabbyTheme.chartKiro).frame(height: kiroHeight)
                                 Rectangle().fill(VocabbyTheme.chartOMPBar(vertical: true)).frame(height: ompHeight)
                                 Rectangle().fill(VocabbyTheme.chartPi).frame(height: piHeight)
+                                Rectangle().fill(VocabbyTheme.devin).frame(height: devinHeight)
                             } else {
                                 Rectangle().fill(VocabbyTheme.hairline).frame(height: 1)
                             }
@@ -1545,6 +1588,8 @@ struct DayDetailPanelRoot: View {
                        usd: day.ompUSD, tokens: day.ompTokens),
             AgentSlice(id: "pi", name: "Pi Agent", color: AnyShapeStyle(VocabbyTheme.chartPi),
                        usd: day.piUSD, tokens: day.piTokens),
+            AgentSlice(id: "devin", name: "Devin", color: AnyShapeStyle(VocabbyTheme.devin),
+                       usd: day.devinUSD, tokens: day.devinTokens),
         ]
         .filter { $0.usd > 0 || $0.tokens > 0 }
         // Xếp theo TOKEN, không theo tiền: giá mỗi model chênh nhau hàng chục
@@ -1783,6 +1828,7 @@ struct DayDetailPanelRoot: View {
         case "kiro": return AnyShapeStyle(VocabbyTheme.chartKiro)
         case "omp": return AnyShapeStyle(VocabbyTheme.chartOMPBar())
         case "pi": return AnyShapeStyle(VocabbyTheme.chartPi)
+        case "devin": return AnyShapeStyle(VocabbyTheme.devin)
         default: return AnyShapeStyle(VocabbyTheme.chartCodex)
         }
     }
@@ -1887,6 +1933,7 @@ struct CombinedTopModelsCard: View {
         case "kiro": AnyShapeStyle(VocabbyTheme.chartKiro)
         case "omp": AnyShapeStyle(VocabbyTheme.chartOMPBar())
         case "pi": AnyShapeStyle(VocabbyTheme.chartPi)
+        case "devin": AnyShapeStyle(VocabbyTheme.devin)
         default: AnyShapeStyle(VocabbyTheme.tertiary)
         }
     }

@@ -46,11 +46,16 @@ struct AllAgentsCostBreakdownSection: View {
         switch mode {
         case .agent:
             return rows.map {
-                DisplayRow(
+                // Token-only source (Devin): không có USD local → hiển thị tokens,
+                // giữ amount = 0 để sort xuống cuối thay vì giả lập chi phí.
+                let tokenOnly = $0.periodUSD <= 0 && $0.tokens > 0
+                return DisplayRow(
                     id: $0.id.rawValue,
                     name: $0.record.displayName,
                     amount: $0.periodUSD,
-                    display: AllUsageFormat.usd($0.periodUSD),
+                    display: tokenOnly
+                        ? AllUsageFormat.tokensShort($0.tokens)
+                        : AllUsageFormat.usd($0.periodUSD),
                     color: $0.color,
                     agentID: $0.id
                 )

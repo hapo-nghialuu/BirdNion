@@ -625,6 +625,7 @@ struct AgentDetailPanelRoot: View {
         case .kiro: return VocabbyTheme.chartKiro
         case .omp: return VocabbyTheme.chartOMP
         case .pi: return VocabbyTheme.chartPi
+        case .devin: return VocabbyTheme.devin
         default: return VocabbyTheme.primary
         }
     }

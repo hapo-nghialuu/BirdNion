@@ -20,7 +20,7 @@ const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 const MODEL_NAME_MAX_CHARS: usize = 128;
 const MAX_MODELS_PER_DAY: usize = 32;
 const MAX_SCANNED_AT_FUTURE_MS: i64 = 5 * 60 * 1_000;
-const KNOWN_SOURCES: [&str; 6] = ["claude", "codex", "grok", "kiro", "omp", "pi"];
+const KNOWN_SOURCES: [&str; 7] = ["claude", "codex", "grok", "kiro", "omp", "pi", "devin"];
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct HistoryModel {

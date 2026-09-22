@@ -5614,6 +5614,205 @@ final class NewProviderTests: XCTestCase {
             "_https://example.com\(sep)auth1_session"))
     }
 
+    // MARK: - Devin CLI cost scanner (transcripts → CostHistoryStore.devin)
+
+    private var devinUTCCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal
+    }
+
+    /// Synthetic transcript — steps carry `metrics.prompt_tokens` +
+    /// `completion_tokens`; `cached_tokens` is a subset of prompt and must
+    /// NOT be added again. Steps without metrics carry no usage.
+    private func writeDevinTranscript(_ json: String, to dir: URL, name: String) throws {
+        try json.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
+    func testDevinCostScannerCountsPromptPlusCompletionNotCached() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try writeDevinTranscript("""
+        {
+          "schema_version": 1,
+          "session_id": "s1",
+          "agent": {"model_name": "swe-2-max"},
+          "steps": [
+            {"timestamp": "2026-09-21T10:00:00Z", "model_name": "swe-2-max",
+             "metrics": {"prompt_tokens": 1000, "completion_tokens": 100, "cached_tokens": 400}},
+            {"timestamp": "2026-09-21T11:00:00Z", "model_name": "swe-2-high",
+             "metrics": {"prompt_tokens": 500, "completion_tokens": 50}},
+            {"timestamp": "2026-09-22T09:00:00Z", "model_name": "swe-2-max",
+             "metrics": {"prompt_tokens": 200, "completion_tokens": 20, "cached_tokens": 200}},
+            {"timestamp": "2026-09-22T09:30:00Z", "model_name": "swe-2-max"},
+            {"timestamp": "2026-09-22T10:00:00Z"}
+          ],
+          "final_metrics": {"total_prompt_tokens": 1700, "total_completion_tokens": 170}
+        }
+        """, to: dir, name: "session-one.json")
+
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22, hour: 12))!
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, now: now, calendar: cal)
+
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.dailyBuckets.count, 2)
+
+        let sep21 = cal.startOfDay(for: cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 21))!)
+        let sep22 = cal.startOfDay(for: cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22))!)
+        let day1 = result.dailyBuckets.first { $0.date == sep21 }
+        let day2 = result.dailyBuckets.first { $0.date == sep22 }
+
+        // 1000+100 + 500+50 = 1650 (cached 400/200 are inside prompt_tokens).
+        XCTAssertEqual(day1?.tokens, 1650)
+        XCTAssertEqual(day1?.usd ?? -1, 0, accuracy: 0.0001)
+        XCTAssertEqual(day2?.tokens, 220)
+
+        // Models grouped per day; token-sorted.
+        XCTAssertEqual(day1?.models.count, 2)
+        XCTAssertEqual(day1?.models.first?.name, "swe-2-max")
+        XCTAssertEqual(day1?.models.first?.tokens, 1100)
+        XCTAssertEqual(day1?.models.last?.name, "swe-2-high")
+        XCTAssertEqual(day1?.models.last?.tokens, 550)
+    }
+
+    /// Malformed/legacy transcripts must not abort the scan: the bad file
+    /// marks the pass incomplete (never claims LIVE) while valid transcripts
+    /// still contribute their days.
+    func testDevinCostScannerMalformedFileMarksIncompleteButKeepsData() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try writeDevinTranscript("not json at all", to: dir, name: "a-bad.json")
+        try writeDevinTranscript("""
+        {"steps": [
+          {"timestamp": "2026-09-22T08:00:00Z",
+           "metrics": {"prompt_tokens": 42, "completion_tokens": 8}}
+        ]}
+        """, to: dir, name: "b-good.json")
+
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22, hour: 12))!
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, now: now, calendar: cal)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.dailyBuckets.reduce(0) { $0 + $1.tokens }, 50)
+        // Missing metrics → model falls back to "devin".
+        XCTAssertEqual(result.dailyBuckets.first?.models.first?.name, "devin")
+    }
+
+    /// Empty transcript directory → completed, zero buckets (not an error).
+    func testDevinCostScannerEmptyDirectory() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, calendar: devinUTCCalendar)
+        XCTAssertTrue(result.completed)
+        XCTAssertTrue(result.dailyBuckets.isEmpty)
+    }
+
+    /// Steps older than the scan window are dropped.
+    func testDevinCostScannerHonorsScanWindow() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try writeDevinTranscript("""
+        {"steps": [
+          {"timestamp": "2026-08-01T08:00:00Z",
+           "metrics": {"prompt_tokens": 999, "completion_tokens": 1}},
+          {"timestamp": "2026-09-22T08:00:00Z",
+           "metrics": {"prompt_tokens": 10, "completion_tokens": 5}}
+        ]}
+        """, to: dir, name: "s.json")
+
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22, hour: 12))!
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 7, now: now, calendar: cal)
+
+        XCTAssertEqual(result.dailyBuckets.count, 1)
+        XCTAssertEqual(result.dailyBuckets.first?.tokens, 15)
+    }
+
+    /// `makeDevinReport` aggregates last30 + picks the top model by tokens.
+    func testDevinReportFromHistoryWindow() {
+        let cal = devinUTCCalendar
+        let day = { (offset: Int) -> Date in
+            cal.date(byAdding: .day, value: offset,
+                     to: cal.startOfDay(for: Date()))!
+        }
+        let window = [
+            CostHistoryStore.DayBucket(
+                date: day(-1), usd: 0, tokens: 100,
+                models: [CostHistoryStore.Model(name: "swe-2-max", usd: 0, tokens: 100)]),
+            CostHistoryStore.DayBucket(
+                date: day(0), usd: 0, tokens: 40,
+                models: [
+                    CostHistoryStore.Model(name: "swe-2-max", usd: 0, tokens: 10),
+                    CostHistoryStore.Model(name: "swe-2-high", usd: 0, tokens: 30),
+                ]),
+        ]
+        let report = CostHistoryStore.makeDevinReport(
+            window: window,
+            confidence: .init(included: true, live: true, scannedAt: Date()))
+        XCTAssertEqual(report.todayTokens, 40)
+        XCTAssertEqual(report.last30Tokens, 140)
+        XCTAssertEqual(report.last30USD, 0)
+        XCTAssertEqual(report.topModel, "swe-2-max")
+        XCTAssertEqual(report.daily.count, 2)
+    }
+
+    /// The Devin agent record feeds the `.devin` cost source so the All tab
+    /// can authorize and attribute the scan.
+    func testDevinAgentMapsToDevinCostSource() {
+        XCTAssertEqual(InstalledAgentID.devin.costHistorySource, .devin)
+        XCTAssertEqual(CostHistoryStore.Source(rawValue: "devin"), .devin)
+    }
+
+    /// cost-history.json round-trips a "devin" source entry — the schema gate
+    /// (`knownSources`) must accept it so macOS/Linux share the file format.
+    func testDevinCostHistorySourceRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-history-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+
+        let cal = devinUTCCalendar
+        let today = cal.startOfDay(for: Date())
+        _ = CostHistoryStore.apply(
+            source: .devin,
+            liveDays: [(today, 0.0, 123,
+                        [(name: "swe-2-max", usd: 0.0, tokens: 123)])],
+            now: Date(),
+            calendar: cal,
+            windowDays: 120,
+            url: url,
+            liveScanSucceeded: true)
+
+        let window = CostHistoryStore.window(
+            source: .devin, now: Date(), calendar: cal, windowDays: 120, url: url)
+        XCTAssertEqual(window.last?.tokens, 123)
+        XCTAssertEqual(window.last?.models.first?.name, "swe-2-max")
+    }
+
     // MARK: - Menu bar: 5-hour + weekly for CommandCode / OpenCode Go
 
     private func rateWindow(_ label: String, remaining: Int, seconds: Int) -> QuotaWindow {

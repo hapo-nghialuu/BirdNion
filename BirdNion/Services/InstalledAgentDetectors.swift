@@ -288,7 +288,8 @@ enum InstalledAgentDetectors {
             markers: [
                 (".devin", .configuration),
                 (".config/devin", .configuration),
-                ("Library/Application Support/Devin", .configuration)
+                ("Library/Application Support/Devin", .configuration),
+                (".local/share/devin", .applicationState)
             ],
             providerIDs: ["devin"]
         )

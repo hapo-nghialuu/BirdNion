@@ -73,6 +73,7 @@ enum InstalledAgentID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kiro: .kiro
         case .omp: .omp
         case .pi: .pi
+        case .devin: .devin
         default: nil
         }
     }
