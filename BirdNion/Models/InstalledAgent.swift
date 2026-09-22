@@ -17,6 +17,7 @@ enum InstalledAgentID: String, CaseIterable, Codable, Identifiable, Sendable {
     case aider
     case qwen
     case goose
+    case devin
 
     var id: String { rawValue }
 
@@ -38,6 +39,7 @@ enum InstalledAgentID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .aider: "Aider"
         case .qwen: "Qwen Code"
         case .goose: "Goose"
+        case .devin: "Devin"
         }
     }
 
@@ -59,6 +61,7 @@ enum InstalledAgentID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .aider: "ellipsis.message"
         case .qwen: "cpu"
         case .goose: "bird"
+        case .devin: "hexagon"
         }
     }
 

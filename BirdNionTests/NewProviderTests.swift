@@ -5504,6 +5504,25 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows.map(\.usedPct), [67, 34])
     }
 
+    /// Storage may carry metadata for several orgs; emit one session per
+    /// internal-org candidate so the fetcher can try each — auth1 tokens only
+    /// resolve against their own org ("No organizations found for auth1 user").
+    func testDevinImporterEmitsOneSessionPerOrgCandidate() {
+        let storage: [String: String] = [
+            "auth1_session": "{\"token\":\"auth1_0123456789abcdef0123456789\"}",
+            "sidebar-collapsed-folders:org-aaaaaaaaa": "[]",
+            "feature-flags-cache:user-1:org-bbbbbbbbb": "1",
+        ]
+        let sessions = DevinSessionImporter.sessions(from: storage, sourceLabel: "test")
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(
+            Set(sessions.map(\.internalOrganizationID)),
+            ["org-aaaaaaaaa", "org-bbbbbbbbb"])
+        // Sorted-key scan keeps the first candidate deterministic.
+        XCTAssertEqual(sessions.first?.internalOrganizationID, "org-bbbbbbbbb")
+        XCTAssertEqual(Set(sessions.map(\.accessToken)).count, 1)
+    }
+
     /// `readTextEntries` scans the whole profile LevelDB — unscoped. Without
     /// the origin guard, a foreign auth0 key (e.g. ChatGPT's auth0spajs entry
     /// in the same store) is mistaken for a Devin session: a token with no
