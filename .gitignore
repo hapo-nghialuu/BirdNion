@@ -35,7 +35,10 @@ Vendor/CodexBar/.swiftpm/
 
 # CafeKit / Ecosystem
 specs/_shared/
+plans/*
+!plans/*.md
 !plans/templates/
+!plans/templates/**
 .cafekit-backup/
 .cafekit.lock
 .opencode/
@@ -44,3 +47,4 @@ specs/_shared/
 # Upstream CodexBar reference files (local only, not part of the build)
 .codexbar-ref/
 .vercel
+.omp/
