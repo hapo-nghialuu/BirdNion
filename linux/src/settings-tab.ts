@@ -185,7 +185,7 @@ const ROSTER: [string, string][] = [
   ["commandcode", "CommandCode"], ["freemodel", "Freemodel"], ["mimo", "MiMo"],
   ["alibaba", "Alibaba"], ["cursor", "Cursor"], ["gemini", "Gemini"],
   ["kiro", "Kiro"], ["opencode", "OpenCode"], ["opencodego", "OpenCodeGo"],
-  ["antigravity", "Antigravity"], ["bedrock", "Bedrock"],
+  ["antigravity", "Antigravity"], ["bedrock", "Bedrock"], ["devin", "Devin"],
 ];
 
 function el(tag: string, className: string, text?: string): HTMLElement {

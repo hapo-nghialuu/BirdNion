@@ -15,6 +15,7 @@ export function logoUrl(id: string): string | null {
     "openrouter", "tryapi", "deepseek", "zai", "elevenlabs", "hiyo", "deepgram", "groq",
     "copilot", "kilo", "commandcode", "freemodel", "mimo", "alibaba",
     "cursor", "gemini", "kiro", "opencode", "opencodego", "antigravity", "bedrock",
+    "devin",
     // Agent không phải provider — cần logo cho Cost by / danh sách agent cài đặt.
     "omp", "pi", "aider", "amp", "auggie", "goose", "qwen",
   ]);
@@ -109,6 +110,7 @@ const PROVIDER_TINT: Record<string, [string, string]> = {
   opencodego: ["#3B82F6", "#3B82F6"],
   antigravity: ["#60BA7E", "#60BA7E"],
   bedrock: ["#FF9900", "#FF9900"],
+  devin: ["#46B482", "#46B482"],
   // elevenlabs/auggie/pi bám màu chữ như macOS (mark gốc gần như đen/trắng).
   elevenlabs: ["#16150F", "#F2F0E8"],
   auggie: ["#16150F", "#F2F0E8"],

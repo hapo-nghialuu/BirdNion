@@ -464,6 +464,11 @@ pub struct Provider {
     /// Bedrock: named ~/.aws profile, used when `aws_auth_mode == "profile"`.
     #[serde(default)]
     pub aws_profile: Option<String>,
+    /// Devin: organization override — slug, internal `org-…`/`org_…` ID, or
+    /// full `https://app.devin.ai/org/<slug>` URL (mirrors the macOS
+    /// `devinOrganization` field in the shared settings.json schema).
+    #[serde(default)]
+    pub devin_organization: Option<String>,
     /// Bedrock: optional monthly budget (USD) for the spend window.
     #[serde(default)]
     pub budget: Option<f64>,
