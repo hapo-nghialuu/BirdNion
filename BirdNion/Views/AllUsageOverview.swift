@@ -859,6 +859,9 @@ struct AllUsageOverview: View {
                 return nil
             }
         }
+        // Agent cài đặt nhưng không có usage trong cửa sổ chart đang chọn
+        // → ẩn khỏi Cost by (vẫn hiện ở Configured nếu có .nativeConfig).
+        .filter { $0.periodUSD > 0 || $0.tokens > 0 }
     }
 
     /// Gộp model theo đúng window chart (MODEL = $, TOKEN = tokens).
