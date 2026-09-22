@@ -252,16 +252,25 @@ enum DevinSessionImporter {
             storage[entry.key] = self.decodedStorageValue(entry.value)
         }
 
+        // readTextEntries scans the whole profile store — it is NOT scoped to
+        // our origin. Without a filter, a foreign site's auth0spajs token
+        // (e.g. ChatGPT's, living in the same LevelDB) gets mistaken for a
+        // Devin session. LevelDB text keys keep the `_<origin>\x00\x01<key>`
+        // prefix, so only accept entries belonging to storageOrigin.
         let textEntries = SweetCookieKit.ChromiumLocalStorageReader.readTextEntries(
             in: levelDBURL,
             logger: logger)
         for entry in textEntries where storage[entry.key] == nil {
-            if self.isUsefulStorageKey(entry.key) {
+            if self.isOwnOriginTextKey(entry.key), self.isUsefulStorageKey(entry.key) {
                 storage[entry.key] = self.decodedStorageValue(entry.value)
             }
         }
 
         return storage
+    }
+
+    static func isOwnOriginTextKey(_ key: String) -> Bool {
+        key.contains(self.storageOrigin)
     }
 
     private static func jsonObject(from raw: String) -> Any? {

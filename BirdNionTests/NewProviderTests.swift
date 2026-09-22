@@ -5504,6 +5504,20 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows.map(\.usedPct), [67, 34])
     }
 
+    /// `readTextEntries` scans the whole profile LevelDB — unscoped. Without
+    /// the origin guard, a foreign auth0 key (e.g. ChatGPT's auth0spajs entry
+    /// in the same store) is mistaken for a Devin session: a token with no
+    /// org, surfacing as "missing organization".
+    func testDevinImporterRejectsForeignOriginStorageKeys() {
+        let sep = "\u{0}\u{1}"
+        XCTAssertTrue(DevinSessionImporter.isOwnOriginTextKey(
+            "_https://app.devin.ai\(sep)@@auth0spajs@@::devin::"))
+        XCTAssertFalse(DevinSessionImporter.isOwnOriginTextKey(
+            "_https://chatgpt.com\(sep)@@auth0spajs@@::app_2SKx67EdpoN0G6j64rFvigXD::"))
+        XCTAssertFalse(DevinSessionImporter.isOwnOriginTextKey(
+            "_https://example.com\(sep)auth1_session"))
+    }
+
     // MARK: - Menu bar: 5-hour + weekly for CommandCode / OpenCode Go
 
     private func rateWindow(_ label: String, remaining: Int, seconds: Int) -> QuotaWindow {
