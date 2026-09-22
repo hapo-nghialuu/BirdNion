@@ -1336,7 +1336,7 @@ enum L10n {
         "xai.teamId.title": "xAI Team ID",
         "xai.teamId.hint": "Required for the Management API. You can set XAI_TEAM_ID; the environment value takes precedence.",
         "devin.organization.title": "Devin Organization",
-        "devin.organization.hint": "Org slug, internal org-…/org_… ID, or a full app.devin.ai/org/<slug> URL. You can set DEVIN_ORGANIZATION; the environment value takes precedence. Blank = auto-read from the Chrome session."
+        "devin.organization.hint": "Org slug, internal org-…/org_… ID, or a full app.devin.ai/org/<slug> URL. You can set DEVIN_ORGANIZATION; the environment value takes precedence. Blank = auto-read from the Chrome session.",
         "provider.systemManaged": "System · ~/.codex",
         "provider.appManaged": "Managed by app",
         "provider.reauth": "Sign in again",
