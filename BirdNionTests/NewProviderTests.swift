@@ -5479,6 +5479,31 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows[1].usedPct, 25)
     }
 
+    /// Live Zen payload: `percent` is already 0-100, so an integer `1` means
+    /// 1% used — it must NOT be rescaled as a 0-1 fraction into 100%.
+    func testOpenCodeGoIntegerPercentPayloadNotRescaled() {
+        let json = """
+        {"usage":{"rolling":{"percent":0,"resetsAt":"2030-01-01T00:00:00.000Z"},
+                  "weekly":{"percent":1,"resetsAt":"2030-01-08T00:00:00.000Z"},
+                  "monthly":{"percent":57,"resetsAt":"2030-02-01T00:00:00.000Z"}}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.usedPct), [0, 1, 57])
+    }
+
+    /// Fraction-style payloads still scale up — decided once per payload,
+    /// not per value.
+    func testOpenCodeGoFractionPayloadScalesToPercent() {
+        let json = """
+        {"usage":{"rolling":{"percent":0.67,"resetInSec":600},
+                  "weekly":{"percent":0.34,"resetInSec":86400}}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.usedPct), [67, 34])
+    }
+
     // MARK: - Menu bar: 5-hour + weekly for CommandCode / OpenCode Go
 
     private func rateWindow(_ label: String, remaining: Int, seconds: Int) -> QuotaWindow {
