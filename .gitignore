@@ -43,3 +43,4 @@ specs/_shared/
 
 # Upstream CodexBar reference files (local only, not part of the build)
 .codexbar-ref/
+.vercel

@@ -35,7 +35,69 @@ BirdNion là desktop companion miễn phí, mã nguồn mở MIT, giữ quota AI
 
 Không dùng URL shortener, referral link, UTM hoặc query tracking.
 
-## 1. Cursor Community Forum
+## 1. GitHub soft launch
+
+### Repository surface
+
+- Description: `Open-source AI coding quota companion for the macOS menu bar and Linux system tray.`
+- Homepage: <https://birdnion.vercel.app/>
+- Topics: `macos`, `linux`, `menu-bar`, `system-tray`, `ai-tools`, `quota-tracker`, `swiftui`, `tauri`.
+- Latest release phải có macOS `.zip` và Linux `.deb`, `.rpm`, `.AppImage`, kèm digest do GitHub công bố.
+
+### Ready-to-post — English
+
+```text
+BirdNion is now available as an open-source desktop companion for AI coding quotas.
+
+It keeps the quota and reset information exposed by Claude, Codex, Gemini, Cursor, Grok, and other supported sources one click away in the macOS menu bar or Linux system tray. Supported Claude, Codex, and Grok session logs can also produce local cost history.
+
+BirdNion is free and MIT-licensed. There is no BirdNion account or backend: you choose each provider source, and the app keeps source, freshness, and error state explicit.
+
+Platforms:
+- macOS 14+ via Homebrew or GitHub Releases
+- Linux x86_64 via .deb, .rpm, or .AppImage
+
+Landing: https://birdnion.vercel.app/
+Source and downloads: https://github.com/hapo-nghialuu/BirdNion
+
+Current limitation: the macOS build is ad-hoc signed rather than Developer ID notarized. The README documents the exact Homebrew and Gatekeeper behavior.
+
+If you try it, which coding-tool quota or reset signal still makes you open another dashboard?
+```
+
+### Ready-to-post — Tiếng Việt
+
+```text
+BirdNion đã sẵn sàng dưới dạng ứng dụng desktop mã nguồn mở để theo dõi quota AI coding.
+
+Ứng dụng giữ quota và thời điểm reset mà Claude, Codex, Gemini, Cursor, Grok cùng các nguồn được hỗ trợ cung cấp ngay trên menu bar macOS hoặc system tray Linux. Session log Claude, Codex và Grok được hỗ trợ cũng có thể tạo lịch sử chi phí local.
+
+BirdNion miễn phí, giấy phép MIT, không có BirdNion account hoặc backend. Bạn chọn từng provider source; ứng dụng luôn thể hiện rõ source, freshness và error state.
+
+Nền tảng:
+- macOS 14+ qua Homebrew hoặc GitHub Releases
+- Linux x86_64 qua .deb, .rpm hoặc .AppImage
+
+Landing: https://birdnion.vercel.app/
+Source và tải xuống: https://github.com/hapo-nghialuu/BirdNion
+
+Giới hạn hiện tại: bản macOS được ad-hoc signed, chưa có Developer ID/notarization. README ghi rõ cách cài Homebrew và xử lý Gatekeeper.
+
+Nếu dùng thử, quota hoặc reset signal nào vẫn khiến bạn phải mở thêm dashboard?
+```
+
+### D0 checklist
+
+- [x] Description, homepage và topics công khai đã đồng bộ.
+- [x] Latest release có đủ bốn package macOS/Linux.
+- [x] Landing, release và privacy anchor mở được.
+- [x] macOS ad-hoc signing được disclose trên landing và README.
+- [ ] Maintainer đăng bài soft-launch thủ công và điền URL thật vào bảng publication.
+
+## 2. Cursor Community Forum
+
+Cách GitHub soft launch tối thiểu một nhịp support; không đăng đồng loạt.
+
 
 ### Policy lane
 
@@ -90,7 +152,7 @@ Nếu bạn dùng Cursor: usage/reset signal nào đang thiếu hoặc lệch so
 
 **Media:** `website/assets/product-hunt-gallery-01-overview.png` hoặc `product-hunt-gallery-02-data-trust.png`. Không dùng browser/mock render như native capture.
 
-## 2. r/ClaudeCode Weekly Showcase
+## 3. r/ClaudeCode Weekly Showcase
 
 ### Policy lane
 
@@ -136,7 +198,7 @@ Cửa sổ quota hoặc reset signal nào của Claude vẫn buộc bạn mở t
 
 Đăng sau Cursor tối thiểu 72 giờ để đủ khả năng support; không lặp lại tuần sau nếu không có update đáng kể.
 
-## 3. Product Hunt
+## 4. Product Hunt
 
 ### Listing fields — English primary
 
@@ -204,33 +266,63 @@ Ba gallery trên là explanatory marketing cards, không phải native product s
 ### Pre-publish checklist
 
 - [ ] Product Hunt account đủ điều kiện tạo launch; account mới có thể phải chờ theo policy hiện hành.
-- [ ] Tagline `≤60`, description `≤260` (đạt cả help article cũ và launch guide mới), tối đa ba launch tag.
-- [ ] Thumbnail 240×240; ít nhất hai gallery image 1270×760; mỗi file dưới 3 MB.
-- [ ] Có native macOS capture và packaged Linux/Tauri capture kèm provenance; cho tới khi có, chỉ dùng explanatory cards và giữ trạng thái `NOT PUBLISHED`.
-- [ ] Landing, release, install commands và privacy anchor mở được.
-- [ ] macOS ad-hoc signing được disclose.
-- [ ] Không tracked/short link, fake urgency, testimonial, metric hoặc coordinated upvote.
+- [x] Tagline `47/60`, description `163/260`, tối đa ba launch tag.
+- [x] Thumbnail 240×240; ba gallery image 1270×760; mọi file dưới 3 MB.
+- [x] Maintainer chấp nhận dùng explanatory cards thay native captures trong iteration này; asset/copy không gọi các card là product capture.
+- [x] Landing, release, install commands và privacy anchor mở được.
+- [x] macOS ad-hoc signing được disclose.
+- [x] Không tracked/short link, fake urgency, testimonial, metric hoặc coordinated upvote.
 - [ ] Maintainer có thời gian trực launch window.
 - [ ] Cursor account đã có đóng góp hữu ích trước self-promotion; không dùng account mới chỉ để drop link.
 - [ ] Đọc lại [Before launch](https://www.producthunt.com/launch/before-launch) và [Preparing for launch](https://www.producthunt.com/launch/preparing-for-launch) trong ngày publish.
 
+### Readiness receipt — 2026-09-21
+
+- Cursor guideline công khai xác nhận Showcase chấp nhận sản phẩm làm với/cho Cursor, nhưng yêu cầu contribute first, disclosure minh bạch, liên quan đúng topic, không link-drop/spam và không dùng bài hoàn toàn do AI tạo. Draft hiện tại vẫn cần maintainer viết lại bằng giọng cá nhân trước khi đăng.
+- `r/ClaudeCode` đang dùng recurring `Weekly Showcase Thread`; candidate thread tìm thấy ngày 2026-09-21 là <https://www.reddit.com/r/ClaudeCode/comments/1w9pn3e/weekly_showcase_thread_what_are_you_building_with/>. Thread quay vòng nên URL phải được maintainer xác nhận lại trong ngày đăng.
+- Product Hunt pages trả Cloudflare `403` cho automated reader/browser trong lần kiểm tra này. Contract tagline/description/assets hiện pass theo launch kit, nhưng account eligibility, tags có trong submission UI và policy cuối vẫn là manual same-day gate.
+- Asset proof: thumbnail PNG `240×240`, `40,856` bytes; ba gallery PNG `1270×760`, lần lượt `158,555`, `49,023`, `51,847` bytes.
+
 ## Publication sequence và evidence
 
-1. Cursor Community Forum.
-2. Sau tối thiểu 72 giờ: r/ClaudeCode Weekly Showcase.
-3. Hấp thụ objection/fix copy từ hai kênh.
-4. Product Hunt chỉ publish sau manual account/policy/link/media preflight.
+1. GitHub soft launch.
+2. Cursor Community Forum sau khi đã xử lý phản hồi GitHub ban đầu.
+3. Sau Cursor tối thiểu 72 giờ: r/ClaudeCode Weekly Showcase.
+4. Hấp thụ objection/fix copy từ các kênh trên.
+5. Product Hunt chỉ publish sau manual account/policy/link/media preflight.
 
 | Kênh | URL bài thật | Trạng thái |
 |---|---|---|
+| GitHub soft launch | Chưa có | READY — AWAITING MANUAL POST |
 | Cursor Community | Chưa có | NOT PUBLISHED |
 | r/ClaudeCode | Chưa có | NOT PUBLISHED |
 | Product Hunt | Chưa có | NOT PUBLISHED |
 
-Không dùng stars, upvotes, clone count hoặc raw downloads làm bằng chứng activation. Chỉ ghi bài là hoàn thành khi có URL thật.
+### Deferred maintainer inputs — 2026-09-21
+
+Maintainer đã yêu cầu ghi nhận và tiếp tục phần chuẩn bị, chưa publish thủ công. Các đầu vào sẽ được cung cấp sau:
+
+- Phiên đăng nhập hoặc URL bài GitHub soft-launch sau khi maintainer đăng.
+- Cursor Community account đủ điều kiện và URL topic sau khi đăng.
+- URL `r/ClaudeCode` Weekly Showcase thread hiện hành và URL comment sau khi đăng.
+- Product Hunt maker account/browser session, launch window và URL draft/live.
+- Người trực support trong từng launch window.
+
+Cho tới khi có các đầu vào trên, không đổi trạng thái kênh thành `PUBLISHED` và không tự suy diễn URL.
+
+
+### Support log tối thiểu
+
+| Thời gian | Kênh | Platform | Provider đầu tiên | Blocker/câu hỏi nguyên văn | Owner | Kết quả |
+|---|---|---|---|---|---|---|
+| — | — | — | — | — | — | — |
+
+Tổng hợp acquisition theo referrer/traffic và download theo asset ở mức aggregate. Không nối thành user-level funnel, không suy diễn download thành activation và không dùng stars/upvotes làm bằng chứng sử dụng.
+
+Chỉ ghi một bài là hoàn thành khi có URL thật.
 
 ## Unresolved questions
 
-- Chưa có native macOS + packaged Linux captures có provenance; Product Hunt giữ `NOT PUBLISHED` cho tới khi gate này đạt.
-- Chưa có phiên trình duyệt/tài khoản xác thực để publish; maintainer cần đăng nhập và duyệt lần cuối.
+- Maintainer đã chấp nhận dùng explanatory marketing cards hiện có thay cho native captures trong iteration này; các card vẫn phải được ghi rõ không phải product capture.
+- Authenticated account/browser session, launch window, support owner và URL bài thật được hoãn để maintainer cung cấp sau.
 - Policy có thể đổi; cả hai community lane và Product Hunt requirements phải được recheck ngay trước khi đăng.

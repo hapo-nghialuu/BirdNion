@@ -66,6 +66,7 @@ p, h1, h2, h3, dl, dd, ol {
 }
 
 .primary-nav a,
+.language-link,
 .header-link {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -75,6 +76,7 @@ p, h1, h2, h3, dl, dd, ol {
 }
 
 .primary-nav a,
+.language-link,
 .header-link {
   min-height: 44px;
   display: inline-flex;
@@ -82,13 +84,26 @@ p, h1, h2, h3, dl, dd, ol {
 }
 
 .primary-nav a:hover,
+.language-link:hover,
 .header-link:hover,
 .text-link:hover {
   color: var(--blue);
 }
 
-.header-link {
+.header-actions {
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.language-link {
+  min-width: 44px;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
 }
 
 .eyebrow {

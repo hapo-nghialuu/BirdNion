@@ -86,11 +86,13 @@
 }
 
 .platform-rows {
-  margin-top: 42px;
+  margin: 42px 0 0;
+  padding: 0;
   border-top: 1px solid var(--ink);
+  list-style: none;
 }
 
-.platform-rows div {
+.platform-rows li {
   min-height: 70px;
   display: flex;
   justify-content: space-between;

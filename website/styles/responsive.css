@@ -64,7 +64,8 @@
 
   .site-header { min-height: 72px; }
   .brand img { width: 34px; height: 34px; }
-  .header-link { font-size: 10px; }
+  .header-link { display: none; }
+  .language-link { font-size: 10px; }
 
   .hero { padding-top: 54px; gap: 48px; }
   .hero h1 { font-size: clamp(48px, 15vw, 68px); }
@@ -105,7 +106,7 @@
 
   .feature-ledger p { grid-column: 2; }
 
-  .platform-rows div {
+  .platform-rows li {
     align-items: flex-start;
     flex-direction: column;
     justify-content: center;

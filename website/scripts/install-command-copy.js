@@ -34,14 +34,16 @@ if (copyButton && copyStatus) {
       copied = copyFromSelection(target);
     }
 
-    copyButton.textContent = copied ? "Copied" : "Selected";
+    copyButton.textContent = copied
+      ? copyButton.dataset.copiedLabel
+      : copyButton.dataset.selectedLabel;
     copyStatus.textContent = copied
-      ? "Install command copied to clipboard."
-      : "Clipboard unavailable. The command is selected for you.";
+      ? copyButton.dataset.copiedStatus
+      : copyButton.dataset.selectedStatus;
 
     window.clearTimeout(resetTimer);
     resetTimer = window.setTimeout(() => {
-      copyButton.textContent = "Copy";
+      copyButton.textContent = copyButton.dataset.copyLabel;
       copyStatus.textContent = "";
     }, 2400);
   });
