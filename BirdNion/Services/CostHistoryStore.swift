@@ -30,7 +30,7 @@ enum CostHistoryStore {
     }
 
     enum Source: String, CaseIterable {
-        case claude, codex, grok, kiro, omp, pi
+        case claude, codex, grok, kiro, omp, pi, devin
     }
 
     // MARK: - Schema
@@ -941,6 +941,43 @@ enum CostHistoryStore {
                     date: $0.date, usd: $0.usd, tokens: $0.tokens,
                     models: $0.models.map {
                         PiDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
+                    })
+            },
+            topModel: top,
+            scanConfidence: confidence)
+    }
+
+    static func makeDevinReport(
+        window: [DayBucket],
+        confidence: UsageScanConfidence = .unavailable) -> DevinCLIUsageReport
+    {
+        let last30 = window.suffix(30)
+        let today = window.last
+        var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
+        for d in last30 {
+            for m in d.models {
+                var t = modelTotals[m.name] ?? (0, 0)
+                t.usd += m.usd
+                t.tokens += m.tokens
+                modelTotals[m.name] = t
+            }
+        }
+        // Devin carries no USD — rank the top model by tokens alone.
+        let top = modelTotals.max {
+            $0.value.tokens == $1.value.tokens
+                ? $0.key > $1.key
+                : $0.value.tokens < $1.value.tokens
+        }?.key
+        return DevinCLIUsageReport(
+            todayUSD: today?.usd ?? 0,
+            todayTokens: today?.tokens ?? 0,
+            last30USD: last30.map(\.usd).reduce(0, +),
+            last30Tokens: last30.map(\.tokens).reduce(0, +),
+            daily: window.map {
+                DevinCLIDailyUsage(
+                    date: $0.date, usd: $0.usd, tokens: $0.tokens,
+                    models: $0.models.map {
+                        DevinCLIDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
             topModel: top,

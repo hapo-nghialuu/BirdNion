@@ -5479,6 +5479,402 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows[1].usedPct, 25)
     }
 
+    /// Live Zen payload: `percent` is already 0-100, so an integer `1` means
+    /// 1% used — it must NOT be rescaled as a 0-1 fraction into 100%.
+    func testOpenCodeGoIntegerPercentPayloadNotRescaled() {
+        let json = """
+        {"usage":{"rolling":{"percent":0,"resetsAt":"2030-01-01T00:00:00.000Z"},
+                  "weekly":{"percent":1,"resetsAt":"2030-01-08T00:00:00.000Z"},
+                  "monthly":{"percent":57,"resetsAt":"2030-02-01T00:00:00.000Z"}}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.usedPct), [0, 1, 57])
+    }
+
+    /// Fraction-style payloads still scale up — decided once per payload,
+    /// not per value.
+    func testOpenCodeGoFractionPayloadScalesToPercent() {
+        let json = """
+        {"usage":{"rolling":{"percent":0.67,"resetInSec":600},
+                  "weekly":{"percent":0.34,"resetInSec":86400}}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.usedPct), [67, 34])
+    }
+
+    /// Storage may carry metadata for several orgs; emit one session per
+    /// internal-org candidate so the fetcher can try each — auth1 tokens only
+    /// resolve against their own org ("No organizations found for auth1 user").
+    func testDevinImporterEmitsOneSessionPerOrgCandidate() {
+        let storage: [String: String] = [
+            "auth1_session": "{\"token\":\"auth1_0123456789abcdef0123456789\"}",
+            "sidebar-collapsed-folders:org-aaaaaaaaa": "[]",
+            "feature-flags-cache:user-1:org-bbbbbbbbb": "1",
+        ]
+        let sessions = DevinSessionImporter.sessions(from: storage, sourceLabel: "test")
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(
+            Set(sessions.map(\.internalOrganizationID)),
+            ["org-aaaaaaaaa", "org-bbbbbbbbb"])
+        // Sorted-key scan keeps the first candidate deterministic.
+        XCTAssertEqual(sessions.first?.internalOrganizationID, "org-bbbbbbbbb")
+        XCTAssertEqual(Set(sessions.map(\.accessToken)).count, 1)
+    }
+
+    /// `billing/usage/daily-usage?cycle=current&view=all` — shape observed
+    /// live on 2026-09-22: cycle bounds + per-day amount/cumulative rows +
+    /// per-product totals. Parser must keep days, products and the total.
+    func testDevinDailyUsageParser() {
+        let json = """
+        {
+          "cycle_start": "2026-09-22T03:27:08+00:00",
+          "cycle_end": "2026-10-22T03:27:08+00:00",
+          "previous_cycle_available": true,
+          "total": 12.5,
+          "days": [
+            {"date": "2026-09-21", "amount": 0.0, "cumulative": 0.0},
+            {"date": "2026-09-22", "amount": 4.5, "cumulative": 4.5},
+            {"date": "2026-09-23", "amount": 8.0, "cumulative": 12.5}
+          ],
+          "products": [
+            {"view": "sessions", "total": 10.0,
+             "days": [{"date": "2026-09-23", "amount": 8.0, "cumulative": 10.0}]},
+            {"view": "reviews", "total": 2.5, "days": []}
+          ]
+        }
+        """
+        let history = DevinUsageParser.parseDailyUsage(Data(json.utf8))
+        XCTAssertNotNil(history)
+        XCTAssertEqual(history?.days.count, 3)
+        XCTAssertEqual(history?.days[1].amount, 4.5)
+        XCTAssertEqual(history?.days[2].cumulative, 12.5)
+        XCTAssertEqual(history?.products.count, 2)
+        XCTAssertEqual(history?.products.first?.view, "sessions")
+        XCTAssertEqual(history?.products.first?.total, 10.0)
+        XCTAssertEqual(history?.total, 12.5)
+        XCTAssertNotNil(history?.cycleStart)
+        XCTAssertNotNil(history?.cycleEnd)
+        XCTAssertTrue(DevinUsageParser.previousCycleAvailable(in: Data(json.utf8)))
+    }
+
+    /// Garbage payload → nil (chart stays hidden), never a thrown error.
+    func testDevinDailyUsageParserRejectsBadPayload() {
+        XCTAssertNil(DevinUsageParser.parseDailyUsage(Data("{}".utf8)))
+        XCTAssertNil(DevinUsageParser.parseDailyUsage(Data("[]".utf8)))
+        XCTAssertNil(DevinUsageParser.parseDailyUsage(Data("not json".utf8)))
+    }
+
+    /// Previous + current cycle merge: days dedupe by date, product totals
+    /// sum per view, cycle bounds span both.
+    func testDevinDailyUsageMergeCycles() {
+        func day(_ iso: String, _ amount: Double) -> DevinDailyUsage {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = TimeZone(identifier: "UTC")
+            f.dateFormat = "yyyy-MM-dd"
+            return DevinDailyUsage(date: f.date(from: iso)!, amount: amount, cumulative: 0)
+        }
+        let previous = DevinUsageHistory(
+            days: [day("2026-08-23", 1), day("2026-08-24", 2)],
+            products: [DevinProductUsage(view: "sessions", total: 3, days: [day("2026-08-24", 2)])],
+            cycleStart: Date(timeIntervalSince1970: 100),
+            cycleEnd: Date(timeIntervalSince1970: 200),
+            total: 3)
+        let current = DevinUsageHistory(
+            days: [day("2026-09-22", 4)],
+            products: [DevinProductUsage(view: "sessions", total: 4, days: [day("2026-09-22", 4)]),
+                       DevinProductUsage(view: "reviews", total: 1, days: [])],
+            cycleStart: Date(timeIntervalSince1970: 300),
+            cycleEnd: Date(timeIntervalSince1970: 400),
+            total: 4)
+        let merged = DevinUsageParser.mergeCycles(previous: previous, current: current)
+        XCTAssertEqual(merged.days.count, 3)
+        XCTAssertEqual(merged.days.map(\.amount), [1, 2, 4])
+        XCTAssertEqual(merged.total, 7)
+        XCTAssertEqual(merged.cycleStart, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(merged.cycleEnd, Date(timeIntervalSince1970: 400))
+        let sessions = merged.products.first { $0.view == "sessions" }
+        XCTAssertEqual(sessions?.total, 6)
+        XCTAssertEqual(merged.products.count, 2)
+    }
+
+    /// `readTextEntries` scans the whole profile LevelDB — unscoped. Without
+    /// the origin guard, a foreign auth0 key (e.g. ChatGPT's auth0spajs entry
+    /// in the same store) is mistaken for a Devin session: a token with no
+    /// org, surfacing as "missing organization".
+    func testDevinImporterRejectsForeignOriginStorageKeys() {
+        let sep = "\u{0}\u{1}"
+        XCTAssertTrue(DevinSessionImporter.isOwnOriginTextKey(
+            "_https://app.devin.ai\(sep)@@auth0spajs@@::devin::"))
+        XCTAssertFalse(DevinSessionImporter.isOwnOriginTextKey(
+            "_https://chatgpt.com\(sep)@@auth0spajs@@::app_2SKx67EdpoN0G6j64rFvigXD::"))
+        XCTAssertFalse(DevinSessionImporter.isOwnOriginTextKey(
+            "_https://example.com\(sep)auth1_session"))
+    }
+
+    /// DIAGNOSTIC — remove before commit.
+    func testZZZDevinDiagnosticRawPayloads() async throws {
+        struct RecordingTransport: ProviderHTTPTransport {
+            func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+                let (data, resp) = try await ProviderHTTPClient.shared.data(for: request)
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    print("DIAG-URL \(request.url?.absoluteString ?? "?")")
+                    print("DIAG-KEYS \(obj.keys.sorted())")
+                    for (k, v) in obj where !(v is [Any]) {
+                        print("DIAG-FIELD \(k)=\(v)")
+                    }
+                }
+                return (data, resp)
+            }
+        }
+        let sessions = DevinSessionImporter.importSessions(browserDetection: BrowserDetection())
+        guard let s = sessions.first(where: { $0.internalOrganizationID != nil }) else {
+            print("DIAG no session"); return
+        }
+        let auth = DevinUsageFetcher.RequestAuth(
+            bearerToken: s.accessToken, organization: s.organization,
+            internalOrganizationID: s.internalOrganizationID, sourceLabel: s.sourceLabel)
+        _ = try? await DevinUsageFetcher.fetchQuotaUsage(
+            auth: auth, transport: RecordingTransport())
+    }
+
+    // MARK: - Devin CLI cost scanner (transcripts → CostHistoryStore.devin)
+
+    private var devinUTCCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal
+    }
+
+    /// Synthetic transcript — steps carry `metrics.prompt_tokens` +
+    /// `completion_tokens`; `cached_tokens` is a subset of prompt and must
+    /// NOT be added again. Steps without metrics carry no usage.
+    private func writeDevinTranscript(_ json: String, to dir: URL, name: String) throws {
+        try json.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
+    func testDevinCostScannerCountsPromptPlusCompletionNotCached() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try writeDevinTranscript("""
+        {
+          "schema_version": 1,
+          "session_id": "s1",
+          "agent": {"model_name": "swe-2-max"},
+          "steps": [
+            {"timestamp": "2026-09-21T10:00:00Z", "model_name": "swe-2-max",
+             "metrics": {"prompt_tokens": 1000, "completion_tokens": 100, "cached_tokens": 400}},
+            {"timestamp": "2026-09-21T11:00:00Z", "model_name": "swe-2-high",
+             "metrics": {"prompt_tokens": 500, "completion_tokens": 50}},
+            {"timestamp": "2026-09-22T09:00:00Z", "model_name": "swe-2-max",
+             "metrics": {"prompt_tokens": 200, "completion_tokens": 20, "cached_tokens": 200}},
+            {"timestamp": "2026-09-22T09:30:00Z", "model_name": "swe-2-max"},
+            {"timestamp": "2026-09-22T10:00:00Z"}
+          ],
+          "final_metrics": {"total_prompt_tokens": 1700, "total_completion_tokens": 170}
+        }
+        """, to: dir, name: "session-one.json")
+
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22, hour: 12))!
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, now: now, calendar: cal)
+
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.dailyBuckets.count, 2)
+
+        let sep21 = cal.startOfDay(for: cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 21))!)
+        let sep22 = cal.startOfDay(for: cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22))!)
+        let day1 = result.dailyBuckets.first { $0.date == sep21 }
+        let day2 = result.dailyBuckets.first { $0.date == sep22 }
+
+        // 1000+100 + 500+50 = 1650 (cached 400/200 are inside prompt_tokens).
+        XCTAssertEqual(day1?.tokens, 1650)
+        XCTAssertEqual(day2?.tokens, 220)
+
+        // USD at published API rates (swe-2: $0.75 in / $3.75 out /
+        // $0.075 cache-read per 1M):
+        //   swe-2-max : 600×0.75 + 400×0.075 + 100×3.75 = 855 µ$/1M
+        //   swe-2-high: 500×0.75 + 50×3.75              = 562.5
+        XCTAssertEqual(day1?.usd ?? -1, 0.0014175, accuracy: 0.0000001)
+        // Sep22 swe-2-max: 0 uncached + 200×0.075 + 20×3.75 = 90 µ$/1M
+        XCTAssertEqual(day2?.usd ?? -1, 0.00009, accuracy: 0.0000001)
+
+        // Models grouped per day; token-sorted, carrying their own USD.
+        XCTAssertEqual(day1?.models.count, 2)
+        XCTAssertEqual(day1?.models.first?.name, "swe-2-max")
+        XCTAssertEqual(day1?.models.first?.tokens, 1100)
+        XCTAssertEqual(day1?.models.first?.usd ?? -1, 0.000855, accuracy: 0.0000001)
+        XCTAssertEqual(day1?.models.last?.name, "swe-2-high")
+        XCTAssertEqual(day1?.models.last?.tokens, 550)
+        XCTAssertEqual(day1?.models.last?.usd ?? -1, 0.0005625, accuracy: 0.0000001)
+    }
+
+    /// Pricing table mirrors the `modelCostData` API rates published on
+    /// docs.devin.ai/desktop/models. Unknown models keep usd = 0 (tokens
+    /// still count — the UI falls back to showing them).
+    func testDevinPricingUsesPublishedRatesAndSkipsUnknownModels() {
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "swe-2-max", promptTokens: 1_000_000,
+                cachedTokens: 0, completionTokens: 0),
+            0.75, accuracy: 0.0001)
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "swe-2-max", promptTokens: 1_000_000,
+                cachedTokens: 1_000_000, completionTokens: 1_000_000),
+            0.075 + 3.75, accuracy: 0.0001)
+        // cached > prompt clamps at zero uncached — never negative cost.
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "swe-2-high", promptTokens: 100,
+                cachedTokens: 500, completionTokens: 0),
+            500 * 0.075 / 1_000_000, accuracy: 0.0000001)
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "some-future-model", promptTokens: 1_000_000,
+                cachedTokens: 0, completionTokens: 0),
+            0, accuracy: 0.0001)
+    }
+
+    /// Malformed/legacy transcripts must not abort the scan: the bad file
+    /// marks the pass incomplete (never claims LIVE) while valid transcripts
+    /// still contribute their days.
+    func testDevinCostScannerMalformedFileMarksIncompleteButKeepsData() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try writeDevinTranscript("not json at all", to: dir, name: "a-bad.json")
+        try writeDevinTranscript("""
+        {"steps": [
+          {"timestamp": "2026-09-22T08:00:00Z",
+           "metrics": {"prompt_tokens": 42, "completion_tokens": 8}}
+        ]}
+        """, to: dir, name: "b-good.json")
+
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22, hour: 12))!
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, now: now, calendar: cal)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.dailyBuckets.reduce(0) { $0 + $1.tokens }, 50)
+        // Missing metrics → model falls back to "devin".
+        XCTAssertEqual(result.dailyBuckets.first?.models.first?.name, "devin")
+    }
+
+    /// Empty transcript directory → completed, zero buckets (not an error).
+    func testDevinCostScannerEmptyDirectory() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, calendar: devinUTCCalendar)
+        XCTAssertTrue(result.completed)
+        XCTAssertTrue(result.dailyBuckets.isEmpty)
+    }
+
+    /// Steps older than the scan window are dropped.
+    func testDevinCostScannerHonorsScanWindow() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try writeDevinTranscript("""
+        {"steps": [
+          {"timestamp": "2026-08-01T08:00:00Z",
+           "metrics": {"prompt_tokens": 999, "completion_tokens": 1}},
+          {"timestamp": "2026-09-22T08:00:00Z",
+           "metrics": {"prompt_tokens": 10, "completion_tokens": 5}}
+        ]}
+        """, to: dir, name: "s.json")
+
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 22, hour: 12))!
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 7, now: now, calendar: cal)
+
+        XCTAssertEqual(result.dailyBuckets.count, 1)
+        XCTAssertEqual(result.dailyBuckets.first?.tokens, 15)
+    }
+
+    /// `makeDevinReport` aggregates last30 + picks the top model by tokens.
+    func testDevinReportFromHistoryWindow() {
+        let cal = devinUTCCalendar
+        let day = { (offset: Int) -> Date in
+            cal.date(byAdding: .day, value: offset,
+                     to: cal.startOfDay(for: Date()))!
+        }
+        let window = [
+            CostHistoryStore.DayBucket(
+                date: day(-1), usd: 0, tokens: 100,
+                models: [CostHistoryStore.Model(name: "swe-2-max", usd: 0, tokens: 100)]),
+            CostHistoryStore.DayBucket(
+                date: day(0), usd: 0, tokens: 40,
+                models: [
+                    CostHistoryStore.Model(name: "swe-2-max", usd: 0, tokens: 10),
+                    CostHistoryStore.Model(name: "swe-2-high", usd: 0, tokens: 30),
+                ]),
+        ]
+        let report = CostHistoryStore.makeDevinReport(
+            window: window,
+            confidence: .init(included: true, live: true, scannedAt: Date()))
+        XCTAssertEqual(report.todayTokens, 40)
+        XCTAssertEqual(report.last30Tokens, 140)
+        XCTAssertEqual(report.last30USD, 0)
+        XCTAssertEqual(report.topModel, "swe-2-max")
+        XCTAssertEqual(report.daily.count, 2)
+    }
+
+    /// The Devin agent record feeds the `.devin` cost source so the All tab
+    /// can authorize and attribute the scan.
+    func testDevinAgentMapsToDevinCostSource() {
+        XCTAssertEqual(InstalledAgentID.devin.costHistorySource, .devin)
+        XCTAssertEqual(CostHistoryStore.Source(rawValue: "devin"), .devin)
+    }
+
+    /// cost-history.json round-trips a "devin" source entry — the schema gate
+    /// (`knownSources`) must accept it so macOS/Linux share the file format.
+    func testDevinCostHistorySourceRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-history-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("cost-history.json")
+
+        let cal = devinUTCCalendar
+        let today = cal.startOfDay(for: Date())
+        _ = CostHistoryStore.apply(
+            source: .devin,
+            liveDays: [(today, 0.0, 123,
+                        [(name: "swe-2-max", usd: 0.0, tokens: 123)])],
+            now: Date(),
+            calendar: cal,
+            windowDays: 120,
+            url: url,
+            liveScanSucceeded: true)
+
+        let window = CostHistoryStore.window(
+            source: .devin, now: Date(), calendar: cal, windowDays: 120, url: url)
+        XCTAssertEqual(window.last?.tokens, 123)
+        XCTAssertEqual(window.last?.models.first?.name, "swe-2-max")
+    }
+
     // MARK: - Menu bar: 5-hour + weekly for CommandCode / OpenCode Go
 
     private func rateWindow(_ label: String, remaining: Int, seconds: Int) -> QuotaWindow {
@@ -5810,5 +6206,79 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNil(GrokCostScanner.boundedData(at: huge), "file quá khổ phải bị bỏ qua")
 
         XCTAssertNil(GrokCostScanner.boundedData(at: dir.appendingPathComponent("nope.json")))
+    }
+
+    // MARK: - Devin
+
+    /// Snapshot daily/weekly → hai window "Ngày"/"Tuần" với reset + pace.
+    func testDevinSnapshotMapsToProviderStatus() {
+        let reset = Date(timeIntervalSinceNow: 3600)
+        let snap = DevinUsageSnapshot(
+            daily: DevinQuotaWindow(usedPercent: 42.4, resetsAt: reset),
+            weekly: DevinQuotaWindow(usedPercent: 7.6),
+            planName: "Core",
+            organization: "org/acme",
+            updatedAt: Date())
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.id, "devin")
+        XCTAssertEqual(s.windows.count, 2)
+        XCTAssertEqual(s.windows[0].label, "Ngày")
+        XCTAssertEqual(s.windows[0].usedPct, 42)
+        XCTAssertEqual(s.windows[0].remainingPct, 58)
+        XCTAssertEqual(s.windows[0].resetDate, reset)
+        XCTAssertEqual(s.windows[0].windowSeconds, 24 * 3600)
+        XCTAssertEqual(s.windows[1].label, "Tuần")
+        XCTAssertEqual(s.windows[1].windowSeconds, 7 * 24 * 3600)
+        XCTAssertEqual(s.accountLabel, "org/acme")
+        XCTAssertEqual(s.planName, "Core")
+    }
+
+    /// `overage_balance` trong quota payload → snapshot.overageBalance →
+    /// ProviderStatus.creditsRemaining (hàng CREDITS · "$10 còn lại").
+    func testDevinOverageBalanceMapsToCredits() throws {
+        let json = """
+        {"daily_percentage": 48, "weekly_percentage": 24,
+         "overage_balance": 10.0, "is_quota_plan": true}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: "org/acme")
+        XCTAssertEqual(snap.overageBalance, 10.0)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertEqual(s.creditsRemaining, 10.0)
+    }
+
+    /// Snapshot kèm usageHistory → ProviderStatus.devinUsage cho chart card;
+    /// products total=0 bị lọc, còn lại sort giảm dần.
+    func testDevinSnapshotMapsUsageHistory() {
+        let day = DevinDailyUsage(date: Date(), amount: 2.5, cumulative: 2.5)
+        let history = DevinUsageHistory(
+            days: [day],
+            products: [
+                DevinProductUsage(view: "sessions", total: 2.5, days: [day]),
+                DevinProductUsage(view: "reviews", total: 0, days: []),
+            ],
+            cycleStart: nil,
+            cycleEnd: nil,
+            total: 2.5)
+        let snap = DevinUsageSnapshot(
+            daily: DevinQuotaWindow(usedPercent: 10),
+            weekly: nil, planName: nil, organization: nil,
+            updatedAt: Date(), usageHistory: history)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.devinUsage?.days.count, 1)
+        XCTAssertEqual(s.devinUsage?.days.first?.amount, 2.5)
+        XCTAssertEqual(s.devinUsage?.total, 2.5)
+        XCTAssertEqual(s.devinUsage?.products.map(\.view), ["sessions"])
+    }
+
+    /// Không có window nào → status lỗi thay vì popover trống.
+    func testDevinSnapshotWithoutWindowsYieldsError() {
+        let snap = DevinUsageSnapshot(
+            daily: nil, weekly: nil, planName: nil, organization: nil,
+            updatedAt: Date())
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNotNil(s.error)
+        XCTAssertTrue(s.windows.isEmpty)
     }
 }

@@ -235,6 +235,7 @@ enum SettingsSearchIndex {
         case "bedrock": return "AWS Bedrock"
         case "freemodel": return "FreeModel"
         case "hiyo": return "Hiyo"
+        case "devin": return "Devin"
         default: return fallback ?? id
         }
     }
@@ -257,6 +258,7 @@ enum SettingsSearchIndex {
         case "deepseek": return ["deepseek"]
         case "elevenlabs": return ["elevenlabs", "eleven"]
         case "hiyo": return ["hiyo"]
+        case "devin": return ["devin", "cognition"]
         case "kilo": return ["kilo"]
         default: return [id]
         }

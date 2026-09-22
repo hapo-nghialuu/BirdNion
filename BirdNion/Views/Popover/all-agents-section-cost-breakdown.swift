@@ -46,11 +46,16 @@ struct AllAgentsCostBreakdownSection: View {
         switch mode {
         case .agent:
             return rows.map {
-                DisplayRow(
+                // Nguồn chỉ có token (model Devin chưa có giá): hiển thị
+                // tokens thay "$0.00"; amount = 0 giữ sort xuống cuối.
+                let tokenOnly = $0.periodUSD <= 0 && $0.tokens > 0
+                return DisplayRow(
                     id: $0.id.rawValue,
                     name: $0.record.displayName,
                     amount: $0.periodUSD,
-                    display: AllUsageFormat.usd($0.periodUSD),
+                    display: tokenOnly
+                        ? AllUsageFormat.tokensShort($0.tokens)
+                        : AllUsageFormat.usd($0.periodUSD),
                     color: $0.color,
                     agentID: $0.id
                 )
@@ -233,7 +238,7 @@ struct AllAgentsCostBreakdownSection: View {
 
     private func hasBrandLogo(_ id: InstalledAgentID) -> Bool {
         switch id {
-        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen, .omp, .pi:
+        case .claude, .codex, .kiro, .opencode, .grok, .gemini, .cursor, .antigravity, .copilot, .aider, .amp, .auggie, .goose, .qwen, .omp, .pi, .devin:
             return true
         default:
             return false

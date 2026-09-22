@@ -68,6 +68,61 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertFalse(r.isEmpty)
     }
 
+    private func devinReport(daily: [DevinCLIDailyUsage],
+                             last30Tokens: Int = 0,
+                             confidence: CostHistoryStore.UsageScanConfidence = .unavailable
+    ) -> DevinCLIUsageReport {
+        DevinCLIUsageReport(todayUSD: 0, todayTokens: 0,
+                            last30USD: 0, last30Tokens: last30Tokens,
+                            daily: daily, topModel: nil, scanConfidence: confidence)
+    }
+
+    /// Devin CLI carries token-only usage (no local USD). The combined day
+    /// must still surface it in tokens + per-source fields + model rows so
+    /// the All tab's COST BY / BY AGENT shows the Devin slice.
+    func testDevinTokenOnlyDaysMergeIntoCombined() {
+        let devin = devinReport(
+            daily: [
+                DevinCLIDailyUsage(
+                    date: day(0), usd: 0, tokens: 500,
+                    models: [DevinCLIDailyModel(name: "swe-2-max", usd: 0, tokens: 500)]),
+            ],
+            last30Tokens: 500,
+            confidence: .init(included: true, live: true, scannedAt: now))
+
+        let r = CombinedUsageReport.build(
+            claude: nil, codex: nil, devin: devin,
+            calendar: calendar, now: now)
+
+        let today = r.daily.last
+        XCTAssertEqual(today?.devinTokens, 500)
+        XCTAssertEqual(today?.devinUSD ?? -1, 0, accuracy: 0.0001)
+        XCTAssertEqual(today?.tokens, 500)
+        XCTAssertEqual(r.last30Tokens, 500)
+        XCTAssertEqual(r.todayTokens, 500)
+        XCTAssertEqual(r.devinConfidence?.included, true)
+        XCTAssertEqual(r.includedSourceCount, 1)
+        XCTAssertTrue(r.topModels.contains { $0.source == "devin" && $0.name == "swe-2-max" })
+    }
+
+    /// Excluding the source drops its contribution (used when the Devin
+    /// agent is disabled/hidden from All).
+    func testDevinExcludedWhenUnauthorized() {
+        let devin = devinReport(
+            daily: [DevinCLIDailyUsage(
+                date: day(0), usd: 0, tokens: 500,
+                models: [DevinCLIDailyModel(name: "swe-2-max", usd: 0, tokens: 500)])],
+            last30Tokens: 500)
+
+        let r = CombinedUsageReport.build(
+            claude: nil, codex: nil, devin: devin, includeDevin: false,
+            calendar: calendar, now: now)
+
+        XCTAssertEqual(r.daily.last?.devinTokens ?? -1, 0)
+        XCTAssertEqual(r.last30Tokens, 0)
+        XCTAssertNil(r.devinConfidence)
+    }
+
     func testKiroSyntheticOtherIsKeptForConservationButNeverRankedAsModel() {
         let kiro = KiroUsageReport(
             todayUSD: 5.5,
@@ -739,6 +794,11 @@ final class CombinedUsageReportTests: XCTestCase {
                 evidence: [.init(kind: .configuration, token: "~/.pi/agent/settings.json")],
                 capabilities: [],
                 providerIDs: []),
+            InstalledAgentRecord(
+                id: .devin,
+                evidence: [.init(kind: .applicationState, token: "~/.local/share/devin")],
+                capabilities: [],
+                providerIDs: ["devin"]),
         ]
 
         let sources = AllUsageSourceAuthorization.sources(

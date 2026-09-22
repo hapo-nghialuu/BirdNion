@@ -57,18 +57,18 @@ enum DevinSessionImporter {
         var sessions: [SessionInfo] = []
         for candidate in candidates {
             let storage = self.readLocalStorage(from: candidate.url, logger: log)
-            guard let session = self.session(
+            let found = self.sessions(
                 from: storage,
                 organizationOverride: organizationOverride,
                 sourceLabel: candidate.label)
-            else {
+            guard let session = found.first else {
                 continue
             }
             log(
                 "Found Devin session in \(candidate.label); " +
                     "organization=\(session.organization != nil), internalOrganizationID=" +
                     "\(session.internalOrganizationID != nil)")
-            sessions.append(session)
+            sessions.append(contentsOf: found)
         }
         sessions = self.rankSessions(self.deduplicateSessions(sessions))
 
@@ -83,15 +83,40 @@ enum DevinSessionImporter {
         organizationOverride: String? = nil,
         sourceLabel: String) -> SessionInfo?
     {
+        self.sessions(
+            from: storage,
+            organizationOverride: organizationOverride,
+            sourceLabel: sourceLabel).first
+    }
+
+    /// One session per discovered organization: storage can carry metadata for
+    /// several orgs, and auth1 tokens only resolve against their own org —
+    /// emitting all candidates lets the fetcher try each until one succeeds.
+    static func sessions(
+        from storage: [String: String],
+        organizationOverride: String? = nil,
+        sourceLabel: String) -> [SessionInfo]
+    {
         guard let accessToken = self.accessToken(from: storage) else {
-            return nil
+            return []
         }
-        let organizationInfo = self.organizationInfo(from: storage, organizationOverride: organizationOverride)
-        return SessionInfo(
-            accessToken: accessToken,
-            organization: organizationInfo.organization,
-            internalOrganizationID: organizationInfo.internalOrganizationID,
-            sourceLabel: sourceLabel)
+        let organizations = self.organizationCandidates(
+            from: storage,
+            organizationOverride: organizationOverride)
+        if organizations.isEmpty {
+            return [SessionInfo(
+                accessToken: accessToken,
+                organization: nil,
+                internalOrganizationID: nil,
+                sourceLabel: sourceLabel)]
+        }
+        return organizations.map { info in
+            SessionInfo(
+                accessToken: accessToken,
+                organization: info.organization,
+                internalOrganizationID: info.internalOrganizationID,
+                sourceLabel: sourceLabel)
+        }
     }
 
     static func accessToken(from storage: [String: String]) -> String? {
@@ -129,13 +154,20 @@ enum DevinSessionImporter {
         var order: [String] = []
         var bestByToken: [String: SessionInfo] = [:]
         for session in sessions {
-            if let existing = bestByToken[session.accessToken] {
+            // Same token may legitimately pair with different org candidates —
+            // dedupe by (token, org), not token alone.
+            let key = [
+                session.accessToken,
+                session.organization ?? "",
+                session.internalOrganizationID ?? "",
+            ].joined(separator: "\u{0}")
+            if let existing = bestByToken[key] {
                 if self.organizationScore(session) > self.organizationScore(existing) {
-                    bestByToken[session.accessToken] = session
+                    bestByToken[key] = session
                 }
             } else {
-                order.append(session.accessToken)
-                bestByToken[session.accessToken] = session
+                order.append(key)
+                bestByToken[key] = session
             }
         }
         return order.compactMap { bestByToken[$0] }
@@ -159,33 +191,87 @@ enum DevinSessionImporter {
         from storage: [String: String],
         organizationOverride: String?) -> (organization: String?, internalOrganizationID: String?)
     {
+        self.organizationCandidates(from: storage, organizationOverride: organizationOverride)
+            .first ?? (nil, nil)
+    }
+
+    /// Ordered (slug, internal-ID) candidates. Storage dictionaries iterate in
+    /// nondeterministic order and may hold metadata for several orgs, so scan
+    /// sorted keys and emit every discovered candidate — the fetcher retries
+    /// with the next session when an org doesn't match the token.
+    static func organizationCandidates(
+        from storage: [String: String],
+        organizationOverride: String?) -> [(organization: String?, internalOrganizationID: String?)]
+    {
         let override = DevinUsageFetcher.normalizedOrganization(organizationOverride)
         let overrideSlug = override.flatMap(self.slug(fromNormalizedOrganization:))
+        let overrideOrgID = override.flatMap(self.orgID(fromNormalizedOrganization:))
+        let sortedEntries = storage.sorted { $0.key < $1.key }
+
+        var pairs: [(organization: String?, internalOrganizationID: String?)] = []
+        var seen = Set<String>()
+        var internalOrgIDs: [String] = []
+        var slugs: [String] = []
         var firstInternalOrgID: String?
 
-        for (key, value) in storage where self.isExternalOrgStorageKey(key) {
+        func add(_ organization: String?, _ internalOrganizationID: String?) {
+            guard organization != nil || internalOrganizationID != nil else { return }
+            guard seen.insert("\(organization ?? "")\u{0}\(internalOrganizationID ?? "")").inserted
+            else { return }
+            pairs.append((organization, internalOrganizationID))
+        }
+        func noteIDs(_ internalOrganizationID: String?) {
+            guard let internalOrganizationID else { return }
+            if firstInternalOrgID == nil { firstInternalOrgID = internalOrganizationID }
+            if !internalOrgIDs.contains(internalOrganizationID) { internalOrgIDs.append(internalOrganizationID) }
+        }
+
+        for (key, value) in sortedEntries where self.isExternalOrgStorageKey(key) {
             let suffix = self.externalOrgSlug(from: key)
             let orgID = self.cleanedOrgID(value)
-            if firstInternalOrgID == nil {
-                firstInternalOrgID = orgID
-            }
-            if let overrideSlug, suffix == overrideSlug {
-                return (override, orgID)
-            }
-            if override == nil, suffix != "null" {
-                return ("org/\(suffix)", orgID)
+            noteIDs(orgID)
+            if let override {
+                if let overrideOrgID, orgID == overrideOrgID { add(override, orgID) }
+                if let overrideSlug, suffix == overrideSlug { add(override, orgID) }
+            } else if suffix != "null" {
+                add("org/\(suffix)", orgID)
             }
         }
 
-        if let inferred = self.inferredOrganizationInfo(from: storage, override: override) {
-            return inferred
+        for (key, value) in sortedEntries {
+            let object = self.jsonObject(from: value)
+            let internalOrgID = self.cleanedOrgID(self.firstString(
+                in: object,
+                matching: ["internalOrgId", "internal_org_id", "org_id", "orgId"]))
+                ?? self.internalOrgIDFromStorageKey(key)
+            let slug = self.cleanedSlug(
+                self.slugFromPostAuthKey(key) ??
+                    self.firstString(in: object, matching: [
+                        "orgName", "org_name", "externalOrgId", "external_org_id",
+                    ]))
+
+            if let override {
+                if let overrideOrgID, internalOrgID == overrideOrgID { add(override, internalOrgID) }
+                if let overrideSlug, slug == overrideSlug { add(override, internalOrgID) }
+            } else if let slug, let internalOrgID {
+                // Name and ID from the same storage record only — never pair a
+                // slug from one org with an ID from another.
+                add("org/\(slug)", internalOrgID)
+            }
+            noteIDs(internalOrgID)
+            if let slug, !slugs.contains(slug) { slugs.append(slug) }
         }
 
         if let override {
-            return (override, firstInternalOrgID ?? self.orgID(fromNormalizedOrganization: override))
+            for orgID in internalOrgIDs { add(override, orgID) }
+            add(override, overrideOrgID ?? firstInternalOrgID)
+        } else {
+            // Internal IDs first: auth1 tokens resolve only via the internal
+            // organization ID, not the display slug.
+            for orgID in internalOrgIDs { add("organizations/\(orgID)", orgID) }
+            for slug in slugs { add("org/\(slug)", nil) }
         }
-
-        return (firstInternalOrgID.map { "organizations/\($0)" }, firstInternalOrgID)
+        return pairs
     }
 
     static func decodedStorageValue(_ value: String) -> String {
@@ -252,16 +338,25 @@ enum DevinSessionImporter {
             storage[entry.key] = self.decodedStorageValue(entry.value)
         }
 
+        // readTextEntries scans the whole profile store — it is NOT scoped to
+        // our origin. Without a filter, a foreign site's auth0spajs token
+        // (e.g. ChatGPT's, living in the same LevelDB) gets mistaken for a
+        // Devin session. LevelDB text keys keep the `_<origin>\x00\x01<key>`
+        // prefix, so only accept entries belonging to storageOrigin.
         let textEntries = SweetCookieKit.ChromiumLocalStorageReader.readTextEntries(
             in: levelDBURL,
             logger: logger)
         for entry in textEntries where storage[entry.key] == nil {
-            if self.isUsefulStorageKey(entry.key) {
+            if self.isOwnOriginTextKey(entry.key), self.isUsefulStorageKey(entry.key) {
                 storage[entry.key] = self.decodedStorageValue(entry.value)
             }
         }
 
         return storage
+    }
+
+    static func isOwnOriginTextKey(_ key: String) -> Bool {
+        key.contains(self.storageOrigin)
     }
 
     private static func jsonObject(from raw: String) -> Any? {
@@ -331,54 +426,6 @@ enum DevinSessionImporter {
             key.contains("member-info-v") ||
             key.contains("feature-flags-cache:org-") ||
             key.contains("feature-flags-cache:org_")
-    }
-
-    private static func inferredOrganizationInfo(
-        from storage: [String: String],
-        override: String?) -> (organization: String?, internalOrganizationID: String?)?
-    {
-        let overrideSlug = override.flatMap(self.slug(fromNormalizedOrganization:))
-        let overrideOrgID = override.flatMap(self.orgID(fromNormalizedOrganization:))
-        var fallbackSlug: String?
-        var fallbackInternalOrgID: String?
-
-        for (key, value) in storage {
-            let object = self.jsonObject(from: value)
-            let internalOrgID = self.cleanedOrgID(self.firstString(
-                in: object,
-                matching: ["internalOrgId", "internal_org_id", "org_id", "orgId"]))
-                ?? self.internalOrgIDFromStorageKey(key)
-            let slug = self.cleanedSlug(
-                self.slugFromPostAuthKey(key) ??
-                    self.firstString(in: object, matching: ["orgName", "org_name", "externalOrgId", "external_org_id"]))
-
-            if let overrideOrgID, internalOrgID == overrideOrgID {
-                return (override, internalOrgID)
-            }
-            if let overrideSlug, slug == overrideSlug {
-                return (override, internalOrgID)
-            }
-
-            if fallbackSlug == nil, let slug {
-                fallbackSlug = slug
-            }
-            if fallbackInternalOrgID == nil, let internalOrgID {
-                fallbackInternalOrgID = internalOrgID
-            }
-        }
-
-        if let override, fallbackInternalOrgID != nil {
-            return (override, fallbackInternalOrgID)
-        }
-
-        if let fallbackSlug {
-            return ("org/\(fallbackSlug)", fallbackInternalOrgID)
-        }
-        if let fallbackInternalOrgID {
-            return ("organizations/\(fallbackInternalOrgID)", fallbackInternalOrgID)
-        }
-
-        return nil
     }
 
     private static func externalOrgSlug(from key: String) -> String {

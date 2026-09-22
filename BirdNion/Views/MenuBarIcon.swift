@@ -514,6 +514,7 @@ enum MenuBarIconRenderer {
         case "antigravity": providerAsset = "AntigravityLogo"
         case "bedrock": providerAsset = "BedrockLogo"
         case "hiyo": providerAsset = "HiyoLogo"
+        case "devin": providerAsset = "DevinLogo"
         default:
             return fallbackLogo(effectivePointSize)
         }

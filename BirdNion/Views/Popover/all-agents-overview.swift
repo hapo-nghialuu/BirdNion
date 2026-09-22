@@ -90,6 +90,7 @@ struct AgentCostRow: Identifiable {
         case .kiro: VocabbyTheme.chartKiro
         case .omp: VocabbyTheme.chartOMP
         case .pi: VocabbyTheme.chartPi
+        case .devin: VocabbyTheme.devin
         default: VocabbyTheme.tertiary
         }
     }
@@ -167,6 +168,7 @@ struct AgentModelRow: Identifiable {
         case "kiro": VocabbyTheme.chartKiro
         case "omp": VocabbyTheme.chartOMP
         case "pi": VocabbyTheme.chartPi
+        case "devin": VocabbyTheme.devin
         default: VocabbyTheme.tertiary
         }
     }

@@ -544,13 +544,19 @@ fn build_windows_from_dict(
     let weekly_win = parse_window(weekly)?;
     let monthly_win = first_dict(dict, MONTHLY_KEYS).and_then(parse_window);
 
+    let percents: Vec<f64> = [Some(&rolling_win), Some(&weekly_win), monthly_win.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|w| w.percent)
+        .collect();
+    let scale = percent_scale(&percents);
     let now = chrono::Utc::now().timestamp();
     let mut windows = vec![
-        make_window("Rolling", &rolling_win, now, Some(5 * 3600)),
-        make_window("Tuần", &weekly_win, now, Some(7 * 24 * 3600)),
+        make_window("Rolling", &rolling_win, scale, now, Some(5 * 3600)),
+        make_window("Tuần", &weekly_win, scale, now, Some(7 * 24 * 3600)),
     ];
     if let Some(m) = monthly_win {
-        windows.push(make_window("Tháng", &m, now, Some(30 * 24 * 3600)));
+        windows.push(make_window("Tháng", &m, scale, now, Some(30 * 24 * 3600)));
     }
 
     let renews_at = RENEW_KEYS
@@ -571,40 +577,50 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
     )?;
     let weekly_reset = extract_int(text, r"weeklyUsage[^}]*?resetInSec\s*:\s*([0-9]+)")?;
 
+    let monthly_pct = extract_double(
+        text,
+        r"monthlyUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)",
+    );
+    let monthly_reset = extract_int(text, r"monthlyUsage[^}]*?resetInSec\s*:\s*([0-9]+)");
+
+    let scale = percent_scale(
+        &[rolling_pct, weekly_pct]
+            .into_iter()
+            .chain(monthly_pct)
+            .collect::<Vec<_>>(),
+    );
     let now = chrono::Utc::now().timestamp();
     let mut windows = vec![
         make_window(
             "Rolling",
             &WindowResult {
-                percent: normalize_percent(rolling_pct),
+                percent: rolling_pct,
                 reset_sec: rolling_reset,
             },
+            scale,
             now,
             Some(5 * 3600),
         ),
         make_window(
             "Tuần",
             &WindowResult {
-                percent: normalize_percent(weekly_pct),
+                percent: weekly_pct,
                 reset_sec: weekly_reset,
             },
+            scale,
             now,
             Some(7 * 24 * 3600),
         ),
     ];
 
-    let monthly_pct = extract_double(
-        text,
-        r"monthlyUsage[^}]*?usagePercent\s*:\s*([0-9]+(?:\.[0-9]+)?)",
-    );
-    let monthly_reset = extract_int(text, r"monthlyUsage[^}]*?resetInSec\s*:\s*([0-9]+)");
     if let (Some(p), Some(r)) = (monthly_pct, monthly_reset) {
         windows.push(make_window(
             "Tháng",
             &WindowResult {
-                percent: normalize_percent(p),
+                percent: p,
                 reset_sec: r,
             },
+            scale,
             now,
             Some(30 * 24 * 3600),
         ));
@@ -616,10 +632,11 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
 fn make_window(
     label: &str,
     result: &WindowResult,
+    scale: f64,
     now: i64,
     window_seconds: Option<i64>,
 ) -> QuotaWindow {
-    let used = (result.percent.round() as i32).clamp(0, 100);
+    let used = (result.percent * scale).round().clamp(0.0, 100.0) as i32;
     QuotaWindow {
         semantic_key: None,
         semantic_kind: None,
@@ -659,7 +676,7 @@ fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<WindowResult> {
             }
         }
     }
-    let resolved_pct = normalize_percent(pct?);
+    let resolved_pct = pct?;
 
     let mut reset_sec = RESET_IN_KEYS
         .iter()
@@ -675,13 +692,18 @@ fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<WindowResult> {
     })
 }
 
-fn normalize_percent(v: f64) -> f64 {
-    let scaled = if (0.0..=1.0).contains(&v) {
-        v * 100.0
+/// One payload mixes either 0-1 fractions or 0-100 percents — never both.
+/// Decide once per payload: a bare `1` is ambiguous, so only a fractional
+/// value proves the 0-1 form. The live Zen API returns integer percents
+/// (`"weekly": {"percent": 1}` = 1% used, not 100%).
+fn percent_scale(percents: &[f64]) -> f64 {
+    let in_unit_range = percents.iter().all(|p| (0.0..=1.0).contains(p));
+    let has_fraction = percents.iter().any(|p| p.fract() != 0.0);
+    if in_unit_range && has_fraction {
+        100.0
     } else {
-        v
-    };
-    scaled.clamp(0.0, 100.0)
+        1.0
+    }
 }
 
 fn double_value(v: &Value) -> Option<f64> {
@@ -853,6 +875,29 @@ mod tests {
         let status = parse_page(text, None).unwrap();
         assert_eq!(status.windows.len(), 3);
         assert_eq!(status.windows[2].label, "Tháng");
+    }
+
+    #[test]
+    /// Live Zen payload: `percent` is already 0-100, so an integer `1` means
+    /// 1% used and must NOT be rescaled as a 0-1 fraction into 100%.
+    fn integer_percent_payload_not_rescaled() {
+        let json = r#"{"usage":{"rolling":{"percent":0,"resetsAt":"2030-01-01T00:00:00Z"},
+                       "weekly":{"percent":1,"resetsAt":"2030-01-08T00:00:00Z"},
+                       "monthly":{"percent":57,"resetsAt":"2030-02-01T00:00:00Z"}}}"#;
+        let status = parse_page(json, None).expect("parses");
+        let used: Vec<i32> = status.windows.iter().map(|w| w.used_pct).collect();
+        assert_eq!(used, [0, 1, 57]);
+    }
+
+    #[test]
+    /// Fraction-style payloads still scale up — decided once for the whole
+    /// payload, not per value.
+    fn fraction_payload_scales_to_percent() {
+        let json = r#"{"usage":{"rolling":{"percent":0.67,"resetInSec":600},
+                       "weekly":{"percent":0.34,"resetInSec":86400}}}"#;
+        let status = parse_page(json, None).expect("parses");
+        let used: Vec<i32> = status.windows.iter().map(|w| w.used_pct).collect();
+        assert_eq!(used, [67, 34]);
     }
 
     #[test]

@@ -128,6 +128,8 @@ final class ServicesContainer: ObservableObject {
                 result.append(BedrockProvider())
             case "hiyo":
                 result.append(HiyoProvider())
+            case "devin":
+                result.append(DevinProvider())
             default:
                 break
             }

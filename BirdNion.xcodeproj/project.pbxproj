@@ -31,6 +31,8 @@
 		HIY00001000000000000B01 /* HiyoProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = HIY00002000000000000F01 /* HiyoProvider.swift */; };
 		TRY00001000000000000B01 /* TryAPIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRY00002000000000000F01 /* TryAPIProvider.swift */; };
 		DGP00001000000000000B01 /* DeepgramProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DGP00002000000000000F01 /* DeepgramProvider.swift */; };
+		DVP00001000000000000B01 /* DevinProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP00002000000000000F01 /* DevinProvider.swift */; };
+		DVP00003000000000000B01 /* DevinCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP00004000000000000F01 /* DevinCostScanner.swift */; };
 		GRP00001000000000000B01 /* GroqProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = GRP00002000000000000F01 /* GroqProvider.swift */; };
 		CPL00001000000000000B01 /* CopilotProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPL00002000000000000F01 /* CopilotProvider.swift */; };
 		CPL00003000000000000B01 /* CopilotOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPL00004000000000000F01 /* CopilotOAuth.swift */; };
@@ -261,6 +263,8 @@
 		HIY00002000000000000F01 /* HiyoProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/HiyoProvider.swift; sourceTree = "<group>"; };
 		TRY00002000000000000F01 /* TryAPIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/TryAPIProvider.swift; sourceTree = "<group>"; };
 		DGP00002000000000000F01 /* DeepgramProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DeepgramProvider.swift; sourceTree = "<group>"; };
+		DVP00002000000000000F01 /* DevinProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DevinProvider.swift; sourceTree = "<group>"; };
+		DVP00004000000000000F01 /* DevinCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/DevinCostScanner.swift; sourceTree = "<group>"; };
 		GRP00002000000000000F01 /* GroqProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GroqProvider.swift; sourceTree = "<group>"; };
 		CPL00002000000000000F01 /* CopilotProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/CopilotProvider.swift; sourceTree = "<group>"; };
 		CPL00004000000000000F01 /* CopilotOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Copilot/CopilotOAuth.swift; sourceTree = "<group>"; };
@@ -791,6 +795,8 @@
 				HIY00001000000000000B01 /* HiyoProvider.swift in Sources */,
 				TRY00001000000000000B01 /* TryAPIProvider.swift in Sources */,
 				DGP00001000000000000B01 /* DeepgramProvider.swift in Sources */,
+				DVP00001000000000000B01 /* DevinProvider.swift in Sources */,
+				DVP00003000000000000B01 /* DevinCostScanner.swift in Sources */,
 				GRP00001000000000000B01 /* GroqProvider.swift in Sources */,
 				CPL00001000000000000B01 /* CopilotProvider.swift in Sources */,
 				CPL00003000000000000B01 /* CopilotOAuth.swift in Sources */,

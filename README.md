@@ -12,7 +12,7 @@
 [![Homebrew](https://img.shields.io/badge/brew-hapo--nghialuu%2Ftap%2Fbirdnion-orange?style=flat-square)](https://github.com/hapo-nghialuu/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/license-MIT-6e5aff?style=flat-square)](LICENSE)
 
-25+ providers. BirdNion is a small macOS 14+ menu-bar app and Linux tray app that keeps AI coding limits visible, shows when each window resets, and centralizes how each coding agent is read. Codex, Claude, MiniMax, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, Grok, xAI, OpenAI, Ollama, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, and FreeModel.
+25+ providers. BirdNion is a small macOS 14+ menu-bar app and Linux tray app that keeps AI coding limits visible, shows when each window resets, and centralizes how each coding agent is read. Codex, Claude, MiniMax, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, Grok, xAI, OpenAI, Ollama, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, FreeModel, and Devin.
 
 The native macOS app uses SwiftUI/AppKit and a vendored, trimmed `CodexBarCore` subset. The Linux port lives in `linux/` and uses Tauri v2 with a Rust core and vanilla TypeScript UI. Both platforms share the same XDG provider configuration schema.
 
@@ -156,6 +156,7 @@ Planned direction:
 - **Antigravity** - Local process/CLI probe and Google OAuth account store for quota buckets and account-matched data.
 - **AWS Bedrock** - AWS access keys or named profile, region, budget fields, and CloudWatch/Cost usage.
 - **FreeModel** - Browser sessions from `freemodel.dev` for 5-hour and weekly dollar budgets, with per-browser account switching and managed-cookie support.
+- **Devin** - Daily and weekly quota from `app.devin.ai/api/<org>/billing/quota/usage`. Auto-imports the browser session token and organization from Chrome localStorage, or takes a manual Bearer token plus optional Organization (slug or internal `org-...` ID).
 
 Open to more providers when they fit the existing `QuotaProvider` model.
 

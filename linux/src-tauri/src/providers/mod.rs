@@ -17,6 +17,7 @@ pub mod copilot_oauth;
 pub mod cursor;
 pub mod deepgram;
 pub mod deepseek;
+pub mod devin;
 pub mod elevenlabs;
 pub mod error_classifier;
 pub mod freemodel;
@@ -153,6 +154,7 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "hiyo" => "Hiyo",
         "elevenlabs" => "ElevenLabs",
         "deepgram" => "Deepgram",
+        "devin" => "Devin",
         "groq" => "Groq",
         "grok" => "Grok",
         "xai" => "xAI",
@@ -247,6 +249,7 @@ async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
         "hiyo" => hiyo::fetch(cfg).await,
         "elevenlabs" => elevenlabs::fetch(cfg).await,
         "deepgram" => deepgram::fetch(cfg).await,
+        "devin" => devin::fetch(cfg).await,
         "groq" => groq::fetch(cfg).await,
         "grok" => grok::fetch(cfg).await,
         "xai" => xai::fetch(cfg).await,

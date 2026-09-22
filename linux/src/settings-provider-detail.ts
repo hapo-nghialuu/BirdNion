@@ -90,6 +90,8 @@ export type ProviderCfg = {
   claudeCodeScope?: string | null;
   claudeCodeProjectPath?: string | null;
   source?: string | null;
+  /** Devin organization override (macOS `Provider.devinOrganization`). */
+  devinOrganization?: string | null;
   /** Derived Codex record for this preset (macOS `Provider.codexProfileID`). */
   codexProfileID?: string | null;
   /** Last selected AI Coding agent (macOS `Provider.preferredAgent`). */
@@ -135,6 +137,7 @@ export type CodexProfileLite = {
 export const KEYED = new Set([
   "minimax", "hapo", "openrouter", "tryapi", "deepseek", "zai", "elevenlabs", "hiyo",
   "deepgram", "groq", "kiro", "kilo", "alibaba", "bedrock", "openai", "ollama", "opencodego",
+  "devin",
 ]);
 /** Providers that can use browser cookies. */
 export const COOKIED = new Set([
@@ -572,6 +575,10 @@ const PROVIDER_LINKS: Record<string, LinkSpec[]> = {
     L("link.dashboard", "https://console.aws.amazon.com/bedrock"),
     L("link.status", "https://health.aws.amazon.com/health/status"),
   ],
+  devin: [
+    L("link.dashboard", "https://app.devin.ai"),
+    L("link.usage", "https://app.devin.ai/settings/usage"),
+  ],
 };
 
 export function linksSection(id: string): HTMLElement | null {
@@ -752,12 +759,23 @@ export function setupSection(cfg: ProviderCfg): HTMLElement {
     // keys live in elevenlabs-keys.json / hiyo-keys.json.
     const credential = textInput(
       cfg.apiKey,
-      id === "openai" ? "OPENAI_ADMIN_KEY / API key" : t("settingsApiKey"),
+      id === "openai"
+        ? "OPENAI_ADMIN_KEY / API key"
+        : id === "devin"
+          ? "DEVIN_BEARER_TOKEN / Bearer token"
+          : t("settingsApiKey"),
       (v) => { cfg.apiKey = v; },
       true,
     );
     credential.dataset.remediationTarget = "credential";
     body.append(fieldRow(t("settingsApiKey"), credential));
+  }
+  if (id === "devin") {
+    body.append(fieldRow(
+      t("devin.organization.title"),
+      textInput(cfg.devinOrganization, "org-…", (v) => { cfg.devinOrganization = v; }),
+    ));
+    body.append(el("div", "pp-field-hint", t("devin.organization.hint")));
   }
   if (id === "openai" || id === "deepgram") {
     body.append(fieldRow(

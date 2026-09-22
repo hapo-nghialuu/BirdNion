@@ -1058,6 +1058,11 @@ extension ProvidersPane {
                 xaiTeamIDSection(idx)
             }
 
+            if row.id == "devin" {
+                HairlineRule()
+                devinOrganizationSection(idx)
+            }
+
             if row.id == "codex" {
                 HairlineRule()
                 VStack(alignment: .leading, spacing: 4) {
@@ -2063,6 +2068,32 @@ extension ProvidersPane {
         .padding(.vertical, 10)
     }
 
+    func devinOrganizationSection(_ idx: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L10n.t("devin.organization.title", language))
+                .font(.plexSans(13, weight: .semibold))
+                .foregroundStyle(SettingsTheme.primary)
+            Text(L10n.t("devin.organization.hint", language))
+                .font(.plexSans(11))
+                .foregroundStyle(SettingsTheme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("org-…", text: Binding(
+                get: { rows[idx].devinOrganization ?? "" },
+                set: { raw in
+                    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    rows[idx].devinOrganization = value.isEmpty ? nil : value
+                    if saveAll() {
+                        providerFetchIdentityDidChange("devin")
+                    }
+                }
+            ))
+            .instrumentFieldStyle()
+            .font(.plexMono(12))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
     @ViewBuilder
     func xaiCostSection(_ status: ProviderStatus?) -> some View {
         if let cost = status?.cost {
@@ -2284,6 +2315,9 @@ extension ProvidersPane {
             return [stat(googleStatus)].compactMap { $0 }
         case "bedrock":
             return [dash("https://console.aws.amazon.com/bedrock"), stat(awsStatus)].compactMap { $0 }
+        case "devin":
+            return [dash("https://app.devin.ai"),
+                    usage("https://app.devin.ai/settings/usage")].compactMap { $0 }
         default:
             return []
         }

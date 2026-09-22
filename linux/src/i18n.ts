@@ -713,6 +713,11 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     vi: "Đăng nhập bằng lệnh `codex` trong Terminal.",
     en: "Sign in by running `codex` in a terminal.",
   },
+  "devin.organization.title": { vi: "Devin Organization", en: "Devin Organization" },
+  "devin.organization.hint": {
+    vi: "Slug org (ví dụ my-org), ID nội bộ org-…/org_…, hoặc URL app.devin.ai/org/<slug>. Có thể đặt DEVIN_ORGANIZATION; giá trị môi trường được ưu tiên.",
+    en: "Org slug, internal org-…/org_… ID, or a full app.devin.ai/org/<slug> URL. You can set DEVIN_ORGANIZATION; the environment value takes precedence.",
+  },
 
   // Quota-warning card (macOS QuotaWarningCard)
   quotaWarnTitle: { vi: "CẢNH BÁO QUOTA", en: "QUOTA WARNINGS" },
