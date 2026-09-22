@@ -39,16 +39,18 @@ struct DevinCLIUsageReport: Equatable, Sendable {
 /// against `final_metrics` on real transcripts), so a step's token count is
 /// prompt + completion — adding cached would double count.
 ///
-/// USD stays 0: Devin bills in ACU (see `DevinUsageFetcher`'s
-/// `billing/usage/daily-usage`), and SWE models have no public per-token
-/// price, so no honest dollar estimate exists. The All-tab agent row falls
-/// back to displaying tokens instead of a fake "$0.00".
+/// USD is estimated at the per-token API rates Devin publishes on
+/// docs.devin.ai/desktop/models (`input/output/cache_read` per million —
+/// the same rates billed for usage beyond plan quota). Models missing
+/// from the table keep `usd = 0`; tokens are still counted and the UI
+/// falls back to showing them.
 enum DevinCostScanner {
 
     static let chartWindowDays = 120
     /// Bump when the counting formula changes — same migration rule as the
     /// other scanners (`CostHistoryStore` never shrinks a day on its own).
-    static let countingRevision = 1
+    /// 2 = first revision carrying per-model USD estimates.
+    static let countingRevision = 2
     private static let countingRevisionKey = "devinCostCountingRevision"
     private static let cacheTTL: TimeInterval = 300 // 5 minutes
     static let maxTranscriptFileBytes = 64 * 1024 * 1024
@@ -211,9 +213,43 @@ enum DevinCostScanner {
         let completed: Bool
     }
 
+    /// Per-token USD rates (per million) keyed by transcript `model_name`
+    /// (= Devin's `model_uid`). Source: the `modelCostData` table on
+    /// docs.devin.ai/desktop/models — `TEAMS_TIER_ENTERPRISE_SAAS` carries
+    /// the real API prices that apply once plan quota is exhausted.
+    private static let modelRates: [String: (input: Double, output: Double, cacheRead: Double)] = [
+        "swe-2-max": (0.75, 3.75, 0.075),
+        "swe-2-high": (0.75, 3.75, 0.075),
+        "swe-2-medium": (0.75, 3.75, 0.075),
+        "swe-1-7": (0.5, 2.5, 0.2),
+        "swe-1-7-medium": (0.5, 2.5, 0.2),
+        "swe-1-7-lightning": (2.5, 12.5, 1.0),
+        "swe-1-7-lightning-medium": (2.5, 12.5, 1.0),
+        "swe-1-6": (0.5, 2.5, 0.2),
+        "swe-1-6-fast": (0.5, 2.5, 0.2),
+    ]
+
+    /// USD for one step: uncached prompt × input rate + cached prompt ×
+    /// cache-read rate + completion × output rate. `cached_tokens` is a
+    /// subset of `prompt_tokens` (verified against `final_metrics`), so
+    /// uncached = prompt − cached.
+    static func usdCost(
+        model: String,
+        promptTokens: Int,
+        cachedTokens: Int,
+        completionTokens: Int
+    ) -> Double {
+        guard let rates = modelRates[model] else { return 0 }
+        let uncached = max(0, promptTokens - cachedTokens)
+        return (Double(uncached) * rates.input
+                + Double(cachedTokens) * rates.cacheRead
+                + Double(completionTokens) * rates.output) / 1_000_000
+    }
+
     private struct StepAccumulator {
         var tokens = 0
-        var models: [String: Int] = [:]
+        var usd = 0.0
+        var models: [String: (usd: Double, tokens: Int)] = [:]
     }
 
     /// Pure filesystem scan — unit-testable via `root` override.
@@ -259,7 +295,11 @@ enum DevinCostScanner {
                 guard day >= oldest, day <= startOfToday, step.tokens > 0 else { continue }
                 var acc = byDay[day] ?? StepAccumulator()
                 acc.tokens += step.tokens
-                acc.models[step.model, default: 0] += step.tokens
+                acc.usd += step.usd
+                var model = acc.models[step.model] ?? (0, 0)
+                model.usd += step.usd
+                model.tokens += step.tokens
+                acc.models[step.model] = model
                 byDay[day] = acc
             }
         }
@@ -267,9 +307,9 @@ enum DevinCostScanner {
         let buckets = byDay.keys.sorted().map { day -> CostHistoryStore.DayBucket in
             let acc = byDay[day] ?? StepAccumulator()
             let models = acc.models
-                .sorted { $0.value > $1.value }
-                .map { CostHistoryStore.Model(name: $0.key, usd: 0, tokens: $0.value) }
-            return CostHistoryStore.DayBucket(date: day, usd: 0, tokens: acc.tokens, models: models)
+                .sorted { $0.value.tokens > $1.value.tokens }
+                .map { CostHistoryStore.Model(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens) }
+            return CostHistoryStore.DayBucket(date: day, usd: acc.usd, tokens: acc.tokens, models: models)
         }
         return ScanResult(dailyBuckets: buckets, completed: completed)
     }
@@ -288,11 +328,12 @@ enum DevinCostScanner {
         let date: Date?
         let model: String
         let tokens: Int
+        let usd: Double
     }
 
-    /// Extracts metric-bearing steps: `(timestamp, model_name, prompt +
-    /// completion tokens)`. Steps without `metrics` (sysprompt, user turns)
-    /// carry no usage and are skipped.
+    /// Extracts metric-bearing steps: `(timestamp, model_name, tokens, usd)`.
+    /// Steps without `metrics` (sysprompt, user turns) carry no usage and
+    /// are skipped.
     private static func transcriptSteps(data: Data) -> [TranscriptStep]? {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let root = object as? [String: Any],
@@ -313,6 +354,7 @@ enum DevinCostScanner {
             else { continue }
             let prompt = intValue(metrics["prompt_tokens"])
             let completion = intValue(metrics["completion_tokens"])
+            let cached = min(intValue(metrics["cached_tokens"]), prompt)
             let tokens = prompt + completion
             guard tokens > 0 else { continue }
 
@@ -322,7 +364,10 @@ enum DevinCostScanner {
             }
             let model = sanitizedModelName(
                 (step["model_name"] as? String) ?? agentModel ?? "devin")
-            steps.append(TranscriptStep(date: date, model: model, tokens: tokens))
+            let usd = self.usdCost(
+                model: model, promptTokens: prompt,
+                cachedTokens: cached, completionTokens: completion)
+            steps.append(TranscriptStep(date: date, model: model, tokens: tokens, usd: usd))
         }
         return steps
     }

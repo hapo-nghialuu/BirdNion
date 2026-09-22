@@ -5614,6 +5614,32 @@ final class NewProviderTests: XCTestCase {
             "_https://example.com\(sep)auth1_session"))
     }
 
+    /// DIAGNOSTIC — remove before commit.
+    func testZZZDevinDiagnosticRawPayloads() async throws {
+        struct RecordingTransport: ProviderHTTPTransport {
+            func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+                let (data, resp) = try await ProviderHTTPClient.shared.data(for: request)
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    print("DIAG-URL \(request.url?.absoluteString ?? "?")")
+                    print("DIAG-KEYS \(obj.keys.sorted())")
+                    for (k, v) in obj where !(v is [Any]) {
+                        print("DIAG-FIELD \(k)=\(v)")
+                    }
+                }
+                return (data, resp)
+            }
+        }
+        let sessions = DevinSessionImporter.importSessions(browserDetection: BrowserDetection())
+        guard let s = sessions.first(where: { $0.internalOrganizationID != nil }) else {
+            print("DIAG no session"); return
+        }
+        let auth = DevinUsageFetcher.RequestAuth(
+            bearerToken: s.accessToken, organization: s.organization,
+            internalOrganizationID: s.internalOrganizationID, sourceLabel: s.sourceLabel)
+        _ = try? await DevinUsageFetcher.fetchQuotaUsage(
+            auth: auth, transport: RecordingTransport())
+    }
+
     // MARK: - Devin CLI cost scanner (transcripts → CostHistoryStore.devin)
 
     private var devinUTCCalendar: Calendar {
@@ -5672,15 +5698,51 @@ final class NewProviderTests: XCTestCase {
 
         // 1000+100 + 500+50 = 1650 (cached 400/200 are inside prompt_tokens).
         XCTAssertEqual(day1?.tokens, 1650)
-        XCTAssertEqual(day1?.usd ?? -1, 0, accuracy: 0.0001)
         XCTAssertEqual(day2?.tokens, 220)
 
-        // Models grouped per day; token-sorted.
+        // USD at published API rates (swe-2: $0.75 in / $3.75 out /
+        // $0.075 cache-read per 1M):
+        //   swe-2-max : 600×0.75 + 400×0.075 + 100×3.75 = 855 µ$/1M
+        //   swe-2-high: 500×0.75 + 50×3.75              = 562.5
+        XCTAssertEqual(day1?.usd ?? -1, 0.0014175, accuracy: 0.0000001)
+        // Sep22 swe-2-max: 0 uncached + 200×0.075 + 20×3.75 = 90 µ$/1M
+        XCTAssertEqual(day2?.usd ?? -1, 0.00009, accuracy: 0.0000001)
+
+        // Models grouped per day; token-sorted, carrying their own USD.
         XCTAssertEqual(day1?.models.count, 2)
         XCTAssertEqual(day1?.models.first?.name, "swe-2-max")
         XCTAssertEqual(day1?.models.first?.tokens, 1100)
+        XCTAssertEqual(day1?.models.first?.usd ?? -1, 0.000855, accuracy: 0.0000001)
         XCTAssertEqual(day1?.models.last?.name, "swe-2-high")
         XCTAssertEqual(day1?.models.last?.tokens, 550)
+        XCTAssertEqual(day1?.models.last?.usd ?? -1, 0.0005625, accuracy: 0.0000001)
+    }
+
+    /// Pricing table mirrors the `modelCostData` API rates published on
+    /// docs.devin.ai/desktop/models. Unknown models keep usd = 0 (tokens
+    /// still count — the UI falls back to showing them).
+    func testDevinPricingUsesPublishedRatesAndSkipsUnknownModels() {
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "swe-2-max", promptTokens: 1_000_000,
+                cachedTokens: 0, completionTokens: 0),
+            0.75, accuracy: 0.0001)
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "swe-2-max", promptTokens: 1_000_000,
+                cachedTokens: 1_000_000, completionTokens: 1_000_000),
+            0.075 + 3.75, accuracy: 0.0001)
+        // cached > prompt clamps at zero uncached — never negative cost.
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "swe-2-high", promptTokens: 100,
+                cachedTokens: 500, completionTokens: 0),
+            500 * 0.075 / 1_000_000, accuracy: 0.0000001)
+        XCTAssertEqual(
+            DevinCostScanner.usdCost(
+                model: "some-future-model", promptTokens: 1_000_000,
+                cachedTokens: 0, completionTokens: 0),
+            0, accuracy: 0.0001)
     }
 
     /// Malformed/legacy transcripts must not abort the scan: the bad file

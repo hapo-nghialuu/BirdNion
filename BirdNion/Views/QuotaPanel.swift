@@ -4627,21 +4627,18 @@ private struct ProviderDayChartDetail {
 
     static func from(day: DevinCLIDailyUsage, language: String) -> ProviderDayChartDetail {
         make(date: day.date, usd: day.usd, tokens: day.tokens,
-             models: day.models.map { ($0.name, $0.usd, $0.tokens) },
-             language: language, showUSD: false)
+             models: day.models.map { ($0.name, $0.usd, $0.tokens) }, language: language)
     }
 
     private static func make(date: Date, usd: Double, tokens: Int,
                              models: [(String, Double, Int)],
-                             language: String,
-                             showUSD: Bool = true) -> ProviderDayChartDetail {
+                             language: String) -> ProviderDayChartDetail {
         let sorted = models
             .filter { $0.1 > 0 || $0.2 > 0 }
             .sorted { ($0.2, $0.1) > ($1.2, $1.1) }
             .prefix(6)
             .map { (name: $0.0, usd: $0.1, tokens: $0.2) }
-        var header = "\(L10n.dayMonth(date, preference: language)) · \(AllUsageFormat.tokens(tokens))"
-        if showUSD { header += " · \(AllUsageFormat.usd(usd))" }
+        let header = "\(L10n.dayMonth(date, preference: language)) · \(AllUsageFormat.tokens(tokens)) · \(AllUsageFormat.usd(usd))"
         return ProviderDayChartDetail(header: header, models: Array(sorted))
     }
 }
@@ -4659,10 +4656,6 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
     let dayDetail: ProviderDayChartDetail?
     let footnote: String
     let barTint: Color
-    /// Token-only sources (Devin): replace the USD-first hero/today strings
-    /// so the card never claims a fake "$0.00".
-    var heroText: String? = nil
-    var todayText: String? = nil
     /// Cạnh vẽ hairline. Mặc định TOP (như mọi section popover). Codex đặt
     /// `top:false, bottom:true` để: (1) không đôi line với hairline đáy của
     /// hàng quota ngay trên, (2) tự tạo line ngăn với card ngân sách ngay dưới
@@ -4680,7 +4673,7 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .tracking(0.4)
                 Spacer(minLength: 8)
-                Text(heroText ?? AllUsageFormat.usd(totalUSD))
+                Text(AllUsageFormat.usd(totalUSD))
                     .font(.plexMono(16, weight: .bold))
                     .foregroundStyle(VocabbyTheme.primary)
             }
@@ -4693,7 +4686,7 @@ private struct ProviderCostChartScaffold<Bars: View>: View {
                         .foregroundStyle(VocabbyTheme.tertiary)
                 }
                 Spacer(minLength: 8)
-                Text(todayText ?? "\(L10n.t("chart.today", settings.appLanguage).uppercased()) \(AllUsageFormat.usd(todayUSD)) · \(AllUsageFormat.tokensShort(todayTokens))")
+                Text("\(L10n.t("chart.today", settings.appLanguage).uppercased()) \(AllUsageFormat.usd(todayUSD)) · \(AllUsageFormat.tokensShort(todayTokens))")
                     .font(.plexMono(9, weight: .medium))
                     .foregroundStyle(VocabbyTheme.tertiary)
                     .lineLimit(1)
@@ -4904,10 +4897,10 @@ struct GrokUsageChartCard: View {
 
 // MARK: - Devin CLI usage chart
 
-/// 30-day token chart for Devin CLI, scanned from
-/// `~/.local/share/devin/cli/transcripts`. Same interaction as the
-/// Codex/Grok cards (hover + click-pin model detail), but the hero is
-/// tokens — local transcripts carry no honest USD (Devin bills in ACU).
+/// 30-day usage chart for Devin CLI, scanned from
+/// `~/.local/share/devin/cli/transcripts` and priced at Devin's published
+/// per-token API rates. Same interaction as the Codex/Grok cards
+/// (hover + click-pin model detail).
 struct DevinCLIUsageChartCard: View {
     @EnvironmentObject var settings: SettingsStore
 
@@ -4924,7 +4917,7 @@ struct DevinCLIUsageChartCard: View {
 
     var body: some View {
         ProviderCostChartScaffold(
-            title: L10n.f("chart.providerUsage30", settings.appLanguage, "Devin CLI"),
+            title: L10n.f("chart.providerCost30", settings.appLanguage, "Devin CLI"),
             totalUSD: report.last30USD,
             todayUSD: report.todayUSD,
             todayTokens: report.todayTokens,
@@ -4932,8 +4925,6 @@ struct DevinCLIUsageChartCard: View {
             dayDetail: dayDetail,
             footnote: L10n.t("chart.estimateDevin", settings.appLanguage),
             barTint: VocabbyTheme.devin,
-            heroText: AllUsageFormat.tokensShort(report.last30Tokens),
-            todayText: "\(L10n.t("chart.today", settings.appLanguage).uppercased()) \(AllUsageFormat.tokensShort(report.todayTokens))",
             hairlineTopEdge: false,
             hairlineBottomEdge: true
         ) {
