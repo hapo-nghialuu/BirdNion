@@ -97,9 +97,6 @@ public struct DevinUsageFetcher: Sendable {
             } catch {
                 lastError = error
                 logger?("[devin] /api/\(path) failed: \(error.localizedDescription)")
-                if case DevinUsageError.invalidCredentials = error {
-                    throw error
-                }
                 continue
             }
             logger?("[devin] Fetched quota usage from /api/\(path)")
@@ -255,11 +252,10 @@ public struct DevinUsageFetcher: Sendable {
         }
         let response = try await transport.response(for: request)
         guard response.statusCode == 200 else {
-            let body = String(data: response.data.prefix(200), encoding: .utf8) ?? "<binary>"
             if response.statusCode == 401 || response.statusCode == 403 {
                 throw DevinUsageError.invalidCredentials
             }
-            Self.log.error("Devin API returned \(response.statusCode): \(body)")
+            Self.log.error("Devin API returned HTTP \(response.statusCode)")
             throw DevinUsageError.apiError("HTTP \(response.statusCode)")
         }
         return response.data

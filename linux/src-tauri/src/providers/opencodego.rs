@@ -437,6 +437,7 @@ fn filtered_cookie_header(raw: &str) -> Option<String> {
 struct WindowResult {
     percent: f64,
     reset_sec: i64,
+    is_derived: bool,
 }
 
 const PERCENT_KEYS: &[&str] = &[
@@ -547,16 +548,35 @@ fn build_windows_from_dict(
     let percents: Vec<f64> = [Some(&rolling_win), Some(&weekly_win), monthly_win.as_ref()]
         .into_iter()
         .flatten()
+        .filter(|w| !w.is_derived)
         .map(|w| w.percent)
         .collect();
     let scale = percent_scale(&percents);
     let now = chrono::Utc::now().timestamp();
     let mut windows = vec![
-        make_window("Rolling", &rolling_win, scale, now, Some(5 * 3600)),
-        make_window("Tuần", &weekly_win, scale, now, Some(7 * 24 * 3600)),
+        make_window(
+            "Rolling",
+            &rolling_win,
+            if rolling_win.is_derived { 1.0 } else { scale },
+            now,
+            Some(5 * 3600),
+        ),
+        make_window(
+            "Tuần",
+            &weekly_win,
+            if weekly_win.is_derived { 1.0 } else { scale },
+            now,
+            Some(7 * 24 * 3600),
+        ),
     ];
     if let Some(m) = monthly_win {
-        windows.push(make_window("Tháng", &m, scale, now, Some(30 * 24 * 3600)));
+        windows.push(make_window(
+            "Tháng",
+            &m,
+            if m.is_derived { 1.0 } else { scale },
+            now,
+            Some(30 * 24 * 3600),
+        ));
     }
 
     let renews_at = RENEW_KEYS
@@ -596,6 +616,7 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
             &WindowResult {
                 percent: rolling_pct,
                 reset_sec: rolling_reset,
+                is_derived: false,
             },
             scale,
             now,
@@ -606,6 +627,7 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
             &WindowResult {
                 percent: weekly_pct,
                 reset_sec: weekly_reset,
+                is_derived: false,
             },
             scale,
             now,
@@ -619,6 +641,7 @@ fn parse_regex_usage(text: &str) -> Option<Vec<QuotaWindow>> {
             &WindowResult {
                 percent: p,
                 reset_sec: r,
+                is_derived: false,
             },
             scale,
             now,
@@ -661,6 +684,7 @@ fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<WindowResult> {
     let mut pct = PERCENT_KEYS
         .iter()
         .find_map(|k| dict.get(*k).and_then(double_value));
+    let mut is_derived = false;
     if pct.is_none() {
         let used = dict
             .get("used")
@@ -673,6 +697,7 @@ fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<WindowResult> {
         if let (Some(u), Some(l)) = (used, limit) {
             if l > 0.0 {
                 pct = Some(u / l * 100.0);
+                is_derived = true;
             }
         }
     }
@@ -689,6 +714,7 @@ fn parse_window(dict: &serde_json::Map<String, Value>) -> Option<WindowResult> {
     Some(WindowResult {
         percent: resolved_pct,
         reset_sec: reset_sec.unwrap_or(0).max(0),
+        is_derived,
     })
 }
 
@@ -898,6 +924,15 @@ mod tests {
         let status = parse_page(json, None).expect("parses");
         let used: Vec<i32> = status.windows.iter().map(|w| w.used_pct).collect();
         assert_eq!(used, [67, 34]);
+    }
+
+    #[test]
+    fn mixed_explicit_ratio_and_derived_percent_scale_independently() {
+        let json = r#"{"usage":{"rolling":{"percent":0.5,"resetInSec":600},
+                       "weekly":{"used":25,"limit":100,"resetInSec":86400}}}"#;
+        let status = parse_page(json, None).expect("parses");
+        let used: Vec<i32> = status.windows.iter().map(|w| w.used_pct).collect();
+        assert_eq!(used, [50, 25]);
     }
 
     #[test]

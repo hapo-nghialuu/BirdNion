@@ -10,6 +10,25 @@ private actor KiroScanInvocationCounter {
     func current() -> Int { count }
 }
 
+private actor DevinCandidateTransport: ProviderHTTPTransport {
+    private var paths: [String] = []
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let path = request.url?.path ?? ""
+        paths.append(path)
+        let succeeds = path == "/api/org/acme/billing/quota/usage"
+        let body = succeeds
+            ? Data(#"{"daily_percentage":42,"weekly_percentage":20}"#.utf8)
+            : Data(#"{"error":"wrong organization path"}"#.utf8)
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: succeeds ? 200 : 403,
+            httpVersion: nil, headerFields: nil)!
+        return (body, response)
+    }
+
+    func requestedPaths() -> [String] { paths }
+}
+
 /// Parser tests for the natively-authored new providers (fixture-driven, no
 /// network). Cookie/OAuth/CLI providers expose their own `_parseForTesting`
 /// hooks; these cover the three hand-written API-key parsers.
@@ -5504,6 +5523,16 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows.map(\.usedPct), [67, 34])
     }
 
+    func testOpenCodeGoMixedExplicitRatioAndDerivedPercentScaleIndependently() {
+        let json = """
+        {"usage":{"rolling":{"percent":0.5,"resetInSec":600},
+                  "weekly":{"used":25,"limit":100,"resetInSec":86400}}}
+        """
+        let status = OpenCodeGoProvider._parseForTesting(pageText: json, zenBalance: nil)
+        XCTAssertNil(status.error)
+        XCTAssertEqual(status.windows.map(\.usedPct), [50, 25])
+    }
+
     /// Storage may carry metadata for several orgs; emit one session per
     /// internal-org candidate so the fetcher can try each — auth1 tokens only
     /// resolve against their own org ("No organizations found for auth1 user").
@@ -5521,6 +5550,23 @@ final class NewProviderTests: XCTestCase {
         // Sorted-key scan keeps the first candidate deterministic.
         XCTAssertEqual(sessions.first?.internalOrganizationID, "org-bbbbbbbbb")
         XCTAssertEqual(Set(sessions.map(\.accessToken)).count, 1)
+    }
+
+    func testDevinFetcherTriesNextOrganizationPathAfterForbiddenCandidate() async throws {
+        let transport = DevinCandidateTransport()
+        let snapshot = try await DevinUsageFetcher.fetchQuotaUsage(
+            auth: .init(
+                bearerToken: "test-token",
+                organization: "org/acme",
+                internalOrganizationID: "org-stale",
+                sourceLabel: "test"),
+            transport: transport)
+
+        XCTAssertEqual(snapshot.daily?.usedPercent, 42)
+        let quotaPaths = await transport.requestedPaths().filter { $0.hasSuffix("billing/quota/usage") }
+        XCTAssertEqual(
+            Array(quotaPaths.prefix(2)),
+            ["/api/org-stale/billing/quota/usage", "/api/org/acme/billing/quota/usage"])
     }
 
     /// `billing/usage/daily-usage?cycle=current&view=all` — shape observed
@@ -5596,8 +5642,9 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(merged.cycleStart, Date(timeIntervalSince1970: 100))
         XCTAssertEqual(merged.cycleEnd, Date(timeIntervalSince1970: 400))
         let sessions = merged.products.first { $0.view == "sessions" }
-        XCTAssertEqual(sessions?.total, 6)
+        XCTAssertEqual(sessions?.total, 7)
         XCTAssertEqual(merged.products.count, 2)
+        XCTAssertEqual(merged.products.first { $0.view == "reviews" }?.total, 1)
     }
 
     /// `readTextEntries` scans the whole profile LevelDB — unscoped. Without
@@ -5612,32 +5659,8 @@ final class NewProviderTests: XCTestCase {
             "_https://chatgpt.com\(sep)@@auth0spajs@@::app_2SKx67EdpoN0G6j64rFvigXD::"))
         XCTAssertFalse(DevinSessionImporter.isOwnOriginTextKey(
             "_https://example.com\(sep)auth1_session"))
-    }
-
-    /// DIAGNOSTIC — remove before commit.
-    func testZZZDevinDiagnosticRawPayloads() async throws {
-        struct RecordingTransport: ProviderHTTPTransport {
-            func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-                let (data, resp) = try await ProviderHTTPClient.shared.data(for: request)
-                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    print("DIAG-URL \(request.url?.absoluteString ?? "?")")
-                    print("DIAG-KEYS \(obj.keys.sorted())")
-                    for (k, v) in obj where !(v is [Any]) {
-                        print("DIAG-FIELD \(k)=\(v)")
-                    }
-                }
-                return (data, resp)
-            }
-        }
-        let sessions = DevinSessionImporter.importSessions(browserDetection: BrowserDetection())
-        guard let s = sessions.first(where: { $0.internalOrganizationID != nil }) else {
-            print("DIAG no session"); return
-        }
-        let auth = DevinUsageFetcher.RequestAuth(
-            bearerToken: s.accessToken, organization: s.organization,
-            internalOrganizationID: s.internalOrganizationID, sourceLabel: s.sourceLabel)
-        _ = try? await DevinUsageFetcher.fetchQuotaUsage(
-            auth: auth, transport: RecordingTransport())
+        XCTAssertFalse(DevinSessionImporter.isOwnOriginTextKey(
+            "_https://example.com\(sep)redirect=https://app.devin.ai\(sep)auth1_session"))
     }
 
     // MARK: - Devin CLI cost scanner (transcripts → CostHistoryStore.devin)
@@ -5811,6 +5834,97 @@ final class NewProviderTests: XCTestCase {
 
         XCTAssertEqual(result.dailyBuckets.count, 1)
         XCTAssertEqual(result.dailyBuckets.first?.tokens, 15)
+    }
+
+    func testDevinCostScannerAggregateByteBudgetMarksPartial() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let transcript = #"{"steps":[{"timestamp":"2026-09-22T08:00:00Z","metrics":{"prompt_tokens":10,"completion_tokens":2}}]}"#
+        try writeDevinTranscript(transcript, to: dir, name: "a.json")
+        try writeDevinTranscript(transcript, to: dir, name: "b.json")
+        let oneFileBytes = try Data(contentsOf: dir.appendingPathComponent("a.json")).count
+        let now = ISO8601DateFormatter().date(from: "2026-09-22T12:00:00Z")!
+
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, now: now, calendar: devinUTCCalendar,
+            maxReadBytes: oneFileBytes)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertEqual(result.dailyBuckets.reduce(0) { $0 + $1.tokens }, 12)
+    }
+
+    func testDevinCostScannerDirectoryEntryBudgetMarksPartial() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeDevinTranscript(#"{"steps":[]}"#, to: dir, name: "a.json")
+        try writeDevinTranscript(#"{"steps":[]}"#, to: dir, name: "b.json")
+
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, calendar: devinUTCCalendar,
+            maxDirectoryEntries: 1)
+
+        XCTAssertFalse(result.completed)
+    }
+
+    func testDevinCostScannerRejectsTranscriptSymlink() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        let dir = base.appendingPathComponent("transcripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let target = base.appendingPathComponent("outside.json")
+        try #"{"steps":[]}"#.write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent("linked.json"), withDestinationURL: target)
+
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, calendar: devinUTCCalendar)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.dailyBuckets.isEmpty)
+    }
+
+    func testDevinCostScannerTokenOverflowMarksPartial() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeDevinTranscript("""
+        {"steps":[{"timestamp":"2026-09-22T08:00:00Z",
+                    "metrics":{"prompt_tokens":\(Int.max),"completion_tokens":1}}]}
+        """, to: dir, name: "overflow.json")
+
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30,
+            now: ISO8601DateFormatter().date(from: "2026-09-22T12:00:00Z")!,
+            calendar: devinUTCCalendar)
+
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.dailyBuckets.isEmpty)
+    }
+
+    func testDevinCostScannerPreCancelledTaskIsIncomplete() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let calendar = devinUTCCalendar
+        let task = Task.detached { () -> DevinCostScanner.ScanResult in
+            await Task.yield()
+            return DevinCostScanner.scanTranscripts(
+                root: dir, scanDays: 30, calendar: calendar)
+        }
+        task.cancel()
+        let result = await task.value
+
+        XCTAssertFalse(result.completed)
+        XCTAssertTrue(result.dailyBuckets.isEmpty)
     }
 
     /// `makeDevinReport` aggregates last30 + picks the top model by tokens.

@@ -31,8 +31,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
             "Chưa cấu hình Devin Bearer token — đặt DEVIN_BEARER_TOKEN/DEVIN_AUTHORIZATION hoặc dán token trong Settings",
         );
     };
-    let Some(organization) =
-        normalized_organization(resolve_organization(cfg, &env).as_deref())
+    let Some(organization) = normalized_organization(resolve_organization(cfg, &env).as_deref())
     else {
         return ProviderStatus::failure(
             &cfg.id,
@@ -44,18 +43,22 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 
     let client = shared_client();
     let mut last_error = String::new();
+    let mut saw_invalid_credentials = false;
     for path in candidate_paths(&organization, internal_id.as_deref()) {
         match get(&client, &path, &token, internal_id.as_deref()).await {
             Ok(body) => return materialize(cfg, &name, &organization, &body),
             Err(FetchError::InvalidCredentials) => {
-                return ProviderStatus::failure(
-                    &cfg.id,
-                    &name,
-                    "Devin session/token không hợp lệ hoặc đã hết hạn.",
-                );
+                saw_invalid_credentials = true;
             }
             Err(FetchError::Other(message)) => last_error = message,
         }
+    }
+    if last_error.is_empty() && saw_invalid_credentials {
+        return ProviderStatus::failure(
+            &cfg.id,
+            &name,
+            "Devin session/token không hợp lệ hoặc đã hết hạn.",
+        );
     }
     ProviderStatus::failure(
         &cfg.id,
@@ -72,10 +75,7 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 
 /// Env → settings `apiKey`; strips an optional `Authorization:`/`Bearer `
 /// prefix so a pasted header line still works (upstream `manualAuth`).
-fn resolve_token(
-    cfg: &config::Provider,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
+fn resolve_token(cfg: &config::Provider, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     for key in ["DEVIN_BEARER_TOKEN", "DEVIN_AUTHORIZATION"] {
         if let Some(token) = env(key).and_then(|v| clean_token(&v)) {
             return Some(token);
@@ -103,7 +103,10 @@ fn resolve_organization(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     for key in ["DEVIN_ORGANIZATION", "DEVIN_ORG"] {
-        if let Some(value) = env(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+        if let Some(value) = env(key)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
             return Some(value);
         }
     }
@@ -125,10 +128,8 @@ fn normalized_organization(raw: Option<&str>) -> Option<String> {
     if let Ok(url) = Url::parse(&value) {
         if let Some(host) = url.host_str().map(|h| h.to_lowercase()) {
             if host == "devin.ai" || host.ends_with(".devin.ai") {
-                let segments: Vec<&str> = url
-                    .path_segments()
-                    .map(|s| s.collect())
-                    .unwrap_or_default();
+                let segments: Vec<&str> =
+                    url.path_segments().map(|s| s.collect()).unwrap_or_default();
                 if segments.len() >= 2 && segments[0] == "org" {
                     value = format!("org/{}", segments[1]);
                 } else if segments.len() >= 2 && segments[0] == "organizations" {
@@ -155,9 +156,7 @@ fn is_internal_org_id(value: &str) -> bool {
 }
 
 fn internal_org_id(normalized: &str) -> Option<String> {
-    normalized
-        .strip_prefix("organizations/")
-        .map(String::from)
+    normalized.strip_prefix("organizations/").map(String::from)
 }
 
 /// Upstream `candidatePaths` order: internal id first, then the normalized
@@ -309,7 +308,9 @@ fn percent_from(value: &Value) -> Option<f64> {
     if let Some(v) = double(value) {
         return Some(normalize_percent(v));
     }
-    let Value::Object(map) = value else { return None };
+    let Value::Object(map) = value else {
+        return None;
+    };
 
     for key in [
         "used_percent",
@@ -335,7 +336,10 @@ fn percent_from(value: &Value) -> Option<f64> {
         }
     }
 
-    let used = first_double(map, &["used", "usage", "used_count", "usedCount", "consumed"]);
+    let used = first_double(
+        map,
+        &["used", "usage", "used_count", "usedCount", "consumed"],
+    );
     let limit = first_double(map, &["limit", "quota", "total", "max", "available"]);
     if let (Some(used), Some(limit)) = (used, limit) {
         if limit > 0.0 {
@@ -625,7 +629,11 @@ mod tests {
         assert!((daily.used_percent - 42.4).abs() < 0.001);
         assert_eq!(
             daily.resets_at,
-            Some(chrono::DateTime::parse_from_rfc3339("2026-09-23T00:00:00Z").unwrap().timestamp())
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-09-23T00:00:00Z")
+                    .unwrap()
+                    .timestamp()
+            )
         );
         assert!((snap.weekly.unwrap().used_percent - 7.6).abs() < 0.001);
         assert_eq!(snap.plan_name.as_deref(), Some("Core"));

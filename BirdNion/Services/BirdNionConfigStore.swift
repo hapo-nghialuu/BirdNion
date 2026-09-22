@@ -1073,7 +1073,7 @@ enum BirdNionConfigStore {
     /// Any other per-provider key in an existing document is preserved.
     private static let knownProviderKeys: Set<String> = [
         "id", "apiKey", "enabled", "region", "budget", "projectID", "secretKey",
-        "awsAuthMode", "awsProfile", "baseURL", "displayName", "accountLabel",
+        "awsAuthMode", "awsProfile", "devinOrganization", "baseURL", "displayName", "accountLabel",
         "cookieHeader", "claudeHaikuModel", "claudeSonnetModel", "claudeOpusModel",
         "claudeDisable1M", "claudeCodeScope", "claudeCodeProjectPath",
         "codexProfileID", "preferredAgent",

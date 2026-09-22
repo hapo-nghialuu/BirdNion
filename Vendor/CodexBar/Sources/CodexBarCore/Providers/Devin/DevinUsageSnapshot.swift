@@ -461,9 +461,11 @@ public enum DevinUsageParser {
             daysByDate[day.date] = day
         }
         var productDays: [String: [Date: DevinDailyUsage]] = [:]
+        var productTotals: [String: Double] = [:]
         var productOrder: [String] = []
         for product in previous.products + current.products {
             if productDays[product.view] == nil { productOrder.append(product.view) }
+            productTotals[product.view, default: 0] += product.total
             var merged = productDays[product.view] ?? [:]
             for day in product.days { merged[day.date] = day }
             productDays[product.view] = merged
@@ -472,7 +474,7 @@ public enum DevinUsageParser {
             let days = (productDays[view] ?? [:]).values.sorted { $0.date < $1.date }
             return DevinProductUsage(
                 view: view,
-                total: days.reduce(0) { $0 + $1.amount },
+                total: productTotals[view] ?? 0,
                 days: days)
         }
         return DevinUsageHistory(

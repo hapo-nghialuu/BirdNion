@@ -117,6 +117,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn runner_returns_true_only_for_zero_exit() {
+        let process_start_timeout = Duration::from_secs(5);
         let home = Path::new("/tmp/system-codex-home");
         let success = write_script(
             "success",
@@ -124,8 +125,8 @@ mod tests {
         );
         let nonzero = write_script("nonzero", "exit 17");
 
-        assert!(run_prime(&success, home, Duration::from_secs(1)));
-        assert!(!run_prime(&nonzero, home, Duration::from_secs(1)));
+        assert!(run_prime(&success, home, process_start_timeout));
+        assert!(!run_prime(&nonzero, home, process_start_timeout));
 
         std::fs::remove_dir_all(success.parent().unwrap()).unwrap();
         std::fs::remove_dir_all(nonzero.parent().unwrap()).unwrap();

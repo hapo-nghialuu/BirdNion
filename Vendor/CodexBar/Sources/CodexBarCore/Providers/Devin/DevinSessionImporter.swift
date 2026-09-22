@@ -356,7 +356,7 @@ enum DevinSessionImporter {
     }
 
     static func isOwnOriginTextKey(_ key: String) -> Bool {
-        key.contains(self.storageOrigin)
+        key.hasPrefix("_\(self.storageOrigin)\u{0}\u{1}")
     }
 
     private static func jsonObject(from raw: String) -> Any? {
