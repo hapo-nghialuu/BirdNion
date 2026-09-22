@@ -155,6 +155,7 @@ enum VocabbyTheme {
     static let googleGreen = fixed(0x34A853)
     static let bedrock    = fixed(0xFF9900)    // AWS
     static let hiyo       = fixed(0x00A8E8)
+    static let devin      = fixed(0x46B482)    // Devin brand (CodexBar ProviderBranding 70,180,130)
     static let omp        = dyn(0xBC52C8, 0xCE7FD8)
     static let pi         = dyn(0x06B6D4, 0x22D3EE)
     /// Brand tint for a provider id; nil → caller falls back to default styling.
@@ -187,6 +188,7 @@ enum VocabbyTheme {
         case "antigravity": return antigravity
         case "bedrock": return bedrock
         case "hiyo": return hiyo
+        case "devin": return devin
         case "omp": return omp
         case "pi": return pi
         default: return nil

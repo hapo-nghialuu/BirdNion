@@ -5811,4 +5811,40 @@ final class NewProviderTests: XCTestCase {
 
         XCTAssertNil(GrokCostScanner.boundedData(at: dir.appendingPathComponent("nope.json")))
     }
+
+    // MARK: - Devin
+
+    /// Snapshot daily/weekly → hai window "Ngày"/"Tuần" với reset + pace.
+    func testDevinSnapshotMapsToProviderStatus() {
+        let reset = Date(timeIntervalSinceNow: 3600)
+        let snap = DevinUsageSnapshot(
+            daily: DevinQuotaWindow(usedPercent: 42.4, resetsAt: reset),
+            weekly: DevinQuotaWindow(usedPercent: 7.6),
+            planName: "Core",
+            organization: "org/acme",
+            updatedAt: Date())
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.id, "devin")
+        XCTAssertEqual(s.windows.count, 2)
+        XCTAssertEqual(s.windows[0].label, "Ngày")
+        XCTAssertEqual(s.windows[0].usedPct, 42)
+        XCTAssertEqual(s.windows[0].remainingPct, 58)
+        XCTAssertEqual(s.windows[0].resetDate, reset)
+        XCTAssertEqual(s.windows[0].windowSeconds, 24 * 3600)
+        XCTAssertEqual(s.windows[1].label, "Tuần")
+        XCTAssertEqual(s.windows[1].windowSeconds, 7 * 24 * 3600)
+        XCTAssertEqual(s.accountLabel, "org/acme")
+        XCTAssertEqual(s.planName, "Core")
+    }
+
+    /// Không có window nào → status lỗi thay vì popover trống.
+    func testDevinSnapshotWithoutWindowsYieldsError() {
+        let snap = DevinUsageSnapshot(
+            daily: nil, weekly: nil, planName: nil, organization: nil,
+            updatedAt: Date())
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNotNil(s.error)
+        XCTAssertTrue(s.windows.isEmpty)
+    }
 }

@@ -426,6 +426,7 @@ extension ProvidersPane {
         case "bedrock": "AWS Bedrock"
         case "freemodel": "FreeModel"
         case "hiyo": "Hiyo"
+        case "devin": "Devin"
         default: row.displayName ?? row.id
         }
     }
@@ -618,6 +619,8 @@ struct ProviderLogoView: View {
             logo("BedrockLogo", brand: VocabbyTheme.bedrock)
         case "hiyo":
             logo("HiyoLogo", brand: VocabbyTheme.hiyo)
+        case "devin":
+            logo("DevinLogo", brand: VocabbyTheme.devin)
         default:
             Image(systemName: "circle.dotted")
                 .resizable()

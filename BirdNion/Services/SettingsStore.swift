@@ -414,6 +414,9 @@ final class SettingsStore: ObservableObject {
             caps.hasMonthlyPlan = true
         case "bedrock":
             caps.hasSecondary = true
+        case "devin":
+            // Daily + weekly windows.
+            caps.hasSecondary = true
         case "antigravity":
             caps.hasSecondary = true
         case "commandcode", "opencodego":

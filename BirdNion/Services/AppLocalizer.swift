@@ -680,6 +680,8 @@ enum L10n {
         "xai.spend": "Chi tiêu",
         "xai.teamId.title": "xAI Team ID",
         "xai.teamId.hint": "Bắt buộc cho Management API. Có thể đặt XAI_TEAM_ID; giá trị môi trường được ưu tiên.",
+        "devin.organization.title": "Devin Organization",
+        "devin.organization.hint": "Slug org (ví dụ my-org), ID nội bộ org-…/org_…, hoặc URL app.devin.ai/org/<slug>. Có thể đặt DEVIN_ORGANIZATION; giá trị môi trường được ưu tiên. Trống = tự đọc từ session Chrome.",
         "provider.systemManaged": "Hệ thống · ~/.codex",
         "provider.appManaged": "Quản lý bởi app",
         "provider.reauth": "Đăng nhập lại",
@@ -1333,6 +1335,8 @@ enum L10n {
         "xai.spend": "Spend",
         "xai.teamId.title": "xAI Team ID",
         "xai.teamId.hint": "Required for the Management API. You can set XAI_TEAM_ID; the environment value takes precedence.",
+        "devin.organization.title": "Devin Organization",
+        "devin.organization.hint": "Org slug, internal org-…/org_… ID, or a full app.devin.ai/org/<slug> URL. You can set DEVIN_ORGANIZATION; the environment value takes precedence. Blank = auto-read from the Chrome session."
         "provider.systemManaged": "System · ~/.codex",
         "provider.appManaged": "Managed by app",
         "provider.reauth": "Sign in again",
