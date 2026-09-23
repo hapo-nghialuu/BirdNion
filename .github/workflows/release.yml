@@ -94,6 +94,19 @@ jobs:
           # local branch matching RELEASE_BRANCH.
           git switch -C release origin/release
 
+      - name: Match runner to dev test environment (timezone + Codex home)
+        # xcodebuild does not forward shell env vars into the test process, so
+        # TZ/CODEX_HOME exports have no effect — set the runner's real state:
+        # - The suite is authored on an Asia/Ho_Chi_Minh machine; cost-scanner
+        #   tests assert on local-midnight boundaries that only differ there.
+        # - FirstLiveCheckpoint reauth tests exercise the real system Codex
+        #   home (reauth(id: "system")); the runner has no ~/.codex. Seed an
+        #   empty credential fixture — no real credentials are used.
+        run: |
+          sudo systemsetup -settimezone Asia/Ho_Chi_Minh
+          mkdir -p "$HOME/.codex"
+          if [ ! -f "$HOME/.codex/auth.json" ]; then printf '{}' > "$HOME/.codex/auth.json"; fi
+
       - name: Check out CLIProxyAPI helper source
         # release.sh's "Embed CLIProxyAPI Core" build phase compiles the helper
         # from CLIPROXYAPI_SOURCE; it must live outside the repo so the
