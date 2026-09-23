@@ -647,6 +647,22 @@ async fn fetch_cookie_enrichment(cfg: &config::Provider) -> Option<Value> {
     resp.json::<Value>().await.ok()
 }
 
+/// Core phase: auth + quota usage, no enrichment probes (version/status-page/
+/// cookie dashboard/reset credits). `provider_statuses` publishes this first;
+/// `fetch_extras` fills the enrichment fields afterward (task-08 split).
+pub async fn fetch_core(cfg: &config::Provider) -> ProviderStatus {
+    fetch_core_with_operations(cfg, &LIVE_OPERATIONS).await
+}
+
+/// Extras phase: enrichment-only status for merge via `merge_status_extras`.
+/// Re-resolves auth on its own (selection + guarded read + refresh) so the
+/// extras tail can run detached after the core result has already shipped.
+pub async fn fetch_extras(cfg: &config::Provider) -> ProviderStatus {
+    fetch_extras_with_operations(cfg, &LIVE_OPERATIONS).await
+}
+
+/// Single-shot full fetch (self-test path): core + extras merged, preserving
+/// the pre-split output shape.
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
     fetch_with_operations(cfg, &LIVE_OPERATIONS).await
 }
@@ -654,6 +670,16 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 enum FetchAttempt {
     Ready(ProviderStatus, FetchGuard),
     Stale,
+}
+
+/// Auth prelude shared by the core and extras phases: active selection →
+/// guarded `auth.json` read → refresh-if-needed + bound save. Returns the
+/// refreshed creds plus the staleness guard, a cookie-fallback marker, or a
+/// terminal `FetchAttempt` (failure status / stale) the caller returns as-is.
+enum ResolvedAuth {
+    Creds { guard: FetchGuard, creds: Credentials },
+    CookieOnly { guard: FetchGuard },
+    Done(FetchAttempt),
 }
 
 fn finish_attempt(status: ProviderStatus, guard: FetchGuard) -> FetchAttempt {
@@ -664,9 +690,145 @@ fn finish_attempt(status: ProviderStatus, guard: FetchGuard) -> FetchAttempt {
     }
 }
 
+async fn resolve_auth(
+    cfg: &config::Provider,
+    selection: &codex_accounts::ActiveSelection,
+    operations: &dyn CodexOperations,
+) -> ResolvedAuth {
+    let name = display_name(cfg);
+    if selection.account_id != codex_accounts::SYSTEM_ID && selection.auth_path.is_none() {
+        return ResolvedAuth::Done(FetchAttempt::Ready(
+            ProviderStatus::failure(
+                &cfg.id,
+                &name,
+                "Không thể xác minh account Codex đang hoạt động",
+            ),
+            FetchGuard {
+                selection: selection.clone(),
+                auth: AuthStateGuard::Unavailable,
+            },
+        ));
+    }
+    if selection.auth_path.is_none() {
+        return ResolvedAuth::CookieOnly {
+            guard: FetchGuard {
+                selection: selection.clone(),
+                auth: AuthStateGuard::Unavailable,
+            },
+        };
+    }
+    let Some(directory) = selection.auth_directory.as_ref() else {
+        return ResolvedAuth::CookieOnly {
+            guard: FetchGuard {
+                selection: selection.clone(),
+                auth: AuthStateGuard::Unavailable,
+            },
+        };
+    };
+
+    let guarded_file =
+        match codex_accounts::read_auth_file_guarded_at(directory, MAX_AUTH_JSON_BYTES) {
+            Ok(Some(guarded)) => guarded,
+            Ok(None) => {
+                return ResolvedAuth::CookieOnly {
+                    guard: FetchGuard {
+                        selection: selection.clone(),
+                        auth: AuthStateGuard::Missing(directory.clone()),
+                    },
+                };
+            }
+            Err(_) => {
+                return ResolvedAuth::Done(FetchAttempt::Ready(
+                    ProviderStatus::failure(&cfg.id, &name, "Không đọc được auth.json"),
+                    FetchGuard {
+                        selection: selection.clone(),
+                        auth: AuthStateGuard::Unreadable(directory.clone()),
+                    },
+                ))
+            }
+        };
+    let mut guard = FetchGuard {
+        selection: selection.clone(),
+        auth: AuthStateGuard::Present(AuthContentGuard {
+            directory: guarded_file.directory.clone(),
+            expected: guarded_file.bytes.clone(),
+            revision: guarded_file.revision,
+        }),
+    };
+    let contents = match std::str::from_utf8(&guarded_file.bytes) {
+        Ok(contents) => contents,
+        Err(_) => {
+            return ResolvedAuth::Done(FetchAttempt::Ready(
+                ProviderStatus::failure(&cfg.id, &name, "Không đọc được auth.json"),
+                guard,
+            ))
+        }
+    };
+    let mut creds = match parse_auth_json(contents) {
+        Ok(c) => c,
+        Err(_) => {
+            return ResolvedAuth::Done(FetchAttempt::Ready(
+                ProviderStatus::failure(&cfg.id, &name, "Không đọc được auth.json"),
+                guard,
+            ))
+        }
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    if creds.needs_refresh(now) && !creds.refresh_token.is_empty() {
+        let refresh_result = operations.refresh(&creds.refresh_token).await;
+        if !guard
+            .auth_content()
+            .is_some_and(auth_guard_is_current_value)
+        {
+            return ResolvedAuth::Done(FetchAttempt::Stale);
+        }
+        if let Ok((access, rotated_refresh, id_token)) = refresh_result {
+            creds.access_token = access;
+            creds.refresh_token = rotated_refresh.unwrap_or(creds.refresh_token);
+            creds.id_token = id_token.or(creds.id_token);
+            creds.last_refresh = Some(now);
+            let auth_guard = guard.auth_content_mut().expect("present auth guard");
+            match save_bound_auth(selection, &creds, &auth_guard.expected, auth_guard.revision) {
+                Ok(Some(written)) => auth_guard.expected = written,
+                Ok(None) => return ResolvedAuth::Done(FetchAttempt::Stale),
+                Err(_) => {
+                    return ResolvedAuth::Done(finish_attempt(
+                        ProviderStatus::failure(
+                            &cfg.id,
+                            &name,
+                            "Không lưu được auth.json sau khi làm mới token",
+                        ),
+                        guard,
+                    ))
+                }
+            }
+        }
+        if !guard.is_current() {
+            return ResolvedAuth::Done(FetchAttempt::Stale);
+        }
+    }
+    ResolvedAuth::Creds { guard, creds }
+}
+
 async fn fetch_with_operations(
     cfg: &config::Provider,
     operations: &dyn CodexOperations,
+) -> ProviderStatus {
+    fetch_phases(cfg, operations, true).await
+}
+
+async fn fetch_core_with_operations(
+    cfg: &config::Provider,
+    operations: &dyn CodexOperations,
+) -> ProviderStatus {
+    fetch_phases(cfg, operations, false).await
+}
+
+async fn fetch_phases(
+    cfg: &config::Provider,
+    operations: &dyn CodexOperations,
+    include_extras: bool,
 ) -> ProviderStatus {
     for _ in 0..2 {
         let selection = match codex_accounts::active_selection_checked() {
@@ -679,7 +841,7 @@ async fn fetch_with_operations(
                 )
             }
         };
-        match fetch_uncached(cfg, &selection, operations).await {
+        match fetch_uncached(cfg, &selection, operations, include_extras).await {
             FetchAttempt::Stale => continue,
             FetchAttempt::Ready(status, guard) => {
                 if !guard.is_current() {
@@ -707,136 +869,53 @@ async fn fetch_uncached(
     cfg: &config::Provider,
     selection: &codex_accounts::ActiveSelection,
     operations: &dyn CodexOperations,
+    include_extras: bool,
 ) -> FetchAttempt {
     let name = display_name(cfg);
-    if selection.account_id != codex_accounts::SYSTEM_ID && selection.auth_path.is_none() {
-        return FetchAttempt::Ready(
-            ProviderStatus::failure(
-                &cfg.id,
-                &name,
-                "Không thể xác minh account Codex đang hoạt động",
-            ),
-            FetchGuard {
-                selection: selection.clone(),
-                auth: AuthStateGuard::Unavailable,
-            },
-        );
-    }
-    if selection.auth_path.is_none() {
-        let guard = FetchGuard {
-            selection: selection.clone(),
-            auth: AuthStateGuard::Unavailable,
-        };
-        let status = fetch_cookie_fallback(cfg, &name).await;
-        return finish_attempt(status, guard);
-    }
-    let Some(directory) = selection.auth_directory.as_ref() else {
-        let guard = FetchGuard {
-            selection: selection.clone(),
-            auth: AuthStateGuard::Unavailable,
-        };
-        let status = fetch_cookie_fallback(cfg, &name).await;
-        return finish_attempt(status, guard);
-    };
-
-    let guarded_file =
-        match codex_accounts::read_auth_file_guarded_at(directory, MAX_AUTH_JSON_BYTES) {
-            Ok(Some(guarded)) => guarded,
-            Ok(None) => {
-                let guard = FetchGuard {
-                    selection: selection.clone(),
-                    auth: AuthStateGuard::Missing(directory.clone()),
-                };
-                let status = fetch_cookie_fallback(cfg, &name).await;
-                return finish_attempt(status, guard);
-            }
-            Err(_) => {
-                return finish_attempt(
-                    ProviderStatus::failure(&cfg.id, &name, "Không đọc được auth.json"),
-                    FetchGuard {
-                        selection: selection.clone(),
-                        auth: AuthStateGuard::Unreadable(directory.clone()),
-                    },
-                )
-            }
-        };
-    let mut guard = FetchGuard {
-        selection: selection.clone(),
-        auth: AuthStateGuard::Present(AuthContentGuard {
-            directory: guarded_file.directory.clone(),
-            expected: guarded_file.bytes.clone(),
-            revision: guarded_file.revision,
-        }),
-    };
-    let contents = match std::str::from_utf8(&guarded_file.bytes) {
-        Ok(contents) => contents,
-        Err(_) => {
-            return finish_attempt(
-                ProviderStatus::failure(&cfg.id, &name, "Không đọc được auth.json"),
-                guard,
-            )
+    let (mut guard, mut creds) = match resolve_auth(cfg, selection, operations).await {
+        ResolvedAuth::Done(attempt) => return attempt,
+        ResolvedAuth::CookieOnly { guard } => {
+            let status = fetch_cookie_fallback(cfg, &name).await;
+            return finish_attempt(status, guard);
         }
-    };
-    let mut creds = match parse_auth_json(contents) {
-        Ok(c) => c,
-        Err(_) => {
-            return finish_attempt(
-                ProviderStatus::failure(&cfg.id, &name, "Không đọc được auth.json"),
-                guard,
-            )
-        }
+        ResolvedAuth::Creds { guard, creds } => (guard, creds),
     };
 
     let now = chrono::Utc::now().timestamp();
-    if creds.needs_refresh(now) && !creds.refresh_token.is_empty() {
-        let refresh_result = operations.refresh(&creds.refresh_token).await;
-        if !guard
-            .auth_content()
-            .is_some_and(auth_guard_is_current_value)
-        {
-            return FetchAttempt::Stale;
-        }
-        if let Ok((access, rotated_refresh, id_token)) = refresh_result {
-            creds.access_token = access;
-            creds.refresh_token = rotated_refresh.unwrap_or(creds.refresh_token);
-            creds.id_token = id_token.or(creds.id_token);
-            creds.last_refresh = Some(now);
-            let auth_guard = guard.auth_content_mut().expect("present auth guard");
-            match save_bound_auth(selection, &creds, &auth_guard.expected, auth_guard.revision) {
-                Ok(Some(written)) => auth_guard.expected = written,
-                Ok(None) => return FetchAttempt::Stale,
-                Err(_) => {
-                    return finish_attempt(
-                        ProviderStatus::failure(
-                            &cfg.id,
-                            &name,
-                            "Không lưu được auth.json sau khi làm mới token",
-                        ),
-                        guard,
-                    )
-                }
-            }
-        }
-        if !guard.is_current() {
-            return FetchAttempt::Stale;
-        }
-    }
 
-    // Side-channel info fetched alongside usage (macOS runs these the same
-    // way): CLI version (memoized) + statuspage probe — both best-effort.
-    let (usage, side) = futures::join!(
-        operations.usage(&creds.access_token, creds.account_id.as_deref()),
-        operations.side_info(),
-    );
+    // Side-channel info joins usage in the full path only; the core phase
+    // skips it so the quota result ships without waiting on version/status
+    // probes (they arrive via `fetch_extras` → merge_status_extras).
+    let (usage, side) = if include_extras {
+        let (usage, side) = futures::join!(
+            operations.usage(&creds.access_token, creds.account_id.as_deref()),
+            operations.side_info(),
+        );
+        (usage, side)
+    } else {
+        (
+            operations
+                .usage(&creds.access_token, creds.account_id.as_deref())
+                .await,
+            SideInfo {
+                version: None,
+                service: None,
+            },
+        )
+    };
     if !guard.is_current() {
         return FetchAttempt::Stale;
     }
     let mut status = match usage {
         Ok(body) => {
-            let (enrichment, reset_credits_available) = futures::join!(
-                operations.enrichment(cfg),
-                operations.reset_credits(&creds.access_token, creds.account_id.as_deref()),
-            );
+            let (enrichment, reset_credits_available) = if include_extras {
+                futures::join!(
+                    operations.enrichment(cfg),
+                    operations.reset_credits(&creds.access_token, creds.account_id.as_deref()),
+                )
+            } else {
+                (None, None)
+            };
             if !guard.is_current() {
                 return FetchAttempt::Stale;
             }
@@ -895,11 +974,17 @@ async fn fetch_uncached(
                         return FetchAttempt::Stale;
                     }
                     if let Ok(body) = retry {
-                        let (enrichment, reset_credits_available) = futures::join!(
-                            operations.enrichment(cfg),
-                            operations
-                                .reset_credits(&creds.access_token, creds.account_id.as_deref(),),
-                        );
+                        let (enrichment, reset_credits_available) = if include_extras {
+                            futures::join!(
+                                operations.enrichment(cfg),
+                                operations.reset_credits(
+                                    &creds.access_token,
+                                    creds.account_id.as_deref(),
+                                ),
+                            )
+                        } else {
+                            (None, None)
+                        };
                         if !guard.is_current() {
                             return FetchAttempt::Stale;
                         }
@@ -942,6 +1027,84 @@ async fn fetch_uncached(
     }
     status.menu_bar_metric = cfg.menu_bar_metric.clone();
     finish_attempt(status, guard)
+}
+
+/// Extras-phase fetch: side info + (OAuth only) cookie enrichment + reset
+/// credits, on freshly re-resolved creds. Returns an enrichment-only status —
+/// windows/account/error stay empty so `merge_status_extras` is the only
+/// sane consumer. A stale auth change mid-flight drops the extras (the next
+/// refresh picks them up).
+async fn fetch_extras_with_operations(
+    cfg: &config::Provider,
+    operations: &dyn CodexOperations,
+) -> ProviderStatus {
+    let name = display_name(cfg);
+    let empty = || ProviderStatus {
+        id: cfg.id.clone(),
+        display_name: name.clone(),
+        last_updated: chrono::Utc::now().timestamp(),
+        ..Default::default()
+    };
+    let selection = match codex_accounts::active_selection_checked() {
+        Ok(selection) => selection,
+        Err(_) => return empty(),
+    };
+    match resolve_auth(cfg, &selection, operations).await {
+        ResolvedAuth::Done(_) => empty(),
+        ResolvedAuth::CookieOnly { guard } => {
+            let side = operations.side_info().await;
+            if !guard.is_current() {
+                return empty();
+            }
+            extras_status(&cfg.id, &name, None, None, &side)
+        }
+        ResolvedAuth::Creds { guard, creds } => {
+            let (side, enrichment, reset_credits_available) = futures::join!(
+                operations.side_info(),
+                operations.enrichment(cfg),
+                operations.reset_credits(&creds.access_token, creds.account_id.as_deref()),
+            );
+            if !guard.is_current() {
+                return empty();
+            }
+            extras_status(
+                &cfg.id,
+                &name,
+                enrichment.as_ref(),
+                reset_credits_available,
+                &side,
+            )
+        }
+    }
+}
+
+/// Enrichment-only status: every field `merge_status_extras` knows about,
+/// nothing else — windows/account/source never leak from the extras phase.
+fn extras_status(
+    id: &str,
+    name: &str,
+    cookie_enrichment: Option<&Value>,
+    reset_credits_available: Option<i32>,
+    side: &SideInfo,
+) -> ProviderStatus {
+    let extras = cookie_enrichment.map(dashboard_extras);
+    ProviderStatus {
+        id: id.to_string(),
+        display_name: name.to_string(),
+        last_updated: chrono::Utc::now().timestamp(),
+        credits_remaining: cookie_enrichment.and_then(credits_balance),
+        reset_credits_available,
+        signed_in_email: extras.as_ref().and_then(|e| e.signed_in_email.clone()),
+        credits_purchase_url: extras
+            .as_ref()
+            .and_then(|e| e.credits_purchase_url.clone()),
+        credits_history_count: extras.as_ref().and_then(|e| e.credits_history_count),
+        version: side.version.clone(),
+        service_status: side.service.as_ref().map(|(d, _)| d.clone()),
+        service_status_level: side.service.as_ref().map(|(_, i)| i.clone()),
+        credits_unlimited: cookie_enrichment.map(credits_unlimited).unwrap_or(false),
+        ..Default::default()
+    }
 }
 
 /// Best-effort side-channel info shown in the settings detail grid.
@@ -1538,7 +1701,8 @@ mod tests {
         let assert_read_failure = |home: &std::path::Path| {
             std::env::set_var("CODEX_HOME", home);
             let selection = codex_accounts::active_selection();
-            let outcome = block_on(fetch_uncached(&cfg, &selection, &LIVE_OPERATIONS));
+            let outcome =
+                block_on(fetch_uncached(&cfg, &selection, &LIVE_OPERATIONS, true));
             let FetchAttempt::Ready(status, _) = outcome else {
                 panic!("unchanged unreadable auth must return its failure status");
             };

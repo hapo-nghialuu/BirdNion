@@ -189,6 +189,103 @@ pub fn display_name(cfg: &config::Provider) -> String {
 /// any provider's own internal timeouts.
 pub const FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(200);
 
+/// Tail budget for the extras/enrichment phase of the two-phase split
+/// (task-08): version/status-page/cookie-extras/reset-credits probes run
+/// after the core quota status has already shipped, so they get their own
+/// bounded budget instead of holding the fetch hostage. Mirrors the macOS
+/// 30s extras SLO.
+pub const EXTRAS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Tauri event emitted once per provider after its extras phase settles.
+/// Payload is the core `ProviderStatus` with enrichment fields merged on top
+/// (`merge_status_extras`) — the JS side applies it onto the same provider id.
+pub const PROVIDER_EXTRAS_EVENT: &str = "birdnion-provider-extras";
+
+/// Merge an extras-phase status onto an already-published core status.
+/// Enrichment fields fill gaps only — core quota/windows/account/error/
+/// source data always wins (parity with macOS `ProviderStatus.withEnrichment`).
+pub fn merge_status_extras(core: &mut ProviderStatus, extras: ProviderStatus) {
+    if core.version.is_none() {
+        core.version = extras.version;
+    }
+    if core.service_status.is_none() {
+        core.service_status = extras.service_status;
+    }
+    if core.service_status_level.is_none() {
+        core.service_status_level = extras.service_status_level;
+    }
+    if core.reset_credits_available.is_none() {
+        core.reset_credits_available = extras.reset_credits_available;
+    }
+    if core.signed_in_email.is_none() {
+        core.signed_in_email = extras.signed_in_email;
+    }
+    if core.code_review_remaining_percent.is_none() {
+        core.code_review_remaining_percent = extras.code_review_remaining_percent;
+    }
+    if core.credits_purchase_url.is_none() {
+        core.credits_purchase_url = extras.credits_purchase_url;
+    }
+    if core.credits_history_count.is_none() {
+        core.credits_history_count = extras.credits_history_count;
+    }
+    if core.credits_remaining.is_none() {
+        core.credits_remaining = extras.credits_remaining;
+    }
+    if core.kiro_context_percent.is_none() {
+        core.kiro_context_percent = extras.kiro_context_percent;
+    }
+    core.credits_unlimited |= extras.credits_unlimited;
+}
+
+/// True when an extras-phase status carries at least one enrichment field —
+/// the emit gate for `PROVIDER_EXTRAS_EVENT`. An empty tail (non-split
+/// provider, timed-out probe, dropped stale extras) must not emit a no-op.
+fn extras_has_fields(status: &ProviderStatus) -> bool {
+    status.version.is_some()
+        || status.service_status.is_some()
+        || status.service_status_level.is_some()
+        || status.reset_credits_available.is_some()
+        || status.signed_in_email.is_some()
+        || status.code_review_remaining_percent.is_some()
+        || status.credits_purchase_url.is_some()
+        || status.credits_history_count.is_some()
+        || status.credits_remaining.is_some()
+        || status.kiro_context_percent.is_some()
+        || status.credits_unlimited
+}
+
+/// Core-phase fetch — quota/account/plan data only, bounded by
+/// `FETCH_DEADLINE` exactly like the pre-split `fetch`. Enrichment probes
+/// live in `fetch_extras` so a slow status page can never delay the card.
+pub async fn fetch_core(cfg: &config::Provider) -> ProviderStatus {
+    with_deadline(cfg, FETCH_DEADLINE, dispatch_core(cfg)).await
+}
+
+/// Extras-phase fetch — enrichment-only status bounded by `EXTRAS_DEADLINE`.
+/// A timeout yields a field-less status, which `extras_has_fields` then
+/// filters out of the emit path.
+pub async fn fetch_extras(cfg: &config::Provider) -> ProviderStatus {
+    with_deadline(cfg, EXTRAS_DEADLINE, dispatch_extras(cfg)).await
+}
+
+/// Spawn one provider's detached extras tail: fetch extras, merge onto the
+/// already-shipped core, hand the merged status to `emit_extras` only when
+/// enrichment fields are actually present.
+fn spawn_extras<F>(cfg: config::Provider, core: ProviderStatus, emit_extras: F)
+where
+    F: Fn(ProviderStatus) + Send + 'static,
+{
+    tauri::async_runtime::spawn(async move {
+        let extras = fetch_extras(&cfg).await;
+        if extras_has_fields(&extras) {
+            let mut merged = core;
+            merge_status_extras(&mut merged, extras);
+            emit_extras(merged);
+        }
+    });
+}
+
 /// Fetch one provider's status by id, bounded by `FETCH_DEADLINE` so a
 /// hung/misbehaving provider can never stall the caller — refresh pass or
 /// self-test — forever. Unknown/not-yet-ported ids return a clear "chưa hỗ
@@ -279,14 +376,98 @@ async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
     }
 }
 
+/// Core-phase dispatch: providers with a real two-phase split return fast
+/// here; every other provider runs its unchanged single-phase `fetch`.
+async fn dispatch_core(cfg: &config::Provider) -> ProviderStatus {
+    match cfg.id.as_str() {
+        "codex" => codex::fetch_core(cfg).await,
+        "claude" => claude::fetch_core(cfg).await,
+        #[cfg(test)]
+        "probe-two-phase" => ProviderStatus {
+            id: cfg.id.clone(),
+            display_name: display_name(cfg),
+            windows: vec![QuotaWindow {
+                label: "probe".to_string(),
+                used_pct: 10,
+                remaining_pct: 90,
+                subtitle: None,
+                resets_at: None,
+                window_seconds: None,
+                semantic_key: None,
+                semantic_kind: None,
+            }],
+            last_updated: chrono::Utc::now().timestamp(),
+            ..Default::default()
+        },
+        _ => dispatch(cfg).await,
+    }
+}
+
+/// Extras-phase dispatch: only split providers produce enrichment fields;
+/// everyone else returns a field-less status (`extras_has_fields` ⇒ no emit).
+async fn dispatch_extras(cfg: &config::Provider) -> ProviderStatus {
+    match cfg.id.as_str() {
+        "codex" => codex::fetch_extras(cfg).await,
+        "claude" => claude::fetch_extras(cfg).await,
+        #[cfg(test)]
+        "probe-two-phase" => {
+            // Deliberately slow extras — ProbeTwoPhase asserts the core
+            // result ships before this tail resolves.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            ProviderStatus {
+                id: cfg.id.clone(),
+                display_name: display_name(cfg),
+                last_updated: chrono::Utc::now().timestamp(),
+                version: Some("probe 1.0".to_string()),
+                ..Default::default()
+            }
+        }
+        _ => ProviderStatus {
+            id: cfg.id.clone(),
+            display_name: display_name(cfg),
+            last_updated: chrono::Utc::now().timestamp(),
+            ..Default::default()
+        },
+    }
+}
+
 /// Fetch enabled providers concurrently, optionally restricted to `ids`.
 /// `None` fetches every enabled provider; `Some(ids)` only fetches providers
 /// whose id is in the set, preserving config order. Used by the JS poller so
 /// a provider with a longer refresh-interval override can be skipped on
 /// cycles where it isn't due yet.
-pub async fn fetch_filtered(ids: Option<&[String]>) -> Vec<ProviderStatus> {
-    let providers = filter_enabled(config::enabled_providers(), ids);
-    let futures = providers.iter().map(fetch);
+///
+/// Two-phase contract (task-08): the returned statuses are *core* results.
+/// Each provider's extras tail is spawned detached; when it produces
+/// enrichment fields the merged status is handed to `emit_extras`
+/// (`provider_statuses` maps that onto `app.emit(PROVIDER_EXTRAS_EVENT, _)`).
+pub async fn fetch_filtered<F>(ids: Option<&[String]>, emit_extras: F) -> Vec<ProviderStatus>
+where
+    F: Fn(ProviderStatus) + Send + Sync + Clone + 'static,
+{
+    fetch_core_and_spawn_extras(&filter_enabled(config::enabled_providers(), ids), emit_extras)
+        .await
+}
+
+/// The two-phase pipeline over an explicit provider list — split out so tests
+/// can drive it without touching the global enabled-providers config. All
+/// core fetches run concurrently; each settled core spawns its detached
+/// extras tail and ships immediately — extras never gate the return.
+async fn fetch_core_and_spawn_extras<F>(
+    providers: &[config::Provider],
+    emit_extras: F,
+) -> Vec<ProviderStatus>
+where
+    F: Fn(ProviderStatus) + Send + Sync + Clone + 'static,
+{
+    let futures = providers.iter().map(|cfg| {
+        let emit_extras = emit_extras.clone();
+        async move {
+            let core = fetch_core(cfg).await;
+            spawn_extras(cfg.clone(), core.clone(), emit_extras);
+            core
+        }
+    });
     futures::future::join_all(futures).await
 }
 
@@ -385,6 +566,156 @@ mod tests {
         let status = block_on(with_deadline(&cfg, std::time::Duration::from_secs(5), fast));
         assert!(status.error.is_none());
         assert_eq!(status.id, "fast");
+    }
+
+    /// Merge fills enrichment gaps only — core fields (windows/account/error/
+    /// source/credits already set) always win.
+    #[test]
+    fn merge_status_extras_fills_gaps_never_overwrites_core() {
+        let mut core = ProviderStatus {
+            id: "x".into(),
+            display_name: "X".into(),
+            windows: vec![QuotaWindow {
+                label: "w".into(),
+                used_pct: 5,
+                remaining_pct: 95,
+                subtitle: None,
+                resets_at: None,
+                window_seconds: None,
+                semantic_key: None,
+                semantic_kind: None,
+            }],
+            last_updated: 1,
+            error: Some("core err".into()),
+            account_label: Some("core acct".into()),
+            credits_remaining: Some(7.0),
+            source_label: Some("OAuth".into()),
+            ..Default::default()
+        };
+        let extras = ProviderStatus {
+            id: "x".into(),
+            display_name: "X".into(),
+            last_updated: 2,
+            version: Some("v1".into()),
+            service_status: Some("Operational".into()),
+            service_status_level: Some("none".into()),
+            reset_credits_available: Some(3),
+            signed_in_email: Some("a@b.c".into()),
+            credits_remaining: Some(99.0),
+            credits_unlimited: true,
+            ..Default::default()
+        };
+        merge_status_extras(&mut core, extras);
+        assert_eq!(core.version.as_deref(), Some("v1"));
+        assert_eq!(core.service_status.as_deref(), Some("Operational"));
+        assert_eq!(core.reset_credits_available, Some(3));
+        assert_eq!(core.signed_in_email.as_deref(), Some("a@b.c"));
+        assert!(core.credits_unlimited);
+        assert_eq!(core.credits_remaining, Some(7.0), "core credits win");
+        assert_eq!(core.error.as_deref(), Some("core err"));
+        assert_eq!(core.account_label.as_deref(), Some("core acct"));
+        assert_eq!(core.source_label.as_deref(), Some("OAuth"));
+        assert_eq!(core.windows.len(), 1);
+        assert_eq!(core.last_updated, 1, "extras never bumps lastUpdated");
+    }
+
+    /// `extras_has_fields` gates the emit path — an empty extras tail (e.g.
+    /// a non-split provider or a timed-out probe) must not emit.
+    #[test]
+    fn extras_has_fields_gates_emit() {
+        assert!(!extras_has_fields(&ProviderStatus {
+            id: "x".into(),
+            display_name: "X".into(),
+            last_updated: 1,
+            ..Default::default()
+        }));
+        assert!(extras_has_fields(&ProviderStatus {
+            id: "x".into(),
+            display_name: "X".into(),
+            last_updated: 1,
+            version: Some("v".into()),
+            ..Default::default()
+        }));
+    }
+
+    /// ProbeTwoPhase: a fixture provider whose extras sleep. The core result
+    /// must resolve before the extras settle, and the spawned extras tail
+    /// emits the merged status onto the same provider id.
+    #[test]
+    fn two_phase_core_ships_before_extras_and_emits_merged() {
+        block_on(async {
+            let cfg = provider("probe-two-phase");
+            let core = fetch_core(&cfg).await;
+            assert!(core.error.is_none(), "probe core failed: {:?}", core.error);
+            assert_eq!(core.windows.len(), 1);
+            assert!(core.version.is_none(), "core must not carry extras fields");
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            spawn_extras(cfg, core.clone(), move |merged| {
+                let _ = tx.send(merged);
+            });
+
+            // The extras tail sleeps 300ms — nothing may be emitted yet.
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_millis(100)).is_err(),
+                "extras emitted before its fetch resolved"
+            );
+            let merged = rx
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .expect("extras emit must arrive after the tail settles");
+            assert_eq!(merged.id, "probe-two-phase");
+            assert_eq!(merged.version.as_deref(), Some("probe 1.0"));
+            assert_eq!(merged.windows.len(), 1, "merge keeps core windows");
+        });
+    }
+
+    /// Command-path counterexample: the pipeline must return core results
+    /// *before* the 300ms extras sleep resolves. If `fetch_filtered` ever
+    /// awaited the extras tail, this test fails on the elapsed check.
+    #[test]
+    fn pipeline_returns_core_before_extras_settle() {
+        block_on(async {
+            let cfg = provider("probe-two-phase");
+            let (tx, rx) = std::sync::mpsc::channel();
+            let start = std::time::Instant::now();
+            let statuses =
+                fetch_core_and_spawn_extras(&[cfg], move |merged| {
+                    let _ = tx.send(merged);
+                })
+                .await;
+            assert!(
+                start.elapsed() < std::time::Duration::from_millis(250),
+                "pipeline waited on the 300ms extras tail: {:?}",
+                start.elapsed()
+            );
+            assert_eq!(statuses.len(), 1);
+            assert!(statuses[0].version.is_none(), "core ships without extras");
+            let merged = rx
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .expect("extras emit must arrive after the tail settles");
+            assert_eq!(merged.id, "probe-two-phase");
+            assert_eq!(merged.version.as_deref(), Some("probe 1.0"));
+            assert_eq!(merged.windows.len(), 1, "merge keeps core windows");
+        });
+    }
+
+    /// Non-split providers emit a single phase: their extras tail resolves
+    /// field-less, so `spawn_extras` never fires the emit callback.
+    #[test]
+    fn non_split_provider_never_emits_extras() {
+        block_on(async {
+            let cfg = provider("unsupported-thing");
+            let core = fetch_core(&cfg).await;
+            assert!(core.error.is_some(), "unknown id still reports its status");
+            let (tx, rx) = std::sync::mpsc::channel();
+            spawn_extras(cfg, core, move |merged| {
+                let _ = tx.send(merged);
+            });
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_millis(500)).is_err(),
+                "non-split provider must not emit an extras event"
+            );
+        });
     }
 }
 

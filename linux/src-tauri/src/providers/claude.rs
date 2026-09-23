@@ -234,7 +234,37 @@ fn resolved_source(cfg: &config::Provider) -> &str {
     cfg.source.as_deref().unwrap_or("auto")
 }
 
+/// Core phase: source-selected quota fetch without the enrichment probes —
+/// `provider_statuses` ships this first (task-08 split).
+pub async fn fetch_core(cfg: &config::Provider) -> ProviderStatus {
+    fetch_inner(cfg, false).await
+}
+
+/// Extras phase: enrichment-only status (CLI version + statuspage probe) —
+/// independent of credentials, merged by `merge_status_extras`.
+pub async fn fetch_extras(cfg: &config::Provider) -> ProviderStatus {
+    let name = display_name(cfg);
+    let (version, service) = futures::join!(
+        tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "claude")),
+        fetch_service_status(STATUS_URL),
+    );
+    ProviderStatus {
+        id: cfg.id.clone(),
+        display_name: name,
+        last_updated: chrono::Utc::now().timestamp(),
+        version: version.unwrap_or(None),
+        service_status: service.as_ref().map(|(d, _)| d.clone()),
+        service_status_level: service.map(|(_, i)| i),
+        ..Default::default()
+    }
+}
+
+/// Single-shot full fetch (self-test path) — pre-split output shape preserved.
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
+    fetch_inner(cfg, true).await
+}
+
+async fn fetch_inner(cfg: &config::Provider, include_extras: bool) -> ProviderStatus {
     let name = display_name(cfg);
     match resolved_source(cfg) {
         "web" => fetch_web(cfg, &name).await,
@@ -243,18 +273,18 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
             ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trong bản này")
         }
         "auto" => {
-            let status = fetch_oauth(cfg, &name).await;
+            let status = fetch_oauth(cfg, &name, include_extras).await;
             if status.error.is_some() {
                 fetch_web(cfg, &name).await
             } else {
                 status
             }
         }
-        _ => fetch_oauth(cfg, &name).await,
+        _ => fetch_oauth(cfg, &name, include_extras).await,
     }
 }
 
-async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
+async fn fetch_oauth(cfg: &config::Provider, name: &str, include_extras: bool) -> ProviderStatus {
     let Some(creds) = load_with_auto_refresh().await else {
         return ProviderStatus::failure(
             &cfg.id,
@@ -271,11 +301,17 @@ async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
     }
     // Side-channel info alongside usage (macOS parity): CLI version
     // (memoized) + statuspage probe — both best-effort, never fail the fetch.
-    let (body, version, service) = futures::join!(
-        fetch_usage(&creds.access_token),
-        tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "claude")),
-        fetch_service_status(STATUS_URL),
-    );
+    // Skipped in the core phase; they arrive via `fetch_extras` instead.
+    let (body, version, service) = if include_extras {
+        let (body, version, service) = futures::join!(
+            fetch_usage(&creds.access_token),
+            tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "claude")),
+            fetch_service_status(STATUS_URL),
+        );
+        (body, version.unwrap_or(None), service)
+    } else {
+        (fetch_usage(&creds.access_token).await, None, None)
+    };
     let body = match body {
         Ok(b) => b,
         Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
@@ -288,7 +324,7 @@ async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
         creds.rate_limit_tier.as_deref(),
     );
     status.account_label = cfg.account_label.clone();
-    status.version = version.unwrap_or(None);
+    status.version = version;
     status.service_status = service.as_ref().map(|(d, _)| d.clone());
     status.service_status_level = service.map(|(_, i)| i);
     status.source_label = Some("OAuth".to_string());
