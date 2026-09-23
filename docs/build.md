@@ -4,24 +4,26 @@
 - macOS 14+ (Sonoma). Một số API dùng `@Environment` SwiftUI 5.
 - Xcode 15+ (đã verify với Xcode 16/26). Command Line Tools: `xcode-select --install`.
 - [Homebrew](https://brew.sh) + [GitHub CLI](https://cli.github.com) (`brew install gh`) cho release flow.
-- Không cần dependency ngoài SwiftUI / AppKit / UserNotifications / Foundation — nhưng project link local SPM [CodexBarCore](https://github.com/hapo-nghialuu/CodexBar) tại `~/Desktop/CodexBar` (xem `project.pbxproj`).
+- Không cần dependency ngoài SwiftUI / AppKit / UserNotifications / Foundation — project link local SPM [CodexBarCore](https://github.com/hapo-nghialuu/CodexBar) đã vendored trong repo tại `Vendor/CodexBar` (xem `project.pbxproj`).
 
 ## Bản đồ build và release
 
-BirdNion hiện có các lane phân phối độc lập:
+BirdNion hiện có các lane phân phối:
 
-- **macOS**: `Scripts/release.sh` chạy verification gate, bump version, build universal `.app`, tạo zip, tạo/cập nhật GitHub Release và cập nhật Homebrew cask.
-- **Linux**: `.github/workflows/linux-release.yml` hiện là workflow `workflow_dispatch` thủ công. Workflow không tự bump version và không tự tạo tag; nó nhận một tag release đã tồn tại, checkout ref được dispatch, rồi đính kèm `.deb`, `.rpm` và `.AppImage` vào release đó.
-- **CI (branch `release`)**: `.github/workflows/release.yml` chạy khi code được push lên branch `release` — thực hiện cả hai lane trên trong một run (xem [Release qua CI](#release-qua-ci--push-vào-branch-release)).
+- **CI (branch `release`) — lane chuẩn**: `.github/workflows/release.yml` chạy khi code được push lên branch `release` — publish cả macOS + Linux trong một run, gồm verification gate → tag → GitHub Release → Homebrew cask → Linux packages (xem [Release qua CI](#release-qua-ci--push-vào-branch-release)).
+- **macOS local (fallback)**: `Scripts/release.sh` chạy cùng verification gate, bump version, build universal `.app`, tạo zip, tạo/cập nhật GitHub Release và cập nhật Homebrew cask.
+- **Linux manual (fallback/repair)**: `.github/workflows/linux-release.yml` là workflow `workflow_dispatch` thủ công. Workflow không tự bump version và không tự tạo tag; nó nhận một tag release đã tồn tại, checkout ref được dispatch, rồi đính kèm `.deb`, `.rpm` và `.AppImage` vào release đó. Chỉ dùng khi cần repair/rebuild Linux cho một release có sẵn.
 
 Windows 10/11 x64/ARM64 là **development target**, chưa phải lane phân phối. `linux/src-tauri/tauri.windows.conf.json` mới mô tả NSIS current-user + WebView2 bootstrapper và hiện cố ý để `resources: []`; chưa có sidecar Windows được bundle hoặc workflow Windows nào được xác minh.
 
-Vì vậy, phải phân biệt hai khái niệm:
+Với lane CI chuẩn, tag `vX.Y.Z` và Linux asset luôn cùng một source commit
+(job `linux` checkout đúng tag do job `macos` tạo). Chỉ khi dùng lane manual
+`linux-release.yml` mới phải phân biệt:
 
-1. **Tag/source commit**: tag `vX.Y.Z` trỏ tới một commit cụ thể, thường được tạo bởi lane macOS.
+1. **Tag/source commit**: tag `vX.Y.Z` trỏ tới một commit cụ thể, được tạo bởi lane macOS.
 2. **Linux build commit**: commit của ref dùng khi dispatch `linux-release.yml` (thường là `main` mới nhất).
 
-Workflow Linux chỉ kiểm tra `inputs.tag` khớp `linux/src-tauri/tauri.conf.json.version`; nó không kiểm tra tag phải trỏ cùng commit với `main`. Khi release lại Linux cho một tag macOS đã tồn tại, cần ghi rõ Linux asset được build từ commit nào.
+Workflow Linux thủ công chỉ kiểm tra `inputs.tag` khớp `linux/src-tauri/tauri.conf.json.version`; nó không kiểm tra tag phải trỏ cùng commit với `main`. Khi release lại Linux cho một tag macOS đã tồn tại, cần ghi rõ Linux asset được build từ commit nào.
 
 ### Windows build status — chưa phải runbook phát hành
 
@@ -119,27 +121,29 @@ find ~/Library/Developer/Xcode/DerivedData -type d -name BirdNion.app -path "*Re
 
 ## Release — push lên Homebrew tap
 
-Dùng script tự động (xem [release flow](#release-flow) bên dưới):
+Đường chuẩn là CI (xem [Release qua CI](#release-qua-ci--push-vào-branch-release)). Nếu release local, dùng script tự động (xem [release flow](#release-flow) bên dưới):
 
 ```bash
 Scripts/release.sh 0.5.2
-# 9 bước tự động:
-#   1. Verify clean working tree (bắt buộc — commit hết trước)
-#   2. Bump MARKETING_VERSION + CFBundleShortVersionString
-#   3. xcodebuild Release
-#   4. Copy → ~/Desktop/BirdNion.app
-#   5. Zip + shasum + verify upload
-#   6. Commit + push đúng source commit đã dùng để build
-#   7. gh release create v<ver> --target <source-commit> + upload zip
-#   8. Update Casks/birdnion.rb (version+sha) + commit + push main
-#   9. Update homebrew-tap Casks/birdnion.rb + push
+# Các bước tự động:
+#   1. Verify branch khớp RELEASE_BRANCH (default: main) + cây git sạch
+#      + preflight homebrew-tap (clone .homebrew-tap nếu brew không có)
+#   2. Verification gate: xcodebuild test → linux npm ci/test/build → cargo test
+#   3. Bump MARKETING_VERSION + CFBundleShortVersionString
+#   4. xcodebuild Release universal (ONLY_ACTIVE_ARCH=NO, CLIPROXYAPI_UNIVERSAL=1)
+#   5. Copy → ~/Desktop/BirdNion.app + verify bundle version + Hapo endpoints
+#   6. Zip → ~/Desktop/BirdNion-<ver>.zip
+#   7. Commit + push đúng source commit đã dùng để build (theo RELEASE_BRANCH)
+#   8. gh release create v<ver> --target <source-commit> + upload zip + verify SHA
+#   9. Update Casks/birdnion.rb (version+sha) + commit + push
+#   10. Update homebrew-tap Casks/birdnion.rb + push
 ```
 
-> **Prereq:** đang ở `main`, `gh` đã auth (`hapo-nghialuu`), cây git sạch.
-> Build (bước 3) chạy trước mọi thao tác publish nên build lỗi sẽ dừng an toàn.
-> `--skip-build` chỉ bỏ bước compile; không bỏ kiểm tra nhánh `main` và cây git sạch.
+> **Prereq:** đang ở branch `RELEASE_BRANCH` (default `main`), `gh` đã auth (`hapo-nghialuu`), cây git sạch, đã `source Scripts/dev-env.sh` và `CLIPROXYAPI_SOURCE` trỏ tới checkout CLIProxyAPI.
+> Gate (bước 2) chạy trước mọi thao tác publish nên test lỗi sẽ dừng an toàn.
+> `--skip-build` bỏ cả gate lẫn compile; `--dry-run` không publish.
 
-> ⚠️ **GitHub push-protection (bước 6 có thể fail):** secret-scanning chặn cặp
+> ⚠️ **GitHub push-protection (bước 7 có thể fail):** secret-scanning chặn cặp
 > client id/secret OAuth **công khai** của Gemini CLI trong `GeminiProvider.swift`.
 > Chúng được **tách chuỗi** (`"GOCSPX" + "-…"`; id tách trước `.apps.googleusercontent.com`)
 > để push qua được — **đừng gộp lại thành 1 literal**, nếu không `git push` sẽ
@@ -229,32 +233,71 @@ plutil -p /Applications/BirdNion.app/Contents/Info.plist | grep CFBundleShortVer
 ## Release qua CI — push vào branch `release`
 
 `.github/workflows/release.yml` publish cả macOS + Linux trong một run khi code
-được push lên branch `release` (hoặc dispatch thủ công). Version không truyền
-tay — workflow đọc từ source và fail nếu các authority lệch nhau, nên bump
-trước bằng script:
+được push lên branch `release` (hoặc dispatch thủ công). Đây là lane chuẩn —
+đã verify bằng release `v0.10.42` (macos ~22 phút + linux ~15 phút). Version
+không truyền tay — workflow đọc từ source và fail nếu các authority lệch nhau,
+nên bump trước bằng script:
 
 ```bash
-Scripts/bump-version.sh X.Y.Z           # trên main
+Scripts/bump-version.sh X.Y.Z           # trên main — bump đồng bộ 5 chỗ:
+                                        # Info.plist, project.pbxproj,
+                                        # tauri.conf.json, Cargo.toml, Cargo.lock
 git commit -am "release: bump X.Y.Z" && git push origin main
 git push origin main:release            # trigger — chỉ ff được khi release ⊆ main
 # Nếu release đã diverge (bot commit cask trên release), merge thay vì push:
 git switch release && git merge --no-edit main && git push origin release && git switch main
 ```
 
-- macOS job chạy `release.sh` trên `macos-15` với `RELEASE_BRANCH=release`:
-  verification gate → build universal → tag `vX.Y.Z` trên commit release →
-  GitHub Release → cask ở repo này và `homebrew-tap`.
-- Linux job chạy sau, checkout đúng tag vừa tạo, build helper `cliproxyapi`
-  trực tiếp từ `CLIProxyAPI-private` (không qua asset tạm), `npm test` +
-  `cargo test`, `npm run tauri build`, upload `.deb`/`.rpm`/`.AppImage`.
-- Commit do bot push (bump cask, prepare) không retrigger workflow; dispatch
-  lại một release đã hoàn tất là no-op an toàn. Push thêm commit vào `release`
-  mà không bump version sẽ fail ngay ở bước kiểm tra tag — phải bump version
-  mới cho release mới.
-- Cần secret `RELEASE_PAT` (BirdNion + homebrew-tap `contents: write`,
-  CLIProxyAPI-private `contents: read`) ngoài ba secret `HAPO_*` hiện có.
+Theo dõi run:
+
+```bash
+gh run watch --repo hapo-nghialuu/BirdNion --exit-status
+```
+
+- **Job `macos`** (`macos-26`, `RELEASE_BRANCH=release`): chọn Xcode mới nhất
+  (`Vendor/CodexBar` cần swift-tools 6.2), `setup-go 1.26` (go.mod của
+  CLIProxyAPI yêu cầu ≥1.26), clone `CLIProxyAPI-private` ra `$RUNNER_TEMP`,
+  build `binaries/cliproxyapi` cho host (tauri-build đòi resource này ngay cả
+  trong `cargo test`), rồi chạy `release.sh`: verification gate → build
+  universal → tag `vX.Y.Z` → GitHub Release → cask ở repo này và `homebrew-tap`.
+- **Job `linux`** (`ubuntu-22.04`, `needs: macos`): checkout đúng tag vừa tạo,
+  build helper `cliproxyapi` trực tiếp từ `CLIProxyAPI-private` (không qua
+  asset tạm), `npm test` + `cargo test`, `npm run tauri build`, upload
+  `.deb`/`.rpm`/`.AppImage` (`fail_on_unmatched_files`).
+
+### Guard rails
+
+- Commit do `github-actions[bot]` push (bump cask/prepare) không retrigger
+  workflow — publish không tự lặp.
+- Dispatch/push lại một release đã hoàn tất là no-op (`skip`); release dở dang
+  (thiếu zip/cask) tại cùng commit được **repair** tự động.
+- Push commit mới vào `release` mà không bump version → fail ngay ở bước
+  `Evaluate tag state` trước khi build — phải bump version mới cho release mới.
+
+### Test environment trên runner
+
+`xcodebuild test` **không forward env của shell vào test process**, nên CI phải
+dựng lại môi trường giống máy dev:
+
+- `sudo systemsetup -settimezone Asia/Ho_Chi_Minh` — suite được authored trên
+  máy UTC+7; `CodexCostScannerTests` assert biên local-midnight chỉ đúng ở TZ đó.
+- Seed `~/.codex/auth.json` rỗng (`{}`) — `FirstLiveCheckpointTests` gọi
+  `reauth(id: "system")` đọc system Codex home thật; fixture không chứa
+  credential nào.
+
+### Secrets
+
+- `RELEASE_PAT` — PAT của `hapo-nghialuu`: BirdNion `contents: write`,
+  homebrew-tap `contents: write`, CLIProxyAPI-private `contents: read`.
+- `HAPO_BASE_URL`, `HAPO_ME_URL`, `HAPO_AUTH_TEMPLATE` (phải chứa literal
+  `{token}`) — bake vào cả macOS bundle lẫn Linux binary; job verify lại trước
+  khi publish.
 
 ## Runbook Linux release thủ công
+
+> Lane fallback — `release.yml` đã cover Linux trong cùng run với macOS. Chỉ
+> dùng runbook này khi cần repair/rebuild Linux cho một tag đã release (ví dụ
+> xoá package cũ rồi dispatch lại `linux-release.yml`).
 
 ### 1. Build và test local
 
@@ -446,20 +489,24 @@ Nếu workflow fail trước bước cleanup, helper có thể còn trên releas
 kiểm tra và xoá thủ công đúng hai helper asset; đồng thời kiểm tra package nào
 đã upload để tránh tạo asset trùng hoặc giữ package không thuộc lần build mới.
 
-### 8. Quy trình macOS chuẩn
+### 8. Quy trình macOS local (fallback)
 
-Release macOS dùng script thay vì bump thủ công:
+Lane chuẩn là push lên branch `release` (xem phần CI ở trên). Khi cần release
+local, dùng script thay vì bump thủ công:
 
 ```bash
 git status --short --branch
 gh auth status
 source Scripts/dev-env.sh
+export CLIPROXYAPI_SOURCE=/duong-dan/toi/CLIProxyAPI
 Scripts/release.sh X.Y.Z
 ```
 
-Script yêu cầu branch `main`, cây git sạch và `HAPO_BASE_URL` cho release
-build. Gate chạy macOS `xcodebuild test`, Linux TypeScript build và Rust test
-trước khi đổi version hoặc publish. Sau đó script:
+Script yêu cầu branch `RELEASE_BRANCH` (default `main`), cây git sạch và
+`HAPO_BASE_URL` cho release build. Gate chạy macOS `xcodebuild test`, Linux
+TypeScript build và Rust test trước khi đổi version hoặc publish — `cargo test`
+cần `linux/src-tauri/binaries/cliproxyapi` có sẵn (chạy
+`linux/scripts/build-cliproxy.sh` trước nếu chưa build). Sau đó script:
 
 1. bump `BirdNion/Info.plist` và `MARKETING_VERSION` trong `project.pbxproj`;
 2. build Release với `ONLY_ACTIVE_ARCH=NO` và `CLIPROXYAPI_UNIVERSAL=1`, nên app/helper có lane Apple Silicon + Intel;
@@ -491,8 +538,11 @@ Không thay `birdnion` bằng tên project/agent khác.
 
 ## Vấn đề cần nhớ
 
-- Linux release hiện là manual-only; push tag không tự build Linux.
-- Linux package có thể được build từ `main` mới hơn source commit mà tag đang trỏ tới; luôn ghi `headSha` của workflow.
+- Push vào branch `release` build cả macOS + Linux (`release.yml`). Lane
+  `linux-release.yml` thủ công chỉ còn để repair; push tag trần không tự build.
+- Job `linux` checkout đúng tag mà job `macos` vừa tạo, nên Linux asset luôn
+  cùng source commit với tag. Lane manual `linux-release.yml` thì không —
+  nó build từ ref được dispatch; khi dùng nó, ghi rõ `headSha` của workflow.
 - Native Linux packaging cần runner Ubuntu/Linux; local macOS chỉ nên build helper hoặc chạy frontend/Rust tests.
 - Không dùng checksum được tạo với absolute path; checksum file phải tham chiếu basename đúng với file download.
 - Không xoá tag/release để thay package Linux. Xác định numeric asset id, xoá đúng ba package, rồi xác minh lại toàn bộ asset sau workflow.
@@ -638,6 +688,8 @@ curl -H "Authorization: Bearer $TOKEN" \
 | `Unable to find module dependency: 'BirdNion'` | Test chạy trước khi app build | `xcodebuild build` trước, rồi `test` |
 | Linker error `Undefined symbols ...` | Build incremental sau khi đổi `init` | `xcodebuild clean build` rồi test |
 | `release.sh` SHA mismatch on upload | GitHub release-asset cache | Đổi filename (`v0.x.y` → `0.x.y`) — script tự dùng `BirdNion-${VERSION}.zip` |
+| `cargo test`: `resource path binaries/cliproxyapi doesn't exist` | tauri-build đòi bundle resource ngay cả khi test | `linux/scripts/build-cliproxy.sh` (cần `CLIPROXYAPI_SOURCE` + Go ≥1.26); `binaries/` được gitignore |
+| Test fail chỉ trên CI, local pass | `xcodebuild test` không forward env vào test process — runner UTC, không `~/.codex` | Workflow `release.yml` đã set `systemsetup -settimezone Asia/Ho_Chi_Minh` + seed `~/.codex/auth.json`; đừng cố export `TZ`/`CODEX_HOME` |
 | BirdNion mở ra dialog Gatekeeper | postflight chưa chạy / cask version cũ | `brew reinstall --cask birdnion` |
 | App icon trắng trong Finder | `ASSETCATALOG_COMPILER_APPICON_NAME` chưa set = `AppIcon` | Check project.pbxproj (đã fix ở `5e8ee0a`) |
 | Claude tab "Đang tải…" load lâu | OAuth + cookie fetch chậm khi cold | Đặt `refreshInterval.claude` lớn hơn (UI: Settings popover) |
@@ -645,7 +697,9 @@ curl -H "Authorization: Bearer $TOKEN" \
 ## File liên quan
 
 - `BirdNion.xcodeproj/project.pbxproj` — Xcode project, build settings
-- `Scripts/release.sh` — release automation
+- `Scripts/release.sh` — release automation (dùng bởi cả local lẫn CI job `macos`)
+- `Scripts/bump-version.sh` — bump đồng bộ 5 version authority trước khi push `release`
+- `.github/workflows/release.yml` — lane release chuẩn (push `release` → macOS + Linux)
 - `docs/build.md` — file này
 - `docs/system-architecture.md` — kiến trúc providers
 - `docs/development-roadmap.md` — phases đã xong + còn lại
