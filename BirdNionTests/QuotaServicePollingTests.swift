@@ -859,6 +859,25 @@ final class QuotaServicePollingTests: XCTestCase {
     }
 
     @MainActor
+    func testFetchingIDsTrackInFlightLane() async {
+        let provider = GatedProvider(id: "gated", displayName: "Gated")
+        let svc = QuotaService(providers: [provider], interval: 60)
+
+        XCTAssertFalse(svc.isRefreshing)
+        XCTAssertTrue(svc.fetchingIDs.isEmpty)
+
+        let refresh = Task { @MainActor in await svc.refresh() }
+        await provider.waitUntilFirstFetchStarts()
+        XCTAssertTrue(svc.isRefreshing)
+        XCTAssertEqual(svc.fetchingIDs, ["gated"])
+
+        await provider.releaseFirstFetch()
+        await refresh.value
+        XCTAssertFalse(svc.isRefreshing)
+        XCTAssertTrue(svc.fetchingIDs.isEmpty)
+    }
+
+    @MainActor
     func testStartSweepsAllHistoricalFailureNotificationsOnce() {
         var sweepCount = 0
         let svc = QuotaService(

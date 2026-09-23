@@ -1,9 +1,10 @@
 import Foundation
 
 // Native port of CodexBarCore's ClaudeSourcePlanner. BirdNion is always an app
-// runtime (no CLI runtime), so the auto order is fixed: OAuth → CLI → Web. Pure
-// branching logic, no side effects — drives which sources the orchestrator
-// tries (and in what order) for `.auto`, and validates explicit selections.
+// runtime (no CLI runtime), so the auto plan is fixed: race(OAuth‖Web) → CLI.
+// Pure branching logic, no side effects — drives which sources the
+// orchestrator tries (and in what order) for `.auto`, and validates explicit
+// selections.
 
 /// Inputs that decide the fetch plan: the user's selected source, whether web
 /// extras are enabled, and which sources are plausibly available right now.
@@ -50,10 +51,26 @@ struct ClaudeFetchPlanStep: Equatable, Sendable {
     }
 }
 
-/// The resolved plan. `executionSteps` is what the orchestrator actually runs:
-/// for `.auto` only the available steps (in order); for an explicit source the
-/// single chosen step regardless of availability (so the user sees a real error
-/// instead of a silent skip).
+/// One execution stage. `.race` runs its HTTP sources concurrently — the
+/// first trusted result wins the core; `.single` runs one source (the CLI
+/// chain, or a pinned selection).
+enum ClaudeFetchStage: Equatable, Sendable {
+    case race([ClaudeFetchPlanStep])
+    case single(ClaudeFetchPlanStep)
+
+    var steps: [ClaudeFetchPlanStep] {
+        switch self {
+        case .race(let steps): steps
+        case .single(let step): [step]
+        }
+    }
+}
+
+/// The resolved plan. `executionStages` is what the orchestrator actually
+/// runs: for `.auto`, stage 1 races every plausibly-available HTTP source
+/// (OAuth‖Web) and stage 2 falls back to the CLI chain; for an explicit source
+/// the single chosen step regardless of availability (so the user sees a real
+/// error instead of a silent skip).
 struct ClaudeFetchPlan: Equatable, Sendable {
     let input: ClaudeSourcePlanningInput
     let orderedSteps: [ClaudeFetchPlanStep]
@@ -76,15 +93,42 @@ struct ClaudeFetchPlan: Equatable, Sendable {
         }
     }
 
-    var executionSteps: [ClaudeFetchPlanStep] {
+    /// Staged execution — `.auto` = `race(oauth‖web)` then `cli` (each filtered
+    /// by availability); explicit sources = one single-source stage.
+    var executionStages: [ClaudeFetchStage] {
         switch input.selectedDataSource {
-        case .auto: availableSteps
-        case .api, .oauth, .web, .cli: orderedSteps
+        case .auto:
+            var stages: [ClaudeFetchStage] = []
+            let httpSteps = orderedSteps.filter {
+                $0.isPlausiblyAvailable
+                    && ($0.dataSource == .oauth || $0.dataSource == .web)
+            }
+            if !httpSteps.isEmpty { stages.append(.race(httpSteps)) }
+            if let cli = orderedSteps.first(where: {
+                $0.dataSource == .cli && $0.isPlausiblyAvailable
+            }) {
+                stages.append(.single(cli))
+            }
+            return stages
+        case .api, .oauth, .web, .cli:
+            return orderedSteps.map { .single($0) }
         }
     }
 
+    /// Flattened stage steps (compat view of `executionStages`).
+    var executionSteps: [ClaudeFetchPlanStep] {
+        executionStages.flatMap(\.steps)
+    }
+
     var orderLabel: String {
-        orderedSteps.map(\.dataSource.sourceLabel).joined(separator: "→")
+        executionStages.map { stage in
+            switch stage {
+            case .race(let steps):
+                steps.map { $0.dataSource.sourceLabel }.joined(separator: "‖")
+            case .single(let step):
+                step.dataSource.sourceLabel
+            }
+        }.joined(separator: "→")
     }
 
     func debugLines() -> [String] {
@@ -99,7 +143,7 @@ struct ClaudeFetchPlan: Equatable, Sendable {
     }
 }
 
-/// Resolves a plan from the inputs. App-auto order = OAuth → CLI → Web.
+/// Resolves a plan from the inputs. App-auto plan = race(OAuth‖Web) → CLI.
 enum ClaudeSourcePlanner {
     static func resolve(input: ClaudeSourcePlanningInput) -> ClaudeFetchPlan {
         ClaudeFetchPlan(input: input, orderedSteps: makeSteps(input: input))

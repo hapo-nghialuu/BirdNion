@@ -65,7 +65,8 @@ final class ClaudeNativeTests: XCTestCase {
         let auto = ClaudeSourcePlanner.resolve(input: ClaudeSourcePlanningInput(
             selectedDataSource: .auto, webExtrasEnabled: true,
             hasWebSession: true, hasCLI: true, hasOAuthCredentials: true))
-        XCTAssertEqual(auto.executionSteps.map(\.dataSource), [.oauth, .cli, .web])
+        // Staged auto plan: HTTP sources race first, CLI is the last resort.
+        XCTAssertEqual(auto.executionSteps.map(\.dataSource), [.oauth, .web, .cli])
 
         let pinned = ClaudeSourcePlanner.resolve(input: ClaudeSourcePlanningInput(
             selectedDataSource: .oauth, webExtrasEnabled: true,

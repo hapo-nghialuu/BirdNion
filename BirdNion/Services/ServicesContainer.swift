@@ -19,6 +19,8 @@ final class ServicesContainer: ObservableObject {
     let agentVisibility = InstalledAgentVisibilityStore.shared
     /// Refreshes when the system `~/.codex` login changes (terminal `codex login`).
     let codexAccountObserver = CodexSystemAccountObserver()
+    /// Single-flight + TTL owner for the local cost scanners.
+    let usageReports = UsageReportCoordinator.shared
     /// Process-wide instance. Set by `BirdNionApp.init` so the Settings
     /// scene can use the same services as AppDelegate. Reading before
     /// registration is a programmer error.

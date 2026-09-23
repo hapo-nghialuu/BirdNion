@@ -301,6 +301,32 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
             claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu, devinUsage: devinUsage)
     }
 
+    /// Copy with enrichment-only fields merged from `extras`. Core fields
+    /// (`windows`, `error`, account/plan identity, `sourceLabel`, credits) are
+    /// never touched — enrichment can add detail but cannot turn a good core
+    /// status into an error or replace its quota data. A nil field on `extras`
+    /// keeps this status's value, so a failed side probe doesn't strip data
+    /// that an earlier emission already provided.
+    func withEnrichment(from extras: ProviderStatus) -> ProviderStatus {
+        ProviderStatus(
+            id: id, displayName: displayName, windows: windows,
+            lastUpdated: max(lastUpdated, extras.lastUpdated),
+            error: error, accountLabel: accountLabel, planType: planType,
+            creditsRemaining: creditsRemaining, creditsUnlimited: creditsUnlimited,
+            version: extras.version ?? version,
+            serviceStatus: extras.serviceStatus ?? serviceStatus,
+            serviceStatusLevel: extras.serviceStatusLevel ?? serviceStatusLevel,
+            accountID: accountID, planName: planName,
+            resetCreditsAvailable: extras.resetCreditsAvailable ?? resetCreditsAvailable,
+            cost: extras.cost ?? cost,
+            webExtras: extras.webExtras ?? webExtras,
+            sourceLabel: sourceLabel,
+            codexWeb: extras.codexWeb ?? codexWeb,
+            claudeAdminUsage: extras.claudeAdminUsage ?? claudeAdminUsage,
+            kiroMenu: extras.kiroMenu ?? kiroMenu,
+            devinUsage: extras.devinUsage ?? devinUsage)
+    }
+
     /// Which path actually produced this snapshot, for providers that have more
     /// than one (API key vs browser cookie). Surfaced in the providers panel.
     func withSourceLabel(_ sourceLabel: String?) -> ProviderStatus {

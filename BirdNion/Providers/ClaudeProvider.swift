@@ -19,23 +19,82 @@ final class ClaudeProvider: QuotaProvider {
     static let keychainService = "Claude Code-credentials"
 
     private let session: URLSession
+    private let fetchers: ClaudeUsageOrchestrator.Fetchers
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared,
+         fetchers: ClaudeUsageOrchestrator.Fetchers = .live) {
         self.session = session
+        self.fetchers = fetchers
     }
 
     private func override() -> String? {
         BirdNionConfigStore.accountLabel(provider: id)
     }
 
-    // No global fetch cap — mirrors CodexBar. Each source carries its own
-    // budget (OAuth request 30s, CLI PTY 12/24s + 60s retry, web 15s, status
-    // badge 6s), so the chain is bounded without an outer race that would
-    // kill a legitimately slow CLI probe mid-flight. QuotaService publishes
-    // provider results incrementally, so a slow Claude fetch never blocks
-    // the other providers' UI.
+    /// Legacy single-shot entry point (Settings self-test): drains the status
+    /// stream and returns the last emission — the fully enriched status, or
+    /// the sole error status when the fetch fails.
     func fetch() async throws -> ProviderStatus {
-        await runFetch()
+        var last: ProviderStatus?
+        for await status in statuses(interaction: ProviderInteractionContext.current) {
+            last = status
+        }
+        return last ?? failure("Claude không trả dữ liệu")
+    }
+
+    /// Two-phase fetch: emission 0 is the core quota status (windows, account
+    /// label, plan, web-extras-merged cost) derived purely from the usage
+    /// result — the statuspage probe and CLI version detection are not awaited
+    /// before it. Emission 1 carries enrichment only (`version`,
+    /// `serviceStatus`) so a failed side probe can never touch the published
+    /// core. Failure stays a single `failure(_:)` emission, unchanged.
+    func statuses(interaction: ProviderInteraction) -> AsyncStream<ProviderStatus> {
+        AsyncStream { continuation in
+            let task = Task {
+                await ProviderInteractionContext.$current.withValue(interaction) {
+                    await self.produceStatuses(interaction: interaction, into: continuation)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func produceStatuses(
+        interaction: ProviderInteraction,
+        into continuation: AsyncStream<ProviderStatus>.Continuation
+    ) async {
+        let allowPrompt = Self.allowKeychainPrompt(
+            mode: ClaudeOAuthKeychainPromptPreference.current(),
+            interaction: interaction)
+        // Same preference gate as Codex (`statusChecksEnabled`) so Settings →
+        // "Check provider status" also stops the Anthropic statuspage probe.
+        // Runs concurrently but only rides the enrichment emission.
+        async let statusAsync: ClaudeServiceStatus? = Self.statusChecksEnabled
+            ? Self.fetchServiceStatus()
+            : nil
+        do {
+            let result = try await ClaudeUsageOrchestrator.loadLatestUsage(
+                session: session, allowKeychainPrompt: allowPrompt,
+                interaction: interaction, fetchers: fetchers)
+            // Phase 1 — core quota data, published before side probes settle.
+            continuation.yield(Self.materialize(
+                from: result.snapshot, override: override(),
+                sourceLabel: result.sourceLabel, status: nil,
+                allowKeychainRead: allowPrompt, includeVersion: false))
+            // Phase 2 — enrichment: statuspage badge + detected CLI version.
+            // Never carries `error` (emission policy drops it otherwise).
+            let status = await statusAsync
+            continuation.yield(ProviderStatus(
+                id: id, displayName: displayName, windows: [],
+                lastUpdated: Date(),
+                version: Self.detectedClaudeVersion(),
+                serviceStatus: status?.description,
+                serviceStatusLevel: status?.indicator))
+        } catch {
+            let status = await statusAsync
+            continuation.yield(failure("Claude: \(error.localizedDescription)", status: status))
+        }
     }
 
     /// True when an extra rate window is the Claude Fable model-scoped limit.
@@ -60,28 +119,6 @@ final class ClaudeProvider: QuotaProvider {
         }
     }
 
-    private func runFetch() async -> ProviderStatus {
-        let allowPrompt = Self.allowKeychainPrompt(
-            mode: ClaudeOAuthKeychainPromptPreference.current(),
-            interaction: ProviderInteractionContext.current)
-        // Same preference gate as Codex (`statusChecksEnabled`) so Settings →
-        // "Check provider status" also stops the Anthropic statuspage probe.
-        async let statusAsync: ClaudeServiceStatus? = Self.statusChecksEnabled
-            ? Self.fetchServiceStatus()
-            : nil
-        do {
-            let result = try await ClaudeUsageOrchestrator.loadLatestUsage(
-                session: session, allowKeychainPrompt: allowPrompt)
-            let status = await statusAsync
-            return Self.materialize(from: result.snapshot, override: override(),
-                                    sourceLabel: result.sourceLabel, status: status,
-                                    allowKeychainRead: allowPrompt)
-        } catch {
-            let status = await statusAsync
-            return failure("Claude: \(error.localizedDescription)", status: status)
-        }
-    }
-
     // MARK: - Materialize
 
     /// Converts a native `ClaudeUsageSnapshot` into the app-facing `ProviderStatus`.
@@ -93,7 +130,8 @@ final class ClaudeProvider: QuotaProvider {
                             override: String?,
                             sourceLabel: String,
                             status: ClaudeServiceStatus?,
-                            allowKeychainRead: Bool = true) -> ProviderStatus {
+                            allowKeychainRead: Bool = true,
+                            includeVersion: Bool = true) -> ProviderStatus {
         var windows: [QuotaWindow] = []
         if let primary = snapshot.primary {
             let label = snapshot.primaryWindowKind == .spendLimit ? "Spend" : "5 giờ"
@@ -164,7 +202,7 @@ final class ClaudeProvider: QuotaProvider {
             windows: windows, lastUpdated: Date(), error: error,
             accountLabel: label,
             creditsRemaining: spendRemainingFromCost(snapshot.providerCost),
-            version: detectedClaudeVersion(),
+            version: includeVersion ? detectedClaudeVersion() : nil,
             serviceStatus: status?.description,
             serviceStatusLevel: status?.indicator,
             planName: planName,

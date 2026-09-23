@@ -77,7 +77,45 @@ final class CodexProvider: QuotaProvider {
         self.refreshedCredentialSync = refreshedCredentialSync
     }
 
+    /// Legacy single-shot entry point (Settings self-test via
+    /// `fetchWithDeadline`/`fetchAsUserAction`): drains the status stream and
+    /// returns the last emission — the fully enriched status, or the sole
+    /// error/core status when enrichment never arrives.
     func fetch() async throws -> ProviderStatus {
+        var last: ProviderStatus?
+        for await status in statuses(interaction: ProviderInteractionContext.current) {
+            last = status
+        }
+        return last ?? failure("Codex không trả dữ liệu")
+    }
+
+    /// Two-phase fetch: emission 0 is the core quota status derived purely
+    /// from the usage response (windows, account, plan, credits, source label)
+    /// — no side probes are awaited before it. Emission 1 carries the same
+    /// status plus enrichment (version, service status, resetCredits, web
+    /// extras) once all probes settle; per-provider contract it never carries
+    /// `error` and a failed probe leaves its field nil. Credential-document
+    /// currency is re-checked before every emission; a stale extras emission
+    /// is dropped silently (the already-published core stays — it was valid
+    /// when emitted).
+    func statuses(interaction: ProviderInteraction) -> AsyncStream<ProviderStatus> {
+        AsyncStream { continuation in
+            let task = Task {
+                await ProviderInteractionContext.$current.withValue(interaction) {
+                    await self.produceStatuses(into: continuation)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The fetch pipeline, emitting into the stream instead of returning.
+    /// `return` after a single `yield` = single-emission terminal status
+    /// (every failure path stays one emission, like before).
+    private func produceStatuses(
+        into continuation: AsyncStream<ProviderStatus>.Continuation
+    ) async {
         let context = fetchContext()
         // A managed selection is never allowed to degrade into a system/CLI
         // route when its metadata or descriptor binding cannot be established.
@@ -85,7 +123,8 @@ final class CodexProvider: QuotaProvider {
            accountID != "system",
            context.authBinding == nil
         {
-            return failure("Không đọc được auth.json")
+            continuation.yield(failure("Không đọc được auth.json"))
+            return
         }
         // CLI-only source: skip OAuth entirely and read from `codex app-server`.
         // Credentials are still loaded best-effort for the account label / id.
@@ -97,23 +136,21 @@ final class CodexProvider: QuotaProvider {
             if let document {
                 guard credentialDocumentIsCurrent(
                     context, data: document.rawData, revision: document.revision)
-                else { return staleCredentialFailure() }
+                else { continuation.yield(staleCredentialFailure()); return }
             }
             if let cli = await cliUsageProbe() {
                 if let document {
                     guard credentialDocumentIsCurrent(
                         context, data: document.rawData, revision: document.revision)
-                    else { return staleCredentialFailure() }
+                    else { continuation.yield(staleCredentialFailure()); return }
                 }
-                let status = await cliRPCSuccess(cli, credentials: credentials)
-                if let document {
-                    guard credentialDocumentIsCurrent(
-                        context, data: document.rawData, revision: document.revision)
-                    else { return staleCredentialFailure() }
-                }
-                return status
+                await emitCLIStatus(
+                    cli, credentials: credentials, document: document,
+                    context: context, into: continuation)
+                return
             }
-            return failure("Codex CLI không trả dữ liệu — kiểm tra `codex`")
+            continuation.yield(failure("Codex CLI không trả dữ liệu — kiểm tra `codex`"))
+            return
         }
 
         var credentials: CodexCredentials
@@ -123,9 +160,11 @@ final class CodexProvider: QuotaProvider {
             if !FileManager.default.fileExists(
                 atPath: context.authURL.deletingLastPathComponent().path)
             {
-                return failure("Chưa đăng nhập Codex — chạy `codex` để đăng nhập")
+                continuation.yield(failure("Chưa đăng nhập Codex — chạy `codex` để đăng nhập"))
+            } else {
+                continuation.yield(failure("Không đọc được auth.json"))
             }
-            return failure("Không đọc được auth.json")
+            return
         }
         do {
             let document = try CodexAuthStore.loadDocument(binding: authBinding)
@@ -133,9 +172,11 @@ final class CodexProvider: QuotaProvider {
             expectedAuthData = document.rawData
             expectedAuthRevision = document.revision
         } catch CodexAuthError.notFound, CodexAuthError.missingTokens {
-            return failure("Chưa đăng nhập Codex — chạy `codex` để đăng nhập")
+            continuation.yield(failure("Chưa đăng nhập Codex — chạy `codex` để đăng nhập"))
+            return
         } catch {
-            return failure("Không đọc được auth.json")
+            continuation.yield(failure("Không đọc được auth.json"))
+            return
         }
 
         // Proactive refresh (like CodexBar): rotate a stale token before it 401s.
@@ -147,9 +188,9 @@ final class CodexProvider: QuotaProvider {
                 binding: authBinding,
                 expectedData: expectedAuthData,
                 expectedRevision: expectedAuthRevision)
-            else { return staleCredentialFailure() }
+            else { continuation.yield(staleCredentialFailure()); return }
             guard let rebound = synchronizeCommittedCredential(written, context: context)
-            else { return staleCredentialFailure() }
+            else { continuation.yield(staleCredentialFailure()); return }
             credentials = refreshed
             expectedAuthData = rebound.rawData
             expectedAuthRevision = rebound.revision
@@ -162,12 +203,11 @@ final class CodexProvider: QuotaProvider {
                 session: session)
             guard credentialDocumentIsCurrent(
                 context, data: expectedAuthData, revision: expectedAuthRevision)
-            else { return staleCredentialFailure() }
-            let status = await success(usage, credentials: credentials)
-            guard credentialDocumentIsCurrent(
-                context, data: expectedAuthData, revision: expectedAuthRevision)
-            else { return staleCredentialFailure() }
-            return status
+            else { continuation.yield(staleCredentialFailure()); return }
+            await emitUsageStatus(
+                usage, credentials: credentials,
+                expectedData: expectedAuthData, expectedRevision: expectedAuthRevision,
+                context: context, into: continuation)
         } catch CodexUsageError.unauthorized {
             // Reactive refresh + single retry. If still unauthorized, fall back
             // to the local Codex CLI RPC (CodexBar's "auto" fallback chain)
@@ -180,9 +220,9 @@ final class CodexProvider: QuotaProvider {
                     binding: authBinding,
                     expectedData: expectedAuthData,
                     expectedRevision: expectedAuthRevision)
-                else { return staleCredentialFailure() }
+                else { continuation.yield(staleCredentialFailure()); return }
                 guard let rebound = synchronizeCommittedCredential(written, context: context)
-                else { return staleCredentialFailure() }
+                else { continuation.yield(staleCredentialFailure()); return }
                 credentials = refreshed
                 expectedAuthData = rebound.rawData
                 expectedAuthRevision = rebound.revision
@@ -193,83 +233,191 @@ final class CodexProvider: QuotaProvider {
                 {
                     guard credentialDocumentIsCurrent(
                         context, data: expectedAuthData, revision: expectedAuthRevision)
-                    else { return staleCredentialFailure() }
-                    let status = await success(usage, credentials: refreshed)
-                    guard credentialDocumentIsCurrent(
-                        context, data: expectedAuthData, revision: expectedAuthRevision)
-                    else { return staleCredentialFailure() }
-                    return status
+                    else { continuation.yield(staleCredentialFailure()); return }
+                    await emitUsageStatus(
+                        usage, credentials: refreshed,
+                        expectedData: expectedAuthData, expectedRevision: expectedAuthRevision,
+                        context: context, into: continuation)
+                    return
                 }
             }
             if context.source == .auto {
                 guard credentialDocumentIsCurrent(
                     context, data: expectedAuthData, revision: expectedAuthRevision)
-                else { return staleCredentialFailure() }
+                else { continuation.yield(staleCredentialFailure()); return }
                 if let cli = await cliUsageProbe() {
                     guard credentialDocumentIsCurrent(
                         context, data: expectedAuthData, revision: expectedAuthRevision)
-                    else { return staleCredentialFailure() }
-                    let status = await cliRPCSuccess(cli, credentials: credentials)
-                    guard credentialDocumentIsCurrent(
-                        context, data: expectedAuthData, revision: expectedAuthRevision)
-                    else { return staleCredentialFailure() }
-                    return status
+                    else { continuation.yield(staleCredentialFailure()); return }
+                    await emitCLIStatus(
+                        cli, credentials: credentials, document: nil,
+                        expectedData: expectedAuthData, expectedRevision: expectedAuthRevision,
+                        context: context, into: continuation)
+                    return
                 }
             }
-            return failure("Token Codex hết hạn — chạy `codex` để đăng nhập lại")
+            continuation.yield(failure("Token Codex hết hạn — chạy `codex` để đăng nhập lại"))
         } catch CodexUsageError.serverError(let code) {
             // Server down/5xx — in auto mode try the CLI RPC so the user still
             // sees something rather than a hard failure.
             if context.source == .auto {
                 guard credentialDocumentIsCurrent(
                     context, data: expectedAuthData, revision: expectedAuthRevision)
-                else { return staleCredentialFailure() }
+                else { continuation.yield(staleCredentialFailure()); return }
                 if let cli = await cliUsageProbe() {
                     guard credentialDocumentIsCurrent(
                         context, data: expectedAuthData, revision: expectedAuthRevision)
-                    else { return staleCredentialFailure() }
-                    let status = await cliRPCSuccess(cli, credentials: credentials)
-                    guard credentialDocumentIsCurrent(
-                        context, data: expectedAuthData, revision: expectedAuthRevision)
-                    else { return staleCredentialFailure() }
-                    return status
+                    else { continuation.yield(staleCredentialFailure()); return }
+                    await emitCLIStatus(
+                        cli, credentials: credentials, document: nil,
+                        expectedData: expectedAuthData, expectedRevision: expectedAuthRevision,
+                        context: context, into: continuation)
+                    return
                 }
             }
-            return failure("HTTP \(code)")
+            continuation.yield(failure("HTTP \(code)"))
         } catch CodexUsageError.invalidResponse {
-            return failure("Response không hợp lệ")
+            continuation.yield(failure("Response không hợp lệ"))
         } catch {
-            return failure("Network: \(error.localizedDescription)")
+            continuation.yield(failure("Network: \(error.localizedDescription)"))
         }
     }
 
-    /// Map a Codex CLI RPC result to a `ProviderStatus` (the OAuth fallback).
-    /// Side data (status page, CLI version) is best-effort, like `success`.
-    private func cliRPCSuccess(_ usage: CodexCLIUsage,
-                               credentials: CodexCredentials?) async -> ProviderStatus {
-        async let versionTask = versionProbe()
-        async let webTask = webExtrasIfEnabled(emailHint: usage.email)
-        let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
-        let version = await versionTask
-        let web = await webTask
-        let label = usage.email ?? credentials.map(accountLabel) ?? "Codex"
-        let status = ProviderStatus(
+    /// Core emission for the OAuth usage path: everything derivable from the
+    /// usage response alone — published before any side probe resolves.
+    private func usageCoreStatus(_ usage: CodexUsageResponse,
+                                 credentials: CodexCredentials) -> ProviderStatus? {
+        let windows = Self.map(usage)
+        guard !windows.isEmpty else { return nil }
+        return ProviderStatus(
+            id: id,
+            displayName: displayName,
+            windows: windows,
+            lastUpdated: Date(),
+            error: nil,
+            accountLabel: accountLabel(credentials),
+            planType: CodexPlanFormatting.displayName(usage.planType),
+            creditsRemaining: usage.credits?.balance,
+            creditsUnlimited: usage.credits?.unlimited ?? false,
+            accountID: credentials.accountId,
+            sourceLabel: "OAuth")
+    }
+
+    /// Core emission for the CLI-RPC path (OAuth fallback / CLI-only source).
+    private func cliCoreStatus(_ usage: CodexCLIUsage,
+                               credentials: CodexCredentials?) -> ProviderStatus {
+        ProviderStatus(
             id: id,
             displayName: displayName,
             windows: usage.windows,
             lastUpdated: Date(),
             error: nil,
-            accountLabel: label,
+            accountLabel: usage.email ?? credentials.map(accountLabel) ?? "Codex",
             planType: CodexPlanFormatting.displayName(usage.planType),
-            creditsRemaining: usage.credits ?? web?.creditsRemaining,
+            creditsRemaining: usage.credits,
             creditsUnlimited: usage.creditsUnlimited,
-            version: version,
-            serviceStatus: service?.description,
-            serviceStatusLevel: service?.indicator,
             accountID: credentials?.accountId,
-            sourceLabel: "CLI",
-            codexWeb: web)
-        return status
+            sourceLabel: "CLI")
+    }
+
+    /// Enrichment probes — best-effort; a failure leaves its field nil.
+    /// `resetCredits` only runs on the OAuth path (needs the bearer token).
+    private struct CodexExtras {
+        var version: String?
+        var service: OpenAIServiceStatus?
+        var resetCredits: Int?
+        var web: CodexWebExtras?
+    }
+
+    private func gatherExtras(emailHint: String?,
+                              credentials: CodexCredentials?) async -> CodexExtras {
+        async let versionTask = versionProbe()
+        async let resetTask: Int? = {
+            guard let credentials else { return nil }
+            return await Self.fetchResetCredits(
+                accessToken: credentials.accessToken,
+                accountId: credentials.accountId,
+                session: session)
+        }()
+        async let webTask = webExtrasIfEnabled(emailHint: emailHint)
+        let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
+        return await CodexExtras(
+            version: versionTask, service: service,
+            resetCredits: resetTask, web: webTask)
+    }
+
+    /// Fills `core` with enrichment fields. Emitted whole (complete status) so
+    /// the extras emission is valid even standalone.
+    private func enrichedStatus(_ core: ProviderStatus,
+                                extras: CodexExtras) -> ProviderStatus {
+        core.withEnrichment(from: ProviderStatus(
+            id: id, displayName: displayName, windows: [], lastUpdated: Date(),
+            version: extras.version,
+            serviceStatus: extras.service?.description,
+            serviceStatusLevel: extras.service?.indicator,
+            resetCreditsAvailable: extras.resetCredits,
+            codexWeb: extras.web))
+    }
+
+    /// OAuth success: emit core, run probes, emit enrichment. The document
+    /// guard runs before each emission (a stale extras emission is dropped —
+    /// the core stays, matching "stale emissions dropped" without revoking
+    /// already-valid data).
+    private func emitUsageStatus(
+        _ usage: CodexUsageResponse,
+        credentials: CodexCredentials,
+        expectedData: Data,
+        expectedRevision: CodexAuthStore.CredentialRevision,
+        context: FetchContext,
+        into continuation: AsyncStream<ProviderStatus>.Continuation
+    ) async {
+        guard let core = usageCoreStatus(usage, credentials: credentials) else {
+            continuation.yield(failure("Codex chưa có dữ liệu quota"))
+            return
+        }
+        guard credentialDocumentIsCurrent(
+            context, data: expectedData, revision: expectedRevision)
+        else { continuation.yield(staleCredentialFailure()); return }
+        continuation.yield(core)
+
+        let extras = await gatherExtras(
+            emailHint: CodexAuthStore.emailFromIDToken(credentials.idToken),
+            credentials: credentials)
+        guard !Task.isCancelled,
+              credentialDocumentIsCurrent(
+                context, data: expectedData, revision: expectedRevision)
+        else { return }
+        continuation.yield(enrichedStatus(core, extras: extras))
+    }
+
+    /// CLI-RPC success (fallback or CLI-only source): same two-phase shape —
+    /// core from the RPC payload, then probes (version/status/web; the RPC
+    /// path has no reset-credits endpoint).
+    private func emitCLIStatus(
+        _ usage: CodexCLIUsage,
+        credentials: CodexCredentials?,
+        document: CodexAuthStore.LoadedDocument?,
+        expectedData: Data? = nil,
+        expectedRevision: CodexAuthStore.CredentialRevision? = nil,
+        context: FetchContext,
+        into continuation: AsyncStream<ProviderStatus>.Continuation
+    ) async {
+        func current() -> Bool {
+            if let document {
+                return credentialDocumentIsCurrent(
+                    context, data: document.rawData, revision: document.revision)
+            }
+            guard let expectedData, let expectedRevision else { return true }
+            return credentialDocumentIsCurrent(
+                context, data: expectedData, revision: expectedRevision)
+        }
+        guard current() else { continuation.yield(staleCredentialFailure()); return }
+        let core = cliCoreStatus(usage, credentials: credentials)
+        continuation.yield(core)
+
+        let extras = await gatherExtras(emailHint: usage.email, credentials: nil)
+        guard !Task.isCancelled, current() else { return }
+        continuation.yield(enrichedStatus(core, extras: extras))
     }
 
     // MARK: - Mapping
@@ -363,49 +511,6 @@ final class CodexProvider: QuotaProvider {
             remainingPct: 100 - w.usedPercent,
             resetDate: Date(timeIntervalSince1970: TimeInterval(w.resetAt)),
             windowSeconds: w.limitWindowSeconds)
-    }
-
-    private func success(_ usage: CodexUsageResponse,
-                         credentials: CodexCredentials) async -> ProviderStatus {
-        let windows = Self.map(usage)
-        guard !windows.isEmpty else {
-            return failure("Codex chưa có dữ liệu quota")
-        }
-        // Best-effort side data — never fail the status if these don't resolve.
-        // Run probes concurrently: status page, codex CLI version, and the
-        // manual-reset credits endpoint.
-        async let versionTask = versionProbe()
-        async let resetTask = Self.fetchResetCredits(
-            accessToken: credentials.accessToken,
-            accountId: credentials.accountId,
-            session: session)
-        async let webTask = webExtrasIfEnabled(
-            emailHint: CodexAuthStore.emailFromIDToken(credentials.idToken))
-        let service: OpenAIServiceStatus? = Self.statusChecksEnabled ? await statusProbe() : nil
-        let version = await versionTask
-        let reset = await resetTask
-        let web = await webTask
-
-        let status = ProviderStatus(
-            id: id,
-            displayName: displayName,
-            windows: windows,
-            lastUpdated: Date(),
-            error: nil,
-            accountLabel: accountLabel(credentials),
-            planType: CodexPlanFormatting.displayName(usage.planType),
-            // Web dashboard fills credits only when OAuth doesn't provide them.
-            creditsRemaining: usage.credits?.balance ?? web?.creditsRemaining,
-            // OAuth `unlimited` flag → UI renders "∞" instead of a balance.
-            creditsUnlimited: usage.credits?.unlimited ?? false,
-            version: version,
-            serviceStatus: service?.description,
-            serviceStatusLevel: service?.indicator,
-            accountID: credentials.accountId,
-            resetCreditsAvailable: reset,
-            sourceLabel: "OAuth",
-            codexWeb: web)
-        return status
     }
 
     /// Best-effort OpenAI web-dashboard extras, only when the user enabled them.

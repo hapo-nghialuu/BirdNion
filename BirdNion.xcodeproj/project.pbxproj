@@ -12,6 +12,15 @@
 		QAGN0001000000000000B001 /* quota-agenda-projection.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAGN0002000000000000F001 /* quota-agenda-projection.swift */; };
 		PSPG0001000000000000B001 /* ProviderStatusPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = PSPG0002000000000000F001 /* ProviderStatusPage.swift */; };
 		BBBB0003000000000000B002 /* QuotaProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBBB0004000000000000F002 /* QuotaProvider.swift */; };
+		PSCH0001000000000000B001 /* ProviderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = PSCH0002000000000000F001 /* ProviderScheduler.swift */; };
+		QNFS0001000000000000B001 /* QuotaNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = QNFS0002000000000000F001 /* QuotaNotifications.swift */; };
+		URCO0001000000000000B001 /* UsageReportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = URCO0002000000000000F001 /* UsageReportCoordinator.swift */; };
+		URCO0001000000000000B002 /* UsageReportCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = URCO0002000000000000F002 /* UsageReportCoordinatorTests.swift */; };
+		PSCT0001000000000000B001 /* ProviderSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PSCT0002000000000000F001 /* ProviderSchedulerTests.swift */; };
+		PSTR0001000000000000B001 /* ProviderStatusStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = PSTR0002000000000000F001 /* ProviderStatusStream.swift */; };
+		PSTS0001000000000000B001 /* ProviderStatusStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PSTS0002000000000000F001 /* ProviderStatusStreamTests.swift */; };
+		C2PT0001000000000000B001 /* CodexProviderTwoPhaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2PT0002000000000000F001 /* CodexProviderTwoPhaseTests.swift */; };
+		C2PT0001000000000000B002 /* ClaudeRacePlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2PT0002000000000000F002 /* ClaudeRacePlanTests.swift */; };
 		CCCC0001000000000000B001 /* ProviderStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0002000000000000F001 /* ProviderStatusTests.swift */; };
 		QAGT0001000000000000B001 /* quota-agenda-projection-tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAGT0002000000000000F001 /* quota-agenda-projection-tests.swift */; };
 		CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */; };
@@ -238,6 +247,15 @@
 		CLW00002000000000000F01 /* ClaudeWebCookieReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Web/ClaudeWebCookieReader.swift; sourceTree = "<group>"; };
 		CWF00002000000000000F01 /* ClaudeWebAPIFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Web/ClaudeWebAPIFetcher.swift; sourceTree = "<group>"; };
 		BBBB0004000000000000F002 /* QuotaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaProvider.swift; sourceTree = "<group>"; };
+		PSCH0002000000000000F001 /* ProviderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/ProviderScheduler.swift; sourceTree = "<group>"; };
+		QNFS0002000000000000F001 /* QuotaNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/QuotaNotifications.swift; sourceTree = "<group>"; };
+		URCO0002000000000000F001 /* UsageReportCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/UsageReportCoordinator.swift; sourceTree = "<group>"; };
+		URCO0002000000000000F002 /* UsageReportCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/UsageReportCoordinatorTests.swift; sourceTree = "<group>"; };
+		PSCT0002000000000000F001 /* ProviderSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ProviderSchedulerTests.swift; sourceTree = "<group>"; };
+		PSTR0002000000000000F001 /* ProviderStatusStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderStatusStream.swift; sourceTree = "<group>"; };
+		PSTS0002000000000000F001 /* ProviderStatusStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ProviderStatusStreamTests.swift; sourceTree = "<group>"; };
+		C2PT0002000000000000F001 /* CodexProviderTwoPhaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CodexProviderTwoPhaseTests.swift; sourceTree = "<group>"; };
+		C2PT0002000000000000F002 /* ClaudeRacePlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ClaudeRacePlanTests.swift; sourceTree = "<group>"; };
 		CCCC0002000000000000F001 /* ProviderStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ProviderStatusTests.swift; sourceTree = "<group>"; };
 		QAGT0002000000000000F001 /* quota-agenda-projection-tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNionTests/quota-agenda-projection-tests.swift"; sourceTree = "<group>"; };
 		CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/MiniMaxProviderParserTests.swift; sourceTree = "<group>"; };
@@ -453,6 +471,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				CCCC0001000000000000B001 /* ProviderStatusTests.swift in Sources */,
+				PSCT0001000000000000B001 /* ProviderSchedulerTests.swift in Sources */,
+				PSTS0001000000000000B001 /* ProviderStatusStreamTests.swift in Sources */,
+				C2PT0001000000000000B001 /* CodexProviderTwoPhaseTests.swift in Sources */,
+				C2PT0001000000000000B002 /* ClaudeRacePlanTests.swift in Sources */,
+				URCO0001000000000000B002 /* UsageReportCoordinatorTests.swift in Sources */,
 				QAGT0001000000000000B001 /* quota-agenda-projection-tests.swift in Sources */,
 				CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */,
 				CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */,
@@ -603,6 +626,7 @@
 			isa = PBXGroup;
 			children = (
 				BBBB0004000000000000F002 /* QuotaProvider.swift */,
+				PSTR0002000000000000F001 /* ProviderStatusStream.swift */,
 				XAI0002000000000000F001 /* XAIBillingFetcher.swift */,
 					XAI0004000000000000F001 /* XAIProvider.swift */,
 			);
@@ -781,6 +805,10 @@
 				CLW00001000000000000B01 /* ClaudeWebCookieReader.swift in Sources */,
 				CWF00001000000000000B01 /* ClaudeWebAPIFetcher.swift in Sources */,
 				BBBB0003000000000000B002 /* QuotaProvider.swift in Sources */,
+				PSCH0001000000000000B001 /* ProviderScheduler.swift in Sources */,
+				QNFS0001000000000000B001 /* QuotaNotifications.swift in Sources */,
+				URCO0001000000000000B001 /* UsageReportCoordinator.swift in Sources */,
+				PSTR0001000000000000B001 /* ProviderStatusStream.swift in Sources */,
 				DDDD0003000000000000B002 /* ConfigService.swift in Sources */,
 				DDDD0005000000000000B003 /* QuotaService.swift in Sources */,
 				UPD0001000000000000B001 /* UpdateChecker.swift in Sources */,
