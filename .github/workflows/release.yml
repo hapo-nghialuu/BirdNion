@@ -115,6 +115,12 @@ jobs:
           git clone --depth 1 https://github.com/hapo-nghialuu/CLIProxyAPI-private.git "$RUNNER_TEMP/CLIProxyAPI"
           echo "CLIPROXYAPI_SOURCE=$RUNNER_TEMP/CLIProxyAPI" >> "$GITHUB_ENV"
 
+      - name: Build cliproxyapi helper (Tauri gate prerequisite)
+        # linux/src-tauri declares binaries/cliproxyapi as a bundle resource;
+        # tauri-build validates it even during `cargo test` in release.sh.
+        # binaries/ is gitignored, so the clean-tree gate stays satisfied.
+        run: linux/scripts/build-cliproxy.sh
+
       - name: Resolve release version
         id: version
         run: |
