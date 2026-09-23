@@ -46,10 +46,6 @@ jobs:
       HAPO_BASE_URL: ${{ secrets.HAPO_BASE_URL }}
       HAPO_ME_URL: ${{ secrets.HAPO_ME_URL }}
       HAPO_AUTH_TEMPLATE: ${{ secrets.HAPO_AUTH_TEMPLATE }}
-      # release.sh's "Embed CLIProxyAPI Core" build phase compiles the helper
-      # from this path; must live outside the repo so the clean-tree gate
-      # stays satisfied.
-      CLIPROXYAPI_SOURCE: ${{ runner.temp }}/CLIProxyAPI
       RELEASE_BRANCH: release
     steps:
       - uses: actions/checkout@v4
@@ -87,7 +83,12 @@ jobs:
           git switch -C release origin/release
 
       - name: Check out CLIProxyAPI helper source
-        run: git clone --depth 1 https://github.com/hapo-nghialuu/CLIProxyAPI-private.git "$CLIPROXYAPI_SOURCE"
+        # release.sh's "Embed CLIProxyAPI Core" build phase compiles the helper
+        # from CLIPROXYAPI_SOURCE; it must live outside the repo so the
+        # clean-tree gate stays satisfied. $RUNNER_TEMP is set on every runner.
+        run: |
+          git clone --depth 1 https://github.com/hapo-nghialuu/CLIProxyAPI-private.git "$RUNNER_TEMP/CLIProxyAPI"
+          echo "CLIPROXYAPI_SOURCE=$RUNNER_TEMP/CLIProxyAPI" >> "$GITHUB_ENV"
 
       - name: Resolve release version
         id: version
@@ -162,7 +163,6 @@ jobs:
       HAPO_BASE_URL: ${{ secrets.HAPO_BASE_URL }}
       HAPO_ME_URL: ${{ secrets.HAPO_ME_URL }}
       HAPO_AUTH_TEMPLATE: ${{ secrets.HAPO_AUTH_TEMPLATE }}
-      CLIPROXYAPI_SOURCE: ${{ runner.temp }}/CLIProxyAPI
     steps:
       - uses: actions/checkout@v4
         with:
@@ -202,8 +202,8 @@ jobs:
       - name: Build bundled CLIProxyAPI helper
         run: |
           gh auth setup-git
-          git clone --depth 1 https://github.com/hapo-nghialuu/CLIProxyAPI-private.git "$CLIPROXYAPI_SOURCE"
-          scripts/build-cliproxy.sh
+          git clone --depth 1 https://github.com/hapo-nghialuu/CLIProxyAPI-private.git "$RUNNER_TEMP/CLIProxyAPI"
+          CLIPROXYAPI_SOURCE="$RUNNER_TEMP/CLIProxyAPI" scripts/build-cliproxy.sh
           file src-tauri/binaries/cliproxyapi
 
       - name: Install npm dependencies
