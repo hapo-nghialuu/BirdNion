@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "birdnion"
-version = "0.10.41"
+version = "0.10.42"
 dependencies = [
  "base64 0.22.1",
  "chrono",
