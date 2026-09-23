@@ -8,10 +8,11 @@
 
 ## Bản đồ build và release
 
-BirdNion hiện có hai lane phân phối độc lập:
+BirdNion hiện có các lane phân phối độc lập:
 
 - **macOS**: `Scripts/release.sh` chạy verification gate, bump version, build universal `.app`, tạo zip, tạo/cập nhật GitHub Release và cập nhật Homebrew cask.
 - **Linux**: `.github/workflows/linux-release.yml` hiện là workflow `workflow_dispatch` thủ công. Workflow không tự bump version và không tự tạo tag; nó nhận một tag release đã tồn tại, checkout ref được dispatch, rồi đính kèm `.deb`, `.rpm` và `.AppImage` vào release đó.
+- **CI (branch `release`)**: `.github/workflows/release.yml` chạy khi code được push lên branch `release` — thực hiện cả hai lane trên trong một run (xem [Release qua CI](#release-qua-ci--push-vào-branch-release)).
 
 Windows 10/11 x64/ARM64 là **development target**, chưa phải lane phân phối. `linux/src-tauri/tauri.windows.conf.json` mới mô tả NSIS current-user + WebView2 bootstrapper và hiện cố ý để `resources: []`; chưa có sidecar Windows được bundle hoặc workflow Windows nào được xác minh.
 
@@ -224,6 +225,34 @@ brew reinstall --cask birdnion
 xattr -l /Applications/BirdNion.app   # should NOT contain com.apple.quarantine
 plutil -p /Applications/BirdNion.app/Contents/Info.plist | grep CFBundleShortVersionString
 ```
+
+## Release qua CI — push vào branch `release`
+
+`.github/workflows/release.yml` publish cả macOS + Linux trong một run khi code
+được push lên branch `release` (hoặc dispatch thủ công). Version không truyền
+tay — workflow đọc từ source và fail nếu các authority lệch nhau, nên bump
+trước bằng script:
+
+```bash
+Scripts/bump-version.sh X.Y.Z           # trên main
+git commit -am "release: bump X.Y.Z" && git push origin main
+git push origin main:release            # trigger — chỉ ff được khi release ⊆ main
+# Nếu release đã diverge (bot commit cask trên release), merge thay vì push:
+git switch release && git merge --no-edit main && git push origin release && git switch main
+```
+
+- macOS job chạy `release.sh` trên `macos-15` với `RELEASE_BRANCH=release`:
+  verification gate → build universal → tag `vX.Y.Z` trên commit release →
+  GitHub Release → cask ở repo này và `homebrew-tap`.
+- Linux job chạy sau, checkout đúng tag vừa tạo, build helper `cliproxyapi`
+  trực tiếp từ `CLIProxyAPI-private` (không qua asset tạm), `npm test` +
+  `cargo test`, `npm run tauri build`, upload `.deb`/`.rpm`/`.AppImage`.
+- Commit do bot push (bump cask, prepare) không retrigger workflow; dispatch
+  lại một release đã hoàn tất là no-op an toàn. Push thêm commit vào `release`
+  mà không bump version sẽ fail ngay ở bước kiểm tra tag — phải bump version
+  mới cho release mới.
+- Cần secret `RELEASE_PAT` (BirdNion + homebrew-tap `contents: write`,
+  CLIProxyAPI-private `contents: read`) ngoài ba secret `HAPO_*` hiện có.
 
 ## Runbook Linux release thủ công
 
