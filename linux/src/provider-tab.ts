@@ -22,7 +22,7 @@ export type QuotaAllowance = {
   used?: number;
   remaining?: number;
   limit?: number;
-  unit: "usd" | "characters" | "requests" | "credits" | "tokens" | "count";
+  unit: "usd" | "characters" | "requests" | "credits" | "tokens" | "count" | "acu";
 };
 
 export type QuotaWindow = {

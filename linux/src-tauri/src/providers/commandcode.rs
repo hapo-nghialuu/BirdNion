@@ -12,7 +12,7 @@
 use serde_json::Value;
 
 use crate::providers::browser_cookies;
-use crate::providers::{display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const CREDITS_URL: &str = "https://api.commandcode.ai/internal/billing/credits";
 const SUBSCRIPTIONS_URL: &str = "https://api.commandcode.ai/internal/billing/subscriptions";
@@ -162,7 +162,12 @@ fn window_limit_quota(
         .and_then(Value::as_f64)
         .map(|ms| (ms / 1000.0) as i64);
     Some(QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(used),
+            remaining: Some(cap - used),
+            limit: Some(cap),
+            unit: "usd".into(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -251,7 +256,12 @@ fn parse_status(
             0
         };
         windows.push(QuotaWindow {
-            allowance: None,
+            allowance: Some(QuotaAllowance {
+                used: Some(used),
+                remaining: Some(monthly),
+                limit: Some(total),
+                unit: "usd".into(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Tháng".to_string(),
@@ -385,6 +395,29 @@ mod tests {
         assert_eq!(status.windows[2].used_pct, 13);
         assert!(status.windows[0].resets_at.is_some());
         assert_eq!(status.credits_remaining, None);
+    }
+
+    /// windowLimits cap/used and the monthly grant surface as typed "usd"
+    /// allowances — the dollar figures no longer live only in the subtitle.
+    #[test]
+    fn windows_carry_usd_allowance() {
+        let credits = r#"{"credits":{"monthlyCredits":60.825467787,"purchasedCredits":0,
+            "premiumMonthlyCredits":0,"monthlyCreditsGranted":70},
+            "windowLimits":{"limited":true,
+            "fiveHour":{"used":0.185009678,"cap":14,"resetAt":1789293206298},
+            "weekly":{"used":9.174532213,"cap":35,"resetAt":1789703513267}}}"#;
+        let status = parse_status("commandcode", "Command Code", credits, None).unwrap();
+        let five_hour = status.windows[0].allowance.as_ref().unwrap();
+        assert_eq!(five_hour.unit, "usd");
+        assert!((five_hour.used.unwrap() - 0.185009678).abs() < 0.0001);
+        assert!((five_hour.remaining.unwrap() - 13.814990322).abs() < 0.0001);
+        assert_eq!(five_hour.limit, Some(14.0));
+        let weekly = status.windows[1].allowance.as_ref().unwrap();
+        assert_eq!(weekly.limit, Some(35.0));
+        let monthly = status.windows[2].allowance.as_ref().unwrap();
+        assert_eq!(monthly.unit, "usd");
+        assert!((monthly.remaining.unwrap() - 60.825467787).abs() < 0.0001);
+        assert_eq!(monthly.limit, Some(70.0));
     }
 
     /// The granted total must win over the catalog: a plan whose real allowance

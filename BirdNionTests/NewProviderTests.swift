@@ -5442,6 +5442,31 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows.map(\.label), ["Tháng"])
     }
 
+    /// cap/used USD của windowLimits và grant tháng map thẳng sang allowance
+    /// typed `.usd` — số tiền không còn chỉ sống trong subtitle nữa.
+    func testCommandCodeWindowsCarryUSDAllowance() {
+        let credits = Data("""
+        {"credits":{"monthlyCredits":60.83,"purchasedCredits":0,
+        "premiumMonthlyCredits":0,"monthlyCreditsGranted":70},
+        "windowLimits":{"limited":true,
+        "fiveHour":{"used":0.185,"cap":14,"resetAt":1769999999000},
+        "weekly":{"used":9.17,"cap":35,"resetAt":1770999999000}}}
+        """.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: credits, subscriptionData: nil)
+        XCTAssertEqual(status.windows.map(\.label), ["5 giờ", "Tuần", "Tháng"])
+        let expected: [(used: Double, remaining: Double, limit: Double)] = [
+            (0.185, 13.815, 14), (9.17, 25.83, 35), (9.17, 60.83, 70),
+        ]
+        for (window, e) in zip(status.windows, expected) {
+            let a = window.allowance
+            XCTAssertEqual(a?.unit, .usd)
+            XCTAssertEqual(a?.used ?? -1, e.used, accuracy: 0.0001)
+            XCTAssertEqual(a?.remaining ?? -1, e.remaining, accuracy: 0.0001)
+            XCTAssertEqual(a?.limit ?? -1, e.limit, accuracy: 0.0001)
+        }
+    }
+
     // MARK: - OpenCode Go: API key source
 
     func testOpenCodeGoKeyPrefersEnvOverConfig() {
@@ -6364,6 +6389,47 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(snap.overageBalance, 10.0)
         let s = DevinProvider._mapForTesting(snap)
         XCTAssertEqual(s.creditsRemaining, 10.0)
+    }
+
+    /// Payload có số ACU tuyệt đối (`used`/`limit`) → window.allowance đơn vị
+    /// `.acu`; phần trăm vẫn derive từ cùng cặp số đó.
+    func testDevinAbsoluteQuotaMapsACUAllowance() throws {
+        let json = """
+        {"daily": {"used": 2.1, "limit": 5.0},
+         "weekly": {"used": 4.0, "limit": 20.0}}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: "org/acme")
+        XCTAssertEqual(snap.daily?.used, 2.1)
+        XCTAssertEqual(snap.daily?.limit, 5.0)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertEqual(s.windows[0].usedPct, 42)
+        XCTAssertEqual(s.windows[0].allowance, QuotaAllowance(
+            used: 2.1, remaining: nil, limit: 5.0, unit: .acu))
+        XCTAssertEqual(s.windows[1].allowance, QuotaAllowance(
+            used: 4.0, remaining: nil, limit: 20.0, unit: .acu))
+    }
+
+    /// `available` đã gánh vai trò `limit` thì không được tái sử dụng làm
+    /// `remaining` — cặp số trùng nhau sẽ nói dối số còn lại.
+    func testDevinAvailableAliasDoesNotDoubleAsRemaining() throws {
+        let json = """
+        {"daily": {"used": 2.0, "available": 5.0}}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: nil)
+        XCTAssertEqual(snap.daily?.used, 2.0)
+        XCTAssertEqual(snap.daily?.limit, 5.0)
+        XCTAssertNil(snap.daily?.remaining)
+    }
+
+    /// Payload chỉ có phần trăm → allowance nil, không bịa số tuyệt đối.
+    func testDevinPercentOnlyQuotaKeepsAllowanceNil() throws {
+        let json = """
+        {"daily_percentage": 48, "weekly_percentage": 24, "is_quota_plan": true}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: nil)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNil(s.windows[0].allowance)
+        XCTAssertNil(s.windows[1].allowance)
     }
 
     /// Snapshot kèm usageHistory → ProviderStatus.devinUsage cho chart card;

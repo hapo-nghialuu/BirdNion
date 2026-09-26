@@ -126,12 +126,20 @@ final class DevinProvider: QuotaProvider {
         _ quota: DevinQuotaWindow, label: String, windowSeconds: Int
     ) -> QuotaWindow {
         let used = max(0, min(100, Int(quota.usedPercent.rounded())))
+        let allowance = (quota.used != nil || quota.remaining != nil || quota.limit != nil)
+            ? QuotaAllowance(
+                used: quota.used,
+                remaining: quota.remaining,
+                limit: quota.limit,
+                unit: .acu)
+            : nil
         return QuotaWindow(
             label: label,
             usedPct: used,
             remainingPct: 100 - used,
             resetDate: quota.resetsAt,
-            windowSeconds: windowSeconds)
+            windowSeconds: windowSeconds,
+            allowance: allowance)
     }
 
     private static func friendly(_ error: Error) -> String {

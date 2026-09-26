@@ -207,7 +207,9 @@ final class CommandCodeProvider: QuotaProvider {
                 remainingPct: remainingPct,
                 subtitle: subtitle,
                 resetDate: periodEnd,
-                windowSeconds: 30 * 24 * 3600))
+                windowSeconds: 30 * 24 * 3600,
+                allowance: QuotaAllowance(
+                    used: used, remaining: monthly, limit: total, unit: .usd)))
         } else if monthly > 0 {
             spendableBalance += monthly
         }
@@ -367,7 +369,9 @@ final class CommandCodeProvider: QuotaProvider {
             remainingPct: 100 - usedPct,
             subtitle: "\(usd(cap - used)) / \(usd(cap))",
             resetDate: resetDate,
-            windowSeconds: windowSeconds)
+            windowSeconds: windowSeconds,
+            allowance: QuotaAllowance(
+                used: used, remaining: cap - used, limit: cap, unit: .usd))
     }
 
     // MARK: - Embedded plan catalog (hand-ported from CommandCodePlanCatalog)

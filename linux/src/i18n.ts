@@ -100,6 +100,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "allowance.unit.credits": { vi: "credit", en: "credits" },
   "allowance.unit.tokens": { vi: "token", en: "tokens" },
   "allowance.unit.count": { vi: "lượt", en: "items" },
+  "allowance.unit.acu": { vi: "ACU", en: "ACU" },
   updatedAt: { vi: "cập nhật", en: "updated" },
   resetInDays: { vi: "reset sau {n} ngày", en: "resets in {n}d" },
   resetInHours: { vi: "reset sau {n} giờ", en: "resets in {n}h" },

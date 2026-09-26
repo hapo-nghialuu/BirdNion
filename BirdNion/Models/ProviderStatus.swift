@@ -7,6 +7,7 @@ enum QuotaUnit: String, Codable, Equatable, Sendable {
     case credits
     case tokens
     case count
+    case acu
 }
 
 /// Exact native allowance fields exposed by a provider contract.

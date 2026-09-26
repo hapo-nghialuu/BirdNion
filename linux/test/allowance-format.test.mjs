@@ -93,6 +93,13 @@ test("native allowance formats exact USD and character values", () => {
     limit: 10_000,
     unit: "characters",
   }), "5,000 characters remaining of 10,000 characters");
+
+  assert.equal(quotaAllowanceText({
+    used: 2.9,
+    remaining: 2.1,
+    limit: 5,
+    unit: "acu",
+  }), "2.1 ACU remaining of 5 ACU");
 });
 
 test("missing or invalid native values stay unavailable", () => {
