@@ -31,10 +31,11 @@
   <link rel="stylesheet" href="../styles/base-layout.css">
   <link rel="stylesheet" href="../styles/landing-hero.css?v=landing-remake-1">
   <link rel="stylesheet" href="../styles/first-live-path.css?v=landing-remake-1">
-  <link rel="stylesheet" href="../styles/landing-sections.css?v=landing-remake-3">
+  <link rel="stylesheet" href="../styles/landing-sections.css?v=landing-remake-6">
   <link rel="stylesheet" href="../styles/landing-utility-sections.css?v=landing-remake-2">
   <link rel="stylesheet" href="../styles/friendly-brand.css?v=landing-remake-2">
-  <link rel="stylesheet" href="../styles/responsive.css?v=landing-remake-2">
+  <link rel="stylesheet" href="../styles/app-replica.css?v=landing-remake-3">
+  <link rel="stylesheet" href="../styles/responsive.css?v=landing-remake-4">
   <script src="../scripts/install-command-copy.js?v=landing-remake-1" defer></script>
 </head>
 <body>
@@ -81,14 +82,13 @@
           <img src="../assets/birdnion-readme-bird-quota-384.png?v=1" width="384" height="384" alt="" fetchpriority="low" decoding="async">
         </div>
         <div class="proof-label">
-          <span>01 / popover macOS</span>
-          <span>Chờ ảnh chụp</span>
+          <span>01 / GIAO DIỆN SẢN PHẨM ĐẠI DIỆN</span>
+          <span>Dữ liệu mẫu</span>
         </div>
-        <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: popover macOS native hiển thị các card quota kèm đếm ngược reset">
-          <p>Đang chờ ảnh chụp native</p>
-          <p>Popover macOS · 2–3 card quota kèm đếm ngược reset</p>
+        <div class="screen-crop">
+          <img src="../assets/usage-overview.png" width="840" height="1562" alt="Giao diện chi phí local BirdNion được render với dữ liệu hoạt động và model đại diện" fetchpriority="high">
         </div>
-        <figcaption>Ảnh giữ chỗ · thay bằng ảnh chụp native trên macOS trước khi publish</figcaption>
+        <figcaption>Render từ giao diện BirdNion hiện tại · dữ liệu mẫu đại diện · không phải ảnh chụp native của nền tảng</figcaption>
       </figure>
     </section>
 
@@ -106,11 +106,53 @@
             <p>Mỗi card hiển thị các cửa sổ quota mà provider cung cấp—5 giờ, tuần, tháng, credit hoặc ngân sách. Cửa sổ nào provider không báo thì vẫn được ghi là không có.</p>
           </div>
           <figure class="capture-frame">
-            <div class="proof-label"><span>02 / Card quota</span><span>Chờ ảnh chụp</span></div>
-            <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: card quota của provider với phần trăm còn lại theo từng cửa sổ">
-              <p>Đang chờ ảnh chụp native</p>
-              <p>Một card provider · % còn lại của từng cửa sổ quota</p>
+            <div class="proof-label"><span>02 / Card quota</span><span>Dữ liệu mẫu</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Mẫu dựng lại card quota Claude: quota thấp nhất 38% theo tuần, kèm các cửa sổ 5 giờ, tuần và Opus với thời điểm reset">
+        <div class="app-replica" inert>
+          <div class="container">
+            <div class="app-body">
+              <div class="provider-stack">
+              <div class="card provider-header-card">
+                <div class="provider-head-row">
+                  <div class="provider-logo-plate"><span class="provider-logo-ink tab-logo-mono replica-logo replica-logo-claude"></span></div>
+                  <div class="provider-head-text">
+                    <div class="provider-name">Claude</div>
+                    <div class="provider-meta">MAX · OAUTH · 2 PHÚT TRƯỚC</div>
+                  </div>
+                  <div class="mb-vis"><span class="mb-vis-label">TRAY</span><button type="button" class="mb-vis-switch on"><span class="mb-vis-knob"></span></button></div>
+                </div>
+              </div>
+              <div class="card provider-body-card">
+                <div class="quota-summary">
+                  <div class="quota-summary-label">QUOTA THẤP NHẤT · TUẦN</div>
+                  <div class="quota-summary-row">
+                    <div class="quota-summary-pct warning">38%</div>
+                    <div class="quota-summary-right"><div class="quota-summary-meta">RESET SAU 2 NGÀY</div><div class="quota-summary-meta">ĐÃ DÙNG 62%</div></div>
+                  </div>
+                </div>
+                <div class="provider-divider"></div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">5 GIỜ</span><span class="window-pct ok">71%</span></div>
+                  <div class="window-track"><div class="window-fill ok" style="width: 71%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">ĐÃ DÙNG 29%</span><span class="window-subtitle">RESET SAU 3 GIỜ</span></div>
+                </div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">TUẦN</span><span class="window-pct warning">38%</span></div>
+                  <div class="window-track"><div class="window-fill warning" style="width: 38%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">ĐÃ DÙNG 62%</span><span class="window-subtitle">RESET SAU 2 NGÀY</span></div>
+                </div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">OPUS</span><span class="window-pct ok">84%</span></div>
+                  <div class="window-track"><div class="window-fill ok" style="width: 84%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">ĐÃ DÙNG 16%</span><span class="window-subtitle">RESET SAU 2 NGÀY</span></div>
+                </div>
+              </div>
+              </div>
             </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Dựng lại từ style giao diện Linux hiện tại của BirdNion · dữ liệu mẫu · không phải ảnh chụp native</figcaption>
           </figure>
         </li>
         <li class="answer-row">
@@ -120,11 +162,46 @@
             <p>Đếm ngược reset giúp bạn quyết định chờ, đổi công cụ hay tiếp tục. Quota Agenda xếp các lần reset sắp tới của mọi provider, chỉ dùng thời điểm reset mà provider báo.</p>
           </div>
           <figure class="capture-frame">
-            <div class="proof-label"><span>03 / Quota Agenda</span><span>Chờ ảnh chụp</span></div>
-            <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: panel Quota Agenda liệt kê các lần reset sắp tới của các provider">
-              <p>Đang chờ ảnh chụp native</p>
-              <p>Panel Quota Agenda · các lần reset sắp tới</p>
+            <div class="proof-label"><span>03 / Quota Agenda</span><span>Dữ liệu mẫu</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Mẫu dựng lại panel Lịch quota liệt kê Codex, Claude và Grok theo lần reset gần nhất">
+        <div class="app-replica" inert>
+          <div class="panel-root">
+            <div class="panel-content quota-agenda-panel">
+              <div class="panel-head quota-agenda-panel-head">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" aria-hidden="true" class="quota-agenda-panel-icon"><rect x="3.7" y="5.2" width="16.6" height="15" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" d="M7.8 3.8v3M16.2 3.8v3M3.7 9.2h16.6"/><circle cx="7.4" cy="12.4" r=".75" fill="currentColor"/><circle cx="12" cy="12.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="12.4" r=".75" fill="currentColor"/><circle cx="7.4" cy="16.4" r=".75" fill="currentColor"/><circle cx="12" cy="16.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="16.4" r=".75" fill="currentColor"/></svg>
+                <div class="panel-head-text"><div class="panel-title">Lịch quota</div><div class="panel-subtitle">3 provider có dữ liệu</div></div>
+                <button type="button" class="panel-close">✕</button>
+              </div>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-codex replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Codex CLI</span><span class="quota-agenda-provider">· Codex</span></span>
+                <span class="quota-agenda-percent is-current tone-critical">12%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">5 GIỜ</span><span class="quota-agenda-reset is-scheduled">reset sau 47m</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">OAuth</span><span class="quota-agenda-account">Đã ẩn tài khoản</span><span class="quota-agenda-freshness">vừa cập nhật</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-claude replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Claude Code</span><span class="quota-agenda-provider">· Claude</span></span>
+                <span class="quota-agenda-percent is-current tone-warning">38%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">TUẦN</span><span class="quota-agenda-reset is-scheduled">reset sau 1d 14h</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">OAuth</span><span class="quota-agenda-account">Đã ẩn tài khoản</span><span class="quota-agenda-freshness">2 phút trước</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-grok replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Grok CLI</span><span class="quota-agenda-provider">· Grok</span></span>
+                <span class="quota-agenda-percent is-current tone-ok">64%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">TUẦN</span><span class="quota-agenda-reset is-scheduled">reset sau 4d 6h</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">grok-web</span><span class="quota-agenda-account">Đã ẩn tài khoản</span><span class="quota-agenda-freshness">5 phút trước</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <div class="quota-agenda-trust">CHỈ DÙNG MỐC RESET ĐƯỢC XÁC NHẬN</div>
             </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Dựng lại từ style giao diện Linux hiện tại của BirdNion · dữ liệu mẫu · không phải ảnh chụp native</figcaption>
           </figure>
         </li>
         <li class="answer-row">
@@ -134,11 +211,32 @@
             <p>Khi phiên đăng nhập hết hạn hoặc key ngừng hoạt động, card sẽ báo rõ. Nhảy thẳng đến cài đặt của provider đó, sửa nguồn rồi chạy lại bước kiểm tra thật.</p>
           </div>
           <figure class="capture-frame">
-            <div class="proof-label"><span>04 / Cần xử lý</span><span>Chờ ảnh chụp</span></div>
-            <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: card provider ở trạng thái cần xử lý kèm link sửa">
-              <p>Đang chờ ảnh chụp native</p>
-              <p>Card cần xử lý · kèm link sửa</p>
+            <div class="proof-label"><span>04 / Cần xử lý</span><span>Dữ liệu mẫu</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Mẫu dựng lại card Codex cần xử lý: cookie hết hạn, kèm nút Thử lại và Sửa">
+        <div class="app-replica" inert>
+          <div class="container">
+            <div class="app-body">
+              <div class="provider-stack">
+              <div class="card provider-header-card">
+                <div class="provider-head-row">
+                  <div class="provider-logo-plate"><span class="provider-logo-ink tab-logo-mono replica-logo replica-logo-codex"></span></div>
+                  <div class="provider-head-text">
+                    <div class="provider-name">Codex</div>
+                    <div class="provider-meta">COOKIE · 1 PHÚT TRƯỚC</div>
+                  </div>
+                  <div class="mb-vis"><span class="mb-vis-label err">TRAY</span><button type="button" class="mb-vis-switch on"><span class="mb-vis-knob"></span></button></div>
+                </div>
+              </div>
+              <div class="card provider-body-card">
+                <div class="provider-error">Cookie hết hạn — đăng nhập lại trình duyệt</div>
+                <div class="provider-error-actions"><button type="button" class="sw-pill-btn">Thử lại</button><button type="button" class="sw-pill-btn">Sửa</button></div>
+              </div>
+              </div>
             </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Dựng lại từ style giao diện Linux hiện tại của BirdNion · dữ liệu mẫu · không phải ảnh chụp native</figcaption>
           </figure>
         </li>
       </ol>
@@ -190,18 +288,9 @@
       </div>
       <div class="platform-captures">
         <figure class="capture-frame">
-          <div class="proof-label"><span>05 / Menu bar macOS</span><span>Chờ ảnh chụp</span></div>
-          <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: menu bar macOS hiển thị phần trăm còn lại cạnh icon BirdNion">
-            <p>Đang chờ ảnh chụp native</p>
-            <p>Cắt vùng menu bar · phần trăm cạnh icon BirdNion</p>
-          </div>
-        </figure>
-        <figure class="capture-frame">
-          <div class="proof-label"><span>06 / Tray Linux</span><span>Chờ ảnh chụp</span></div>
-          <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: panel Linux hiển thị phần trăm và logo provider trong icon tray BirdNion">
-            <p>Đang chờ ảnh chụp native</p>
-            <p>Cắt vùng panel Linux · phần trăm và logo provider trong icon tray</p>
-          </div>
+          <div class="proof-label"><span>05 / BỀ MẶT ĐIỀU KHIỂN</span><span>Bản minh họa Settings hiện tại</span></div>
+          <img src="../assets/control-surface-redraw.jpg" width="920" height="1200" alt="Bản minh họa Settings BirdNion trên Linux với ngôn ngữ, giao diện, tray, refresh và budget" loading="lazy">
+          <figcaption>Bản minh họa bề mặt điều khiển · dựa trên phần Settings Linux hiện tại.</figcaption>
         </figure>
       </div>
     </section>

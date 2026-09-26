@@ -31,10 +31,11 @@
   <link rel="stylesheet" href="styles/base-layout.css">
   <link rel="stylesheet" href="styles/landing-hero.css?v=landing-remake-1">
   <link rel="stylesheet" href="styles/first-live-path.css?v=landing-remake-1">
-  <link rel="stylesheet" href="styles/landing-sections.css?v=landing-remake-3">
+  <link rel="stylesheet" href="styles/landing-sections.css?v=landing-remake-6">
   <link rel="stylesheet" href="styles/landing-utility-sections.css?v=landing-remake-2">
   <link rel="stylesheet" href="styles/friendly-brand.css?v=landing-remake-2">
-  <link rel="stylesheet" href="styles/responsive.css?v=landing-remake-2">
+  <link rel="stylesheet" href="styles/app-replica.css?v=landing-remake-3">
+  <link rel="stylesheet" href="styles/responsive.css?v=landing-remake-4">
   <script src="scripts/install-command-copy.js?v=landing-remake-1" defer></script>
 </head>
 <body>
@@ -81,14 +82,13 @@
           <img src="assets/birdnion-readme-bird-quota-384.png?v=1" width="384" height="384" alt="" fetchpriority="low" decoding="async">
         </div>
         <div class="proof-label">
-          <span>01 / macOS popover</span>
-          <span>Capture pending</span>
+          <span>01 / REPRESENTATIVE PRODUCT UI</span>
+          <span>Rendered sample</span>
         </div>
-        <div class="screen-crop capture-pending" role="img" aria-label="Screenshot pending: native macOS popover showing quota cards with reset countdowns">
-          <p>Native capture pending</p>
-          <p>macOS popover · 2–3 quota cards with reset countdowns</p>
+        <div class="screen-crop">
+          <img src="assets/usage-overview.png" width="840" height="1562" alt="Rendered BirdNion local cost interface with representative daily activity and model data" fetchpriority="high">
         </div>
-        <figcaption>Placeholder · replace with a native macOS capture before publishing</figcaption>
+        <figcaption>Rendered from the current BirdNion interface · representative sample data · not a native platform capture</figcaption>
       </figure>
     </section>
 
@@ -106,11 +106,53 @@
             <p>Each card shows the quota windows its provider exposes—5-hour, weekly, monthly, credits or budget. A window the provider does not report stays marked unavailable.</p>
           </div>
           <figure class="capture-frame">
-            <div class="proof-label"><span>02 / Quota card</span><span>Capture pending</span></div>
-            <div class="screen-crop capture-pending" role="img" aria-label="Screenshot pending: provider quota card with remaining percent per window">
-              <p>Native capture pending</p>
-              <p>One provider card · remaining % for each quota window</p>
+            <div class="proof-label"><span>02 / Quota card</span><span>Rendered sample</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Rendered sample of a Claude quota card: lowest quota 38% for the week, plus 5-hour, week and Opus windows with reset times">
+        <div class="app-replica" inert>
+          <div class="container">
+            <div class="app-body">
+              <div class="provider-stack">
+              <div class="card provider-header-card">
+                <div class="provider-head-row">
+                  <div class="provider-logo-plate"><span class="provider-logo-ink tab-logo-mono replica-logo replica-logo-claude"></span></div>
+                  <div class="provider-head-text">
+                    <div class="provider-name">Claude</div>
+                    <div class="provider-meta">MAX · OAUTH · 2M AGO</div>
+                  </div>
+                  <div class="mb-vis"><span class="mb-vis-label">TRAY</span><button type="button" class="mb-vis-switch on"><span class="mb-vis-knob"></span></button></div>
+                </div>
+              </div>
+              <div class="card provider-body-card">
+                <div class="quota-summary">
+                  <div class="quota-summary-label">LOWEST QUOTA · WEEK</div>
+                  <div class="quota-summary-row">
+                    <div class="quota-summary-pct warning">38%</div>
+                    <div class="quota-summary-right"><div class="quota-summary-meta">RESETS IN 2D</div><div class="quota-summary-meta">62% USED</div></div>
+                  </div>
+                </div>
+                <div class="provider-divider"></div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">5 HOURS</span><span class="window-pct ok">71%</span></div>
+                  <div class="window-track"><div class="window-fill ok" style="width: 71%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">29% USED</span><span class="window-subtitle">RESETS IN 3H</span></div>
+                </div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">WEEK</span><span class="window-pct warning">38%</span></div>
+                  <div class="window-track"><div class="window-fill warning" style="width: 38%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">62% USED</span><span class="window-subtitle">RESETS IN 2D</span></div>
+                </div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">OPUS</span><span class="window-pct ok">84%</span></div>
+                  <div class="window-track"><div class="window-fill ok" style="width: 84%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">16% USED</span><span class="window-subtitle">RESETS IN 2D</span></div>
+                </div>
+              </div>
+              </div>
             </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Rebuilt from the current BirdNion Linux UI styles · sample data · not a native capture</figcaption>
           </figure>
         </li>
         <li class="answer-row">
@@ -120,11 +162,46 @@
             <p>Reset countdowns tell you whether to wait, switch tools or keep going. Quota Agenda lines up the next resets across providers, using only reset times the providers report.</p>
           </div>
           <figure class="capture-frame">
-            <div class="proof-label"><span>03 / Quota Agenda</span><span>Capture pending</span></div>
-            <div class="screen-crop capture-pending" role="img" aria-label="Screenshot pending: Quota Agenda panel listing upcoming resets across providers">
-              <p>Native capture pending</p>
-              <p>Quota Agenda panel · upcoming resets across providers</p>
+            <div class="proof-label"><span>03 / Quota Agenda</span><span>Rendered sample</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Rendered sample of the Quota Agenda panel listing Codex, Claude and Grok by their next reset">
+        <div class="app-replica" inert>
+          <div class="panel-root">
+            <div class="panel-content quota-agenda-panel">
+              <div class="panel-head quota-agenda-panel-head">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" aria-hidden="true" class="quota-agenda-panel-icon"><rect x="3.7" y="5.2" width="16.6" height="15" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" d="M7.8 3.8v3M16.2 3.8v3M3.7 9.2h16.6"/><circle cx="7.4" cy="12.4" r=".75" fill="currentColor"/><circle cx="12" cy="12.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="12.4" r=".75" fill="currentColor"/><circle cx="7.4" cy="16.4" r=".75" fill="currentColor"/><circle cx="12" cy="16.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="16.4" r=".75" fill="currentColor"/></svg>
+                <div class="panel-head-text"><div class="panel-title">Quota Agenda</div><div class="panel-subtitle">3 providers with data</div></div>
+                <button type="button" class="panel-close">✕</button>
+              </div>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-codex replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Codex CLI</span><span class="quota-agenda-provider">· Codex</span></span>
+                <span class="quota-agenda-percent is-current tone-critical">12%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">5 HOURS</span><span class="quota-agenda-reset is-scheduled">resets in 47m</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">OAuth</span><span class="quota-agenda-account">Account hidden</span><span class="quota-agenda-freshness">just updated</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-claude replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Claude Code</span><span class="quota-agenda-provider">· Claude</span></span>
+                <span class="quota-agenda-percent is-current tone-warning">38%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">WEEK</span><span class="quota-agenda-reset is-scheduled">resets in 1d 14h</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">OAuth</span><span class="quota-agenda-account">Account hidden</span><span class="quota-agenda-freshness">2m ago</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-grok replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Grok CLI</span><span class="quota-agenda-provider">· Grok</span></span>
+                <span class="quota-agenda-percent is-current tone-ok">64%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">WEEK</span><span class="quota-agenda-reset is-scheduled">resets in 4d 6h</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">grok-web</span><span class="quota-agenda-account">Account hidden</span><span class="quota-agenda-freshness">5m ago</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <div class="quota-agenda-trust">EXPLICIT RESET TIMES ONLY</div>
             </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Rebuilt from the current BirdNion Linux UI styles · sample data · not a native capture</figcaption>
           </figure>
         </li>
         <li class="answer-row">
@@ -134,11 +211,32 @@
             <p>When a sign-in expires or a key stops working, the card says so. Jump to the exact provider setting, fix the source and run the real check again.</p>
           </div>
           <figure class="capture-frame">
-            <div class="proof-label"><span>04 / Needs attention</span><span>Capture pending</span></div>
-            <div class="screen-crop capture-pending" role="img" aria-label="Screenshot pending: provider card in a needs-attention state with its fix link">
-              <p>Native capture pending</p>
-              <p>A card that needs attention · with its fix-it link</p>
+            <div class="proof-label"><span>04 / Needs attention</span><span>Rendered sample</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Rendered sample of a Codex card that needs attention: cookie expired, with Retry and Fix buttons">
+        <div class="app-replica" inert>
+          <div class="container">
+            <div class="app-body">
+              <div class="provider-stack">
+              <div class="card provider-header-card">
+                <div class="provider-head-row">
+                  <div class="provider-logo-plate"><span class="provider-logo-ink tab-logo-mono replica-logo replica-logo-codex"></span></div>
+                  <div class="provider-head-text">
+                    <div class="provider-name">Codex</div>
+                    <div class="provider-meta">COOKIE · 1M AGO</div>
+                  </div>
+                  <div class="mb-vis"><span class="mb-vis-label err">TRAY</span><button type="button" class="mb-vis-switch on"><span class="mb-vis-knob"></span></button></div>
+                </div>
+              </div>
+              <div class="card provider-body-card">
+                <div class="provider-error">Cookie expired — sign in again in your browser</div>
+                <div class="provider-error-actions"><button type="button" class="sw-pill-btn">Retry</button><button type="button" class="sw-pill-btn">Fix</button></div>
+              </div>
+              </div>
             </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Rebuilt from the current BirdNion Linux UI styles · sample data · not a native capture</figcaption>
           </figure>
         </li>
       </ol>
@@ -190,18 +288,9 @@
       </div>
       <div class="platform-captures">
         <figure class="capture-frame">
-          <div class="proof-label"><span>05 / macOS menu bar</span><span>Capture pending</span></div>
-          <div class="screen-crop capture-pending" role="img" aria-label="Screenshot pending: macOS menu bar showing the remaining percent next to the BirdNion icon">
-            <p>Native capture pending</p>
-            <p>Menu bar crop · percent next to the BirdNion icon</p>
-          </div>
-        </figure>
-        <figure class="capture-frame">
-          <div class="proof-label"><span>06 / Linux tray</span><span>Capture pending</span></div>
-          <div class="screen-crop capture-pending" role="img" aria-label="Screenshot pending: Linux panel showing the percent and provider logo in the BirdNion tray icon">
-            <p>Native capture pending</p>
-            <p>Linux panel crop · percent and provider logo in the tray icon</p>
-          </div>
+          <div class="proof-label"><span>05 / CONTROL SURFACE</span><span>Current settings redraw</span></div>
+          <img src="assets/control-surface-redraw.jpg" width="920" height="1200" alt="Illustrated BirdNion Linux settings showing language, appearance, tray, refresh, and budget controls" loading="lazy">
+          <figcaption>Illustrated control surface · based on the current Linux Settings implementation.</figcaption>
         </figure>
       </div>
     </section>
