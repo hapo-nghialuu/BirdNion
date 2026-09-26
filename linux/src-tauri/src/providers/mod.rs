@@ -25,7 +25,6 @@ pub mod gemini;
 pub mod grok;
 pub mod groq;
 pub mod hapo;
-pub mod hiyo;
 pub mod kilo;
 pub mod kiro;
 pub mod mimo;
@@ -35,7 +34,6 @@ pub mod openai;
 pub mod opencode;
 pub mod opencodego;
 pub mod openrouter;
-pub mod tryapi;
 pub mod xai;
 pub mod zai;
 
@@ -167,7 +165,6 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "zai" => "z.ai",
         "minimax" => "MiniMax",
         "hapo" => "Hapo AI Hub",
-        "hiyo" => "Hiyo",
         "elevenlabs" => "ElevenLabs",
         "deepgram" => "Deepgram",
         "devin" => "Devin",
@@ -191,7 +188,6 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "freemodel" => "FreeModel",
         "gemini" => "Gemini",
         "antigravity" => "Antigravity",
-        "tryapi" => "TryAPI",
         other => other,
     }
     .to_string()
@@ -359,7 +355,6 @@ async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
         "zai" => zai::fetch(cfg).await,
         "minimax" => minimax::fetch(cfg).await,
         "hapo" => hapo::fetch(cfg).await,
-        "hiyo" => hiyo::fetch(cfg).await,
         "elevenlabs" => elevenlabs::fetch(cfg).await,
         "deepgram" => deepgram::fetch(cfg).await,
         "devin" => devin::fetch(cfg).await,
@@ -382,7 +377,6 @@ async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
         "mimo" => mimo::fetch(cfg).await,
         "alibaba" => alibaba::fetch(cfg).await,
         "freemodel" => freemodel::fetch(cfg).await,
-        "tryapi" => tryapi::fetch(cfg).await,
         "copilot" => copilot::fetch(cfg).await,
         other => ProviderStatus::failure(
             other,

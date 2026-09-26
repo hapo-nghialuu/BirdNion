@@ -25,7 +25,6 @@ import { copilotAccountsSection } from "./settings-copilot-login";
 import { codexAccountsSection } from "./settings-codex-accounts";
 import { freemodelAccountsSection } from "./settings-freemodel-accounts";
 import { elevenlabsKeysSection } from "./settings-elevenlabs-keys";
-import { hiyoKeysSection } from "./settings-hiyo-keys";
 
 export const ANTIGRAVITY_ACCOUNT_CHANGED_EVENT = "birdnion-antigravity-account-changed";
 
@@ -106,7 +105,6 @@ export type Settings = {
   active_codex_account?: string | null;
   active_freemodel_account?: string | null;
   active_elevenlabs_key?: string | null;
-  active_hiyo_key?: string | null;
   claudeCodeProfiles?: ClaudeCodeProfileLite[];
   codexProfiles?: CodexProfileLite[];
 };
@@ -136,7 +134,7 @@ export type CodexProfileLite = {
 
 /** Providers whose auth is a pasted API key. */
 export const KEYED = new Set([
-  "minimax", "hapo", "openrouter", "tryapi", "deepseek", "zai", "elevenlabs", "hiyo",
+  "minimax", "hapo", "openrouter", "deepseek", "zai", "elevenlabs",
   "deepgram", "groq", "kiro", "kilo", "alibaba", "bedrock", "openai", "ollama", "opencodego",
   "devin",
 ]);
@@ -513,10 +511,6 @@ const PROVIDER_LINKS: Record<string, LinkSpec[]> = {
     L("link.apiKeys", "https://openrouter.ai/keys"),
     L("link.status", "https://status.openrouter.ai"),
   ],
-  tryapi: [
-    L("link.dashboard", "https://tryapi.tryai.chat/dashboard"),
-    L("link.apiKeys", "https://tryapi.tryai.chat/keys"),
-  ],
   deepseek: [
     L("link.usage", "https://platform.deepseek.com/usage"),
     L("link.status", "https://status.deepseek.com"),
@@ -527,7 +521,6 @@ const PROVIDER_LINKS: Record<string, LinkSpec[]> = {
     L("link.subscription", "https://elevenlabs.io/app/subscription"),
     L("link.status", "https://status.elevenlabs.io"),
   ],
-  hiyo: [L("link.usage", "https://codex.hiyo.top")],
   deepgram: [
     L("link.dashboard", "https://console.deepgram.com/project/"),
     L("link.status", "https://status.deepgram.com"),
@@ -757,9 +750,9 @@ export function setupSection(cfg: ProviderCfg): HTMLElement {
   // 2. Auth block per provider type.
   if (id === "bedrock") {
     body.append(bedrockAuthSection(cfg));
-  } else if (KEYED.has(id) && id !== "grok" && id !== "elevenlabs" && id !== "hiyo") {
-    // ElevenLabs / Hiyo use multi-key cards instead of a single TokenField —
-    // keys live in elevenlabs-keys.json / hiyo-keys.json.
+  } else if (KEYED.has(id) && id !== "grok" && id !== "elevenlabs") {
+    // ElevenLabs uses a multi-key card instead of a single TokenField —
+    // keys live in elevenlabs-keys.json.
     const credential = textInput(
       cfg.apiKey,
       id === "openai"
@@ -1058,14 +1051,3 @@ export function elevenlabsKeysCard(): HTMLElement {
   return group;
 }
 
-/** Standalone Hiyo multi-key card — add / switch / remove API keys. */
-export function hiyoKeysCard(): HTMLElement {
-  const group = el("div", "sw-group");
-  group.append(el("div", "sw-section-header", t("hiyoKeysLabel").toUpperCase()));
-  const card = el("div", "sw-card");
-  const body = el("div", "sw-card-body");
-  body.append(hiyoKeysSection());
-  card.append(body);
-  group.append(card);
-  return group;
-}

@@ -491,7 +491,6 @@ enum MenuBarIconRenderer {
         case "claude": providerAsset = "ClaudeLogo"
         case "codex", "openai": providerAsset = "CodexLogo"
         case "openrouter": providerAsset = "OpenRouterLogo"
-        case "tryapi": providerAsset = "TryAPILogo"
         case "deepseek": providerAsset = "DeepSeekLogo"
         case "zai": providerAsset = "ZaiLogo"
         case "elevenlabs": providerAsset = "ElevenLabsLogo"
@@ -513,7 +512,6 @@ enum MenuBarIconRenderer {
         case "opencodego": providerAsset = "OpenCodeGoLogo"
         case "antigravity": providerAsset = "AntigravityLogo"
         case "bedrock": providerAsset = "BedrockLogo"
-        case "hiyo": providerAsset = "HiyoLogo"
         case "devin": providerAsset = "DevinLogo"
         default:
             return fallbackLogo(effectivePointSize)

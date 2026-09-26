@@ -1224,8 +1224,6 @@ struct ProviderLogoMark: View {
             logo("HapoLogo")
         case "openrouter":
             logo("OpenRouterLogo", brand: VocabbyTheme.openRouter)
-        case "tryapi":
-            logo("TryAPILogo", brand: VocabbyTheme.tryAPI)
         case "deepseek":
             logo("DeepSeekLogo", brand: VocabbyTheme.deepSeek)
         case "zai":
@@ -1272,8 +1270,6 @@ struct ProviderLogoMark: View {
             logo("AntigravityLogo", brand: VocabbyTheme.antigravity)
         case "bedrock":
             logo("BedrockLogo", brand: VocabbyTheme.bedrock)
-        case "hiyo":
-            logo("HiyoLogo", brand: VocabbyTheme.hiyo)
         case "devin":
             logo("DevinLogo", brand: VocabbyTheme.devin)
         // Agent logos (2026-08-24): aider/goose PNG màu gốc, amp mark
@@ -4300,7 +4296,6 @@ struct ClaudeCodeQuickApplyButton: View {
         case "minimax": return "MiniMax"
         case "deepseek": return "DeepSeek"
         case "zai": return "z.ai"
-        case "hiyo": return "Hiyo"
         default: return p?.displayName ?? providerID
         }
     }
@@ -5200,9 +5195,6 @@ extension Notification.Name {
     /// Posted by `ElevenLabsKeyStore` when keys are added/removed/switched so
     /// Settings + the popover switcher re-list immediately (no app restart).
     static let birdnionElevenLabsKeysChanged = Notification.Name("com.local.birdnion.elevenLabsKeysChanged")
-    /// Posted by `HiyoKeyStore` when keys are added/removed/switched so
-    /// Settings + the popover switcher re-list immediately (no app restart).
-    static let birdnionHiyoKeysChanged = Notification.Name("com.local.birdnion.hiyoKeysChanged")
     /// Posted when the user switches the popover tab to "all", before the
     /// selected-tab state mutates. AppDelegate pre-expands the panel to
     /// a safe seed so the hosting view has stable bounds for the tall All

@@ -13,7 +13,6 @@ mod cost_history;
 mod elevenlabs_keys;
 mod freemodel_accounts;
 mod grok_scanner;
-mod hiyo_keys;
 mod installed_agents;
 mod kiro_scanner;
 mod omp_scanner;
@@ -1476,46 +1475,6 @@ fn elevenlabs_key_remove(id: String) -> Result<ElevenLabsKeysState, String> {
     Ok(elevenlabs_keys_state())
 }
 
-/// Hiyo multi-key state — managed keys + active id (secrets never leave Rust).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HiyoKeysState {
-    keys: Vec<hiyo_keys::HiyoKey>,
-    active_id: Option<String>,
-    settings: config::Settings,
-}
-
-fn hiyo_keys_state() -> HiyoKeysState {
-    HiyoKeysState {
-        keys: hiyo_keys::all_keys(),
-        active_id: hiyo_keys::active_id(),
-        settings: config::load(),
-    }
-}
-
-#[tauri::command]
-fn hiyo_keys_list() -> HiyoKeysState {
-    hiyo_keys_state()
-}
-
-#[tauri::command]
-fn hiyo_key_add(api_key: String, label: Option<String>) -> Result<HiyoKeysState, String> {
-    hiyo_keys::add(&api_key, label.as_deref())?;
-    Ok(hiyo_keys_state())
-}
-
-#[tauri::command]
-fn hiyo_key_switch(id: String) -> Result<HiyoKeysState, String> {
-    hiyo_keys::set_active(&id)?;
-    Ok(hiyo_keys_state())
-}
-
-#[tauri::command]
-fn hiyo_key_remove(id: String) -> Result<HiyoKeysState, String> {
-    hiyo_keys::remove(&id)?;
-    Ok(hiyo_keys_state())
-}
-
 /// Starts a GitHub Device Flow login for Copilot: requests a user code the
 /// user enters at the returned verification URL.
 #[tauri::command]
@@ -2343,10 +2302,6 @@ pub fn run() {
             elevenlabs_key_add,
             elevenlabs_key_switch,
             elevenlabs_key_remove,
-            hiyo_keys_list,
-            hiyo_key_add,
-            hiyo_key_switch,
-            hiyo_key_remove,
             copilot_login_start,
             copilot_login_poll,
             copilot_accounts_list,

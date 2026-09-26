@@ -127,7 +127,6 @@ enum VocabbyTheme {
     static let codex      = fixed(0x49A3B0)
     static let minimax    = fixed(0xFE603C)
     static let openRouter = fixed(0x6467F2)
-    static let tryAPI     = fixed(0x5B6CFF)
     static let deepSeek   = fixed(0x527DF0)
     static let zai        = fixed(0xE85A6A)
     static let claude     = fixed(0xCC7C5E)
@@ -154,7 +153,6 @@ enum VocabbyTheme {
     static let googleYellow = fixed(0xFBBC05)
     static let googleGreen = fixed(0x34A853)
     static let bedrock    = fixed(0xFF9900)    // AWS
-    static let hiyo       = fixed(0x00A8E8)
     static let devin      = dyn(0x317CFF, 0x49B0FF)    // devin.ai accent-primary light/dark
     static let omp        = dyn(0xBC52C8, 0xCE7FD8)
     static let pi         = dyn(0x06B6D4, 0x22D3EE)
@@ -164,7 +162,6 @@ enum VocabbyTheme {
         case "codex": return codex
         case "minimax": return minimax
         case "openrouter": return openRouter
-        case "tryapi": return tryAPI
         case "deepseek": return deepSeek
         case "zai": return zai
         case "claude": return claude
@@ -187,7 +184,6 @@ enum VocabbyTheme {
         case "opencode", "opencodego": return openCode
         case "antigravity": return antigravity
         case "bedrock": return bedrock
-        case "hiyo": return hiyo
         case "devin": return devin
         case "omp": return omp
         case "pi": return pi

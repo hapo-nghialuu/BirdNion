@@ -572,7 +572,6 @@ enum BirdNionConfigStore {
             Provider(id: "hapo", enabled: false,
                      displayName: "AI Hub"),
             Provider(id: "openrouter", enabled: false),
-            Provider(id: "tryapi", enabled: false),
             Provider(id: "deepseek", enabled: false),
             Provider(id: "zai", enabled: false),
             Provider(id: "claude", enabled: false),
@@ -596,7 +595,6 @@ enum BirdNionConfigStore {
             Provider(id: "antigravity", enabled: false),
             Provider(id: "bedrock", enabled: false),
             Provider(id: "freemodel", enabled: false),
-            Provider(id: "hiyo", enabled: false),
             Provider(id: "devin", enabled: false)
         ])
     }()
