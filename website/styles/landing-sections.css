@@ -9,10 +9,6 @@
   border-bottom: 1px solid var(--hairline);
 }
 
-.proof-section {
-  display: grid;
-  grid-template-columns: 5fr 1fr 6fr;
-}
 
 .section-heading {
   grid-column: 1;
@@ -30,8 +26,8 @@
 }
 
 .section-heading > p:last-child,
-.platform-copy > p,
-.privacy-intro > p {
+.platform-copy > p:not(.eyebrow),
+.privacy-intro > p:not(.eyebrow) {
   max-width: 480px;
   margin-top: 28px;
   color: var(--ink-soft);
@@ -39,38 +35,72 @@
   line-height: 1.65;
 }
 
-.feature-ledger {
-  grid-column: 3;
+.answer-rows {
+  margin: 64px 0 0;
+  padding: 0;
+  list-style: none;
   border-top: 1px solid var(--ink);
 }
 
-.feature-ledger article {
-  min-height: 132px;
-  padding: 25px 0;
+.answer-row {
+  padding: 48px 0;
   display: grid;
-  grid-template-columns: 48px 170px 1fr;
-  align-items: baseline;
+  grid-template-columns: 5fr 7fr;
+  column-gap: 8.33%;
+  align-items: center;
   border-bottom: 1px solid var(--hairline);
 }
 
-.feature-ledger span,
+/* Alternate 5/7 and 7/5 so the narrative does not read as a card grid. */
+.answer-row:nth-child(even) { grid-template-columns: 7fr 5fr; }
+.answer-row:nth-child(even) .answer-copy { order: 2; }
+
+.answer-copy > span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.answer-copy h3 {
+  margin-top: 18px;
+  font-size: clamp(24px, 2.4vw, 32px);
+  font-weight: 620;
+  letter-spacing: -.03em;
+  line-height: 1.1;
+}
+
+.answer-copy p {
+  max-width: 440px;
+  margin-top: 14px;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.capture-frame {
+  margin: 0;
+  padding: 7px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 16px 16px 5px 5px;
+}
+
+.answer-row .screen-crop { height: 360px; }
+
+.answers-footnote {
+  margin-top: 28px;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 .platform-rows span {
   color: var(--blue);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: .05em;
-}
-
-.feature-ledger h3 {
-  font-size: 17px;
-  font-weight: 650;
-}
-
-.feature-ledger p {
-  color: var(--ink-soft);
-  font-size: 15px;
-  line-height: 1.6;
 }
 
 .platform-section {
@@ -106,21 +136,45 @@
   font-weight: 600;
 }
 
-.settings-proof {
+.platform-limits-title {
+  margin-top: 36px;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+
+.platform-limits {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.platform-limits li {
+  padding: 10px 0;
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 12px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.platform-limits span {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.platform-captures {
   grid-column: 3;
-  margin: 0;
-  padding: 7px;
-  background: var(--paper-deep);
-  border: 1px solid var(--ink);
+  display: grid;
+  gap: 24px;
 }
 
-.settings-proof .proof-label {
-  border-color: var(--hairline);
-}
-
-.settings-proof img {
-  width: 100%;
-  max-height: 700px;
-  object-fit: cover;
-  object-position: top center;
-}
+/* Menu bar and tray captures are wide strips, not tall windows. */
+.platform-captures .screen-crop { height: 220px; }

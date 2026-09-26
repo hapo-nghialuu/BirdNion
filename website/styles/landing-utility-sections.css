@@ -10,7 +10,7 @@
 
 .privacy-intro { grid-column: 1; }
 .privacy-intro .eyebrow,
-.privacy-intro > p { color: #bdb9ae; }
+.privacy-intro > p:not(.eyebrow) { color: #bdb9ae; }
 .read-map { grid-column: 3; border-top: 1px solid #777268; }
 
 .read-map div {
@@ -28,7 +28,7 @@
 .install-section {
   display: grid;
   grid-template-columns: 5fr 1fr 6fr;
-  align-items: end;
+  align-items: start;
 }
 
 .install-section > div:first-child { grid-column: 1; }

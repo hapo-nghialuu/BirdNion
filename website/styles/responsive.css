@@ -17,11 +17,6 @@
   .product-proof { grid-column: 1; }
   .screen-crop { height: 680px; }
 
-  .outcome-strip {
-    grid-template-columns: 1fr;
-    gap: 32px;
-  }
-
   .proof-section,
   .platform-section,
   .privacy-section,
@@ -34,9 +29,8 @@
   }
 
   .section-heading,
-  .feature-ledger,
   .platform-copy,
-  .settings-proof,
+  .platform-captures,
   .privacy-intro,
   .read-map,
   .install-section > div:first-child,
@@ -45,6 +39,14 @@
   .faq-list { grid-column: 1; }
 
   .platform-copy { position: static; }
+
+  .answer-row,
+  .answer-row:nth-child(even) {
+    grid-template-columns: 1fr;
+    row-gap: 28px;
+  }
+
+  .answer-row:nth-child(even) .answer-copy { order: 0; }
 
   .privacy-section {
     padding-inline: 20px;
@@ -78,33 +80,15 @@
   }
 
   .text-link { justify-content: center; }
-  .hero-facts { margin-top: 42px; }
-  .hero-facts dt { font-size: 18px; }
-  .hero-facts dd { max-width: 80px; }
 
   .screen-crop { height: 560px; }
-
-  .outcome-strip ol {
-    grid-template-columns: 1fr;
-    gap: 20px;
-  }
-
-  .outcome-strip li {
-    grid-template-columns: 32px 1fr;
-    align-items: baseline;
-  }
 
   .section-heading h2,
   .platform-copy h2,
   .privacy-intro h2,
   .install-section h2 { font-size: 42px; }
 
-  .feature-ledger article {
-    grid-template-columns: 38px 1fr;
-    gap: 7px 0;
-  }
-
-  .feature-ledger p { grid-column: 2; }
+  .answer-row .screen-crop { height: 300px; }
 
   .platform-rows li {
     align-items: flex-start;
@@ -113,7 +97,7 @@
     gap: 6px;
   }
 
-  .settings-proof img { max-height: 560px; }
+  .platform-captures .screen-crop { height: 180px; }
 
   .read-map div {
     min-height: 112px;

@@ -1,6 +1,3 @@
-const copyButton = document.querySelector("[data-copy-target]");
-const copyStatus = document.querySelector(".copy-status");
-
 function copyFromSelection(target) {
   const selection = window.getSelection();
   if (!selection) return false;
@@ -19,7 +16,12 @@ function copyFromSelection(target) {
   }
 }
 
-if (copyButton && copyStatus) {
+// The page has more than one install command (hero + install panel); each
+// button reports into the status line named by its data-status-target.
+for (const copyButton of document.querySelectorAll("[data-copy-target]")) {
+  const copyStatus = document.getElementById(copyButton.dataset.statusTarget);
+  if (!copyStatus) continue;
+
   let resetTimer;
 
   copyButton.addEventListener("click", async () => {

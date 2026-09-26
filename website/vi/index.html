@@ -29,13 +29,13 @@
   <link rel="preload" href="../assets/fonts/ibm-plex-sans-regular.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="../styles/design-tokens.css">
   <link rel="stylesheet" href="../styles/base-layout.css">
-  <link rel="stylesheet" href="../styles/landing-hero.css">
-  <link rel="stylesheet" href="../styles/first-live-path.css?v=public-proof-1">
-  <link rel="stylesheet" href="../styles/landing-sections.css">
-  <link rel="stylesheet" href="../styles/landing-utility-sections.css">
-  <link rel="stylesheet" href="../styles/friendly-brand.css?v=quota-bird-1">
-  <link rel="stylesheet" href="../styles/responsive.css">
-  <script src="../scripts/install-command-copy.js?v=public-proof-1" defer></script>
+  <link rel="stylesheet" href="../styles/landing-hero.css?v=landing-remake-1">
+  <link rel="stylesheet" href="../styles/first-live-path.css?v=landing-remake-1">
+  <link rel="stylesheet" href="../styles/landing-sections.css?v=landing-remake-3">
+  <link rel="stylesheet" href="../styles/landing-utility-sections.css?v=landing-remake-2">
+  <link rel="stylesheet" href="../styles/friendly-brand.css?v=landing-remake-2">
+  <link rel="stylesheet" href="../styles/responsive.css?v=landing-remake-2">
+  <script src="../scripts/install-command-copy.js?v=landing-remake-1" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Bỏ qua đến nội dung chính</a>
@@ -61,16 +61,19 @@
         <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span> Bạn đồng hành quota nhỏ gọn trên desktop</p>
         <h1 id="hero-title">Cứ tập trung code.<br>BirdNion sẽ để mắt đến giới hạn.</h1>
         <p class="hero-lede">Claude, Codex, Gemini và các công cụ khác đặt usage ở nhiều nơi. BirdNion giữ thông tin còn bao nhiêu và khi nào reset trong một lần bấm—chỉ dùng những kết nối provider bạn chọn.</p>
-        <div class="hero-actions">
-          <a class="button button-primary" href="#install">Cài BirdNion</a>
-          <a class="text-link" href="#first-live">Xem cách hoạt động <span aria-hidden="true">↓</span></a>
-        </div>
-        <dl class="hero-facts">
-          <div><dt>25+</dt><dd>công cụ và provider</dd></div>
-          <div><dt>2</dt><dd>macOS + Linux</dd></div>
-          <div><dt>0</dt><dd>tài khoản BirdNion</dd></div>
-        </dl>
         <p class="provider-line">Claude · Codex · Gemini · Cursor · Grok · <a href="https://github.com/hapo-nghialuu/BirdNion#providers">xem phạm vi chính xác</a></p>
+        <div class="hero-install">
+          <p class="hero-install-label">macOS 14+ · Homebrew</p>
+          <div class="command-row">
+            <code id="hero-brew-command">brew install --cask hapo-nghialuu/tap/birdnion</code>
+            <button type="button" data-copy-target="hero-brew-command" data-status-target="hero-copy-status" data-copy-label="Sao chép" data-copied-label="Đã sao chép" data-selected-label="Đã chọn" data-copied-status="Đã sao chép lệnh cài đặt." data-selected-status="Không thể truy cập clipboard. Lệnh đã được chọn để bạn sao chép.">Sao chép</button>
+          </div>
+          <p class="copy-status" id="hero-copy-status" aria-live="polite"></p>
+          <p class="hero-install-note">Ký ad-hoc, chưa notarize; Homebrew gỡ quarantine trong lúc cài. Trên Linux x86_64, <a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">tải .deb, .rpm hoặc AppImage <span aria-hidden="true">↗</span></a></p>
+        </div>
+        <div class="hero-actions">
+          <a class="text-link" href="#proof">Xem cách hoạt động <span aria-hidden="true">↓</span></a>
+        </div>
       </div>
 
       <figure class="product-proof">
@@ -78,49 +81,91 @@
           <img src="../assets/birdnion-readme-bird-quota-384.png?v=1" width="384" height="384" alt="" fetchpriority="low" decoding="async">
         </div>
         <div class="proof-label">
-          <span>01 / GIAO DIỆN SẢN PHẨM ĐẠI DIỆN</span>
-          <span>Dữ liệu mẫu</span>
+          <span>01 / popover macOS</span>
+          <span>Chờ ảnh chụp</span>
         </div>
-        <div class="screen-crop">
-          <img src="../assets/usage-overview.png" width="840" height="1562" alt="Giao diện chi phí local BirdNion được render với dữ liệu hoạt động và model đại diện" fetchpriority="high">
+        <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: popover macOS native hiển thị các card quota kèm đếm ngược reset">
+          <p>Đang chờ ảnh chụp native</p>
+          <p>Popover macOS · 2–3 card quota kèm đếm ngược reset</p>
         </div>
-        <figcaption>Render từ giao diện BirdNion hiện tại · dữ liệu mẫu đại diện · không phải ảnh chụp native của nền tảng</figcaption>
+        <figcaption>Ảnh giữ chỗ · thay bằng ảnh chụp native trên macOS trước khi publish</figcaption>
       </figure>
-    </section>
-
-    <section class="outcome-strip" aria-label="Ba câu trả lời chính từ BirdNion">
-      <p>Ba câu trả lời trung thực<br>mà không ngắt mạch công việc.</p>
-      <ol>
-        <li><span>01</span><strong>Còn bao nhiêu?</strong></li>
-        <li><span>02</span><strong>Khi nào dùng lại được?</strong></li>
-        <li><span>03</span><strong>Nguồn nào cần xử lý?</strong></li>
-      </ol>
-    </section>
-
-    <section class="first-live-path" id="first-live" aria-labelledby="first-live-title">
-      <div class="first-live-heading">
-        <p class="eyebrow">BẮT ĐẦU NHỎ / MỘT CÔNG CỤ</p>
-        <h2 id="first-live-title">Bắt đầu với một provider bạn đang dùng.</h2>
-      </div>
-      <ol>
-        <li><span>01</span><strong>Cài BirdNion</strong><p>Dùng Homebrew trên macOS hoặc gói phát hành trên Linux.</p></li>
-        <li><span>02</span><strong>Chọn một provider</strong><p>Claude, Codex và Grok có luồng First Live được hướng dẫn.</p></li>
-        <li><span>03</span><strong>Xác nhận kết nối</strong><p>BirdNion lưu lựa chọn rồi kiểm tra nguồn thật trước khi gọi trạng thái là Live.</p></li>
-        <li><span>04</span><strong>Xem phần còn lại</strong><p>Một card quota và reset thật—không phải dữ liệu demo—xác nhận kết nối đã hoạt động.</p></li>
-      </ol>
     </section>
 
     <section class="proof-section" id="proof" aria-labelledby="proof-title">
       <div class="section-heading">
         <p class="eyebrow">TRONG PHIÊN LÀM VIỆC THẬT</p>
         <h2 id="proof-title">Nhìn một lần thay vì mở năm dashboard.</h2>
-        <p>Trước một tác vụ dài hoặc khi đổi công cụ, hãy mở BirdNion. Ứng dụng hiển thị đúng những gì từng nguồn đã bật cung cấp—và nói rõ khi kết nối cần xử lý thay vì tự tạo ra một con số.</p>
+        <p>Trước một tác vụ dài hoặc khi đổi công cụ, hãy mở BirdNion. Ứng dụng trả lời ba câu hỏi dựa trên đúng những gì từng nguồn đã bật cung cấp—và nói rõ khi kết nối cần xử lý thay vì tự tạo ra một con số.</p>
       </div>
-      <div class="feature-ledger">
-        <article><span>01</span><h3>Còn bao nhiêu</h3><p>Xem các cửa sổ quota gốc mà provider cung cấp; dữ liệu không có vẫn được ghi là không có.</p></article>
-        <article><span>02</span><h3>Khi nào có lại</h3><p>Dùng thời gian đếm ngược để quyết định chờ, đổi công cụ hay tiếp tục.</p></article>
-        <article><span>03</span><h3>Chi phí local được hỗ trợ</h3><p>Chuyển session log Claude, Codex và Grok thành lịch sử chi phí theo ngày khi có dữ liệu.</p></article>
-        <article><span>04</span><h3>Điểm cần xử lý</h3><p>Đi thẳng tới đúng thiết lập provider, sửa nguồn rồi chạy kiểm tra thật lần nữa.</p></article>
+      <ol class="answer-rows">
+        <li class="answer-row">
+          <div class="answer-copy">
+            <span>01</span>
+            <h3>Còn bao nhiêu?</h3>
+            <p>Mỗi card hiển thị các cửa sổ quota mà provider cung cấp—5 giờ, tuần, tháng, credit hoặc ngân sách. Cửa sổ nào provider không báo thì vẫn được ghi là không có.</p>
+          </div>
+          <figure class="capture-frame">
+            <div class="proof-label"><span>02 / Card quota</span><span>Chờ ảnh chụp</span></div>
+            <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: card quota của provider với phần trăm còn lại theo từng cửa sổ">
+              <p>Đang chờ ảnh chụp native</p>
+              <p>Một card provider · % còn lại của từng cửa sổ quota</p>
+            </div>
+          </figure>
+        </li>
+        <li class="answer-row">
+          <div class="answer-copy">
+            <span>02</span>
+            <h3>Khi nào dùng lại được?</h3>
+            <p>Đếm ngược reset giúp bạn quyết định chờ, đổi công cụ hay tiếp tục. Quota Agenda xếp các lần reset sắp tới của mọi provider, chỉ dùng thời điểm reset mà provider báo.</p>
+          </div>
+          <figure class="capture-frame">
+            <div class="proof-label"><span>03 / Quota Agenda</span><span>Chờ ảnh chụp</span></div>
+            <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: panel Quota Agenda liệt kê các lần reset sắp tới của các provider">
+              <p>Đang chờ ảnh chụp native</p>
+              <p>Panel Quota Agenda · các lần reset sắp tới</p>
+            </div>
+          </figure>
+        </li>
+        <li class="answer-row">
+          <div class="answer-copy">
+            <span>03</span>
+            <h3>Nguồn nào cần xử lý?</h3>
+            <p>Khi phiên đăng nhập hết hạn hoặc key ngừng hoạt động, card sẽ báo rõ. Nhảy thẳng đến cài đặt của provider đó, sửa nguồn rồi chạy lại bước kiểm tra thật.</p>
+          </div>
+          <figure class="capture-frame">
+            <div class="proof-label"><span>04 / Cần xử lý</span><span>Chờ ảnh chụp</span></div>
+            <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: card provider ở trạng thái cần xử lý kèm link sửa">
+              <p>Đang chờ ảnh chụp native</p>
+              <p>Card cần xử lý · kèm link sửa</p>
+            </div>
+          </figure>
+        </li>
+      </ol>
+      <p class="answers-footnote">Trên cả macOS và Linux: chi phí local theo ngày từ session log của Claude, Codex, Grok, Kiro, Oh My Pi và Pi. macOS đọc thêm Devin.</p>
+    </section>
+
+    <section class="install-section" id="install" aria-labelledby="install-title">
+      <div class="install-journey">
+        <p class="eyebrow">THỬ MỘT CÔNG CỤ TRƯỚC</p>
+        <h2 id="install-title">Kết nối một provider.<br>Xem một card reset thật.</h2>
+        <ol class="install-steps">
+          <li><span>01</span><strong>Cài BirdNion</strong><p>Dùng Homebrew trên macOS hoặc gói phát hành trên Linux.</p></li>
+          <li><span>02</span><strong>Chọn một provider</strong><p>Claude, Codex và Grok có luồng First Live được hướng dẫn.</p></li>
+          <li><span>03</span><strong>Xác nhận kết nối</strong><p>BirdNion lưu lựa chọn rồi kiểm tra nguồn thật trước khi gọi trạng thái là Live.</p></li>
+          <li><span>04</span><strong>Xem phần còn lại</strong><p>Một card quota và reset thật—không phải dữ liệu demo—xác nhận kết nối đã hoạt động.</p></li>
+        </ol>
+      </div>
+      <div class="install-panel">
+        <p>macOS 14+ qua Homebrew</p>
+        <div class="command-row">
+          <code id="brew-command">brew install --cask hapo-nghialuu/tap/birdnion</code>
+          <button type="button" data-copy-target="brew-command" data-status-target="install-copy-status" data-copy-label="Sao chép" data-copied-label="Đã sao chép" data-selected-label="Đã chọn" data-copied-status="Đã sao chép lệnh cài đặt." data-selected-status="Không thể truy cập clipboard. Lệnh đã được chọn để bạn sao chép.">Sao chép</button>
+        </div>
+        <p class="copy-status" id="install-copy-status" aria-live="polite"></p>
+        <p class="signing-note"><strong>Trạng thái ký trên macOS:</strong> ứng dụng đang được ký ad-hoc, chưa có Developer ID notarization. Homebrew gỡ quarantine trong lúc cài đặt.</p>
+        <p class="install-fit">Linux x86_64 · giấy phép MIT · không cần đăng ký BirdNion</p>
+        <a class="button button-light" href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Tải cho macOS hoặc Linux <span aria-hidden="true">↗</span></a>
       </div>
     </section>
 
@@ -128,60 +173,62 @@
       <div class="platform-copy">
         <p class="eyebrow">KHÔNG LÀM PHIỀN</p>
         <h2 id="platform-title">Nhìn lên mà không phải rời trình soạn thảo.</h2>
-        <p>Trên macOS, BirdNion nằm ở menu bar. Trên Linux, ứng dụng nằm trong system tray. Mở chi tiết khi cần; để ứng dụng yên lặng khi không cần.</p>
+        <p>Trên macOS, BirdNion nằm ở menu bar; bật hiển thị phần trăm để thấy phần còn lại ngay cạnh icon. Trên Linux, chính icon trong tray hiện phần trăm kèm logo provider và được bật sẵn. Cả hai tự xoay vòng qua các provider, ưu tiên provider đang dùng quota.</p>
         <!-- Safari/VoiceOver cần role list rõ ràng khi marker bị ẩn. -->
         <!-- [html-validate-disable-next no-redundant-role] -->
         <ul class="platform-rows" role="list">
           <li><span>macOS 14+</span><strong>Universal app · menu bar</strong></li>
           <li><span>Linux x86_64</span><strong>DEB · RPM · AppImage</strong></li>
         </ul>
+        <h3 class="platform-limits-title">Giới hạn hiện tại</h3>
+        <!-- [html-validate-disable-next no-redundant-role] -->
+        <ul class="platform-limits" role="list">
+          <li><span>macOS</span>Ký ad-hoc, chưa notarize bằng Developer ID</li>
+          <li><span>Linux</span>Chỉ có gói x86_64</li>
+          <li><span>Linux</span>Không có hotkey toàn cục, không có tooltip khi rê chuột trên panel</li>
+        </ul>
       </div>
-      <figure class="settings-proof">
-        <div class="proof-label"><span>02 / BỀ MẶT ĐIỀU KHIỂN</span><span>Bản minh họa Settings hiện tại</span></div>
-        <img src="../assets/control-surface-redraw.jpg" width="920" height="1200" alt="Bản minh họa Settings BirdNion trên Linux với ngôn ngữ, giao diện, tray, refresh và budget" loading="lazy">
-        <figcaption>Bản minh họa bề mặt điều khiển · dựa trên phần Settings Linux hiện tại.</figcaption>
-      </figure>
+      <div class="platform-captures">
+        <figure class="capture-frame">
+          <div class="proof-label"><span>05 / Menu bar macOS</span><span>Chờ ảnh chụp</span></div>
+          <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: menu bar macOS hiển thị phần trăm còn lại cạnh icon BirdNion">
+            <p>Đang chờ ảnh chụp native</p>
+            <p>Cắt vùng menu bar · phần trăm cạnh icon BirdNion</p>
+          </div>
+        </figure>
+        <figure class="capture-frame">
+          <div class="proof-label"><span>06 / Tray Linux</span><span>Chờ ảnh chụp</span></div>
+          <div class="screen-crop capture-pending" role="img" aria-label="Chưa có ảnh: panel Linux hiển thị phần trăm và logo provider trong icon tray BirdNion">
+            <p>Đang chờ ảnh chụp native</p>
+            <p>Cắt vùng panel Linux · phần trăm và logo provider trong icon tray</p>
+          </div>
+        </figure>
+      </div>
     </section>
 
     <section class="privacy-section" id="privacy" aria-labelledby="privacy-title">
       <div class="privacy-intro">
-        <p class="eyebrow">BẠN CHỌN DỮ LIỆU ĐƯỢC ĐỌC</p>
-        <h2 id="privacy-title">Không cần tài khoản BirdNion.<br>Bạn chọn từng nguồn.</h2>
-        <p>BirdNion không quét mọi thứ trên máy tính. Ứng dụng chỉ đọc nguồn đã được tài liệu hóa mà bạn bật. Nguồn đó vẫn có thể liên hệ trực tiếp với provider tương ứng.</p>
+        <p class="eyebrow">DỮ LIỆU ĐƯỢC ĐỌC</p>
+        <h2 id="privacy-title">Không có backend<br>hay tài khoản BirdNion.</h2>
+        <p>BirdNion đọc các nguồn đã được tài liệu hóa của những provider bạn bật, cùng session log local của các coding agent tìm thấy tại những đường dẫn cài đặt cố định, để tính lịch sử chi phí. Không quét toàn bộ ổ đĩa. Bạn có thể đổi nguồn của từng provider trong Settings, và nguồn đã bật vẫn liên hệ trực tiếp với provider của nó.</p>
       </div>
       <dl class="read-map">
         <div><dt>Mật khẩu</dt><dd>BirdNion không lưu mật khẩu.</dd></div>
-        <div><dt>Phiên đăng nhập có sẵn</dt><dd>OAuth, Keychain và CLI session vẫn thuộc quyền sở hữu của công cụ gốc.</dd></div>
-        <div><dt>Key bạn nhập</dt><dd>Được lưu trong config local của BirdNion với quyền file hạn chế.</dd></div>
-        <div><dt>Cookie trình duyệt</dt><dd>Chỉ được dùng cho nguồn bạn chủ động chọn.</dd></div>
-        <div><dt>Project insights</dt><dd>Chỉ lưu nhãn an toàn và định danh đã hash, không lưu đường dẫn đầy đủ.</dd></div>
+        <div><dt>Phiên đăng nhập có sẵn</dt><dd>Được dùng lại khi có hỗ trợ. OAuth, Keychain và CLI session vẫn thuộc về công cụ gốc.</dd></div>
+        <div><dt>Key bạn nhập</dt><dd>Lưu dạng văn bản thường trong file local của BirdNion, chỉ tài khoản người dùng của bạn đọc được.</dd></div>
+        <div><dt>Cookie trình duyệt</dt><dd>Ở chế độ Tự động (mặc định), provider hỗ trợ cookie chỉ đọc cookie của chính trang đó từ trình duyệt. Có thể chuyển sang Thủ công hoặc Tắt cho từng provider.</dd></div>
+        <div><dt>Project insights</dt><dd>Lưu tên thư mục và mã băm, không bao giờ lưu đường dẫn đầy đủ.</dd></div>
       </dl>
-    </section>
-
-    <section class="install-section" id="install" aria-labelledby="install-title">
-      <div>
-        <p class="eyebrow">THỬ MỘT CÔNG CỤ TRƯỚC</p>
-        <h2 id="install-title">Kết nối một provider.<br>Xem một card reset thật.</h2>
-      </div>
-      <div class="install-panel">
-        <p>macOS 14+ qua Homebrew</p>
-        <div class="command-row">
-          <code id="brew-command">brew install --cask hapo-nghialuu/tap/birdnion</code>
-          <button type="button" data-copy-target="brew-command" data-copy-label="Sao chép" data-copied-label="Đã sao chép" data-selected-label="Đã chọn" data-copied-status="Đã sao chép lệnh cài đặt." data-selected-status="Không thể truy cập clipboard. Lệnh đã được chọn để bạn sao chép.">Sao chép</button>
-        </div>
-        <p class="copy-status" aria-live="polite"></p>
-        <p class="signing-note"><strong>Trạng thái ký trên macOS:</strong> ứng dụng đang được ký ad-hoc, chưa có Developer ID notarization. Homebrew gỡ quarantine trong lúc cài đặt.</p>
-        <p class="install-fit">Linux x86_64 · giấy phép MIT · không cần đăng ký BirdNion</p>
-        <a class="button button-light" href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Tải cho macOS hoặc Linux <span aria-hidden="true">↗</span></a>
-      </div>
     </section>
 
     <section class="faq-section" aria-labelledby="faq-title">
       <h2 id="faq-title">Những điều cần biết trước khi mời chú chim này vào máy</h2>
       <div class="faq-list">
-        <details><summary>BirdNion có quét toàn bộ máy tính không?</summary><p>Không. Ứng dụng chỉ đọc những vị trí đã được tài liệu hóa cho các nguồn bạn bật; không quét filesystem không giới hạn.</p></details>
+        <details><summary>BirdNion có quét toàn bộ máy tính không?</summary><p>Không. Ứng dụng kiểm tra một danh sách đường dẫn cài đặt cố định để tìm coding agent, đọc session log local của các agent đó để tính lịch sử chi phí, và đọc các nguồn đã được tài liệu hóa của những provider bạn bật. Không có bước quét filesystem đệ quy.</p></details>
         <details><summary>Tôi có cần đăng nhập lại không?</summary><p>Tùy provider. BirdNion có thể dùng lại CLI, OAuth hoặc browser session được hỗ trợ; nguồn khác cần key hoặc cấu hình rõ ràng.</p></details>
         <details><summary>Mọi provider có cung cấp cùng một loại dữ liệu không?</summary><p>Không. Mỗi card chỉ phản ánh đúng dữ liệu provider hoặc nguồn local thực sự cung cấp, kể cả trạng thái không có dữ liệu.</p></details>
+        <details><summary>Linux khác macOS ở điểm nào?</summary><p>Trên Linux, icon tray hiện phần trăm ngay từ đầu, còn phần trăm trên menu bar macOS phải tự bật. Linux không có hotkey toàn cục, không có tooltip khi rê chuột trên panel, chỉ có gói x86_64 và không hiển thị usage code review của Codex.</p></details>
+        <details><summary>BirdNion có mất phí không?</summary><p>Không. BirdNion dùng giấy phép MIT và không cần tài khoản BirdNion. Gói dịch vụ và giá API của từng provider vẫn áp dụng như bình thường.</p></details>
         <details><summary>macOS có cảnh báo ở lần chạy đầu không?</summary><p>Bản hiện tại được ký ad-hoc. Homebrew gỡ quarantine khi cài; nếu macOS vẫn chặn, hãy nhấp chuột phải vào ứng dụng rồi chọn <span lang="en">Open</span>.</p></details>
       </div>
     </section>

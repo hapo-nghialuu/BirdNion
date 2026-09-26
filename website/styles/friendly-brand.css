@@ -93,8 +93,8 @@
   box-shadow: 2px 2px 0 var(--sun);
 }
 
-.feature-ledger span,
-.first-live-path li > span {
+.answer-copy > span,
+.install-steps li > span {
   width: 28px;
   height: 28px;
   display: inline-flex;
@@ -104,14 +104,6 @@
   border-radius: 50%;
   background: var(--sun-soft);
   color: var(--ink);
-}
-
-.settings-proof {
-  border-radius: 16px 16px 5px 5px;
-}
-
-.settings-proof img {
-  border-radius: 9px 9px 2px 2px;
 }
 
 .install-fit {
