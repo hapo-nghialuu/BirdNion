@@ -89,6 +89,7 @@
   .install-section h2 { font-size: 42px; }
 
   .answer-row .screen-crop { height: 300px; }
+  .answer-row .screen-crop.replica-stage { min-height: 0; padding: 16px 8px; }
 
   .platform-rows li {
     align-items: flex-start;
@@ -98,6 +99,7 @@
   }
 
   .platform-captures .screen-crop { height: 180px; }
+  .capture-frame > img { max-height: 560px; }
 
   .read-map div {
     min-height: 112px;

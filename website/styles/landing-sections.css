@@ -87,6 +87,30 @@
 
 .answer-row .screen-crop { height: 360px; }
 
+/* A frame holding an app-UI replica grows to fit it instead of cropping. */
+.answer-row .screen-crop.replica-stage {
+  height: auto;
+  min-height: 360px;
+  padding: 28px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.replica-stage > .app-replica {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+
+/* Grid and flex items default to min-width: auto, so the app's fixed 420px
+   popover would widen the whole row on phones; let it shrink to the frame. */
+.answer-row > *,
+.replica-stage .container { min-width: 0; }
+
+.replica-stage .panel-root { max-width: 100%; }
+
 .answers-footnote {
   margin-top: 28px;
   color: var(--ink-soft);
@@ -174,6 +198,21 @@
   grid-column: 3;
   display: grid;
   gap: 24px;
+}
+
+.capture-frame > img {
+  width: 100%;
+  max-height: 700px;
+  display: block;
+  object-fit: cover;
+  object-position: top center;
+  border-radius: 9px 9px 2px 2px;
+}
+
+/* The frame is ink-dark, so its caption needs the light text colour. */
+.capture-frame figcaption {
+  padding: 11px 7px 5px;
+  color: #c7c3b8;
 }
 
 /* Menu bar and tray captures are wide strips, not tall windows. */
