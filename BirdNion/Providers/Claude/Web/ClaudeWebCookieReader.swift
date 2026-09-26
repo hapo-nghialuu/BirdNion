@@ -39,7 +39,13 @@ enum ClaudeWebCookieReader {
     /// can fall through to a manual-cookie path without interrupting the main flow.
     ///
     /// - Parameter allowAuto: When false, skips browser detection entirely and returns nil.
-    static func sessionKeyInfo(allowAuto: Bool) throws -> SessionKeyInfo? {
+    /// - Parameter permissionDenied: when non-nil, set to `true` when the sweep
+    ///   was blocked (Full Disk Access / Keychain denial / macOS app-data
+    ///   protection EPERM) rather than "no session found anywhere".
+    static func sessionKeyInfo(
+        allowAuto: Bool,
+        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+    ) throws -> SessionKeyInfo? {
         guard allowAuto else { return nil }
 
         // Check cooldown — skip browser reads while in the suppression window.
@@ -51,7 +57,7 @@ enum ClaudeWebCookieReader {
         // concurrently, and QuotaService fans provider fetches out in parallel.
         BrowserCookieSerialGate.lock.lock()
         defer { BrowserCookieSerialGate.lock.unlock() }
-        return try extractFromBrowsers()
+        return try extractFromBrowsers(permissionDenied: permissionDenied)
     }
 
     /// Parse a user-pasted Cookie header string for a sessionKey.
@@ -69,7 +75,9 @@ enum ClaudeWebCookieReader {
 
     // MARK: - Private helpers
 
-    private static func extractFromBrowsers() throws -> SessionKeyInfo? {
+    private static func extractFromBrowsers(
+        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+    ) throws -> SessionKeyInfo? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: ["claude.ai"])
         var sawAccessDenied = false
@@ -87,7 +95,10 @@ enum ClaudeWebCookieReader {
                 return info
             }
         }
-        if sawAccessDenied { recordCooldown() }
+        if sawAccessDenied {
+            recordCooldown()
+            permissionDenied?.pointee = true
+        }
         return nil
     }
 
@@ -121,10 +132,20 @@ enum ClaudeWebCookieReader {
                 }
             }
         } catch let error as BrowserCookieError {
-            // Flag access-denied for the caller's cooldown decision.
-            if case .accessDenied = error { sawAccessDenied = true }
+            // Flag access-denied for the caller's cooldown decision — including
+            // a `notFound`/`loadFailed` that macOS app-data protection caused
+            // (enumeration EPERM maps to notFound inside SweetCookieKit).
+            if case .accessDenied = error {
+                sawAccessDenied = true
+            } else if ProviderCookieReader.browserDataAccessBlocked(browser) {
+                sawAccessDenied = true
+            }
         } catch {
-            // notFound / loadFailed — browser not installed or store unreadable, skip silently.
+            // notFound / loadFailed — browser not installed or store unreadable,
+            // unless macOS app-data protection is what made it unreadable.
+            if ProviderCookieReader.browserDataAccessBlocked(browser) {
+                sawAccessDenied = true
+            }
         }
         return nil
     }

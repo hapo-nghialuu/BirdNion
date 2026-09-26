@@ -35,13 +35,18 @@ final class CursorProvider: QuotaProvider {
 
     func fetch() async throws -> ProviderStatus {
         // Attempt SQLite auth first; fall back to browser cookies.
+        var browserDenied = false
         let cookieHeader: String
         if let dbCookie = Self.cookieHeaderFromDB() {
             cookieHeader = dbCookie
-        } else if let browserCookie = ProviderCookieReader.resolvedCookieHeader(providerID: id, domain: "cursor.com") {
+        } else if let browserCookie = ProviderCookieReader.resolvedCookieHeader(
+                      providerID: id, domain: "cursor.com",
+                      permissionDenied: &browserDenied) {
             cookieHeader = browserCookie
         } else {
-            return failure("Chưa đăng nhập Cursor (mở app Cursor hoặc đăng nhập cursor.com)")
+            return failure(browserDenied
+                ? ProviderCookieReader.browserDataDeniedMessage
+                : "Chưa đăng nhập Cursor (mở app Cursor hoặc đăng nhập cursor.com)")
         }
         return try await fetchStatus(cookieHeader: cookieHeader)
     }

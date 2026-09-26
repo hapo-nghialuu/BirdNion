@@ -79,16 +79,20 @@ final class OpenCodeGoProvider: QuotaProvider {
 
         // Name the session cookie so a browser whose login has expired loses to
         // one that is still signed in — a stale analytics cookie must not win.
+        var browserDenied = false
         guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(
                   providerID: id,
                   domain: Self.cookieDomain,
-                  matchingSession: { Self.allowedCookieNames.contains($0) }),
+                  matchingSession: { Self.allowedCookieNames.contains($0) },
+                  permissionDenied: &browserDenied),
               !rawHeader.isEmpty
         else {
             // With a key configured its rejection is the actionable message;
             // "not signed in to the browser" would send the user to the wrong
-            // place entirely.
-            return failure(apiKeyError ?? "Chưa đăng nhập OpenCode Go trên trình duyệt")
+            // place entirely — unless the browser read itself was blocked.
+            return failure(browserDenied
+                ? ProviderCookieReader.browserDataDeniedMessage
+                : (apiKeyError ?? "Chưa đăng nhập OpenCode Go trên trình duyệt"))
         }
 
         guard let cookieHeader = Self.filteredCookieHeader(from: rawHeader) else {

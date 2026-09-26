@@ -36,6 +36,7 @@ enum ClaudeWebAPIFetcher {
 
     enum FetchError: LocalizedError, Sendable {
         case noSessionKeyFound
+        case browserDataDenied
         case notSupportedOnThisPlatform
         case invalidResponse
         case unauthorized
@@ -46,6 +47,8 @@ enum ClaudeWebAPIFetcher {
             switch self {
             case .noSessionKeyFound:
                 "Không tìm thấy session cookie claude.ai trong trình duyệt."
+            case .browserDataDenied:
+                ProviderCookieReader.browserDataDeniedMessage
             case .notSupportedOnThisPlatform:
                 "Chỉ hỗ trợ macOS."
             case .invalidResponse:
@@ -67,8 +70,10 @@ enum ClaudeWebAPIFetcher {
         #if !os(macOS)
         throw FetchError.notSupportedOnThisPlatform
         #else
-        guard let info = try ClaudeWebCookieReader.sessionKeyInfo(allowAuto: true) else {
-            throw FetchError.noSessionKeyFound
+        var denied = false
+        guard let info = try ClaudeWebCookieReader.sessionKeyInfo(
+                  allowAuto: true, permissionDenied: &denied) else {
+            throw denied ? FetchError.browserDataDenied : FetchError.noSessionKeyFound
         }
         return try await fetchUsage(sessionKeyInfo: info, session: session)
         #endif

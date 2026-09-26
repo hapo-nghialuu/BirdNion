@@ -6,6 +6,29 @@ import XCTest
 final class ProviderErrorClassifierTests: XCTestCase {
     // MARK: - One assertion per kind
 
+    func testBrowserDataDenied() {
+        // macOS app-data protection (macOS 27+): EPERM on the browser data dir
+        // must NOT degrade to "not configured" — the fix is a Privacy &
+        // Security grant (or Manual cookie), not re-login.
+        XCTAssertEqual(
+            classify(rawError: "Thiếu quyền đọc dữ liệu trình duyệt — cấp cho app trong Privacy & Security → Files & Folders (hoặc Full Disk Access) rồi thử lại"),
+            .browserDataDenied)
+        XCTAssertEqual(
+            classify(rawError: "No permission to read browser data"),
+            .browserDataDenied)
+    }
+
+    func testPermissionBeatsCookieAndNotConfigured() {
+        // A denied message that also carries cookie/not-logged-in words still
+        // classifies as the permission kind — re-login cannot fix EPERM.
+        XCTAssertEqual(
+            classify(rawError: "Thiếu quyền đọc dữ liệu trình duyệt (session cookie)"),
+            .browserDataDenied)
+        XCTAssertEqual(
+            classify(rawError: "Full disk access required; chưa đăng nhập"),
+            .browserDataDenied)
+    }
+
     func testCookieMarker() {
         XCTAssertEqual(classify(rawError: "Không tìm thấy cookie trình duyệt"), .cookieExpiredOrMissing)
         XCTAssertEqual(classify(rawError: "sessionKey missing"), .cookieExpiredOrMissing)
@@ -102,7 +125,8 @@ final class ProviderErrorClassifierTests: XCTestCase {
     func testKindKeys() {
         XCTAssertEqual(ProviderErrorKind.rateLimited.titleKey, "providerError.rateLimited.title")
         XCTAssertEqual(ProviderErrorKind.cookieExpiredOrMissing.hintKey, "providerError.cookieExpiredOrMissing.hint")
-        XCTAssertEqual(ProviderErrorKind.allCases.count, 7)
+        XCTAssertEqual(ProviderErrorKind.browserDataDenied.titleKey, "providerError.browserDataDenied.title")
+        XCTAssertEqual(ProviderErrorKind.allCases.count, 8)
     }
 
     // MARK: - Fix-button eligibility (R4 — Error UX)
@@ -111,6 +135,7 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertTrue(ProviderErrorKind.notConfigured.isFixable)
         XCTAssertTrue(ProviderErrorKind.tokenInvalidOrMissing.isFixable)
         XCTAssertTrue(ProviderErrorKind.cookieExpiredOrMissing.isFixable)
+        XCTAssertTrue(ProviderErrorKind.browserDataDenied.isFixable)
         XCTAssertFalse(ProviderErrorKind.rateLimited.isFixable)
         XCTAssertFalse(ProviderErrorKind.networkUnreachableOrTimeout.isFixable)
         XCTAssertFalse(ProviderErrorKind.apiSchemaChanged.isFixable)
@@ -123,6 +148,9 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertEqual(remediationTarget(providerID: "grok", kind: .cookieExpiredOrMissing), .setupSource)
         XCTAssertEqual(remediationTarget(providerID: "claude", kind: .cookieExpiredOrMissing), .cookieSource)
         XCTAssertEqual(remediationTarget(providerID: "codex", kind: .cookieExpiredOrMissing), .cookieSource)
+        // Permission failures point at the cookie-source controls — Manual is
+        // the only in-app workaround while the OS grant is missing.
+        XCTAssertEqual(remediationTarget(providerID: "commandcode", kind: .browserDataDenied), .cookieSource)
         XCTAssertEqual(remediationTarget(providerID: "openrouter", kind: .tokenInvalidOrMissing), .credential)
 
         for kind in [ProviderErrorKind.networkUnreachableOrTimeout, .rateLimited,

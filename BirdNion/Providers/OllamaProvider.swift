@@ -24,6 +24,7 @@ final class OllamaProvider: QuotaProvider {
     func fetch() async throws -> ProviderStatus {
         let override = BirdNionConfigStore.accountLabel(provider: id)
         var lastError: Error?
+        var browserDenied = false
 
         // 1) Cookie / web settings scrape
         let cookieMode = UserDefaults.standard.string(forKey: "\(id)CookieSource") ?? "auto"
@@ -37,7 +38,8 @@ final class OllamaProvider: QuotaProvider {
                     if let manual, !manual.isEmpty { return manual }
                     return ProviderCookieReader.resolvedCookieHeader(
                         providerID: id,
-                        domain: "ollama.com")
+                        domain: "ollama.com",
+                        permissionDenied: &browserDenied)
                 }()
 
                 let fetcher = OllamaUsageFetcher(browserDetection: BrowserDetection())
@@ -60,7 +62,9 @@ final class OllamaProvider: QuotaProvider {
             }
         }
 
-        return failure(Self.friendly(lastError))
+        return failure(browserDenied
+            ? ProviderCookieReader.browserDataDeniedMessage
+            : Self.friendly(lastError))
     }
 
     static func resolveToken(

@@ -68,13 +68,17 @@ final class CommandCodeProvider: QuotaProvider {
         // Name the session cookie so a browser whose login has EXPIRED loses to
         // one that is still signed in. Without it any store holding a stray
         // `_ga`/`__stripe_mid` won on rank alone.
+        var browserDenied = false
         guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(
                   providerID: id,
                   domain: Self.cookieDomain,
-                  matchingSession: Self.isSessionCookieName),
+                  matchingSession: Self.isSessionCookieName,
+                  permissionDenied: &browserDenied),
               !rawHeader.isEmpty
         else {
-            return failure("Chưa đăng nhập CommandCode trên trình duyệt")
+            return failure(browserDenied
+                ? ProviderCookieReader.browserDataDeniedMessage
+                : "Chưa đăng nhập CommandCode trên trình duyệt")
         }
 
         guard let cookieHeader = Self.filteredCookieHeader(from: rawHeader) else {

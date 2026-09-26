@@ -170,6 +170,7 @@ enum L10n {
         ("không nhận được authorization code.", "no authorization code received."),
         ("Không lấy được port từ listener", "Could not read the listener port"),
         ("chạy `claude` để đăng nhập lại.", "run `claude` to sign in again."),
+        ("Thiếu quyền đọc dữ liệu trình duyệt", "No permission to read browser data"),
         ("phản hồi không hợp lệ.", "invalid response."),
         ("Token Claude hết hạn — đăng nhập lại bằng Claude Code", "The Claude token expired — sign in again with Claude Code"),
         ("Chưa cài Claude CLI — cài từ https://code.claude.com/docs", "Claude CLI is not installed — get it at https://code.claude.com/docs"),
@@ -500,6 +501,8 @@ enum L10n {
         "about.updateNow": "Cập nhật ngay",
         "about.checkFailed": "Không kiểm tra được cập nhật.",
         "about.buildDate": "Build %@",
+        "providerError.browserDataDenied.title": "Thiếu quyền",
+        "providerError.browserDataDenied.hint": "macOS chặn đọc dữ liệu trình duyệt — bật cho BirdNion trong Privacy & Security → Files & Folders (hoặc Full Disk Access), hoặc đổi Cookie source sang Manual",
         "providerError.cookieExpiredOrMissing.title": "Cookie hết hạn",
         "providerError.cookieExpiredOrMissing.hint": "Cookie hết hạn — đăng nhập lại trình duyệt",
         "providerError.notConfigured.title": "Chưa cấu hình",
@@ -518,6 +521,7 @@ enum L10n {
         // Cause line for the stale banner: states only WHY the refresh failed.
         // The error card's `providerError.*.hint` strings are instructions and
         // must not be reused here — the provider still has valid data on screen.
+        "staleQuota.cause.browserDataDenied": "macOS đang chặn đọc dữ liệu trình duyệt",
         "staleQuota.cause.cookieExpiredOrMissing": "Phiên trình duyệt đã hết hạn",
         "staleQuota.cause.notConfigured": "Không làm mới được trong nền",
         "staleQuota.cause.tokenInvalidOrMissing": "Token bị từ chối",
@@ -1159,6 +1163,8 @@ enum L10n {
         "about.updateNow": "Update now",
         "about.checkFailed": "Could not check for updates.",
         "about.buildDate": "Built %@",
+        "providerError.browserDataDenied.title": "Permission required",
+        "providerError.browserDataDenied.hint": "macOS is blocking browser data — enable BirdNion in Privacy & Security → Files & Folders (or Full Disk Access), or switch Cookie source to Manual",
         "providerError.cookieExpiredOrMissing.title": "Cookie expired",
         "providerError.cookieExpiredOrMissing.hint": "Cookie expired — sign in again in your browser",
         "providerError.notConfigured.title": "Not configured",
@@ -1174,6 +1180,7 @@ enum L10n {
         "providerError.unknown.title": "Unknown error",
         "providerError.unknown.hint": "Unknown error — see details",
         "staleQuota.notice": "Quota data may be outdated",
+        "staleQuota.cause.browserDataDenied": "macOS is blocking browser data access",
         "staleQuota.cause.cookieExpiredOrMissing": "Browser session expired",
         "staleQuota.cause.notConfigured": "Couldn't refresh in the background",
         "staleQuota.cause.tokenInvalidOrMissing": "Token was rejected",
