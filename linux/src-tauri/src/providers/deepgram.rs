@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const BASE: &str = "https://api.deepgram.com/v1";
 
@@ -171,7 +171,12 @@ fn materialize(
     plan_name: &str,
 ) -> ProviderStatus {
     let mut windows = vec![QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(agg.requests as f64),
+            remaining: None,
+            limit: None,
+            unit: "requests".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: "Requests (30d)".into(),

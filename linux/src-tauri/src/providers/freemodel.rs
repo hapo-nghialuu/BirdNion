@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::providers::browser_cookies;
-use crate::providers::{display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const USAGE_URL: &str = "https://freemodel.dev/api/usage";
 const ME_URL: &str = "https://freemodel.dev/api/auth/me";
@@ -199,7 +199,6 @@ fn persisted_balance_window(now: i64) -> Option<QuotaWindow> {
 
 fn stale_balance_window(window: QuotaWindow) -> QuotaWindow {
     QuotaWindow {
-        allowance: None,
         subtitle: Some(match window.subtitle {
             Some(subtitle) => format!("{subtitle} · số cũ"),
             None => "số cũ".to_string(),
@@ -253,7 +252,12 @@ fn balance_window(referral: Option<&Value>, billing: Option<&Value>) -> Option<Q
         subtitle += &format!(" · {count} giới thiệu");
     }
     Some(QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(used),
+            remaining: Some(remaining),
+            limit: Some(total),
+            unit: "usd".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: "Số dư".to_string(),
@@ -393,7 +397,12 @@ fn cents_window(label: &str, window: &Value) -> Result<QuotaWindow, String> {
         _ => None,
     };
     Ok(QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(used_usd),
+            remaining: Some((limit_usd - used_usd).max(0.0)),
+            limit: Some(limit_usd),
+            unit: "usd".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),

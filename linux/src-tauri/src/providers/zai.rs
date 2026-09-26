@@ -10,7 +10,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 fn endpoint(region: &str) -> String {
     let host = if region == "cn" {
@@ -130,6 +130,32 @@ fn computed_used_percent(entry: &Value) -> f64 {
     ((used as f64 / limit as f64) * 100.0).clamp(0.0, 100.0)
 }
 
+/// Native token counts for TOKENS_LIMIT entries carrying the `usage` limit
+/// field; TIME_LIMIT and percent-only payloads stay nil.
+fn token_allowance(entry: &Value, kind: &str) -> Option<QuotaAllowance> {
+    if kind != "TOKENS_LIMIT" {
+        return None;
+    }
+    let limit = entry
+        .get("usage")
+        .and_then(Value::as_i64)
+        .filter(|l| *l > 0)?;
+    let remaining = entry.get("remaining").and_then(Value::as_i64);
+    let current_value = entry.get("current_value").and_then(Value::as_i64);
+    let used_raw = match (remaining, current_value) {
+        (Some(r), Some(c)) => Some((limit - r).max(c)),
+        (Some(r), None) => Some(limit - r),
+        (None, Some(c)) => Some(c),
+        (None, None) => None,
+    };
+    Some(QuotaAllowance {
+        used: used_raw.map(|u| u.clamp(0, limit) as f64),
+        remaining: remaining.map(|r| r as f64),
+        limit: Some(limit as f64),
+        unit: "tokens".to_string(),
+    })
+}
+
 /// Pure payload → status mapping (unit-tested).
 pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> ProviderStatus {
     let success = body
@@ -184,7 +210,7 @@ pub fn parse_quota(id: &str, name: &str, account_label: &str, body: &Value) -> P
                 .and_then(Value::as_i64)
                 .map(|ms| ms / 1000);
             QuotaWindow {
-                allowance: None,
+                allowance: token_allowance(e, kind),
                 semantic_key: None,
                 semantic_kind: None,
                 label: label(kind, unit, number, is_primary),

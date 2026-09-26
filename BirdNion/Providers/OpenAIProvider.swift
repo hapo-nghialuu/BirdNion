@@ -94,7 +94,9 @@ final class OpenAIProvider: QuotaProvider {
                 remainingPct: 100,
                 subtitle: String(format: "$%.2f · %@ tokens",
                                  summary.costUSD,
-                                 formatTokens(summary.totalTokens)))
+                                 formatTokens(summary.totalTokens)),
+                allowance: QuotaAllowance(
+                    used: summary.costUSD, remaining: nil, limit: nil, unit: .usd))
         }
 
         let windows = [
@@ -142,7 +144,12 @@ final class OpenAIProvider: QuotaProvider {
             usedPct: usedPct,
             remainingPct: 100 - usedPct,
             subtitle: String(format: "$%.2f available / $%.2f granted", available, granted),
-            resetDate: balance.nextGrantExpiry)
+            resetDate: balance.nextGrantExpiry,
+            allowance: QuotaAllowance(
+                used: granted > 0 ? used : nil,
+                remaining: available,
+                limit: granted > 0 ? granted : nil,
+                unit: .usd))
 
         return ProviderStatus(
             id: "openai",

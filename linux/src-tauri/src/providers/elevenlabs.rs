@@ -146,7 +146,12 @@ pub fn parse_subscription(
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
         windows.push(QuotaWindow {
-            allowance: None,
+            allowance: Some(QuotaAllowance {
+                used: Some(u as f64),
+                remaining: Some((lim - u) as f64),
+                limit: Some(lim as f64),
+                unit: "count".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Voice slots".into(),
@@ -166,7 +171,12 @@ pub fn parse_subscription(
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
         windows.push(QuotaWindow {
-            allowance: None,
+            allowance: Some(QuotaAllowance {
+                used: Some(u as f64),
+                remaining: Some((lim - u) as f64),
+                limit: Some(lim as f64),
+                unit: "count".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Professional voices".into(),

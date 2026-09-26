@@ -755,7 +755,9 @@ final class BedrockProvider: QuotaProvider {
                     remainingPct: remainingPct,
                     subtitle: spendStr,
                     resetDate: resetsAt,
-                    windowSeconds: resetsAt.map { Int($0.timeIntervalSince(now)) }
+                    windowSeconds: resetsAt.map { Int($0.timeIntervalSince(now)) },
+                    allowance: QuotaAllowance(
+                        used: spend, remaining: max(0, b - spend), limit: b, unit: .usd)
                 ))
             } else {
                 // No budget configured — informational window
@@ -765,7 +767,9 @@ final class BedrockProvider: QuotaProvider {
                     usedPct: 0,
                     remainingPct: 100,
                     subtitle: spendStr,
-                    resetDate: resetsAt
+                    resetDate: resetsAt,
+                    allowance: QuotaAllowance(
+                        used: spend, remaining: nil, limit: nil, unit: .usd)
                 ))
             }
         }
@@ -779,7 +783,9 @@ final class BedrockProvider: QuotaProvider {
                 label: "14 ngày (\(region))",
                 usedPct: 0,  // Pay-per-token: no ceiling
                 remainingPct: 100,
-                subtitle: "\(tokenLabel) tokens · \(subtitle)"
+                subtitle: "\(tokenLabel) tokens · \(subtitle)",
+                allowance: QuotaAllowance(
+                    used: Double(totalTokens), remaining: nil, limit: nil, unit: .tokens)
             ))
         }
 

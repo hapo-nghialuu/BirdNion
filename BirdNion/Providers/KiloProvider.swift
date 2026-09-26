@@ -214,7 +214,10 @@ final class KiloProvider: QuotaProvider {
                 label: "Credits",
                 usedPct: usedPct,
                 remainingPct: remPct,
-                subtitle: subtitle))
+                subtitle: subtitle,
+                allowance: QuotaAllowance(
+                    used: used, remaining: max(0, total - used),
+                    limit: total, unit: .usd)))
         } else if creditSnap.total == 0 {
             // Explicit exhausted state: zero balance account
             windows.append(QuotaWindow(
@@ -242,7 +245,10 @@ final class KiloProvider: QuotaProvider {
                 usedPct: usedPct,
                 remainingPct: remPct,
                 subtitle: subtitle,
-                resetDate: passSnap.resetsAt))
+                resetDate: passSnap.resetsAt,
+                allowance: QuotaAllowance(
+                    used: passUsed, remaining: max(0, baseCredits - passUsed),
+                    limit: baseCredits, unit: .usd)))
         }
 
         // creditsRemaining from credits block (USD)

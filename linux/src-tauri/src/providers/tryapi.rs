@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const ENDPOINT: &str = "https://tryapi.tryai.chat/v1/usage";
 
@@ -67,7 +67,12 @@ pub fn parse(id: &str, name: &str, account_label: &str, body: &Value) -> Provide
     };
 
     let mut windows = vec![QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(used),
+            remaining: Some(remaining),
+            limit: Some(total),
+            unit: "usd".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: "Số dư".into(),
@@ -92,7 +97,12 @@ pub fn parse(id: &str, name: &str, account_label: &str, body: &Value) -> Provide
                 format!("${today_cost:.2}")
             };
             windows.push(QuotaWindow {
-                allowance: None,
+                allowance: Some(QuotaAllowance {
+                    used: Some(today_cost),
+                    remaining: None,
+                    limit: None,
+                    unit: "usd".to_string(),
+                }),
                 semantic_key: None,
                 semantic_kind: None,
                 label: "Hôm nay".into(),
@@ -160,7 +170,12 @@ fn subscription_window(label: &str, used: Option<f64>, limit: Option<f64>) -> Op
     let spent = used.unwrap_or(0.0).max(0.0);
     let used_pct = ((spent / limit) * 100.0).round().clamp(0.0, 100.0) as i32;
     Some(QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(spent),
+            remaining: Some((limit - spent).max(0.0)),
+            limit: Some(limit),
+            unit: "usd".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: label.into(),

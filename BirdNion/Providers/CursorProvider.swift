@@ -240,7 +240,12 @@ final class CursorProvider: QuotaProvider {
             remainingPct: max(0, 100 - planPct),
             subtitle: planSubtitle,
             resetDate: cycleEnd,
-            windowSeconds: windowSecs)
+            windowSeconds: windowSecs,
+            allowance: QuotaAllowance(
+                used: planUsedUSD,
+                remaining: planLimitUSD > 0 ? max(0, planLimitUSD - planUsedUSD) : nil,
+                limit: planLimitUSD > 0 ? planLimitUSD : nil,
+                unit: .usd))
 
         // --- On-demand ---
         // Prefer personal cap; fall back to team shared pool.
@@ -309,7 +314,12 @@ final class CursorProvider: QuotaProvider {
                 remainingPct: max(0, 100 - odPct),
                 subtitle: odSubtitle,
                 resetDate: cycleEnd,
-                windowSeconds: windowSecs)
+                windowSeconds: windowSecs,
+                allowance: QuotaAllowance(
+                    used: resolvedODUsed,
+                    remaining: resolvedODLimit.map { max(0, $0 - resolvedODUsed) },
+                    limit: resolvedODLimit,
+                    unit: .usd))
             windows.append(odWindow)
         }
 
@@ -325,7 +335,12 @@ final class CursorProvider: QuotaProvider {
                 remainingPct: max(0, 100 - reqPct),
                 subtitle: "\(usedReq) / \(maxReq) requests",
                 resetDate: cycleEnd,
-                windowSeconds: windowSecs)
+                windowSeconds: windowSecs,
+                allowance: QuotaAllowance(
+                    used: Double(usedReq),
+                    remaining: Double(max(0, maxReq - usedReq)),
+                    limit: Double(maxReq),
+                    unit: .requests))
             windows.append(reqWindow)
         }
 

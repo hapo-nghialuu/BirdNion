@@ -104,7 +104,8 @@ final class ZaiProvider: QuotaProvider {
                 usedPct: clampedUsed,
                 remainingPct: 100 - clampedUsed,
                 resetDate: resetDate,
-                windowSeconds: windowSecs)
+                windowSeconds: windowSecs,
+                allowance: Self.allowance(for: e))
         }
         return ProviderStatus(
             id: id,
@@ -191,6 +192,21 @@ final class ZaiProvider: QuotaProvider {
         }
         let used = max(0, min(limit, usedRaw))
         return min(100, max(0, (Double(used) / Double(limit)) * 100))
+    }
+
+    /// Native token counts for TOKENS_LIMIT entries when the payload carries
+    /// the limit field (`usage`). TIME_LIMIT entries and percent-only payloads
+    /// stay nil — the unit of their raw values isn't exposed.
+    private static func allowance(for e: LimitRaw) -> QuotaAllowance? {
+        guard e.type == "TOKENS_LIMIT", let limit = e.usage, limit > 0 else { return nil }
+        let usedRaw: Int? = e.remaining.map { limit - $0 }.flatMap { fromRem in
+            e.currentValue.map { max(fromRem, $0) } ?? fromRem
+        } ?? e.currentValue
+        return QuotaAllowance(
+            used: usedRaw.map { Double(max(0, min(limit, $0))) },
+            remaining: e.remaining.map(Double.init),
+            limit: Double(limit),
+            unit: .tokens)
     }
 
     private func failure(_ message: String) -> ProviderStatus {

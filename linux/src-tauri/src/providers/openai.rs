@@ -7,7 +7,7 @@ use chrono::{Duration, Utc};
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const COSTS_URL: &str = "https://api.openai.com/v1/organization/costs";
 const COMPLETIONS_URL: &str = "https://api.openai.com/v1/organization/usage/completions";
@@ -183,7 +183,12 @@ pub fn parse_admin_status(
 
 fn spend_window(label: &str, usd: f64) -> QuotaWindow {
     QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(usd),
+            remaining: None,
+            limit: None,
+            unit: "usd".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: label.into(),
@@ -225,7 +230,12 @@ pub fn parse_credits(id: &str, name: &str, body: &Value) -> ProviderStatus {
         id: id.into(),
         display_name: name.into(),
         windows: vec![QuotaWindow {
-            allowance: None,
+            allowance: Some(QuotaAllowance {
+                used: if granted > 0.0 { Some(used) } else { None },
+                remaining: Some(available),
+                limit: if granted > 0.0 { Some(granted) } else { None },
+                unit: "usd".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Credits".into(),

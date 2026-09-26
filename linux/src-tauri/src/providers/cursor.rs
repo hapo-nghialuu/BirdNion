@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::providers::browser_cookies;
-use crate::providers::{display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const USAGE_SUMMARY_URL: &str = "https://cursor.com/api/usage-summary";
 const AUTH_ME_URL: &str = "https://cursor.com/api/auth/me";
@@ -301,7 +301,12 @@ fn parse_status(
                 (Some(u), Some(l)) if l > 0.0 => (u / l * 100.0).clamp(0.0, 100.0),
                 _ => 0.0,
             });
-        windows.push(pct_window(label, pct, subtitle_used_limit(p.used, p.limit)));
+        windows.push(pct_window(
+            label,
+            pct,
+            subtitle_used_limit(p.used, p.limit),
+            usd_allowance(p.used, p.limit),
+        ));
     } else if let Some(o) = &overall {
         let pct = match (o.used, o.limit) {
             (Some(u), Some(l)) if l > 0.0 => (u / l * 100.0).clamp(0.0, 100.0),
@@ -311,6 +316,7 @@ fn parse_status(
             "Plan",
             pct,
             subtitle_used_limit(o.used, o.limit),
+            usd_allowance(o.used, o.limit),
         ));
     } else if let Some(pool) = &pooled {
         let pct = match (pool.used, pool.limit) {
@@ -321,15 +327,16 @@ fn parse_status(
             "Plan",
             pct,
             subtitle_used_limit(pool.used, pool.limit),
+            usd_allowance(pool.used, pool.limit),
         ));
     }
 
     if let Some(p) = &plan {
         if let Some(auto) = p.auto_percent_used {
-            windows.push(pct_window("Auto", auto, None));
+            windows.push(pct_window("Auto", auto, None, None));
         }
         if let Some(api) = p.api_percent_used {
-            windows.push(pct_window("API", api, None));
+            windows.push(pct_window("API", api, None, None));
         }
     }
 
@@ -357,6 +364,7 @@ fn parse_status(
                 "On-demand",
                 pct,
                 subtitle_used_limit(Some(used), Some(limit)),
+                usd_allowance(Some(used), Some(limit)),
             ));
         }
     }
@@ -372,6 +380,12 @@ fn parse_status(
                         "Yêu cầu",
                         pct,
                         Some(format!("{used:.0} / {max_req:.0} requests")),
+                        Some(QuotaAllowance {
+                            used: Some(used),
+                            remaining: Some((max_req - used).max(0.0)),
+                            limit: Some(max_req),
+                            unit: "requests".to_string(),
+                        }),
                     ));
                 }
             }
@@ -389,10 +403,15 @@ fn parse_status(
     })
 }
 
-fn pct_window(label: &str, pct: f64, subtitle: Option<String>) -> QuotaWindow {
+fn pct_window(
+    label: &str,
+    pct: f64,
+    subtitle: Option<String>,
+    allowance: Option<QuotaAllowance>,
+) -> QuotaWindow {
     let used = pct.round().clamp(0.0, 100.0) as i32;
     QuotaWindow {
-        allowance: None,
+        allowance,
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -402,6 +421,17 @@ fn pct_window(label: &str, pct: f64, subtitle: Option<String>) -> QuotaWindow {
         resets_at: None,
         window_seconds: None,
     }
+}
+
+fn usd_allowance(used: Option<f64>, limit: Option<f64>) -> Option<QuotaAllowance> {
+    let used = used?;
+    let limit = limit.filter(|l| *l > 0.0);
+    Some(QuotaAllowance {
+        used: Some(used),
+        remaining: limit.map(|l| (l - used).max(0.0)),
+        limit,
+        unit: "usd".to_string(),
+    })
 }
 
 fn subtitle_used_limit(used: Option<f64>, limit: Option<f64>) -> Option<String> {

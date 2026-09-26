@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
 const KEY_URL: &str = "https://openrouter.ai/api/v1/key";
@@ -77,7 +77,12 @@ pub fn parse_credits(
         id: id.to_string(),
         display_name: name.to_string(),
         windows: vec![QuotaWindow {
-            allowance: None,
+            allowance: Some(QuotaAllowance {
+                used: Some(usage),
+                remaining: Some(remaining),
+                limit: Some(total),
+                unit: "usd".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Credits".into(),
@@ -123,7 +128,12 @@ pub fn parse_key_window(body: &Value) -> Option<QuotaWindow> {
     let usage = data.get("usage").and_then(Value::as_f64).unwrap_or(0.0);
     let used_pct = ((usage / limit) * 100.0).round().clamp(0.0, 100.0) as i32;
     Some(QuotaWindow {
-        allowance: None,
+        allowance: Some(QuotaAllowance {
+            used: Some(usage),
+            remaining: Some((limit - usage).max(0.0)),
+            limit: Some(limit),
+            unit: "usd".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: "Hạn mức key".into(),

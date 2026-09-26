@@ -286,12 +286,18 @@ final class ElevenLabsProvider: QuotaProvider {
         if let u = r.voiceSlotsUsed, let lim = r.voiceLimit, lim > 0 {
             let p = max(0, min(100, Int((Double(u) / Double(lim) * 100).rounded())))
             windows.append(QuotaWindow(label: "Voice slots", usedPct: p, remainingPct: 100 - p,
-                                       subtitle: "\(u) / \(lim)"))
+                                       subtitle: "\(u) / \(lim)",
+                                       allowance: QuotaAllowance(
+                                           used: Double(u), remaining: Double(lim - u),
+                                           limit: Double(lim), unit: .count)))
         }
         if let u = r.professionalVoiceSlotsUsed, let lim = r.professionalVoiceLimit, lim > 0 {
             let p = max(0, min(100, Int((Double(u) / Double(lim) * 100).rounded())))
             windows.append(QuotaWindow(label: "Professional voices", usedPct: p, remainingPct: 100 - p,
-                                       subtitle: "\(u) / \(lim)"))
+                                       subtitle: "\(u) / \(lim)",
+                                       allowance: QuotaAllowance(
+                                           used: Double(u), remaining: Double(lim - u),
+                                           limit: Double(lim), unit: .count)))
         }
         let plan = displayTier(tier: r.tier, status: r.status)
         return ProviderStatus(

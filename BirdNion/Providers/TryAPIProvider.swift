@@ -88,7 +88,9 @@ final class TryAPIProvider: QuotaProvider {
                 label: "Số dư",
                 usedPct: usedPct,
                 remainingPct: 100 - usedPct,
-                subtitle: String(format: "$%.2f / $%.2f", used, total))
+                subtitle: String(format: "$%.2f / $%.2f", used, total),
+                allowance: QuotaAllowance(
+                    used: used, remaining: remaining, limit: total, unit: .usd))
         ]
 
         if let today = root.usage?.today {
@@ -105,7 +107,9 @@ final class TryAPIProvider: QuotaProvider {
                     label: "Hôm nay",
                     usedPct: 0,
                     remainingPct: 100,
-                    subtitle: subtitle))
+                    subtitle: subtitle,
+                    allowance: QuotaAllowance(
+                        used: todayCost, remaining: nil, limit: nil, unit: .usd)))
             }
         }
 
@@ -154,7 +158,9 @@ final class TryAPIProvider: QuotaProvider {
             label: label,
             usedPct: usedPct,
             remainingPct: 100 - usedPct,
-            subtitle: String(format: "$%.2f / $%.2f", spent, limit))
+            subtitle: String(format: "$%.2f / $%.2f", spent, limit),
+            allowance: QuotaAllowance(
+                used: spent, remaining: max(0, limit - spent), limit: limit, unit: .usd))
     }
 
     private func failure(_ message: String) -> ProviderStatus {
