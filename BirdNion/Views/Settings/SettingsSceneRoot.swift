@@ -166,6 +166,17 @@ func openActionCenterSettings() {
     NotificationCenter.default.post(name: .openSettings, object: nil)
 }
 
+/// Opens System Settings → Privacy & Security → Full Disk Access — the durable
+/// grant for the macOS 27 browser app-data protection (covers every protected
+/// browser dir; a Files & Folders entry only unlocks that one app's folder).
+@MainActor
+func openBrowserDataPrivacyPane() {
+    guard let url = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+    else { return }
+    NSWorkspace.shared.open(url)
+}
+
 @MainActor
 func openProviderSettings(_ id: String, target: ProviderRemediationTarget? = nil) {
     UserDefaults.standard.set("providers", forKey: "birdnion.settingsSection")

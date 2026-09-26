@@ -1682,6 +1682,12 @@ struct ProviderCard: View {
                     Task { await quota.refresh(forceProviderIDs: [status.id]) }
                 }
                 .controlSize(.small)
+                if kind == .browserDataDenied {
+                    Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Cấp quyền" : "Grant access") {
+                        openBrowserDataPrivacyPane()
+                    }
+                    .controlSize(.small)
+                }
                 if let target = remediationTarget(providerID: status.id, kind: kind) {
                     Button(L10n.languageCode(settings.appLanguage) == "vi" ? "Sửa" : "Fix") {
                         openProviderSettings(status.id, target: target)

@@ -321,6 +321,14 @@ extension ProvidersPane {
                             .buttonStyle(.instrumentOutline)
                             .pointingHandCursor()
                         }
+                        if case .fail(let kind, _) = selfTestState[row.id] ?? .idle,
+                           kind == .browserDataDenied {
+                            Button(onboardingCopy("Cấp quyền", "Grant access")) {
+                                openBrowserDataPrivacyPane()
+                            }
+                            .buttonStyle(.instrumentOutline)
+                            .pointingHandCursor()
+                        }
                     }
                     if saveErrorProviderID == row.id {
                         let storageOutcomeIsUncertain =
