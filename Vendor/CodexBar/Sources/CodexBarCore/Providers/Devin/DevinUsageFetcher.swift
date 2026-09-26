@@ -97,16 +97,77 @@ public struct DevinUsageFetcher: Sendable {
             } catch {
                 lastError = error
                 logger?("[devin] /api/\(path) failed: \(error.localizedDescription)")
-                if case DevinUsageError.invalidCredentials = error {
-                    throw error
-                }
                 continue
             }
             logger?("[devin] Fetched quota usage from /api/\(path)")
-            return try DevinUsageParser.parse(data, organization: organization, now: now)
+            var snapshot = try DevinUsageParser.parse(data, organization: organization, now: now)
+            let orgPrefix = path.replacingOccurrences(of: "billing/quota/usage", with: "")
+            if let history = await self.fetchDailyUsageHistory(
+                orgPrefix: orgPrefix,
+                auth: auth,
+                timeout: timeout,
+                logger: logger,
+                transport: transport)
+            {
+                snapshot = DevinUsageSnapshot(
+                    daily: snapshot.daily,
+                    weekly: snapshot.weekly,
+                    planName: snapshot.planName,
+                    organization: snapshot.organization,
+                    updatedAt: snapshot.updatedAt,
+                    usageHistory: history,
+                    overageBalance: snapshot.overageBalance)
+            }
+            return snapshot
         }
 
         throw lastError ?? DevinUsageError.apiError("No Devin quota endpoint succeeded.")
+    }
+
+    /// Best-effort `billing/usage/daily-usage` fetch: current cycle, plus the
+    /// previous cycle when `previous_cycle_available` is true. Any failure is
+    /// swallowed — the quota windows are the primary payload and the chart is
+    /// an optional overlay.
+    private static func fetchDailyUsageHistory(
+        orgPrefix: String,
+        auth: RequestAuth,
+        timeout: TimeInterval,
+        logger: ((String) -> Void)?,
+        transport: any ProviderHTTPTransport) async -> DevinUsageHistory?
+    {
+        let query = [
+            URLQueryItem(name: "view", value: "all"),
+        ]
+        func cycleQuery(_ cycle: String) -> [URLQueryItem] {
+            query + [URLQueryItem(name: "cycle", value: cycle)]
+        }
+        do {
+            let currentData = try await self.fetch(
+                path: "\(orgPrefix)billing/usage/daily-usage",
+                queryItems: cycleQuery("current"),
+                auth: auth,
+                timeout: timeout,
+                transport: transport)
+            guard let current = DevinUsageParser.parseDailyUsage(currentData) else {
+                return nil
+            }
+            var previous: DevinUsageHistory?
+            if DevinUsageParser.previousCycleAvailable(in: currentData),
+               let previousData = try? await self.fetch(
+                   path: "\(orgPrefix)billing/usage/daily-usage",
+                   queryItems: cycleQuery("previous"),
+                   auth: auth,
+                   timeout: timeout,
+                   transport: transport)
+            {
+                previous = DevinUsageParser.parseDailyUsage(previousData)
+            }
+            logger?("[devin] Fetched daily usage history (\(current.days.count) day rows)")
+            return DevinUsageParser.mergeCycles(previous: previous, current: current)
+        } catch {
+            logger?("[devin] daily-usage unavailable: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     public static func manualAuth(from raw: String?, organization: String? = nil) -> RequestAuth? {
@@ -170,11 +231,15 @@ public struct DevinUsageFetcher: Sendable {
 
     private static func fetch(
         path: String,
+        queryItems: [URLQueryItem] = [],
         auth: RequestAuth,
         timeout: TimeInterval,
         transport: any ProviderHTTPTransport) async throws -> Data
     {
-        let url = self.baseURL.appending(path: "api/\(path)")
+        var url = self.baseURL.appending(path: "api/\(path)")
+        if !queryItems.isEmpty {
+            url.append(queryItems: queryItems)
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = timeout
@@ -187,11 +252,10 @@ public struct DevinUsageFetcher: Sendable {
         }
         let response = try await transport.response(for: request)
         guard response.statusCode == 200 else {
-            let body = String(data: response.data.prefix(200), encoding: .utf8) ?? "<binary>"
             if response.statusCode == 401 || response.statusCode == 403 {
                 throw DevinUsageError.invalidCredentials
             }
-            Self.log.error("Devin API returned \(response.statusCode): \(body)")
+            Self.log.error("Devin API returned HTTP \(response.statusCode)")
             throw DevinUsageError.apiError("HTTP \(response.statusCode)")
         }
         return response.data

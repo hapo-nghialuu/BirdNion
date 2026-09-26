@@ -823,8 +823,17 @@ mod project_insights_cache_tests {
 /// fetches every enabled provider. Ports still in progress return an
 /// explanatory error status.
 #[tauri::command]
-async fn provider_statuses(ids: Option<Vec<String>>) -> Vec<providers::ProviderStatus> {
-    providers::fetch_filtered(ids.as_deref()).await
+async fn provider_statuses(
+    app: tauri::AppHandle,
+    ids: Option<Vec<String>>,
+) -> Vec<providers::ProviderStatus> {
+    use tauri::Emitter as _;
+    // Two-phase refresh: the returned vec carries core statuses; each
+    // provider's enrichment tail lands afterward as `PROVIDER_EXTRAS_EVENT`.
+    providers::fetch_filtered(ids.as_deref(), move |status| {
+        let _ = app.emit(providers::PROVIDER_EXTRAS_EVENT, status);
+    })
+    .await
 }
 
 /// Classifies a raw provider error string into a `ProviderErrorKind` key

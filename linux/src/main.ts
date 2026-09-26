@@ -53,6 +53,12 @@ import {
   type QuotaAgendaProviderSelectedPayload,
 } from "./quota-agenda-panel";
 import {
+  createTtlCache,
+  mergeStatusExtras,
+  ProviderLanes,
+  type LaneInteraction,
+} from "./provider-lanes";
+import {
   acknowledgeSidePanelClosed,
   closeTransientPanel,
   PANEL_OWNER_ATTR,
@@ -106,6 +112,11 @@ const TAB_KEY = "birdnion.selectedTab";
  * without the fixed-cost cadence of the global setting driving every tick. */
 const TICK_MS = 10_000;
 const CODEX_USAGE_UPDATED_EVENT = "birdnion-codex-usage-updated";
+/** Rust two-phase fetch (task-08): after `provider_statuses` returns core
+ * results, each provider's enrichment tail lands as this event carrying the
+ * core status merged with extras fields (version/service status/reset
+ * credits/web extras). JS applies the enrichment fields only. */
+const PROVIDER_EXTRAS_EVENT = "birdnion-provider-extras";
 
 type ProviderCfg = {
   id: string; enabled?: boolean | null; refreshInterval?: number | null;
@@ -532,6 +543,20 @@ function replaceProviderStatuses(statuses: ProviderStatus[]) {
   refreshQuotaAgendaPanelIfOpen();
 }
 
+/** Apply a `birdnion-provider-extras` payload: enrichment fields fill gaps
+ * on the already-rendered core status (windows/error/labels untouched —
+ * the same field-scoped rule as the Rust merge). Card-scoped refresh: the
+ * provider tab renders a single provider's card, so only repaint when the
+ * enriched provider is on screen. */
+function applyProviderExtras(extras: ProviderStatus) {
+  const existing = state.statuses.find((s) => s.id === extras.id);
+  if (!existing) return;
+  mergeStatusExtras(existing, extras);
+  providerStatusStateRevision += 1;
+  if (state.tab === extras.id) render();
+  refreshQuotaAgendaPanelIfOpen();
+}
+
 /** Any unrelated provider can be invalidated while an async merge classifies
  * an error. Retry against the latest full status array before committing so a
  * captured cache cannot resurrect a provider cleared during that await. */
@@ -618,17 +643,14 @@ function paintRefreshChrome() {
   }
 }
 
-/** Per-provider last-fetch timestamps (ms), used to honor `refreshInterval`
- * overrides independent of the global polling cadence. */
-const lastFetched = new Map<string, number>();
-/** Provider ids with a `provider_statuses` fetch currently in flight, shared
- * by EVERY fetch path — `load()`'s per-provider fanout, `refetchProvider()`,
- * and `tick()` — so a given provider is owned by exactly one caller at a
- * time regardless of which path started it. Added right before the request
- * fires, cleared in `finally` once it settles (success, error, or throw) so
- * an id can never get stuck "in flight" forever.
+/** Per-provider fetch lanes (task-09) — owns last-fetch timestamps,
+ * in-flight joins, forced follow-ups, and failure-streak backoff for every
+ * `provider_statuses` path (`load()`'s fanout, `refetchProvider()`, `tick()`),
+ * replacing the previous bare `lastFetched` / `inFlightProviderIds` /
+ * `adaptiveFailureStreaks` maps with the same semantics plus
+ * force-follow-up (macOS `ProviderLane` parity).
  *
- * Without this, three races were possible: `setInterval` re-invokes `tick()`
+ * Without lanes, three races were possible: `setInterval` re-invokes `tick()`
  * every `TICK_MS` regardless of whether the previous call resolved (and
  * `lastFetched` only updates once a fetch actually completes, so a slow
  * provider like Claude's ~160s cold CLI probe stayed "due" on every
@@ -636,10 +658,10 @@ const lastFetched = new Map<string, number>();
  * for a provider `load()` or `tick()` was already fetching; and any two of
  * those overlapping requests for the same provider could resolve out of
  * order, letting a stale completion clobber a fresher one. */
-const inFlightProviderIds = new Set<string>();
+const providerLanes = new ProviderLanes();
 
 const providerIdentityRefreshCoordinator = createProviderIdentityRefreshCoordinator({
-  isInFlight: (providerId) => inFlightProviderIds.has(providerId),
+  isInFlight: (providerId) => providerLanes.isInFlight(providerId),
   forceFetch: (providerId) => refetchProvider(providerId),
   onIdentityInvalidated: (providerId) => clearProviderIdentityState(providerId),
 });
@@ -663,7 +685,7 @@ function onCopilotAccountChanged(change: CopilotAccountChange) {
 
 /** Pure filter: which of `dueIds` are actually fetchable right now, i.e. not
  * already in flight from ANY caller (`load`, `refetchProvider`, or an
- * earlier still-unresolved `tick`) — see `inFlightProviderIds`. Kept
+ * earlier still-unresolved `tick`) — see `providerLanes`. Kept
  * separate from `dueProviderIds` (which awaits `get_settings`) so this one
  * decision is a plain function of its inputs — easy to audit/exercise even
  * without a JS test runner wired up in this project. */
@@ -671,65 +693,47 @@ export function eligibleForFetch(dueIds: string[], inFlight: ReadonlySet<string>
   return dueIds.filter((id) => !inFlight.has(id));
 }
 
-/** Shared per-provider ownership guard for the two single-id fetch paths
- * (`load()`'s fanout and `refetchProvider()`). If `id` is already in
- * `inFlightProviderIds` (from `load`, `refetchProvider`, or `tick`), this is
- * a no-op — "don't create a duplicate request", matching the manual-retry
- * UX: clicking Retry while a fetch for that provider is already in flight
- * simply doesn't start a second one; the in-flight request's own caller
- * still applies its result. Otherwise claims `id` for the duration of
- * `fetchAndApply` and always releases it in `finally`, so an IPC error or
- * thrown exception can never leave the id stuck. */
-async function withProviderInFlightGuard(id: string, fetchAndApply: () => Promise<void>): Promise<void> {
-  if (inFlightProviderIds.has(id)) return;
-  inFlightProviderIds.add(id);
-  try {
-    await fetchAndApply();
-  } finally {
-    inFlightProviderIds.delete(id);
-    providerIdentityRefreshCoordinator.onFetchReleased(id);
-  }
+/** Shared per-provider lane kick for every `provider_statuses` path.
+ * `force=false` joins an in-flight fetch for the same id (the joiner's run
+ * is dropped — "don't create a duplicate request"); `force=true` queues
+ * exactly one follow-up behind it (manual Retry / account-switch semantics,
+ * task-09). `onFetchReleased` fires once per real fetch, by the owner. */
+function laneKick(
+  id: string,
+  force: boolean,
+  interaction: LaneInteraction,
+  fetchAndApply: () => Promise<void>,
+): Promise<void> {
+  return providerLanes.lane(id).kick(force, interaction, async () => {
+    try {
+      await fetchAndApply();
+    } finally {
+      providerIdentityRefreshCoordinator.onFetchReleased(id);
+    }
+  });
 }
-/** Consecutive awaited failures per provider. The existing 10-second tick
- * remains the only timer; this state only stretches each failed provider's
- * own due interval so healthy providers keep their configured cadence. */
-const adaptiveFailureStreaks = new Map<string, number>();
-
-function adaptiveBackoffMultiplier(consecutiveFailures: number): number {
-  const failures = Math.max(0, Math.trunc(consecutiveFailures));
-  if (failures <= 1) return 1;
-  if (failures === 2) return 2;
-  if (failures === 3) return 4;
-  return 8;
-}
-
-function adaptiveIntervalMs(baseMs: number, providerId: string): number {
-  if (baseMs <= 0) return baseMs;
-  return baseMs * adaptiveBackoffMultiplier(adaptiveFailureStreaks.get(providerId) ?? 0);
-}
-
 /** Record every attempted id, including an IPC result that omitted a status.
- * Manual/open/account-switch retries start a new streak and always bypass the
- * due gate; a failed user retry therefore becomes failure #1 rather than
- * inheriting an old automatic backoff. */
+ * The lane's own interaction tag decides whether the attempt is manual —
+ * manual/open/account-switch retries start a new streak and always bypass
+ * the due gate; a failed user retry therefore becomes failure #1 rather
+ * than inheriting an old automatic backoff. */
 function recordFetchOutcomes(
   requestedIds: string[],
   fresh: ProviderStatus[],
-  manual: boolean,
 ): void {
   const byId = new Map(fresh.map((status) => [status.id, status]));
   const now = Date.now();
   for (const id of requestedIds) {
-    lastFetched.set(id, now);
     const status = byId.get(id);
-    if (status && !status.error) {
-      adaptiveFailureStreaks.delete(id);
-      continue;
-    }
-    const previous = manual ? 0 : (adaptiveFailureStreaks.get(id) ?? 0);
-    adaptiveFailureStreaks.set(id, previous + 1);
+    providerLanes.lane(id).recordOutcome(status !== undefined && !status.error, now);
   }
 }
+
+/** `get_settings` is only needed by `dueProviderIds` inside the 10s tick —
+ * cached for 30s so the poll loop costs at most one IPC per three ticks
+ * (task-09). Load/manual paths still fetch fresh settings. */
+const tickSettings = createTtlCache<Settings | null>(30_000, () =>
+  invoke<Settings>("get_settings").catch(() => null));
 
 /** Provider ids due for a fetch this tick: providers whose own
  * `refreshInterval` (or the global interval when unset/0) has elapsed since
@@ -739,7 +743,7 @@ function recordFetchOutcomes(
  * mirroring macOS `RefreshFrequency.manual`. */
 async function dueProviderIds(): Promise<string[] | undefined> {
   if (isManualRefresh()) return [];
-  const settings = await invoke<Settings>("get_settings").catch(() => null);
+  const settings = await tickSettings();
   if (!settings) return undefined;
   const globalMs = getPollSeconds() * 1000;
   const now = Date.now();
@@ -747,9 +751,7 @@ async function dueProviderIds(): Promise<string[] | undefined> {
   for (const p of settings.providers) {
     if (p.enabled !== true) continue;
     const baseMs = p.refreshInterval && p.refreshInterval > 0 ? p.refreshInterval * 1000 : globalMs;
-    const intervalMs = adaptiveIntervalMs(baseMs, p.id);
-    const last = lastFetched.get(p.id);
-    if (last === undefined || now - last >= intervalMs) due.push(p.id);
+    if (providerLanes.lane(p.id).isDue(now, baseMs)) due.push(p.id);
   }
   return due;
 }
@@ -2242,13 +2244,11 @@ async function rebuildProviderOrderFromSettings(settingsOverride?: Settings | nu
   }
   seedPlaceholderStatuses(settings);
   await rebuildActionCenterInputs(settings);
-  // Drop lastFetched for providers no longer enabled so a re-enable refetches.
+  // Drop lane scheduling state for providers no longer enabled so a
+  // re-enable refetches.
   const keep = new Set(state.statuses.map((s) => s.id));
-  for (const id of [...lastFetched.keys()]) {
-    if (!keep.has(id)) {
-      lastFetched.delete(id);
-      adaptiveFailureStreaks.delete(id);
-    }
+  for (const id of providerLanes.ids()) {
+    if (!keep.has(id)) providerLanes.lane(id).resetSchedule();
   }
   for (const id of [...staleWarnings.keys()]) {
     if (!keep.has(id)) staleWarnings.delete(id);
@@ -2265,14 +2265,13 @@ async function rebuildProviderOrderFromSettings(settingsOverride?: Settings | nu
 function observedProviderIds(): Set<string> {
   return new Set([
     ...state.statuses.map((status) => status.id),
-    ...inFlightProviderIds,
+    ...providerLanes.inFlightIds(),
   ]);
 }
 
 function clearProviderIdentityState(providerId: string) {
   replaceProviderStatuses(state.statuses.filter((status) => status.id !== providerId));
-  lastFetched.delete(providerId);
-  adaptiveFailureStreaks.delete(providerId);
+  providerLanes.lane(providerId).resetSchedule();
   staleWarnings.delete(providerId);
   failureEpisode.delete(providerId);
   for (const key of [...warned]) {
@@ -2371,7 +2370,7 @@ export async function reconcileProviderSettingsChange(
   // requeue those that the persisted snapshot still enables. Popover identity
   // switches separately invalidate their known provider before refetching.
   providerIdentityRefreshCoordinator.invalidateForCanonicalReconciliation(
-    inFlightProviderIds,
+    providerLanes.inFlightIds(),
   );
   const settings = await readSettings().catch(() => null);
   if (settings === null) {
@@ -2515,7 +2514,7 @@ async function load(manual = false) {
     if (settings === null) {
       failClosedUnavailableProviderSettings(
         state.statuses.map((status) => status.id),
-        inFlightProviderIds,
+        providerLanes.inFlightIds(),
         (providerIds) =>
           providerIdentityRefreshCoordinator.invalidateForCanonicalReconciliation(providerIds),
       );
@@ -2538,7 +2537,7 @@ async function load(manual = false) {
       (currentRequestedIds, currentFresh, merged, isStillCurrent) => {
         if (!isStillCurrent()) return;
         const prevIds = state.statuses.map((s) => s.id).join(",");
-        recordFetchOutcomes(currentRequestedIds, currentFresh, manual);
+        recordFetchOutcomes(currentRequestedIds, currentFresh);
         replaceProviderStatuses(merged);
         checkQuotaWarnings(currentFresh);
         evaluateFailureEpisodes(currentFresh, (providerId) =>
@@ -2562,7 +2561,7 @@ async function load(manual = false) {
       // Per-id guard: skips a provider `refetchProvider()` or `tick()` is
       // already fetching instead of firing a duplicate request for it.
       ? Promise.all(enabledIds.map((id) =>
-          withProviderInFlightGuard(id, async () => {
+          laneKick(id, false, manual ? "manual" : "background", async () => {
             const identitySnapshot = captureProviderIdentitySnapshot([id]);
             const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] })
               .catch(() => [] as ProviderStatus[]);
@@ -2624,13 +2623,13 @@ async function load(manual = false) {
 
 /** Re-fetches ONE provider immediately (e.g. after an account switch or the
  * user clicking Retry) and merges the fresh status over the cached state.
- * Guarded by `inFlightProviderIds`: a no-op when `load()` or `tick()` is
- * already fetching this same provider — "don't create a duplicate request"
- * — identity/config invalidation queues a forced follow-up and can discard
- * that older in-flight caller's completion. */
+ * Lane-forced kick (task-09): when `load()`/`tick()` is already fetching
+ * this provider, exactly one follow-up is queued behind the in-flight
+ * fetch — "don't create a duplicate request". Identity/config invalidation
+ * can discard that older in-flight caller's completion. */
 async function refetchProvider(id: string) {
   if (isSettingsWindow()) return;
-  await withProviderInFlightGuard(id, async () => {
+  await laneKick(id, true, "manual", async () => {
     const identitySnapshot = captureProviderIdentitySnapshot([id]);
     const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] }).catch(() => []);
     await publishCurrentProviderFetch(
@@ -2639,7 +2638,7 @@ async function refetchProvider(id: string) {
       identitySnapshot,
       (currentRequestedIds, currentFresh, merged, isStillCurrent) => {
         if (!isStillCurrent()) return;
-        recordFetchOutcomes(currentRequestedIds, currentFresh, true);
+        recordFetchOutcomes(currentRequestedIds, currentFresh);
         if (currentFresh.length === 0) return;
         replaceProviderStatuses(merged);
         checkQuotaWarnings(currentFresh);
@@ -2677,41 +2676,45 @@ async function tick() {
   const due = await dueProviderIds();
   if (!due || due.length === 0) return;
   // Exclude ids an earlier, still-unresolved tick already requested — see
-  // `inFlightProviderIds`.
-  const ids = eligibleForFetch(due, inFlightProviderIds);
+  // `providerLanes`.
+  const ids = eligibleForFetch(due, providerLanes.inFlightIds());
   if (ids.length === 0) return;
-  const prevIds = state.statuses.map((s) => s.id).join(",");
-  for (const id of ids) inFlightProviderIds.add(id);
-  const identitySnapshot = captureProviderIdentitySnapshot(ids);
-  try {
-    const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids }).catch(() => []);
-    await publishCurrentProviderFetch(
-      ids,
-      fresh,
-      identitySnapshot,
-      (currentRequestedIds, currentFresh, merged, isStillCurrent) => {
-        if (!isStillCurrent()) return;
-        recordFetchOutcomes(currentRequestedIds, currentFresh, false);
-        replaceProviderStatuses(merged);
-        checkQuotaWarnings(state.statuses);
-        evaluateFailureEpisodes(currentFresh, (providerId) =>
-          providerIdentityIsCurrent(identitySnapshot, providerId));
-        // Avoid rebuilding the All-tab charts every 10s (felt like constant spin/flicker).
-        // Re-render only when the tab strip set changed, or user is on a provider tab.
-        const nextIds = state.statuses.map((s) => s.id).join(",");
-        const onProviderTab = state.tab !== "all";
-        if (onProviderTab || prevIds !== nextIds) {
-          render();
-        } else {
-          refreshQuotaAgendaPanelIfOpen();
-        }
-        void refreshActionCenterIssues().catch(() => {});
-        void refreshTrayTooltip().catch(() => {});
-      },
-    );
-  } finally {
-    for (const id of ids) inFlightProviderIds.delete(id);
-    for (const id of ids) providerIdentityRefreshCoordinator.onFetchReleased(id);
+  // Per-provider lane kicks (task-09): each due provider fetches and
+  // publishes independently — a slow provider's extras/core can never hold
+  // the other due providers' cards. Non-force kicks join any caller that
+  // already owns the id.
+  for (const id of ids) {
+    void laneKick(id, false, "background", async () => {
+      const prevIds = state.statuses.map((s) => s.id).join(",");
+      const identitySnapshot = captureProviderIdentitySnapshot([id]);
+      const fresh = await invoke<ProviderStatus[]>("provider_statuses", { ids: [id] })
+        .catch(() => [] as ProviderStatus[]);
+      await publishCurrentProviderFetch(
+        [id],
+        fresh,
+        identitySnapshot,
+        (currentRequestedIds, currentFresh, merged, isStillCurrent) => {
+          if (!isStillCurrent()) return;
+          recordFetchOutcomes(currentRequestedIds, currentFresh);
+          replaceProviderStatuses(merged);
+          checkQuotaWarnings(state.statuses);
+          evaluateFailureEpisodes(currentFresh, (providerId) =>
+            providerIdentityIsCurrent(identitySnapshot, providerId));
+          // Avoid rebuilding the All-tab charts every 10s (felt like constant
+          // spin/flicker). Re-render only when the tab strip set changed, or
+          // the user is on a provider tab.
+          const nextIds = state.statuses.map((s) => s.id).join(",");
+          const onProviderTab = state.tab !== "all";
+          if (onProviderTab || prevIds !== nextIds) {
+            render();
+          } else {
+            refreshQuotaAgendaPanelIfOpen();
+          }
+          void refreshActionCenterIssues().catch(() => {});
+          void refreshTrayTooltip().catch(() => {});
+        },
+      );
+    }).catch(() => {});
   }
 }
 
@@ -2814,6 +2817,10 @@ window.addEventListener("DOMContentLoaded", async () => {
       listen<CopilotAccountChange>(COPILOT_ACCOUNT_CHANGED_EVENT, (event) =>
         onCopilotAccountChanged(event.payload)),
       listen(QUOTA_AGENDA_PROVIDER_SELECTED_EVENT, onQuotaAgendaProviderSelected),
+      // Rust extras tail (task-08/09): enrichment fields merge onto the
+      // already-rendered core status — core fields are never touched.
+      listen<ProviderStatus>(PROVIDER_EXTRAS_EVENT, (event) =>
+        applyProviderExtras(event.payload)),
       // Settings webview → main: rebuild tab order and reconcile local usage.
       listen(PROVIDERS_CHANGED_EVENT, () => {
         codexUsageCompletionCoordinator.invalidate();

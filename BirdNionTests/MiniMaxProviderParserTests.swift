@@ -914,4 +914,21 @@ final class BirdNionConfigStoreTests: XCTestCase {
         // applies to keys this build doesn't model).
         XCTAssertNil(claude["accountLabel"])
     }
+
+    func testSaveUpdatesAndClearsDevinOrganizationWithoutResurrectingIt() throws {
+        try writeRaw(
+            #"{"version":1,"providers":[{"id":"devin","enabled":true,"devinOrganization":"org/old"}]}"#)
+
+        var provider = try XCTUnwrap(BirdNionConfigStore.provider(id: "devin", url: testConfigURL))
+        provider.devinOrganization = "org/new"
+        try BirdNionConfigStore.save(provider, url: testConfigURL)
+        XCTAssertEqual(
+            BirdNionConfigStore.provider(id: "devin", url: testConfigURL)?.devinOrganization,
+            "org/new")
+
+        provider = try XCTUnwrap(BirdNionConfigStore.provider(id: "devin", url: testConfigURL))
+        provider.devinOrganization = nil
+        try BirdNionConfigStore.save(provider, url: testConfigURL)
+        XCTAssertNil(BirdNionConfigStore.provider(id: "devin", url: testConfigURL)?.devinOrganization)
+    }
 }

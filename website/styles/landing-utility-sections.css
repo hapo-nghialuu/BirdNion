@@ -66,6 +66,16 @@
 
 .command-row button:hover { background: #2b2a23; }
 .copy-status { min-height: 24px; color: var(--green); font-family: var(--font-mono); font-size: 10px; }
+.signing-note {
+  margin-top: 4px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.signing-note strong {
+  color: var(--ink);
+}
 .install-panel .button { margin-top: 20px; }
 
 .faq-section { display: grid; grid-template-columns: 5fr 1fr 6fr; }
@@ -77,7 +87,6 @@
 
 .site-footer {
   width: var(--content);
-  min-height: 150px;
   margin: 0 auto;
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -88,4 +97,11 @@
 .site-footer > div { display: flex; align-items: center; gap: 10px; }
 .site-footer > p { justify-self: center; color: var(--ink-soft); }
 .site-footer nav { justify-self: end; display: flex; gap: 12px; }
-.site-footer nav a { min-height: 44px; padding: 0 4px; display: inline-flex; align-items: center; }
+.site-footer nav a {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}

@@ -311,6 +311,11 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
     /// Structured Kiro credits/overage for the menu-bar display-mode picker
     /// (credits left / percent / used÷total / overage). nil for non-Kiro.
     let kiroMenu: KiroMenuUsage?
+    /// Devin billing-cycle daily usage (ACU per day + per-product totals)
+    /// from `billing/usage/daily-usage`. The popover renders it as the usage
+    /// chart card on the Devin tab. nil for every other provider or when the
+    /// probe returned nothing.
+    let devinUsage: DevinUsageHistorySnapshot?
 
     init(id: String,
          displayName: String,
@@ -332,7 +337,8 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
          sourceLabel: String? = nil,
          codexWeb: CodexWebExtras? = nil,
          claudeAdminUsage: ClaudeAdminAPIUsageSnapshot? = nil,
-         kiroMenu: KiroMenuUsage? = nil) {
+         kiroMenu: KiroMenuUsage? = nil,
+         devinUsage: DevinUsageHistorySnapshot? = nil) {
         self.id = id
         self.displayName = displayName
         self.windows = windows
@@ -354,6 +360,7 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
         self.codexWeb = codexWeb
         self.claudeAdminUsage = claudeAdminUsage
         self.kiroMenu = kiroMenu
+        self.devinUsage = devinUsage
     }
 
     /// Copy with `serviceStatus`/`serviceStatusLevel` overridden, every other
@@ -369,7 +376,7 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
             version: version, serviceStatus: serviceStatus, serviceStatusLevel: serviceStatusLevel,
             accountID: accountID, planName: planName, resetCreditsAvailable: resetCreditsAvailable,
             cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
-            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
+            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu, devinUsage: devinUsage)
     }
 
     /// Copy with `accountLabel` overridden, every other field identical. Used
@@ -384,7 +391,33 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
             version: version, serviceStatus: serviceStatus, serviceStatusLevel: serviceStatusLevel,
             accountID: accountID, planName: planName, resetCreditsAvailable: resetCreditsAvailable,
             cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
-            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
+            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu, devinUsage: devinUsage)
+    }
+
+    /// Copy with enrichment-only fields merged from `extras`. Core fields
+    /// (`windows`, `error`, account/plan identity, `sourceLabel`, credits) are
+    /// never touched — enrichment can add detail but cannot turn a good core
+    /// status into an error or replace its quota data. A nil field on `extras`
+    /// keeps this status's value, so a failed side probe doesn't strip data
+    /// that an earlier emission already provided.
+    func withEnrichment(from extras: ProviderStatus) -> ProviderStatus {
+        ProviderStatus(
+            id: id, displayName: displayName, windows: windows,
+            lastUpdated: max(lastUpdated, extras.lastUpdated),
+            error: error, accountLabel: accountLabel, planType: planType,
+            creditsRemaining: creditsRemaining, creditsUnlimited: creditsUnlimited,
+            version: extras.version ?? version,
+            serviceStatus: extras.serviceStatus ?? serviceStatus,
+            serviceStatusLevel: extras.serviceStatusLevel ?? serviceStatusLevel,
+            accountID: accountID, planName: planName,
+            resetCreditsAvailable: extras.resetCreditsAvailable ?? resetCreditsAvailable,
+            cost: extras.cost ?? cost,
+            webExtras: extras.webExtras ?? webExtras,
+            sourceLabel: sourceLabel,
+            codexWeb: extras.codexWeb ?? codexWeb,
+            claudeAdminUsage: extras.claudeAdminUsage ?? claudeAdminUsage,
+            kiroMenu: extras.kiroMenu ?? kiroMenu,
+            devinUsage: extras.devinUsage ?? devinUsage)
     }
 
     /// Which path actually produced this snapshot, for providers that have more
@@ -397,7 +430,7 @@ struct ProviderStatus: Identifiable, Codable, Equatable {
             version: version, serviceStatus: serviceStatus, serviceStatusLevel: serviceStatusLevel,
             accountID: accountID, planName: planName, resetCreditsAvailable: resetCreditsAvailable,
             cost: cost, webExtras: webExtras, sourceLabel: sourceLabel, codexWeb: codexWeb,
-            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu)
+            claudeAdminUsage: claudeAdminUsage, kiroMenu: kiroMenu, devinUsage: devinUsage)
     }
 }
 
@@ -451,6 +484,35 @@ struct KiroMenuUsage: Codable, Equatable, Sendable {
         self.contextToolsPercent = contextToolsPercent
         self.contextResponsesPercent = contextResponsesPercent
         self.contextPromptsPercent = contextPromptsPercent
+    }
+}
+
+/// Devin per-day metered usage for the billing cycle(s) the API exposes —
+/// `GET /api/<org>/billing/usage/daily-usage?cycle=current|previous&view=all`.
+/// Amounts are ACUs for ACU/quota plans. Days keep their own cycle boundary so
+/// the chart can shade the previous cycle differently if needed later.
+struct DevinUsageHistorySnapshot: Codable, Equatable, Sendable {
+    struct Day: Codable, Equatable, Identifiable, Sendable {
+        let date: Date
+        let amount: Double
+        var id: Date { date }
+    }
+    struct Product: Codable, Equatable, Identifiable, Sendable {
+        /// API view key: "sessions" / "reviews" / "automations" / …
+        let view: String
+        let total: Double
+        var id: String { view }
+    }
+    let days: [Day]
+    let products: [Product]
+    let total: Double
+    let cycleEnd: Date?
+
+    init(days: [Day], products: [Product], total: Double, cycleEnd: Date?) {
+        self.days = days
+        self.products = products
+        self.total = total
+        self.cycleEnd = cycleEnd
     }
 }
 

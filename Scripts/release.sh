@@ -14,6 +14,7 @@
 #   5. Copy build/Release/BirdNion.app → ~/Desktop/BirdNion.app
 #   6. Zip → ~/Desktop/BirdNion-<version>.zip
 #   7. Commit + push the exact source used for the build
+#      (branch from RELEASE_BRANCH env, default: main)
 #   8. gh release create/upload v<version> targeting that source commit
 #   9. Update Casks/birdnion.rb (version + sha256), commit + push to same repo
 #   10. Update homebrew-tap/Casks/birdnion.rb, commit + push tap
@@ -53,9 +54,10 @@ TAP_REPO="hapo-nghialuu/homebrew-tap"
 ZIP_NAME="BirdNion-${VERSION}.zip"
 DESKTOP="$HOME/Desktop"
 
+RELEASE_BRANCH="${RELEASE_BRANCH:-main}"
 CURRENT_BRANCH=$(git -C "$REPO_ROOT" branch --show-current)
-if [[ "$CURRENT_BRANCH" != "main" ]]; then
-  echo "Release must run from main, current branch: ${CURRENT_BRANCH:-detached HEAD}" >&2
+if [[ "$CURRENT_BRANCH" != "$RELEASE_BRANCH" ]]; then
+  echo "Release must run from ${RELEASE_BRANCH}, current branch: ${CURRENT_BRANCH:-detached HEAD}" >&2
   exit 1
 fi
 
@@ -276,7 +278,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     git -C "$REPO_ROOT" commit -m "release: prepare ${VERSION}"
   fi
   SOURCE_COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD)
-  git -C "$REPO_ROOT" push origin main
+  git -C "$REPO_ROOT" push origin "$CURRENT_BRANCH"
 else
   echo "  [dry-run] would commit version files and push main"
 fi
@@ -292,7 +294,7 @@ if gh release view "$TAG" --repo "$ASSET_REPO" >/dev/null 2>&1; then
     exit 1
   fi
   echo "    release $TAG exists — uploading new asset"
-  run gh release upload "$TAG" "$ZIP_PATH" --repo "$ASSET_REPO"
+  run gh release upload "$TAG" "$ZIP_PATH" --repo "$ASSET_REPO" --clobber
 else
   echo "    creating new release $TAG"
   run gh release create "$TAG" "$ZIP_PATH" \
@@ -329,8 +331,10 @@ with open(path, 'w') as f:
     f.write(content)
 PY
   git -C "$REPO_ROOT" add Casks/birdnion.rb
-  git -C "$REPO_ROOT" commit -m "build(release): bump cask to ${VERSION}"
-  git -C "$REPO_ROOT" push origin main
+  if ! git -C "$REPO_ROOT" diff --cached --quiet; then
+    git -C "$REPO_ROOT" commit -m "build(release): bump cask to ${VERSION}"
+    git -C "$REPO_ROOT" push origin "$CURRENT_BRANCH"
+  fi
 fi
 
 # 10. Also update homebrew-tap so `brew tap hapo-nghialuu/tap` picks up the new version
@@ -348,8 +352,10 @@ with open(path, 'w') as f:
     f.write(content)
 PY
   git -C "$TAP_DIR" add Casks/birdnion.rb
-  git -C "$TAP_DIR" commit -m "chore: bump birdnion to ${VERSION}"
-  git -C "$TAP_DIR" push origin main
+  if ! git -C "$TAP_DIR" diff --cached --quiet; then
+    git -C "$TAP_DIR" commit -m "chore: bump birdnion to ${VERSION}"
+    git -C "$TAP_DIR" push origin main
+  fi
 fi
 
 cat <<EOF

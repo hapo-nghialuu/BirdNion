@@ -234,7 +234,37 @@ fn resolved_source(cfg: &config::Provider) -> &str {
     cfg.source.as_deref().unwrap_or("auto")
 }
 
+/// Core phase: source-selected quota fetch without the enrichment probes —
+/// `provider_statuses` ships this first (task-08 split).
+pub async fn fetch_core(cfg: &config::Provider) -> ProviderStatus {
+    fetch_inner(cfg, false).await
+}
+
+/// Extras phase: enrichment-only status (CLI version + statuspage probe) —
+/// independent of credentials, merged by `merge_status_extras`.
+pub async fn fetch_extras(cfg: &config::Provider) -> ProviderStatus {
+    let name = display_name(cfg);
+    let (version, service) = futures::join!(
+        tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "claude")),
+        fetch_service_status(STATUS_URL),
+    );
+    ProviderStatus {
+        id: cfg.id.clone(),
+        display_name: name,
+        last_updated: chrono::Utc::now().timestamp(),
+        version: version.unwrap_or(None),
+        service_status: service.as_ref().map(|(d, _)| d.clone()),
+        service_status_level: service.map(|(_, i)| i),
+        ..Default::default()
+    }
+}
+
+/// Single-shot full fetch (self-test path) — pre-split output shape preserved.
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
+    fetch_inner(cfg, true).await
+}
+
+async fn fetch_inner(cfg: &config::Provider, include_extras: bool) -> ProviderStatus {
     let name = display_name(cfg);
     match resolved_source(cfg) {
         "web" => fetch_web(cfg, &name).await,
@@ -243,18 +273,61 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
             ProviderStatus::failure(&cfg.id, &name, "Nguồn CLI chưa được hỗ trợ trong bản này")
         }
         "auto" => {
-            let status = fetch_oauth(cfg, &name).await;
-            if status.error.is_some() {
-                fetch_web(cfg, &name).await
+            if include_extras {
+                // Self-test path keeps the sequential fallback so a winning
+                // oauth arm still carries its enrichment probes.
+                let status = fetch_oauth(cfg, &name, include_extras).await;
+                if status.error.is_some() {
+                    fetch_web(cfg, &name).await
+                } else {
+                    status
+                }
             } else {
-                status
+                race_sources(fetch_oauth(cfg, &name, false), fetch_web(cfg, &name)).await
             }
         }
-        _ => fetch_oauth(cfg, &name).await,
+        _ => fetch_oauth(cfg, &name, include_extras).await,
     }
 }
 
-async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
+/// "auto" = race oauth vs web; the first *success* wins (macOS
+/// `ClaudeSourcePlanner` staged-race parity — a slow source no longer delays
+/// a fast one behind it). `select!` is biased so a simultaneous success
+/// resolves to oauth, the preferred source. A source that finishes as an
+/// error does not end the race — the other arm still gets its shot; when both
+/// fail, the web error is surfaced, same as the old sequential fallback.
+async fn race_sources<O, W>(oauth: O, web: W) -> ProviderStatus
+where
+    O: std::future::Future<Output = ProviderStatus>,
+    W: std::future::Future<Output = ProviderStatus>,
+{
+    use futures::FutureExt;
+    // `Fuse` makes a completed arm permanently Pending — safe to keep in the
+    // select without completion guards (tokio's `select!` is unavailable:
+    // the crate doesn't enable tokio's "macros" feature). `Box::pin` gives
+    // the select its `Unpin` bound without requiring it on the callers.
+    let mut oauth = Box::pin(oauth).fuse();
+    let mut web = Box::pin(web).fuse();
+    let mut oauth_err = None;
+    let mut web_err = None;
+    loop {
+        if oauth_err.is_some() && web_err.is_some() {
+            return web_err.or(oauth_err).expect("both arms failed");
+        }
+        futures::select_biased! {
+            s = oauth => {
+                if s.error.is_none() { return s }
+                oauth_err = Some(s)
+            }
+            s = web => {
+                if s.error.is_none() { return s }
+                web_err = Some(s)
+            }
+        }
+    }
+}
+
+async fn fetch_oauth(cfg: &config::Provider, name: &str, include_extras: bool) -> ProviderStatus {
     let Some(creds) = load_with_auto_refresh().await else {
         return ProviderStatus::failure(
             &cfg.id,
@@ -271,11 +344,17 @@ async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
     }
     // Side-channel info alongside usage (macOS parity): CLI version
     // (memoized) + statuspage probe — both best-effort, never fail the fetch.
-    let (body, version, service) = futures::join!(
-        fetch_usage(&creds.access_token),
-        tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "claude")),
-        fetch_service_status(STATUS_URL),
-    );
+    // Skipped in the core phase; they arrive via `fetch_extras` instead.
+    let (body, version, service) = if include_extras {
+        let (body, version, service) = futures::join!(
+            fetch_usage(&creds.access_token),
+            tauri::async_runtime::spawn_blocking(|| cli_version_blocking(&CLI_VERSION, "claude")),
+            fetch_service_status(STATUS_URL),
+        );
+        (body, version.unwrap_or(None), service)
+    } else {
+        (fetch_usage(&creds.access_token).await, None, None)
+    };
     let body = match body {
         Ok(b) => b,
         Err(e) => return ProviderStatus::failure(&cfg.id, name, e),
@@ -288,7 +367,7 @@ async fn fetch_oauth(cfg: &config::Provider, name: &str) -> ProviderStatus {
         creds.rate_limit_tier.as_deref(),
     );
     status.account_label = cfg.account_label.clone();
-    status.version = version.unwrap_or(None);
+    status.version = version;
     status.service_status = service.as_ref().map(|(d, _)| d.clone());
     status.service_status_level = service.map(|(_, i)| i);
     status.source_label = Some("OAuth".to_string());
@@ -968,5 +1047,78 @@ mod tests {
 
         assert_eq!(pick_organization_id(&json!([])), None);
         assert_eq!(pick_organization_id(&json!({})), None);
+    }
+
+    /// Throwaway current-thread runtime (same rationale as mod.rs: the crate
+    /// doesn't enable tokio's "macros" feature).
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    /// Race parity probe: a fast web success must not wait behind a slow
+    /// oauth arm — the old sequential fallback blocked for its full duration.
+    #[test]
+    fn race_sources_fast_success_does_not_wait_for_slow_arm() {
+        let slow_oauth = async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            ProviderStatus::failure("claude", "Claude", "oauth too slow")
+        };
+        let fast_web = async {
+            ProviderStatus { id: "claude".into(), ..Default::default() }
+        };
+        let status = block_on(race_sources(slow_oauth, fast_web));
+        assert!(status.error.is_none());
+    }
+
+    /// An early-failed arm must not end the race — the other source still
+    /// gets its shot (the sequential fallback's one remaining guarantee).
+    #[test]
+    fn race_sources_failed_first_arm_does_not_end_race() {
+        let oauth = async { ProviderStatus::failure("claude", "Claude", "no creds") };
+        let web = async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            ProviderStatus { id: "claude".into(), ..Default::default() }
+        };
+        let status = block_on(race_sources(oauth, web));
+        assert!(status.error.is_none());
+    }
+
+    /// Biased select: a simultaneous success resolves to oauth — the
+    /// preferred source — never to web.
+    #[test]
+    fn race_sources_prefers_oauth_on_simultaneous_success() {
+        let oauth = async {
+            ProviderStatus {
+                id: "claude".into(),
+                source_label: Some("oauth".into()),
+                ..Default::default()
+            }
+        };
+        let web = async {
+            ProviderStatus {
+                id: "claude".into(),
+                source_label: Some("web".into()),
+                ..Default::default()
+            }
+        };
+        let status = block_on(race_sources(oauth, web));
+        assert_eq!(status.source_label.as_deref(), Some("oauth"));
+    }
+
+    /// Both arms failed → the web error surfaces, matching what the old
+    /// sequential fallback used to return.
+    #[test]
+    fn race_sources_both_fail_surfaces_web_error() {
+        let oauth = async { ProviderStatus::failure("claude", "Claude", "oauth err") };
+        let web = async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            ProviderStatus::failure("claude", "Claude", "web err")
+        };
+        let status = block_on(race_sources(oauth, web));
+        assert_eq!(status.error.as_deref(), Some("web err"));
     }
 }

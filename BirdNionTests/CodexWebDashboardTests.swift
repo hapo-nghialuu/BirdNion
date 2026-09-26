@@ -47,4 +47,19 @@ final class CodexWebDashboardTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: key)
         XCTAssertFalse(CodexWebDashboard.isEnabled)
     }
+
+    /// The WKWebView scrape is gated to popover-open or manual refresh —
+    /// a background tick must never be allowed to spawn it.
+    func testScrapeGateRequiresPopoverOpenOrManualRefresh() {
+        let previous = CodexWebDashboard.popoverIsOpen
+        defer { CodexWebDashboard.popoverIsOpen = previous }
+
+        CodexWebDashboard.popoverIsOpen = false
+        XCTAssertFalse(CodexWebDashboard.mayScrape(forceRefresh: false))
+        XCTAssertTrue(CodexWebDashboard.mayScrape(forceRefresh: true))
+
+        CodexWebDashboard.popoverIsOpen = true
+        XCTAssertTrue(CodexWebDashboard.mayScrape(forceRefresh: false))
+        XCTAssertTrue(CodexWebDashboard.mayScrape(forceRefresh: true))
+    }
 }

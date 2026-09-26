@@ -1,7 +1,6 @@
 import Foundation
 import Combine
 import SwiftUI
-import UserNotifications
 import os
 
 /// A refresh failure recorded while the popover still shows a prior
@@ -47,13 +46,20 @@ struct ConsecutiveFailureGate: Equatable {
     }
 }
 
-/// Polls every enabled provider in parallel on a 120s ± 10s loop.
-/// Throwing providers are caught and recorded on the status (no crash).
+/// Facade over `ProviderScheduler`. Keeps the public surface and semantics:
+/// statuses publish incrementally as lanes emit, warnings/failure episodes/
+/// persistence/notifications stay identical, and the refresh coalescing
+/// queue serializes whole-refresh callers while lanes inside a batch run
+/// independently.
 @MainActor
 final class QuotaService: ObservableObject {
     @Published private(set) var statuses: [ProviderStatus] = []
     @Published private(set) var displayStatuses: [ProviderStatus] = []
+    /// Derived from the scheduler's in-flight lane set — true while any
+    /// provider lane is mid-fetch (core or extras phase).
     @Published private(set) var isRefreshing: Bool = false
+    /// Per-provider in-flight set — powers the per-card refresh indicator.
+    @Published private(set) var fetchingIDs: Set<String> = []
 
     /// Bumped when the background per-account Antigravity refresh stores a new
     /// snapshot. The popover's all-accounts card reads `AccountSnapshotStore`
@@ -76,24 +82,35 @@ final class QuotaService: ObservableObject {
         }
     }
 
+    /// Merge a lane emission into `statuses`, preserving provider order.
+    private func mergePublished(_ status: ProviderStatus) {
+        if let index = statuses.firstIndex(where: { $0.id == status.id }) {
+            statuses[index] = status
+        } else {
+            statuses.append(status)
+        }
+        let byID = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
+        statuses = providers.compactMap { byID[$0.id] }
+        rebuildDisplayStatuses()
+        if passIsFirstRefresh, !passFirstCompletionLogged {
+            passFirstCompletionLogged = true
+            if let started = passStartedAt {
+                Self.refreshLog.info(
+                    "first fetch done in \(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s — popover has data")
+            }
+        }
+    }
+
     /// Per provider+window warning state: last seen remaining % and the set of
     /// thresholds already fired (so we notify once per crossing, not every poll).
     private var warnState: [String: [String: (last: Int, fired: Set<Int>)]] = [:]
-
-    /// Per-provider stale-data warning, populated only while a *transient*
-    /// refresh error is being suppressed behind a preserved last-good
-    /// snapshot (see `runRefreshPass`). Intentionally NOT `@Published` or
-    /// persisted: SwiftUI already re-renders alongside the `statuses` publish
-    /// that happens in the very same refresh iteration, and a fresh launch
-    /// always starts empty — see `StaleQuotaWarning`'s doc comment.
-    private var staleWarnings: [String: StaleQuotaWarning] = [:]
 
     /// Current stale-data warning for a provider, if its last refresh failed
     /// transiently while a last-good snapshot was preserved. `nil` once a
     /// fresh success or a non-transient error lands (both replace the entry
     /// with the fresh status instead of preserving the old one).
     func staleWarning(for id: String) -> StaleQuotaWarning? {
-        staleWarnings[id]
+        scheduler.lane(for: id)?.staleWarning
     }
 
     private(set) var providers: [QuotaProvider] = []
@@ -109,10 +126,68 @@ final class QuotaService: ObservableObject {
     private var settingsRefreshTask: Task<Void, Never>?
     private var pendingSettingsRefreshProviderIDs: Set<String> = []
     private var settingsRefreshGeneration: UInt = 0
-    /// Monotonic identity/config token for each provider. Provider object
-    /// identity is insufficient when an account or credential changes inside
-    /// the same provider instance while its previous fetch is still running.
-    private var providerContextGenerations: [String: UInt] = [:]
+
+    // Per-pass diagnostics (reset at each `runSchedulerPass`).
+    private static let refreshLog = Logger(
+        subsystem: "com.local.birdnion", category: "quota.refresh")
+    private var passStartedAt: Date?
+    private var passIsFirstRefresh = false
+    private var passFirstCompletionLogged = false
+    private var passTimings: [(String, TimeInterval)] = []
+
+    private lazy var scheduler: ProviderScheduler = {
+        var hooks = ProviderLane.Hooks()
+        hooks.publish = { [weak self] status in self?.mergePublished(status) }
+        hooks.warningsChanged = { [weak self] in
+            guard let self, QuotaWarnConfig.enabled else { return }
+            self.evaluateWarnings(self.statuses)
+        }
+        hooks.evaluateFailure = { [weak self] id, name, error in
+            self?.evaluateFailureEpisode(id: id, displayName: name, error: error)
+        }
+        hooks.invalidateCleanup = { [weak self] id in
+            guard let self else { return }
+            self.failureEpisode.removeValue(forKey: id)
+            self.warnState.removeValue(forKey: id)
+            self.failureNotificationRemove(Self.failureNotificationID(for: id))
+            self.legacyFailureNotificationCleanup(id)
+        }
+        hooks.saveAccountSnapshot = { [weak self] status in
+            self?.saveAccountSnapshot(for: status)
+        }
+        hooks.fetchingChanged = { [weak self] in self?.syncFetchingState() }
+        hooks.recordTiming = { [weak self] id, elapsed in
+            self?.passTimings.append((id, elapsed))
+        }
+        let scheduler = ProviderScheduler(hooks: hooks)
+        scheduler.onBatchSettled = { [weak self] in
+            await self?.handleBatchSettled()
+        }
+        scheduler.configure(providers: providers)
+        return scheduler
+    }()
+
+    private func syncFetchingState() {
+        fetchingIDs = scheduler.fetchingIDs
+        isRefreshing = scheduler.isRefreshing
+    }
+
+    /// Per-account snapshot write keyed under the ACTIVE account at publish
+    /// time, so the popover can show every account's last known quota without
+    /// paying for a fetch per account.
+    private func saveAccountSnapshot(for status: ProviderStatus) {
+        let snapshotAccountKey: String? = switch status.id {
+        case "codex": CodexAccountStore.activeSelection().id
+        case "antigravity": AntigravityOAuthStore.load().activeLabel
+        default: nil
+        }
+        guard let snapshotAccountKey else { return }
+        switch status.id {
+        case "codex": codexSnapshotSave(status, snapshotAccountKey)
+        case "antigravity": antigravitySnapshotSave(status, snapshotAccountKey)
+        default: break
+        }
+    }
 
     typealias FailureNotificationPost = @MainActor (
         _ id: String, _ title: String, _ body: String
@@ -192,6 +267,7 @@ final class QuotaService: ObservableObject {
 
     func add(_ p: QuotaProvider) {
         providers.append(p)
+        scheduler.configure(providers: providers)
         rebuildDisplayStatuses()
     }
 
@@ -217,11 +293,8 @@ final class QuotaService: ObservableObject {
             cancelAntigravityAccountSnapshotRefresh()
         }
         providers = newProviders
+        scheduler.configure(providers: providers)
         statuses = statuses.filter { keep.contains($0.id) }
-        // Drop cached last-fetched timestamps for providers no longer in
-        // the list, otherwise the per-provider throttle could skip a fresh
-        // provider's first poll under the right timing.
-        providerLastFetched = providerLastFetched.filter { keep.contains($0.key) }
         // Re-sort cached statuses to match the new providers order. Stale
         // entries keep their old lastUpdated; that's intentional — the
         // next refresh will overwrite them anyway.
@@ -234,6 +307,7 @@ final class QuotaService: ObservableObject {
         guard providers.contains(where: { $0.id == id }) else { return }
         cleanupRemovedProvider(id)
         providers.removeAll { $0.id == id }
+        scheduler.configure(providers: providers)
         statuses.removeAll { $0.id == id }
         rebuildDisplayStatuses()
     }
@@ -245,14 +319,15 @@ final class QuotaService: ObservableObject {
         // The self-test result fully replaces the entry (success or fresh
         // error) rather than merging against a prior snapshot, so any
         // preserved stale-data warning no longer applies.
-        staleWarnings.removeValue(forKey: status.id)
+        let lane = scheduler.lane(for: status.id)
+        lane?.adopt(status, fetchedAt: Date())
         // A self-test that reached real quota is proof the provider works, so
         // the next background flake gets its one free pass again. A failing
         // self-test deliberately leaves the streak alone — it already wrote its
         // error straight into `statuses`, and the poller must not treat that as
         // fresh prior data.
         if status.error == nil {
-            errorSurfaceGates[status.id, default: ConsecutiveFailureGate()].recordSuccess()
+            lane?.recordSurfaceGateSuccess()
         }
         if let index = statuses.firstIndex(where: { $0.id == status.id }) {
             statuses[index] = status
@@ -261,7 +336,6 @@ final class QuotaService: ObservableObject {
         }
         let byID = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
         statuses = providers.compactMap { byID[$0.id] }
-        providerLastFetched[status.id] = Date()
         rebuildDisplayStatuses()
         persistStatuses()
     }
@@ -273,12 +347,9 @@ final class QuotaService: ObservableObject {
         failureNotificationRemove(Self.failureNotificationID(for: id))
         legacyFailureNotificationCleanup(id)
         failureEpisode.removeValue(forKey: id)
-        adaptiveFailureCounts.removeValue(forKey: id)
-        errorSurfaceGates.removeValue(forKey: id)
-        providerLastFetched.removeValue(forKey: id)
-        providerContextGenerations.removeValue(forKey: id)
         warnState.removeValue(forKey: id)
-        staleWarnings.removeValue(forKey: id)
+        // Lane teardown (in-flight cancel + per-provider state drop) happens
+        // in `scheduler.configure` / `remove` right after this call.
     }
 
     /// Move a provider to a new position in the polling + tab order. The
@@ -365,6 +436,7 @@ final class QuotaService: ObservableObject {
     func stop() {
         loopTask?.cancel()
         loopTask = nil
+        scheduler.cancelAll()
         cancelAntigravityAccountSnapshotRefresh()
         settingsRefreshTask?.cancel()
         settingsRefreshTask = nil
@@ -372,22 +444,6 @@ final class QuotaService: ObservableObject {
         notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
         notificationObservers.removeAll()
     }
-
-    /// Per-provider refresh override (in seconds). 0 or absent means "use the
-    /// global interval set via `setInterval`". When set, this provider is
-    /// only fetched on refresh cycles where `now - lastFetched[id] >=
-    /// override` has elapsed, so a slow / rate-limited provider can be polled
-    /// less often than a fast one.
-    private var providerLastFetched: [String: Date] = [:]
-    /// Consecutive awaited failures per provider. The existing loop still
-    /// wakes at the configured global cadence; this map only makes failed
-    /// providers progressively less likely to perform another expensive fetch.
-    private var adaptiveFailureCounts: [String: Int] = [:]
-    /// Per-provider gate deciding whether a refresh failure reaches the UI.
-    /// Separate from `adaptiveFailureCounts` (fetch cadence) and
-    /// `failureEpisode` (notifications) on purpose: this one governs only what
-    /// the popover/Settings card renders.
-    private var errorSurfaceGates: [String: ConsecutiveFailureGate] = [:]
 
     /// Where the last published statuses are cached across launches (nil =
     /// persistence disabled, e.g. in unit tests). See ProviderStatusCache.
@@ -411,7 +467,9 @@ final class QuotaService: ObservableObject {
         var byId = Dictionary(uniqueKeysWithValues: restored.map { ($0.id, $0) })
         statuses = providers.compactMap { byId.removeValue(forKey: $0.id) }
         for status in statuses {
-            providerLastFetched[status.id] = status.lastUpdated
+            // Seed the lane's cadence clock AND its last-good base so a
+            // transient first-poll failure preserves the restored card.
+            scheduler.lane(for: status.id)?.adopt(status, fetchedAt: status.lastUpdated)
         }
         rebuildDisplayStatuses()
     }
@@ -431,17 +489,6 @@ final class QuotaService: ObservableObject {
     /// the global interval (the default).
     static func setOverrideInterval(_ seconds: TimeInterval, for providerId: String) {
         UserDefaults.standard.set(seconds, forKey: "refreshInterval.\(providerId)")
-    }
-
-    /// Effective refresh interval for a provider: its override if non-zero,
-    /// otherwise the global one.
-    private func effectiveInterval(for providerId: String) -> TimeInterval {
-        let override = Self.overrideInterval(for: providerId)
-        let base = override > 0 ? override : interval
-        return Self.adaptiveInterval(
-            base: base,
-            consecutiveFailures: adaptiveFailureCounts[providerId, default: 0]
-        )
     }
 
     /// Deterministic, bounded backoff: the first failure keeps the configured
@@ -466,16 +513,8 @@ final class QuotaService: ObservableObject {
     /// Test seam and diagnostics without exposing mutable scheduler state.
     func adaptiveBackoffState(for providerID: String)
     -> (consecutiveFailures: Int, multiplier: Int) {
-        let failures = adaptiveFailureCounts[providerID, default: 0]
+        let failures = scheduler.lane(for: providerID)?.adaptiveFailureCount ?? 0
         return (failures, Self.adaptiveBackoffMultiplier(for: failures))
-    }
-
-    private func recordAdaptiveOutcome(providerID: String, error: String?) {
-        if let error, !error.isEmpty {
-            adaptiveFailureCounts[providerID, default: 0] += 1
-        } else {
-            adaptiveFailureCounts.removeValue(forKey: providerID)
-        }
     }
 
     /// Replace the Codex status with the active account's cached snapshot so an
@@ -485,8 +524,8 @@ final class QuotaService: ObservableObject {
         guard let cached = AccountSnapshotStore.codex.currentCodexSnapshot() else { return }
         // A different account's cached snapshot is a fresh context — any
         // stale-data warning attached to the previous account no longer
-        // applies here.
-        staleWarnings.removeValue(forKey: "codex")
+        // applies here (adopt clears it).
+        scheduler.lane(for: "codex")?.adopt(cached)
         if let idx = statuses.firstIndex(where: { $0.id == "codex" }) {
             statuses[idx] = cached
         } else {
@@ -549,16 +588,8 @@ final class QuotaService: ObservableObject {
         if providerID == "antigravity" {
             cancelAntigravityAccountSnapshotRefresh()
         }
-        providerContextGenerations[providerID] =
-            (providerContextGenerations[providerID] ?? 0) &+ 1
-        providerLastFetched.removeValue(forKey: providerID)
-        adaptiveFailureCounts.removeValue(forKey: providerID)
-        errorSurfaceGates.removeValue(forKey: providerID)
-        warnState.removeValue(forKey: providerID)
-        staleWarnings.removeValue(forKey: providerID)
-        failureEpisode.removeValue(forKey: providerID)
-        failureNotificationRemove(Self.failureNotificationID(for: providerID))
-        legacyFailureNotificationCleanup(providerID)
+        // Lane-side: generation bump + cadence/gate/state reset + cleanup hook.
+        scheduler.lane(for: providerID)?.invalidateContext()
         statuses.removeAll { $0.id == providerID }
         rebuildDisplayStatuses()
         persistStatuses()
@@ -575,12 +606,10 @@ final class QuotaService: ObservableObject {
         }
 
         refreshPassIsRunning = true
-        isRefreshing = true
         var nextForceProviderIDs = forceProviderIDs
         repeat {
-            let successfulProviderGenerations = await runRefreshPass(
-                forceProviderIDs: nextForceProviderIDs
-            )
+            let passStart = Date()
+            await runSchedulerPass(forceProviderIDs: nextForceProviderIDs)
             guard pendingRefreshRequested else { break }
             // A forced request that queued up WHILE the pass was fetching that
             // same provider is satisfied only when that in-flight fetch
@@ -588,13 +617,16 @@ final class QuotaService: ObservableObject {
             // promised user-initiated retry, which resets adaptive backoff and
             // bypasses provider cooldowns without duplicating successful work.
             nextForceProviderIDs = Set(pendingForceProviderIDs.filter { providerID in
-                successfulProviderGenerations[providerID]
-                    != (providerContextGenerations[providerID] ?? 0)
+                guard let lane = scheduler.lane(for: providerID) else { return true }
+                guard lane.succeededGeneration == lane.contextGeneration,
+                      let succeededAt = lane.lastSucceededAt,
+                      succeededAt >= passStart
+                else { return true }
+                return false
             })
             pendingForceProviderIDs.removeAll()
             pendingRefreshRequested = false
         } while true
-        isRefreshing = false
         refreshPassIsRunning = false
 
         let waiters = refreshWaiters
@@ -612,37 +644,21 @@ final class QuotaService: ObservableObject {
         (settingsRefreshTask != nil, pendingSettingsRefreshProviderIDs)
     }
 
-    private func runRefreshPass(forceProviderIDs: Set<String>) async -> [String: UInt] {
-        let snapshot = providers
-        let startedAt = Date()
-        let log = Logger(subsystem: "com.local.birdnion", category: "quota.refresh")
-
-        // User-driven refreshes (button, popover-open and account switch)
-        // always bypass timing gates and start a fresh failure episode. A
-        // failed manual retry becomes failure #1, so it is never immediately
-        // penalized by an older automatic backoff streak.
-        for id in forceProviderIDs {
-            adaptiveFailureCounts.removeValue(forKey: id)
-        }
-
-        // Per-provider throttling: skip a provider if its individual override
-        // interval (including adaptive backoff) hasn't elapsed since the last
-        // fetch attempt. The
-        // global `interval` is still the loop cadence; this only stops
-        // re-polling providers whose own setting says "wait longer".
-        let due: [QuotaProvider] = snapshot.filter { p in
-            if forceProviderIDs.contains(p.id) { return true }
-            let interval = effectiveInterval(for: p.id)
-            guard interval > 0 else { return true }
-            guard let last = providerLastFetched[p.id] else { return true }
-            return Date().timeIntervalSince(last) >= interval
-        }
-        log.info("refresh start — due=\(due.count, privacy: .public)/\(snapshot.count, privacy: .public)")
+    /// One refresh pass over the scheduler: Codex bookkeeping for the cadence
+    /// rides ahead of the batch, then due lanes kick and settle independently.
+    private func runSchedulerPass(forceProviderIDs: Set<String>) async {
+        passStartedAt = Date()
+        passIsFirstRefresh = statuses.isEmpty
+        passFirstCompletionLogged = false
+        passTimings = []
 
         // Token-rotation sync-back: reconcile the managed account's cached
         // auth.json copy against ~/.codex/auth.json on the existing refresh
         // cadence (no new polling loop). Best-effort — swallows errors.
-        if due.contains(where: { $0.id == "codex" }) {
+        let codexDue = forceProviderIDs.contains("codex")
+            || (scheduler.lane(for: "codex")?
+                .isDue(now: Date(), globalInterval: interval) ?? false)
+        if codexDue {
             _ = CodexAccountStore.reconcileCLISyncBack()
 
             // Codex 5h auto-prime: reuses this same cadence (no new
@@ -662,181 +678,42 @@ final class QuotaService: ObservableObject {
             }
         }
 
-        // Publish statuses progressively as each provider completes — so the
-        // menu-bar popover stops showing 'Đang tải…' as soon as the first
-        // provider returns instead of waiting for the slowest one (which
-        // can be Codex at 30s timeout on first cold call).
-        //
-        // Seed `pending` with the LAST KNOWN statuses so providers keep
-        // showing their previous data while the new fetch is in flight.
-        // Without this seed the popover would flash empty placeholders for
-        // every provider the moment refresh() starts — confusing and
-        // visually jarring. Now: old data stays, header shows a subtle
-        // 'Đang cập nhật…' indicator, and each row swaps to fresh data
-        // the moment its fetch returns.
-        var pending: [String: ProviderStatus] = Dictionary(
-            uniqueKeysWithValues: statuses.map { ($0.id, $0) }
-        )
-        var pendingContextGenerations = Dictionary(
-            uniqueKeysWithValues: pending.keys.map {
-                ($0, providerContextGenerations[$0] ?? 0)
-            })
-        /// A pass-local last-good snapshot must not outlive an account/config
-        /// invalidation. Replace stale entries with any status explicitly
-        /// published in the new context (cached account/self-test), or remove
-        /// them when the new context has no status yet.
-        func reconcilePendingWithCurrentContexts() {
-            for id in Array(pending.keys) {
-                let currentGeneration = providerContextGenerations[id] ?? 0
-                guard pendingContextGenerations[id] != currentGeneration else { continue }
-                pending.removeValue(forKey: id)
-                pendingContextGenerations.removeValue(forKey: id)
-                if let current = statuses.first(where: { $0.id == id }) {
-                    pending[id] = current
-                    pendingContextGenerations[id] = currentGeneration
-                }
-            }
-            // Preserve a current-context status that arrived outside this pass
-            // (for example the newly selected account's cached snapshot).
-            for current in statuses where pending[current.id] == nil {
-                pending[current.id] = current
-                pendingContextGenerations[current.id] =
-                    providerContextGenerations[current.id] ?? 0
-            }
-        }
-        let isFirstRefresh = statuses.isEmpty
-        var successfulProviderGenerations: [String: UInt] = [:]
-        await withTaskGroup(
-            of: (String, ObjectIdentifier, UInt, String?, ProviderStatus, TimeInterval).self
-        ) { group in
-            for p in due {
-                // Forced providers (user clicked Refresh / changed a source in
-                // Settings) fetch as `.userInitiated` — providers use this to
-                // bypass rate-limit cooldowns and allow Keychain prompts.
-                let interaction: ProviderInteraction =
-                    forceProviderIDs.contains(p.id) ? .userInitiated : .background
-                let contextGeneration = providerContextGenerations[p.id] ?? 0
-                // Key under which this fetch's result is cached per account, so
-                // the popover can show every account's last known quota without
-                // paying for a fetch per account.
-                let snapshotAccountKey: String? = switch p.id {
-                case "codex": CodexAccountStore.activeSelection().id
-                case "antigravity": AntigravityOAuthStore.load().activeLabel
-                default: nil
-                }
-                group.addTask {
-                    let t0 = Date()
-                    let providerIdentity = ObjectIdentifier(p)
-                    let status = await ProviderInteractionContext.$current
-                        .withValue(interaction) { await p.fetchWithDeadline() }
-                    return (
-                        p.id, providerIdentity, contextGeneration, snapshotAccountKey,
-                        status, Date().timeIntervalSince(t0))
-                }
-            }
-            var timings: [(String, TimeInterval)] = []
-            var firstCompletionAt: Date?
-            for await (
-                id, providerIdentity, contextGeneration,
-                snapshotAccountKey, status, elapsed
-            ) in group {
-                guard providers.contains(where: {
-                    $0.id == id && ObjectIdentifier($0) == providerIdentity
-                }), providerContextGenerations[id] ?? 0 == contextGeneration else {
-                    log.info("discard removed, replaced, or stale-context provider result: \(id, privacy: .public)")
-                    continue
-                }
-                if let snapshotAccountKey,
-                   status.error == nil,
-                   status.isRenderableSnapshot
-                {
-                    switch id {
-                    case "codex": codexSnapshotSave(status, snapshotAccountKey)
-                    case "antigravity": antigravitySnapshotSave(status, snapshotAccountKey)
-                    default: break
-                    }
-                }
-                reconcilePendingWithCurrentContexts()
-                let previous = pending[id]
-                // Failure-episode bookkeeping reads the AWAITED status only —
-                // `pending`/`statuses` may keep a preserved stale good
-                // snapshot that would mask an ongoing failure (R3.5).
-                evaluateFailureEpisode(id: id, displayName: status.displayName,
-                                       error: status.error)
-                recordAdaptiveOutcome(providerID: id, error: status.error)
-                if status.error == nil {
-                    successfulProviderGenerations[id] = contextGeneration
-                }
-                // `.notConfigured` reached during a poll is the one ambiguous
-                // kind: it usually means the provider was never set up, but it
-                // also fires when the fetch DELIBERATELY skipped a user-gated
-                // source. A background pass never reads Claude's macOS Keychain
-                // login under the default `.onlyOnUserAction` prompt policy, so
-                // on a machine where the Keychain is the only credential source
-                // every poll "proved" a signed-in provider was unconfigured and
-                // wiped its numbers. Give that kind exactly one free pass while
-                // a good snapshot is on screen. Every other kind (token
-                // revoked, cookie expired, schema drift) is positive evidence
-                // from a real response and still surfaces on the first failure.
-                // The gate is NOT reset by a forced refresh: a user who clicks
-                // Retry and fails again must see the error, not a silent no-op.
-                let hadPriorData = previous?.isRenderableSnapshot == true
-                let suppressedAsFirstFlake: Bool
-                if status.error == nil {
-                    errorSurfaceGates[id, default: ConsecutiveFailureGate()].recordSuccess()
-                    suppressedAsFirstFlake = false
-                } else if classify(rawError: status.error) == .notConfigured {
-                    suppressedAsFirstFlake = !errorSurfaceGates[id, default: ConsecutiveFailureGate()]
-                        .shouldSurfaceError(onFailureWithPriorData: hadPriorData)
-                } else {
-                    suppressedAsFirstFlake = false
-                }
-                // Preserve a good snapshot across a *transient* refresh error
-                // (timeout, rate-limit, 5xx) so the popover doesn't flicker to
-                // empty. But a credential, cookie, or generic schema error means
-                // the shown numbers are no longer trustworthy — the key was
-                // revoked/rotated, the cookie expired, or the response shape
-                // genuinely changed — so surface the fresh error instead of a
-                // stale "still fine" reading.
-                if status.error != nil, let previous, previous.isRenderableSnapshot,
-                   isTransientForLastGood(rawError: status.error) || suppressedAsFirstFlake {
-                    let kind = classify(rawError: status.error) ?? .unknown
-                    staleWarnings[id] = StaleQuotaWarning(kind: kind, lastGoodUpdated: previous.lastUpdated)
-                    log.warning("preserve stale status for \(id, privacy: .public) after classified refresh error: \(kind.rawValue, privacy: .public)")
-                } else {
-                    staleWarnings.removeValue(forKey: id)
-                    pending[id] = Self.preservingLastGoodServiceStatus(status, previous: previous)
-                }
-                pendingContextGenerations[id] = contextGeneration
-                providerLastFetched[id] = Date()
-                timings.append((id, elapsed))
-                if firstCompletionAt == nil { firstCompletionAt = Date() }
-                // Re-publish on each completion so the popover updates
-                // incrementally (tab appears, then fills in).
-                statuses = providers.compactMap { pending[$0.id] }
-                rebuildDisplayStatuses()
-                if QuotaWarnConfig.enabled { evaluateWarnings(statuses) }
-            }
-            if isFirstRefresh, let firstAt = firstCompletionAt {
-                log.info("first fetch done in \(String(format: "%.2f", Date().timeIntervalSince(startedAt)), privacy: .public)s — popover has data")
-                _ = firstAt  // reserved for future "first-paint" metric
-            }
-            // Log slow providers (>2s) so the cause of slow loads is
-            // visible in Console.app without attaching a debugger.
-            let total = Date().timeIntervalSince(startedAt)
-            let sortedByDuration = timings.sorted { $0.1 > $1.1 }
+        let dueCount = providerCountPendingFetch(forceProviderIDs)
+        let providerCount = providers.count
+        Self.refreshLog.info(
+            "refresh start — due=\(dueCount, privacy: .public)/\(providerCount, privacy: .public)")
+        await scheduler.refreshAll(
+            forceProviderIDs: forceProviderIDs, globalInterval: interval)
+    }
+
+    /// How many providers this pass will actually fetch — mirrors the old
+    /// `due.count` log field (forced ids + non-forced lanes that are due).
+    private func providerCountPendingFetch(_ forceProviderIDs: Set<String>) -> Int {
+        providers.filter { p in
+            if forceProviderIDs.contains(p.id) { return true }
+            return scheduler.lane(for: p.id)?
+                .isDue(now: Date(), globalInterval: interval) ?? false
+        }.count
+    }
+
+    /// Post-batch work — runs once per scheduler batch, including batches
+    /// that kicked zero lanes (the digest cadence is internally gated).
+    private func handleBatchSettled() async {
+        let log = Self.refreshLog
+        // Log slow providers (>2s) so the cause of slow loads is
+        // visible in Console.app without attaching a debugger.
+        if let started = passStartedAt {
+            let total = Date().timeIntervalSince(started)
+            let sortedByDuration = passTimings.sorted { $0.1 > $1.1 }
             for (id, elapsed) in sortedByDuration where elapsed > 2.0 {
                 log.warning("slow provider: \(id, privacy: .public) took \(String(format: "%.2f", elapsed), privacy: .public)s")
             }
             log.info("refresh done — total=\(String(format: "%.2f", total), privacy: .public)s slow=\(sortedByDuration.filter { $0.1 > 2.0 }.count, privacy: .public)")
         }
-        reconcilePendingWithCurrentContexts()
-        statuses = providers.compactMap { pending[$0.id] }
-        rebuildDisplayStatuses()
         persistStatuses()
         scheduleAntigravityAccountSnapshotRefresh()
         await runWeeklyDigestIfDue()
-        return successfulProviderGenerations
+        syncFetchingState()
     }
 
     /// Tops up the popover's all-accounts Antigravity card in the background.
@@ -847,10 +724,11 @@ final class QuotaService: ObservableObject {
     private func scheduleAntigravityAccountSnapshotRefresh() {
         guard antigravityAccountRefreshTask == nil,
               let provider = providers.first(where: { $0.id == "antigravity" })
-                  as? AntigravityProvider
+                  as? AntigravityProvider,
+              let lane = scheduler.lane(for: provider.id)
         else { return }
         let providerIdentity = ObjectIdentifier(provider)
-        let contextGeneration = providerContextGenerations[provider.id] ?? 0
+        let contextGeneration = lane.contextGeneration
         antigravityAccountRefreshGeneration &+= 1
         let refreshGeneration = antigravityAccountRefreshGeneration
         antigravityAccountRefreshTask = Task { [weak self] in
@@ -861,7 +739,7 @@ final class QuotaService: ObservableObject {
             else { return }
             antigravityAccountRefreshTask = nil
             guard !Task.isCancelled,
-                  providerContextGenerations[provider.id] ?? 0 == contextGeneration,
+                  scheduler.lane(for: provider.id)?.contextGeneration == contextGeneration,
                   providers.contains(where: {
                       $0.id == provider.id && ObjectIdentifier($0) == providerIdentity
                   })
@@ -881,8 +759,8 @@ final class QuotaService: ObservableObject {
     /// Runs after every completed refresh pass. Gated by
     /// `WeeklyDigest.isEnabled` (a disabled toggle costs one UserDefaults
     /// read) and `WeeklyDigest.isDue` (a 7-day cadence, so an enabled toggle
-    /// still only scans once a week). `refreshPassIsRunning` already
-    /// serializes every call into `runRefreshPass`, so no separate overlap
+    /// still only scans once a week). The refresh serializer already
+    /// serializes every call into `runSchedulerPass`, so no separate overlap
     /// flag is needed here. Reuses the same six local cost scanners the All
     /// tab already calls — no new Timer/daemon/polling loop.
     private func runWeeklyDigestIfDue() async {
@@ -903,17 +781,17 @@ final class QuotaService: ObservableObject {
         }
 
         let claudeReport = authorizedSources.contains(.claude)
-            ? await ClaudeCostScanner.usageReport(now: now) : nil
+            ? await UsageReportCoordinator.shared.claudeReport() : nil
         let codexReport = authorizedSources.contains(.codex)
-            ? await CodexCostScanner.usageReport(now: now) : nil
+            ? await UsageReportCoordinator.shared.codexReport() : nil
         let grokReport = authorizedSources.contains(.grok)
-            ? await GrokCostScanner.usageReport(now: now) : nil
+            ? await UsageReportCoordinator.shared.grokReport() : nil
         let kiroReport = authorizedSources.contains(.kiro)
-            ? await KiroCostScanner.usageReport(now: now) : nil
+            ? await UsageReportCoordinator.shared.kiroReport() : nil
         let ompReport = authorizedSources.contains(.omp)
-            ? await OMPCostScanner.loadReport(now: now) : nil
+            ? await UsageReportCoordinator.shared.ompReport() : nil
         let piReport = authorizedSources.contains(.pi)
-            ? await PiCostScanner.loadReport(now: now) : nil
+            ? await UsageReportCoordinator.shared.piReport() : nil
 
         // Scanner calls can take long enough for a provider to be disabled or
         // an agent to be removed. Re-read both sources of authority at the
@@ -1081,8 +959,9 @@ final class QuotaService: ObservableObject {
     }
 
     /// Called once per FETCHED provider per refresh cycle with the awaited
-    /// result. Posts with one stable provider ID and removes pending/delivered
-    /// copies only after recovery is confirmed.
+    /// result (lanes route core-emission outcomes here). Posts with one
+    /// stable provider ID and removes pending/delivered copies only after
+    /// recovery is confirmed.
     func evaluateFailureEpisode(id: String, displayName: String, error: String?) {
         var state = failureEpisode[id] ?? FailureEpisodeState()
         let notificationID = Self.failureNotificationID(for: id)
@@ -1234,6 +1113,10 @@ final class QuotaService: ObservableObject {
 /// internal budgets: it sits well above the slowest known legitimate chain
 /// (Claude's cold CLI probe, observed up to ~160s with its OAuth/CLI/web
 /// fallback chain) so no existing provider is cut off mid-flight.
+///
+/// Lane scheduling (task-02) now bounds time-to-first-emission separately
+/// via `ProviderFetchPhaseBudgets`; this deadline still backs the one-shot
+/// `fetchAsUserAction`/`fetchWithDeadline` self-test path.
 enum ProviderFetchDeadline {
     static let seconds: TimeInterval = 200
 }
@@ -1360,7 +1243,7 @@ enum ProviderStatusCache {
     }
 }
 
-private extension ProviderStatus {
+extension ProviderStatus {
     /// A previous non-error snapshot that has meaningful UI content. When a
     /// follow-up refresh times out, keep this around so the popover does not
     /// collapse quota rows or chart payloads into an error-only card. Also
@@ -1381,327 +1264,5 @@ private extension ProviderStatus {
             || accountLabel != nil
             || version != nil
             || serviceStatus != nil
-    }
-}
-
-// MARK: - Quota warning configuration
-
-/// Resolves quota-warning thresholds from UserDefaults (shared by SettingsStore
-/// UI and QuotaService). Thresholds are "remaining %" levels, high → low; a
-/// provider+window may override the global pair, otherwise it inherits.
-enum QuotaWarnConfig {
-    static let level1Key = "quotaWarnLevel1"   // first (warning) level, default 50
-    static let level2Key = "quotaWarnLevel2"   // second (critical) level, default 20
-    static let enabledKey = "quotaWarningNotificationsEnabled"
-    /// Delivery options (SettingsStore exposes the same keys): notification
-    /// sound (default on, matching the pre-existing behavior) and a brief
-    /// on-screen overlay (default off, CodexBar parity).
-    static let soundKey = "quotaWarningSoundEnabled"
-    static let alertKey = "quotaWarningOnScreenAlertEnabled"
-
-    static var enabled: Bool {
-        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? false
-    }
-
-    static var soundEnabled: Bool {
-        UserDefaults.standard.object(forKey: soundKey) as? Bool ?? true
-    }
-
-    static var onScreenAlertEnabled: Bool {
-        UserDefaults.standard.bool(forKey: alertKey)
-    }
-
-    static var globalThresholds: [Int] {
-        let l1 = UserDefaults.standard.object(forKey: level1Key) as? Int ?? 50
-        let l2 = UserDefaults.standard.object(forKey: level2Key) as? Int ?? 20
-        return [l1, l2].filter { $0 > 0 && $0 <= 100 }.sorted(by: >)
-    }
-
-    /// "session" for the ~5h window, "weekly" for the 7-day window.
-    static func windowKey(_ label: String) -> String {
-        label.contains("Tuần") ? "weekly" : "session"
-    }
-
-    static func overrideKey(_ provider: String, _ window: String) -> String {
-        "quotaWarn.\(provider).\(window)"
-    }
-
-    static func hasOverride(provider: String, window: String) -> Bool {
-        UserDefaults.standard.string(forKey: overrideKey(provider, window)) != nil
-    }
-
-    static func thresholds(provider: String, window: String) -> [Int] {
-        if let raw = UserDefaults.standard.string(forKey: overrideKey(provider, window)), !raw.isEmpty {
-            let parsed = raw.split(separator: ",").compactMap { Int($0) }.filter { $0 > 0 && $0 <= 100 }
-            if !parsed.isEmpty { return parsed.sorted(by: >) }
-        }
-        return globalThresholds
-    }
-
-    static func setOverride(provider: String, window: String, thresholds: [Int]?) {
-        let key = overrideKey(provider, window)
-        if let thresholds {
-            UserDefaults.standard.set(thresholds.map(String.init).joined(separator: ","), forKey: key)
-        } else {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-    }
-
-    /// Pure crossing test (unit-tested): thresholds whose level was above
-    /// `previous` but is now at/below `current`, and hasn't been fired yet.
-    static func crossings(previous: Int, current: Int, thresholds: [Int], fired: Set<Int>) -> [Int] {
-        thresholds.filter { previous > $0 && current <= $0 && !fired.contains($0) }
-    }
-}
-
-// MARK: - Notifications
-
-/// Serializes async side effects in invocation order. Notification removal
-/// must never overtake a delayed authorization/add operation.
-@MainActor
-final class OrderedAsyncOperationQueue {
-    private var tail: Task<Void, Never>?
-
-    func enqueue(_ operation: @escaping @MainActor () async -> Void) {
-        let previous = tail
-        tail = Task { @MainActor in
-            await previous?.value
-            await operation()
-        }
-    }
-
-    func drain() async {
-        await tail?.value
-    }
-}
-
-/// Thin wrapper over UNUserNotificationCenter. Requests authorization lazily on
-/// first use (the system caches the decision, so repeat calls don't re-prompt).
-@MainActor
-enum QuotaNotifier {
-    private static let operations = OrderedAsyncOperationQueue()
-
-    static func post(id: String, title: String, body: String) {
-        let center = UNUserNotificationCenter.current()
-        let soundEnabled = QuotaWarnConfig.soundEnabled
-        operations.enqueue {
-            let granted = await requestAuthorization(center)
-            guard granted else { return }
-            let content = UNMutableNotificationContent()
-            content.title = title
-            content.body = body
-            content.sound = soundEnabled ? .default : nil
-            let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
-            await add(request, to: center)
-        }
-        if QuotaWarnConfig.onScreenAlertEnabled {
-            QuotaAlertOverlay.shared.show(title: title, message: body)
-        }
-    }
-
-    /// Awaitable variant of `post` — returns `true` only when the OS
-    /// actually queued the notification (authorization granted AND `add`
-    /// completed without an error). Used by `WeeklyDigest` so `lastSentAt`
-    /// only advances on confirmed delivery; every other call site keeps
-    /// using the fire-and-forget `post` above, which this does not replace.
-    @discardableResult
-    static func postAndWait(
-        id: String,
-        title: String,
-        body: String,
-        revalidate: @escaping @MainActor () async -> Bool = { true }
-    ) async -> Bool {
-        let center = UNUserNotificationCenter.current()
-        let soundEnabled = QuotaWarnConfig.soundEnabled
-        let posted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            operations.enqueue {
-                let mayPost = await authorizationAndRevalidationAllowPost(
-                    requestAuthorization: { await requestAuthorization(center) },
-                    revalidate: revalidate)
-                guard mayPost else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                let content = UNMutableNotificationContent()
-                content.title = title
-                content.body = body
-                content.sound = soundEnabled ? .default : nil
-                let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
-                let succeeded = await addAwaitingResult(request, to: center)
-                continuation.resume(returning: succeeded)
-            }
-        }
-        if posted, QuotaWarnConfig.onScreenAlertEnabled {
-            QuotaAlertOverlay.shared.show(title: title, message: body)
-        }
-        return posted
-    }
-
-    /// Keeps the consent/source check causally after the potentially blocking
-    /// OS permission prompt and immediately before the notification is added.
-    static func authorizationAndRevalidationAllowPost(
-        requestAuthorization: @escaping @MainActor () async -> Bool,
-        revalidate: @escaping @MainActor () async -> Bool
-    ) async -> Bool {
-        guard await requestAuthorization() else { return false }
-        return await revalidate()
-    }
-
-    static func remove(id: String) {
-        let center = UNUserNotificationCenter.current()
-        operations.enqueue {
-            center.removePendingNotificationRequests(withIdentifiers: [id])
-            center.removeDeliveredNotifications(withIdentifiers: [id])
-        }
-    }
-
-    static func removeLegacyFailureNotifications(providerID: String) {
-        let center = UNUserNotificationCenter.current()
-        let prefix = "\(providerID).failing."
-        operations.enqueue {
-            let requests = await pendingRequests(center)
-            let pendingIDs = requests.map(\.identifier).filter { $0.hasPrefix(prefix) }
-            center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
-            let notifications = await deliveredNotifications(center)
-            let deliveredIDs = notifications.map(\.request.identifier).filter {
-                $0.hasPrefix(prefix)
-            }
-            center.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
-        }
-    }
-
-    static func removeAllFailureNotifications() {
-        let center = UNUserNotificationCenter.current()
-        operations.enqueue {
-            let requests = await pendingRequests(center)
-            let pendingIDs = requests.map(\.identifier).filter(isFailureNotificationID)
-            center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
-            let notifications = await deliveredNotifications(center)
-            let deliveredIDs = notifications.map(\.request.identifier).filter(isFailureNotificationID)
-            center.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
-        }
-    }
-
-    private static func isFailureNotificationID(_ id: String) -> Bool {
-        id.hasPrefix("provider.failure.") || id.contains(".failing.")
-    }
-
-    private static func requestAuthorization(_ center: UNUserNotificationCenter) async -> Bool {
-        await withCheckedContinuation { continuation in
-            center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-                continuation.resume(returning: granted)
-            }
-        }
-    }
-
-    private static func add(
-        _ request: UNNotificationRequest,
-        to center: UNUserNotificationCenter
-    ) async {
-        await withCheckedContinuation { continuation in
-            center.add(request) { _ in
-                continuation.resume()
-            }
-        }
-    }
-
-    /// Same as `add` but reports whether the OS actually accepted the
-    /// request (`error == nil`), for `postAndWait`.
-    private static func addAwaitingResult(
-        _ request: UNNotificationRequest,
-        to center: UNUserNotificationCenter
-    ) async -> Bool {
-        await withCheckedContinuation { continuation in
-            center.add(request) { error in
-                continuation.resume(returning: error == nil)
-            }
-        }
-    }
-
-    private static func pendingRequests(
-        _ center: UNUserNotificationCenter
-    ) async -> [UNNotificationRequest] {
-        await withCheckedContinuation { continuation in
-            center.getPendingNotificationRequests {
-                continuation.resume(returning: $0)
-            }
-        }
-    }
-
-    private static func deliveredNotifications(
-        _ center: UNUserNotificationCenter
-    ) async -> [UNNotification] {
-        await withCheckedContinuation { continuation in
-            center.getDeliveredNotifications {
-                continuation.resume(returning: $0)
-            }
-        }
-    }
-}
-
-// MARK: - On-screen alert overlay
-
-/// Brief centered on-screen alert for quota warnings — a floating,
-/// non-activating, click-through panel that auto-dismisses. Trimmed-down
-/// port of CodexBar's `QuotaWarningAlertOverlayController`.
-@MainActor
-final class QuotaAlertOverlay {
-    static let shared = QuotaAlertOverlay()
-
-    private var panel: NSPanel?
-    private var dismissTask: Task<Void, Never>?
-    private static let displayDuration: TimeInterval = 4.5
-
-    func show(title: String, message: String) {
-        dismiss()
-
-        let content = VStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-            Text(message)
-                .font(.system(size: 12))
-                .multilineTextAlignment(.center)
-        }
-        .padding(.horizontal, 26)
-        .padding(.vertical, 18)
-        .frame(maxWidth: 420)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-        let hosting = NSHostingView(rootView: content)
-        hosting.frame.size = hosting.fittingSize
-
-        let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.ignoresMouseEvents = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .transient]
-        panel.contentView = hosting
-        if let screen = NSScreen.main {
-            let frame = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(
-                x: frame.midX - hosting.fittingSize.width / 2,
-                y: frame.midY - hosting.fittingSize.height / 2))
-        }
-        panel.orderFrontRegardless()
-        self.panel = panel
-
-        dismissTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.displayDuration * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            self?.dismiss()
-        }
-    }
-
-    private func dismiss() {
-        dismissTask?.cancel()
-        dismissTask = nil
-        panel?.orderOut(nil)
-        panel = nil
     }
 }

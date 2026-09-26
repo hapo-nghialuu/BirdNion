@@ -140,12 +140,12 @@ struct InsightsPane: View {
         let includeOMP = enabledSources.contains(.omp)
         let includePi = enabledSources.contains(.pi)
 
-        let seededClaude = includeClaude ? await ClaudeCostScanner.seededReport() : nil
-        let seededCodex = includeCodex ? await CodexCostScanner.seededReport() : nil
-        let seededGrok = includeGrok ? await GrokCostScanner.seededReport() : nil
-        let seededKiro = includeKiro ? await KiroCostScanner.seededReport() : nil
-        let ompReport = includeOMP ? await OMPCostScanner.loadReport() : nil
-        let piReport = includePi ? await PiCostScanner.loadReport() : nil
+        let seededClaude = includeClaude ? await UsageReportCoordinator.shared.seededClaudeReport() : nil
+        let seededCodex = includeCodex ? await UsageReportCoordinator.shared.seededCodexReport() : nil
+        let seededGrok = includeGrok ? await UsageReportCoordinator.shared.seededGrokReport() : nil
+        let seededKiro = includeKiro ? await UsageReportCoordinator.shared.seededKiroReport() : nil
+        let ompReport = includeOMP ? await UsageReportCoordinator.shared.ompReport() : nil
+        let piReport = includePi ? await UsageReportCoordinator.shared.piReport() : nil
         guard !Task.isCancelled, loadGeneration == generation else { return }
         let seeded = await buildReport(
             claude: seededClaude, codex: seededCodex, grok: seededGrok,
@@ -157,10 +157,10 @@ struct InsightsPane: View {
         guard !Task.isCancelled, loadGeneration == generation else { return }
         if let seeded { report = seeded }
 
-        let liveClaude = includeClaude ? await ClaudeCostScanner.usageReport() : nil
-        let liveCodex = includeCodex ? await CodexCostScanner.usageReport() : nil
-        let liveGrok = includeGrok ? await GrokCostScanner.usageReport() : nil
-        let liveKiro = includeKiro ? await KiroCostScanner.usageReport() : nil
+        let liveClaude = includeClaude ? await UsageReportCoordinator.shared.claudeReport() : nil
+        let liveCodex = includeCodex ? await UsageReportCoordinator.shared.codexReport() : nil
+        let liveGrok = includeGrok ? await UsageReportCoordinator.shared.grokReport() : nil
+        let liveKiro = includeKiro ? await UsageReportCoordinator.shared.kiroReport() : nil
         guard !Task.isCancelled, loadGeneration == generation else { return }
         let live = await buildReport(
             claude: liveClaude ?? seededClaude, codex: liveCodex ?? seededCodex,

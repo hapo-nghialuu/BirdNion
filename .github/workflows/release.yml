@@ -1,0 +1,283 @@
+name: release
+
+# Release lane: pushing code to the `release` branch publishes BOTH macOS and
+# Linux artifacts for the version recorded in source.
+#
+# Developer ritual:
+#   Scripts/bump-version.sh X.Y.Z          # on main — bumps all 5 version spots
+#   git commit -am "release: bump X.Y.Z" && git push origin main
+#   git push origin main:release           # triggers this workflow
+#
+# The tag version is derived from source — BirdNion/Info.plist,
+# project.pbxproj MARKETING_VERSION, linux/src-tauri/tauri.conf.json,
+# Cargo.toml and Cargo.lock must all agree or the run fails before building.
+#
+# Required secrets:
+#   RELEASE_PAT — PAT for hapo-nghialuu covering:
+#     - BirdNion:            contents read/write (push release, create release)
+#     - homebrew-tap:        contents read/write (cask bump commit)
+#     - CLIProxyAPI-private: contents read       (embedded helper, both jobs)
+#   HAPO_BASE_URL, HAPO_ME_URL, HAPO_AUTH_TEMPLATE — same as linux-release.yml.
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    # macos-26: Xcode 26 toolchain — Vendor/CodexBar requires swift-tools 6.2.
+    runs-on: macos-26
+    timeout-minutes: 240
+    # The workflow pushes its own release/cask commits back to this branch;
+    # skip runs triggered by bot-authored head commits so a publish cannot
+    # retrigger itself.
+    if: github.event.head_commit.committer.username != 'github-actions[bot]'
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+      HAPO_BASE_URL: ${{ secrets.HAPO_BASE_URL }}
+      HAPO_ME_URL: ${{ secrets.HAPO_ME_URL }}
+      HAPO_AUTH_TEMPLATE: ${{ secrets.HAPO_AUTH_TEMPLATE }}
+      RELEASE_BRANCH: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release
+          token: ${{ secrets.RELEASE_PAT }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'   # CLIProxyAPI go.mod requires go >= 1.26.0
+
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Preflight secrets
+        env:
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+        run: |
+          for v in HAPO_BASE_URL HAPO_ME_URL HAPO_AUTH_TEMPLATE RELEASE_PAT; do
+            if [ -z "${!v:-}" ]; then
+              echo "Missing required secret/env: $v" >&2
+              exit 1
+            fi
+          done
+          case "$HAPO_AUTH_TEMPLATE" in
+            *'{token}'*) ;;
+            *) echo "HAPO_AUTH_TEMPLATE must contain the literal {token} placeholder" >&2; exit 1 ;;
+          esac
+
+      - name: Configure git identity and credentials
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+          # actions/checkout leaves a detached HEAD; release.sh requires a
+          # local branch matching RELEASE_BRANCH.
+          git switch -C release origin/release
+
+      - name: Match runner to dev test environment (timezone + Codex home)
+        # xcodebuild does not forward shell env vars into the test process, so
+        # TZ/CODEX_HOME exports have no effect — set the runner's real state:
+        # - The suite is authored on an Asia/Ho_Chi_Minh machine; cost-scanner
+        #   tests assert on local-midnight boundaries that only differ there.
+        # - FirstLiveCheckpoint reauth tests exercise the real system Codex
+        #   home (reauth(id: "system")); the runner has no ~/.codex. Seed an
+        #   empty credential fixture — no real credentials are used.
+        run: |
+          sudo systemsetup -settimezone Asia/Ho_Chi_Minh
+          mkdir -p "$HOME/.codex"
+          if [ ! -f "$HOME/.codex/auth.json" ]; then printf '{}' > "$HOME/.codex/auth.json"; fi
+
+      - name: Check out CLIProxyAPI helper source
+        # release.sh's "Embed CLIProxyAPI Core" build phase compiles the helper
+        # from CLIPROXYAPI_SOURCE; it must live outside the repo so the
+        # clean-tree gate stays satisfied. $RUNNER_TEMP is set on every runner.
+        run: |
+          git clone --depth 1 https://github.com/hapo-nghialuu/CLIProxyAPI-private.git "$RUNNER_TEMP/CLIProxyAPI"
+          echo "CLIPROXYAPI_SOURCE=$RUNNER_TEMP/CLIProxyAPI" >> "$GITHUB_ENV"
+
+      - name: Build cliproxyapi helper (Tauri gate prerequisite)
+        # linux/src-tauri declares binaries/cliproxyapi as a bundle resource;
+        # tauri-build validates it even during `cargo test` in release.sh.
+        # binaries/ is gitignored, so the clean-tree gate stays satisfied.
+        run: linux/scripts/build-cliproxy.sh
+
+      - name: Resolve release version
+        id: version
+        run: |
+          PLIST=$(plutil -extract CFBundleShortVersionString raw BirdNion/Info.plist)
+          PBX=$(sed -nE 's/.*MARKETING_VERSION = ([0-9]+\.[0-9]+\.[0-9]+);.*/\1/p' \
+            BirdNion.xcodeproj/project.pbxproj | sort -u)
+          TAURI=$(node -p "require('./linux/src-tauri/tauri.conf.json').version")
+          CARGO=$(grep -m1 '^version = ' linux/src-tauri/Cargo.toml | cut -d'"' -f2)
+          LOCK=$(grep -A1 '^name = "birdnion"$' linux/src-tauri/Cargo.lock \
+            | grep -m1 'version' | cut -d'"' -f2)
+          echo "plist=$PLIST pbx=$PBX tauri=$TAURI cargo=$CARGO lock=$LOCK"
+          for v in "$PBX" "$TAURI" "$CARGO" "$LOCK"; do
+            if [ "$v" != "$PLIST" ]; then
+              echo "::error::Version mismatch — run Scripts/bump-version.sh <semver> first" >&2
+              exit 1
+            fi
+          done
+          echo "value=$PLIST" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate tag state
+        id: state
+        run: |
+          V="${{ steps.version.outputs.value }}"
+          TAG="v$V"
+          if ! gh release view "$TAG" --repo hapo-nghialuu/BirdNion >/dev/null 2>&1; then
+            echo "$TAG not on GitHub yet — fresh release"
+            exit 0
+          fi
+          REMOTE=$(gh api "repos/hapo-nghialuu/BirdNion/commits/$TAG" --jq .sha)
+          HEAD_SHA=$(git rev-parse HEAD)
+          COMPLETE=0
+          if gh release view "$TAG" --repo hapo-nghialuu/BirdNion --json assets \
+               --jq '.assets[].name' | grep -qx "BirdNion-$V.zip" \
+             && grep -q "version \"$V\"" Casks/birdnion.rb; then
+            COMPLETE=1
+          fi
+          if [ "$REMOTE" = "$HEAD_SHA" ]; then
+            if [ "$COMPLETE" -eq 1 ]; then
+              echo "$TAG already fully released at HEAD — nothing to do"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$TAG exists at HEAD but release is incomplete — repairing"
+            fi
+          elif git merge-base --is-ancestor "$REMOTE" "$HEAD_SHA"; then
+            if [ "$COMPLETE" -eq 1 ]; then
+              echo "$TAG already released; branch has post-release commits — nothing to do"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::$TAG is incomplete but the branch moved on — inspect the release manually" >&2
+              exit 1
+            fi
+          else
+            echo "::error::$TAG already released at $REMOTE (this run: $HEAD_SHA). Bump the version for a new release." >&2
+            exit 1
+          fi
+
+      - name: Run release (verification gate → build → publish)
+        if: steps.state.outputs.skip != 'true'
+        run: ./Scripts/release.sh "${{ steps.version.outputs.value }}"
+
+  linux:
+    needs: macos
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: linux
+    env:
+      RELEASE_TAG: v${{ needs.macos.outputs.version }}
+      GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+      HAPO_BASE_URL: ${{ secrets.HAPO_BASE_URL }}
+      HAPO_ME_URL: ${{ secrets.HAPO_ME_URL }}
+      HAPO_AUTH_TEMPLATE: ${{ secrets.HAPO_AUTH_TEMPLATE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify tag matches tauri.conf.json version
+        run: |
+          TAG_VERSION="${RELEASE_TAG#v}"
+          CONF_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$TAG_VERSION" != "$CONF_VERSION" ]; then
+            echo "Tag v$TAG_VERSION does not match tauri.conf.json version $CONF_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: linux/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: linux/src-tauri
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build bundled CLIProxyAPI helper
+        run: |
+          gh auth setup-git
+          git clone --depth 1 https://github.com/hapo-nghialuu/CLIProxyAPI-private.git "$RUNNER_TEMP/CLIProxyAPI"
+          CLIPROXYAPI_SOURCE="$RUNNER_TEMP/CLIProxyAPI" scripts/build-cliproxy.sh
+          file src-tauri/binaries/cliproxyapi
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Frontend contract tests
+        run: npm test
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build bundles (.deb / .rpm / AppImage)
+        run: |
+          for name in HAPO_BASE_URL HAPO_ME_URL HAPO_AUTH_TEMPLATE; do
+            if [ -z "${!name}" ]; then
+              echo "Required GitHub Actions secret $name is missing" >&2
+              exit 1
+            fi
+          done
+          if [[ "$HAPO_AUTH_TEMPLATE" != *'{token}'* ]]; then
+            echo "HAPO_AUTH_TEMPLATE must contain the literal {token} placeholder" >&2
+            exit 1
+          fi
+
+          cargo clean --manifest-path src-tauri/Cargo.toml -p birdnion --release
+          npm run tauri build
+
+          binary=src-tauri/target/release/birdnion
+          for name in HAPO_BASE_URL HAPO_ME_URL HAPO_AUTH_TEMPLATE; do
+            if ! grep -aFq -- "${!name}" "$binary"; then
+              echo "$name was not baked into the release binary" >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload bundles to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: |
+            linux/src-tauri/target/release/bundle/deb/*.deb
+            linux/src-tauri/target/release/bundle/rpm/*.rpm
+            linux/src-tauri/target/release/bundle/appimage/*.AppImage
+          fail_on_unmatched_files: true

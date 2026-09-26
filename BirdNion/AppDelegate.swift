@@ -445,6 +445,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             display: true
         )
         panel.makeKeyAndOrderFront(nil)
+        // Lets CodexWebDashboard know the scrape may run — the WKWebView is
+        // only allowed while the popover can actually show its extras.
+        CodexWebDashboard.popoverIsOpen = true
 
         // Optional CodexBar-parity behavior: force-refresh every provider on
         // open. Guarded so an already-running cycle isn't doubled.
@@ -460,6 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .birdnionInvalidateAgentPanelRequests,
             object: nil)
         panel.orderOut(nil)
+        CodexWebDashboard.popoverIsOpen = false
         panelTopY = nil
         agentDetailCoordinator.close()
     }

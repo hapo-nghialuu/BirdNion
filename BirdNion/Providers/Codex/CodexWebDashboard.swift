@@ -6,15 +6,28 @@ import Foundation
 /// browser-cookie importer + dashboard fetcher.
 ///
 /// Opt-in (off by default): it loads chatgpt.com in a hidden WKWebView and
-/// imports browser cookies, so it materially increases battery/network use.
-/// Results are cached with a TTL to bound how often the WKWebView spawns on the
-/// background poll; a manual refresh forces a re-scrape.
+/// imports browser cookies, so it materially increases memory/network use.
+/// The scrape only runs while the popover is open (`popoverIsOpen`) or on a
+/// manual refresh; results are cached with a TTL to bound how often the
+/// WKWebView re-spawns, and a closed popover is served the last cached value.
 enum CodexWebDashboard {
     static let enabledKey = "codexOpenAIWebEnabled"
     static let cookieSourceKey = "codexCookieSource"        // ProviderCookieSource raw value
     static let manualCookieKey = "codexManualCookieHeader"
-    private static let ttl: TimeInterval = 600
+    private static let ttl: TimeInterval = 1800
     private static let timeout: TimeInterval = 20
+
+    /// Set by AppDelegate when the quota popover shows/hides. The WKWebView
+    /// scrape only runs while the popover is open or on a manual refresh —
+    /// background ticks never spawn the webview for a result nobody can see
+    /// (a chatgpt.com render transiently allocates hundreds of MB).
+    nonisolated(unsafe) static var popoverIsOpen = false
+
+    /// Whether a scrape may spawn the WKWebView right now: popover open, or
+    /// a user-initiated refresh.
+    static func mayScrape(forceRefresh: Bool) -> Bool {
+        popoverIsOpen || forceRefresh
+    }
 
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
 
@@ -25,6 +38,9 @@ enum CodexWebDashboard {
             guard let e = entries[key], now.timeIntervalSince(e.at) < ttl else { return nil }
             return e.value
         }
+        /// Last stored extras regardless of age — served while the popover is
+        /// closed so stale fields stay on the next open without a scrape.
+        func latest(key: String) -> CodexWebExtras? { entries[key]?.value }
         func store(key: String, value: CodexWebExtras, at: Date) { entries[key] = (at, value) }
     }
 
@@ -36,6 +52,13 @@ enum CodexWebDashboard {
         let key = email ?? "system"
         if !forceRefresh, let cached = await Cache.shared.valid(key: key, now: now, ttl: ttl) {
             return cached
+        }
+        // Popover closed + not a manual refresh: serve whatever is cached
+        // (even past TTL) and never spawn the WKWebView — extras only render
+        // inside the popover, so a background scrape pays real memory for
+        // data nobody can see.
+        guard mayScrape(forceRefresh: forceRefresh) else {
+            return await Cache.shared.latest(key: key)
         }
         guard let snapshot = await scrape(email: email) else { return nil }
         // Ownership guard: if the caller supplied a specific email, discard the

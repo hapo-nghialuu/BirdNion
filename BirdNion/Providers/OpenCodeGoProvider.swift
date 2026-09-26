@@ -414,13 +414,21 @@ final class OpenCodeGoProvider: QuotaProvider {
         else { return nil }
 
         let monthly = firstDict(from: dict, keys: monthlyKeys).flatMap { parseWindow($0, now: now) }
+        let scale = percentScale(
+            [rolling, weekly, monthly].compactMap { $0 }.filter { !$0.isDerived }.map(\.percent))
 
         var windows: [QuotaWindow] = [
-            makeWindow(label: "Rolling", result: rolling, windowSec: 5 * 3600),
-            makeWindow(label: "Tuần", result: weekly, windowSec: 7 * 24 * 3600),
+            makeWindow(
+                label: "Rolling", result: rolling,
+                scale: rolling.isDerived ? 1 : scale, windowSec: 5 * 3600),
+            makeWindow(
+                label: "Tuần", result: weekly,
+                scale: weekly.isDerived ? 1 : scale, windowSec: 7 * 24 * 3600),
         ]
         if let monthly {
-            windows.append(makeWindow(label: "Tháng", result: monthly, windowSec: 30 * 24 * 3600))
+            windows.append(makeWindow(
+                label: "Tháng", result: monthly,
+                scale: monthly.isDerived ? 1 : scale, windowSec: 30 * 24 * 3600))
         }
 
         // Parse subscription renewal date — aliases: renewAt / renewsAt / renew_at / renews_at.
@@ -448,20 +456,24 @@ final class OpenCodeGoProvider: QuotaProvider {
         let monthlyReset = extractInt(
             pattern: #"monthlyUsage[^}]*?resetInSec\s*:\s*([0-9]+)"#, text: text)
 
+        let scale = percentScale([rollingPct, weeklyPct, monthlyPct].compactMap { $0 })
         var windows = [
             makeWindow(
                 label: "Rolling",
-                result: WindowResult(percent: normalizePercent(rollingPct), resetSec: rollingReset),
+                result: WindowResult(percent: rollingPct, resetSec: rollingReset, isDerived: false),
+                scale: scale,
                 windowSec: 5 * 3600),
             makeWindow(
                 label: "Tuần",
-                result: WindowResult(percent: normalizePercent(weeklyPct), resetSec: weeklyReset),
+                result: WindowResult(percent: weeklyPct, resetSec: weeklyReset, isDerived: false),
+                scale: scale,
                 windowSec: 7 * 24 * 3600),
         ]
         if let mPct = monthlyPct, let mReset = monthlyReset {
             windows.append(makeWindow(
                 label: "Tháng",
-                result: WindowResult(percent: normalizePercent(mPct), resetSec: mReset),
+                result: WindowResult(percent: mPct, resetSec: mReset, isDerived: false),
+                scale: scale,
                 windowSec: 30 * 24 * 3600))
         }
         return windows
@@ -596,6 +608,7 @@ final class OpenCodeGoProvider: QuotaProvider {
     private struct WindowResult {
         let percent: Double
         let resetSec: Int
+        let isDerived: Bool
     }
 
     private static let percentKeys = [
@@ -609,6 +622,7 @@ final class OpenCodeGoProvider: QuotaProvider {
 
     private static func parseWindow(_ dict: [String: Any], now: Date) -> WindowResult? {
         var pct: Double?
+        var isDerived = false
         for key in percentKeys {
             if let v = doubleValue(dict[key]) { pct = v; break }
         }
@@ -616,7 +630,10 @@ final class OpenCodeGoProvider: QuotaProvider {
             if let used = doubleValue(dict["used"]) ?? doubleValue(dict["usage"]),
                let limit = doubleValue(dict["limit"]) ?? doubleValue(dict["total"]),
                limit > 0
-            { pct = used / limit * 100 }
+            {
+                pct = used / limit * 100
+                isDerived = true
+            }
         }
         guard let resolvedPct = pct else { return nil }
 
@@ -632,11 +649,26 @@ final class OpenCodeGoProvider: QuotaProvider {
             }
         }
 
-        return WindowResult(percent: normalizePercent(resolvedPct), resetSec: max(0, resetSec ?? 0))
+        return WindowResult(
+            percent: resolvedPct,
+            resetSec: max(0, resetSec ?? 0),
+            isDerived: isDerived)
     }
 
-    private static func makeWindow(label: String, result: WindowResult, windowSec: Int) -> QuotaWindow {
-        let used = Int(result.percent.rounded()).clamped(to: 0...100)
+    /// One payload mixes either 0-1 fractions or 0-100 percents — never both.
+    /// Decide once per payload: a bare `1` is ambiguous, so only a fractional
+    /// value proves the 0-1 form. The live Zen API returns integer percents
+    /// (`"weekly": {"percent": 1}` = 1% used, not 100%).
+    private static func percentScale(_ percents: [Double]) -> Double {
+        let inUnitRange = percents.allSatisfy { (0.0...1.0).contains($0) }
+        let hasFraction = percents.contains { $0.truncatingRemainder(dividingBy: 1) != 0 }
+        return (inUnitRange && hasFraction) ? 100 : 1
+    }
+
+    private static func makeWindow(
+        label: String, result: WindowResult, scale: Double, windowSec: Int
+    ) -> QuotaWindow {
+        let used = Int((result.percent * scale).rounded()).clamped(to: 0...100)
         let now = Date()
         let resetDate = now.addingTimeInterval(TimeInterval(result.resetSec))
         return QuotaWindow(
@@ -649,11 +681,6 @@ final class OpenCodeGoProvider: QuotaProvider {
     }
 
     // MARK: - Value coercion
-
-    private static func normalizePercent(_ v: Double) -> Double {
-        let scaled = (v <= 1.0 && v >= 0) ? v * 100 : v
-        return max(0, min(100, scaled))
-    }
 
     private static func doubleValue(_ raw: Any?) -> Double? {
         switch raw {

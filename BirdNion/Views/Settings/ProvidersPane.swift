@@ -192,15 +192,15 @@ struct ProvidersPane: View {
                 selfTestState[selectedID] = .running
             }
             // Scan local sessions for token cost only while the provider is
-            // selected. Mirrors CodexCostScanner's behavior — cached 5 min
-            // so the panel doesn't re-walk the project tree on every refresh.
+            // selected — cached 5 min via UsageReportCoordinator so the panel
+            // doesn't re-walk the project tree on every refresh.
             switch selectedID {
             case "codex":
                 claudeCost = nil
-                codexCost = await CodexCostScanner.summary()
+                codexCost = await UsageReportCoordinator.shared.codexSummary()
             case "claude":
                 codexCost = nil
-                claudeCost = await ClaudeCostScanner.summary()
+                claudeCost = await UsageReportCoordinator.shared.claudeSummary()
             default:
                 codexCost = nil
                 claudeCost = nil
@@ -426,6 +426,7 @@ extension ProvidersPane {
         case "bedrock": "AWS Bedrock"
         case "freemodel": "FreeModel"
         case "hiyo": "Hiyo"
+        case "devin": "Devin"
         default: row.displayName ?? row.id
         }
     }
@@ -618,6 +619,8 @@ struct ProviderLogoView: View {
             logo("BedrockLogo", brand: VocabbyTheme.bedrock)
         case "hiyo":
             logo("HiyoLogo", brand: VocabbyTheme.hiyo)
+        case "devin":
+            logo("DevinLogo", brand: VocabbyTheme.devin)
         default:
             Image(systemName: "circle.dotted")
                 .resizable()
@@ -1467,7 +1470,10 @@ struct CodexExtraHomesCard: View {
     private func apply(_ next: [String]) {
         settings.codexExtraHomePaths = next
         paths = settings.codexExtraHomePaths
-        Task { await CodexCostScanner.invalidateCaches() }
+        Task {
+            await CodexCostScanner.invalidateCaches()
+            await UsageReportCoordinator.shared.invalidateAll()
+        }
     }
 }
 

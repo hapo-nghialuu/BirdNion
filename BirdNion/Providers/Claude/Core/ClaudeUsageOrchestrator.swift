@@ -13,44 +13,292 @@ enum ClaudeUsageOrchestrator {
         let sourceLabel: String
     }
 
+    /// Injectable seam for the per-source fetchers + environment probes, so
+    /// the staged race is unit-testable without network/Keychain/PTY. The
+    /// live defaults call exactly the same code paths as before.
+    struct Fetchers: Sendable {
+        var oauth: @Sendable (URLSession, Bool) async throws -> ClaudeUsageSnapshot
+        var web: @Sendable (ClaudeCookieSource, String?, URLSession) async throws -> ClaudeWebUsageData
+        /// PTY/direct CLI chain. `allowRetry` gates the 60s retry budget
+        /// (manual interaction only); `budget` clamps the probe timeout to the
+        /// remaining core budget.
+        var cli: @Sendable (Bool, Bool, TimeInterval?) async throws -> ClaudeStatusSnapshot
+        var admin: @Sendable (URLSession) async throws -> ClaudeUsageSnapshot
+        var hasCLI: @Sendable () -> Bool
+        var autoWebSessionSuppressed: @Sendable () -> Bool
+        var readDataSource: @Sendable () -> ClaudeUsageDataSource
+        var readCookieSource: @Sendable () -> ClaudeCookieSource
+        var readManualCookie: @Sendable () -> String?
+        var now: @Sendable () -> Date
+
+        static let live = Fetchers(
+            oauth: { session, allowPrompt in
+                try await ClaudeOAuthUsageAPI.loadSnapshot(
+                    session: session, allowKeychainPrompt: allowPrompt)
+            },
+            web: { cookieSource, manualCookie, session in
+                if cookieSource == .manual, let header = manualCookie {
+                    return try await ClaudeWebAPIFetcher.fetchUsage(
+                        cookieHeader: header, session: session)
+                }
+                return try await ClaudeWebAPIFetcher.fetchUsage(session: session)
+            },
+            cli: { isAutoPlan, allowRetry, budget in
+                try await cliFetch(
+                    isAutoPlan: isAutoPlan, allowRetry: allowRetry, budget: budget)
+            },
+            admin: { session in try await fetchAdmin(session: session) },
+            hasCLI: { ClaudeCLIResolver.isAvailable() },
+            autoWebSessionSuppressed: { ClaudeWebCookieReader.isAutoSuppressed },
+            readDataSource: { ClaudeUsageOrchestrator.readDataSource() },
+            readCookieSource: { ClaudeUsageOrchestrator.readCookieSource() },
+            readManualCookie: { readManualCookieHeader() },
+            now: { Date() })
+    }
+
     static func loadLatestUsage(session: URLSession = .shared,
-                                allowKeychainPrompt: Bool) async throws -> Result {
-        let selected = readDataSource()
-        let cookieSource = readCookieSource()
-        let manualCookie = readManualCookieHeader()
+                                allowKeychainPrompt: Bool,
+                                interaction: ProviderInteraction = .background,
+                                fetchers: Fetchers = .live) async throws -> Result {
+        let selected = fetchers.readDataSource()
+        let cookieSource = fetchers.readCookieSource()
+        let manualCookie = fetchers.readManualCookie()
         let webEnabled = cookieSource != .off
+        let coreDeadline = fetchers.now()
+            .addingTimeInterval(ProviderFetchPhaseBudgets.coreSeconds(for: interaction))
 
         let input = ClaudeSourcePlanningInput(
             selectedDataSource: selected,
             webExtrasEnabled: webEnabled,
             hasWebSession: cookieSource == .manual
                 ? (manualCookie != nil)
-                : (cookieSource == .auto && !ClaudeWebCookieReader.isAutoSuppressed),
-            hasCLI: ClaudeCLIResolver.isAvailable(),
+                : (cookieSource == .auto && !fetchers.autoWebSessionSuppressed()),
+            hasCLI: fetchers.hasCLI(),
             hasOAuthCredentials: true)   // OAuth is the default; the fetch reports real availability
         let plan = ClaudeSourcePlanner.resolve(input: input)
 
         var lastError: Error?
-        for step in plan.executionSteps {
-            do {
-                var snapshot = try await fetch(
-                    step.dataSource, session: session, cookieSource: cookieSource,
+        /// The HTTP race's Web outcome — reused by a later stage's extras merge
+        /// so a failed/untrusted race scrape is never retried a second time.
+        var raceWebOutcome: Swift.Result<ClaudeWebUsageData, Error>?
+        for stage in plan.executionStages {
+            switch stage {
+            case .race(let steps):
+                if let winner = await raceHTTPSources(
+                    steps: steps, session: session, cookieSource: cookieSource,
                     manualCookie: manualCookie, allowKeychainPrompt: allowKeychainPrompt,
-                    isAutoPlan: selected == .auto)
-                guard hasTrustedData(snapshot) else {
-                    throw ClaudeUsageError.parseFailed(
-                        "\(step.dataSource.sourceLabel): phản hồi không có quota/cost hợp lệ")
+                    webEnabled: webEnabled, coreDeadline: coreDeadline,
+                    fetchers: fetchers, lastError: &lastError,
+                    webOutcome: &raceWebOutcome)
+                {
+                    return winner
                 }
-                if webEnabled, step.dataSource != .web {
-                    snapshot = await applyWebExtras(
-                        to: snapshot, cookieSource: cookieSource, manualCookie: manualCookie, session: session)
+            case .single(let step):
+                let remaining = coreDeadline.timeIntervalSince(fetchers.now())
+                // CLI starvation guard (F-09): in background polls a nearly
+                // exhausted core budget can't fit even the cheapest PTY probe —
+                // skip the stage instead of spawning a doomed process.
+                if step.dataSource == .cli, interaction == .background, remaining < 10 {
+                    lastError = lastError ?? ClaudeUsageError.parseFailed(
+                        "CLI: ngân sách fetch còn lại quá ngắn cho PTY probe")
+                    continue
                 }
-                return Result(snapshot: snapshot, sourceLabel: step.dataSource.sourceLabel)
-            } catch {
-                lastError = error
+                do {
+                    var snapshot = try await fetch(
+                        step.dataSource, session: session, cookieSource: cookieSource,
+                        manualCookie: manualCookie, allowKeychainPrompt: allowKeychainPrompt,
+                        isAutoPlan: selected == .auto, interaction: interaction,
+                        remainingBudget: remaining, fetchers: fetchers)
+                    guard hasTrustedData(snapshot) else {
+                        throw ClaudeUsageError.parseFailed(
+                            "\(step.dataSource.sourceLabel): phản hồi không có quota/cost hợp lệ")
+                    }
+                    if webEnabled, step.dataSource != .web {
+                        snapshot = await applyWebExtras(
+                            to: snapshot, cookieSource: cookieSource,
+                            manualCookie: manualCookie, session: session,
+                            prefetched: raceWebOutcome, fetchers: fetchers)
+                    }
+                    return Result(snapshot: snapshot, sourceLabel: step.dataSource.sourceLabel)
+                } catch {
+                    lastError = error
+                }
             }
         }
         throw lastError ?? ClaudeUsageError.oauthFailed("Không có nguồn Claude khả dụng")
+    }
+
+    // MARK: - Stage 1: HTTP source race (auto plan)
+
+    /// Races the available HTTP sources (OAuth‖Web). The first TRUSTED result
+    /// wins the core; if Web resolves first while OAuth is still in flight a
+    /// short grace lets OAuth steal the win (OAuth outranks Web when both
+    /// resolve). The losing Web result — when it lands within the extras
+    /// window — is reused for the `applyWebExtras` merge instead of a second
+    /// scrape. Returns nil when no source produced trusted data (errors are
+    /// accumulated into `lastError` for the CLI stage/failure path).
+    private static func raceHTTPSources(
+        steps: [ClaudeFetchPlanStep],
+        session: URLSession,
+        cookieSource: ClaudeCookieSource,
+        manualCookie: String?,
+        allowKeychainPrompt: Bool,
+        webEnabled: Bool,
+        coreDeadline: Date,
+        fetchers: Fetchers,
+        lastError: inout Error?,
+        webOutcome raceWebOutcome: inout Swift.Result<ClaudeWebUsageData, Error>?
+    ) async -> Result? {
+        enum Outcome {
+            case oauth(Swift.Result<ClaudeUsageSnapshot, Error>)
+            case web(Swift.Result<ClaudeWebUsageData, Error>)
+            case stageDeadline
+            case oauthGraceExpired
+            case extrasExpired
+        }
+        /// How long a provisional Web winner waits for a still-running OAuth
+        /// before locking in (OAuth outranks Web when both resolve).
+        let oauthTieBreakGrace: TimeInterval = 0.75
+        /// Loser-Web harvest window — the same 5s bound `applyWebExtras`
+        /// always used for its rescue scrape.
+        let extrasWindow: TimeInterval = 5
+
+        let hasOAuthStep = steps.contains { $0.dataSource == .oauth }
+        let hasWebStep = steps.contains { $0.dataSource == .web }
+        var winner: (snapshot: ClaudeUsageSnapshot, source: ClaudeUsageDataSource)?
+        var webCandidate: ClaudeUsageSnapshot?
+        var webOutcome: Swift.Result<ClaudeWebUsageData, Error>?
+        var oauthSettled = !hasOAuthStep
+        var graceArmed = false
+        var extrasArmed = false
+
+        await withTaskGroup(of: Outcome.self) { group in
+            for step in steps {
+                switch step.dataSource {
+                case .oauth:
+                    group.addTask {
+                        do {
+                            return .oauth(.success(try await fetchers.oauth(
+                                session, allowKeychainPrompt)))
+                        } catch { return .oauth(.failure(error)) }
+                    }
+                case .web:
+                    group.addTask {
+                        do {
+                            return .web(.success(try await fetchers.web(
+                                cookieSource, manualCookie, session)))
+                        } catch { return .web(.failure(error)) }
+                    }
+                default: break
+                }
+            }
+            group.addTask {
+                let delay = max(0, coreDeadline.timeIntervalSince(fetchers.now()))
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                return .stageDeadline
+            }
+
+            var done = false
+            for await outcome in group {
+                if done { break }
+                switch outcome {
+                case .stageDeadline, .extrasExpired:
+                    group.cancelAll()
+                    done = true
+                case .oauthGraceExpired:
+                    // Grace elapsed with OAuth still unsettled → the
+                    // provisional Web candidate locks in as the winner.
+                    if winner == nil, let webCandidate {
+                        winner = (webCandidate, .web)
+                    }
+                case .oauth(let result):
+                    oauthSettled = true
+                    switch result {
+                    case .success(let snapshot) where hasTrustedData(snapshot):
+                        // OAuth wins while undecided — including over a
+                        // provisional Web candidate still inside its grace
+                        // window. A locked-in Web winner (grace expired or
+                        // OAuth already settled) is not stolen retroactively.
+                        if winner == nil { winner = (snapshot, .oauth) }
+                    case .success:
+                        lastError = ClaudeUsageError.parseFailed(
+                            "OAuth API: phản hồi không có quota/cost hợp lệ")
+                    case .failure(let error):
+                        lastError = error
+                    }
+                    if winner == nil, let webCandidate {
+                        winner = (webCandidate, .web)
+                    }
+                case .web(let result):
+                    webOutcome = result
+                    switch result {
+                    case .success(let data):
+                        let snapshot = mapWeb(data)
+                        if hasTrustedData(snapshot) {
+                            if winner == nil {
+                                if oauthSettled {
+                                    winner = (snapshot, .web)
+                                } else {
+                                    // Provisional: OAuth may still steal the
+                                    // core inside the tie-break grace.
+                                    webCandidate = snapshot
+                                    if !graceArmed {
+                                        graceArmed = true
+                                        group.addTask {
+                                            try? await Task.sleep(nanoseconds:
+                                                UInt64(oauthTieBreakGrace * 1_000_000_000))
+                                            return .oauthGraceExpired
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            lastError = ClaudeUsageError.parseFailed(
+                                "Web API (cookies): phản hồi không có quota/cost hợp lệ")
+                        }
+                    case .failure(let error):
+                        lastError = error
+                    }
+                }
+                // Settlement check after each outcome.
+                if let winner {
+                    // Keep draining only while the loser-Web harvest is still
+                    // worth waiting for (bounded by the armed extras expiry).
+                    let harvesting = winner.source == .oauth && webEnabled
+                        && hasWebStep && webOutcome == nil
+                    if harvesting {
+                        if !extrasArmed {
+                            extrasArmed = true
+                            group.addTask {
+                                try? await Task.sleep(nanoseconds:
+                                    UInt64(extrasWindow * 1_000_000_000))
+                                return .extrasExpired
+                            }
+                        }
+                    } else {
+                        group.cancelAll()
+                        done = true
+                    }
+                } else if oauthSettled, webOutcome != nil {
+                    group.cancelAll()
+                    done = true
+                }
+            }
+        }
+        raceWebOutcome = webOutcome
+        guard let winner else { return nil }
+
+        var snapshot = winner.snapshot
+        if webEnabled, winner.source != .web {
+            // Loser-Web reuse: the raced web fetch doubles as the extras merge
+            // source — no second scrape. `.failure` means "tried, failed —
+            // don't rescrape"; nil means "not attempted — scrape as before".
+            snapshot = await applyWebExtras(
+                to: snapshot, cookieSource: cookieSource,
+                manualCookie: manualCookie, session: session,
+                prefetched: webOutcome, fetchers: fetchers)
+        }
+        return Result(snapshot: snapshot, sourceLabel: winner.source.sourceLabel)
     }
 
     private static func hasTrustedData(_ snapshot: ClaudeUsageSnapshot) -> Bool {
@@ -80,43 +328,55 @@ enum ClaudeUsageOrchestrator {
                              cookieSource: ClaudeCookieSource,
                              manualCookie: String?,
                              allowKeychainPrompt: Bool,
-                             isAutoPlan: Bool) async throws -> ClaudeUsageSnapshot {
+                             isAutoPlan: Bool,
+                             interaction: ProviderInteraction,
+                             remainingBudget: TimeInterval?,
+                             fetchers: Fetchers) async throws -> ClaudeUsageSnapshot {
         switch source {
         case .oauth:
-            return try await ClaudeOAuthUsageAPI.loadSnapshot(
-                session: session, allowKeychainPrompt: allowKeychainPrompt)
+            return try await fetchers.oauth(session, allowKeychainPrompt)
         case .web:
-            return try await fetchWeb(cookieSource: cookieSource, manualCookie: manualCookie, session: session)
+            return mapWeb(try await fetchers.web(cookieSource, manualCookie, session))
         case .cli:
-            // Skip the whole probe chain (~90s of doomed PTY attempts) when a
-            // previous probe proved /usage has no quota panel on this machine.
-            // Only for the auto plan — explicitly selecting the CLI source
-            // always probes for real (and clears the gate on success).
-            if isAutoPlan, ClaudeCLIQuotaUnsupportedGate.blockedUntil() != nil {
-                throw ClaudeStatusProbeError.parseFailed(ClaudeCLIQuotaUnsupportedGate.message)
-            }
-            let first = isAutoPlan ? cliAutoProbeTimeout : cliProbeTimeout
-            return mapCLI(try await loadViaCLIWithRetry(firstTimeout: first))
+            return mapCLI(try await fetchers.cli(
+                isAutoPlan,
+                interaction == .userInitiated,
+                remainingBudget))
         case .api:
-            return try await fetchAdmin(session: session)
+            return try await fetchers.admin(session)
         case .auto:
             throw ClaudeUsageError.parseFailed("auto không phải nguồn cụ thể")
         }
     }
 
-    // MARK: - CLI chain (gate + PTY + direct fallback + retry, mirrors CodexBar)
-
-    /// One PTY attempt at `firstTimeout`; if it timed out / was still loading,
-    /// a single retry with the 60s budget.
-    private static func loadViaCLIWithRetry(firstTimeout: TimeInterval) async throws -> ClaudeStatusSnapshot {
+    /// The live CLI fetcher behind `Fetchers.cli`: quota-unsupported gate →
+    /// PTY probe → direct fallback → retry. `allowRetry` gates the generous
+    /// 60s second attempt (manual refreshes only — a background poll can't
+    /// afford it inside the 60s core budget); `budget` clamps the first probe
+    /// to the remaining core budget.
+    private static func cliFetch(isAutoPlan: Bool,
+                                 allowRetry: Bool,
+                                 budget: TimeInterval?) async throws -> ClaudeStatusSnapshot {
+        // Skip the whole probe chain (~90s of doomed PTY attempts) when a
+        // previous probe proved /usage has no quota panel on this machine.
+        // Only for the auto plan — explicitly selecting the CLI source
+        // always probes for real (and clears the gate on success).
+        if isAutoPlan, ClaudeCLIQuotaUnsupportedGate.blockedUntil() != nil {
+            throw ClaudeStatusProbeError.parseFailed(ClaudeCLIQuotaUnsupportedGate.message)
+        }
+        let base = isAutoPlan ? cliAutoProbeTimeout : cliProbeTimeout
+        let first = budget.map { max(1, min(base, $0)) } ?? base
         do {
-            return try await loadViaCLI(timeout: firstTimeout)
+            return try await loadViaCLI(timeout: first)
         } catch {
             if error is CancellationError { throw error }
-            guard shouldRetryCLIProbe(after: error) else { throw error }
-            return try await loadViaCLI(timeout: cliRetryProbeTimeout)
+            guard allowRetry, shouldRetryCLIProbe(after: error) else { throw error }
+            let retry = budget.map { max(1, min(cliRetryProbeTimeout, $0)) } ?? cliRetryProbeTimeout
+            return try await loadViaCLI(timeout: retry)
         }
     }
+
+    // MARK: - CLI chain (gate + PTY + direct fallback + retry, mirrors CodexBar)
 
     /// Rate-limit gate → PTY probe → direct (non-PTY) `claude /usage` fallback
     /// when the PTY path timed out or couldn't render usage.
@@ -194,18 +454,6 @@ enum ClaudeUsageOrchestrator {
         return false
     }
 
-    private static func fetchWeb(cookieSource: ClaudeCookieSource,
-                                manualCookie: String?,
-                                session: URLSession) async throws -> ClaudeUsageSnapshot {
-        let data: ClaudeWebUsageData
-        if cookieSource == .manual, let header = manualCookie {
-            data = try await ClaudeWebAPIFetcher.fetchUsage(cookieHeader: header, session: session)
-        } else {
-            data = try await ClaudeWebAPIFetcher.fetchUsage(session: session)
-        }
-        return mapWeb(data)
-    }
-
     private static func fetchAdmin(session: URLSession) async throws -> ClaudeUsageSnapshot {
         guard let key = adminAPIKey() else { throw ClaudeAdminAPIUsageError.missingCredentials }
         let snap = try await ClaudeAdminAPIUsageFetcher.fetchUsage(apiKey: key, session: session)
@@ -221,32 +469,41 @@ enum ClaudeUsageOrchestrator {
 
     // MARK: - Web-extras merge (restores cookie cost scrape)
 
-    /// Best-effort: pull claude.ai cookie data and fill any missing cost / extra
-    /// windows on `snapshot`. Never throws — wrapped in a 5s race so a hanging
-    /// Keychain cookie prompt can't stall the refresh. Returns the original
-    /// snapshot unchanged on any failure.
-    private static func applyWebExtras(to snapshot: ClaudeUsageSnapshot,
-                                       cookieSource: ClaudeCookieSource,
-                                       manualCookie: String?,
-                                       session: URLSession) async -> ClaudeUsageSnapshot {
+    /// Best-effort: fill any missing cost / extra windows on `snapshot` from
+    /// claude.ai cookie data. Never throws. `prefetched` reuses the race's
+    /// losing Web result instead of a second scrape: `.success` merges it,
+    /// `.failure` means "already tried — don't rescrape", nil falls back to a
+    /// 5s-bounded fetch so a hanging Keychain cookie prompt can't stall the
+    /// refresh. Returns the original snapshot unchanged on any failure.
+    private static func applyWebExtras(
+        to snapshot: ClaudeUsageSnapshot,
+        cookieSource: ClaudeCookieSource,
+        manualCookie: String?,
+        session: URLSession,
+        prefetched: Swift.Result<ClaudeWebUsageData, Error>?,
+        fetchers: Fetchers
+    ) async -> ClaudeUsageSnapshot {
         let hasKnownExtra = snapshot.extraRateWindows.contains(where: \.usageKnown)
         if snapshot.providerCost != nil, hasKnownExtra { return snapshot }
-        let web: ClaudeWebUsageData? = await withTaskGroup(of: ClaudeWebUsageData?.self) { group in
-            group.addTask {
-                do {
-                    if cookieSource == .manual, let header = manualCookie {
-                        return try await ClaudeWebAPIFetcher.fetchUsage(cookieHeader: header, session: session)
-                    }
-                    return try await ClaudeWebAPIFetcher.fetchUsage(session: session)
-                } catch { return nil }
+        let web: ClaudeWebUsageData?
+        switch prefetched {
+        case .success(let data): web = data
+        case .failure: return snapshot
+        case nil:
+            web = await withTaskGroup(of: ClaudeWebUsageData?.self) { group in
+                group.addTask {
+                    do {
+                        return try await fetchers.web(cookieSource, manualCookie, session)
+                    } catch { return nil }
+                }
+                group.addTask {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    return nil
+                }
+                let result = await group.next() ?? nil
+                group.cancelAll()
+                return result
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                return nil
-            }
-            let result = await group.next() ?? nil
-            group.cancelAll()
-            return result
         }
         guard let web else { return snapshot }
         let mergedExtra = hasKnownExtra ? snapshot.extraRateWindows : web.extraRateWindows

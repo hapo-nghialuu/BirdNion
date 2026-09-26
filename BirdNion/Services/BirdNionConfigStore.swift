@@ -519,6 +519,10 @@ enum BirdNionConfigStore {
         var awsAuthMode: String?
         /// Bedrock named AWS profile (when `awsAuthMode == "profile"`).
         var awsProfile: String?
+        /// Devin organization override — slug, internal `org-...`/`org_...`
+        /// ID, or full `https://app.devin.ai/org/<slug>` URL. Blank = resolve
+        /// from the imported browser session.
+        var devinOrganization: String?
         var baseURL: String?
         var displayName: String?
         var accountLabel: String?
@@ -592,7 +596,8 @@ enum BirdNionConfigStore {
             Provider(id: "antigravity", enabled: false),
             Provider(id: "bedrock", enabled: false),
             Provider(id: "freemodel", enabled: false),
-            Provider(id: "hiyo", enabled: false)
+            Provider(id: "hiyo", enabled: false),
+            Provider(id: "devin", enabled: false)
         ])
     }()
 
@@ -1068,7 +1073,7 @@ enum BirdNionConfigStore {
     /// Any other per-provider key in an existing document is preserved.
     private static let knownProviderKeys: Set<String> = [
         "id", "apiKey", "enabled", "region", "budget", "projectID", "secretKey",
-        "awsAuthMode", "awsProfile", "baseURL", "displayName", "accountLabel",
+        "awsAuthMode", "awsProfile", "devinOrganization", "baseURL", "displayName", "accountLabel",
         "cookieHeader", "claudeHaikuModel", "claudeSonnetModel", "claudeOpusModel",
         "claudeDisable1M", "claudeCodeScope", "claudeCodeProjectPath",
         "codexProfileID", "preferredAgent",

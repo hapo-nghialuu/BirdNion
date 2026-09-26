@@ -281,6 +281,17 @@ enum InstalledAgentDetectors {
                 (".config/goose", .configuration)
             ],
             providerIDs: []
+        ),
+        .init(
+            id: .devin,
+            binaries: ["devin"],
+            markers: [
+                (".devin", .configuration),
+                (".config/devin", .configuration),
+                ("Library/Application Support/Devin", .configuration),
+                (".local/share/devin", .applicationState)
+            ],
+            providerIDs: ["devin"]
         )
     ]
 }
