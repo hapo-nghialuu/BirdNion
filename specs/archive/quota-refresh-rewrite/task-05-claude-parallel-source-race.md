@@ -38,7 +38,7 @@ Status: done
 
 ## Dependencies
 
-- task-03
+- task-03-quotaservice-facade.md
 
 ## Verification Plan
 

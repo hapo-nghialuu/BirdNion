@@ -39,7 +39,7 @@ New `ProviderScheduler` owns one `ProviderLane` per provider id. Each lane owns 
 
 ## Dependencies
 
-- task-01
+- task-01-provider-status-stream.md
 
 ## Verification Plan
 

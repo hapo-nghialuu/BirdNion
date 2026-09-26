@@ -32,7 +32,7 @@ Status: done
 
 ## Dependencies
 
-- task-08
+- task-08-linux-two-phase-fetch.md
 
 ## Verification Plan
 

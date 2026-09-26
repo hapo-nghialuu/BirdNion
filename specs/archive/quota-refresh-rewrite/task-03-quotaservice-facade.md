@@ -40,7 +40,7 @@ Status: done
 
 ## Dependencies
 
-- task-02
+- task-02-provider-lane-scheduler.md
 
 ## Verification Plan
 

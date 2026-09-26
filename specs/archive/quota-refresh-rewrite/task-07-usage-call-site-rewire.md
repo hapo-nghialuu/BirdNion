@@ -35,7 +35,8 @@ Status: done
 
 ## Dependencies
 
-- task-03, task-06
+- task-03-quotaservice-facade.md
+- task-06-usage-report-coordinator.md
 
 ## Verification Plan
 
