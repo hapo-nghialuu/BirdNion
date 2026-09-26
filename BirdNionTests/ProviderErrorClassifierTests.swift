@@ -11,7 +11,7 @@ final class ProviderErrorClassifierTests: XCTestCase {
         // must NOT degrade to "not configured" — the fix is a Privacy &
         // Security grant (or Manual cookie), not re-login.
         XCTAssertEqual(
-            classify(rawError: "Thiếu quyền đọc dữ liệu trình duyệt — cấp cho app trong Privacy & Security → Files & Folders (hoặc Full Disk Access) rồi thử lại"),
+            classify(rawError: "Thiếu quyền đọc dữ liệu trình duyệt — bật quyền truy cập trình duyệt cho app trong Privacy & Security → Files & Folders rồi thử lại"),
             .browserDataDenied)
         XCTAssertEqual(
             classify(rawError: "No permission to read browser data"),

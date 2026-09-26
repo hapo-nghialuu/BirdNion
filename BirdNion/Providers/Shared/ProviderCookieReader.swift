@@ -39,8 +39,8 @@ enum ProviderCookieReader {
     /// shared constant so every provider reports the same wording and
     /// ProviderErrorClassifier's permission markers always match.
     static let browserDataDeniedMessage =
-        "Thiếu quyền đọc dữ liệu trình duyệt — cấp cho app trong " +
-        "Privacy & Security → Files & Folders (hoặc Full Disk Access) rồi thử lại"
+        "Thiếu quyền đọc dữ liệu trình duyệt — bật quyền truy cập trình duyệt " +
+        "cho app trong Privacy & Security → Files & Folders rồi thử lại"
 
     // MARK: - Public API
 
