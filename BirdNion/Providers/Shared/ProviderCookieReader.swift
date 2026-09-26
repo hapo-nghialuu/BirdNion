@@ -35,9 +35,34 @@ enum ProviderCookieReader {
     /// UserDefaults key prefix; append the domain to avoid key collisions.
     private static let deniedUntilKeyPrefix = "providerCookieDeniedUntil_"
 
-    /// Error text providers should surface when `permissionDenied` is set — one
-    /// shared constant so every provider reports the same wording and
-    /// ProviderErrorClassifier's permission markers always match.
+    /// Why a browser's data could not be read — mirrors upstream CodexBar's
+    /// `BrowserProfileAccessIssue`: "macOS blocked access" (fixable via
+    /// Privacy & Security) is a different problem from "the store itself is
+    /// broken" (transient I/O, corruption — no toggle helps).
+    enum AccessIssueKind {
+        case accessDenied
+        case unreadable
+    }
+
+    /// Which browsers were blocked and how — the provider surfaces this as its
+    /// error text so the user sees exactly which browser toggle to flip.
+    struct AccessIssue {
+        var kind: AccessIssueKind
+        var browserNames: [String]
+
+        var message: String {
+            let names = browserNames.joined(separator: ", ")
+            switch kind {
+            case .accessDenied:
+                return "macOS đã chặn BirdNion đọc phiên đăng nhập trong \(names) — bật quyền truy cập trình duyệt cho app trong Privacy & Security → Files & Folders rồi thử lại"
+            case .unreadable:
+                return "Không đọc được dữ liệu trình duyệt \(names) — thử lại sau, hoặc đổi Cookie source sang Manual"
+            }
+        }
+    }
+
+    /// Generic access-denied text for callers that cannot name the browser
+    /// (Claude's session-key sweep reports a Bool, not an AccessIssue).
     static let browserDataDeniedMessage =
         "Thiếu quyền đọc dữ liệu trình duyệt — bật quyền truy cập trình duyệt " +
         "cho app trong Privacy & Security → Files & Folders rồi thử lại"
@@ -65,31 +90,31 @@ enum ProviderCookieReader {
     static func cookieHeader(
         domain: String,
         requiredCookie: String? = nil,
-        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+        accessIssue: UnsafeMutablePointer<AccessIssue?>? = nil
     ) -> String? {
         cookieHeader(
             domain: domain,
             matchingSession: requiredCookie.map { name in { $0 == name } },
-            permissionDenied: permissionDenied)
+            accessIssue: accessIssue)
     }
 
     /// Same, but the session cookie is identified by a predicate — for providers
     /// whose session cookie name varies by deployment (CommandCode ships three
     /// prefixes, OpenCode two).
-    /// - Parameter permissionDenied: when non-nil, set to `true` when the read
-    ///   failed because macOS blocked access to the browser's data folder
-    ///   (app-data protection / Full Disk Access / Keychain denial) — i.e. the
-    ///   result is "we could not look" rather than "no session found".
+    /// - Parameter accessIssue: when non-nil, populated with the browsers and
+    ///   failure kind when the read could not even look — macOS blocked access
+    ///   (app-data protection / Full Disk Access / Keychain denial) or the
+    ///   store was unreadable — rather than "no session found".
     static func cookieHeader(
         domain: String,
         matchingSession: ((String) -> Bool)?,
-        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+        accessIssue: UnsafeMutablePointer<AccessIssue?>? = nil
     ) -> String? {
         BrowserCookieSerialGate.lock.lock()
         defer { BrowserCookieSerialGate.lock.unlock() }
         return extractFromBrowsers(
             domain: domain, matchesSession: matchingSession,
-            permissionDenied: permissionDenied)
+            accessIssue: accessIssue)
     }
 
     /// Resolves the cookie header honoring the provider's "cookie source"
@@ -99,23 +124,23 @@ enum ProviderCookieReader {
         providerID: String,
         domain: String,
         requiredCookie: String? = nil,
-        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+        accessIssue: UnsafeMutablePointer<AccessIssue?>? = nil
     ) -> String? {
         resolvedCookieHeader(
             providerID: providerID,
             domain: domain,
             matchingSession: requiredCookie.map { name in { $0 == name } },
-            permissionDenied: permissionDenied)
+            accessIssue: accessIssue)
     }
 
     /// Same, with a predicate instead of an exact session cookie name.
-    /// `permissionDenied` is only ever set by the `auto` path — `off`/`manual`
-    /// never touch the filesystem, so they never report a permission failure.
+    /// `accessIssue` is only ever set by the `auto` path — `off`/`manual`
+    /// never touch the filesystem, so they never report an access failure.
     static func resolvedCookieHeader(
         providerID: String,
         domain: String,
         matchingSession: ((String) -> Bool)?,
-        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+        accessIssue: UnsafeMutablePointer<AccessIssue?>? = nil
     ) -> String? {
         let source = UserDefaults.standard.string(forKey: "\(providerID)CookieSource") ?? "auto"
         switch source {
@@ -128,7 +153,7 @@ enum ProviderCookieReader {
         default:
             return cookieHeader(
                 domain: domain, matchingSession: matchingSession,
-                permissionDenied: permissionDenied)
+                accessIssue: accessIssue)
         }
     }
 
@@ -148,7 +173,7 @@ enum ProviderCookieReader {
     static func allBrowserSessions(
         domain: String,
         requiredCookie: String,
-        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+        accessIssue: UnsafeMutablePointer<AccessIssue?>? = nil
     ) -> [BrowserSession] {
         BrowserCookieSerialGate.lock.lock()
         defer { BrowserCookieSerialGate.lock.unlock() }
@@ -158,6 +183,22 @@ enum ProviderCookieReader {
         var sessions: [BrowserSession] = []
 
         func collect(_ browser: Browser) {
+            // Preflight probe (upstream CodexBar does the same in
+            // `isCookieSourceAvailable`): a browser whose data dir macOS
+            // refuses to enumerate can never yield cookies — skip it before
+            // the read, so it cannot even trigger a wasted "Safe Storage"
+            // Keychain prompt.
+            if let issue = browserAccessIssue(browser) {
+                note(issue, browser: browser, into: accessIssue)
+                if issue == .accessDenied {
+                    recordCooldownIfNeeded(
+                        .accessDenied(
+                            browser: browser,
+                            details: "macOS blocked browser data access"),
+                        domain: domain)
+                }
+                return
+            }
             do {
                 let storeRecords = try client.records(matching: query, in: browser)
                 // Same detached-snapshot dance as extractFromBrowsers (see the
@@ -179,7 +220,7 @@ enum ProviderCookieReader {
                 }
             } catch let error as BrowserCookieError {
                 if Self.permissionBlocksReads(of: browser, error: error) {
-                    permissionDenied?.pointee = true
+                    note(.accessDenied, browser: browser, into: accessIssue)
                     recordCooldownIfNeeded(
                         Self.cooldownCause(error, browser: browser), domain: domain)
                 } else {
@@ -187,13 +228,15 @@ enum ProviderCookieReader {
                 }
             } catch {
                 // browser not installed / store unreadable — skip
-                if Self.browserDataAccessBlocked(browser) {
-                    permissionDenied?.pointee = true
-                    recordCooldownIfNeeded(
-                        .accessDenied(
-                            browser: browser,
-                            details: "macOS blocked browser data access"),
-                        domain: domain)
+                if let issue = browserAccessIssue(browser) {
+                    note(issue, browser: browser, into: accessIssue)
+                    if issue == .accessDenied {
+                        recordCooldownIfNeeded(
+                            .accessDenied(
+                                browser: browser,
+                                details: "macOS blocked browser data access"),
+                            domain: domain)
+                    }
                 }
             }
         }
@@ -208,11 +251,11 @@ enum ProviderCookieReader {
         browserID: String,
         domain: String,
         requiredCookie: String,
-        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+        accessIssue: UnsafeMutablePointer<AccessIssue?>? = nil
     ) -> String? {
         allBrowserSessions(
             domain: domain, requiredCookie: requiredCookie,
-            permissionDenied: permissionDenied)
+            accessIssue: accessIssue)
             .first(where: { $0.browserID == browserID })?
             .cookieHeader
     }
@@ -240,12 +283,25 @@ enum ProviderCookieReader {
     private static func extractFromBrowsers(
         domain: String,
         matchesSession: ((String) -> Bool)?,
-        permissionDenied: UnsafeMutablePointer<Bool>? = nil
+        accessIssue: UnsafeMutablePointer<AccessIssue?>? = nil
     ) -> String? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: [domain])
 
         func tryBrowser(_ browser: Browser) -> String? {
+            // Preflight probe — same idea as CodexBar's isCookieSourceAvailable:
+            // skip browsers macOS blocks before the read can reach Keychain.
+            if let issue = browserAccessIssue(browser) {
+                note(issue, browser: browser, into: accessIssue)
+                if issue == .accessDenied {
+                    recordCooldownIfNeeded(
+                        .accessDenied(
+                            browser: browser,
+                            details: "macOS blocked browser data access"),
+                        domain: domain)
+                }
+                return nil
+            }
             do {
                 let storeRecords = try client.records(matching: query, in: browser)
                 // Snapshot name+value into freshly-allocated Strings *immediately*,
@@ -269,7 +325,7 @@ enum ProviderCookieReader {
                 return header.isEmpty ? nil : header
             } catch let error as BrowserCookieError {
                 if Self.permissionBlocksReads(of: browser, error: error) {
-                    permissionDenied?.pointee = true
+                    note(.accessDenied, browser: browser, into: accessIssue)
                     recordCooldownIfNeeded(
                         Self.cooldownCause(error, browser: browser), domain: domain)
                 } else {
@@ -277,13 +333,15 @@ enum ProviderCookieReader {
                 }
             } catch {
                 // notFound / loadFailed — browser not installed or store unreadable; skip silently.
-                if Self.browserDataAccessBlocked(browser) {
-                    permissionDenied?.pointee = true
-                    recordCooldownIfNeeded(
-                        .accessDenied(
-                            browser: browser,
-                            details: "macOS blocked browser data access"),
-                        domain: domain)
+                if let issue = browserAccessIssue(browser) {
+                    note(issue, browser: browser, into: accessIssue)
+                    if issue == .accessDenied {
+                        recordCooldownIfNeeded(
+                            .accessDenied(
+                                browser: browser,
+                                details: "macOS blocked browser data access"),
+                            domain: domain)
+                    }
                 }
             }
             return nil
@@ -298,6 +356,24 @@ enum ProviderCookieReader {
 
     // MARK: - macOS app-data protection probe
 
+    /// Merge one browser's access issue into the out-param: names are deduped,
+    /// and `.accessDenied` outranks `.unreadable` for the headline kind (the
+    /// permission grant fixes it; unreadable just means "retry later").
+    private static func note(
+        _ kind: AccessIssueKind, browser: Browser,
+        into ptr: UnsafeMutablePointer<AccessIssue?>?
+    ) {
+        guard let ptr else { return }
+        let name = browser.displayName
+        if var issue = ptr.pointee {
+            if !issue.browserNames.contains(name) { issue.browserNames.append(name) }
+            if issue.kind != .accessDenied { issue.kind = kind }
+            ptr.pointee = issue
+        } else {
+            ptr.pointee = AccessIssue(kind: kind, browserNames: [name])
+        }
+    }
+
     /// Whether a store failure means "blocked" rather than "no cookies".
     ///
     /// SweetCookieKit collapses several distinct failures into the same errors:
@@ -311,7 +387,7 @@ enum ProviderCookieReader {
         of browser: Browser, error: BrowserCookieError
     ) -> Bool {
         if case .accessDenied = error { return true }
-        return browserDataAccessBlocked(browser)
+        return browserAccessIssue(browser) == .accessDenied
     }
 
     /// Keeps the cooldown record honest: an EPERM-mapped `notFound` is logged
@@ -325,27 +401,61 @@ enum ProviderCookieReader {
             browser: browser, details: "macOS blocked browser data access")
     }
 
-    /// Re-probe the browser's data root after a failed read.
+    /// Probe this browser's own data root — distinguishes "macOS blocked us"
+    /// from "the store is broken" from "not installed", per browser.
     ///
     /// The app-data protection denies directory *contents* while plain `stat`
-    /// still succeeds, so "root exists but `contentsOfDirectory` throws" means
-    /// `EPERM`. Firefox's data dir is on Apple's protection list too, so it is
-    /// probed alongside whatever chromium roots apply — a blocked store we
-    /// never reached counts as denied regardless of which browser failed.
+    /// still succeeds, so "root exists but `contentsOfDirectory` throws
+    /// EPERM/EACCES" means `.accessDenied`; any other read error on an
+    /// existing dir means `.unreadable`; missing/unreadable-free dirs mean
+    /// nil (browser simply isn't there — not an access problem).
+    ///
+    /// Same model as upstream CodexBar's `BrowserDetection.probeProfileAccessIssue`.
+    /// Probing only THIS browser's root (unlike the earlier any-dir heuristic)
+    /// keeps the blame accurate — a blocked Firefox dir must not brand a
+    /// failed Brave read as denied.
     ///
     /// Internal (not private): ClaudeWebCookieReader shares the same probe.
-    static func browserDataAccessBlocked(_ browser: Browser) -> Bool {
+    static func browserAccessIssue(_ browser: Browser) -> AccessIssueKind? {
         let fm = FileManager.default
-        var candidates = ChromiumProfileLocator.roots(for: [browser]).map(\.url)
-        candidates.append(contentsOf: BrowserCookieClient.defaultHomeDirectories().map {
-            $0.appendingPathComponent("Library/Application Support/Firefox")
-        })
+        let candidates: [URL]
+        if browser == .firefox {
+            candidates = BrowserCookieClient.defaultHomeDirectories().map {
+                $0.appendingPathComponent("Library/Application Support/Firefox")
+            }
+        } else {
+            candidates = ChromiumProfileLocator.roots(for: [browser]).map(\.url)
+        }
+        var sawUnreadable = false
         for root in candidates where fm.fileExists(atPath: root.path) {
-            if (try? fm.contentsOfDirectory(atPath: root.path)) == nil {
-                return true
+            do {
+                _ = try fm.contentsOfDirectory(atPath: root.path)
+            } catch {
+                if isPermissionError(error) { return .accessDenied }
+                sawUnreadable = true
             }
         }
-        return false
+        return sawUnreadable ? .unreadable : nil
+    }
+
+    /// Recursive NSError classification — same set upstream treats as a
+    /// permission problem: Cocoa `fileReadNoPermission` (257) and POSIX
+    /// `EACCES`/`EPERM`, including errors wrapped in `NSUnderlyingErrorKey`.
+    private static func isPermissionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain,
+           nsError.code == CocoaError.fileReadNoPermission.rawValue
+        {
+            return true
+        }
+        if nsError.domain == NSPOSIXErrorDomain,
+           nsError.code == Int(EACCES) || nsError.code == Int(EPERM)
+        {
+            return true
+        }
+        guard let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error
+        else { return false }
+        return isPermissionError(underlying)
     }
 
     // MARK: - Cookie header builder

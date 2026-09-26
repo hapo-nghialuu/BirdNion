@@ -16,6 +16,22 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertEqual(
             classify(rawError: "No permission to read browser data"),
             .browserDataDenied)
+        // Per-browser form (AccessIssue.message) names the blocked browser.
+        XCTAssertEqual(
+            classify(rawError: "macOS đã chặn BirdNion đọc phiên đăng nhập trong Brave Browser — bật quyền truy cập trình duyệt cho app trong Privacy & Security → Files & Folders rồi thử lại"),
+            .browserDataDenied)
+    }
+
+    func testBrowserDataUnreadable() {
+        // A non-permission read failure is NOT the missing-grant case — the
+        // message shares "dữ liệu trình duyệt" with denied copy, so ordering
+        // alone keeps them apart.
+        XCTAssertEqual(
+            classify(rawError: "Không đọc được dữ liệu trình duyệt Brave Browser — thử lại sau, hoặc đổi Cookie source sang Manual"),
+            .browserDataUnreadable)
+        XCTAssertEqual(
+            classify(rawError: "Could not read browser data for Chrome"),
+            .browserDataUnreadable)
     }
 
     func testPermissionBeatsCookieAndNotConfigured() {
@@ -126,7 +142,7 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertEqual(ProviderErrorKind.rateLimited.titleKey, "providerError.rateLimited.title")
         XCTAssertEqual(ProviderErrorKind.cookieExpiredOrMissing.hintKey, "providerError.cookieExpiredOrMissing.hint")
         XCTAssertEqual(ProviderErrorKind.browserDataDenied.titleKey, "providerError.browserDataDenied.title")
-        XCTAssertEqual(ProviderErrorKind.allCases.count, 8)
+        XCTAssertEqual(ProviderErrorKind.allCases.count, 9)
     }
 
     // MARK: - Fix-button eligibility (R4 — Error UX)
@@ -136,6 +152,7 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertTrue(ProviderErrorKind.tokenInvalidOrMissing.isFixable)
         XCTAssertTrue(ProviderErrorKind.cookieExpiredOrMissing.isFixable)
         XCTAssertTrue(ProviderErrorKind.browserDataDenied.isFixable)
+        XCTAssertTrue(ProviderErrorKind.browserDataUnreadable.isFixable)
         XCTAssertFalse(ProviderErrorKind.rateLimited.isFixable)
         XCTAssertFalse(ProviderErrorKind.networkUnreachableOrTimeout.isFixable)
         XCTAssertFalse(ProviderErrorKind.apiSchemaChanged.isFixable)
@@ -151,6 +168,7 @@ final class ProviderErrorClassifierTests: XCTestCase {
         // Permission failures point at the cookie-source controls — Manual is
         // the only in-app workaround while the OS grant is missing.
         XCTAssertEqual(remediationTarget(providerID: "commandcode", kind: .browserDataDenied), .cookieSource)
+        XCTAssertEqual(remediationTarget(providerID: "commandcode", kind: .browserDataUnreadable), .cookieSource)
         XCTAssertEqual(remediationTarget(providerID: "openrouter", kind: .tokenInvalidOrMissing), .credential)
 
         for kind in [ProviderErrorKind.networkUnreachableOrTimeout, .rateLimited,

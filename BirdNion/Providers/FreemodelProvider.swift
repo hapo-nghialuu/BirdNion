@@ -223,7 +223,7 @@ final class FreemodelProvider: QuotaProvider {
         // cookie makes every browser path skip stores that only hold stale
         // analytics/Stripe cookies.
         let activeAccountID = FreemodelAccountStore.activeID()
-        var browserDenied = false
+        var accessIssue: ProviderCookieReader.AccessIssue?
         let rawHeader: String?
         if activeAccountID != FreemodelAccountStore.browserID,
            !activeAccountID.hasPrefix(FreemodelAccountStore.browserPrefix) {
@@ -232,18 +232,16 @@ final class FreemodelProvider: QuotaProvider {
             rawHeader = ProviderCookieReader.cookieHeader(
                 browserID: browserID, domain: Self.cookieDomain,
                 requiredCookie: Self.sessionCookieName,
-                permissionDenied: &browserDenied)
+                accessIssue: &accessIssue)
         } else {
             rawHeader = ProviderCookieReader.resolvedCookieHeader(
                 providerID: id, domain: Self.cookieDomain,
                 requiredCookie: Self.sessionCookieName,
-                permissionDenied: &browserDenied)
+                accessIssue: &accessIssue)
         }
         let cookieHeader = rawHeader.flatMap { Self.filteredCookieHeader(from: $0) }
         guard let cookieHeader else {
-            return failure(browserDenied
-                ? ProviderCookieReader.browserDataDeniedMessage
-                : "Chưa đăng nhập FreeModel trên trình duyệt")
+            return failure(accessIssue?.message ?? "Chưa đăng nhập FreeModel trên trình duyệt")
         }
 
         let usageData: Data

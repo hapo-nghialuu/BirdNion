@@ -279,18 +279,16 @@ final class MiniMaxProvider: QuotaProvider {
         case .com: domains = ["platform.minimaxi.com", "platform.minimax.io"]
         }
 
-        var browserDenied = false
+        var accessIssue: ProviderCookieReader.AccessIssue?
         let cookieHeader = domains.compactMap {
             ProviderCookieReader.resolvedCookieHeader(
-                providerID: id, domain: $0, permissionDenied: &browserDenied)
+                providerID: id, domain: $0, accessIssue: &accessIssue)
         }.first
         guard let cookieHeader else {
             return ProviderStatus(
                 id: id, displayName: displayName, windows: [],
                 lastUpdated: Date(),
-                error: browserDenied
-                    ? ProviderCookieReader.browserDataDeniedMessage
-                    : "Chưa cấu hình token và không tìm thấy cookie trình duyệt")
+                error: accessIssue?.message ?? "Chưa cấu hình token và không tìm thấy cookie trình duyệt")
         }
 
         var req = URLRequest(url: Self.endpoint(region: region))

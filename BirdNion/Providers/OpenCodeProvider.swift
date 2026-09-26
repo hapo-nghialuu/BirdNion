@@ -58,17 +58,15 @@ final class OpenCodeProvider: QuotaProvider {
     func fetch() async throws -> ProviderStatus {
         // Name the session cookie so a browser whose login has expired loses to
         // one that is still signed in — a stale analytics cookie must not win.
-        var browserDenied = false
+        var accessIssue: ProviderCookieReader.AccessIssue?
         guard let rawHeader = ProviderCookieReader.resolvedCookieHeader(
                   providerID: id,
                   domain: Self.cookieDomain,
                   matchingSession: { Self.allowedCookieNames.contains($0) },
-                  permissionDenied: &browserDenied),
+                  accessIssue: &accessIssue),
               !rawHeader.isEmpty
         else {
-            return failure(browserDenied
-                ? ProviderCookieReader.browserDataDeniedMessage
-                : "Chưa đăng nhập OpenCode trên trình duyệt")
+            return failure(accessIssue?.message ?? "Chưa đăng nhập OpenCode trên trình duyệt")
         }
 
         guard let cookieHeader = Self.filteredCookieHeader(from: rawHeader) else {

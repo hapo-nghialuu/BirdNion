@@ -5,6 +5,7 @@ import Foundation
 /// (see the classification precedence invariant below).
 enum ProviderErrorKind: String, CaseIterable, Equatable, Sendable {
     case browserDataDenied           // macOS blocked reading the browser's data -> grant in Privacy & Security (or use Manual cookie)
+    case browserDataUnreadable       // browser data dir exists but read failed non-permission -> retry, or Manual cookie
     case cookieExpiredOrMissing      // browser session cookie missing/expired -> re-login browser
     case notConfigured               // provider never set up (no token/login attempted yet) -> open Settings
     case tokenInvalidOrMissing       // API key / OAuth token present but wrong/expired -> re-paste token
@@ -35,7 +36,7 @@ enum ProviderErrorKind: String, CaseIterable, Equatable, Sendable {
     var isFixable: Bool {
         switch self {
         case .notConfigured, .tokenInvalidOrMissing, .cookieExpiredOrMissing,
-             .browserDataDenied:
+             .browserDataDenied, .browserDataUnreadable:
             return true
         case .apiSchemaChanged, .networkUnreachableOrTimeout, .rateLimited, .unknown:
             return false
@@ -59,9 +60,9 @@ func remediationTarget(providerID: String, kind: ProviderErrorKind) -> ProviderR
         return ["claude", "codex", "grok"].contains(providerID) ? .setupSource : .credential
     case .cookieExpiredOrMissing:
         return ["claude", "codex"].contains(providerID) ? .cookieSource : .setupSource
-    case .browserDataDenied:
+    case .browserDataDenied, .browserDataUnreadable:
         // The cookie-source controls carry the Manual paste field — the only
-        // in-app workaround when the OS grant is missing.
+        // in-app workaround when the OS grant is missing or the store is broken.
         return .cookieSource
     case .apiSchemaChanged, .networkUnreachableOrTimeout, .rateLimited, .unknown:
         return nil
@@ -72,15 +73,17 @@ func remediationTarget(providerID: String, kind: ProviderErrorKind) -> ProviderR
 /// Returns nil when there is no error to classify (nil/empty input).
 /// PRECEDENCE (fixed invariant — order of checks matters):
 ///   1. nil/empty            -> nil                         (R0.7)
-///   2. permission marker    -> browserDataDenied           (synthetic text, beats every
+///   2. unreadable marker    -> browserDataUnreadable       (checked FIRST: its copy
+///                                                           contains "dữ liệu trình duyệt")
+///   3. permission marker    -> browserDataDenied           (synthetic text, beats every
 ///                                                           marker it could also contain)
-///   3. cookie marker        -> cookieExpiredOrMissing      (R0.3, beats 401/403)
-///   4. 429 / rate-limit     -> rateLimited                 (R0.4, beats 401/403)
-///   5. timeout/network      -> networkUnreachableOrTimeout (R0.5, beats schema)
-///   6. not-configured       -> notConfigured                (beats token: never set up != wrong value)
-///   7. 401/403 / token      -> tokenInvalidOrMissing
-///   8. invalid-response/5xx -> apiSchemaChanged
-///   9. otherwise            -> unknown                     (R0.6)
+///   4. cookie marker        -> cookieExpiredOrMissing      (R0.3, beats 401/403)
+///   5. 429 / rate-limit     -> rateLimited                 (R0.4, beats 401/403)
+///   6. timeout/network      -> networkUnreachableOrTimeout (R0.5, beats schema)
+///   7. not-configured       -> notConfigured                (beats token: never set up != wrong value)
+///   8. 401/403 / token      -> tokenInvalidOrMissing
+///   9. invalid-response/5xx -> apiSchemaChanged
+///   10. otherwise           -> unknown                     (R0.6)
 /// Matching is case-insensitive substring/code containment over the raw string,
 /// which is intentionally bilingual (vi/en) and ad-hoc across providers.
 func classify(rawError: String?) -> ProviderErrorKind? {
@@ -93,11 +96,16 @@ func classify(rawError: String?) -> ProviderErrorKind? {
     // Marker sets are the single source of truth — extend with one-line additions.
     // Ambiguous single-word markers ("đăng nhập", "expired", "connection") are
     // deliberately excluded: they appear across cookie AND token provider copy.
-    // Synthetic text emitted only by ProviderCookieReader.browserDataDeniedMessage
-    // (plus the English translation of it) — "blocked, could not look" must never
-    // degrade to "not configured" or "sign in again".
+    // "Store exists but read failed" copy — distinct remediation from denied
+    // (retry / Manual, not a Privacy grant). MUST be checked before
+    // permissionMarkers because the message also contains "dữ liệu trình duyệt".
+    let unreadableMarkers = ["không đọc được dữ liệu", "could not read browser data"]
+    // Synthetic text emitted by ProviderCookieReader's AccessIssue.message /
+    // browserDataDeniedMessage — "blocked, could not look" must never degrade
+    // to "not configured" or "sign in again".
     let permissionMarkers = ["thiếu quyền", "quyền đọc dữ liệu", "browser data",
-                             "dữ liệu trình duyệt", "full disk access"]
+                             "dữ liệu trình duyệt", "full disk access",
+                             "đã chặn", "quyền truy cập", "macos denied"]
     let cookieMarkers = ["cookie", "session cookie", "cần auth", "__host-auth", "sessionkey"]
     let rateMarkers = ["rate limit", "too many", "quá nhiều"]
     let networkMarkers = ["timeout", "network", "mạng", "offline", "could not connect"]
@@ -114,6 +122,7 @@ func classify(rawError: String?) -> ProviderErrorKind? {
                          "parse", "json", "không nhận ra", "không có model"]
     let xAITeamNotFound = codes.contains(404) && s.contains("xai team")
 
+    if unreadableMarkers.contains(where: s.contains) { return .browserDataUnreadable }
     if permissionMarkers.contains(where: s.contains) { return .browserDataDenied }
     if cookieMarkers.contains(where: s.contains) { return .cookieExpiredOrMissing }
     if rateMarkers.contains(where: s.contains) || codes.contains(429) { return .rateLimited }

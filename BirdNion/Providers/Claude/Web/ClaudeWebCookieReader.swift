@@ -137,13 +137,13 @@ enum ClaudeWebCookieReader {
             // (enumeration EPERM maps to notFound inside SweetCookieKit).
             if case .accessDenied = error {
                 sawAccessDenied = true
-            } else if ProviderCookieReader.browserDataAccessBlocked(browser) {
+            } else if ProviderCookieReader.browserAccessIssue(browser) == .accessDenied {
                 sawAccessDenied = true
             }
         } catch {
             // notFound / loadFailed — browser not installed or store unreadable,
             // unless macOS app-data protection is what made it unreadable.
-            if ProviderCookieReader.browserDataAccessBlocked(browser) {
+            if ProviderCookieReader.browserAccessIssue(browser) == .accessDenied {
                 sawAccessDenied = true
             }
         }

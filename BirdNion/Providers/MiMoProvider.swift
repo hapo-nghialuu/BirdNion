@@ -68,21 +68,19 @@ final class MiMoProvider: QuotaProvider {
         // lives on `platform.xiaomimimo.com` while `userId` lives on the apex
         // `.xiaomimimo.com`. Merge BOTH domains' cookies — querying only the
         // sub-domain misses `userId` and the session looks "not found".
-        var browserDenied = false
+        var accessIssue: ProviderCookieReader.AccessIssue?
         let headers = [
             ProviderCookieReader.resolvedCookieHeader(
                 providerID: id, domain: Self.cookieDomain,
-                permissionDenied: &browserDenied),
+                accessIssue: &accessIssue),
             ProviderCookieReader.resolvedCookieHeader(
                 providerID: id, domain: Self.cookieDomainFallback,
-                permissionDenied: &browserDenied),
+                accessIssue: &accessIssue),
         ].compactMap { $0 }.filter { !$0.isEmpty }
         let rawHeader = headers.joined(separator: "; ")
 
         guard !rawHeader.isEmpty else {
-            return failure(browserDenied
-                ? ProviderCookieReader.browserDataDeniedMessage
-                : "Chưa đăng nhập MiMo trên trình duyệt")
+            return failure(accessIssue?.message ?? "Chưa đăng nhập MiMo trên trình duyệt")
         }
 
         // Validate and filter to only MiMo-relevant cookies.

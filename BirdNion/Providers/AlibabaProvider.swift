@@ -161,20 +161,18 @@ final class AlibabaProvider: QuotaProvider {
         let accountLabel = BirdNionConfigStore.accountLabel(provider: id) ?? "alibaba"
 
         // Resolve cookies for both plans independently (best-effort).
-        var browserDenied = false
+        var accessIssue: ProviderCookieReader.AccessIssue?
         let codingCookie = ProviderCookieReader.resolvedCookieHeader(
             providerID: id, domain: AlibabaRegion.current.cookieDomain,
-            permissionDenied: &browserDenied)
+            accessIssue: &accessIssue)
         let tokenCookie = ProviderCookieReader.resolvedCookieHeader(
             providerID: id, domain: TokenPlanRegion.cookieDomain,
-            permissionDenied: &browserDenied)
+            accessIssue: &accessIssue)
 
         guard (codingCookie != nil && !(codingCookie!.isEmpty)) ||
               (tokenCookie != nil && !(tokenCookie!.isEmpty))
         else {
-            return failure(browserDenied
-                ? ProviderCookieReader.browserDataDeniedMessage
-                : "Chưa đăng nhập Alibaba / Qwen trên trình duyệt")
+            return failure(accessIssue?.message ?? "Chưa đăng nhập Alibaba / Qwen trên trình duyệt")
         }
 
         var windows: [QuotaWindow] = []
