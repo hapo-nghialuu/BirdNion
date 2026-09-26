@@ -28,7 +28,7 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 | Startup fetch | launch-time refresh, per-provider streaming, lazy scans + 5-min cache | first paint before any fetch; per-provider status streaming; scanners `spawn_blocking` + 5-min TTL cache; skeleton + "Đang quét…" hint | **done** |
 | Grok brand color | #111827 black | `--grok: #111827` bars/dots/fills | **done** |
 | Hotkey global | yes | N/A — Ctrl+, in-window only | **accepted gap** |
-| Menu-bar % text | yes | tray tooltip | **accepted gap** |
+| Menu-bar % text | yes (opt-in, mặc định tắt) | % + logo provider vẽ thẳng vào icon tray (`set_tray_status` ghép PNG), xoay vòng 5s, bật mặc định; tooltip không hiện trên panel Linux | **done** |
 | Settings provider detail | detailHeader + info grid + usage (pace/credits/cost) + setup + quota-warn card + links | `settings-provider-detail.ts` full port; ProviderStatus mở rộng (plan/version/serviceStatus/sourceLabel/windowSeconds) | **done** |
 | Settings Claude Code pane | 2-pane: preset + custom profiles, activation panel + power 76px, scope segmented + folder picker, remove env, token/baseURL, model loader, 1M toggle, paste JSON | `claude-code-pane.ts` + Rust `claudeCodeProfiles` (config flatten giữ key lạ), `claude_code_models` fetcher, profile apply/state commands, tauri-plugin-dialog | **done** |
 | Custom Claude/Codex quick switch trong popover | có, kèm ready/stale/active + proxy health; exact-snapshot guard chống activate sau delete/edit | `ai-coding-profile-popover.ts` + `profile_switch.rs`; opaque HMAC snapshot, kiểm tra lại sau mọi `await`, provider-scoped proxy cleanup/reconcile | **done** |
