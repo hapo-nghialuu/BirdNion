@@ -410,7 +410,6 @@ test("canonical provider identity ignores presentation but tracks fetch config a
     ["codex", "active_codex_account"],
     ["freemodel", "active_freemodel_account"],
     ["elevenlabs", "active_elevenlabs_key"],
-    ["hiyo", "active_hiyo_key"],
   ]) {
     const provider = { id: providerId, enabled: true };
     const selected = (value) => canonicalProviderFetchIdentities({

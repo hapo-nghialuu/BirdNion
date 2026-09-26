@@ -106,6 +106,7 @@ final class GrokProvider: QuotaProvider {
         let windowSeconds: Int? = primary.windowMinutes.flatMap { $0 > 0 ? $0 * 60 : nil }
 
         var subtitle: String?
+        var allowance: QuotaAllowance?
         if let billing = snap.billing,
            let limitCents = billing.monthlyLimit?.val, limitCents > 0,
            let usedCents = billing.usage?.totalUsed?.val
@@ -113,6 +114,9 @@ final class GrokProvider: QuotaProvider {
             let usedUSD = Double(usedCents) / 100.0
             let limitUSD = Double(limitCents) / 100.0
             subtitle = String(format: "$%.2f / $%.2f", usedUSD, limitUSD)
+            allowance = QuotaAllowance(
+                used: usedUSD, remaining: max(0, limitUSD - usedUSD),
+                limit: limitUSD, unit: .usd)
         }
 
         let window = QuotaWindow(
@@ -121,7 +125,8 @@ final class GrokProvider: QuotaProvider {
             remainingPct: remainingPct,
             subtitle: subtitle,
             resetDate: primary.resetsAt,
-            windowSeconds: windowSeconds)
+            windowSeconds: windowSeconds,
+            allowance: allowance)
 
         return ProviderStatus(
             id: "grok",

@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::providers::browser_cookies;
 use crate::providers::copilot_oauth::accounts;
-use crate::providers::{display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
 
@@ -181,6 +181,12 @@ fn window(label: &str, snap: Option<&Snap>, reset: Option<i64>) -> Option<QuotaW
 
     let used = (100.0 - percent_remaining).round().clamp(0.0, 100.0) as i32;
     Some(QuotaWindow {
+        allowance: snap.entitlement.map(|e| QuotaAllowance {
+            used: snap.remaining.map(|r| (e - r).max(0.0)),
+            remaining: snap.remaining,
+            limit: Some(e),
+            unit: "requests".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -419,6 +425,12 @@ fn budget_windows(budgets: &[BudgetEntry]) -> Vec<QuotaWindow> {
             let used = used_raw.round().clamp(0.0, 100.0) as i32;
             let label_name = b.name.clone().unwrap_or_else(|| "Copilot".to_string());
             Some(QuotaWindow {
+                allowance: Some(QuotaAllowance {
+                    used: Some(b.current_amount),
+                    remaining: Some((b.budget_amount - b.current_amount).max(0.0)),
+                    limit: Some(b.budget_amount),
+                    unit: "usd".to_string(),
+                }),
                 semantic_key: None,
                 semantic_kind: None,
                 label: format!("Budget · {label_name}"),

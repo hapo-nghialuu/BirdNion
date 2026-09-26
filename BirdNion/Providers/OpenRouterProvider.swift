@@ -94,7 +94,9 @@ final class OpenRouterProvider: QuotaProvider {
             label: "Hạn mức key",
             usedPct: usedPct,
             remainingPct: 100 - usedPct,
-            subtitle: String(format: "$%.2f / $%.2f", remaining, limit))
+            subtitle: String(format: "$%.2f / $%.2f", remaining, limit),
+            allowance: QuotaAllowance(
+                used: usage, remaining: remaining, limit: limit, unit: .usd))
     }
 
     func parse(_ data: Data, accountLabel: String) -> ProviderStatus {
@@ -109,7 +111,9 @@ final class OpenRouterProvider: QuotaProvider {
             label: "Tín dụng",
             usedPct: usedPct,
             remainingPct: 100 - usedPct,
-            subtitle: String(format: "$%.2f / $%.2f", remaining, total))
+            subtitle: String(format: "$%.2f / $%.2f", remaining, total),
+            allowance: QuotaAllowance(
+                used: used, remaining: remaining, limit: total, unit: .usd))
         return ProviderStatus(
             id: id,
             displayName: displayName,

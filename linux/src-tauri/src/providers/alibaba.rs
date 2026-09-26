@@ -19,7 +19,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::providers::browser_cookies;
-use crate::providers::{display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
@@ -455,6 +455,12 @@ fn quota_window(label: &str, used: i64, total: i64, reset: Option<i64>) -> Quota
         .round()
         .clamp(0.0, 100.0) as i32;
     QuotaWindow {
+        allowance: Some(QuotaAllowance {
+            used: Some(used as f64),
+            remaining: Some((total - used).max(0) as f64),
+            limit: Some(total as f64),
+            unit: "requests".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -537,6 +543,12 @@ fn parse_token_plan_window(text: &str) -> Option<QuotaWindow> {
     let rem = remaining.unwrap_or((total - used).max(0.0));
 
     Some(QuotaWindow {
+        allowance: Some(QuotaAllowance {
+            used: Some(used),
+            remaining: Some(rem),
+            limit: Some(total),
+            unit: "credits".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: "Token Plan".to_string(),

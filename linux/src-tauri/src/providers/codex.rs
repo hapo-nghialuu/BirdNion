@@ -1318,6 +1318,7 @@ fn normalize(
 
 fn to_quota_window(w: Window, label: &str) -> QuotaWindow {
     QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: label.to_string(),
@@ -2032,6 +2033,7 @@ mod tests {
             id: "codex".into(),
             display_name: "Codex".into(),
             windows: vec![QuotaWindow {
+                allowance: None,
                 label: "Tuần".into(),
                 used_pct: 12,
                 remaining_pct: 88,
@@ -2127,6 +2129,7 @@ mod tests {
                     id: "codex".into(),
                     display_name: "Codex".into(),
                     windows: vec![QuotaWindow {
+                        allowance: None,
                         label: "Tuần".into(),
                         used_pct: 12,
                         remaining_pct: 88,

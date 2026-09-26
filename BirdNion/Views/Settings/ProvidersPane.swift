@@ -402,7 +402,6 @@ extension ProvidersPane {
         case "hapo": row.displayName ?? "Hapo Hub"
         case "claude": "Claude"
         case "openrouter": "OpenRouter"
-        case "tryapi": "TryAPI"
         case "deepseek": "DeepSeek"
         case "zai": "z.ai"
         case "elevenlabs": "ElevenLabs"
@@ -425,7 +424,6 @@ extension ProvidersPane {
         case "antigravity": "Antigravity"
         case "bedrock": "AWS Bedrock"
         case "freemodel": "FreeModel"
-        case "hiyo": "Hiyo"
         case "devin": "Devin"
         default: row.displayName ?? row.id
         }
@@ -569,8 +567,6 @@ struct ProviderLogoView: View {
             logo("CodexLogo", brand: VocabbyTheme.codex)
         case "openrouter":
             logo("OpenRouterLogo", brand: VocabbyTheme.openRouter)
-        case "tryapi":
-            logo("TryAPILogo", brand: VocabbyTheme.tryAPI)
         case "deepseek":
             logo("DeepSeekLogo", brand: VocabbyTheme.deepSeek)
         case "zai":
@@ -617,8 +613,6 @@ struct ProviderLogoView: View {
             logo("AntigravityLogo", brand: VocabbyTheme.antigravity)
         case "bedrock":
             logo("BedrockLogo", brand: VocabbyTheme.bedrock)
-        case "hiyo":
-            logo("HiyoLogo", brand: VocabbyTheme.hiyo)
         case "devin":
             logo("DevinLogo", brand: VocabbyTheme.devin)
         default:
@@ -984,169 +978,6 @@ struct ElevenLabsKeysCard: View {
         }
     }
 }
-
-// MARK: - Hiyo multi-key card
-
-/// Settings card for managing multiple Hiyo API keys — add / switch /
-/// remove. Secrets live in `hiyo-keys.json`; the active id is in
-/// UserDefaults (`activeHiyoKey`).
-struct HiyoKeysCard: View {
-    @EnvironmentObject var settings: SettingsStore
-    @EnvironmentObject var quota: QuotaService
-
-    @State var keys: [HiyoKey] = []
-    @State var activeID: String?
-    @State var newKey = ""
-    @State var newLabel = ""
-    @State var errorText: String?
-    @State var busy = false
-
-    var body: some View {
-        SettingsCard(
-            header: L10n.t("hiyo.keysLabel", settings.appLanguage),
-            footer: LocalizedStringKey(L10n.t("hiyo.keysFooter", settings.appLanguage))
-        ) {
-            if keys.isEmpty {
-                Text(L10n.t("hiyo.keysEmpty", settings.appLanguage))
-                    .font(.plexSans(12))
-                    .foregroundStyle(SettingsTheme.secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                SettingsRowDivider()
-            }
-            ForEach(keys) { key in
-                keyRow(key)
-                SettingsRowDivider()
-            }
-            addRow
-            if let errorText {
-                Text(errorText)
-                    .font(.plexSans(10))
-                    .foregroundStyle(SettingsTheme.critical)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 8)
-            }
-        }
-        .onAppear(perform: reload)
-        .onReceive(NotificationCenter.default.publisher(for: .birdnionHiyoKeysChanged)) { _ in
-            reload()
-        }
-    }
-
-    func displayName(_ key: HiyoKey) -> String {
-        if let label = key.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
-            return label
-        }
-        return key.preview
-    }
-
-    func keyRow(_ key: HiyoKey) -> some View {
-        let isActive = key.id == activeID
-        return HStack(spacing: 10) {
-            Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-                .foregroundStyle(isActive ? SettingsTheme.accent : SettingsTheme.secondary)
-                .onTapGesture { switchTo(key) }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayName(key))
-                    .font(.plexSans(13, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.primary)
-                Text(key.preview + "…")
-                    .font(.plexMono(10))
-                    .foregroundStyle(SettingsTheme.secondary)
-            }
-
-            Spacer(minLength: 6)
-
-            if isActive {
-                Text(L10n.t("hiyo.activeBadge", settings.appLanguage))
-                    .font(.plexSans(10, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.accent)
-            } else {
-                Button(L10n.t("hiyo.switchKey", settings.appLanguage)) {
-                    switchTo(key)
-                }
-                .buttonStyle(.instrumentInline)
-                .pointingHandCursor()
-                .disabled(busy)
-            }
-
-            Button {
-                removeKey(key)
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(SettingsTheme.critical)
-                    .instrumentIconTile(bordered: false)
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-            .disabled(busy)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-
-    var addRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SecureField(L10n.t("hiyo.keyPlaceholder", settings.appLanguage), text: $newKey)
-                .font(.plexMono(12))
-                .instrumentControlFieldStyle()
-            HStack(alignment: .center, spacing: 8) {
-                TextField(L10n.t("hiyo.labelPlaceholder", settings.appLanguage), text: $newLabel)
-                    .font(.plexSans(12))
-                    .instrumentControlFieldStyle()
-                Button(L10n.t("hiyo.addKey", settings.appLanguage)) {
-                    addKey()
-                }
-                .buttonStyle(.instrumentInline)
-                .pointingHandCursor()
-                .disabled(busy || newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-
-    func reload() {
-        keys = HiyoKeyStore.allKeys()
-        activeID = HiyoKeyStore.activeID()
-    }
-
-    func switchTo(_ key: HiyoKey) {
-        // Store posts keys-changed + birdnionRefresh (force fetch).
-        HiyoKeyStore.setActive(key.id)
-        reload()
-        errorText = nil
-    }
-
-    func addKey() {
-        busy = true
-        errorText = nil
-        defer { busy = false }
-        do {
-            // Store notifies Settings + popover to re-list immediately.
-            _ = try HiyoKeyStore.add(apiKey: newKey, label: newLabel.isEmpty ? nil : newLabel)
-            newKey = ""
-            newLabel = ""
-            reload()
-        } catch {
-            errorText = error.localizedDescription
-        }
-    }
-
-    func removeKey(_ key: HiyoKey) {
-        busy = true
-        errorText = nil
-        defer { busy = false }
-        do {
-            try HiyoKeyStore.remove(key.id)
-            reload()
-        } catch {
-            errorText = error.localizedDescription
-        }
-    }
-}
-
 /// read-only; managed accounts live in their own CODEX_HOME and are added via
 /// `codex login` in the browser. Selecting one switches which login the
 /// provider reads.

@@ -928,7 +928,10 @@ final class KiroProvider: QuotaProvider {
             usedPct: usedPct,
             remainingPct: remainingPct,
             subtitle: subtitle,
-            resetDate: resetDate)
+            resetDate: resetDate,
+            allowance: matchedCredits ? QuotaAllowance(
+                used: creditsUsed, remaining: max(0, creditsTotal - creditsUsed),
+                limit: creditsTotal, unit: .credits) : nil)
 
         var windows: [QuotaWindow] = [creditsWindow]
         if let w = bonusWindow(bonus) { windows.append(w) }
@@ -977,6 +980,9 @@ final class KiroProvider: QuotaProvider {
             remainingPct: 100 - bonusUsedPct,
             subtitle: String(format: "%.2f / %.0f bonus", bonus.used, bonus.total),
             resetDate: bonusExpiry,
+            allowance: QuotaAllowance(
+                used: bonus.used, remaining: max(0, bonus.total - bonus.used),
+                limit: bonus.total, unit: .credits),
             isSupplementary: true)
     }
 
@@ -989,7 +995,9 @@ final class KiroProvider: QuotaProvider {
         if let u = creditsUsed { parts.append(String(format: "%.2f credits", u)) }
         if let c = costUSD { parts.append(String(format: "~$%.2f", c)) }
         let subtitle = parts.isEmpty ? (status ?? "Đang bật") : parts.joined(separator: " · ")
-        return QuotaWindow(label: "Vượt hạn mức", usedPct: 0, remainingPct: 100, subtitle: subtitle)
+        return QuotaWindow(
+            label: "Vượt hạn mức", usedPct: 0, remainingPct: 100, subtitle: subtitle,
+            allowance: creditsUsed.map { QuotaAllowance(used: $0, remaining: nil, limit: nil, unit: .credits) })
     }
 
     // MARK: - Parse helpers

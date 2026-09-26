@@ -360,6 +360,7 @@ final class FreemodelProvider: QuotaProvider {
             subtitle: window.subtitle.map { "\($0) · số cũ" } ?? "số cũ",
             resetDate: window.resetDate,
             windowSeconds: window.windowSeconds,
+            allowance: window.allowance,
             isSupplementary: window.isSupplementary,
             isInactive: window.isInactive)
     }
@@ -398,6 +399,8 @@ final class FreemodelProvider: QuotaProvider {
             usedPct: usedPct,
             remainingPct: 100 - usedPct,
             subtitle: subtitle,
+            allowance: QuotaAllowance(
+                used: used, remaining: remaining, limit: total, unit: .usd),
             isSupplementary: true)
     }
 
@@ -418,6 +421,8 @@ final class FreemodelProvider: QuotaProvider {
             subtitle: "\(UsageFormatter.usdString(used)) / \(UsageFormatter.usdString(limit))",
             resetDate: w.resetsAt > 0 ? Date(timeIntervalSince1970: TimeInterval(w.resetsAt)) : nil,
             windowSeconds: windowSeconds,
+            allowance: QuotaAllowance(
+                used: used, remaining: max(0, limit - used), limit: limit, unit: .usd),
             isInactive: isInactive)
     }
 

@@ -177,6 +177,11 @@ final class NewProviderTests: XCTestCase {
         XCTAssertNil(s.error)
         XCTAssertEqual(s.windows.first?.label, "Credits")
         XCTAssertEqual(s.windows.first?.usedPct, 12)   // 12000 / 100000
+        XCTAssertEqual(s.windows.first?.allowance, QuotaAllowance(
+            used: 12_000,
+            remaining: 88_000,
+            limit: 100_000,
+            unit: .characters))
         XCTAssertEqual(s.planName, "Creator")
         XCTAssertTrue(s.windows.contains { $0.label == "Voice slots" })
     }
@@ -3791,11 +3796,10 @@ final class NewProviderTests: XCTestCase {
 
     func testMenuBarProviderLogosAreMonochromeTemplates() {
         let providerIDs = [
-            "minimax", "hapo", "codex", "claude", "openrouter", "tryapi", "deepseek", "zai",
+            "minimax", "hapo", "codex", "claude", "openrouter", "deepseek", "zai",
             "elevenlabs", "deepgram", "groq", "grok", "openai", "ollama", "copilot",
             "kilo", "commandcode", "freemodel", "mimo", "cursor", "alibaba", "opencode",
-            "opencodego", "gemini", "kiro", "antigravity", "bedrock", "hiyo",
-        ]
+            "opencodego", "gemini", "kiro", "antigravity", "bedrock",        ]
 
         for id in providerIDs {
             XCTAssertTrue(MenuBarIconRenderer.providerLogo(for: id).isTemplate, id)
@@ -4258,82 +4262,6 @@ final class NewProviderTests: XCTestCase {
         XCTAssertThrowsError(try ElevenLabsKeyStore.add(apiKey: "   ", label: nil,
                                                         url: store.url, defaults: store.defaults))
         XCTAssertTrue(ElevenLabsKeyStore.allKeys(url: store.url, defaults: store.defaults).isEmpty)
-    }
-
-    func testHiyoParse() {
-        let json = """
-        {
-          "balance": 3.98917248,
-          "remaining": 3.98917248,
-          "unit": "USD",
-          "isValid": true,
-          "mode": "unrestricted",
-          "planName": "钱包余额",
-          "usage": {
-            "total": { "cost": 0.0135344, "total_tokens": 26935, "requests": 6 },
-            "today": { "cost": 0, "total_tokens": 0, "requests": 0 }
-          }
-        }
-        """.data(using: .utf8)!
-        let s = HiyoProvider()._parseForTesting(json, accountLabel: "u")
-        XCTAssertNil(s.error)
-        XCTAssertEqual(s.windows.count, 1)
-        XCTAssertEqual(s.windows.first?.label, "Số dư")
-        XCTAssertEqual(s.creditsRemaining ?? 0, 3.98917248, accuracy: 0.0001)
-        XCTAssertTrue(s.windows.first?.subtitle?.contains("$") == true)
-    }
-
-    /// Isolated store: temp metadata file + throwaway UserDefaults suite so
-    /// tests never touch the real key store or the app's active selection.
-    private func makeTempHiyoStore() throws -> (url: URL, defaults: UserDefaults, cleanup: () -> Void) {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("hiyo-keys-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("hiyo-keys.json")
-        // Pre-create an empty store so ensureLegacyImport never copies the
-        // machine's real legacy apiKey into the temp store.
-        try Data(#"{"accounts":[]}"#.utf8).write(to: url)
-        let suite = "hiyo-keys-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        return (url, defaults, {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(at: dir)
-        })
-    }
-
-    func testHiyoKeyStoreAddSwitchRemoveRoundtrip() throws {
-        let store = try makeTempHiyoStore()
-        defer { store.cleanup() }
-        let url = store.url, defaults = store.defaults
-
-        XCTAssertTrue(HiyoKeyStore.allKeys(url: url, defaults: defaults).isEmpty)
-        XCTAssertNil(HiyoKeyStore.activeApiKey(url: url, defaults: defaults))
-
-        let k1 = try HiyoKeyStore.add(apiKey: "sk-hiyo-test-one-aaaa", label: "Work",
-                                      url: url, defaults: defaults)
-        XCTAssertEqual(k1.label, "Work")
-        XCTAssertEqual(k1.preview, "sk-hiyo-")
-        // First key auto-activates.
-        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k1.id)
-
-        let k2 = try HiyoKeyStore.add(apiKey: "sk-hiyo-test-two-bbbb", label: "Personal",
-                                      url: url, defaults: defaults)
-        // Adding a second key must NOT steal active.
-        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k1.id)
-
-        HiyoKeyStore.setActive(k2.id, url: url, defaults: defaults)
-        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k2.id)
-        XCTAssertEqual(HiyoKeyStore.activeApiKey(url: url, defaults: defaults), "sk-hiyo-test-two-bbbb")
-        XCTAssertEqual(HiyoKeyStore.activeDisplayLabel(url: url, defaults: defaults), "Personal")
-
-        try HiyoKeyStore.remove(k2.id, url: url, defaults: defaults)
-        // Active falls back to the first remaining key.
-        XCTAssertEqual(HiyoKeyStore.activeID(url: url, defaults: defaults), k1.id)
-        XCTAssertEqual(HiyoKeyStore.allKeys(url: url, defaults: defaults).count, 1)
-
-        try HiyoKeyStore.remove(k1.id, url: url, defaults: defaults)
-        XCTAssertTrue(HiyoKeyStore.allKeys(url: url, defaults: defaults).isEmpty)
-        XCTAssertNil(HiyoKeyStore.activeApiKey(url: url, defaults: defaults))
     }
 
     // MARK: Antigravity quota-summary parsing
@@ -5437,6 +5365,31 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(status.windows.map(\.label), ["Tháng"])
     }
 
+    /// cap/used USD của windowLimits và grant tháng map thẳng sang allowance
+    /// typed `.usd` — số tiền không còn chỉ sống trong subtitle nữa.
+    func testCommandCodeWindowsCarryUSDAllowance() {
+        let credits = Data("""
+        {"credits":{"monthlyCredits":60.83,"purchasedCredits":0,
+        "premiumMonthlyCredits":0,"monthlyCreditsGranted":70},
+        "windowLimits":{"limited":true,
+        "fiveHour":{"used":0.185,"cap":14,"resetAt":1769999999000},
+        "weekly":{"used":9.17,"cap":35,"resetAt":1770999999000}}}
+        """.utf8)
+        let status = CommandCodeProvider._parseForTesting(
+            creditsData: credits, subscriptionData: nil)
+        XCTAssertEqual(status.windows.map(\.label), ["5 giờ", "Tuần", "Tháng"])
+        let expected: [(used: Double, remaining: Double, limit: Double)] = [
+            (0.185, 13.815, 14), (9.17, 25.83, 35), (9.17, 60.83, 70),
+        ]
+        for (window, e) in zip(status.windows, expected) {
+            let a = window.allowance
+            XCTAssertEqual(a?.unit, .usd)
+            XCTAssertEqual(a?.used ?? -1, e.used, accuracy: 0.0001)
+            XCTAssertEqual(a?.remaining ?? -1, e.remaining, accuracy: 0.0001)
+            XCTAssertEqual(a?.limit ?? -1, e.limit, accuracy: 0.0001)
+        }
+    }
+
     // MARK: - OpenCode Go: API key source
 
     func testOpenCodeGoKeyPrefersEnvOverConfig() {
@@ -6359,6 +6312,47 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(snap.overageBalance, 10.0)
         let s = DevinProvider._mapForTesting(snap)
         XCTAssertEqual(s.creditsRemaining, 10.0)
+    }
+
+    /// Payload có số ACU tuyệt đối (`used`/`limit`) → window.allowance đơn vị
+    /// `.acu`; phần trăm vẫn derive từ cùng cặp số đó.
+    func testDevinAbsoluteQuotaMapsACUAllowance() throws {
+        let json = """
+        {"daily": {"used": 2.1, "limit": 5.0},
+         "weekly": {"used": 4.0, "limit": 20.0}}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: "org/acme")
+        XCTAssertEqual(snap.daily?.used, 2.1)
+        XCTAssertEqual(snap.daily?.limit, 5.0)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertEqual(s.windows[0].usedPct, 42)
+        XCTAssertEqual(s.windows[0].allowance, QuotaAllowance(
+            used: 2.1, remaining: nil, limit: 5.0, unit: .acu))
+        XCTAssertEqual(s.windows[1].allowance, QuotaAllowance(
+            used: 4.0, remaining: nil, limit: 20.0, unit: .acu))
+    }
+
+    /// `available` đã gánh vai trò `limit` thì không được tái sử dụng làm
+    /// `remaining` — cặp số trùng nhau sẽ nói dối số còn lại.
+    func testDevinAvailableAliasDoesNotDoubleAsRemaining() throws {
+        let json = """
+        {"daily": {"used": 2.0, "available": 5.0}}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: nil)
+        XCTAssertEqual(snap.daily?.used, 2.0)
+        XCTAssertEqual(snap.daily?.limit, 5.0)
+        XCTAssertNil(snap.daily?.remaining)
+    }
+
+    /// Payload chỉ có phần trăm → allowance nil, không bịa số tuyệt đối.
+    func testDevinPercentOnlyQuotaKeepsAllowanceNil() throws {
+        let json = """
+        {"daily_percentage": 48, "weekly_percentage": 24, "is_quota_plan": true}
+        """
+        let snap = try DevinUsageParser.parse(Data(json.utf8), organization: nil)
+        let s = DevinProvider._mapForTesting(snap)
+        XCTAssertNil(s.windows[0].allowance)
+        XCTAssertNil(s.windows[1].allowance)
     }
 
     /// Snapshot kèm usageHistory → ProviderStatus.devinUsage cho chart card;

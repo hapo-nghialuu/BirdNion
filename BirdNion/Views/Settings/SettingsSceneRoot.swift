@@ -224,7 +224,6 @@ enum SettingsSearchIndex {
         case "hapo": return fallback ?? "Hapo Hub"
         case "claude": return "Claude"
         case "openrouter": return "OpenRouter"
-        case "tryapi": return "TryAPI"
         case "deepseek": return "DeepSeek"
         case "zai": return "z.ai"
         case "elevenlabs": return "ElevenLabs"
@@ -247,7 +246,6 @@ enum SettingsSearchIndex {
         case "antigravity": return "Antigravity"
         case "bedrock": return "AWS Bedrock"
         case "freemodel": return "FreeModel"
-        case "hiyo": return "Hiyo"
         case "devin": return "Devin"
         default: return fallback ?? id
         }
@@ -270,7 +268,6 @@ enum SettingsSearchIndex {
         case "openrouter": return ["openrouter"]
         case "deepseek": return ["deepseek"]
         case "elevenlabs": return ["elevenlabs", "eleven"]
-        case "hiyo": return ["hiyo"]
         case "devin": return ["devin", "cognition"]
         case "kilo": return ["kilo"]
         default: return [id]

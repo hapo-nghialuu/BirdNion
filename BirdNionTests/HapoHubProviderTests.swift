@@ -70,6 +70,11 @@ final class HapoHubProviderTests: XCTestCase {
         XCTAssertNil(s.error)
         XCTAssertEqual(s.windows.count, 1)
         XCTAssertEqual(s.windows[0].remainingPct, 73)
+        let allowance = try XCTUnwrap(s.windows[0].allowance)
+        XCTAssertEqual(allowance.unit, .usd)
+        XCTAssertEqual(allowance.used ?? -1, 5.4, accuracy: 0.0001)
+        XCTAssertEqual(allowance.remaining ?? -1, 14.6, accuracy: 0.0001)
+        XCTAssertEqual(allowance.limit ?? -1, 20.0, accuracy: 0.0001)
     }
 
     func testRealNon2xx() async throws {

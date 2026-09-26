@@ -130,7 +130,6 @@ type Settings = {
   active_codex_account?: string | null;
   active_freemodel_account?: string | null;
   active_elevenlabs_key?: string | null;
-  active_hiyo_key?: string | null;
   providers: ProviderCfg[];
 };
 
@@ -141,7 +140,6 @@ const ACTIVE_PROVIDER_IDENTITY_KEYS = new Map<string, keyof Settings>([
   ["codex", "active_codex_account"],
   ["freemodel", "active_freemodel_account"],
   ["elevenlabs", "active_elevenlabs_key"],
-  ["hiyo", "active_hiyo_key"],
 ]);
 
 function stableConfigValue(value: unknown): unknown {

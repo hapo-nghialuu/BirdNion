@@ -13,7 +13,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const BASE_URL: &str = "https://app.kilo.ai/api/trpc";
 const PROCEDURES: [&str; 3] = [
@@ -199,6 +199,12 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
         let used = credit_snap.used.unwrap_or(0.0);
         let used_pct = ((used / total) * 100.0).round().clamp(0.0, 100.0) as i32;
         windows.push(QuotaWindow {
+            allowance: Some(QuotaAllowance {
+                used: Some(used),
+                remaining: Some((total - used).max(0.0)),
+                limit: Some(total),
+                unit: "usd".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Credits".into(),
@@ -210,6 +216,7 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
         });
     } else if credit_snap.total == Some(0.0) {
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Credits".into(),
@@ -231,6 +238,12 @@ fn parse_batch_response(bytes: &[u8], id: &str, name: &str, account_label: &str)
             subtitle += &format!(" (+ ${bonus:.2} bonus)");
         }
         windows.push(QuotaWindow {
+            allowance: Some(QuotaAllowance {
+                used: Some(pass_used),
+                remaining: Some((base_credits - pass_used).max(0.0)),
+                limit: Some(base_credits),
+                unit: "usd".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Kilo Pass".into(),

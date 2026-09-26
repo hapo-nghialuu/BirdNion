@@ -228,7 +228,12 @@ final class CopilotProvider: QuotaProvider {
                 remainingPct: 100 - used,
                 subtitle: subtitle,
                 resetDate: nil,
-                windowSeconds: 30 * 24 * 3600)
+                windowSeconds: 30 * 24 * 3600,
+                allowance: QuotaAllowance(
+                    used: b.currentAmount,
+                    remaining: max(0, b.budgetAmount - b.currentAmount),
+                    limit: b.budgetAmount,
+                    unit: .usd))
         }
     }
 
@@ -269,8 +274,16 @@ final class CopilotProvider: QuotaProvider {
             return nil
         }
         let used = max(0, min(100, Int((100 - percentRemaining).rounded())))
+        let allowance = (snap.entitlement != nil || snap.remaining != nil)
+            ? QuotaAllowance(
+                used: nil,
+                remaining: snap.remaining,
+                limit: snap.entitlement,
+                unit: .requests)
+            : nil
         return QuotaWindow(label: label, usedPct: used, remainingPct: 100 - used,
-                           resetDate: reset, windowSeconds: 30 * 24 * 3600)
+                           resetDate: reset, windowSeconds: 30 * 24 * 3600,
+                           allowance: allowance)
     }
 
     static func parseReset(_ value: String?) -> Date? {

@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config;
-use crate::providers::{shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -646,6 +646,12 @@ fn build_status(
         if let Some(b) = budget.filter(|b| *b > 0.0) {
             let used_pct = ((spend / b) * 100.0).round().clamp(0.0, 100.0) as i32;
             windows.push(QuotaWindow {
+                allowance: Some(QuotaAllowance {
+                    used: Some(spend),
+                    remaining: Some((b - spend).max(0.0)),
+                    limit: Some(b),
+                    unit: "usd".to_string(),
+                }),
                 semantic_key: None,
                 semantic_kind: None,
                 label: "Ngân sách tháng".into(),
@@ -657,6 +663,12 @@ fn build_status(
             });
         } else {
             windows.push(QuotaWindow {
+                allowance: Some(QuotaAllowance {
+                    used: Some(spend),
+                    remaining: None,
+                    limit: None,
+                    unit: "usd".to_string(),
+                }),
                 semantic_key: None,
                 semantic_kind: None,
                 label: "Ngân sách tháng".into(),
@@ -678,6 +690,12 @@ fn build_status(
             compact_count(output_tokens)
         );
         windows.push(QuotaWindow {
+            allowance: Some(QuotaAllowance {
+                used: Some(total_tokens as f64),
+                remaining: None,
+                limit: None,
+                unit: "tokens".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: format!("14 ngày ({region})"),

@@ -28,10 +28,24 @@ public enum DevinUsageError: LocalizedError, Sendable {
 public struct DevinQuotaWindow: Sendable, Equatable {
     public let usedPercent: Double
     public let resetsAt: Date?
+    /// Exact ACU amounts when the payload carries them (`used`/`limit` or
+    /// `remaining`/`limit`); nil for percent-only sources.
+    public let used: Double?
+    public let remaining: Double?
+    public let limit: Double?
 
-    public init(usedPercent: Double, resetsAt: Date? = nil) {
+    public init(
+        usedPercent: Double,
+        resetsAt: Date? = nil,
+        used: Double? = nil,
+        remaining: Double? = nil,
+        limit: Double? = nil)
+    {
         self.usedPercent = min(100, max(0, usedPercent))
         self.resetsAt = resetsAt
+        self.used = used
+        self.remaining = remaining
+        self.limit = limit
     }
 }
 
@@ -243,15 +257,47 @@ public enum DevinUsageParser {
         }
 
         if let percent = self.percent(from: dictionary) {
+            let allowance = self.absoluteAllowance(in: dictionary)
             return DevinQuotaWindow(
                 usedPercent: percent,
-                resetsAt: self.findResetDate(in: dictionary))
+                resetsAt: self.findResetDate(in: dictionary),
+                used: allowance.used,
+                remaining: allowance.remaining,
+                limit: allowance.limit)
         }
 
         if let nested = dictionary.values.lazy.compactMap({ self.window(from: $0) }).first {
             return nested
         }
 
+        return nil
+    }
+
+    /// Raw `used`/`remaining`/`limit` readings from the payload, mirroring the
+    /// key precedence `percent(from:)` uses. `available` doubles as a limit
+    /// alias there — when it sourced the limit, a `remaining` read of the same
+    /// key is dropped so the pair never reports identical values.
+    private static func absoluteAllowance(
+        in dictionary: [String: Any]
+    ) -> (used: Double?, remaining: Double?, limit: Double?) {
+        let used = self.firstKeyedDouble(
+            in: dictionary, keys: ["used", "usage", "used_count", "usedCount", "consumed"])
+        let limit = self.firstKeyedDouble(
+            in: dictionary, keys: ["limit", "quota", "total", "max", "available"])
+        let remaining = self.firstKeyedDouble(
+            in: dictionary, keys: ["remaining", "left", "available"])
+        let distinctRemaining = (remaining?.key == limit?.key) ? nil : remaining?.value
+        return (used?.value, distinctRemaining, limit?.value)
+    }
+
+    private static func firstKeyedDouble(
+        in dictionary: [String: Any], keys: [String]
+    ) -> (key: String, value: Double)? {
+        for key in keys {
+            if let value = self.double(dictionary[key]) {
+                return (key, value)
+            }
+        }
         return nil
     }
 

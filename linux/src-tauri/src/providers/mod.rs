@@ -25,7 +25,6 @@ pub mod gemini;
 pub mod grok;
 pub mod groq;
 pub mod hapo;
-pub mod hiyo;
 pub mod kilo;
 pub mod kiro;
 pub mod mimo;
@@ -35,12 +34,23 @@ pub mod openai;
 pub mod opencode;
 pub mod opencodego;
 pub mod openrouter;
-pub mod tryapi;
 pub mod xai;
 pub mod zai;
 
 use crate::config;
 use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaAllowance {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
+    pub unit: String,
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +67,10 @@ pub struct QuotaWindow {
     /// `resets_at`, drives the settings pace/reserve line (macOS WindowPace).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_seconds: Option<i64>,
+    /// Exact source-native allowance values. Absent when the source exposes
+    /// only a percentage or no authoritative amount/limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowance: Option<QuotaAllowance>,
     /// Stable provider-defined identity for future quota observations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_key: Option<String>,
@@ -151,7 +165,6 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "zai" => "z.ai",
         "minimax" => "MiniMax",
         "hapo" => "Hapo AI Hub",
-        "hiyo" => "Hiyo",
         "elevenlabs" => "ElevenLabs",
         "deepgram" => "Deepgram",
         "devin" => "Devin",
@@ -175,7 +188,6 @@ pub fn display_name(cfg: &config::Provider) -> String {
         "freemodel" => "FreeModel",
         "gemini" => "Gemini",
         "antigravity" => "Antigravity",
-        "tryapi" => "TryAPI",
         other => other,
     }
     .to_string()
@@ -343,7 +355,6 @@ async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
         "zai" => zai::fetch(cfg).await,
         "minimax" => minimax::fetch(cfg).await,
         "hapo" => hapo::fetch(cfg).await,
-        "hiyo" => hiyo::fetch(cfg).await,
         "elevenlabs" => elevenlabs::fetch(cfg).await,
         "deepgram" => deepgram::fetch(cfg).await,
         "devin" => devin::fetch(cfg).await,
@@ -366,7 +377,6 @@ async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
         "mimo" => mimo::fetch(cfg).await,
         "alibaba" => alibaba::fetch(cfg).await,
         "freemodel" => freemodel::fetch(cfg).await,
-        "tryapi" => tryapi::fetch(cfg).await,
         "copilot" => copilot::fetch(cfg).await,
         other => ProviderStatus::failure(
             other,
@@ -393,6 +403,7 @@ async fn dispatch_core(cfg: &config::Provider) -> ProviderStatus {
                 subtitle: None,
                 resets_at: None,
                 window_seconds: None,
+                allowance: None,
                 semantic_key: None,
                 semantic_kind: None,
             }],
@@ -582,6 +593,7 @@ mod tests {
                 subtitle: None,
                 resets_at: None,
                 window_seconds: None,
+                allowance: None,
                 semantic_key: None,
                 semantic_kind: None,
             }],

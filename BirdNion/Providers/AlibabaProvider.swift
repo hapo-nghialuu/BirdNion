@@ -370,7 +370,10 @@ final class AlibabaProvider: QuotaProvider {
                 remainingPct: 100 - usedPct,
                 subtitle: "\(Self.fmt(Double(total - used))) / \(Self.fmt(Double(total))) requests còn lại",
                 resetDate: resetDate,
-                windowSeconds: 5 * 3600))
+                windowSeconds: 5 * 3600,
+                allowance: QuotaAllowance(
+                    used: Double(used), remaining: Double(total - used),
+                    limit: Double(total), unit: .requests)))
         }
 
         // Weekly window.
@@ -384,7 +387,10 @@ final class AlibabaProvider: QuotaProvider {
                 remainingPct: 100 - usedPct,
                 subtitle: "\(Self.fmt(Double(total - used))) / \(Self.fmt(Double(total))) requests còn lại",
                 resetDate: resetDate,
-                windowSeconds: 7 * 24 * 3600))
+                windowSeconds: 7 * 24 * 3600,
+                allowance: QuotaAllowance(
+                    used: Double(used), remaining: Double(total - used),
+                    limit: Double(total), unit: .requests)))
         }
 
         // Monthly window.
@@ -398,7 +404,10 @@ final class AlibabaProvider: QuotaProvider {
                 remainingPct: 100 - usedPct,
                 subtitle: "\(Self.fmt(Double(total - used))) / \(Self.fmt(Double(total))) requests còn lại",
                 resetDate: resetDate,
-                windowSeconds: 30 * 24 * 3600))
+                windowSeconds: 30 * 24 * 3600,
+                allowance: QuotaAllowance(
+                    used: Double(used), remaining: Double(total - used),
+                    limit: Double(total), unit: .requests)))
         }
 
         return windows
@@ -482,7 +491,9 @@ final class AlibabaProvider: QuotaProvider {
             remainingPct: 100 - usedPct,
             subtitle: "\(Self.fmt(rem)) / \(Self.fmt(total)) credits còn lại",
             resetDate: resetsAt,
-            windowSeconds: 30 * 24 * 3600)
+            windowSeconds: 30 * 24 * 3600,
+            allowance: QuotaAllowance(
+                used: used, remaining: rem, limit: total, unit: .credits))
     }
 
     // MARK: - Helpers

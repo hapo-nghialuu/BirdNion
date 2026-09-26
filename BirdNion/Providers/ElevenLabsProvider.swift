@@ -277,16 +277,27 @@ final class ElevenLabsProvider: QuotaProvider {
             remainingPct: 100 - used,
             subtitle: "\(fmt(r.characterCount)) / \(fmt(r.characterLimit))",
             resetDate: r.nextCharacterCountResetUnix.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-            windowSeconds: 30 * 24 * 3600))
+            windowSeconds: 30 * 24 * 3600,
+            allowance: QuotaAllowance(
+                used: Double(r.characterCount),
+                remaining: Double(max(0, r.characterLimit - r.characterCount)),
+                limit: Double(r.characterLimit),
+                unit: .characters)))
         if let u = r.voiceSlotsUsed, let lim = r.voiceLimit, lim > 0 {
             let p = max(0, min(100, Int((Double(u) / Double(lim) * 100).rounded())))
             windows.append(QuotaWindow(label: "Voice slots", usedPct: p, remainingPct: 100 - p,
-                                       subtitle: "\(u) / \(lim)"))
+                                       subtitle: "\(u) / \(lim)",
+                                       allowance: QuotaAllowance(
+                                           used: Double(u), remaining: Double(lim - u),
+                                           limit: Double(lim), unit: .count)))
         }
         if let u = r.professionalVoiceSlotsUsed, let lim = r.professionalVoiceLimit, lim > 0 {
             let p = max(0, min(100, Int((Double(u) / Double(lim) * 100).rounded())))
             windows.append(QuotaWindow(label: "Professional voices", usedPct: p, remainingPct: 100 - p,
-                                       subtitle: "\(u) / \(lim)"))
+                                       subtitle: "\(u) / \(lim)",
+                                       allowance: QuotaAllowance(
+                                           used: Double(u), remaining: Double(lim - u),
+                                           limit: Double(lim), unit: .count)))
         }
         let plan = displayTier(tier: r.tier, status: r.status)
         return ProviderStatus(

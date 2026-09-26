@@ -179,7 +179,10 @@ final class MiMoProvider: QuotaProvider {
                 remainingPct: remainingPct,
                 subtitle: subtitle,
                 resetDate: planDetail?.periodEnd,
-                windowSeconds: 30 * 24 * 3600))
+                windowSeconds: 30 * 24 * 3600,
+                allowance: QuotaAllowance(
+                    used: Double(usage.used), remaining: Double(max(0, usage.limit - usage.used)),
+                    limit: Double(usage.limit), unit: .tokens)))
         }
 
         let planName = planDetail?.planCode.map { $0.capitalized }

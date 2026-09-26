@@ -12,7 +12,7 @@
 use serde_json::Value;
 
 use crate::providers::browser_cookies;
-use crate::providers::{display_name, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const BALANCE_URL: &str = "https://platform.xiaomimimo.com/api/v1/balance";
 const PLAN_DETAIL_URL: &str = "https://platform.xiaomimimo.com/api/v1/tokenPlan/detail";
@@ -182,6 +182,7 @@ fn parse_status(
     }
 
     let mut windows = vec![QuotaWindow {
+        allowance: None,
         semantic_key: None,
         semantic_kind: None,
         label: "Số dư".to_string(),
@@ -219,6 +220,12 @@ fn parse_status(
                         .map(|p| format!("Token Plan · {p}"))
                         .unwrap_or_else(|| "Token Plan".to_string());
                     windows.push(QuotaWindow {
+                        allowance: Some(QuotaAllowance {
+                            used: Some(used),
+                            remaining: Some((limit - used).max(0.0)),
+                            limit: Some(limit),
+                            unit: "tokens".to_string(),
+                        }),
                         semantic_key: None,
                         semantic_kind: None,
                         label,

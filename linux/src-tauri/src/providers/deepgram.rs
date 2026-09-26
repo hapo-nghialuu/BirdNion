@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const BASE: &str = "https://api.deepgram.com/v1";
 
@@ -171,6 +171,12 @@ fn materialize(
     plan_name: &str,
 ) -> ProviderStatus {
     let mut windows = vec![QuotaWindow {
+        allowance: Some(QuotaAllowance {
+            used: Some(agg.requests as f64),
+            remaining: None,
+            limit: None,
+            unit: "requests".to_string(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: "Requests (30d)".into(),
@@ -187,6 +193,7 @@ fn materialize(
             format!("{:.1} giờ", agg.hours)
         };
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Audio (30d)".into(),
@@ -210,6 +217,7 @@ fn materialize(
     }
     if !extra.is_empty() {
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: "Chi tiết (30d)".into(),

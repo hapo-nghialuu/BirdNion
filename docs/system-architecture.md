@@ -33,14 +33,25 @@ Evidence bắt buộc tách bốn lane độc lập: Windows 10 x64, Windows 10 
 ### 3.1 Mô hình dữ liệu
 
 ```swift
-struct QuotaWindow {
-  let label: String     // vd "5 giờ", "Tuần", "Opus"
-  let usedPct: Int      // 0-100
-  let remainingPct: Int // 0-100
-  let resetDate: Date?
-  let windowSeconds: Int?
+enum QuotaUnit: String {
+  case usd, characters, requests, credits, tokens, count
 }
 
+struct QuotaAllowance {
+  let used: Double?
+  let remaining: Double?
+  let limit: Double?
+  let unit: QuotaUnit
+}
+
+struct QuotaWindow {
+  let label: String      // vd "5 giờ", "Tuần", "Opus"
+  let usedPct: Int       // 0-100
+  let remainingPct: Int  // 0-100
+  let resetDate: Date?
+  let windowSeconds: Int?
+  let allowance: QuotaAllowance? // exact source-native values only
+}
 struct ProviderStatus {
   let id: String
   let displayName: String
@@ -65,6 +76,14 @@ struct ClaudeWebExtras {
   let sourceLabel: String?
 }
 ```
+
+`QuotaAllowance` là contract native-unit tùy chọn, đồng nhất qua Swift cache,
+Rust serde IPC và TypeScript. Adapter chỉ ghi các trường số có thẩm quyền từ
+nguồn; trường thiếu giữ `nil`/absent, không đọc ngược `subtitle`, không ép thành
+`0`, `100%` hoặc limit ước lượng. Slice P1 hiện tại map Hapo Hub (USD) và
+ElevenLabs (characters) trên cả macOS/Linux. Provider card chỉ hiển thị reset
+khi nguồn trả timestamp rõ ràng; `windowSeconds` vẫn phục vụ pace khi có reset
+anchor nhưng không tự tạo reset timestamp.
 
 ### 3.2 Providers (7 built-in)
 

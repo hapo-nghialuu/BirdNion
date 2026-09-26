@@ -373,6 +373,7 @@ fn map_to_windows(buckets: &[Bucket]) -> Vec<QuotaWindow> {
         let used_pct = (((1.0 - fraction) * 100.0).round() as i32).clamp(0, 100);
         let resets_at = reset_time.as_deref().and_then(parse_iso8601);
         windows.push(QuotaWindow {
+            allowance: None,
             semantic_key: None,
             semantic_kind: None,
             label: label.to_string(),

@@ -59,7 +59,7 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 
 ## Provider ids (canonical order)
 
-claude, codex, minimax, hapo, openrouter, tryapi, deepseek, zai, elevenlabs, hiyo, deepgram, groq, **grok**, **xai**, **openai**, **ollama**, copilot, kilo, commandcode, freemodel, mimo, alibaba, cursor, gemini, kiro, opencode, opencodego, antigravity, bedrock
+claude, codex, minimax, hapo, openrouter, deepseek, zai, elevenlabs, deepgram, groq, **grok**, **xai**, **openai**, **ollama**, copilot, kilo, commandcode, freemodel, mimo, alibaba, cursor, gemini, kiro, opencode, opencodego, antigravity, bedrock
 
 ## Auth notes (new providers)
 

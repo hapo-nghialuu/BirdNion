@@ -1,5 +1,93 @@
 import Foundation
 
+enum QuotaUnit: String, Codable, Equatable, Sendable {
+    case usd
+    case characters
+    case requests
+    case credits
+    case tokens
+    case count
+    case acu
+}
+
+/// Exact native allowance fields exposed by a provider contract.
+///
+/// Each numeric field is independent: missing source data stays nil instead
+/// of being coerced to zero or an estimated limit.
+struct QuotaAllowance: Codable, Equatable, Sendable {
+    let used: Double?
+    let remaining: Double?
+    let limit: Double?
+    let unit: QuotaUnit
+
+    init(used: Double? = nil,
+         remaining: Double? = nil,
+         limit: Double? = nil,
+         unit: QuotaUnit) {
+        self.used = used
+        self.remaining = remaining
+        self.limit = limit
+        self.unit = unit
+    }
+}
+
+enum QuotaAllowanceFormatter {
+    static func text(_ allowance: QuotaAllowance, language: String) -> String? {
+        let used = valid(allowance.used)
+        let remaining = valid(allowance.remaining)
+        let limit = valid(allowance.limit)
+
+        if let remaining, let limit {
+            return L10n.f(
+                "allowance.remainingOf",
+                language,
+                value(remaining, unit: allowance.unit, language: language),
+                value(limit, unit: allowance.unit, language: language))
+        }
+        if let used, let limit {
+            return L10n.f(
+                "allowance.usedOf",
+                language,
+                value(used, unit: allowance.unit, language: language),
+                value(limit, unit: allowance.unit, language: language))
+        }
+        if let remaining {
+            return L10n.f(
+                "allowance.remaining",
+                language,
+                value(remaining, unit: allowance.unit, language: language))
+        }
+        if let used {
+            return L10n.f(
+                "allowance.used",
+                language,
+                value(used, unit: allowance.unit, language: language))
+        }
+        if let limit {
+            return L10n.f(
+                "allowance.limit",
+                language,
+                value(limit, unit: allowance.unit, language: language))
+        }
+        return nil
+    }
+
+    private static func valid(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value >= 0 else { return nil }
+        return value
+    }
+
+    private static func value(_ value: Double, unit: QuotaUnit, language: String) -> String {
+        if unit == .usd { return UsageFormatter.usdString(value) }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 2
+        formatter.locale = Locale(identifier: language == "en" ? "en_US" : "vi_VN")
+        let number = formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+        return "\(number) \(L10n.t("allowance.unit.\(unit.rawValue)", language))"
+    }
+}
+
 /// One quota window (e.g. "5 giờ" or "Tuần") reported by a provider.
 /// Matches the `<!-- contract:QuotaWindow -->` block in `specs/ai-statusbar/design.md`.
 ///
@@ -17,6 +105,9 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
     /// Full window length in seconds (e.g. 18000 for 5h, 604800 for a week).
     /// Used with `resetDate` to compute consumption pace. nil when unknown.
     let windowSeconds: Int?
+    /// Exact source-native allowance values. nil when the source only reports
+    /// percentages or does not expose an authoritative amount/limit.
+    let allowance: QuotaAllowance?
     /// True for supplementary/bonus-credit windows (referral bonuses, one-off
     /// signup credits) that are expected to sit at 0% once spent — unlike a
     /// recurring rate-limit window, running out isn't an urgent signal.
@@ -37,6 +128,7 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
          subtitle: String? = nil,
          resetDate: Date? = nil,
          windowSeconds: Int? = nil,
+         allowance: QuotaAllowance? = nil,
          isSupplementary: Bool = false,
          isInactive: Bool = false) {
         self.id = id
@@ -46,12 +138,13 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
         self.subtitle = subtitle
         self.resetDate = resetDate
         self.windowSeconds = windowSeconds
+        self.allowance = allowance
         self.isSupplementary = isSupplementary
         self.isInactive = isInactive
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, label, usedPct, remainingPct, subtitle, resetDate, windowSeconds, isSupplementary, isInactive
+        case id, label, usedPct, remainingPct, subtitle, resetDate, windowSeconds, allowance, isSupplementary, isInactive
     }
 
     /// Custom decode so cached snapshots written before these fields existed
@@ -66,6 +159,7 @@ struct QuotaWindow: Identifiable, Codable, Equatable {
         subtitle = try c.decodeIfPresent(String.self, forKey: .subtitle)
         resetDate = try c.decodeIfPresent(Date.self, forKey: .resetDate)
         windowSeconds = try c.decodeIfPresent(Int.self, forKey: .windowSeconds)
+        allowance = try c.decodeIfPresent(QuotaAllowance.self, forKey: .allowance)
         isSupplementary = try c.decodeIfPresent(Bool.self, forKey: .isSupplementary) ?? false
         isInactive = try c.decodeIfPresent(Bool.self, forKey: .isInactive) ?? false
     }

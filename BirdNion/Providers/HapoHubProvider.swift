@@ -154,11 +154,17 @@ final class HapoHubProvider: QuotaProvider {
         let subtitle = String(format: "$%.2f / $%.2f",
                               r.remaining_budget_usd, r.weekly_budget_usd)
         let resetDate = Self.iso8601.date(from: r.budget_week_ends_at)
-        let win = QuotaWindow(label: "Tuần",
-                              usedPct: usedPct,
-                              remainingPct: remainingPct,
-                              subtitle: subtitle,
-                              resetDate: resetDate)
+        let win = QuotaWindow(
+            label: "Tuần",
+            usedPct: usedPct,
+            remainingPct: remainingPct,
+            subtitle: subtitle,
+            resetDate: resetDate,
+            allowance: QuotaAllowance(
+                used: max(0, r.weekly_budget_usd - r.remaining_budget_usd),
+                remaining: r.remaining_budget_usd,
+                limit: r.weekly_budget_usd,
+                unit: .usd))
         return ProviderStatus(id: id, displayName: displayName,
                               windows: [win],
                               lastUpdated: Date(),

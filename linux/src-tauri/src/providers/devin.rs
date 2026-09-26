@@ -15,7 +15,7 @@ use reqwest::Url;
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const BASE: &str = "https://app.devin.ai";
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
@@ -223,6 +223,11 @@ async fn get(
 struct DevinQuota {
     used_percent: f64,
     resets_at: Option<i64>,
+    /// Exact ACU amounts when the payload carries them
+    /// (`used`/`limit` or `remaining`/`limit`); None for percent-only sources.
+    used: Option<f64>,
+    remaining: Option<f64>,
+    limit: Option<f64>,
 }
 
 struct Snapshot {
@@ -258,6 +263,9 @@ fn current_quota_window(percent: Option<&Value>, resets_at: Option<&Value>) -> O
     Some(DevinQuota {
         used_percent: normalize_percent(used),
         resets_at: resets_at.and_then(date_value),
+        used: None,
+        remaining: None,
+        limit: None,
     })
 }
 
@@ -293,15 +301,60 @@ fn window_from(value: &Value) -> Option<DevinQuota> {
         return double(value).map(|v| DevinQuota {
             used_percent: normalize_percent(v),
             resets_at: None,
+            used: None,
+            remaining: None,
+            limit: None,
         });
     };
     if let Some(percent) = percent_from(value) {
+        let (used, remaining, limit) = absolute_allowance(map);
         return Some(DevinQuota {
             used_percent: percent,
             resets_at: find_reset_date(map),
+            used,
+            remaining,
+            limit,
         });
     }
     map.values().find_map(window_from)
+}
+
+/// Raw `used`/`remaining`/`limit` readings, mirroring the key precedence
+/// `percent_from` uses. `available` doubles as a limit alias there — when it
+/// sourced the limit, a `remaining` read of the same key is dropped so the
+/// pair never reports identical values.
+fn absolute_allowance(
+    map: &serde_json::Map<String, Value>,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let used = first_keyed_double(
+        map,
+        &["used", "usage", "used_count", "usedCount", "consumed"],
+    );
+    let limit = first_keyed_double(map, &["limit", "quota", "total", "max", "available"]);
+    let remaining = first_keyed_double(map, &["remaining", "left", "available"]);
+    let distinct_remaining = match (&remaining, &limit) {
+        (Some((r_key, _)), Some((l_key, _))) if r_key == l_key => None,
+        _ => remaining.map(|(_, v)| v),
+    };
+    (
+        used.map(|(_, v)| v),
+        distinct_remaining,
+        limit.map(|(_, v)| v),
+    )
+}
+
+fn first_keyed_double<'m>(
+    map: &'m serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<(&'m String, f64)> {
+    for key in keys {
+        if let Some((k, v)) = map.get_key_value(*key) {
+            if let Some(n) = double(v) {
+                return Some((k, n));
+            }
+        }
+    }
+    None
 }
 
 fn percent_from(value: &Value) -> Option<f64> {
@@ -470,6 +523,16 @@ fn display_organization(normalized: &str) -> String {
 
 fn window(quota: &DevinQuota, label: &str, window_seconds: i64) -> QuotaWindow {
     let used = quota.used_percent.round().clamp(0.0, 100.0) as i32;
+    let allowance = if quota.used.is_some() || quota.remaining.is_some() || quota.limit.is_some() {
+        Some(QuotaAllowance {
+            used: quota.used,
+            remaining: quota.remaining,
+            limit: quota.limit,
+            unit: "acu".into(),
+        })
+    } else {
+        None
+    };
     QuotaWindow {
         label: label.to_string(),
         used_pct: used,
@@ -477,6 +540,7 @@ fn window(quota: &DevinQuota, label: &str, window_seconds: i64) -> QuotaWindow {
         subtitle: None,
         resets_at: quota.resets_at,
         window_seconds: Some(window_seconds),
+        allowance,
         semantic_key: None,
         semantic_kind: None,
     }
@@ -652,6 +716,50 @@ mod tests {
         assert_eq!(snap.daily.unwrap().used_percent, 55.0);
         assert_eq!(snap.weekly.unwrap().used_percent, 30.0);
         assert_eq!(snap.plan_name.as_deref(), Some("Pro Plan"));
+    }
+
+    /// `used`/`limit` absolute keys → ACU allowance on the mapped window;
+    /// the percent still derives from that same pair.
+    #[test]
+    fn absolute_quota_maps_acu_allowance() {
+        let body = json!({
+            "quota": {
+                "daily": { "used": 2.1, "limit": 5.0 },
+                "weekly": { "used": 4.0, "limit": 20.0 }
+            }
+        });
+        let snap = parse(&body).unwrap();
+        let daily = snap.daily.as_ref().unwrap();
+        assert_eq!(daily.used, Some(2.1));
+        assert_eq!(daily.limit, Some(5.0));
+
+        let status = materialize(&cfg(), "Devin", "org/acme", &body);
+        let allowance = status.windows[0].allowance.as_ref().unwrap();
+        assert_eq!(allowance.unit, "acu");
+        assert_eq!(allowance.used, Some(2.1));
+        assert_eq!(allowance.remaining, None);
+        assert_eq!(allowance.limit, Some(5.0));
+        assert_eq!(status.windows[1].allowance.as_ref().unwrap().unit, "acu");
+    }
+
+    /// `available` doubles as a limit alias — once it sources the limit it must
+    /// not reappear as `remaining` (the pair would report identical values).
+    #[test]
+    fn available_alias_does_not_double_as_remaining() {
+        let body = json!({ "daily": { "used": 2.0, "available": 5.0 } });
+        let snap = parse(&body).unwrap();
+        let daily = snap.daily.as_ref().unwrap();
+        assert_eq!(daily.used, Some(2.0));
+        assert_eq!(daily.limit, Some(5.0));
+        assert_eq!(daily.remaining, None);
+    }
+
+    /// Percent-only payloads keep `allowance` absent — no fabricated numbers.
+    #[test]
+    fn percent_only_quota_keeps_allowance_none() {
+        let body = json!({ "daily_percentage": 48, "weekly_percentage": 24 });
+        let status = materialize(&cfg(), "Devin", "org/acme", &body);
+        assert!(status.windows.iter().all(|w| w.allowance.is_none()));
     }
 
     #[test]

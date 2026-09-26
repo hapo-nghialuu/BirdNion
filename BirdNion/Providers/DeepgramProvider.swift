@@ -76,7 +76,10 @@ final class DeepgramProvider: QuotaProvider {
 
     private func materialize(_ agg: Aggregate, planName: String, accountLabel: String?) -> ProviderStatus {
         var windows: [QuotaWindow] = [
-            QuotaWindow(label: "Requests (30d)", usedPct: 0, remainingPct: 100, subtitle: fmt(agg.requests)),
+            QuotaWindow(label: "Requests (30d)", usedPct: 0, remainingPct: 100, subtitle: fmt(agg.requests),
+                        allowance: QuotaAllowance(
+                            used: Double(agg.requests), remaining: nil, limit: nil,
+                            unit: .requests)),
         ]
         if agg.hours > 0 {
             let audio = agg.totalHours > 0

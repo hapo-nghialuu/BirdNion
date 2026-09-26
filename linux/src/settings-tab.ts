@@ -17,7 +17,7 @@ import {
 } from "./provider-tab";
 import {
   detailInfoGrid, usageSection, setupSection, quotaWarningCard, linksSection,
-  codexAccountsCard, copilotAccountsCard, freemodelAccountsCard, antigravityAccountsCard, elevenlabsKeysCard, hiyoKeysCard,
+  codexAccountsCard, copilotAccountsCard, freemodelAccountsCard, antigravityAccountsCard, elevenlabsKeysCard,
   ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, relativeUpdated, displayError,
   refreshMountedAntigravityAccountsCard,
   type AntigravityAccountChange,
@@ -75,7 +75,6 @@ const ACTIVE_STATUS_IDENTITY_KEYS = new Map<string, keyof Settings>([
   ["codex", "active_codex_account"],
   ["freemodel", "active_freemodel_account"],
   ["elevenlabs", "active_elevenlabs_key"],
-  ["hiyo", "active_hiyo_key"],
 ]);
 
 export type ProviderSettingsGenerationToken = Readonly<{
@@ -178,8 +177,8 @@ export async function installListenersBeforeLifecycleArm(
 /** Full roster (macOS parity), in default display order. */
 const ROSTER: [string, string][] = [
   ["claude", "Claude"], ["codex", "Codex"], ["minimax", "MiniMax"],
-  ["hapo", "Hapo AI Hub"], ["openrouter", "OpenRouter"], ["tryapi", "TryAPI"], ["deepseek", "DeepSeek"],
-  ["zai", "z.ai"], ["elevenlabs", "ElevenLabs"], ["hiyo", "Hiyo"], ["deepgram", "Deepgram"],
+  ["hapo", "Hapo AI Hub"], ["openrouter", "OpenRouter"], ["deepseek", "DeepSeek"],
+  ["zai", "z.ai"], ["elevenlabs", "ElevenLabs"], ["deepgram", "Deepgram"],
   ["groq", "Groq"], ["grok", "Grok"], ["xai", "xAI"], ["openai", "OpenAI"], ["ollama", "Ollama"],
   ["copilot", "Copilot"], ["kilo", "Kilo"],
   ["commandcode", "CommandCode"], ["freemodel", "Freemodel"], ["mimo", "MiMo"],
@@ -1107,12 +1106,6 @@ export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
     if (selectedId === "antigravity") scroll.append(antigravityAccountsCard());
     if (selectedId === "elevenlabs") {
       const keys = elevenlabsKeysCard();
-      keys.dataset.remediationTarget = "credential";
-      keys.tabIndex = -1;
-      scroll.append(keys);
-    }
-    if (selectedId === "hiyo") {
-      const keys = hiyoKeysCard();
       keys.dataset.remediationTarget = "credential";
       keys.tabIndex = -1;
       scroll.append(keys);

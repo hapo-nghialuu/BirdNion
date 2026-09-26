@@ -83,6 +83,24 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   providerResetCredits: { vi: "Reset khả dụng", en: "Resets available" },
   providerResetBadge: { vi: "{n} lượt đặt lại", en: "{n} resets" },
   usedPct: { vi: "Đã dùng {n}%", en: "{n}% used" },
+  "allowance.remainingOf": {
+    vi: "Còn {remaining} trong tổng {limit}",
+    en: "{remaining} remaining of {limit}",
+  },
+  "allowance.usedOf": {
+    vi: "Đã dùng {used} trong tổng {limit}",
+    en: "{used} used of {limit}",
+  },
+  "allowance.remaining": { vi: "Còn {value}", en: "{value} remaining" },
+  "allowance.used": { vi: "Đã dùng {value}", en: "{value} used" },
+  "allowance.limit": { vi: "Giới hạn {value}", en: "{value} limit" },
+  "allowance.unit.usd": { vi: "USD", en: "USD" },
+  "allowance.unit.characters": { vi: "ký tự", en: "characters" },
+  "allowance.unit.requests": { vi: "yêu cầu", en: "requests" },
+  "allowance.unit.credits": { vi: "credit", en: "credits" },
+  "allowance.unit.tokens": { vi: "token", en: "tokens" },
+  "allowance.unit.count": { vi: "lượt", en: "items" },
+  "allowance.unit.acu": { vi: "ACU", en: "ACU" },
   updatedAt: { vi: "cập nhật", en: "updated" },
   resetInDays: { vi: "reset sau {n} ngày", en: "resets in {n}d" },
   resetInHours: { vi: "reset sau {n} giờ", en: "resets in {n}h" },
@@ -762,21 +780,6 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     en: "Store multiple API keys and switch from the popover. Keys live in a separate file (elevenlabs-keys.json).",
   },
 
-  // Hiyo multi-key
-  hiyoKeysLabel: { vi: "API keys Hiyo", en: "Hiyo API keys" },
-  hiyoKeysEmpty: {
-    vi: "Chưa có API key — dán key bên dưới để thêm.",
-    en: "No API keys yet — paste a key below to add one.",
-  },
-  hiyoKeyPlaceholder: { vi: "Dán API key Hiyo…", en: "Paste Hiyo API key…" },
-  hiyoKeyLabelPlaceholder: { vi: "Nhãn (tuỳ chọn)", en: "Label (optional)" },
-  hiyoKeyAdd: { vi: "Thêm key", en: "Add key" },
-  hiyoKeySwitch: { vi: "Dùng key này", en: "Use this key" },
-  hiyoKeyActive: { vi: "Đang dùng", en: "Active" },
-  hiyoKeysAddHint: {
-    vi: "Lưu nhiều API key và chuyển nhanh. Key được lưu riêng (hiyo-keys.json).",
-    en: "Store multiple API keys and switch between them. Keys live in a separate file (hiyo-keys.json).",
-  },
 
   // Claude Code pane (macOS ClaudeCodePane)
   ccxSelectProvider: {

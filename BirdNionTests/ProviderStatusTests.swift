@@ -2,13 +2,38 @@ import XCTest
 @testable import BirdNion
 
 final class ProviderStatusTests: XCTestCase {
-    func testQuotaWindowRoundTrip() throws {
-        let w = QuotaWindow(label: "5 giờ", usedPct: 20, remainingPct: 80)
-        let data = try JSONEncoder().encode(w)
+    func testQuotaWindowRoundTripPreservesNativeAllowance() throws {
+        let allowance = QuotaAllowance(
+            used: 25,
+            remaining: 75,
+            limit: 100,
+            unit: .characters)
+        let window = QuotaWindow(
+            label: "Credits",
+            usedPct: 25,
+            remainingPct: 75,
+            allowance: allowance)
+        let data = try JSONEncoder().encode(window)
         let decoded = try JSONDecoder().decode(QuotaWindow.self, from: data)
-        XCTAssertEqual(w.label, decoded.label)
-        XCTAssertEqual(w.usedPct, decoded.usedPct)
-        XCTAssertEqual(w.remainingPct, decoded.remainingPct)
+        XCTAssertEqual(decoded.label, window.label)
+        XCTAssertEqual(decoded.usedPct, window.usedPct)
+        XCTAssertEqual(decoded.remainingPct, window.remainingPct)
+        XCTAssertEqual(decoded.allowance, allowance)
+    }
+
+    func testQuotaWindowLegacyJSONDecodesWithoutAllowance() throws {
+        let json = """
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "label": "Week",
+          "usedPct": 20,
+          "remainingPct": 80
+        }
+        """
+        let decoded = try JSONDecoder().decode(QuotaWindow.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.allowance)
+        XCTAssertFalse(decoded.isSupplementary)
+        XCTAssertFalse(decoded.isInactive)
     }
 
     func testProviderStatusWindowsPreserveOrder() throws {

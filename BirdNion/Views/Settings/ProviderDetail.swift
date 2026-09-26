@@ -640,10 +640,6 @@ extension ProvidersPane {
                     ElevenLabsKeysCard()
                         .id(ProviderRemediationTarget.credential)
                 }
-                if rows[idx].id == "hiyo" {
-                    HiyoKeysCard()
-                        .id(ProviderRemediationTarget.credential)
-                }
                 if rows[idx].id == "antigravity" {
                     antigravityOAuthAccountsSection()
                         .id(ProviderRemediationTarget.credential)
@@ -1039,8 +1035,8 @@ extension ProvidersPane {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                 }
-            } else if row.id == "elevenlabs" || row.id == "hiyo" {
-                // Multi-key store (ElevenLabsKeyStore / HiyoKeyStore) — managed
+            } else if row.id == "elevenlabs" {
+                // Multi-key store (ElevenLabsKeyStore) — managed
                 // in the card below settingsSection; skip the single TokenField.
                 EmptyView()
             } else {
@@ -2264,11 +2260,6 @@ extension ProvidersPane {
                 u("https://openrouter.ai/settings/credits").map { DashboardLink(title: L10n.t("provider.link.openRouterCredits", language), icon: "chart.bar", url: $0) },
                 u("https://openrouter.ai/keys").map { DashboardLink(title: L10n.t("provider.link.apiKeys", language), icon: "key", url: $0) },
                 stat("https://status.openrouter.ai"),
-            ].compactMap { $0 }
-        case "tryapi":
-            return [
-                dash("https://tryapi.tryai.chat/dashboard"),
-                u("https://tryapi.tryai.chat/keys").map { DashboardLink(title: L10n.t("provider.link.apiKeys", language), icon: "key", url: $0) },
             ].compactMap { $0 }
         case "deepseek":
             return [

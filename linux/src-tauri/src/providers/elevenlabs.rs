@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use crate::config;
-use crate::providers::{display_name, shared_client, ProviderStatus, QuotaWindow};
+use crate::providers::{display_name, shared_client, ProviderStatus, QuotaAllowance, QuotaWindow};
 
 const ENDPOINT: &str = "https://api.elevenlabs.io/v1/user/subscription";
 
@@ -107,10 +107,8 @@ pub fn parse_subscription(
     let Some(char_limit) = body.get("character_limit").and_then(Value::as_i64) else {
         return ProviderStatus::failure(id, name, "Response thiếu trường");
     };
-    let char_count = body
-        .get("character_count")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let source_char_count = body.get("character_count").and_then(Value::as_i64);
+    let char_count = source_char_count.unwrap_or(0);
 
     let mut windows = Vec::new();
     let used = if char_limit > 0 {
@@ -124,6 +122,12 @@ pub fn parse_subscription(
         .get("next_character_count_reset_unix")
         .and_then(Value::as_i64);
     windows.push(QuotaWindow {
+        allowance: Some(QuotaAllowance {
+            used: source_char_count.map(|value| value as f64),
+            remaining: source_char_count.map(|value| (char_limit - value).max(0) as f64),
+            limit: Some(char_limit as f64),
+            unit: "characters".into(),
+        }),
         semantic_key: None,
         semantic_kind: None,
         label: "Credits".into(),
@@ -142,6 +146,12 @@ pub fn parse_subscription(
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
         windows.push(QuotaWindow {
+            allowance: Some(QuotaAllowance {
+                used: Some(u as f64),
+                remaining: Some((lim - u) as f64),
+                limit: Some(lim as f64),
+                unit: "count".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Voice slots".into(),
@@ -161,6 +171,12 @@ pub fn parse_subscription(
     ) {
         let p = ((u as f64 / lim as f64) * 100.0).round().clamp(0.0, 100.0) as i32;
         windows.push(QuotaWindow {
+            allowance: Some(QuotaAllowance {
+                used: Some(u as f64),
+                remaining: Some((lim - u) as f64),
+                limit: Some(lim as f64),
+                unit: "count".to_string(),
+            }),
             semantic_key: None,
             semantic_kind: None,
             label: "Professional voices".into(),
@@ -206,6 +222,11 @@ mod tests {
         assert_eq!(s.windows.len(), 2);
         assert_eq!(s.windows[0].used_pct, 50);
         assert_eq!(s.windows[0].subtitle.as_deref(), Some("5,000 / 10,000"));
+        let allowance = s.windows[0].allowance.as_ref().unwrap();
+        assert_eq!(allowance.unit, "characters");
+        assert_eq!(allowance.used, Some(5_000.0));
+        assert_eq!(allowance.remaining, Some(5_000.0));
+        assert_eq!(allowance.limit, Some(10_000.0));
         assert_eq!(s.windows[1].used_pct, 20);
     }
 
@@ -225,5 +246,15 @@ mod tests {
     fn missing_character_limit_is_error() {
         let s = parse_subscription("elevenlabs", "ElevenLabs", "x", &json!({}));
         assert!(s.error.is_some());
+    }
+
+    #[test]
+    fn missing_character_count_keeps_native_usage_unavailable() {
+        let body = json!({"character_limit": 10_000});
+        let status = parse_subscription("elevenlabs", "ElevenLabs", "x", &body);
+        let allowance = status.windows[0].allowance.as_ref().unwrap();
+        assert_eq!(allowance.used, None);
+        assert_eq!(allowance.remaining, None);
+        assert_eq!(allowance.limit, Some(10_000.0));
     }
 }
