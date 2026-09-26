@@ -403,7 +403,7 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
     vi: "{source}: đã vượt ngân sách ({usd} / {budget}).",
     en: "{source}: already over budget ({usd} of {budget}).",
   },
-  settingsHotkey: { vi: "Mở popover", en: "Open popover" },
+  settingsHotkey: { vi: "Mở Cài đặt", en: "Open Settings" },
   settingsHotkeySub: {
     vi: "Phím tắt trong cửa sổ chính (Linux không có global hotkey ổn định).",
     en: "In-window shortcut (Linux has no stable global hotkey).",
