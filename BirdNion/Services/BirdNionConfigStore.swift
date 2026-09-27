@@ -681,8 +681,14 @@ enum BirdNionConfigStore {
         let existing = config.providers ?? []
         let existingIDs = Set(existing.map(\.id))
         let missing = defaults.filter { !existingIDs.contains($0.id) }
+        // JS plugin providers surface like native rows — disabled by default,
+        // carrying the manifest display name. They never persist into the file
+        // unless the user edits them (same as `missing`).
+        let merged = existing + missing
+        let mergedIDs = Set(merged.map(\.id))
+        let plugins = PluginRegistry.defaultEntries().filter { !mergedIDs.contains($0.id) }
         return ProvidersSnapshot(
-            providers: existing + missing,
+            providers: merged + plugins,
             settingsRevision: config.settingsRevision ?? 0,
             isAuthoritative: true)
     }

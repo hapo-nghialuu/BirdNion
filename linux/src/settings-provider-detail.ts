@@ -138,6 +138,26 @@ export const KEYED = new Set([
   "deepgram", "groq", "kiro", "kilo", "alibaba", "bedrock", "openai", "ollama", "opencodego",
   "devin",
 ]);
+/** JS provider plugins discovered via `list_plugin_providers` — ids that
+ * declared an auth secret get the generic API-key field. */
+export const PLUGIN_IDS = new Set<string>();
+export const PLUGIN_KEYED = new Set<string>();
+export const PLUGIN_NAMES = new Map<string, string>();
+
+export function registerPluginProviders(list: [string, string, string][]): void {
+  PLUGIN_IDS.clear();
+  PLUGIN_KEYED.clear();
+  PLUGIN_NAMES.clear();
+  for (const [id, name, hasAuth] of list) {
+    PLUGIN_IDS.add(id);
+    PLUGIN_NAMES.set(id, name);
+    if (hasAuth === "1") PLUGIN_KEYED.add(id);
+  }
+}
+
+export function isKeyedProvider(id: string): boolean {
+  return KEYED.has(id) || PLUGIN_KEYED.has(id);
+}
 /** Providers that can use browser cookies. */
 export const COOKIED = new Set([
   "opencode", "opencodego", "commandcode", "cursor", "mimo",
@@ -750,7 +770,7 @@ export function setupSection(cfg: ProviderCfg): HTMLElement {
   // 2. Auth block per provider type.
   if (id === "bedrock") {
     body.append(bedrockAuthSection(cfg));
-  } else if (KEYED.has(id) && id !== "grok" && id !== "elevenlabs") {
+  } else if (isKeyedProvider(id) && id !== "grok" && id !== "elevenlabs") {
     // ElevenLabs uses a multi-key card instead of a single TokenField —
     // keys live in elevenlabs-keys.json.
     const credential = textInput(

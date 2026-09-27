@@ -57,6 +57,10 @@ tauri-plugin-dialog = "2"
 # `Runtime::new().block_on(...)` for the provider fetch-deadline race,
 # without pulling in the `#[tokio::test]` macro's "macros" feature.
 tokio = { version = "1", features = ["time", "rt", "sync"] }
+boa_engine = { version = "0.20.0", features = ["deser"], default-features = false }
+ureq = { version = "3", features = ["rustls"] }
+url = "2.5.8"
+boa_gc = "0.20"
 
 [target.'cfg(unix)'.dependencies]
 # antigravity.rs: attach the warm `agy` child to a PTY and manage its process group.

@@ -23,6 +23,7 @@
 		C2PT0001000000000000B002 /* ClaudeRacePlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2PT0002000000000000F002 /* ClaudeRacePlanTests.swift */; };
 		CCCC0001000000000000B001 /* ProviderStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0002000000000000F001 /* ProviderStatusTests.swift */; };
 		QAGT0001000000000000B001 /* quota-agenda-projection-tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QAGT0002000000000000F001 /* quota-agenda-projection-tests.swift */; };
+		PLGIN00000000000004B001 /* PluginEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000004F001 /* PluginEngineTests.swift */; };
 		CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */; };
 		CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC0008000000000000F004 /* HapoHubProviderTests.swift */; };
 		CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC000A000000000000F005 /* QuotaServicePollingTests.swift */; };
@@ -201,6 +202,9 @@
 		CLNT0001000000000000B001 /* ClaudeNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLNT0002000000000000F001 /* ClaudeNativeTests.swift */; };
 		NPT00001000000000000B01 /* NewProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPT00002000000000000F01 /* NewProviderTests.swift */; };
 
+		PLGIN00000000000001B001 /* PluginEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000001F001 /* PluginEngine.swift */; };
+		PLGIN00000000000002B001 /* PluginProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000002F001 /* PluginProvider.swift */; };
+		PLGIN00000000000003B001 /* atlascloud.js in Resources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000003F001 /* atlascloud.js */; };
 		EEEE0004000000000000B001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEEE0003000000000000F001 /* Assets.xcassets */; };
 		FFFF0001000000000000B001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFFF0002000000000000F001 /* AppDelegate.swift */; };
 		FFFF0003000000000000B002 /* ServicesContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFFF0004000000000000F002 /* ServicesContainer.swift */; };
@@ -256,6 +260,7 @@
 		C2PT0002000000000000F002 /* ClaudeRacePlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ClaudeRacePlanTests.swift; sourceTree = "<group>"; };
 		CCCC0002000000000000F001 /* ProviderStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/ProviderStatusTests.swift; sourceTree = "<group>"; };
 		QAGT0002000000000000F001 /* quota-agenda-projection-tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNionTests/quota-agenda-projection-tests.swift"; sourceTree = "<group>"; };
+		PLGIN00000000000004F001 /* PluginEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/PluginEngineTests.swift; sourceTree = "<group>"; };
 		CCCC0006000000000000F003 /* MiniMaxProviderParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/MiniMaxProviderParserTests.swift; sourceTree = "<group>"; };
 		CCCC0008000000000000F004 /* HapoHubProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/HapoHubProviderTests.swift; sourceTree = "<group>"; };
 		CCCC000A000000000000F005 /* QuotaServicePollingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/QuotaServicePollingTests.swift; sourceTree = "<group>"; };
@@ -433,6 +438,9 @@
 		FNT10006000000000000F003 /* IBMPlexSans-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexSans-SemiBold.ttf"; sourceTree = "<group>"; };
 		FNT10008000000000000F004 /* IBMPlexSans-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexSans-Bold.ttf"; sourceTree = "<group>"; };
 		FNT1000A000000000000F005 /* IBMPlexMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Regular.ttf"; sourceTree = "<group>"; };
+		PLGIN00000000000001F001 /* PluginEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Plugins/PluginEngine.swift"; sourceTree = "<group>"; };
+		PLGIN00000000000002F001 /* PluginProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Plugins/PluginProvider.swift"; sourceTree = "<group>"; };
+		PLGIN00000000000003F001 /* atlascloud.js */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Plugins/atlascloud.js"; sourceTree = "<group>"; };
 		FNT1000C000000000000F006 /* IBMPlexMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Medium.ttf"; sourceTree = "<group>"; };
 		FNT1000E000000000000F007 /* IBMPlexMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-SemiBold.ttf"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -473,6 +481,7 @@
 				C2PT0001000000000000B002 /* ClaudeRacePlanTests.swift in Sources */,
 				URCO0001000000000000B002 /* UsageReportCoordinatorTests.swift in Sources */,
 				QAGT0001000000000000B001 /* quota-agenda-projection-tests.swift in Sources */,
+				PLGIN00000000000004B001 /* PluginEngineTests.swift in Sources */,
 				CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */,
 				CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */,
 				CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */,
@@ -518,6 +527,7 @@
 		isa = PBXResourcesBuildPhase;
 		buildActionMask = 2147483647;
 		files = (
+			PLGIN00000000000003B001 /* atlascloud.js in Resources */,
 			EEEE0004000000000000B001 /* Assets.xcassets in Resources */,
 			FNT10001000000000000B001 /* IBMPlexSans-Regular.ttf in Resources */,
 			FNT10003000000000000B002 /* IBMPlexSans-Medium.ttf in Resources */,
@@ -789,6 +799,8 @@
 				BBBB0001000000000000B001 /* ProviderStatus.swift in Sources */,
 				QAGN0001000000000000B001 /* quota-agenda-projection.swift in Sources */,
 				PSPG0001000000000000B001 /* ProviderStatusPage.swift in Sources */,
+				PLGIN00000000000001B001 /* PluginEngine.swift in Sources */,
+				PLGIN00000000000002B001 /* PluginProvider.swift in Sources */,
 				PCST0001000000000000B001 /* ProviderCostSnapshot.swift in Sources */,
 				CLM00001000000000000B01 /* ClaudeUsageModels.swift in Sources */,
 				CLP00001000000000000B01 /* ClaudeSourcePlanner.swift in Sources */,

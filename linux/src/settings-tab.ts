@@ -20,6 +20,7 @@ import {
   codexAccountsCard, copilotAccountsCard, freemodelAccountsCard, antigravityAccountsCard, elevenlabsKeysCard,
   ANTIGRAVITY_ACCOUNT_CHANGED_EVENT, relativeUpdated, displayError,
   refreshMountedAntigravityAccountsCard,
+  registerPluginProviders, PLUGIN_IDS, PLUGIN_NAMES,
   type AntigravityAccountChange,
   type ProviderCfg, type Settings,
 } from "./settings-provider-detail";
@@ -204,7 +205,8 @@ function orderedIds(settings: Settings): string[] {
   const seen = new Set(settings.providers.map((p) => p.id));
   const fromFile = settings.providers.map((p) => p.id).filter((id) => NAME_BY_ID.has(id));
   const missing = ROSTER.map(([id]) => id).filter((id) => !seen.has(id));
-  return [...fromFile, ...missing];
+  const plugins = [...PLUGIN_IDS].filter((id) => !seen.has(id));
+  return [...fromFile, ...missing, ...plugins];
 }
 
 export type CanonicalSettingsReconciliation = {
@@ -393,6 +395,10 @@ function settingsWithFullRoster(snapshot: Settings): Settings {
  */
 export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
   const vi = currentLang() === "vi";
+  // JS provider plugins join the roster like native providers.
+  const plugins = await invoke<[string, string, string][]>("list_plugin_providers").catch(() => []);
+  registerPluginProviders(plugins);
+  for (const [id, name] of PLUGIN_NAMES) NAME_BY_ID.set(id, name);
   const settings = await invoke<Settings>("get_settings").catch(() => ({
     version: 1,
     settingsRevision: Number.NaN,

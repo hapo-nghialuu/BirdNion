@@ -872,6 +872,18 @@ fn provider_remediation_target(provider_id: String, raw: Option<String>) -> Opti
     providers::error_classifier::remediation_target(&provider_id, kind).map(str::to_string)
 }
 
+/// Discovered JS provider plugins (bundled + `~/.config/birdnion/plugins/`),
+/// so the Settings roster can list them like native providers.
+/// Rows are `[id, name, hasAuth]` — `hasAuth` marks plugins that declared an
+/// auth secret, which the detail pane renders as an API-key field.
+#[tauri::command]
+fn list_plugin_providers() -> Vec<Vec<String>> {
+    providers::plugin::discovered()
+        .into_iter()
+        .map(|p| vec![p.id, p.name, if p.has_auth { "1" } else { "0" }.to_string()])
+        .collect()
+}
+
 #[derive(Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderOnboardingDetection {
@@ -2259,6 +2271,7 @@ pub fn run() {
             is_transient_provider_error,
             is_fixable_provider_error,
             provider_remediation_target,
+            list_plugin_providers,
             provider_onboarding_detection,
             test_provider,
             claude_admin_usage,

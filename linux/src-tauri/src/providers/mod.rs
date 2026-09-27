@@ -34,6 +34,7 @@ pub mod openai;
 pub mod opencode;
 pub mod opencodego;
 pub mod openrouter;
+pub mod plugin;
 pub mod xai;
 pub mod zai;
 
@@ -378,11 +379,7 @@ async fn dispatch(cfg: &config::Provider) -> ProviderStatus {
         "alibaba" => alibaba::fetch(cfg).await,
         "freemodel" => freemodel::fetch(cfg).await,
         "copilot" => copilot::fetch(cfg).await,
-        other => ProviderStatus::failure(
-            other,
-            &display_name(cfg),
-            "Chưa hỗ trợ trên Linux (đang port)",
-        ),
+        _ => plugin::fetch_or_unsupported(cfg).await,
     }
 }
 
