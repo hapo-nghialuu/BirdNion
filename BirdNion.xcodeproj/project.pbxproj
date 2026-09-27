@@ -203,6 +203,12 @@
 		NPT00001000000000000B01 /* NewProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = NPT00002000000000000F01 /* NewProviderTests.swift */; };
 
 		PLGIN00000000000001B001 /* PluginEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000001F001 /* PluginEngine.swift */; };
+		HOOK0000000000000000B001 /* HookEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOOK0000000000000000F001 /* HookEvent.swift */; };
+		HOOK0000000000000000B002 /* HookRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOOK0000000000000000F002 /* HookRule.swift */; };
+		HOOK0000000000000000B003 /* HookRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOOK0000000000000000F003 /* HookRunner.swift */; };
+		HOOK0000000000000000B004 /* HookEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOOK0000000000000000F004 /* HookEngine.swift */; };
+		HOOK0000000000000000B005 /* HooksPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOOK0000000000000000F005 /* HooksPane.swift */; };
+		HOOK0000000000000000B006 /* HookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOOK0000000000000000F006 /* HookTests.swift */; };
 		PLGIN00000000000002B001 /* PluginProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000002F001 /* PluginProvider.swift */; };
 		PLGIN00000000000003B001 /* Plugins in Resources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000003F001 /* Plugins */; };
 		EEEE0004000000000000B001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEEE0003000000000000F001 /* Assets.xcassets */; };
@@ -466,6 +472,12 @@
 		FNT10008000000000000F004 /* IBMPlexSans-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexSans-Bold.ttf"; sourceTree = "<group>"; };
 		FNT1000A000000000000F005 /* IBMPlexMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Regular.ttf"; sourceTree = "<group>"; };
 		PLGIN00000000000001F001 /* PluginEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Plugins/PluginEngine.swift"; sourceTree = "<group>"; };
+		HOOK0000000000000000F001 /* HookEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Hooks/HookEvent.swift"; sourceTree = "<group>"; };
+		HOOK0000000000000000F002 /* HookRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Hooks/HookRule.swift"; sourceTree = "<group>"; };
+		HOOK0000000000000000F003 /* HookRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Hooks/HookRunner.swift"; sourceTree = "<group>"; };
+		HOOK0000000000000000F004 /* HookEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Hooks/HookEngine.swift"; sourceTree = "<group>"; };
+		HOOK0000000000000000F005 /* HooksPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Views/Settings/HooksPane.swift"; sourceTree = "<group>"; };
+		HOOK0000000000000000F006 /* HookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNionTests/HookTests.swift"; sourceTree = "<group>"; };
 		PLGIN00000000000002F001 /* PluginProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Plugins/PluginProvider.swift"; sourceTree = "<group>"; };
 		PLGIN00000000000003F001 /* Plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "BirdNion/Resources/Plugins"; sourceTree = "<group>"; };
 		FNT1000C000000000000F006 /* IBMPlexMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Medium.ttf"; sourceTree = "<group>"; };
@@ -523,6 +535,7 @@
 				URCO0001000000000000B002 /* UsageReportCoordinatorTests.swift in Sources */,
 				QAGT0001000000000000B001 /* quota-agenda-projection-tests.swift in Sources */,
 				PLGIN00000000000004B001 /* PluginEngineTests.swift in Sources */,
+				HOOK0000000000000000B006 /* HookTests.swift in Sources */,
 				CCCC0005000000000000B003 /* MiniMaxProviderParserTests.swift in Sources */,
 				CCCC0007000000000000B004 /* HapoHubProviderTests.swift in Sources */,
 				CCCC0009000000000000B005 /* QuotaServicePollingTests.swift in Sources */,
@@ -901,6 +914,10 @@
 				PSPG0001000000000000B001 /* ProviderStatusPage.swift in Sources */,
 				PLGIN00000000000001B001 /* PluginEngine.swift in Sources */,
 				PLGIN00000000000002B001 /* PluginProvider.swift in Sources */,
+				HOOK0000000000000000B001 /* HookEvent.swift in Sources */,
+				HOOK0000000000000000B002 /* HookRule.swift in Sources */,
+				HOOK0000000000000000B003 /* HookRunner.swift in Sources */,
+				HOOK0000000000000000B004 /* HookEngine.swift in Sources */,
 				PCST0001000000000000B001 /* ProviderCostSnapshot.swift in Sources */,
 				CLM00001000000000000B01 /* ClaudeUsageModels.swift in Sources */,
 				CLP00001000000000000B01 /* ClaudeSourcePlanner.swift in Sources */,
@@ -1032,6 +1049,7 @@
 				SET000D0000000000B007 /* ProvidersPane.swift in Sources */,
 				SET00110000000000B009 /* AdvancedPane.swift in Sources */,
 				SET00130000000000B00A /* AboutPane.swift in Sources */,
+				HOOK0000000000000000B005 /* HooksPane.swift in Sources */,
 				SET00150000000000B00B /* AboutLinkRow.swift in Sources */,
 				ACTC00010000000000B001 /* ActionCenterPane.swift in Sources */,
 				C0DE0001000000000000B001 /* CodexAuth.swift in Sources */,

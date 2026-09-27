@@ -73,6 +73,7 @@ struct SettingsSceneRoot: View {
             case .agents: AgentsPane(tab: $selected, searchText: $sidebarSearch)
             case .aiCoding: AICodingPane(tab: $selected, searchText: $sidebarSearch)
             case .insights: navAndContent { InsightsPane() }
+            case .hooks: navAndContent { HooksPane() }
             case .general: navAndContent { GeneralPane() }
             case .advanced: navAndContent { AdvancedPane() }
             case .about: navAndContent { AboutPane() }
@@ -295,6 +296,10 @@ enum SettingsSearchIndex {
             return vi
                 ? ["phân tích", "usage", "project", "chi tiêu", "overview", "hoạt động"]
                 : ["insights", "usage", "project", "spend", "overview", "activity"]
+        case .hooks:
+            return vi
+                ? ["hook", "hooks", "lệnh", "sự kiện", "command", "script", "automation"]
+                : ["hook", "hooks", "command", "event", "script", "automation"]
         case .advanced:
             return vi
                 ? ["debug", "cấu hình", "finder", "storage"]
