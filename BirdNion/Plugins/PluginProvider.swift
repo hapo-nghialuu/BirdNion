@@ -35,16 +35,20 @@ enum PluginSnapshotMapper {
     }
 
     private static func window(_ w: PluginRateWindow, label: String) -> QuotaWindow {
-        let usageKnown = w.usageKnown ?? true
-        let usedPct = Int(((w.usedPercent ?? 0) / 100.0 * 100).rounded())
-            .clamped(to: 0...100)
+        // No usedPercent means usage is unknown — don't fabricate 0%.
+        let usageKnown = w.usageKnown ?? (w.usedPercent != nil)
+        let raw = w.usedPercent ?? 0
+        let usedPct = raw.isFinite ? Int(raw.clamped(to: 0...100).rounded()) : 0
         return QuotaWindow(
             label: label,
             usedPct: usageKnown ? usedPct : 0,
             remainingPct: usageKnown ? 100 - usedPct : 100,
             subtitle: w.resetDescription,
             resetDate: w.resetsAt?.date,
-            windowSeconds: w.windowMinutes.map { Int($0 * 60) },
+            windowSeconds: w.windowMinutes.flatMap { m -> Int? in
+                guard m.isFinite, m >= 0 else { return nil }
+                return Int(min(m * 60, Double(Int32.max)))
+            },
             isInactive: !usageKnown)
     }
 
@@ -52,7 +56,7 @@ enum PluginSnapshotMapper {
     /// window length, matching BirdNion's existing "5 giờ" / "Ngày" / "Tuần" /
     /// "Tháng" scheme.
     private static func positionalLabel(_ w: PluginRateWindow, position: Int) -> String {
-        if let minutes = w.windowMinutes {
+        if let minutes = w.windowMinutes, minutes.isFinite, minutes >= 0, minutes < Double(Int32.max) {
             switch Int(minutes) {
             case 0..<720: return "5 giờ"
             case 720..<2880: return "Ngày"
@@ -84,6 +88,11 @@ final class PluginProvider: QuotaProvider {
             if let env = ProcessInfo.processInfo.environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
                !env.isEmpty { return env }
             return BirdNionConfigStore.apiKey(provider: engine.manifest.id)
+        }
+        engine.settingResolver = { key in
+            if let env = ProcessInfo.processInfo.environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !env.isEmpty { return env }
+            return BirdNionConfigStore.baseURL(provider: engine.manifest.id)
         }
     }
 

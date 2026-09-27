@@ -396,14 +396,25 @@ function settingsWithFullRoster(snapshot: Settings): Settings {
 export async function providersPane(onSaved: () => void): Promise<HTMLElement> {
   const vi = currentLang() === "vi";
   // JS provider plugins join the roster like native providers.
-  const plugins = await invoke<[string, string, string][]>("list_plugin_providers").catch(() => []);
-  registerPluginProviders(plugins);
+  const plugins = await invoke<[string, string, string][]>("list_plugin_providers").catch(() => null);
+  if (plugins !== null) registerPluginProviders(plugins);
   for (const [id, name] of PLUGIN_NAMES) NAME_BY_ID.set(id, name);
   const settings = await invoke<Settings>("get_settings").catch(() => ({
     version: 1,
     settingsRevision: Number.NaN,
     providers: [] as ProviderCfg[],
   }));
+  if (plugins === null) {
+    // Discovery failed — keep saved plugin rows visible (named by id) so an
+    // enabled plugin provider can still be seen and disabled.
+    for (const p of settings.providers) {
+      if (!NAME_BY_ID.has(p.id)) {
+        PLUGIN_IDS.add(p.id);
+        PLUGIN_NAMES.set(p.id, p.id);
+        NAME_BY_ID.set(p.id, p.id);
+      }
+    }
+  }
   // Ensure full roster present in memory.
   const byId = new Map(settings.providers.map((p) => [p.id, p]));
   for (const id of orderedIds(settings)) {

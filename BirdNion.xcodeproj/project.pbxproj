@@ -204,7 +204,7 @@
 
 		PLGIN00000000000001B001 /* PluginEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000001F001 /* PluginEngine.swift */; };
 		PLGIN00000000000002B001 /* PluginProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000002F001 /* PluginProvider.swift */; };
-		PLGIN00000000000003B001 /* atlascloud.js in Resources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000003F001 /* atlascloud.js */; };
+		PLGIN00000000000003B001 /* Plugins in Resources */ = {isa = PBXBuildFile; fileRef = PLGIN00000000000003F001 /* Plugins */; };
 		EEEE0004000000000000B001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEEE0003000000000000F001 /* Assets.xcassets */; };
 		FFFF0001000000000000B001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFFF0002000000000000F001 /* AppDelegate.swift */; };
 		FFFF0003000000000000B002 /* ServicesContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFFF0004000000000000F002 /* ServicesContainer.swift */; };
@@ -440,7 +440,7 @@
 		FNT1000A000000000000F005 /* IBMPlexMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Regular.ttf"; sourceTree = "<group>"; };
 		PLGIN00000000000001F001 /* PluginEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Plugins/PluginEngine.swift"; sourceTree = "<group>"; };
 		PLGIN00000000000002F001 /* PluginProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Plugins/PluginProvider.swift"; sourceTree = "<group>"; };
-		PLGIN00000000000003F001 /* atlascloud.js */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Plugins/atlascloud.js"; sourceTree = "<group>"; };
+		PLGIN00000000000003F001 /* Plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "BirdNion/Resources/Plugins"; sourceTree = "<group>"; };
 		FNT1000C000000000000F006 /* IBMPlexMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Medium.ttf"; sourceTree = "<group>"; };
 		FNT1000E000000000000F007 /* IBMPlexMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-SemiBold.ttf"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -527,7 +527,7 @@
 		isa = PBXResourcesBuildPhase;
 		buildActionMask = 2147483647;
 		files = (
-			PLGIN00000000000003B001 /* atlascloud.js in Resources */,
+			PLGIN00000000000003B001 /* Plugins in Resources */,
 			EEEE0004000000000000B001 /* Assets.xcassets in Resources */,
 			FNT10001000000000000B001 /* IBMPlexSans-Regular.ttf in Resources */,
 			FNT10003000000000000B002 /* IBMPlexSans-Medium.ttf in Resources */,

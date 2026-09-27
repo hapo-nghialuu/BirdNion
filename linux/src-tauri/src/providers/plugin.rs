@@ -41,7 +41,10 @@ pub struct PluginAuth {
     #[serde(rename = "type")]
     pub kind: String,
     pub secret: String,
-    pub name: Option<String>,
+    /// For type "header".
+    pub header: Option<String>,
+    /// For type "authorization-scheme" (e.g. "Basic").
+    pub scheme: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,8 +191,10 @@ struct PluginResult {
 struct PluginState {
     endpoints: Vec<EndpointOwned>,
     auth_kind: Option<String>,
-    auth_name: Option<String>,
+    auth_header_name: Option<String>,
+    auth_scheme: Option<String>,
     secret: Option<String>,
+    setting_base: Option<String>,
     storage_dir: PathBuf,
     storage_enabled: bool,
 }
@@ -198,22 +203,33 @@ struct PluginState {
 struct EndpointOwned {
     origin: Option<String>,
     setting_key: Option<String>,
+    /// Resolved base URL for `{setting, policy}` endpoints — env var named by
+    /// the setting key, else the provider's configured base_url. Never the
+    /// API key (a credential is not a URL).
+    base: Option<String>,
     policy: String,
 }
 
-impl From<&PluginEndpoint> for EndpointOwned {
-    fn from(e: &PluginEndpoint) -> Self {
-        match e {
-            PluginEndpoint::Origin(o) => Self {
-                origin: Some(o.clone()),
-                setting_key: None,
-                policy: "https".into(),
-            },
-            PluginEndpoint::Setting { key, policy } => Self {
+fn endpoint_owned(e: &PluginEndpoint, setting_base: Option<&String>) -> EndpointOwned {
+    match e {
+        PluginEndpoint::Origin(o) => EndpointOwned {
+            origin: Some(o.clone()),
+            setting_key: None,
+            base: None,
+            policy: "https".into(),
+        },
+        PluginEndpoint::Setting { key, policy } => {
+            let base = std::env::var(key)
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .or_else(|| setting_base.cloned());
+            EndpointOwned {
                 origin: None,
                 setting_key: Some(key.clone()),
+                base,
                 policy: policy.clone(),
-            },
+            }
         }
     }
 }
@@ -224,7 +240,7 @@ struct Engine {
 }
 
 impl Engine {
-    fn new(source: &str, secret: Option<String>) -> Result<Self, String> {
+    fn new(source: &str, secret: Option<String>, setting_base: Option<String>) -> Result<Self, String> {
         let mut context = Context::default();
         context
             .eval(Source::from_bytes(PRELUDE))
@@ -252,10 +268,16 @@ impl Engine {
             .or(secret);
 
         let state = PluginState {
-            endpoints: manifest.endpoints.iter().map(EndpointOwned::from).collect(),
+            endpoints: manifest
+                .endpoints
+                .iter()
+                .map(|e| endpoint_owned(e, setting_base.as_ref()))
+                .collect(),
             auth_kind: manifest.auth.as_ref().map(|a| a.kind.clone()),
-            auth_name: manifest.auth.as_ref().and_then(|a| a.name.clone()),
+            auth_header_name: manifest.auth.as_ref().and_then(|a| a.header.clone()),
+            auth_scheme: manifest.auth.as_ref().and_then(|a| a.scheme.clone()),
             secret: resolved,
+            setting_base: setting_base.clone(),
             storage_dir: plugins_dir().join(&manifest.id),
             storage_enabled: manifest.capabilities.contains("persistent-storage"),
         };
@@ -372,7 +394,7 @@ fn url_allowed(state: &PluginState, url: &str) -> bool {
     for ep in &state.endpoints {
         let base_raw = match (&ep.origin, &ep.setting_key) {
             (Some(o), _) => Some(o.clone()),
-            (_, Some(_)) => state.secret.clone(), // setting resolves to the secret-derived base
+            (_, Some(_)) => ep.base.clone(),
             _ => None,
         };
         let Some(base_raw) = base_raw else { continue };
@@ -459,7 +481,7 @@ fn http_request(req_json: &str, st: &PluginState) -> Result<serde_json::Value, S
                 b = b.header(k, v);
             }
             if let Some(auth) = auth_header(st) {
-                b = b.header(auth.0, auth.1);
+                b = b.header(&auth.0, &auth.1);
             }
             b.call()
         };
@@ -469,7 +491,7 @@ fn http_request(req_json: &str, st: &PluginState) -> Result<serde_json::Value, S
                 b = b.header(k, v);
             }
             if let Some(auth) = auth_header(st) {
-                b = b.header(auth.0, auth.1);
+                b = b.header(&auth.0, &auth.1);
             }
             b.send(body.clone().unwrap_or_default().as_bytes())
         };
@@ -514,36 +536,42 @@ fn http_request(req_json: &str, st: &PluginState) -> Result<serde_json::Value, S
 }
 
 /// Auth header injected natively — JS never sees the raw secret.
-fn auth_header(st: &PluginState) -> Option<(&'static str, String)> {
+/// None when the manifest declares no auth or an unsupported type —
+/// matches the macOS engine (no implicit Bearer).
+fn auth_header(st: &PluginState) -> Option<(String, String)> {
+    let kind = st.auth_kind.as_deref()?;
     let secret = st.secret.as_ref()?.trim().to_string();
     if secret.is_empty() {
         return None;
     }
-    match st.auth_kind.as_deref().unwrap_or("bearer") {
-        "bearer" => Some(("Authorization", format!("Bearer {secret}"))),
-        "x-api-key" => Some(("x-api-key", secret)),
-        "authorization-scheme" => {
-            let scheme = st.auth_name.clone().unwrap_or_else(|| "Bearer".into());
-            Some(("Authorization", format!("{scheme} {secret}")))
-        }
-        "header" => Some((
-            Box::leak(st.auth_name.clone().unwrap_or_else(|| "x-api-key".into()).into_boxed_str()),
-            secret,
-        )),
-        _ => Some(("Authorization", format!("Bearer {secret}"))),
+    match kind {
+        "bearer" => Some(("Authorization".into(), format!("Bearer {secret}"))),
+        "x-api-key" => Some(("x-api-key".into(), secret)),
+        "authorization-scheme" => st
+            .auth_scheme
+            .clone()
+            .map(|scheme| ("Authorization".into(), format!("{scheme} {secret}"))),
+        "header" => st.auth_header_name.clone().map(|name| (name, secret)),
+        _ => None,
     }
 }
 
 fn secret_native(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let key = arg_str(args, 0, ctx).unwrap_or_default();
     let st = state(ctx);
-    // Env var named by the setting key wins; fall back to the provider's
-    // stored apiKey (config.json).
+    // Env var named by the setting key wins; URL-valued settings then resolve
+    // to the provider's configured base_url — never to a credential.
     if let Ok(v) = std::env::var(&key) {
         let v = v.trim().to_string();
         if !v.is_empty() {
             return Ok(JsValue::from(js_string!(v.as_str())));
         }
+    }
+    if key.ends_with("URL") || key.ends_with("_ENDPOINT") || key.ends_with("_ORIGIN") {
+        return match &st.setting_base {
+            Some(s) if !s.trim().is_empty() => Ok(JsValue::from(js_string!(s.trim()))),
+            _ => Ok(JsValue::null()),
+        };
     }
     match &st.secret {
         Some(s) if !s.trim().is_empty() => Ok(JsValue::from(js_string!(s.trim()))),
@@ -700,7 +728,7 @@ pub fn discovered() -> Vec<PluginInfo> {
         }
     }
     for source in sources {
-        if let Ok(engine) = Engine::new(&source, None) {
+        if let Ok(engine) = Engine::new(&source, None, None) {
             if seen.insert(engine.manifest.id.clone()) {
                 out.push(PluginInfo {
                     id: engine.manifest.id.clone(),
@@ -729,8 +757,14 @@ fn engine_for(id: &str, cfg: &config::Provider) -> Result<Engine, String> {
         )
         .collect();
     let secret = config::api_key(cfg);
+    let base = cfg
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
     for source in sources {
-        if let Ok(engine) = Engine::new(&source, secret.clone()) {
+        if let Ok(engine) = Engine::new(&source, secret.clone(), base.clone()) {
             if engine.manifest.id == id {
                 return Ok(engine);
             }
@@ -741,15 +775,21 @@ fn engine_for(id: &str, cfg: &config::Provider) -> Result<Engine, String> {
 
 /// Fallback dispatch for ids no native provider owns.
 pub async fn fetch_or_unsupported(cfg: &config::Provider) -> ProviderStatus {
-    let found = discovered().iter().any(|p| p.id == cfg.id);
-    if !found {
+    let status = fetch(cfg).await;
+    // engine_for reports unknown ids as "no plugin found" — surface the
+    // friendly unsupported message for that specific case.
+    if status
+        .error
+        .as_deref()
+        .is_some_and(|e| e.contains("no plugin found"))
+    {
         return ProviderStatus::failure(
             &cfg.id,
             &display_name(cfg),
             "Chưa hỗ trợ trên Linux (đang port)",
         );
     }
-    fetch(cfg).await
+    status
 }
 
 pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
@@ -813,7 +853,8 @@ fn map_status(result: &PluginResult, id: &str, display_name: &str) -> ProviderSt
 }
 
 fn map_window(w: &PluginRateWindow, label: String) -> QuotaWindow {
-    let usage_known = w.usage_known.unwrap_or(true);
+    // No used_percent means usage is unknown — don't fabricate 0%.
+    let usage_known = w.usage_known.unwrap_or(w.used_percent.is_some());
     let used_pct = ((w.used_percent.unwrap_or(0.0)).round() as i32).clamp(0, 100);
     QuotaWindow {
         label,
@@ -821,7 +862,10 @@ fn map_window(w: &PluginRateWindow, label: String) -> QuotaWindow {
         remaining_pct: if usage_known { 100 - used_pct } else { 100 },
         subtitle: w.reset_description.clone(),
         resets_at: w.resets_at.as_ref().and_then(parse_timestamp),
-        window_seconds: w.window_minutes.map(|m| (m * 60.0) as i64),
+        window_seconds: w
+            .window_minutes
+            .filter(|m| m.is_finite() && *m >= 0.0)
+            .map(|m| (m * 60.0).min(i64::MAX as f64) as i64),
         allowance: None,
         semantic_key: None,
         semantic_kind: None,
@@ -1055,7 +1099,7 @@ mod tests {
     use super::*;
 
     fn engine(source: &str) -> Engine {
-        Engine::new(source, Some("sk-demo".into())).expect("engine")
+        Engine::new(source, Some("sk-demo".into()), None).expect("engine")
     }
 
     #[test]
@@ -1078,7 +1122,7 @@ mod tests {
 
     #[test]
     fn missing_define_provider_fails() {
-        assert!(Engine::new("var x = 1;", None).is_err());
+        assert!(Engine::new("var x = 1;", None, None).is_err());
     }
 
     #[test]

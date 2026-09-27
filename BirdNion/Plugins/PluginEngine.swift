@@ -202,6 +202,12 @@ final class PluginEngine {
     var secretResolver: (String) -> String? = { key in
         ProcessInfo.processInfo.environment[key]?.trimmedNonEmpty
     }
+    /// URL-valued setting resolution (endpoint `{setting, policy}` bases):
+    /// env var named after the key wins, then the provider's configured
+    /// baseURL. Never falls back to apiKey — a credential is not a URL.
+    var settingResolver: (String) -> String? = { key in
+        ProcessInfo.processInfo.environment[key]?.trimmedNonEmpty
+    }
     var transport: PluginHTTPTransport
 
     private let context: JSContext
@@ -334,7 +340,9 @@ final class PluginEngine {
     // MARK: JS bridge
 
     private func installBridge() {
-        context.exceptionHandler = { _, _ in }
+        // Keep JSC's default behaviour of storing the exception on the context
+        // so `context.exception` checks after eval still see real JS errors.
+        context.exceptionHandler = { ctx, exc in ctx?.exception = exc }
         installNativeHTTP()
         installNativeSettings()
         installNativeStorage()
@@ -349,7 +357,7 @@ final class PluginEngine {
             case .origin(let allowed):
                 if sameOrigin(url, allowed) { return true }
             case .setting(let key, let policy):
-                guard let raw = secretResolver(key), let base = URL(string: raw),
+                guard let raw = settingResolver(key), let base = URL(string: raw),
                       let host = base.host
                 else { continue }
                 if sameOrigin(url, base) { return true }
@@ -433,7 +441,12 @@ final class PluginEngine {
 
     private func installNativeSettings() {
         let get: @convention(block) (String) -> String? = { [weak self] key in
-            self?.secretResolver(key)
+            // URL-valued settings resolve to the provider's configured base
+            // URL — never to a credential.
+            if key.hasSuffix("URL") || key.hasSuffix("_ENDPOINT") || key.hasSuffix("_ORIGIN") {
+                return self?.settingResolver(key)
+            }
+            return self?.secretResolver(key)
         }
         context.setObject(get, forKeyedSubscript: "__birdnionGetSecret" as NSString)
     }

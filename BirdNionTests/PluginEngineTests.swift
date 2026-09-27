@@ -190,26 +190,79 @@ final class PluginEngineTests: XCTestCase {
         XCTAssertEqual(status.creditsRemaining, 12.5)
     }
 
-    func testBundledAtlasCloudPluginLoads() throws {
+    private func atlasCloudSource() throws -> String {
         let url = Bundle(for: type(of: self)).url(
             forResource: "atlascloud", withExtension: "js", subdirectory: "Plugins")
         // Plugin may live in the app bundle rather than the test bundle —
         // fall back to the repo path.
-        let source: String
         if let url, let s = try? String(contentsOf: url, encoding: .utf8) {
-            source = s
-        } else {
-            let repoRoot = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-            source = try String(
-                contentsOf: repoRoot.appendingPathComponent(
-                    "BirdNion/Resources/Plugins/atlascloud.js"),
-                encoding: .utf8)
+            return s
         }
-        let engine = try PluginEngine(source: source)
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: repoRoot.appendingPathComponent(
+                "BirdNion/Resources/Plugins/atlascloud.js"),
+            encoding: .utf8)
+    }
+
+    func testBundledAtlasCloudPluginLoads() throws {
+        let engine = try PluginEngine(source: atlasCloudSource())
         XCTAssertEqual(engine.manifest.id, "atlascloud")
         XCTAssertEqual(engine.manifest.name, "Atlas Cloud")
         XCTAssertEqual(engine.manifest.auth?.secret, "ATLASCLOUD_API_KEY")
+    }
+
+    func testBundledAtlasCloudParsesValidBalance() throws {
+        let engine = try PluginEngine(
+            source: atlasCloudSource(),
+            transport: stubTransport(
+                body: #"{"object":"balance","scope":"account","available":{"currency":"usd","value":"12.34"}}"#))
+        engine.secretResolver = { _ in "sk-atlas" }
+        // The plugin's own regex/currency checks run — a malformed payload
+        // would surface as a parse failure instead.
+        XCTAssertNoThrow(try engine.fetchUsage())
+    }
+
+    func testBundledAtlasCloudRateLimitMapsKind() throws {
+        let engine = try PluginEngine(
+            source: atlasCloudSource(),
+            transport: stubTransport(status: 429, headers: ["retry-after": "2"]))
+        engine.secretResolver = { _ in "sk-atlas" }
+        XCTAssertThrowsError(try engine.fetchUsage()) { error in
+            guard let e = error as? PluginFetchError else {
+                return XCTFail("expected PluginFetchError, got \(error)")
+            }
+            XCTAssertEqual(e.kind, .rateLimited)
+            XCTAssertTrue(e.message.contains("429"))
+        }
+    }
+
+    func testBundledAtlasCloudAuthFailureMapsKind() throws {
+        let engine = try PluginEngine(
+            source: atlasCloudSource(),
+            transport: stubTransport(status: 401))
+        engine.secretResolver = { _ in "sk-atlas" }
+        XCTAssertThrowsError(try engine.fetchUsage()) { error in
+            guard let e = error as? PluginFetchError else {
+                return XCTFail("expected PluginFetchError, got \(error)")
+            }
+            XCTAssertEqual(e.kind, .authenticationExpired)
+        }
+    }
+
+    func testMissingUsedPercentIsUnknownNotZero() throws {
+        let engine = try PluginEngine(
+            source: """
+            defineProvider({
+              id: "half", name: "Half", endpoints: [], settings: [],
+              fetchUsage(ctx) { return { primary: { windowMinutes: 300 } }; }
+            });
+            """,
+            transport: stubTransport())
+        let status = PluginSnapshotMapper.status(
+            try engine.fetchUsage(), id: "half", displayName: "Half")
+        XCTAssertTrue(status.windows[0].isInactive)
     }
 }

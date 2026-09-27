@@ -48,7 +48,9 @@ HuggingFace, Replicate, Wayfinder, LiteLLM, llmman, DevPass, Atlas Cloud,
 Vercel AI Gateway, Raycast, Aixy, xKiro, Sakana, Bifrost, Chutes, DeepInfra,
 Fireworks, GitKraken, Hyper, LLMProxy, Muse, NeuralWatt, Perplexity, Qoder,
 ZenMux, ai&, ClawRouter, HelmCode, ClinePass, Qwen Cloud, Azure OpenAI,
-Alibaba Token Plan, Nous Portal, Muse Code, Atlas Cloud, ZoomMate (~60 total).
+Alibaba Token Plan, Nous Portal, Muse Code, ZoomMate (~60 providers upstream
+has that BirdNion lacks — the 87 total includes providers BirdNion already
+supports natively).
 
 ## Plugin API contract (what BirdNion's engine mirrors)
 
