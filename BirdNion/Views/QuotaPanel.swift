@@ -2057,9 +2057,14 @@ struct CodexAccountsPopoverSection: View {
         .padding(.vertical, 5)
         .contentShape(Rectangle())
         .onTapGesture {
-            CodexAccountStore.setActive(account.id)
-            activeID = account.id
+            // Selecting a row also installs it into ~/.codex/auth.json —
+            // "selected" must mean the CLI account, not just the viewed one.
+            Task { await switchCLI(to: account) }
         }
+        .pointingHandCursor(enabled: !busy && !isCLIIdentity(account))
+        .help(isCLIIdentity(account)
+              ? L10n.t("popover.accountSelectedHelp", settings.appLanguage)
+              : L10n.f("popover.cliCard.switchTo", settings.appLanguage, accountLabel(account)))
     }
 
     private struct AccountQuotaBadge {
