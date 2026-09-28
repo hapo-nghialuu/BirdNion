@@ -769,6 +769,8 @@ struct AllUsageOverview: View {
 
             AllAgentsOverview(
                 report: report,
+                claudeHourly: authorizedSources.contains(.claude)
+                    ? (claude?.hourly ?? []) : [],
                 visibleRecords: visibleAgentRecords,
                 aggregateAgentCount: report.includedSourceCount,
                 quotaRows: quotaRows,
@@ -1458,13 +1460,15 @@ struct CombinedChartCard: View {
         }
     }
 
+    private var maxHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
+
     private var hourChart: some View {
         GeometryReader { _ in
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(Array(claudeHourly.enumerated()), id: \.offset) { _, hour in
                     Rectangle()
                         .fill(VocabbyTheme.chartClaude)
-                        .frame(height: max(3, CGFloat(hour.tokens) / CGFloat(maxBarTokens) * 68))
+                        .frame(height: max(3, CGFloat(hour.tokens) / CGFloat(maxHourTokens) * 68))
                         .frame(maxWidth: .infinity)
                 }
             }
