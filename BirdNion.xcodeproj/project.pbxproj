@@ -92,8 +92,10 @@
 		CLO00001000000000000B01 /* ClaudeOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLO00002000000000000F01 /* ClaudeOAuth.swift */; };
 		CLA00001000000000000B01 /* ClaudeAdminAPIUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLA00002000000000000F01 /* ClaudeAdminAPIUsage.swift */; };
 		CLT00001000000000000B01 /* ClaudeTokenAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLT00002000000000000F01 /* ClaudeTokenAccounts.swift */; };
+		CAP00001000000000000B01 /* ClaudeCLIAuthStatusProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAP00002000000000000F01 /* ClaudeCLIAuthStatusProbe.swift */; };
 		CLC00001000000000000B01 /* ClaudeCLISession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLC00002000000000000F01 /* ClaudeCLISession.swift */; };
 		CLG00001000000000000B01 /* ClaudeCLIRateLimitGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLG00002000000000000F01 /* ClaudeCLIRateLimitGate.swift */; };
+		KNQ00001000000000000B01 /* KeychainNoUIQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = KNQ00002000000000000F01 /* KeychainNoUIQuery.swift */; };
 		CLW00001000000000000B01 /* ClaudeWebCookieReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLW00002000000000000F01 /* ClaudeWebCookieReader.swift */; };
 		CWF00001000000000000B01 /* ClaudeWebAPIFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CWF00002000000000000F01 /* ClaudeWebAPIFetcher.swift */; };
 		MV0001000000000000B001 /* MenuBarVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = MV0002000000000000F001 /* MenuBarVisibility.swift */; };
@@ -240,8 +242,10 @@
 		CLO00002000000000000F01 /* ClaudeOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/OAuth/ClaudeOAuth.swift; sourceTree = "<group>"; };
 		CLA00002000000000000F01 /* ClaudeAdminAPIUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Admin/ClaudeAdminAPIUsage.swift; sourceTree = "<group>"; };
 		CLT00002000000000000F01 /* ClaudeTokenAccounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Accounts/ClaudeTokenAccounts.swift; sourceTree = "<group>"; };
+		CAP00002000000000000F01 /* ClaudeCLIAuthStatusProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/CLI/ClaudeCLIAuthStatusProbe.swift; sourceTree = "<group>"; };
 		CLC00002000000000000F01 /* ClaudeCLISession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/CLI/ClaudeCLISession.swift; sourceTree = "<group>"; };
 		CLG00002000000000000F01 /* ClaudeCLIRateLimitGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/CLI/ClaudeCLIRateLimitGate.swift; sourceTree = "<group>"; };
+		KNQ00002000000000000F01 /* KeychainNoUIQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/OAuth/KeychainNoUIQuery.swift; sourceTree = "<group>"; };
 		CLW00002000000000000F01 /* ClaudeWebCookieReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Web/ClaudeWebCookieReader.swift; sourceTree = "<group>"; };
 		CWF00002000000000000F01 /* ClaudeWebAPIFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Claude/Web/ClaudeWebAPIFetcher.swift; sourceTree = "<group>"; };
 		BBBB0004000000000000F002 /* QuotaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaProvider.swift; sourceTree = "<group>"; };
@@ -796,8 +800,10 @@
 				CLO00001000000000000B01 /* ClaudeOAuth.swift in Sources */,
 				CLA00001000000000000B01 /* ClaudeAdminAPIUsage.swift in Sources */,
 				CLT00001000000000000B01 /* ClaudeTokenAccounts.swift in Sources */,
+				CAP00001000000000000B01 /* ClaudeCLIAuthStatusProbe.swift in Sources */,
 				CLC00001000000000000B01 /* ClaudeCLISession.swift in Sources */,
 				CLG00001000000000000B01 /* ClaudeCLIRateLimitGate.swift in Sources */,
+				KNQ00001000000000000B01 /* KeychainNoUIQuery.swift in Sources */,
 				CLW00001000000000000B01 /* ClaudeWebCookieReader.swift in Sources */,
 				CWF00001000000000000B01 /* ClaudeWebAPIFetcher.swift in Sources */,
 				BBBB0003000000000000B002 /* QuotaProvider.swift in Sources */,

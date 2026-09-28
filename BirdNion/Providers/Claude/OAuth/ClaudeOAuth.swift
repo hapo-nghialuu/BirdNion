@@ -105,15 +105,18 @@ enum ClaudeOAuthStore {
     // MARK: - Resolution
 
     /// Resolves credentials without refreshing. `allowKeychainPrompt == false`
-    /// (or prompt mode `.never`) restricts to env + file so a background fetch
-    /// never triggers a Keychain access prompt.
+    /// (or prompt mode `.never`) still reads the Keychain item via a no-UI
+    /// query — it succeeds when the item's ACL doesn't require interaction
+    /// (e.g. a prior "Always Allow") and fails fast otherwise, so a
+    /// background fetch never surfaces a prompt but still gets OAuth when the
+    /// keychain permits silent access.
     static func loadCredentials(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         allowKeychainPrompt: Bool) -> ClaudeOAuthCredentials? {
         if let fromEnv = loadFromEnvironment(environment) { return fromEnv }
         if let fromFile = loadFromFile(environment: environment) { return fromFile }
-        guard allowKeychainPrompt else { return nil }
-        if let data = readKeychainData(), let creds = ClaudeOAuthCredentials.parse(data: data) {
+        if let data = readKeychainData(allowPrompt: allowKeychainPrompt),
+           let creds = ClaudeOAuthCredentials.parse(data: data) {
             return creds
         }
         return nil
@@ -172,18 +175,21 @@ enum ClaudeOAuthStore {
     }
 
     /// Reads the raw `Claude Code-credentials` keychain blob via Security
-    /// framework. May trigger a macOS access prompt the first time.
+    /// framework. `allowPrompt == false` applies the no-UI context so the
+    /// query fails fast instead of surfacing a macOS access prompt;
+    /// `allowPrompt == true` may show the prompt on first access.
     /// The Advanced-pane debug toggle (key shared with CodexBarCore's
     /// KeychainAccessGate) suppresses the read entirely — callers then fall
     /// back to the CLI credentials file.
-    static func readKeychainData() -> Data? {
+    static func readKeychainData(allowPrompt: Bool) -> Data? {
         guard !UserDefaults.standard.bool(forKey: "debugDisableKeychainAccess") else { return nil }
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        if !allowPrompt { KeychainNoUIQuery.apply(to: &query) }
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }

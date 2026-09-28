@@ -833,10 +833,18 @@ actor ClaudeCLISession {
 
     private static func runDirectUsageProcess(binary: String,
                                               timeout: TimeInterval) async throws -> String {
+        try await runDirectProcess(binary: binary, arguments: ["/usage"], timeout: timeout)
+    }
+
+    /// Async wrapper for `runDirectProcessSync` — also used by
+    /// `ClaudeCLIAuthStatusProbe` for the cheap `auth status` precheck.
+    static func runDirectProcess(binary: String,
+                                 arguments: [String],
+                                 timeout: TimeInterval) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(with: Result {
-                    try runDirectUsageProcessSync(binary: binary, timeout: timeout)
+                    try runDirectProcessSync(binary: binary, arguments: arguments, timeout: timeout)
                 })
             }
         }
@@ -845,11 +853,12 @@ actor ClaudeCLISession {
     /// Blocking subprocess run with a wall-clock timeout. Output is streamed
     /// into a locked buffer via `readabilityHandler` so a chatty CLI can't
     /// deadlock the 64KB pipe buffer while we wait for exit.
-    private static func runDirectUsageProcessSync(binary: String,
-                                                  timeout: TimeInterval) throws -> String {
+    static func runDirectProcessSync(binary: String,
+                                     arguments: [String],
+                                     timeout: TimeInterval) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = ["/usage"]
+        proc.arguments = arguments
         proc.environment = launchEnvironment()
         proc.currentDirectoryURL = preparedProbeWorkingDirectoryURL()
         proc.standardInput = FileHandle.nullDevice
@@ -869,7 +878,7 @@ actor ClaudeCLISession {
             try proc.run()
         } catch {
             throw ClaudeStatusProbeError.parseFailed(
-                "direct claude /usage launch failed: \(error.localizedDescription)")
+                "direct claude launch failed: \(error.localizedDescription)")
         }
         let exited = DispatchSemaphore(value: 0)
         proc.terminationHandler = { _ in exited.signal() }
@@ -882,7 +891,7 @@ actor ClaudeCLISession {
         let data = buffer.snapshot()
         guard let text = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .isoLatin1) else {
-            throw ClaudeStatusProbeError.parseFailed("direct claude /usage produced no decodable output")
+            throw ClaudeStatusProbeError.parseFailed("direct claude produced no decodable output")
         }
         return text
     }

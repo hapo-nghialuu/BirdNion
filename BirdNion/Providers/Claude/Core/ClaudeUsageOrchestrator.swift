@@ -279,7 +279,11 @@ enum ClaudeUsageOrchestrator {
                         group.cancelAll()
                         done = true
                     }
-                } else if oauthSettled, webOutcome != nil {
+                } else if oauthSettled, webOutcome != nil || !hasWebStep {
+                    // All planned HTTP sources settled with no winner — don't
+                    // park on the stage deadline when no Web step exists
+                    // (cookie-source off / auto suppression leaves webOutcome
+                    // nil forever).
                     group.cancelAll()
                     done = true
                 }
@@ -363,6 +367,14 @@ enum ClaudeUsageOrchestrator {
         // always probes for real (and clears the gate on success).
         if isAutoPlan, ClaudeCLIQuotaUnsupportedGate.blockedUntil() != nil {
             throw ClaudeStatusProbeError.parseFailed(ClaudeCLIQuotaUnsupportedGate.message)
+        }
+        // CodexBar parity: cheap `claude auth status` precheck (5s) before the
+        // expensive PTY spawn — a logged-out/absent CLI skips the whole
+        // 24s+8s probe chain. Auto plan only; a pinned `.cli` selection
+        // always probes for real.
+        if isAutoPlan, await ClaudeCLIAuthStatusProbe.isLoggedIn() == false {
+            throw ClaudeStatusProbeError.parseFailed(
+                "Claude CLI chưa đăng nhập — chạy `claude` để đăng nhập")
         }
         let base = isAutoPlan ? cliAutoProbeTimeout : cliProbeTimeout
         let first = budget.map { max(1, min(base, $0)) } ?? base

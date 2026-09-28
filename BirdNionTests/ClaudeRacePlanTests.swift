@@ -345,6 +345,28 @@ final class ClaudeRacePlanTests: XCTestCase {
         XCTAssertEqual(recorder.count("cli"), 0)
     }
 
+    /// Regression: an auto plan with Web excluded (cookie source `.off`, or
+    /// the browser-cookie denial cooldown suppressing `.auto`) leaves an
+    /// OAuth-only race — when OAuth fails the stage must settle immediately
+    /// and hand off to CLI, not park on the 60s stage deadline (which would
+    /// also starve the CLI stage via the F-09 guard).
+    func testOAuthOnlyRaceFailureFallsThroughToCLIPromptly() async throws {
+        let recorder = Recorder()
+        var fetchers = Self.makeFetchers(
+            recorder: recorder,
+            oauth: { throw ClaudeUsageError.oauthFailed("no token") })
+        fetchers.readCookieSource = { .off }
+        fetchers.readManualCookie = { nil }
+        let start = Date()
+        let result = try await ClaudeUsageOrchestrator.loadLatestUsage(
+            allowKeychainPrompt: false, interaction: .background, fetchers: fetchers)
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertEqual(result.sourceLabel, "cli")
+        XCTAssertEqual(recorder.count("cli"), 1)
+        XCTAssertEqual(recorder.count("web"), 0)
+        XCTAssertLessThan(elapsed, 15, "must not wait out the 60s core deadline")
+    }
+
     /// Pinned `.web` runs the single web step — OAuth and CLI never start.
     func testPinnedWebNeverTouchesOAuthOrCLI() async throws {
         let recorder = Recorder()
