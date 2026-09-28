@@ -220,6 +220,12 @@
 		FNT10009000000000000B005 /* IBMPlexMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT1000A000000000000F005 /* IBMPlexMono-Regular.ttf */; };
 		FNT1000B000000000000B006 /* IBMPlexMono-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT1000C000000000000F006 /* IBMPlexMono-Medium.ttf */; };
 		FNT1000D000000000000B007 /* IBMPlexMono-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FNT1000E000000000000F007 /* IBMPlexMono-SemiBold.ttf */; };
+		WDGT0001000000000000B001 /* BurnDownWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0001000000000000F001 /* BurnDownWidget.swift */; };
+		WDGT0002000000000000B002 /* BurnDownViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0002000000000000F002 /* BurnDownViews.swift */; };
+		WDGT0003000000000000B003 /* WidgetSnapshotModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0003000000000000F003 /* WidgetSnapshotModel.swift */; };
+		WDGT0004000000000000B004 /* BirdNionWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = WDGT00000000000000APX1 /* BirdNionWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		WDGT0005000000000000B005 /* WidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0005000000000000F005 /* WidgetSnapshotStore.swift */; };
+		WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -230,7 +236,28 @@
 			remoteGlobalIDString = AAAA000E000000000000T001;
 			remoteInfo = BirdNion;
 		};
+		WDGT0000000000000000PXY1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AAAA0010000000000000P001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = WDGT0000000000000000T001;
+			remoteInfo = BirdNionWidget;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		WDGT0013000000000000C001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				WDGT0004000000000000B004 /* BirdNionWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		AAAA0003000000000000F002 /* BirdNion.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BirdNion.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -447,6 +474,13 @@
 		PLGIN00000000000003F001 /* Plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "BirdNion/Resources/Plugins"; sourceTree = "<group>"; };
 		FNT1000C000000000000F006 /* IBMPlexMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-Medium.ttf"; sourceTree = "<group>"; };
 		FNT1000E000000000000F007 /* IBMPlexMono-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "BirdNion/Resources/Fonts/IBMPlexMono-SemiBold.ttf"; sourceTree = "<group>"; };
+		WDGT00000000000000APX1 /* BirdNionWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BirdNionWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		WDGT0001000000000000F001 /* BurnDownWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurnDownWidget.swift; sourceTree = "<group>"; };
+		WDGT0002000000000000F002 /* BurnDownViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurnDownViews.swift; sourceTree = "<group>"; };
+		WDGT0003000000000000F003 /* WidgetSnapshotModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotModel.swift; sourceTree = "<group>"; };
+		WDGT0004000000000000F004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		WDGT0005000000000000F005 /* WidgetSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Services/WidgetSnapshotStore.swift"; sourceTree = "<group>"; };
+		WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WidgetSnapshotTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -468,6 +502,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				CCCC000F000000000000B008 /* BirdNionTests.xctest in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		WDGT0011000000000000F001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -511,6 +552,17 @@
 				AGCT0001000000000000B001 /* InstalledAgentCatalogTests.swift in Sources */,
 				WABT0001000000000000B001 /* WeeklyActivityBucketBuilderTests.swift in Sources */,
 				FLCT0001000000000000B001 /* first-live-checkpoint-tests.swift in Sources */,
+				WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		WDGT0010000000000000S001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				WDGT0001000000000000B001 /* BurnDownWidget.swift in Sources */,
+				WDGT0002000000000000B002 /* BurnDownViews.swift in Sources */,
+				WDGT0003000000000000B003 /* WidgetSnapshotModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -543,6 +595,13 @@
 		);
 		runOnlyForDeploymentPostprocessing = 0;
 	};
+		WDGT0012000000000000R001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -572,6 +631,7 @@
 			isa = PBXGroup;
 			children = (
 				AAAA0007000000000000G002 /* BirdNion */,
+				WDGT0000000000000000G001 /* BirdNionWidget */,
 				B0C82601EFFB44D98456A87DF3DD369B /* BirdNionTests */,
 				AAAA0008000000000000G003 /* Products */,
 			);
@@ -597,6 +657,7 @@
 			children = (
 				AAAA0003000000000000F002 /* BirdNion.app */,
 				CCCC0010000000000000F008 /* BirdNionTests.xctest */,
+				WDGT00000000000000APX1 /* BirdNionWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -650,6 +711,17 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
+		WDGT0000000000000000G001 /* BirdNionWidget */ = {
+			isa = PBXGroup;
+			children = (
+				WDGT0001000000000000F001 /* BurnDownWidget.swift */,
+				WDGT0002000000000000F002 /* BurnDownViews.swift */,
+				WDGT0003000000000000F003 /* WidgetSnapshotModel.swift */,
+				WDGT0004000000000000F004 /* Info.plist */,
+			);
+			path = BirdNionWidget;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -661,10 +733,12 @@
 				CLPX0005000000000000S001 /* Embed CLIProxyAPI Core */,
 				EEEE0005000000000000BR01 /* Resources */,
 				AAAA000F000000000000B003 /* Sources */,
+				WDGT0013000000000000C001 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				WDGT0000000000000000DT01 /* PBXTargetDependency */,
 			);
 			name = BirdNion;
 			packageProductDependencies = (
@@ -700,6 +774,23 @@
 			productReference = CCCC0010000000000000F008 /* BirdNionTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		WDGT0000000000000000T001 /* BirdNionWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = WDGT00000000000000CL01 /* Build configuration list for PBXNativeTarget "BirdNionWidget" */;
+			buildPhases = (
+				WDGT0010000000000000S001 /* Sources */,
+				WDGT0011000000000000F001 /* Frameworks */,
+				WDGT0012000000000000R001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BirdNionWidget;
+			productName = BirdNionWidget;
+			productReference = WDGT00000000000000APX1 /* BirdNionWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -711,6 +802,9 @@
 				LastUpgradeCheck = 1520;
 				TargetAttributes = {
 					AAAA000E000000000000T001 = {
+						CreatedOnToolsVersion = 15.2;
+					};
+					WDGT0000000000000000T001 = {
 						CreatedOnToolsVersion = 15.2;
 					};
 				};
@@ -735,6 +829,7 @@
 			targets = (
 				AAAA000E000000000000T001 /* BirdNion */,
 				CCCC0013000000000000T002 /* BirdNionTests */,
+				WDGT0000000000000000T001 /* BirdNionWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -744,6 +839,11 @@
 			isa = PBXTargetDependency;
 			target = AAAA000E000000000000T001 /* BirdNion */;
 			targetProxy = CCCC0011000000000000PXY1 /* PBXContainerItemProxy */;
+		};
+		WDGT0000000000000000DT01 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = WDGT0000000000000000T001 /* BirdNionWidget */;
+			targetProxy = WDGT0000000000000000PXY1 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -825,6 +925,7 @@
 				PSTR0001000000000000B001 /* ProviderStatusStream.swift in Sources */,
 				DDDD0003000000000000B002 /* ConfigService.swift in Sources */,
 				DDDD0005000000000000B003 /* QuotaService.swift in Sources */,
+				WDGT0005000000000000B005 /* WidgetSnapshotStore.swift in Sources */,
 				UPD0001000000000000B001 /* UpdateChecker.swift in Sources */,
 				PEC0001000000000000B001 /* ProviderErrorClassifier.swift in Sources */,
 				STG0001000000000000B001 /* ProviderStorage.swift in Sources */,
@@ -1160,6 +1261,56 @@
 			};
 			name = Release;
 		};
+		WDGT0000000000000000C001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BirdNionWidget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.10.42;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		WDGT0000000000000000C002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGNING_ALLOWED = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BirdNionWidget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.10.42;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1168,6 +1319,15 @@
 			buildConfigurations = (
 				CCCC0016000000000000TC01 /* Debug */,
 				CCCC0017000000000000TC02 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		WDGT00000000000000CL01 /* Build configuration list for PBXNativeTarget "BirdNionWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				WDGT0000000000000000C001 /* Debug */,
+				WDGT0000000000000000C002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
