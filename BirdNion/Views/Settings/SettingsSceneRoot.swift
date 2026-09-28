@@ -166,15 +166,16 @@ func openActionCenterSettings() {
     NotificationCenter.default.post(name: .openSettings, object: nil)
 }
 
-/// Opens System Settings → Privacy & Security → Files & Folders — where the
-/// per-app browser-data toggles live on macOS 27 (`kTCCServiceSystemPolicyAppDataDetailed`:
-/// BirdNion's row lists Brave/Chrome/… entries). Full Disk Access covers plain
-/// folders (Safari cookies too) but does NOT unlock the macl-protected browser
-/// dirs, so this pane is the one that unblocks cookie imports.
+/// Opens System Settings → Privacy & Security → Full Disk Access — one toggle
+/// that covers every browser's protected data dir (cookies, localStorage),
+/// Safari included. Per-browser toggles under Files & Folders exist on
+/// macOS 27 (`kTCCServiceSystemPolicyAppDataDetailed`) but in practice the
+/// grant does not take effect there, so Full Disk Access is the remediation
+/// we send users to.
 @MainActor
 func openBrowserDataPrivacyPane() {
     guard let url = URL(
-        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
     else { return }
     NSWorkspace.shared.open(url)
 }

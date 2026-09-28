@@ -11,14 +11,14 @@ final class ProviderErrorClassifierTests: XCTestCase {
         // must NOT degrade to "not configured" — the fix is a Privacy &
         // Security grant (or Manual cookie), not re-login.
         XCTAssertEqual(
-            classify(rawError: "Thiếu quyền đọc dữ liệu trình duyệt — bật quyền truy cập trình duyệt cho app trong Privacy & Security → Files & Folders rồi thử lại"),
+            classify(rawError: "Thiếu quyền đọc dữ liệu trình duyệt — bật Full Disk Access cho app trong Privacy & Security → Full Disk Access rồi thử lại"),
             .browserDataDenied)
         XCTAssertEqual(
             classify(rawError: "No permission to read browser data"),
             .browserDataDenied)
         // Per-browser form (AccessIssue.message) names the blocked browser.
         XCTAssertEqual(
-            classify(rawError: "macOS đã chặn BirdNion đọc phiên đăng nhập trong Brave Browser — bật quyền truy cập trình duyệt cho app trong Privacy & Security → Files & Folders rồi thử lại"),
+            classify(rawError: "macOS đã chặn BirdNion đọc phiên đăng nhập trong Brave Browser — bật Full Disk Access cho app trong Privacy & Security → Full Disk Access rồi thử lại"),
             .browserDataDenied)
     }
 

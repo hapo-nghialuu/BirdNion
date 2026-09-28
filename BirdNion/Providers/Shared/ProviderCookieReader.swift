@@ -54,7 +54,7 @@ enum ProviderCookieReader {
             let names = browserNames.joined(separator: ", ")
             switch kind {
             case .accessDenied:
-                return "macOS đã chặn BirdNion đọc phiên đăng nhập trong \(names) — bật quyền truy cập trình duyệt cho app trong Privacy & Security → Files & Folders rồi thử lại"
+                return "macOS đã chặn BirdNion đọc phiên đăng nhập trong \(names) — bật Full Disk Access cho app trong Privacy & Security → Full Disk Access rồi thử lại"
             case .unreadable:
                 return "Không đọc được dữ liệu trình duyệt \(names) — thử lại sau, hoặc đổi Cookie source sang Manual"
             }
@@ -64,8 +64,8 @@ enum ProviderCookieReader {
     /// Generic access-denied text for callers that cannot name the browser
     /// (Claude's session-key sweep reports a Bool, not an AccessIssue).
     static let browserDataDeniedMessage =
-        "Thiếu quyền đọc dữ liệu trình duyệt — bật quyền truy cập trình duyệt " +
-        "cho app trong Privacy & Security → Files & Folders rồi thử lại"
+        "Thiếu quyền đọc dữ liệu trình duyệt — bật Full Disk Access " +
+        "cho app trong Privacy & Security → Full Disk Access rồi thử lại"
 
     // MARK: - Public API
 
