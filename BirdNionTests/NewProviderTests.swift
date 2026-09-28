@@ -1747,6 +1747,61 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(s2.windows.first?.usedPct, 100)  // balance ≤ 0 → red warning
     }
 
+    func testDeepSeekUsageSummaryEnrichment() {
+        // platform.deepseek.com usage endpoints (month-scoped amount + cost).
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .gmt
+        let now = cal.date(from: DateComponents(year: 2026, month: 9, day: 28, hour: 12))!
+        let amount = #"""
+        {"code":0,"data":{"biz_code":0,"biz_data":{
+          "total":[
+            {"model":"deepseek-chat","usage":[{"type":"PROMPT_CACHE_HIT_TOKEN","amount":"1000"},{"type":"RESPONSE_TOKEN","amount":"500"}]},
+            {"model":"deepseek-reasoner","usage":[{"type":"PROMPT_CACHE_MISS_TOKEN","amount":"2000"}]}],
+          "days":[
+            {"date":"2026-09-28","data":[{"model":"deepseek-chat","usage":[{"type":"PROMPT_CACHE_HIT_TOKEN","amount":"100"},{"type":"REQUEST","amount":"3"}]}]},
+            {"date":"2026-08-15","data":[{"model":"deepseek-chat","usage":[{"type":"RESPONSE_TOKEN","amount":"999999"}]}]}
+          ]}}}
+        """#.data(using: .utf8)!
+        let cost = #"""
+        {"code":0,"data":{"biz_code":0,"biz_data":[{"currency":"CNY",
+          "days":[
+            {"date":"2026-09-28","data":[{"model":"deepseek-chat","usage":[{"type":"RESPONSE_TOKEN","amount":"0.50"}]}]}
+          ]}]}}
+        """#.data(using: .utf8)!
+
+        let summary = try! DeepSeekProvider.UsageSummary.parse(
+            amountData: amount, costData: cost, now: now, calendar: cal)
+        // Today + month are derived from the days arrays; August is excluded.
+        XCTAssertEqual(summary.todayTokens, 100)
+        XCTAssertEqual(summary.todayRequests, 3)
+        XCTAssertEqual(summary.todayCost, 0.50)
+        XCTAssertEqual(summary.monthTokens, 100)
+        XCTAssertEqual(summary.monthRequests, 3)
+        XCTAssertEqual(summary.monthCost, 0.50)
+        XCTAssertEqual(summary.topModel, "deepseek-reasoner")  // 2K > chat's 1.5K
+        XCTAssertEqual(summary.currency, "CNY")
+
+        let balance = #"""
+        {"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"5.00"}]}
+        """#.data(using: .utf8)!
+        let s = DeepSeekProvider().parse(balance, accountLabel: "u", summary: summary)
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.map(\.label), ["Số dư", "Hôm nay", "Tháng này"])
+        XCTAssertEqual(s.windows[1].subtitle, "100 tokens · ¥0.50 · 3 req")
+        XCTAssertTrue(s.windows[2].subtitle?.contains("deepseek-reasoner") ?? false)
+        XCTAssertTrue(s.windows[2].isSupplementary)
+    }
+
+    func testDeepSeekUsageSummaryRejectsErrorCode() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .gmt
+        let now = cal.date(from: DateComponents(year: 2026, month: 9, day: 28))!
+        let bad = #"{"code":401,"data":{"biz_code":0,"biz_data":{"days":[]}}}"#.data(using: .utf8)!
+        let cost = #"{"code":0,"data":{"biz_code":0,"biz_data":[{"currency":"CNY","days":[]}]}}"#.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try DeepSeekProvider.UsageSummary.parse(amountData: bad, costData: cost, now: now, calendar: cal))
+    }
+
     func testOpenCodeRenewWindow() {
         let json = """
         {"rollingUsage":{"usagePercent":50,"resetInSec":3600},

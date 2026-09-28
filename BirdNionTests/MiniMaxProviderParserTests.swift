@@ -289,6 +289,60 @@ final class ZaiProviderTests: XCTestCase {
         XCTAssertEqual(ZaiProvider.label(type: "TIME_LIMIT", unit: 1, number: 7), "7 ngày")
         XCTAssertEqual(ZaiProvider.label(type: "TIME_LIMIT", unit: 6, number: 1), "Tuần")
         XCTAssertEqual(ZaiProvider.label(type: "TOKENS_LIMIT", unit: 0, number: 0), "Tokens")
+        XCTAssertEqual(ZaiProvider.label(type: "CREDIT_LIMIT", unit: 0, number: 0), "Credits")
+        XCTAssertEqual(ZaiProvider.label(type: "CREDIT_LIMIT", unit: 3, number: 5,
+                                         isPrimaryTokens: false), "5 giờ")
+    }
+
+    /// CREDIT_LIMIT entries carry the coding-plan quota just like TOKENS_LIMIT
+    /// (upstream treats them identically) — they must not fall into the
+    /// TIME_LIMIT label path.
+    func testParseCreditLimit() {
+        let json = #"""
+        {"code":200,"msg":"ok","success":true,"data":{"plan_name":"GLM Lite",
+        "limits":[
+          {"type":"CREDIT_LIMIT","unit":3,"number":5,"percentage":30,"usage":100,"remaining":70},
+          {"type":"CREDIT_LIMIT","unit":1,"number":30,"percentage":12,"usage":500,"remaining":440}
+        ]}}
+        """#.data(using: .utf8)!
+        let s = ZaiProvider().parse(json, accountLabel: "u")
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows.count, 2)
+        XCTAssertEqual(s.windows[0].label, "5 giờ")          // shorter = session
+        XCTAssertEqual(s.windows[0].allowance?.unit, .credits)
+        XCTAssertEqual(s.windows[1].label, "Credits")        // longest = primary
+        XCTAssertEqual(s.planName, "GLM Lite")
+    }
+
+    /// TIME_LIMIT entries ship a per-model breakdown in `usageDetails` —
+    /// surfaced as the window subtitle (upstream "MCP quota" detail rows).
+    func testParseMCPUsageDetailsSubtitle() {
+        let json = #"""
+        {"code":200,"msg":"ok","success":true,"data":{"limits":[
+          {"type":"TIME_LIMIT","unit":5,"number":1,"percentage":10,
+           "usageDetails":[{"modelCode":"glm-4.6","usage":12},{"modelCode":"mcp-search","usage":4}]}
+        ]}}
+        """#.data(using: .utf8)!
+        let s = ZaiProvider().parse(json, accountLabel: "u")
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows[0].label, "MCP")
+        XCTAssertEqual(s.windows[0].subtitle, "glm-4.6 12 · mcp-search 4")
+    }
+
+    /// A 5-hour Coding Plan reset cannot land more than ~5h out; upstream drops
+    /// implausible timestamps rather than showing "resets in 10h".
+    func testFiveHourWindowDropsImplausibleReset() {
+        let farFutureMs = Int(Date().timeIntervalSince1970 * 1000) + 10 * 3600 * 1000
+        let json = """
+        {"code":200,"msg":"ok","success":true,"data":{"limits":[
+          {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":40,"next_reset_time":\(farFutureMs)}
+        ]}}
+        """.data(using: .utf8)!
+        let s = ZaiProvider().parse(json, accountLabel: "u")
+        XCTAssertNil(s.error)
+        XCTAssertEqual(s.windows[0].label, "Tokens")  // lone entry = primary
+        XCTAssertEqual(s.windows[0].windowSeconds, 300 * 60)
+        XCTAssertNil(s.windows[0].resetDate)
     }
 }
 

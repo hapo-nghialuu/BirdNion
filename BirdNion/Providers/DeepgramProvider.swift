@@ -1,9 +1,10 @@
 import Foundation
 
 /// Deepgram (speech) usage provider. API key (header `Authorization: Token …`)
-/// → lists projects, then sums the first project's 30-day usage breakdown
-/// (requests + audio hours). No hard quota, so surfaced as info windows.
-/// Native port of CodexBar's DeepgramUsageFetcher (simplified to one project).
+/// → lists projects, then aggregates the 30-day usage breakdown across every
+/// project the key can see (or just the configured Project ID when set).
+/// No hard quota, so surfaced as info windows.
+/// Native port of CodexBar's DeepgramUsageFetcher.
 final class DeepgramProvider: QuotaProvider {
     let id = "deepgram"
     let displayName = "Deepgram"
