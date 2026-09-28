@@ -673,16 +673,27 @@ enum BirdNionConfigStore {
     static func providersSnapshotChecked(url: URL = configURL()) throws -> ProvidersSnapshot {
         let defaults = defaultDocument.providers ?? []
         guard let config = try readChecked(url: url) else {
+            // First run (no settings.json): merge plugin rows too, so new
+            // users can see and enable discovered plugins.
+            let merged = defaults
+            let mergedIDs = Set(merged.map(\.id))
+            let plugins = PluginRegistry.defaultEntries().filter { !mergedIDs.contains($0.id) }
             return ProvidersSnapshot(
-                providers: defaults,
+                providers: merged + plugins,
                 settingsRevision: 0,
                 isAuthoritative: true)
         }
         let existing = config.providers ?? []
         let existingIDs = Set(existing.map(\.id))
         let missing = defaults.filter { !existingIDs.contains($0.id) }
+        // JS plugin providers surface like native rows — disabled by default,
+        // carrying the manifest display name. They never persist into the file
+        // unless the user edits them (same as `missing`).
+        let merged = existing + missing
+        let mergedIDs = Set(merged.map(\.id))
+        let plugins = PluginRegistry.defaultEntries().filter { !mergedIDs.contains($0.id) }
         return ProvidersSnapshot(
-            providers: existing + missing,
+            providers: merged + plugins,
             settingsRevision: config.settingsRevision ?? 0,
             isAuthoritative: true)
     }
@@ -698,6 +709,13 @@ enum BirdNionConfigStore {
     /// API token for a provider id (e.g. "minimax"), trimmed; nil if unset.
     static func apiKey(provider id: String, url: URL = configURL()) -> String? {
         cleaned(provider(id: id, url: url)?.apiKey)
+    }
+
+    /// User-configured base URL for a provider id, trimmed; nil if unset.
+    /// Used by plugin endpoints declared as `{setting, policy}` — resolved
+    /// through `settingResolver`, never confused with a credential.
+    static func baseURL(provider id: String, url: URL = configURL()) -> String? {
+        cleaned(provider(id: id, url: url)?.baseURL)
     }
 
     /// Whether a provider is enabled. Returns the explicit flag if present,

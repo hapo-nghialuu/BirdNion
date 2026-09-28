@@ -129,7 +129,10 @@ final class ServicesContainer: ObservableObject {
             case "devin":
                 result.append(DevinProvider())
             default:
-                break
+                // JS plugin provider (bundled or ~/.config/birdnion/plugins).
+                if let plugin = PluginRegistry.makeProvider(id: cfg.id) {
+                    result.append(plugin)
+                }
             }
         }
         return result
