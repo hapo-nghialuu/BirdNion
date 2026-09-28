@@ -58,13 +58,17 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
     }
 }
 
-/// One clock-hour of combined usage for the "24h" chart period. Only sources
-/// with per-event timestamps (Claude, OMP, Pi, Devin) contribute; Codex, Grok
-/// and Kiro logs are day-grained and stay out of the hourly bars.
+/// One clock-hour of combined usage for the "24h" chart period. Claude, OMP,
+/// Pi and Devin contribute real per-event timestamps; Codex logs are
+/// day-grained so its day total is spread over the day's elapsed hours
+/// (stable pseudo-random split — see `apportionHourly`). Grok and Kiro stay
+/// out of the hourly bars entirely.
 struct CombinedHourlyUsage: Equatable, Identifiable, Sendable {
     let date: Date   // start of the hour in local tz
     let claudeUSD: Double
     let claudeTokens: Int
+    let codexUSD: Double
+    let codexTokens: Int
     let ompUSD: Double
     let ompTokens: Int
     let piUSD: Double
@@ -72,14 +76,15 @@ struct CombinedHourlyUsage: Equatable, Identifiable, Sendable {
     let devinUSD: Double
     let devinTokens: Int
 
-    var usd: Double { claudeUSD + ompUSD + piUSD + devinUSD }
-    var tokens: Int { claudeTokens + ompTokens + piTokens + devinTokens }
+    var usd: Double { claudeUSD + codexUSD + ompUSD + piUSD + devinUSD }
+    var tokens: Int { claudeTokens + codexTokens + ompTokens + piTokens + devinTokens }
     var isActive: Bool { usd > 0 || tokens > 0 }
     var id: Date { date }
 
     init(
         date: Date,
         claudeUSD: Double = 0, claudeTokens: Int = 0,
+        codexUSD: Double = 0, codexTokens: Int = 0,
         ompUSD: Double = 0, ompTokens: Int = 0,
         piUSD: Double = 0, piTokens: Int = 0,
         devinUSD: Double = 0, devinTokens: Int = 0
@@ -87,6 +92,8 @@ struct CombinedHourlyUsage: Equatable, Identifiable, Sendable {
         self.date = date
         self.claudeUSD = claudeUSD
         self.claudeTokens = claudeTokens
+        self.codexUSD = codexUSD
+        self.codexTokens = codexTokens
         self.ompUSD = ompUSD
         self.ompTokens = ompTokens
         self.piUSD = piUSD
@@ -328,6 +335,40 @@ struct CombinedUsageReport: Equatable, Sendable {
         if let currentHour = calendar.date(
             from: calendar.dateComponents([.year, .month, .day, .hour], from: now))
         {
+            var windowHours: [Date] = []
+            windowHours.reserveCapacity(24)
+            for offset in stride(from: 23, through: 0, by: -1) {
+                guard let hour = calendar.date(byAdding: .hour, value: -offset, to: currentHour)
+                else { continue }
+                windowHours.append(hour)
+            }
+
+            // Codex logs are day-grained: spread each day's total over that
+            // day's elapsed clock-hours with a stable pseudo-random split,
+            // then keep only the slots inside the rolling window. Yesterday's
+            // total is split over all 24 of its hours so the visible slice
+            // approximates a true trailing-24h share instead of crediting the
+            // whole day to the window's sliver.
+            var codexHours: [Date: (usd: Double, tokens: Int)] = [:]
+            let windowSet = Set(windowHours)
+            var windowDays: Set<Date> = []
+            for hour in windowHours { windowDays.insert(calendar.startOfDay(for: hour)) }
+            for dayStart in windowDays {
+                let t = codexDays.totals[dayStart] ?? (0, 0)
+                guard t.tokens > 0 || t.usd > 0 else { continue }
+                var slots: [Date] = []
+                for hr in 0..<24 {
+                    guard let slot = calendar.date(byAdding: .hour, value: hr, to: dayStart),
+                          slot <= currentHour else { continue }
+                    slots.append(slot)
+                }
+                let shares = apportionHourly(
+                    usd: t.usd, tokens: t.tokens, slotCount: slots.count, seed: dayStart)
+                for (slot, share) in zip(slots, shares) where windowSet.contains(slot) {
+                    codexHours[slot] = share
+                }
+            }
+
             func hourIndex(_ list: [HourlyUsage]) -> [Date: (usd: Double, tokens: Int)] {
                 Dictionary(list.map { ($0.date, ($0.usd, $0.tokens)) }) { a, _ in a }
             }
@@ -335,16 +376,16 @@ struct CombinedUsageReport: Equatable, Sendable {
             let ompHours = hourIndex(includedOMP?.hourly ?? [])
             let piHours = hourIndex(includedPi?.hourly ?? [])
             let devinHours = hourIndex(includedDevin?.hourly ?? [])
-            for offset in stride(from: 23, through: 0, by: -1) {
-                guard let hour = calendar.date(byAdding: .hour, value: -offset, to: currentHour)
-                else { continue }
+            for hour in windowHours {
                 let c = claudeHours[hour] ?? (0, 0)
+                let x = codexHours[hour] ?? (0, 0)
                 let o = ompHours[hour] ?? (0, 0)
                 let p = piHours[hour] ?? (0, 0)
                 let d = devinHours[hour] ?? (0, 0)
                 hourly.append(CombinedHourlyUsage(
                     date: hour,
                     claudeUSD: c.usd, claudeTokens: c.tokens,
+                    codexUSD: x.usd, codexTokens: x.tokens,
                     ompUSD: o.usd, ompTokens: o.tokens,
                     piUSD: p.usd, piTokens: p.tokens,
                     devinUSD: d.usd, devinTokens: d.tokens))
@@ -373,6 +414,54 @@ struct CombinedUsageReport: Equatable, Sendable {
             ompConfidence: includedOMP?.scanConfidence,
             piConfidence: includedPi?.scanConfidence,
             devinConfidence: includedDevin?.scanConfidence)
+    }
+
+    /// Deterministic pseudo-random split of a day-grained total across
+    /// `slotCount` elapsed hours — mulberry32 seeded by the day so the shape
+    /// is stable across refreshes. Token shares use largest-remainder so the
+    /// sum is exact; USD follows each slot's token share so every slot prices
+    /// identically. Used only for Codex, whose logs carry no timestamps.
+    static func apportionHourly(
+        usd: Double, tokens: Int, slotCount: Int, seed: Date
+    ) -> [(usd: Double, tokens: Int)] {
+        guard slotCount > 0 else { return [] }
+        guard tokens > 0 || usd > 0 else {
+            return Array(repeating: (usd: 0.0, tokens: 0), count: slotCount)
+        }
+        var state = UInt32(truncatingIfNeeded: Int(seed.timeIntervalSince1970))
+        func next() -> UInt32 {
+            state &+= 0x6D2B79F5
+            var t = state
+            t = (t ^ (t >> 15)) &* (t | 1)
+            t ^= t &+ ((t ^ (t >> 7)) &* (t | 61))
+            return t ^ (t >> 14)
+        }
+        // +0.01 floor so no slot collapses to a hard zero weight.
+        let weights = (0..<slotCount).map { _ in
+            Double(next() & 0x00FF_FFFF) / 16_777_216 + 0.01
+        }
+        let sumW = weights.reduce(0, +)
+
+        var tokenShares = weights.map { Int(Double(tokens) * $0 / sumW) }
+        var remainder = tokens - tokenShares.reduce(0, +)
+        let fractionalOrder = weights.indices.sorted {
+            (Double(tokens) * weights[$0]).truncatingRemainder(dividingBy: sumW)
+                > (Double(tokens) * weights[$1]).truncatingRemainder(dividingBy: sumW)
+        }
+        for i in fractionalOrder {
+            guard remainder > 0 else { break }
+            tokenShares[i] += 1
+            remainder -= 1
+        }
+
+        var usdShares = tokenShares.map {
+            tokens > 0 ? usd * Double($0) / Double(tokens) : usd / Double(slotCount)
+        }
+        if slotCount > 1 {
+            // Last slot absorbs fp drift so the shares sum back to `usd`.
+            usdShares[slotCount - 1] = max(0, usd - usdShares.dropLast().reduce(0, +))
+        }
+        return zip(usdShares, tokenShares).map { (usd: $0.0, tokens: $0.1) }
     }
 
     private struct DayIndex {
@@ -1322,18 +1411,10 @@ struct CombinedChartCard: View {
 
     private var hourly24USD: Double { report.hourly.reduce(0) { $0 + $1.usd } }
     private var hourly24Tokens: Int { report.hourly.reduce(0) { $0 + $1.tokens } }
-    private var codexTodayUSD: Double { report.daily.last?.codexUSD ?? 0 }
-    private var codexTodayTokens: Int { report.daily.last?.codexTokens ?? 0 }
     private var grokTodayUSD: Double { report.daily.last?.grokUSD ?? 0 }
     private var grokTodayTokens: Int { report.daily.last?.grokTokens ?? 0 }
     private var kiroTodayUSD: Double { report.daily.last?.kiroUSD ?? 0 }
     private var kiroTodayTokens: Int { report.daily.last?.kiroTokens ?? 0 }
-    private var ompTodayUSD: Double { report.daily.last?.ompUSD ?? 0 }
-    private var ompTodayTokens: Int { report.daily.last?.ompTokens ?? 0 }
-    private var piTodayUSD: Double { report.daily.last?.piUSD ?? 0 }
-    private var piTodayTokens: Int { report.daily.last?.piTokens ?? 0 }
-    private var devinTodayUSD: Double { report.daily.last?.devinUSD ?? 0 }
-    private var devinTodayTokens: Int { report.daily.last?.devinTokens ?? 0 }
 
     private func periodLabel(_ days: Int) -> String {
         days == 1 ? "24h" : "\(days) \(vi ? "ngày" : "days")"
@@ -1352,13 +1433,13 @@ struct CombinedChartCard: View {
 
     private var periodTotalUSD: Double {
         is24h
-            ? hourly24USD + codexTodayUSD + grokTodayUSD + kiroTodayUSD
+            ? hourly24USD + grokTodayUSD + kiroTodayUSD
             : windowTotals.usd
     }
 
     private var periodTotalTokens: Int {
         is24h
-            ? hourly24Tokens + codexTodayTokens + grokTodayTokens + kiroTodayTokens
+            ? hourly24Tokens + grokTodayTokens + kiroTodayTokens
             : windowTotals.tokens
     }
 
@@ -1530,9 +1611,10 @@ struct CombinedChartCard: View {
 
     private var maxHourTokens: Int { max(report.hourly.map(\.tokens).max() ?? 0, 1) }
 
-    /// Stacked per-source bars like `barChart` but at hour resolution — only
-    /// Claude/OMP/Pi/Devin carry per-event timestamps, so those are the four
-    /// segments. Empty hours render as a hairline like empty days do.
+    /// Stacked per-source bars like `barChart` but at hour resolution.
+    /// Claude/OMP/Pi/Devin contribute real per-event timestamps; Codex's
+    /// day-grained total is spread over elapsed hours by `apportionHourly`.
+    /// Empty hours render as a hairline like empty days do.
     private var hourChart: some View {
         GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
@@ -1545,10 +1627,12 @@ struct CombinedChartCard: View {
                         VStack(spacing: 0) {
                             if hasTokens {
                                 let claudeHeight = barHeight * CGFloat(Double(hour.claudeTokens) / Double(hour.tokens))
+                                let codexHeight = barHeight * CGFloat(Double(hour.codexTokens) / Double(hour.tokens))
                                 let ompHeight = barHeight * CGFloat(Double(hour.ompTokens) / Double(hour.tokens))
                                 let piHeight = barHeight * CGFloat(Double(hour.piTokens) / Double(hour.tokens))
-                                let devinHeight = max(0, barHeight - claudeHeight - ompHeight - piHeight)
+                                let devinHeight = max(0, barHeight - claudeHeight - codexHeight - ompHeight - piHeight)
                                 Rectangle().fill(VocabbyTheme.chartClaude).frame(height: claudeHeight)
+                                Rectangle().fill(VocabbyTheme.chartCodex).frame(height: codexHeight)
                                 Rectangle().fill(VocabbyTheme.chartOMPBar(vertical: true)).frame(height: ompHeight)
                                 Rectangle().fill(VocabbyTheme.chartPi).frame(height: piHeight)
                                 Rectangle().fill(VocabbyTheme.devin).frame(height: devinHeight)

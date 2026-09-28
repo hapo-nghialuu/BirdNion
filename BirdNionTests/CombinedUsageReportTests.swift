@@ -317,6 +317,59 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertEqual(cur.tokens, 100)
     }
 
+    /// Codex has day-grained logs: its day total is spread over the day's
+    /// elapsed clock-hours by a stable pseudo-random split. All of today lands
+    /// inside the window; yesterday contributes only a partial share; repeated
+    /// builds produce identical bars; and the per-day sums stay exact.
+    func testCodexDayTotalsSpreadAcrossElapsedHoursDeterministically() {
+        let codexRep = codexReport(daily: [
+            codexDay(-1, usd: 1.2, tokens: 1_200),
+            codexDay(0, usd: 2.4, tokens: 2_400),
+        ])
+        let report = CombinedUsageReport.build(
+            claude: nil, codex: codexRep, calendar: calendar, now: now)
+
+        XCTAssertEqual(report.hourly.count, 24)
+
+        let todayHours = report.hourly.filter {
+            calendar.startOfDay(for: $0.date) == startOfToday
+        }
+        let yesterdayHours = report.hourly.filter {
+            calendar.startOfDay(for: $0.date) == day(-1)
+        }
+        // Every today slot is inside the window → the full 2400 lands.
+        XCTAssertEqual(todayHours.reduce(0) { $0 + $1.codexTokens }, 2_400)
+        // Yesterday is split over all 24 of its hours; only the in-window
+        // slice survives → strictly less than 1200.
+        let yesterdayInWindow = yesterdayHours.reduce(0) { $0 + $1.codexTokens }
+        XCTAssertGreaterThanOrEqual(yesterdayInWindow, 0)
+        XCTAssertLessThan(yesterdayInWindow, 1_200)
+        XCTAssertEqual(
+            report.hourly.reduce(0) { $0 + $1.codexTokens },
+            2_400 + yesterdayInWindow)
+
+        // Same day seed → identical bars across rebuilds.
+        let again = CombinedUsageReport.build(
+            claude: nil, codex: codexRep, calendar: calendar, now: now)
+        XCTAssertEqual(report.hourly, again.hourly)
+    }
+
+    /// `apportionHourly` conserves the token total exactly and distributes
+    /// USD proportionally, whatever the slot count.
+    func testApportionHourlyConservesTotals() {
+        for (tokens, slots) in [(1, 24), (7, 3), (999, 24), (50_000, 13)] {
+            let shares = CombinedUsageReport.apportionHourly(
+                usd: 12.5, tokens: tokens, slotCount: slots, seed: day(0))
+            XCTAssertEqual(shares.count, slots)
+            XCTAssertEqual(shares.reduce(0) { $0 + $1.tokens }, tokens)
+            XCTAssertEqual(shares.reduce(0) { $0 + $1.usd }, 12.5, accuracy: 0.0001)
+        }
+        XCTAssertTrue(CombinedUsageReport.apportionHourly(
+            usd: 0, tokens: 0, slotCount: 4, seed: day(0)).allSatisfy { $0.tokens == 0 })
+        XCTAssertTrue(CombinedUsageReport.apportionHourly(
+            usd: 1, tokens: 5, slotCount: 0, seed: day(0)).isEmpty)
+    }
+
     /// Money gets thousands grouping; token counts get a B tier so 14465.0M
     /// reads as 14.5B.
     func testCurrencyAndTokenFormatting() {
