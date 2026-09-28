@@ -2343,6 +2343,7 @@ struct CodexAccountsPopoverSection: View {
         switchErrorText = nil
         accountActionErrorText = nil
         defer { busy = false }
+        let wasCLIIdentity = targetID != "system" && CodexAccountStore.cliSwitchedID() == targetID
         do {
             if targetID == "system" {
                 try CodexAccountStore.restoreSystemCLI()
@@ -2352,9 +2353,28 @@ struct CodexAccountsPopoverSection: View {
             CodexAccountStore.setActive(targetID)
             activeID = targetID
             cliID = CodexAccountStore.cliSwitchedID()
+            if !wasCLIIdentity {
+                restartCodexAppServer()
+            }
             reload()
         } catch {
             switchErrorText = error.localizedDescription
+        }
+    }
+
+    /// The `codex` TUI doesn't read `auth.json` directly — it talks to a
+    /// long-running `codex app-server` managed daemon that caches the
+    /// credential in memory. Kill it (and its code-mode host) so the next
+    /// `codex` launch respawns it against the freshly written auth.json.
+    /// No-op when nothing is running. Bracket trick keeps pkill from
+    /// matching its own invocation.
+    private func restartCodexAppServer() {
+        for pattern in ["[c]odex app-server", "[c]odex-code-mode-host"] {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            p.arguments = ["-f", pattern]
+            try? p.run()
+            p.waitUntilExit()
         }
     }
 
