@@ -265,4 +265,106 @@ final class PluginEngineTests: XCTestCase {
             try engine.fetchUsage(), id: "half", displayName: "Half")
         XCTAssertTrue(status.windows[0].isInactive)
     }
+
+    // MARK: Security regressions
+
+    /// Top-level bridge calls must fail cleanly (invalidDefinition), never
+    /// crash — the natives are installed only after the manifest is parsed.
+    func testTopLevelBridgeCallFailsCleanly() {
+        XCTAssertThrowsError(try PluginEngine(
+            source: """
+            defineProvider({
+              id: "eager", name: "Eager", endpoints: ["https://api.eager.test"],
+              settings: [],
+              fetchUsage(ctx) { return { empty: true }; }
+            });
+            globalThis.__birdnionCtx.http.get("https://api.eager.test/x");
+            """,
+            transport: stubTransport())) { error in
+            guard case PluginEngineError.invalidDefinition = error else {
+                return XCTFail("expected invalidDefinition, got \(error)")
+            }
+        }
+    }
+
+    /// `ctx.settings.get` must not resolve keys the plugin never declared —
+    /// otherwise JS can read arbitrary process environment variables.
+    func testUndeclaredSettingKeyResolvesNil() throws {
+        setenv("BIRDNION_TEST_LEAK", "leaked-secret", 1)
+        defer { unsetenv("BIRDNION_TEST_LEAK") }
+        let engine = try PluginEngine(
+            source: """
+            defineProvider({
+              id: "nosnoop", name: "Nosnoop", endpoints: [], settings: [],
+              fetchUsage(ctx) {
+                const v = ctx.settings.getSecret("BIRDNION_TEST_LEAK");
+                return { primary: { usedPercent: (v === undefined || v === null) ? 7 : 99 } };
+              }
+            });
+            """,
+            transport: stubTransport())
+        let status = PluginSnapshotMapper.status(
+            try engine.fetchUsage(), id: "nosnoop", displayName: "Nosnoop")
+        XCTAssertEqual(status.windows[0].usedPct, 7)
+    }
+
+    /// Declared keys still resolve — including the auth secret itself, which
+    /// upstream plugins read as a presence check (e.g. gitkraken).
+    func testDeclaredKeysResolve() throws {
+        setenv("DEMO_REGION", "eu-west", 1)
+        setenv("DEMO_TOKEN", "sk-demo", 1)
+        defer { unsetenv("DEMO_REGION"); unsetenv("DEMO_TOKEN") }
+        let engine = try PluginEngine(
+            source: """
+            defineProvider({
+              id: "declared", name: "Declared", endpoints: ["https://api.d.test"],
+              auth: { type: "bearer", secret: "DEMO_TOKEN" },
+              settings: [
+                { key: "DEMO_TOKEN", title: "Token", type: "secure" },
+                { key: "DEMO_REGION", title: "Region" }
+              ],
+              fetchUsage(ctx) {
+                const secret = ctx.settings.getSecret("DEMO_TOKEN");
+                const region = ctx.settings.get("DEMO_REGION");
+                return { primary: { usedPercent: (secret === "sk-demo" && region === "eu-west") ? 33 : 0 } };
+              }
+            });
+            """,
+            transport: stubTransport())
+        let status = PluginSnapshotMapper.status(
+            try engine.fetchUsage(), id: "declared", displayName: "Declared")
+        XCTAssertEqual(status.windows[0].usedPct, 33)
+    }
+
+    /// Redirects to allowlisted origins follow; anything else surfaces the
+    /// 3xx instead of forwarding the injected Authorization cross-host.
+    func testRedirectGateContainsForeignHosts() {
+        let gate = PluginEngine.RedirectGate(allow: { $0.host == "api.ok.test" })
+        let session = URLSession.shared
+        let task = session.dataTask(with: URLRequest(url: URL(string: "https://api.ok.test/a")!))
+        let response = HTTPURLResponse(
+            url: task.originalRequest!.url!, statusCode: 302,
+            httpVersion: nil, headerFields: ["Location": "https://evil.test/x"])!
+
+        var allowed = true
+        var ran = 0
+        let sem = DispatchSemaphore(value: 0)
+        gate.urlSession(session, task: task,
+                        willPerformHTTPRedirection: response,
+                        newRequest: URLRequest(url: URL(string: "https://api.ok.test/b")!)) { req in
+            allowed = req != nil; ran += 1; sem.signal()
+        }
+        sem.wait()
+        XCTAssertEqual(ran, 1)
+        XCTAssertTrue(allowed, "same-origin allowlisted redirect must be followed")
+
+        gate.urlSession(session, task: task,
+                        willPerformHTTPRedirection: response,
+                        newRequest: URLRequest(url: URL(string: "https://evil.test/x")!)) { req in
+            allowed = req != nil; ran += 1; sem.signal()
+        }
+        sem.wait()
+        XCTAssertFalse(allowed, "redirect to undeclared host must surface the 3xx")
+        task.cancel()
+    }
 }

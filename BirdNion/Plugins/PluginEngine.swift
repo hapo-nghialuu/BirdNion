@@ -208,26 +208,44 @@ final class PluginEngine {
     var settingResolver: (String) -> String? = { key in
         ProcessInfo.processInfo.environment[key]?.trimmedNonEmpty
     }
-    var transport: PluginHTTPTransport
+    private let injectedTransport: PluginHTTPTransport?
+    /// Injectable for tests. The default is a synchronous URLSession whose
+    /// redirects are contained to the manifest's declared origins — a 3xx to
+    /// an undeclared host is surfaced to JS instead of being followed with
+    /// the injected auth header attached.
+    lazy var transport: PluginHTTPTransport = {
+        injectedTransport ?? Self.makeURLSessionTransport(allow: { [weak self] url in
+            self?.isAllowed(url: url) ?? false
+        })
+    }()
 
     private let context: JSContext
     private let queue: DispatchQueue
 
     /// Build an engine from plugin source. `source` must call
     /// `defineProvider(...)` exactly once.
+    ///
+    /// Ordering is deliberate: the prelude (defineProvider + ctx) is evaluated
+    /// first, then the plugin source, then the manifest is parsed, and only
+    /// then are native bridges installed. A plugin that calls `ctx.*` at
+    /// top level therefore sees an undefined `__birdnionHttp` and throws a
+    /// JS error — instead of reaching a native bridge before `manifest`
+    /// exists. (Same ordering as the Rust engine.)
     init(source: String,
          transport: PluginHTTPTransport? = nil,
          queueLabel: String = "birdnion.plugin") throws {
-        self.transport = transport ?? Self.urlSessionTransport
+        self.injectedTransport = transport
         self.queue = DispatchQueue(label: queueLabel + ".serial")
         self.context = JSContext(virtualMachine: JSVirtualMachine())!
         try queue.sync {
-            installBridge()
+            context.exceptionHandler = { ctx, exc in ctx?.exception = exc }
+            context.evaluateScript(Self.prelude)
             context.evaluateScript(source)
             if let exc = context.exception {
                 throw PluginEngineError.invalidDefinition("plugin source threw: \(exc)")
             }
             self.manifest = try Self.readManifest(from: context)
+            installBridge()
         }
     }
 
@@ -339,19 +357,18 @@ final class PluginEngine {
 
     // MARK: JS bridge
 
+    /// Native bridges are installed only after the manifest is parsed —
+    /// top-level plugin code must not reach them (see `init`).
     private func installBridge() {
-        // Keep JSC's default behaviour of storing the exception on the context
-        // so `context.exception` checks after eval still see real JS errors.
-        context.exceptionHandler = { ctx, exc in ctx?.exception = exc }
         installNativeHTTP()
         installNativeSettings()
         installNativeStorage()
         installNativeFormat()
-        context.evaluateScript(Self.prelude)
     }
 
     /// Validates a request URL against the manifest's declared endpoints.
     private func isAllowed(url: URL) -> Bool {
+        guard let manifest else { return false }
         for endpoint in manifest.endpoints {
             switch endpoint {
             case .origin(let allowed):
@@ -362,17 +379,24 @@ final class PluginEngine {
                 else { continue }
                 if sameOrigin(url, base) { return true }
                 let isLoopback = ["localhost", "127.0.0.1", "::1"].contains(host.lowercased())
-                let isPrivate = host.hasPrefix("10.") || host.hasPrefix("192.168.")
-                    || host.hasPrefix("172.16.") || host.hasPrefix("172.17.")
                 if policy != "https",
                    url.scheme?.lowercased() == "http",
-                   (isLoopback || (policy == "https-or-private-network-http" && isPrivate)),
+                   (isLoopback || (policy == "https-or-private-network-http" && Self.isPrivateIPv4(host))),
                    url.host?.lowercased() == host.lowercased() {
                     return true
                 }
             }
         }
         return false
+    }
+
+    /// RFC 1918 private IPv4: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
+    private static func isPrivateIPv4(_ host: String) -> Bool {
+        if host.hasPrefix("10.") || host.hasPrefix("192.168.") { return true }
+        guard host.hasPrefix("172."),
+              let second = host.split(separator: ".").dropFirst().first.flatMap({ Int($0) })
+        else { return false }
+        return (16...31).contains(second)
     }
 
     private func sameOrigin(_ a: URL, _ b: URL) -> Bool {
@@ -441,12 +465,22 @@ final class PluginEngine {
 
     private func installNativeSettings() {
         let get: @convention(block) (String) -> String? = { [weak self] key in
+            guard let self, let manifest = self.manifest else { return nil }
+            // Only keys the plugin declares resolve at all — otherwise JS
+            // could read arbitrary process env vars (HOME, GITHUB_TOKEN, ...)
+            // through this bridge. Upstream plugins declare every key they
+            // read in `settings` or `endpoints`, so this is contract-safe.
+            let urlValued = key.hasSuffix("URL")
+                || key.hasSuffix("_ENDPOINT") || key.hasSuffix("_ORIGIN")
+            let declared = manifest.settings.contains { $0.key == key }
+                || manifest.endpoints.contains {
+                    if case .setting(let k, _) = $0 { return k == key }
+                    return false
+                }
+            guard declared else { return nil }
             // URL-valued settings resolve to the provider's configured base
             // URL — never to a credential.
-            if key.hasSuffix("URL") || key.hasSuffix("_ENDPOINT") || key.hasSuffix("_ORIGIN") {
-                return self?.settingResolver(key)
-            }
-            return self?.secretResolver(key)
+            return urlValued ? self.settingResolver(key) : self.secretResolver(key)
         }
         context.setObject(get, forKeyedSubscript: "__birdnionGetSecret" as NSString)
     }
@@ -454,10 +488,10 @@ final class PluginEngine {
     private func installNativeStorage() {
         let fileFor: () -> URL = { [weak self] in
             Self.pluginStorageDir
-                .appendingPathComponent(self?.manifest.id ?? "unknown", isDirectory: true)
+                .appendingPathComponent(self?.manifest?.id ?? "unknown", isDirectory: true)
                 .appendingPathComponent("storage.json")
         }
-        let allowed = { [weak self] in self?.manifest.capabilities.contains("persistent-storage") == true }
+        let allowed = { [weak self] in self?.manifest?.capabilities.contains("persistent-storage") == true }
         let load: @convention(block) (String) -> String? = { [weak self] key in
             guard allowed(), let self else { return nil }
             return self.storageRead(file: fileFor())[key]
@@ -544,42 +578,66 @@ final class PluginEngine {
 
     // MARK: Default transport
 
+    /// Blocks redirects to non-allowlisted origins. URLSession forwards the
+    /// request headers — including the natively injected `Authorization` —
+    /// to redirect targets, so following a 3xx cross-host would leak the
+    /// plugin's secret. Allowed targets still redirect transparently;
+    /// anything else surfaces the 3xx to JS, which can re-request the
+    /// Location itself (it will be allowlist-checked like any request).
+    final class RedirectGate: NSObject, URLSessionTaskDelegate {
+        let allow: (URL) -> Bool
+        init(allow: @escaping (URL) -> Bool) { self.allow = allow }
+        func urlSession(_ session: URLSession,
+                        task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(request.url.map(allow) == true ? request : nil)
+        }
+    }
+
     /// Synchronous URLSession GET/POST with a response cap and redirect
     /// containment to declared origins.
-    static let urlSessionTransport: PluginHTTPTransport = { request, timeout in
-        final class Box { var response: PluginHTTPResponse?; var error: Error? }
-        let box = Box()
-        let sem = DispatchSemaphore(value: 0)
-        var req = request
-        req.timeoutInterval = timeout
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = timeout
-        let task = URLSession(configuration: config).dataTask(with: req) { data, response, error in
-            defer { sem.signal() }
-            if let error { box.error = error; return }
-            guard let http = response as? HTTPURLResponse else {
-                box.error = PluginEngineError.engineFailure("non-HTTP response"); return
+    static func makeURLSessionTransport(allow: @escaping (URL) -> Bool) -> PluginHTTPTransport {
+        { request, timeout in
+            final class Box { var response: PluginHTTPResponse?; var error: Error? }
+            let box = Box()
+            let sem = DispatchSemaphore(value: 0)
+            var req = request
+            req.timeoutInterval = timeout
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = timeout
+            let session = URLSession(
+                configuration: config,
+                delegate: RedirectGate(allow: allow),
+                delegateQueue: nil)
+            defer { session.invalidateAndCancel() }
+            let task = session.dataTask(with: req) { data, response, error in
+                defer { sem.signal() }
+                if let error { box.error = error; return }
+                guard let http = response as? HTTPURLResponse else {
+                    box.error = PluginEngineError.engineFailure("non-HTTP response"); return
+                }
+                let capped = (data ?? Data()).prefix(1_048_576)
+                let text = String(decoding: capped, as: UTF8.self)
+                var headers: [String: String] = [:]
+                for (k, v) in http.allHeaderFields {
+                    headers[String(describing: k).lowercased()] = String(describing: v)
+                }
+                box.response = PluginHTTPResponse(
+                    url: http.url?.absoluteString ?? req.url?.absoluteString ?? "",
+                    status: http.statusCode, headers: headers, bodyText: text)
             }
-            let capped = (data ?? Data()).prefix(1_048_576)
-            let text = String(decoding: capped, as: UTF8.self)
-            var headers: [String: String] = [:]
-            for (k, v) in http.allHeaderFields {
-                headers[String(describing: k).lowercased()] = String(describing: v)
+            task.resume()
+            if sem.wait(timeout: .now() + timeout + 5) == .timedOut {
+                task.cancel()
+                throw PluginFetchError(kind: .networkFailure, message: "request timed out")
             }
-            box.response = PluginHTTPResponse(
-                url: http.url?.absoluteString ?? req.url?.absoluteString ?? "",
-                status: http.statusCode, headers: headers, bodyText: text)
+            if let error = box.error {
+                throw PluginFetchError(kind: .networkFailure, message: error.localizedDescription)
+            }
+            return box.response!
         }
-        task.resume()
-        if sem.wait(timeout: .now() + timeout + 5) == .timedOut {
-            task.cancel()
-            throw PluginFetchError(kind: .networkFailure, message: "request timed out")
-        }
-        if let error = box.error {
-            let ns = error as NSError
-            throw PluginFetchError(kind: .networkFailure, message: error.localizedDescription)
-        }
-        return box.response!
     }
 
     // MARK: JS prelude — builds ctx and defineProvider

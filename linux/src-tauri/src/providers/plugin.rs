@@ -193,6 +193,13 @@ struct PluginState {
     auth_kind: Option<String>,
     auth_header_name: Option<String>,
     auth_scheme: Option<String>,
+    /// Settings key name of `auth.secret` — the only key allowed to fall back
+    /// to the stored credential in `ctx.settings.get`.
+    auth_secret_name: Option<String>,
+    /// Keys declared in `manifest.settings` — the only names
+    /// `ctx.settings.get`/`getSecret` may resolve (plus endpoint setting
+    /// keys). Anything else is refused so JS cannot read arbitrary env vars.
+    settings_keys: Vec<String>,
     secret: Option<String>,
     setting_base: Option<String>,
     storage_dir: PathBuf,
@@ -276,6 +283,8 @@ impl Engine {
             auth_kind: manifest.auth.as_ref().map(|a| a.kind.clone()),
             auth_header_name: manifest.auth.as_ref().and_then(|a| a.header.clone()),
             auth_scheme: manifest.auth.as_ref().and_then(|a| a.scheme.clone()),
+            auth_secret_name: manifest.auth.as_ref().map(|a| a.secret.clone()),
+            settings_keys: manifest.settings.iter().map(|s| s.key.clone()).collect(),
             secret: resolved,
             setting_base: setting_base.clone(),
             storage_dir: plugins_dir().join(&manifest.id),
@@ -404,10 +413,7 @@ fn url_allowed(state: &PluginState, url: &str) -> bool {
         }
         let host = base.host_str().unwrap_or_default().to_lowercase();
         let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
-        let private = host.starts_with("10.")
-            || host.starts_with("192.168.")
-            || host.starts_with("172.16.")
-            || host.starts_with("172.17.");
+        let private = is_private_ipv4(&host);
         if ep.policy != "https"
             && parsed.scheme() == "http"
             && parsed.host_str().map(|h| h.to_lowercase()) == Some(host.clone())
@@ -417,6 +423,20 @@ fn url_allowed(state: &PluginState, url: &str) -> bool {
         }
     }
     false
+}
+
+/// RFC 1918 private IPv4: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
+fn is_private_ipv4(host: &str) -> bool {
+    if host.starts_with("10.") || host.starts_with("192.168.") {
+        return true;
+    }
+    if !host.starts_with("172.") {
+        return false;
+    }
+    host.split('.')
+        .nth(1)
+        .and_then(|s| s.parse::<u8>().ok())
+        .is_some_and(|o| (16..=31).contains(&o))
 }
 
 fn same_origin(a: &url::Url, b: &url::Url) -> bool {
@@ -468,44 +488,83 @@ fn http_request(req_json: &str, st: &PluginState) -> Result<serde_json::Value, S
         ureq::config::Config::builder()
             .timeout_global(Some(std::time::Duration::from_secs_f64(timeout)))
             .http_status_as_error(false)
+            // Redirects are followed manually below — every hop is
+            // re-validated against the endpoint allowlist so the injected
+            // auth header can never reach an undeclared host.
+            .max_redirects(0)
             .build(),
     );
-    let method = req.method.to_uppercase();
-    let body = req.body;
-    let mut resp = {
-        // ureq splits body-capable methods into a different builder type, so
-        // the two families send through separate paths.
-        let bodiless = |b: ureq::RequestBuilder<ureq::typestate::WithoutBody>| {
-            let mut b = b;
-            for (k, v) in &req.headers {
-                b = b.header(k, v);
+    let mut method = req.method.to_uppercase();
+    let mut body = req.body;
+    let mut url = req.url.clone();
+    let mut resp;
+    let mut hops = 0;
+    loop {
+        resp = {
+            // ureq splits body-capable methods into a different builder type,
+            // so the two families send through separate paths.
+            let bodiless = |b: ureq::RequestBuilder<ureq::typestate::WithoutBody>| {
+                let mut b = b;
+                for (k, v) in &req.headers {
+                    b = b.header(k, v);
+                }
+                if let Some(auth) = auth_header(st) {
+                    b = b.header(&auth.0, &auth.1);
+                }
+                b.call()
+            };
+            let bodied = |b: ureq::RequestBuilder<ureq::typestate::WithBody>| {
+                let mut b = b.header("Content-Type", "application/json");
+                for (k, v) in &req.headers {
+                    b = b.header(k, v);
+                }
+                if let Some(auth) = auth_header(st) {
+                    b = b.header(&auth.0, &auth.1);
+                }
+                b.send(body.clone().unwrap_or_default().as_bytes())
+            };
+            match method.as_str() {
+                "GET" => bodiless(agent.get(&url)),
+                "HEAD" => bodiless(agent.head(&url)),
+                "DELETE" => bodiless(agent.delete(&url)),
+                "POST" => bodied(agent.post(&url)),
+                "PUT" => bodied(agent.put(&url)),
+                "PATCH" => bodied(agent.patch(&url)),
+                _ => return Err(format!("unsupported method {method}")),
             }
-            if let Some(auth) = auth_header(st) {
-                b = b.header(&auth.0, &auth.1);
-            }
-            b.call()
-        };
-        let bodied = |b: ureq::RequestBuilder<ureq::typestate::WithBody>| {
-            let mut b = b.header("Content-Type", "application/json");
-            for (k, v) in &req.headers {
-                b = b.header(k, v);
-            }
-            if let Some(auth) = auth_header(st) {
-                b = b.header(&auth.0, &auth.1);
-            }
-            b.send(body.clone().unwrap_or_default().as_bytes())
-        };
-        match method.as_str() {
-            "GET" => bodiless(agent.get(&req.url)),
-            "HEAD" => bodiless(agent.head(&req.url)),
-            "DELETE" => bodiless(agent.delete(&req.url)),
-            "POST" => bodied(agent.post(&req.url)),
-            "PUT" => bodied(agent.put(&req.url)),
-            "PATCH" => bodied(agent.patch(&req.url)),
-            _ => return Err(format!("unsupported method {method}")),
         }
+        .map_err(|e| format!("transport: {e}"))?;
+
+        // Redirects are followed manually: every hop is re-validated against
+        // the endpoint allowlist, so the injected auth header can never reach
+        // an undeclared host. A 3xx pointing elsewhere is surfaced to JS
+        // (which may re-request the Location — it is allowlist-checked too).
+        let status = resp.status().as_u16();
+        let next = if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            resp.headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|loc| {
+                    url::Url::parse(loc)
+                        .ok()
+                        .or_else(|| url::Url::parse(&url).ok()?.join(loc).ok())
+                })
+                .filter(|u| url_allowed(st, u.as_str()))
+        } else {
+            None
+        };
+        let Some(next) = next else { break };
+        hops += 1;
+        if hops > 10 {
+            break;
+        }
+        // 301/302/303 rewrite body methods to GET (fetch semantics).
+        if status != 307 && status != 308 && method != "GET" && method != "HEAD" {
+            method = "GET".into();
+            body = None;
+        }
+        url = next.to_string();
     }
-    .map_err(|e| format!("transport: {e}"))?;
     let status = resp.status().as_u16() as i64;
     let headers: serde_json::Map<String, serde_json::Value> = resp
         .headers()
@@ -528,7 +587,7 @@ fn http_request(req_json: &str, st: &PluginState) -> Result<serde_json::Value, S
         String::from_utf8_lossy(&buf).into_owned()
     };
     Ok(serde_json::json!({
-        "url": req.url.clone(),
+        "url": url,
         "status": status,
         "headers": serde_json::Value::Object(headers),
         "bodyText": body_text,
@@ -559,6 +618,18 @@ fn auth_header(st: &PluginState) -> Option<(String, String)> {
 fn secret_native(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let key = arg_str(args, 0, ctx).unwrap_or_default();
     let st = state(ctx);
+    // Only manifest-declared keys resolve at all — otherwise JS could read
+    // arbitrary process env vars (HOME, GITHUB_TOKEN, ...) through this
+    // bridge. Upstream plugins declare every key they read in `settings` or
+    // `endpoints`, so this is contract-safe.
+    let declared = st.settings_keys.iter().any(|k| k == &key)
+        || st
+            .endpoints
+            .iter()
+            .any(|e| e.setting_key.as_deref() == Some(key.as_str()));
+    if !declared {
+        return Ok(JsValue::null());
+    }
     // Env var named by the setting key wins; URL-valued settings then resolve
     // to the provider's configured base_url — never to a credential.
     if let Ok(v) = std::env::var(&key) {
@@ -573,10 +644,16 @@ fn secret_native(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
             _ => Ok(JsValue::null()),
         };
     }
-    match &st.secret {
-        Some(s) if !s.trim().is_empty() => Ok(JsValue::from(js_string!(s.trim()))),
-        _ => Ok(JsValue::null()),
+    // Only the declared auth secret falls back to the stored credential —
+    // other declared settings resolve env-only for now (no persisted per-key
+    // storage slot exists yet).
+    if st.auth_secret_name.as_deref() == Some(key.as_str()) {
+        return match &st.secret {
+            Some(s) if !s.trim().is_empty() => Ok(JsValue::from(js_string!(s.trim()))),
+            _ => Ok(JsValue::null()),
+        };
     }
+    Ok(JsValue::null())
 }
 
 fn storage_file(st: &PluginState) -> Result<PathBuf, String> {
@@ -1192,5 +1269,76 @@ mod tests {
             e.manifest.auth.as_ref().map(|a| a.secret.as_str()),
             Some("ATLASCLOUD_API_KEY")
         );
+    }
+
+    /// `ctx.settings.get` must not resolve keys the plugin never declared —
+    /// otherwise JS could read arbitrary process environment variables.
+    #[test]
+    fn undeclared_setting_key_resolves_null() {
+        std::env::set_var("BIRDNION_TEST_LEAK", "leaked-secret");
+        let mut e = engine(r#"
+            defineProvider({
+              id: "nosnoop", name: "Nosnoop", endpoints: [], settings: [],
+              fetchUsage(ctx) {
+                const v = ctx.settings.getSecret("BIRDNION_TEST_LEAK");
+                return { primary: { usedPercent: (v === undefined || v === null) ? 7 : 99 } };
+              }
+            });
+        "#);
+        let result = e.fetch_usage().unwrap();
+        std::env::remove_var("BIRDNION_TEST_LEAK");
+        let status = map_status(&result, "nosnoop", "Nosnoop");
+        assert_eq!(status.windows[0].used_pct, 7);
+    }
+
+    /// Declared keys still resolve — including the auth secret itself, which
+    /// upstream plugins read as a presence check (e.g. gitkraken).
+    #[test]
+    fn declared_keys_resolve() {
+        let mut e = engine(r#"
+            defineProvider({
+              id: "declared", name: "Declared", endpoints: ["https://api.d.test"],
+              auth: { type: "bearer", secret: "DEMO_TOKEN" },
+              settings: [{ key: "DEMO_TOKEN", title: "Token", type: "secure" }],
+              fetchUsage(ctx) {
+                const secret = ctx.settings.getSecret("DEMO_TOKEN");
+                return { primary: { usedPercent: secret === "sk-demo" ? 33 : 0 } };
+              }
+            });
+        "#);
+        let result = e.fetch_usage().unwrap();
+        let status = map_status(&result, "declared", "Declared");
+        assert_eq!(status.windows[0].used_pct, 33);
+    }
+
+    /// A declared non-secret, non-URL key resolves env-only — it must not
+    /// fall back to the provider's stored credential.
+    #[test]
+    fn declared_plain_setting_never_returns_secret() {
+        let mut e = engine(r#"
+            defineProvider({
+              id: "plain", name: "Plain", endpoints: ["https://api.p.test"],
+              auth: { type: "bearer", secret: "PLAIN_TOKEN" },
+              settings: [{ key: "PLAIN_REGION", title: "Region" }],
+              fetchUsage(ctx) {
+                const region = ctx.settings.get("PLAIN_REGION");
+                return { primary: { usedPercent: (region === undefined || region === null) ? 11 : 0 } };
+              }
+            });
+        "#);
+        let result = e.fetch_usage().unwrap();
+        let status = map_status(&result, "plain", "Plain");
+        assert_eq!(status.windows[0].used_pct, 11);
+    }
+
+    #[test]
+    fn private_ipv4_covers_full_rfc1918() {
+        assert!(is_private_ipv4("172.16.0.1"));
+        assert!(is_private_ipv4("172.31.255.1"));
+        assert!(!is_private_ipv4("172.15.0.1"));
+        assert!(!is_private_ipv4("172.32.0.1"));
+        assert!(is_private_ipv4("10.0.0.1"));
+        assert!(is_private_ipv4("192.168.1.1"));
+        assert!(!is_private_ipv4("8.8.8.8"));
     }
 }

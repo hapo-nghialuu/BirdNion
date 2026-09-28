@@ -87,6 +87,10 @@ final class PluginProvider: QuotaProvider {
         engine.secretResolver = { key in
             if let env = ProcessInfo.processInfo.environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
                !env.isEmpty { return env }
+            // Only the declared auth secret falls back to the stored apiKey —
+            // other declared settings resolve env-only for now (no persisted
+            // per-key storage slot exists yet).
+            guard key == engine.manifest.auth?.secret else { return nil }
             return BirdNionConfigStore.apiKey(provider: engine.manifest.id)
         }
         engine.settingResolver = { key in
@@ -104,6 +108,10 @@ final class PluginProvider: QuotaProvider {
             return ProviderStatus(
                 id: id, displayName: displayName, windows: [],
                 lastUpdated: Date(), error: e.message)
+        } catch {
+            return ProviderStatus(
+                id: id, displayName: displayName, windows: [],
+                lastUpdated: Date(), error: error.localizedDescription)
         }
     }
 }
@@ -113,16 +121,35 @@ final class PluginProvider: QuotaProvider {
 /// list, Settings sidebar, and `ServicesContainer` can treat them like native
 /// providers.
 enum PluginRegistry {
+    /// Discovery is cached on the file set's mtimes — each entry means a
+    /// JSVirtualMachine + full source eval, and this runs inside
+    /// `providersSnapshotChecked` on every provider-list build.
+    private static let cacheLock = NSLock()
+    private static var cache: (stamps: [URL: Date],
+                               entries: [(manifest: PluginManifest, url: URL)])?
+
     /// Manifest + source URL for every valid plugin found. Sorted by id.
     static var discovered: [(manifest: PluginManifest, url: URL)] {
+        let files = pluginFiles()
+        var stamps: [URL: Date] = [:]
+        for file in files {
+            stamps[file] = (try? file.resourceValues(
+                forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+        }
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cache, cache.stamps == stamps { return cache.entries }
+
         var seen: Set<String> = []
         var out: [(PluginManifest, URL)] = []
-        for url in pluginFiles() {
+        for url in files {
             guard let engine = try? PluginEngine(source: (try? String(contentsOf: url, encoding: .utf8)) ?? "") else { continue }
             guard seen.insert(engine.manifest.id).inserted else { continue }
             out.append((engine.manifest, url))
         }
-        return out.sorted { $0.0.id < $1.0.id }
+        let entries = out.sorted { $0.0.id < $1.0.id }
+        cache = (stamps, entries)
+        return entries
     }
 
     /// Config-store rows to inject into the provider list for plugins not yet
