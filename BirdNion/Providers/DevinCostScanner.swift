@@ -25,6 +25,9 @@ struct DevinCLIUsageReport: Equatable, Sendable {
     let last30USD: Double
     let last30Tokens: Int
     let daily: [DevinCLIDailyUsage]
+    /// Trailing-24h hour buckets — transcript `steps[].timestamp` carries
+    /// per-step resolution. Empty for persisted/seeded reports.
+    var hourly: [HourlyUsage] = []
     let topModel: String?
     var scanConfidence: CostHistoryStore.UsageScanConfidence = .unavailable
 
@@ -306,7 +309,10 @@ enum DevinCostScanner {
             source: .devin,
             liveScanSucceeded: result.completed && applied.persisted,
             url: historyURL)
-        let report = CostHistoryStore.makeDevinReport(window: applied.window, confidence: confidence)
+        let report = CostHistoryStore.makeDevinReport(
+            window: applied.window,
+            hourly: result.completed && applied.persisted ? result.hourly : [],
+            confidence: confidence)
         return report
     }
 
@@ -333,6 +339,8 @@ enum DevinCostScanner {
         /// `false` when any transcript failed to read/parse or a budget cap
         /// was hit — partial results still merge, but never claim LIVE.
         let completed: Bool
+        /// Trailing-24h hour buckets built from step timestamps.
+        var hourly: [HourlyUsage] = []
     }
 
     /// Per-token USD rates (per million) keyed by transcript `model_name`
@@ -439,6 +447,7 @@ enum DevinCostScanner {
         names.sort()
 
         var byDay: [Date: StepAccumulator] = [:]
+        var hourEntries: [(date: Date, usd: Double, tokens: Int)] = []
         var completed = !enumerationFailed
         var readFiles = 0
         var readBytes = 0
@@ -466,6 +475,9 @@ enum DevinCostScanner {
             for step in parsed.steps {
                 guard !Task.isCancelled else { completed = false; break }
                 guard let date = step.date else { continue }
+                if step.tokens > 0 {
+                    hourEntries.append((date, step.usd, step.tokens))
+                }
                 let day = calendar.startOfDay(for: date)
                 guard day >= oldest, day <= startOfToday, step.tokens > 0 else { continue }
                 var acc = byDay[day] ?? StepAccumulator()
@@ -494,7 +506,11 @@ enum DevinCostScanner {
                 .map { CostHistoryStore.Model(name: $0.key, usd: $0.value.usd, tokens: $0.value.tokens) }
             return CostHistoryStore.DayBucket(date: day, usd: acc.usd, tokens: acc.tokens, models: models)
         }
-        return ScanResult(dailyBuckets: buckets, completed: completed)
+        return ScanResult(
+            dailyBuckets: buckets,
+            completed: completed,
+            hourly: CostHistoryStore.makeHourlyBuckets(
+                entries: hourEntries, now: now, calendar: calendar))
     }
 
     /// Read at most `maxTranscriptFileBytes` — bounded so a corrupt or

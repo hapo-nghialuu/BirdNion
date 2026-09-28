@@ -247,6 +247,76 @@ final class CombinedUsageReportTests: XCTestCase {
         XCTAssertTrue(report.hourly.contains { $0.tokens == 150 })
     }
 
+    /// The combined report merges the per-source hourly arrays onto shared
+    /// clock-hour positions so the stacked 24h chart can split bars by
+    /// origin. Day-grained sources (Codex/Grok/Kiro) contribute nothing.
+    func testCombinedHourlyMergesFourSourcesByClockHour() {
+        let currentHour = calendar.date(
+            from: calendar.dateComponents([.year, .month, .day, .hour], from: now))!
+        let oneBack = calendar.date(byAdding: .hour, value: -1, to: currentHour)!
+
+        var claudeRep = claudeReport(daily: [])
+        claudeRep.hourly = [
+            HourlyUsage(date: currentHour, usd: 1.0, tokens: 100),
+        ]
+        let ompRep = OMPUsageReport(
+            todayUSD: 0, todayTokens: 0, last30USD: 0, last30Tokens: 0,
+            daily: [], hourly: [HourlyUsage(date: oneBack, usd: 2.0, tokens: 200)],
+            topModel: nil)
+        let piRep = PiUsageReport(
+            todayUSD: 0, todayTokens: 0, last30USD: 0, last30Tokens: 0,
+            daily: [], hourly: [HourlyUsage(date: currentHour, usd: 3.0, tokens: 300)],
+            topModel: nil)
+        let devinRep = DevinCLIUsageReport(
+            todayUSD: 0, todayTokens: 0, last30USD: 0, last30Tokens: 0,
+            daily: [], hourly: [HourlyUsage(date: oneBack, usd: 0, tokens: 400)],
+            topModel: nil)
+
+        let report = CombinedUsageReport.build(
+            claude: claudeRep, codex: nil,
+            omp: ompRep, pi: piRep, devin: devinRep, now: now)
+
+        XCTAssertEqual(report.hourly.count, 24)
+        XCTAssertEqual(report.hourly.last?.date, currentHour)
+
+        let cur = report.hourly.last!
+        XCTAssertEqual(cur.claudeTokens, 100)
+        XCTAssertEqual(cur.piTokens, 300)
+        XCTAssertEqual(cur.ompTokens + cur.devinTokens, 0)
+        XCTAssertEqual(cur.tokens, 400)
+
+        let back = report.hourly[report.hourly.count - 2]
+        XCTAssertEqual(back.date, oneBack)
+        XCTAssertEqual(back.ompTokens, 200)
+        XCTAssertEqual(back.devinTokens, 400)
+        XCTAssertEqual(back.tokens, 600)
+
+        XCTAssertEqual(report.hourly.reduce(0) { $0 + $1.tokens }, 1_000)
+    }
+
+    /// Sources excluded by the tab's authorization state must not leak their
+    /// hourly buckets into the combined bars.
+    func testCombinedHourlyRespectsIncludeFlags() {
+        let currentHour = calendar.date(
+            from: calendar.dateComponents([.year, .month, .day, .hour], from: now))!
+
+        var claudeRep = claudeReport(daily: [])
+        claudeRep.hourly = [HourlyUsage(date: currentHour, usd: 1.0, tokens: 100)]
+        let piRep = PiUsageReport(
+            todayUSD: 0, todayTokens: 0, last30USD: 0, last30Tokens: 0,
+            daily: [], hourly: [HourlyUsage(date: currentHour, usd: 3.0, tokens: 300)],
+            topModel: nil)
+
+        let report = CombinedUsageReport.build(
+            claude: claudeRep, codex: nil, pi: piRep,
+            includePi: false, now: now)
+
+        let cur = report.hourly.last!
+        XCTAssertEqual(cur.claudeTokens, 100)
+        XCTAssertEqual(cur.piTokens, 0)
+        XCTAssertEqual(cur.tokens, 100)
+    }
+
     /// Money gets thousands grouping; token counts get a B tier so 14465.0M
     /// reads as 14.5B.
     func testCurrencyAndTokenFormatting() {

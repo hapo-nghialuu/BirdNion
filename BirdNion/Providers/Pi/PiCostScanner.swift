@@ -24,6 +24,9 @@ struct PiUsageReport: Equatable, Sendable {
     let last30USD: Double
     let last30Tokens: Int
     let daily: [PiDailyUsage]
+    /// Trailing-24h hour buckets — session JSONL `message.timestamp` carries
+    /// per-turn resolution. Empty for persisted/seeded reports.
+    var hourly: [HourlyUsage] = []
     let topModel: String?
     var scanConfidence: CostHistoryStore.UsageScanConfidence = .unavailable
 
@@ -219,7 +222,10 @@ enum PiCostScanner {
             source: .pi,
             liveScanSucceeded: result.completed && receipt?.persisted == true,
             url: historyURL)
-        let report = CostHistoryStore.makePiReport(window: window, confidence: confidence)
+        let report = CostHistoryStore.makePiReport(
+            window: window,
+            hourly: result.completed && receipt?.persisted == true ? result.hourly : [],
+            confidence: confidence)
 
         if receipt?.persisted == true {
             await Cache.shared.storeReport(report, at: now)
@@ -234,17 +240,21 @@ enum PiCostScanner {
         let projectRecords: [ProjectUsageRecord]
         let completed: Bool
         let wasTruncated: Bool
+        /// Trailing-24h hour buckets built from turn timestamps.
+        var hourly: [HourlyUsage] = []
 
         init(
             dailyBuckets: [CostHistoryStore.DayBucket],
             projectRecords: [ProjectUsageRecord],
             completed: Bool = true,
-            wasTruncated: Bool = false
+            wasTruncated: Bool = false,
+            hourly: [HourlyUsage] = []
         ) {
             self.dailyBuckets = dailyBuckets
             self.projectRecords = projectRecords
             self.completed = completed
             self.wasTruncated = wasTruncated
+            self.hourly = hourly
         }
     }
 
@@ -356,7 +366,8 @@ enum PiCostScanner {
                 dailyBuckets: aggregated.dailyBuckets,
                 projectRecords: aggregated.projectRecords,
                 completed: completed && !Task.isCancelled && !wasTruncated,
-                wasTruncated: wasTruncated)
+                wasTruncated: wasTruncated,
+                hourly: aggregated.hourly)
         }
         return await withTaskCancellationHandler {
             await scanTask.value
@@ -566,6 +577,11 @@ enum PiCostScanner {
                 daily: dailyUsage)
         }
 
-        return ScanResult(dailyBuckets: dailyBuckets, projectRecords: projectRecords)
+        return ScanResult(
+            dailyBuckets: dailyBuckets,
+            projectRecords: projectRecords,
+            hourly: CostHistoryStore.makeHourlyBuckets(
+                entries: turns.map { ($0.date, $0.usd, $0.tokens) },
+                now: now, calendar: calendar))
     }
 }

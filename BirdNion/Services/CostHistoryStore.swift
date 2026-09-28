@@ -732,6 +732,41 @@ enum CostHistoryStore {
 
     // MARK: - Report rebuilders
 
+    /// 24 contiguous hour buckets ending at the current clock hour — the
+    /// shared shape the All-tab "24h" chart renders for every source whose
+    /// logs carry per-event timestamps (Claude, Devin, OMP, Pi). Sources
+    /// with day-only granularity never produce entries here.
+    static func makeHourlyBuckets(
+        entries: [(date: Date, usd: Double, tokens: Int)],
+        now: Date,
+        calendar: Calendar = .current
+    ) -> [HourlyUsage] {
+        guard let currentHour = calendar.date(
+            from: calendar.dateComponents([.year, .month, .day, .hour], from: now))
+        else { return [] }
+        let cutoff = now.addingTimeInterval(-24 * 3_600)
+        var byHour: [Date: (usd: Double, tokens: Int)] = [:]
+        for entry in entries where entry.date >= cutoff && entry.date <= now {
+            guard let hour = calendar.date(
+                from: calendar.dateComponents([.year, .month, .day, .hour],
+                                              from: entry.date))
+            else { continue }
+            var v = byHour[hour] ?? (0, 0)
+            v.usd += entry.usd
+            v.tokens += entry.tokens
+            byHour[hour] = v
+        }
+        var hourly: [HourlyUsage] = []
+        hourly.reserveCapacity(24)
+        for offset in stride(from: 23, through: 0, by: -1) {
+            guard let hour = calendar.date(byAdding: .hour, value: -offset, to: currentHour)
+            else { continue }
+            let v = byHour[hour] ?? (0, 0)
+            hourly.append(HourlyUsage(date: hour, usd: v.usd, tokens: v.tokens))
+        }
+        return hourly
+    }
+
     static func makeClaudeReport(
         window: [DayBucket],
         hourly: [ClaudeHourlyUsage] = [],
@@ -877,6 +912,7 @@ enum CostHistoryStore {
 
     static func makeOMPReport(
         window: [DayBucket],
+        hourly: [HourlyUsage] = [],
         confidence: UsageScanConfidence = .unavailable) -> OMPUsageReport
     {
         let last30 = window.suffix(30)
@@ -907,12 +943,14 @@ enum CostHistoryStore {
                         OMPDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
+            hourly: hourly,
             topModel: top,
             scanConfidence: confidence)
     }
 
     static func makePiReport(
         window: [DayBucket],
+        hourly: [HourlyUsage] = [],
         confidence: UsageScanConfidence = .unavailable) -> PiUsageReport
     {
         let last30 = window.suffix(30)
@@ -943,12 +981,14 @@ enum CostHistoryStore {
                         PiDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
+            hourly: hourly,
             topModel: top,
             scanConfidence: confidence)
     }
 
     static func makeDevinReport(
         window: [DayBucket],
+        hourly: [HourlyUsage] = [],
         confidence: UsageScanConfidence = .unavailable) -> DevinCLIUsageReport
     {
         let last30 = window.suffix(30)
@@ -980,6 +1020,7 @@ enum CostHistoryStore {
                         DevinCLIDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
+            hourly: hourly,
             topModel: top,
             scanConfidence: confidence)
     }

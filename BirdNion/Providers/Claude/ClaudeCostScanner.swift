@@ -35,15 +35,19 @@ struct ClaudeDailyUsage: Equatable, Identifiable {
     var id: Date { date }
 }
 
-/// One clock-hour of Claude usage within the trailing 24 h — powers the
-/// "last 24 hours" card on the All tab. Claude logs carry per-line
-/// timestamps, so hourly resolution is exact (unlike Codex's day-only logs).
-struct ClaudeHourlyUsage: Equatable, Identifiable {
+/// One clock-hour of usage within the trailing 24 h — powers the
+/// "last 24 hours" card on the All tab. Shared by every source whose logs
+/// carry per-event timestamps (Claude, Devin, OMP, Pi).
+struct HourlyUsage: Equatable, Identifiable {
     let date: Date   // start of the hour in local tz
     let usd: Double
     let tokens: Int
     var id: Date { date }
 }
+
+/// Back-compat name: the hourly bucket type predates the multi-source 24h
+/// chart and was originally Claude-only.
+typealias ClaudeHourlyUsage = HourlyUsage
 
 /// Full usage report: the existing today/last30 totals plus per-day buckets
 /// for the chart/heatmap and the most-used model. Built from the same scan

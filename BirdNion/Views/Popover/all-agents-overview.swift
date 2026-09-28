@@ -2,9 +2,6 @@ import SwiftUI
 
 struct AllAgentsOverview: View {
     let report: CombinedUsageReport
-    /// Trailing-24h Claude buckets for the "24h" chart period — only Claude
-    /// logs carry per-hour timestamps; empty until the live scan lands.
-    let claudeHourly: [ClaudeHourlyUsage]
     let visibleRecords: [InstalledAgentRecord]
     let aggregateAgentCount: Int
     let quotaRows: [AgentQuotaRow]
@@ -29,7 +26,6 @@ struct AllAgentsOverview: View {
         // luân phiên với dòng UPDATED.)
         CombinedChartCard(
             report: report,
-            claudeHourly: claudeHourly,
             summaryAgentCount: aggregateAgentCount,
             onOpenActivity: onOpenActivity,
             onHoverActivity: onHoverActivity,

@@ -5963,6 +5963,148 @@ final class NewProviderTests: XCTestCase {
         XCTAssertEqual(report.daily.count, 2)
     }
 
+    /// `makeHourlyBuckets` produces exactly 24 contiguous clock-hours ending
+    /// at the current hour, folds events onto their hour start, drops events
+    /// outside the trailing 24 h, and keeps empty hours as zero buckets.
+    func testMakeHourlyBucketsProduces24ContiguousOrderedHours() {
+        let utc = TimeZone(identifier: "UTC")!
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: utc, year: 2026, month: 9, day: 22, hour: 12, minute: 37))!
+        let iso = ISO8601DateFormatter()
+        let entries: [(date: Date, usd: Double, tokens: Int)] = [
+            (iso.date(from: "2026-09-22T11:05:00Z")!, 0.5, 100),
+            (iso.date(from: "2026-09-22T11:45:00Z")!, 0.5, 200),   // same hour
+            (iso.date(from: "2026-09-21T13:30:00Z")!, 1.0, 50),    // oldest kept hour
+            (iso.date(from: "2026-09-21T11:00:00Z")!, 9.0, 999),   // >24h → dropped
+        ]
+        let buckets = CostHistoryStore.makeHourlyBuckets(
+            entries: entries, now: now, calendar: cal)
+
+        XCTAssertEqual(buckets.count, 24)
+        for i in 1..<buckets.count {
+            XCTAssertEqual(
+                buckets[i].date.timeIntervalSince(buckets[i - 1].date),
+                3_600, accuracy: 0.5)
+        }
+        let h11 = cal.date(from: DateComponents(
+            timeZone: utc, year: 2026, month: 9, day: 22, hour: 11))!
+        let hour11 = buckets.first { $0.date == h11 }
+        XCTAssertEqual(hour11?.tokens, 300)
+        XCTAssertEqual(hour11?.usd ?? -1, 1.0, accuracy: 0.0001)
+        // Stale entry dropped → only the in-window events remain.
+        XCTAssertEqual(buckets.reduce(0) { $0 + $1.tokens }, 350)
+        // Zero-activity hours are retained as explicit zero buckets.
+        XCTAssertEqual(buckets.filter { $0.tokens == 0 }.count, 22)
+    }
+
+    /// Devin transcript `steps[].timestamp` feeds the trailing-24h buckets:
+    /// two steps in one hour merge, the stale step is dropped.
+    func testDevinScanBuildsHourlyBucketsFromStepTimestamps() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-devin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try writeDevinTranscript("""
+        {"steps": [
+          {"timestamp": "2026-09-22T10:05:00Z", "model_name": "swe-2-max",
+           "metrics": {"prompt_tokens": 1000, "completion_tokens": 100}},
+          {"timestamp": "2026-09-22T10:45:00Z", "model_name": "swe-2-max",
+           "metrics": {"prompt_tokens": 500, "completion_tokens": 50}},
+          {"timestamp": "2026-09-22T11:30:00Z", "model_name": "swe-2-high",
+           "metrics": {"prompt_tokens": 200, "completion_tokens": 20}},
+          {"timestamp": "2026-09-21T10:30:00Z", "model_name": "swe-2-max",
+           "metrics": {"prompt_tokens": 999, "completion_tokens": 99}}
+        ]}
+        """, to: dir, name: "s.json")
+
+        let utc = TimeZone(identifier: "UTC")!
+        let cal = devinUTCCalendar
+        let now = cal.date(from: DateComponents(
+            timeZone: utc, year: 2026, month: 9, day: 22, hour: 12))!
+        let result = DevinCostScanner.scanTranscripts(
+            root: dir, scanDays: 30, now: now, calendar: cal)
+
+        XCTAssertEqual(result.hourly.count, 24)
+        let h10 = cal.date(from: DateComponents(
+            timeZone: utc, year: 2026, month: 9, day: 22, hour: 10))!
+        let h11 = cal.date(from: DateComponents(
+            timeZone: utc, year: 2026, month: 9, day: 22, hour: 11))!
+        XCTAssertEqual(result.hourly.first { $0.date == h10 }?.tokens, 1_650)
+        XCTAssertEqual(result.hourly.first { $0.date == h11 }?.tokens, 220)
+        // The 10:30 step on Sep 21 is >24 h before `now` — excluded.
+        XCTAssertEqual(result.hourly.reduce(0) { $0 + $1.tokens }, 1_870)
+    }
+
+    /// OMP turn timestamps feed the 24h buckets *after* id dedup — the
+    /// duplicated turn-2 in the fixture must not double-count.
+    func testOMPScanBuildsHourlyBucketsAfterDedup() async throws {
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "omp_session_sample", withExtension: "jsonl"))
+        let fixtureDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-omp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: sourceFixture,
+            to: fixtureDir.appendingPathComponent(sourceFixture.lastPathComponent))
+        defer { try? FileManager.default.removeItem(at: fixtureDir) }
+
+        let result = await OMPCostScanner.scanSessions(
+            roots: [fixtureDir], scanDays: 30,
+            now: ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z") ?? Date())
+
+        XCTAssertEqual(result.hourly.count, 24)
+        // turn-2 (1500) + turn-4 (2500) in a single hour — duplicate skipped.
+        XCTAssertEqual(result.hourly.reduce(0) { $0 + $1.tokens }, 4_000)
+        XCTAssertEqual(result.hourly.filter { $0.tokens > 0 }.count, 1)
+        XCTAssertEqual(result.hourly.filter { $0.tokens > 0 }.first?.tokens, 4_000)
+    }
+
+    /// Pi session timestamps feed the 24h buckets with the same dedup rule.
+    func testPiScanBuildsHourlyBucketsAfterDedup() async throws {
+        let sourceFixture = try XCTUnwrap(
+            Bundle(for: NewProviderTests.self).url(
+                forResource: "pi_session_sample", withExtension: "jsonl"))
+        let fixtureDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-pi-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: sourceFixture,
+            to: fixtureDir.appendingPathComponent(sourceFixture.lastPathComponent))
+        defer { try? FileManager.default.removeItem(at: fixtureDir) }
+
+        let result = await PiCostScanner.scanSessions(
+            root: fixtureDir, scanDays: 30,
+            now: ISO8601DateFormatter().date(from: "2026-08-20T12:00:00Z") ?? Date())
+
+        XCTAssertEqual(result.hourly.count, 24)
+        // pi-turn-2 (800) + pi-turn-3 (1200) — duplicate skipped.
+        XCTAssertEqual(result.hourly.reduce(0) { $0 + $1.tokens }, 2_000)
+        XCTAssertEqual(result.hourly.filter { $0.tokens > 0 }.count, 1)
+    }
+
+    /// Report builders carry the hourly buckets through to the report so the
+    /// combined merge can stack them; history-only callers default to empty.
+    func testMakeReportsPropagateHourlyBuckets() {
+        let hour = devinUTCCalendar.date(from: DateComponents(
+            timeZone: TimeZone(identifier: "UTC"),
+            year: 2026, month: 9, day: 22, hour: 11))!
+        let hourly = [HourlyUsage(date: hour, usd: 1.5, tokens: 42)]
+
+        XCTAssertEqual(
+            CostHistoryStore.makeOMPReport(window: [], hourly: hourly).hourly,
+            hourly)
+        XCTAssertEqual(
+            CostHistoryStore.makePiReport(window: [], hourly: hourly).hourly,
+            hourly)
+        XCTAssertEqual(
+            CostHistoryStore.makeDevinReport(window: [], hourly: hourly).hourly,
+            hourly)
+        XCTAssertTrue(CostHistoryStore.makeDevinReport(window: []).hourly.isEmpty)
+    }
+
     /// The Devin agent record feeds the `.devin` cost source so the All tab
     /// can authorize and attribute the scan.
     func testDevinAgentMapsToDevinCostSource() {

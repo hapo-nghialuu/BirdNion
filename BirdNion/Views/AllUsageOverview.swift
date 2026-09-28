@@ -58,6 +58,44 @@ struct CombinedDailyUsage: Equatable, Identifiable, Sendable {
     }
 }
 
+/// One clock-hour of combined usage for the "24h" chart period. Only sources
+/// with per-event timestamps (Claude, OMP, Pi, Devin) contribute; Codex, Grok
+/// and Kiro logs are day-grained and stay out of the hourly bars.
+struct CombinedHourlyUsage: Equatable, Identifiable, Sendable {
+    let date: Date   // start of the hour in local tz
+    let claudeUSD: Double
+    let claudeTokens: Int
+    let ompUSD: Double
+    let ompTokens: Int
+    let piUSD: Double
+    let piTokens: Int
+    let devinUSD: Double
+    let devinTokens: Int
+
+    var usd: Double { claudeUSD + ompUSD + piUSD + devinUSD }
+    var tokens: Int { claudeTokens + ompTokens + piTokens + devinTokens }
+    var isActive: Bool { usd > 0 || tokens > 0 }
+    var id: Date { date }
+
+    init(
+        date: Date,
+        claudeUSD: Double = 0, claudeTokens: Int = 0,
+        ompUSD: Double = 0, ompTokens: Int = 0,
+        piUSD: Double = 0, piTokens: Int = 0,
+        devinUSD: Double = 0, devinTokens: Int = 0
+    ) {
+        self.date = date
+        self.claudeUSD = claudeUSD
+        self.claudeTokens = claudeTokens
+        self.ompUSD = ompUSD
+        self.ompTokens = ompTokens
+        self.piUSD = piUSD
+        self.piTokens = piTokens
+        self.devinUSD = devinUSD
+        self.devinTokens = devinTokens
+    }
+}
+
 /// One model's summed cost across the combined window, tagged with its source.
 struct CombinedModelCost: Equatable, Identifiable, Sendable {
     let name: String
@@ -83,6 +121,9 @@ struct CombinedUsageReport: Equatable, Sendable {
     let totalUSD: Double
     let totalTokens: Int
     let daily: [CombinedDailyUsage]
+    /// Trailing-24h hour buckets for the "24h" period — merged per-source so
+    /// the stacked hour chart can split each bar by origin.
+    let hourly: [CombinedHourlyUsage]
     let topModels: [CombinedModelCost]
     let peakDayUSD: Double
     let peakDayDate: Date?
@@ -118,6 +159,7 @@ struct CombinedUsageReport: Equatable, Sendable {
         totalUSD: Double,
         totalTokens: Int,
         daily: [CombinedDailyUsage],
+        hourly: [CombinedHourlyUsage] = [],
         topModels: [CombinedModelCost],
         peakDayUSD: Double,
         peakDayDate: Date?,
@@ -139,6 +181,7 @@ struct CombinedUsageReport: Equatable, Sendable {
         self.totalUSD = totalUSD
         self.totalTokens = totalTokens
         self.daily = daily
+        self.hourly = hourly
         self.topModels = topModels
         self.peakDayUSD = peakDayUSD
         self.peakDayDate = peakDayDate
@@ -281,6 +324,33 @@ struct CombinedUsageReport: Equatable, Sendable {
         let dTokens = includedDevin?.last30Tokens ?? 0
         let last30Tokens = cTokens + xTokens + gTokens + kTokens + oTokens + pTokens + dTokens
 
+        var hourly: [CombinedHourlyUsage] = []
+        if let currentHour = calendar.date(
+            from: calendar.dateComponents([.year, .month, .day, .hour], from: now))
+        {
+            func hourIndex(_ list: [HourlyUsage]) -> [Date: (usd: Double, tokens: Int)] {
+                Dictionary(list.map { ($0.date, ($0.usd, $0.tokens)) }) { a, _ in a }
+            }
+            let claudeHours = hourIndex(includedClaude?.hourly ?? [])
+            let ompHours = hourIndex(includedOMP?.hourly ?? [])
+            let piHours = hourIndex(includedPi?.hourly ?? [])
+            let devinHours = hourIndex(includedDevin?.hourly ?? [])
+            for offset in stride(from: 23, through: 0, by: -1) {
+                guard let hour = calendar.date(byAdding: .hour, value: -offset, to: currentHour)
+                else { continue }
+                let c = claudeHours[hour] ?? (0, 0)
+                let o = ompHours[hour] ?? (0, 0)
+                let p = piHours[hour] ?? (0, 0)
+                let d = devinHours[hour] ?? (0, 0)
+                hourly.append(CombinedHourlyUsage(
+                    date: hour,
+                    claudeUSD: c.usd, claudeTokens: c.tokens,
+                    ompUSD: o.usd, ompTokens: o.tokens,
+                    piUSD: p.usd, piTokens: p.tokens,
+                    devinUSD: d.usd, devinTokens: d.tokens))
+            }
+        }
+
         return CombinedUsageReport(
             todayUSD: today?.usd ?? 0,
             todayTokens: today?.tokens ?? 0,
@@ -289,6 +359,7 @@ struct CombinedUsageReport: Equatable, Sendable {
             totalUSD: totalUSD,
             totalTokens: totalTokens,
             daily: daily,
+            hourly: hourly,
             topModels: topModels,
             peakDayUSD: peakUSD,
             peakDayDate: peakUSD > 0 ? peak?.date : nil,
@@ -769,8 +840,6 @@ struct AllUsageOverview: View {
 
             AllAgentsOverview(
                 report: report,
-                claudeHourly: authorizedSources.contains(.claude)
-                    ? (claude?.hourly ?? []) : [],
                 visibleRecords: visibleAgentRecords,
                 aggregateAgentCount: report.includedSourceCount,
                 quotaRows: quotaRows,
@@ -1231,7 +1300,6 @@ struct CombinedChartCard: View {
     @EnvironmentObject var settings: SettingsStore
 
     let report: CombinedUsageReport
-    let claudeHourly: [ClaudeHourlyUsage]
     var summaryAgentCount: Int? = nil
     var onOpenActivity: (() -> Void)? = nil
     /// Hover stats row → panel Hoạt động transient; rời chuột → đóng.
@@ -1240,7 +1308,7 @@ struct CombinedChartCard: View {
 
     @State private var hoveredDay: CombinedDailyUsage?
     @State private var pinnedDay: CombinedDailyUsage?
-    @State private var hoveredHour: ClaudeHourlyUsage?
+    @State private var hoveredHour: CombinedHourlyUsage?
     @AppStorage("popover.allChartDays") private var periodDays = 30
 
     private static let periods = [1, 7, 30, 90, 120]
@@ -1252,8 +1320,8 @@ struct CombinedChartCard: View {
     private var windowTotals: CombinedWindowTotals { report.totals(lastDays: periodWindowDays) }
     private var maxBarTokens: Int { max(windowDaily.map(\.tokens).max() ?? 0, 1) }
 
-    private var claude24USD: Double { claudeHourly.reduce(0) { $0 + $1.usd } }
-    private var claude24Tokens: Int { claudeHourly.reduce(0) { $0 + $1.tokens } }
+    private var hourly24USD: Double { report.hourly.reduce(0) { $0 + $1.usd } }
+    private var hourly24Tokens: Int { report.hourly.reduce(0) { $0 + $1.tokens } }
     private var codexTodayUSD: Double { report.daily.last?.codexUSD ?? 0 }
     private var codexTodayTokens: Int { report.daily.last?.codexTokens ?? 0 }
     private var grokTodayUSD: Double { report.daily.last?.grokUSD ?? 0 }
@@ -1284,13 +1352,13 @@ struct CombinedChartCard: View {
 
     private var periodTotalUSD: Double {
         is24h
-            ? claude24USD + codexTodayUSD + grokTodayUSD + kiroTodayUSD + ompTodayUSD + piTodayUSD + devinTodayUSD
+            ? hourly24USD + codexTodayUSD + grokTodayUSD + kiroTodayUSD
             : windowTotals.usd
     }
 
     private var periodTotalTokens: Int {
         is24h
-            ? claude24Tokens + codexTodayTokens + grokTodayTokens + kiroTodayTokens + ompTodayTokens + piTodayTokens + devinTodayTokens
+            ? hourly24Tokens + codexTodayTokens + grokTodayTokens + kiroTodayTokens
             : windowTotals.tokens
     }
 
@@ -1460,16 +1528,37 @@ struct CombinedChartCard: View {
         }
     }
 
-    private var maxHourTokens: Int { max(claudeHourly.map(\.tokens).max() ?? 0, 1) }
+    private var maxHourTokens: Int { max(report.hourly.map(\.tokens).max() ?? 0, 1) }
 
+    /// Stacked per-source bars like `barChart` but at hour resolution — only
+    /// Claude/OMP/Pi/Devin carry per-event timestamps, so those are the four
+    /// segments. Empty hours render as a hairline like empty days do.
     private var hourChart: some View {
-        GeometryReader { _ in
+        GeometryReader { geo in
             HStack(alignment: .bottom, spacing: 2) {
-                ForEach(Array(claudeHourly.enumerated()), id: \.offset) { _, hour in
-                    Rectangle()
-                        .fill(VocabbyTheme.chartClaude)
-                        .frame(height: max(3, CGFloat(hour.tokens) / CGFloat(maxHourTokens) * 68))
-                        .frame(maxWidth: .infinity)
+                ForEach(report.hourly) { hour in
+                    let hasTokens = hour.tokens > 0
+                    let fraction = hasTokens ? CGFloat(Double(hour.tokens) / Double(maxHourTokens)) : 0
+                    let barHeight = max(geo.size.height * fraction, hasTokens ? 3 : 1)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        VStack(spacing: 0) {
+                            if hasTokens {
+                                let claudeHeight = barHeight * CGFloat(Double(hour.claudeTokens) / Double(hour.tokens))
+                                let ompHeight = barHeight * CGFloat(Double(hour.ompTokens) / Double(hour.tokens))
+                                let piHeight = barHeight * CGFloat(Double(hour.piTokens) / Double(hour.tokens))
+                                let devinHeight = max(0, barHeight - claudeHeight - ompHeight - piHeight)
+                                Rectangle().fill(VocabbyTheme.chartClaude).frame(height: claudeHeight)
+                                Rectangle().fill(VocabbyTheme.chartOMPBar(vertical: true)).frame(height: ompHeight)
+                                Rectangle().fill(VocabbyTheme.chartPi).frame(height: piHeight)
+                                Rectangle().fill(VocabbyTheme.devin).frame(height: devinHeight)
+                            } else {
+                                Rectangle().fill(VocabbyTheme.hairline).frame(height: 1)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .help("\(hourLabel(hour.date)): \(AllUsageFormat.tokens(hour.tokens)) · \(AllUsageFormat.usd(hour.usd))")
                 }
             }
         }
@@ -1555,6 +1644,13 @@ struct CombinedChartCard: View {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
         formatter.dateFormat = "d MMM"
+        return formatter.string(from: date)
+    }
+
+    private func hourLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: vi ? "vi_VN" : "en_US")
+        formatter.dateFormat = "d MMM HH:mm"
         return formatter.string(from: date)
     }
 
