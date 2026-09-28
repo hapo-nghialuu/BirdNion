@@ -18,6 +18,9 @@ name: release
 #     - homebrew-tap:        contents read/write (cask bump commit)
 #     - CLIProxyAPI-private: contents read       (embedded helper, both jobs)
 #   HAPO_BASE_URL, HAPO_ME_URL, HAPO_AUTH_TEMPLATE — same as linux-release.yml.
+#   BIRDNION_SIGN_P12, BIRDNION_SIGN_P12_PASSWORD — base64 PKCS12 of the
+#     "BirdNion Local Signing" cert; optional but recommended: without it the
+#     app is ad-hoc signed and users' Full Disk Access grants reset each update.
 
 on:
   push:
@@ -176,6 +179,36 @@ jobs:
             echo "::error::$TAG already released at $REMOTE (this run: $HEAD_SHA). Bump the version for a new release." >&2
             exit 1
           fi
+
+      - name: Import signing certificate
+        # Release builds sign with "BirdNion Local Signing" so TCC grants
+        # (Full Disk Access) survive updates. When the BIRDNION_SIGN_P12
+        # secrets are absent we fall back to ad-hoc signing explicitly —
+        # that build works but invalidates user grants on the next update.
+        if: steps.state.outputs.skip != 'true'
+        env:
+          P12_B64: ${{ secrets.BIRDNION_SIGN_P12 }}
+          P12_PASSWORD: ${{ secrets.BIRDNION_SIGN_P12_PASSWORD }}
+        run: |
+          if [ -z "$P12_B64" ]; then
+            echo "::warning::BIRDNION_SIGN_P12 not set — building ad-hoc signed (TCC grants reset each update)"
+            echo "BIRDNION_CODE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          KEYCHAIN=birdnion-sign.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$P12_B64" | base64 -d > "$RUNNER_TEMP/birdnion-sign.p12"
+          security import "$RUNNER_TEMP/birdnion-sign.p12" -k "$KEYCHAIN" \
+            -P "$P12_PASSWORD" -A
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s \
+            "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+          rm -f "$RUNNER_TEMP/birdnion-sign.p12"
+          security find-identity -v | grep -i birdnion
 
       - name: Run release (verification gate → build → publish)
         if: steps.state.outputs.skip != 'true'
