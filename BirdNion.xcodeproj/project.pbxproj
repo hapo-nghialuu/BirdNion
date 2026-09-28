@@ -1266,8 +1266,6 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGNING_ALLOWED = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BirdNionWidget/Info.plist;
@@ -1291,8 +1289,6 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGNING_ALLOWED = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BirdNionWidget/Info.plist;
