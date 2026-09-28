@@ -60,6 +60,14 @@ public struct DevinUsageFetcher: Sendable {
             } catch {
                 lastError = error
                 logger?("[devin] Session from \(auth.sourceLabel) failed: \(error.localizedDescription)")
+                if case DevinUsageError.invalidCredentials = error {
+                    // A cached-imported token is dead — drop the session cache
+                    // so the next fetch re-reads localStorage instead of
+                    // replaying the same expired credential.
+                    #if os(macOS)
+                    DevinSessionImporter.invalidateSessionCache()
+                    #endif
+                }
                 if auth.sourceLabel == "manual" || !Self.shouldTryNextSession(after: error) {
                     throw error
                 }

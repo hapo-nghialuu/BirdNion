@@ -11,6 +11,21 @@ enum DevinSessionImporter {
     private static let storageOrigin = "https://app.devin.ai"
     private static let externalOrgPrefix = "last-internal-org-for-external-org-v1-"
 
+    /// In-memory cache for the leveldb scan result. Reading a busy profile's
+    /// Local Storage can take tens of seconds (larger than the 60s background
+    /// lane budget), so a fresh scan per fetch means the API call never gets
+    /// to run. Sessions are only cached when non-empty; `invalidCredentials`
+    /// from the API clears it (see `DevinUsageFetcher.fetch`).
+    private static let sessionCacheLock = NSLock()
+    nonisolated(unsafe) private static var sessionCache: (sessions: [SessionInfo], at: Date)?
+    private static let sessionCacheTTL: TimeInterval = 15 * 60
+
+    static func invalidateSessionCache() {
+        self.sessionCacheLock.lock()
+        self.sessionCache = nil
+        self.sessionCacheLock.unlock()
+    }
+
     struct SessionInfo: Equatable {
         let accessToken: String
         let organization: String?
@@ -49,6 +64,15 @@ enum DevinSessionImporter {
         }
 
         let log: (String) -> Void = { msg in logger?("[devin-storage] \(msg)") }
+        if organizationOverride == nil {
+            self.sessionCacheLock.lock()
+            let cached = self.sessionCache
+            self.sessionCacheLock.unlock()
+            if let cached, Date().timeIntervalSince(cached.at) < self.sessionCacheTTL {
+                log("Using cached session(s): \(cached.sessions.count)")
+                return cached.sessions
+            }
+        }
         let candidates = self.chromeLocalStorageCandidates(browserDetection: browserDetection)
         if !candidates.isEmpty {
             log("Chrome local storage candidates: \(candidates.count)")
@@ -74,6 +98,10 @@ enum DevinSessionImporter {
 
         if sessions.isEmpty {
             log("No Devin session found in browser local storage")
+        } else if organizationOverride == nil {
+            self.sessionCacheLock.lock()
+            self.sessionCache = (sessions, Date())
+            self.sessionCacheLock.unlock()
         }
         return sessions
     }
@@ -343,12 +371,22 @@ enum DevinSessionImporter {
         // (e.g. ChatGPT's, living in the same LevelDB) gets mistaken for a
         // Devin session. LevelDB text keys keep the `_<origin>\x00\x01<key>`
         // prefix, so only accept entries belonging to storageOrigin.
-        let textEntries = SweetCookieKit.ChromiumLocalStorageReader.readTextEntries(
-            in: levelDBURL,
-            logger: logger)
-        for entry in textEntries where storage[entry.key] == nil {
-            if self.isOwnOriginTextKey(entry.key), self.isUsefulStorageKey(entry.key) {
-                storage[entry.key] = self.decodedStorageValue(entry.value)
+        //
+        // It's also the expensive half of the import (linear scan of the full
+        // store). The scoped readEntries above already yields the token in the
+        // modern encoding — when it did, the raw-text fallback has nothing to
+        // add, so skip the scan entirely.
+        let hasTokenKey = storage.keys.contains {
+            self.isAuth1StorageKey($0) || self.isAuth0StorageKey($0)
+        }
+        if !hasTokenKey {
+            let textEntries = SweetCookieKit.ChromiumLocalStorageReader.readTextEntries(
+                in: levelDBURL,
+                logger: logger)
+            for entry in textEntries where storage[entry.key] == nil {
+                if self.isOwnOriginTextKey(entry.key), self.isUsefulStorageKey(entry.key) {
+                    storage[entry.key] = self.decodedStorageValue(entry.value)
+                }
             }
         }
 

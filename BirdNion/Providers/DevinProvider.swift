@@ -32,7 +32,8 @@ final class DevinProvider: QuotaProvider {
             let fetcher = DevinUsageFetcher(browserDetection: BrowserDetection())
             let snap = try await fetcher.fetch(
                 bearerTokenOverride: token,
-                organizationOverride: organization)
+                organizationOverride: organization,
+                logger: { NSLog("%@", $0) })
             return Self.map(
                 snap,
                 accountLabel: accountLabel,
