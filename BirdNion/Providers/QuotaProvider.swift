@@ -38,3 +38,18 @@ enum ProviderInteraction: Sendable {
 enum ProviderInteractionContext {
     @TaskLocal static var current: ProviderInteraction = .background
 }
+
+/// `.startup` marks the app's first refresh pass after launch; `.regular` is
+/// everything else. Mirrors CodexBarCore's `ProviderRefreshContext` — one-time
+/// interactive recovery (the Claude OAuth Keychain bootstrap prompt) keys off
+/// this so a regular background tick can never pop a dialog.
+enum ProviderRefreshPhase: Sendable {
+    case regular
+    case startup
+}
+
+/// Task-local carrier for the current refresh phase. `QuotaService` sets it
+/// around each scheduler pass; unstructured tasks created inside inherit it.
+enum ProviderRefreshContext {
+    @TaskLocal static var current: ProviderRefreshPhase = .regular
+}

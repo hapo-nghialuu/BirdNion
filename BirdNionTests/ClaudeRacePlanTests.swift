@@ -85,10 +85,14 @@ final class ClaudeRacePlanTests: XCTestCase {
         f.readCookieSource = { .manual }
         f.readManualCookie = { "sessionKey=sk-ant-test" }
         f.hasCLI = { true }
+        // Hermetic default: credentials resolvable → the startup bootstrap
+        // prompt path stays off unless a test opts in explicitly.
+        f.hasResolvableOAuthCredentials = { true }
         f.autoWebSessionSuppressed = { false }
         if let clock { f.now = { clock.now() } }
-        f.oauth = { _, _ in
+        f.oauth = { _, allowPrompt in
             recorder.bump("oauth")
+            recorder.bump("oauth.prompt.\(allowPrompt)")
             recorder.mark("oauth.start")
             do {
                 let value = try await oauth?() ?? trustedOAuth()
@@ -440,5 +444,158 @@ final class ClaudeRacePlanTests: XCTestCase {
         XCTAssertNil(core.serviceStatus)
         let enriched = emissions[1]
         XCTAssertNil(enriched.error)
+    }
+
+    // MARK: - Startup bootstrap prompt (CodexBar parity)
+
+    /// Bootstrap decision matrix — the prompt only fires on the first
+    /// background pass of the process, in `onlyOnUserAction` mode, when
+    /// nothing resolves credentials without a prompt.
+    func testStartupBootstrapPromptDecisionMatrix() {
+        XCTAssertTrue(ClaudeProvider.shouldAllowStartupBootstrapPrompt(
+            mode: .onlyOnUserAction, interaction: .background,
+            phase: .startup, hasResolvableCredentials: false))
+        // `.never`/`.always` never bootstrap (always prompts via canPromptNow).
+        XCTAssertFalse(ClaudeProvider.shouldAllowStartupBootstrapPrompt(
+            mode: .never, interaction: .background,
+            phase: .startup, hasResolvableCredentials: false))
+        XCTAssertFalse(ClaudeProvider.shouldAllowStartupBootstrapPrompt(
+            mode: .always, interaction: .background,
+            phase: .startup, hasResolvableCredentials: false))
+        // Startup only — a regular background tick stays silent.
+        XCTAssertFalse(ClaudeProvider.shouldAllowStartupBootstrapPrompt(
+            mode: .onlyOnUserAction, interaction: .background,
+            phase: .regular, hasResolvableCredentials: false))
+        // User-initiated already prompts via canPromptNow — bootstrap is moot.
+        XCTAssertFalse(ClaudeProvider.shouldAllowStartupBootstrapPrompt(
+            mode: .onlyOnUserAction, interaction: .userInitiated,
+            phase: .startup, hasResolvableCredentials: false))
+        // Credentials already resolvable silently → no prompt needed.
+        XCTAssertFalse(ClaudeProvider.shouldAllowStartupBootstrapPrompt(
+            mode: .onlyOnUserAction, interaction: .background,
+            phase: .startup, hasResolvableCredentials: true))
+    }
+
+    /// Denial gate: a recorded denial suppresses prompts until the 6h
+    /// cooldown lapses or `clearDenied` runs (user-initiated retry).
+    func testKeychainAccessGateCooldownBlocksAndClears() {
+        let suiteName = "claude-gate-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let now = Date()
+
+        XCTAssertTrue(ClaudeOAuthKeychainAccessGate.shouldAllowPrompt(now: now, defaults: defaults))
+        ClaudeOAuthKeychainAccessGate.recordDenied(now: now, defaults: defaults)
+        XCTAssertFalse(ClaudeOAuthKeychainAccessGate.shouldAllowPrompt(
+            now: now.addingTimeInterval(60), defaults: defaults))
+        // Expired cooldown self-clears.
+        XCTAssertTrue(ClaudeOAuthKeychainAccessGate.shouldAllowPrompt(
+            now: now.addingTimeInterval(ClaudeOAuthKeychainAccessGate.cooldownInterval + 1),
+            defaults: defaults))
+        // Manual retry clears an armed cooldown.
+        ClaudeOAuthKeychainAccessGate.recordDenied(now: now, defaults: defaults)
+        XCTAssertTrue(ClaudeOAuthKeychainAccessGate.clearDenied(now: now, defaults: defaults))
+        XCTAssertTrue(ClaudeOAuthKeychainAccessGate.shouldAllowPrompt(now: now, defaults: defaults))
+        // Global keychain kill switch wins over everything.
+        defaults.set(true, forKey: "debugDisableKeychainAccess")
+        XCTAssertFalse(ClaudeOAuthKeychainAccessGate.shouldAllowPrompt(now: now, defaults: defaults))
+    }
+
+    /// Runs a full provider statuses() pass under controlled prompt settings;
+    /// every source fails so the fetch ends in the failure emission (the
+    /// success path would reach `materialize`, which reads the real Keychain
+    /// when prompts are allowed — that must never happen in tests).
+    private func runBootstrapProbe(
+        recorder: Recorder,
+        phase: ProviderRefreshPhase,
+        mode: String,
+        resolvable: Bool,
+        deniedUntil: Date? = nil
+    ) async {
+        var fetchers = Self.makeFetchers(
+            recorder: recorder,
+            oauth: { throw ClaudeUsageError.oauthFailed("keychain denied") },
+            web: { throw ClaudeUsageError.parseFailed("no cookies") },
+            cli: { throw ClaudeStatusProbeError.parseFailed("no cli") })
+        fetchers.hasResolvableOAuthCredentials = { resolvable }
+
+        let keys = ["claudeOAuthKeychainPromptMode", "statusChecksEnabled",
+                    "claudeOAuthKeychainDeniedUntil", "debugDisableKeychainAccess"]
+        let prior = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        defer {
+            for (key, value) in prior {
+                if let value { UserDefaults.standard.set(value, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        UserDefaults.standard.set(mode, forKey: "claudeOAuthKeychainPromptMode")
+        UserDefaults.standard.set(false, forKey: "statusChecksEnabled")
+        UserDefaults.standard.removeObject(forKey: "debugDisableKeychainAccess")
+        if let deniedUntil {
+            UserDefaults.standard.set(
+                deniedUntil.timeIntervalSince1970,
+                forKey: "claudeOAuthKeychainDeniedUntil")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "claudeOAuthKeychainDeniedUntil")
+        }
+
+        let provider = ClaudeProvider(fetchers: fetchers)
+        await ProviderRefreshContext.$current.withValue(phase) {
+            for await _ in provider.statuses(interaction: .background) {}
+        }
+    }
+
+    /// The startup pass with `onlyOnUserAction` and no resolvable credentials
+    /// passes `allowKeychainPrompt = true` into the OAuth fetcher — the one
+    /// interactive approval chance that CodexBar offers at launch.
+    func testStartupBootstrapAllowsInteractiveKeychainRead() async {
+        let recorder = Recorder()
+        await runBootstrapProbe(
+            recorder: recorder, phase: .startup,
+            mode: ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue,
+            resolvable: false)
+        XCTAssertEqual(recorder.count("oauth.prompt.true"), 1)
+        XCTAssertEqual(recorder.count("oauth.prompt.false"), 0)
+    }
+
+    /// A regular (non-startup) background pass never prompts.
+    func testRegularPhaseKeepsBootstrapOff() async {
+        let recorder = Recorder()
+        await runBootstrapProbe(
+            recorder: recorder, phase: .regular,
+            mode: ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue,
+            resolvable: false)
+        XCTAssertEqual(recorder.count("oauth.prompt.false"), 1)
+    }
+
+    /// `.never` mode keeps the Keychain untouched even at startup.
+    func testStartupBootstrapSuppressedWhenModeNever() async {
+        let recorder = Recorder()
+        await runBootstrapProbe(
+            recorder: recorder, phase: .startup,
+            mode: ClaudeOAuthKeychainPromptMode.never.rawValue,
+            resolvable: false)
+        XCTAssertEqual(recorder.count("oauth.prompt.false"), 1)
+    }
+
+    /// Credentials already resolvable without a prompt → no bootstrap.
+    func testStartupBootstrapSuppressedWhenCredentialsResolvable() async {
+        let recorder = Recorder()
+        await runBootstrapProbe(
+            recorder: recorder, phase: .startup,
+            mode: ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue,
+            resolvable: true)
+        XCTAssertEqual(recorder.count("oauth.prompt.false"), 1)
+    }
+
+    /// A recent denial suppresses the bootstrap prompt for the cooldown.
+    func testStartupBootstrapSuppressedByDeniedCooldown() async {
+        let recorder = Recorder()
+        await runBootstrapProbe(
+            recorder: recorder, phase: .startup,
+            mode: ClaudeOAuthKeychainPromptMode.onlyOnUserAction.rawValue,
+            resolvable: false,
+            deniedUntil: Date().addingTimeInterval(3600))
+        XCTAssertEqual(recorder.count("oauth.prompt.false"), 1)
     }
 }

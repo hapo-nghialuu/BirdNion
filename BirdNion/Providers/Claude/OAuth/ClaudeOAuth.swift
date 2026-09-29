@@ -191,7 +191,16 @@ enum ClaudeOAuthStore {
         ]
         if !allowPrompt { KeychainNoUIQuery.apply(to: &query) }
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        // Denial cooldown (CodexBar parity): only an interactive failure proves
+        // the user said no — a no-UI failure (`errSecInteractionNotAllowed`)
+        // just means the ACL would prompt, and must never arm the gate.
+        if allowPrompt,
+           status == errSecUserCanceled || status == errSecAuthFailed
+               || status == errSecNoAccessForItem {
+            ClaudeOAuthKeychainAccessGate.recordDenied()
+        }
+        guard status == errSecSuccess,
               let data = item as? Data else { return nil }
         return data
     }
@@ -483,5 +492,46 @@ struct OAuthExtraUsage: Decodable {
         case usedCredits = "used_credits"
         case utilization
         case currency
+    }
+}
+
+// MARK: - Keychain prompt denial gate
+
+/// Persistent cooldown for the Claude OAuth Keychain prompt — simplified port
+/// of CodexBarCore's `ClaudeOAuthKeychainAccessGate` (same defaults key). A
+/// denied interactive read suppresses re-prompting for 6h so a refused or
+/// stuck ACL can't nag on every refresh; a user-initiated refresh clears the
+/// cooldown via `clearDenied` (manual retry = implicit re-approve intent).
+enum ClaudeOAuthKeychainAccessGate {
+    static let defaultsKey = "claudeOAuthKeychainDeniedUntil"
+    static let cooldownInterval: TimeInterval = 6 * 60 * 60
+
+    static func shouldAllowPrompt(now: Date = Date(),
+                                  defaults: UserDefaults = .standard) -> Bool {
+        guard !defaults.bool(forKey: "debugDisableKeychainAccess") else { return false }
+        guard let raw = defaults.object(forKey: defaultsKey) as? Double else { return true }
+        guard Date(timeIntervalSince1970: raw) > now else {
+            defaults.removeObject(forKey: defaultsKey)   // expired — lazily clear
+            return true
+        }
+        return false
+    }
+
+    static func recordDenied(now: Date = Date(),
+                             defaults: UserDefaults = .standard) {
+        defaults.set(now.addingTimeInterval(cooldownInterval).timeIntervalSince1970,
+                     forKey: defaultsKey)
+    }
+
+    /// Clears an armed cooldown so the next attempt can prompt again. Returns
+    /// true when a live cooldown was cleared; an expired entry self-clears in
+    /// `shouldAllowPrompt`.
+    @discardableResult
+    static func clearDenied(now: Date = Date(),
+                            defaults: UserDefaults = .standard) -> Bool {
+        guard let raw = defaults.object(forKey: defaultsKey) as? Double,
+              Date(timeIntervalSince1970: raw) > now else { return false }
+        defaults.removeObject(forKey: defaultsKey)
+        return true
     }
 }

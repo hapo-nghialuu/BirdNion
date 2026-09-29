@@ -64,9 +64,20 @@ final class ClaudeProvider: QuotaProvider {
         interaction: ProviderInteraction,
         into continuation: AsyncStream<ProviderStatus>.Continuation
     ) async {
-        let allowPrompt = Self.allowKeychainPrompt(
-            mode: ClaudeOAuthKeychainPromptPreference.current(),
-            interaction: interaction)
+        let mode = ClaudeOAuthKeychainPromptPreference.current()
+        if interaction == .userInitiated {
+            // Manual retry = implicit re-approve intent (CodexBar parity):
+            // clear a recorded denial cooldown so the prompt can reappear.
+            ClaudeOAuthKeychainAccessGate.clearDenied()
+        }
+        var allowPrompt = Self.allowKeychainPrompt(mode: mode, interaction: interaction)
+            || Self.shouldAllowStartupBootstrapPrompt(
+                mode: mode, interaction: interaction,
+                hasResolvableCredentials: fetchers.hasResolvableOAuthCredentials())
+        if allowPrompt, interaction == .background,
+           !ClaudeOAuthKeychainAccessGate.shouldAllowPrompt() {
+            allowPrompt = false
+        }
         // Same preference gate as Codex (`statusChecksEnabled`) so Settings →
         // "Check provider status" also stops the Anthropic statuspage probe.
         // Runs concurrently but only rides the enrichment emission.
@@ -117,6 +128,25 @@ final class ClaudeProvider: QuotaProvider {
         case .always: true
         case .onlyOnUserAction: interaction == .userInitiated
         }
+    }
+
+    /// CodexBar parity: the first background refresh after launch may surface
+    /// ONE interactive Keychain prompt so a signed-in Claude Code user can
+    /// approve OAuth access — gated on `.onlyOnUserAction` mode and nothing
+    /// being resolvable without a prompt (env/file/no-UI Keychain all miss).
+    /// After "Always Allow" the no-UI read works silently on every later
+    /// refresh, including across updates while the signing certificate stays
+    /// stable. Denial suppression is applied by the caller via
+    /// `ClaudeOAuthKeychainAccessGate`.
+    static func shouldAllowStartupBootstrapPrompt(
+        mode: ClaudeOAuthKeychainPromptMode,
+        interaction: ProviderInteraction,
+        phase: ProviderRefreshPhase = ProviderRefreshContext.current,
+        hasResolvableCredentials: Bool) -> Bool {
+        mode == .onlyOnUserAction
+            && interaction == .background
+            && phase == .startup
+            && !hasResolvableCredentials
     }
 
     // MARK: - Materialize

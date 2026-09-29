@@ -136,6 +136,9 @@ final class QuotaService: ObservableObject {
         subsystem: "com.local.birdnion", category: "quota.refresh")
     private var passStartedAt: Date?
     private var passIsFirstRefresh = false
+    /// Set once the first scheduler pass of the process has run — drives
+    /// `ProviderRefreshContext` (`.startup` → `.regular`).
+    private var didCompleteStartupPass = false
     private var passFirstCompletionLogged = false
     private var passTimings: [(String, TimeInterval)] = []
 
@@ -686,8 +689,15 @@ final class QuotaService: ObservableObject {
         let providerCount = providers.count
         Self.refreshLog.info(
             "refresh start — due=\(dueCount, privacy: .public)/\(providerCount, privacy: .public)")
-        await scheduler.refreshAll(
-            forceProviderIDs: forceProviderIDs, globalInterval: interval)
+        // The first pass after launch runs under `.startup` — the TaskLocal
+        // propagates into every lane task so providers can offer one-time
+        // interactive recovery (the Claude OAuth Keychain bootstrap prompt).
+        let phase: ProviderRefreshPhase = didCompleteStartupPass ? .regular : .startup
+        await ProviderRefreshContext.$current.withValue(phase) {
+            await scheduler.refreshAll(
+                forceProviderIDs: forceProviderIDs, globalInterval: interval)
+        }
+        didCompleteStartupPass = true
     }
 
     /// How many providers this pass will actually fetch — mirrors the old

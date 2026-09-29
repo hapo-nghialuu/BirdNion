@@ -278,12 +278,12 @@ final class SettingsStore: ObservableObject {
     /// DevTools), never logged. Cleared by the user via the Settings UI.
     @AppStorage("claudeManualCookieHeader") var claudeManualCookieHeader: String = ""
     /// How aggressively the OAuth Keychain reader may prompt for access.
-    /// `.never` (default) suppresses the prompt entirely (CLI/Web only);
-    /// `.onlyOnUserAction` prompts when the user clicks Refresh;
-    /// `.always` prompts on every background fetch. Matches CodexBar's
-    /// `ClaudeOAuthKeychainPromptMode`. `ClaudeProvider` reads via
-    /// `ClaudeOAuthKeychainPromptPreference.current()`.
-    @AppStorage("claudeOAuthKeychainPromptMode") var claudeOAuthKeychainPromptMode: String = "never"
+    /// `.never` suppresses the prompt entirely (CLI/Web only);
+    /// `.onlyOnUserAction` (default) prompts on manual refresh and once at
+    /// startup for the OAuth bootstrap; `.always` prompts on every background
+    /// fetch. Matches CodexBar's `ClaudeOAuthKeychainPromptMode`.
+    /// `ClaudeProvider` reads via `ClaudeOAuthKeychainPromptPreference.current()`.
+    @AppStorage("claudeOAuthKeychainPromptMode") var claudeOAuthKeychainPromptMode: String = "onlyOnUserAction"
     /// Anthropic Admin API key (Admin mode only). Stored in macOS Keychain
     /// via KeychainService, not UserDefaults. The plain string below is a
     /// UI bind only — `KeychainService.saveProviderKey` writes it through

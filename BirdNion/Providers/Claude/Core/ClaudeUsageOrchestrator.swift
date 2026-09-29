@@ -25,6 +25,10 @@ enum ClaudeUsageOrchestrator {
         var cli: @Sendable (Bool, Bool, TimeInterval?) async throws -> ClaudeStatusSnapshot
         var admin: @Sendable (URLSession) async throws -> ClaudeUsageSnapshot
         var hasCLI: @Sendable () -> Bool
+        /// Whether env / credentials file / a no-UI Keychain read can already
+        /// resolve OAuth credentials — gates the one-time startup bootstrap
+        /// prompt (CodexBar `hasCachedCredentials` analog).
+        var hasResolvableOAuthCredentials: @Sendable () -> Bool
         var autoWebSessionSuppressed: @Sendable () -> Bool
         var readDataSource: @Sendable () -> ClaudeUsageDataSource
         var readCookieSource: @Sendable () -> ClaudeCookieSource
@@ -49,6 +53,9 @@ enum ClaudeUsageOrchestrator {
             },
             admin: { session in try await fetchAdmin(session: session) },
             hasCLI: { ClaudeCLIResolver.isAvailable() },
+            hasResolvableOAuthCredentials: {
+                ClaudeOAuthStore.loadCredentials(allowKeychainPrompt: false) != nil
+            },
             autoWebSessionSuppressed: { ClaudeWebCookieReader.isAutoSuppressed },
             readDataSource: { ClaudeUsageOrchestrator.readDataSource() },
             readCookieSource: { ClaudeUsageOrchestrator.readCookieSource() },
