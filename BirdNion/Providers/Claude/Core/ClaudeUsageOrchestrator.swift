@@ -130,10 +130,13 @@ enum ClaudeUsageOrchestrator {
 
     // MARK: - Stage 1: HTTP source race (auto plan)
 
-    /// Races the available HTTP sources (OAuth‖Web). The first TRUSTED result
-    /// wins the core; if Web resolves first while OAuth is still in flight a
-    /// short grace lets OAuth steal the win (OAuth outranks Web when both
-    /// resolve). The losing Web result — when it lands within the extras
+    /// Runs the available HTTP sources (OAuth‖Web) concurrently with OAuth
+    /// strictly preferred: a trusted OAuth result wins the core whenever it
+    /// lands before the stage deadline, so a faster Web scrape is held as a
+    /// provisional candidate instead of locking in early. Web becomes the
+    /// core the moment OAuth settles untrusted/failed — or, as a bounded
+    /// fallback, when the stage deadline fires with OAuth still in flight.
+    /// The losing Web result — when it lands within the extras
     /// window — is reused for the `applyWebExtras` merge instead of a second
     /// scrape. Returns nil when no source produced trusted data (errors are
     /// accumulated into `lastError` for the CLI stage/failure path).
@@ -153,12 +156,8 @@ enum ClaudeUsageOrchestrator {
             case oauth(Swift.Result<ClaudeUsageSnapshot, Error>)
             case web(Swift.Result<ClaudeWebUsageData, Error>)
             case stageDeadline
-            case oauthGraceExpired
             case extrasExpired
         }
-        /// How long a provisional Web winner waits for a still-running OAuth
-        /// before locking in (OAuth outranks Web when both resolve).
-        let oauthTieBreakGrace: TimeInterval = 0.75
         /// Loser-Web harvest window — the same 5s bound `applyWebExtras`
         /// always used for its rescue scrape.
         let extrasWindow: TimeInterval = 5
@@ -169,7 +168,6 @@ enum ClaudeUsageOrchestrator {
         var webCandidate: ClaudeUsageSnapshot?
         var webOutcome: Swift.Result<ClaudeWebUsageData, Error>?
         var oauthSettled = !hasOAuthStep
-        var graceArmed = false
         var extrasArmed = false
 
         await withTaskGroup(of: Outcome.self) { group in
@@ -202,23 +200,25 @@ enum ClaudeUsageOrchestrator {
             for await outcome in group {
                 if done { break }
                 switch outcome {
-                case .stageDeadline, .extrasExpired:
-                    group.cancelAll()
-                    done = true
-                case .oauthGraceExpired:
-                    // Grace elapsed with OAuth still unsettled → the
-                    // provisional Web candidate locks in as the winner.
+                case .stageDeadline:
+                    // OAuth never settled inside the core budget — lock in
+                    // the provisional Web candidate rather than dropping a
+                    // usable result down to the CLI stage.
                     if winner == nil, let webCandidate {
                         winner = (webCandidate, .web)
                     }
+                    group.cancelAll()
+                    done = true
+                case .extrasExpired:
+                    group.cancelAll()
+                    done = true
                 case .oauth(let result):
                     oauthSettled = true
                     switch result {
                     case .success(let snapshot) where hasTrustedData(snapshot):
                         // OAuth wins while undecided — including over a
-                        // provisional Web candidate still inside its grace
-                        // window. A locked-in Web winner (grace expired or
-                        // OAuth already settled) is not stolen retroactively.
+                        // provisional Web candidate that resolved earlier
+                        // (OAuth is the preferred source).
                         if winner == nil { winner = (snapshot, .oauth) }
                     case .success:
                         lastError = ClaudeUsageError.parseFailed(
@@ -239,17 +239,10 @@ enum ClaudeUsageOrchestrator {
                                 if oauthSettled {
                                     winner = (snapshot, .web)
                                 } else {
-                                    // Provisional: OAuth may still steal the
-                                    // core inside the tie-break grace.
+                                    // Provisional only — OAuth is preferred,
+                                    // so Web waits for OAuth to settle (or the
+                                    // stage deadline to fire) before locking in.
                                     webCandidate = snapshot
-                                    if !graceArmed {
-                                        graceArmed = true
-                                        group.addTask {
-                                            try? await Task.sleep(nanoseconds:
-                                                UInt64(oauthTieBreakGrace * 1_000_000_000))
-                                            return .oauthGraceExpired
-                                        }
-                                    }
                                 }
                             }
                         } else {

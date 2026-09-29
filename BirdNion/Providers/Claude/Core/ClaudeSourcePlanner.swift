@@ -1,7 +1,9 @@
 import Foundation
 
 // Native port of CodexBarCore's ClaudeSourcePlanner. BirdNion is always an app
-// runtime (no CLI runtime), so the auto plan is fixed: race(OAuth‖Web) → CLI.
+// runtime (no CLI runtime), so the auto plan is fixed: race(OAuth‖Web) → CLI —
+// the HTTP sources fetch concurrently, but OAuth is strictly preferred (a
+// trusted Web result waits for OAuth to settle before it can win the core).
 // Pure branching logic, no side effects — drives which sources the
 // orchestrator tries (and in what order) for `.auto`, and validates explicit
 // selections.
@@ -51,9 +53,10 @@ struct ClaudeFetchPlanStep: Equatable, Sendable {
     }
 }
 
-/// One execution stage. `.race` runs its HTTP sources concurrently — the
-/// first trusted result wins the core; `.single` runs one source (the CLI
-/// chain, or a pinned selection).
+/// One execution stage. `.race` runs its HTTP sources concurrently — OAuth
+/// is preferred, so a trusted Web result only wins after OAuth settles
+/// untrusted/failed (or the stage deadline fires); `.single` runs one
+/// source (the CLI chain, or a pinned selection).
 enum ClaudeFetchStage: Equatable, Sendable {
     case race([ClaudeFetchPlanStep])
     case single(ClaudeFetchPlanStep)
@@ -67,10 +70,10 @@ enum ClaudeFetchStage: Equatable, Sendable {
 }
 
 /// The resolved plan. `executionStages` is what the orchestrator actually
-/// runs: for `.auto`, stage 1 races every plausibly-available HTTP source
-/// (OAuth‖Web) and stage 2 falls back to the CLI chain; for an explicit source
-/// the single chosen step regardless of availability (so the user sees a real
-/// error instead of a silent skip).
+/// runs: for `.auto`, stage 1 runs every plausibly-available HTTP source
+/// (OAuth‖Web, OAuth-preferred) and stage 2 falls back to the CLI chain;
+/// for an explicit source the single chosen step regardless of availability
+/// (so the user sees a real error instead of a silent skip).
 struct ClaudeFetchPlan: Equatable, Sendable {
     let input: ClaudeSourcePlanningInput
     let orderedSteps: [ClaudeFetchPlanStep]

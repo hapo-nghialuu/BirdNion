@@ -2,9 +2,10 @@ import XCTest
 @testable import BirdNion
 
 /// Task-05 coverage for the Claude staged auto plan: planner stage shape,
-/// OAuth‖Web race semantics (first trusted wins, OAuth tie-break, loser-Web
-/// extras reuse, CLI fallback), the background starvation guard, and the
-/// provider's core→enrichment emission order. Everything runs through the
+/// OAuth‖Web concurrent fetch with OAuth strictly preferred (Web only wins
+/// after OAuth settles untrusted/failed, loser-Web extras reuse, CLI
+/// fallback), the background starvation guard, and the provider's
+/// core→enrichment emission order. Everything runs through the
 /// `ClaudeUsageOrchestrator.Fetchers` seam — no network, Keychain, or PTY.
 final class ClaudeRacePlanTests: XCTestCase {
 
@@ -187,20 +188,55 @@ final class ClaudeRacePlanTests: XCTestCase {
 
     // MARK: - Race semantics
 
-    /// Spec case: Web trusted at ~0.2s, OAuth trusted only at ~30s. The core
-    /// must resolve from the Web result without awaiting OAuth — and CLI must
-    /// never run. Also proves both sources started concurrently (counterexample
+    /// OAuth is strictly preferred: Web resolving trusted first is only a
+    /// provisional candidate — OAuth still wins the core when it settles
+    /// trusted later (here ~1.5s, beyond the old 0.75s tie-break grace).
+    /// Also proves both sources started concurrently (counterexample
     /// coverage: OAuth awaited before Web starts would leave no web.start).
-    func testRaceResolvesFromFirstTrustedWebWithoutWaitingForOAuth() async throws {
+    func testOAuthWinsCoreEvenWhenWebResolvesTrustedFirst() async throws {
         let recorder = Recorder()
         let fetchers = Self.makeFetchers(
             recorder: recorder,
             oauth: {
-                try await Self.sleep(30)
+                try await Self.sleep(1.5)
                 return Self.trustedOAuth()
             },
             web: {
-                try await Self.sleep(0.2)
+                try await Self.sleep(0.1)
+                return Self.webData()
+            })
+        let result = try await ClaudeUsageOrchestrator.loadLatestUsage(
+            allowKeychainPrompt: false, interaction: .background, fetchers: fetchers)
+
+        XCTAssertEqual(result.sourceLabel, "oauth")
+        XCTAssertEqual(recorder.count("cli"), 0)
+
+        let events = recorder.events
+        let webDone = events.firstIndex(of: "web.done")
+        let oauthStart = events.firstIndex(of: "oauth.start")
+        let oauthDone = events.firstIndex(of: "oauth.done")
+        let webStart = events.firstIndex(of: "web.start")
+        XCTAssertNotNil(webDone); XCTAssertNotNil(oauthStart); XCTAssertNotNil(webStart)
+        if let webDone, let oauthStart, let webStart, let oauthDone {
+            XCTAssertGreaterThan(webDone, oauthStart)
+            XCTAssertGreaterThan(webDone, webStart)
+            XCTAssertGreaterThan(oauthDone, webDone)
+        }
+    }
+
+    /// OAuth failing (or returning no trusted data) releases the provisional
+    /// Web candidate immediately — the core resolves Web without waiting out
+    /// the stage deadline, and CLI never runs.
+    func testWebWinsPromptlyWhenOAuthFails() async throws {
+        let recorder = Recorder()
+        let fetchers = Self.makeFetchers(
+            recorder: recorder,
+            oauth: {
+                try await Self.sleep(0.3)
+                throw ClaudeUsageError.oauthFailed("keychain denied")
+            },
+            web: {
+                try await Self.sleep(0.1)
                 return Self.webData()
             })
         let start = Date()
@@ -209,37 +245,27 @@ final class ClaudeRacePlanTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
 
         XCTAssertEqual(result.sourceLabel, "web")
-        XCTAssertLessThan(elapsed, 15, "core must not wait for the 30s OAuth")
+        XCTAssertLessThan(elapsed, 15, "OAuth failure must release Web immediately")
         XCTAssertEqual(recorder.count("cli"), 0)
-
-        let events = recorder.events
-        let webDone = events.firstIndex(of: "web.done")
-        let oauthStart = events.firstIndex(of: "oauth.start")
-        let webStart = events.firstIndex(of: "web.start")
-        XCTAssertNotNil(webDone); XCTAssertNotNil(oauthStart); XCTAssertNotNil(webStart)
-        if let webDone, let oauthStart, let webStart {
-            XCTAssertGreaterThan(webDone, oauthStart)
-            XCTAssertGreaterThan(webDone, webStart)
-        }
     }
 
-    /// OAuth resolves trusted inside the tie-break grace after Web → OAuth
-    /// outranks Web when both resolve.
-    func testOAuthWinsTieBreakInsideGrace() async throws {
+    /// An OAuth success without trusted data also hands the core to a
+    /// provisional Web candidate.
+    func testWebWinsWhenOAuthReturnsUntrusted() async throws {
         let recorder = Recorder()
         let fetchers = Self.makeFetchers(
             recorder: recorder,
             oauth: {
-                try await Self.sleep(0.2)
-                return Self.trustedOAuth()
+                try await Self.sleep(0.3)
+                return Self.untrusted()
             },
             web: {
-                try await Self.sleep(0.05)
+                try await Self.sleep(0.1)
                 return Self.webData()
             })
         let result = try await ClaudeUsageOrchestrator.loadLatestUsage(
             allowKeychainPrompt: false, interaction: .background, fetchers: fetchers)
-        XCTAssertEqual(result.sourceLabel, "oauth")
+        XCTAssertEqual(result.sourceLabel, "web")
         XCTAssertEqual(recorder.count("cli"), 0)
     }
 
