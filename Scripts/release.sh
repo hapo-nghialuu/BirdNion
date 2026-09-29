@@ -183,17 +183,17 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> xcodebuild"
   # Publish a universal macOS app so both Apple Silicon and Intel users can
   # install the same release asset.
-  # Release builds sign with the stable "BirdNion Local Signing" identity so
-  # TCC grants (Full Disk Access etc.) survive app updates — ad-hoc cdhash
-  # signatures invalidate every grant on each rebuild. Machines without the
-  # cert can opt back into ad-hoc via BIRDNION_CODE_SIGN_IDENTITY=-.
+  # Release builds sign with a stable Developer ID identity so TCC grants
+  # (Full Disk Access etc.) survive app updates — ad-hoc cdhash signatures
+  # invalidate every grant on each rebuild. Machines without the cert can
+  # opt back into ad-hoc via BIRDNION_CODE_SIGN_IDENTITY=-.
   run xcodebuild -quiet -project "$REPO_ROOT/BirdNion.xcodeproj" \
       -scheme BirdNion -configuration Release \
       -destination 'platform=macOS' \
       -derivedDataPath "$REPO_ROOT/build/DerivedData" \
       ONLY_ACTIVE_ARCH=NO \
       CLIPROXYAPI_UNIVERSAL=1 \
-      CODE_SIGN_IDENTITY="${BIRDNION_CODE_SIGN_IDENTITY:-BirdNion Local Signing}" \
+      CODE_SIGN_IDENTITY="${BIRDNION_CODE_SIGN_IDENTITY:-Developer ID Application: BACH VAN NHAT TAN (YLQWQL7ZFT)}" \
       HAPO_BASE_URL="${HAPO_BASE_URL:-}" \
       HAPO_ME_URL="${HAPO_ME_URL:-}" \
       HAPO_AUTH_TEMPLATE="$HAPO_AUTH_TEMPLATE_VALUE" \

@@ -1164,7 +1164,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "BirdNion Local Signing";
+				CODE_SIGN_IDENTITY = "Developer ID Application: BACH VAN NHAT TAN (YLQWQL7ZFT)";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -1287,7 +1287,7 @@
 		WDGT0000000000000000C002 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "BirdNion Local Signing";
+				CODE_SIGN_IDENTITY = "Developer ID Application: BACH VAN NHAT TAN (YLQWQL7ZFT)";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;

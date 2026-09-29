@@ -19,7 +19,7 @@ name: release
 #     - CLIProxyAPI-private: contents read       (embedded helper, both jobs)
 #   HAPO_BASE_URL, HAPO_ME_URL, HAPO_AUTH_TEMPLATE — same as linux-release.yml.
 #   BIRDNION_SIGN_P12, BIRDNION_SIGN_P12_PASSWORD — base64 PKCS12 of the
-#     "BirdNion Local Signing" cert; optional but recommended: without it the
+#     "Developer ID Application" cert; optional but recommended: without it the
 #     app is ad-hoc signed and users' Full Disk Access grants reset each update.
 
 on:
@@ -181,7 +181,7 @@ jobs:
           fi
 
       - name: Import signing certificate
-        # Release builds sign with "BirdNion Local Signing" so TCC grants
+        # Release builds sign with the Developer ID identity so TCC grants
         # (Full Disk Access) survive updates. When the BIRDNION_SIGN_P12
         # secrets are absent we fall back to ad-hoc signing explicitly —
         # that build works but invalidates user grants on the next update.
@@ -208,7 +208,7 @@ jobs:
           security list-keychains -d user -s \
             "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
           rm -f "$RUNNER_TEMP/birdnion-sign.p12"
-          security find-identity -v | grep -i birdnion
+          security find-identity -v -p codesigning | grep -i "Developer ID"
 
       - name: Run release (verification gate → build → publish)
         if: steps.state.outputs.skip != 'true'
