@@ -1018,7 +1018,7 @@ final class QuotaService: ObservableObject {
         state.consecutiveFailures += 1
         let kind = classify(rawError: error) ?? .unknown
         Self.failureLog.warning(
-            "failure provider=\(id, privacy: .public) kind=\(kind.rawValue, privacy: .public) count=\(state.consecutiveFailures, privacy: .public)")
+            "failure provider=\(id, privacy: .public) kind=\(kind.rawValue, privacy: .public) count=\(state.consecutiveFailures, privacy: .public) raw=\(String(error.prefix(160)), privacy: .public)")
 
         if state.consecutiveFailures >= Self.failureNotifyThreshold {
             state.isFailureActive = true
