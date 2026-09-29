@@ -11,9 +11,11 @@
 //!     30-day cost total as a single window.
 //!   - `"cli"` — no PTY/CLI-session equivalent on Linux; always fails with a
 //!     explanatory message.
-//!   - `"auto"` (default) — try oauth, then fall back to web. Matches the
-//!     macOS default so one shared `settings.json` behaves the same on both
-//!     platforms; a pinned mode has no fallback when its single step fails.
+//!   - `"auto"` (default) — race oauth vs web with strict oauth preference:
+//!     a web success while oauth is still pending stays provisional and only
+//!     wins once oauth settles as a failure. Matches the macOS semantics so
+//!     one shared `settings.json` behaves the same on both platforms; a
+//!     pinned mode has no fallback when its single step fails.
 //!
 //! The macOS-Keychain fallback is dropped — Linux has no Keychain.
 
@@ -290,12 +292,14 @@ async fn fetch_inner(cfg: &config::Provider, include_extras: bool) -> ProviderSt
     }
 }
 
-/// "auto" = race oauth vs web; the first *success* wins (macOS
-/// `ClaudeSourcePlanner` staged-race parity — a slow source no longer delays
-/// a fast one behind it). `select!` is biased so a simultaneous success
-/// resolves to oauth, the preferred source. A source that finishes as an
-/// error does not end the race — the other arm still gets its shot; when both
-/// fail, the web error is surfaced, same as the old sequential fallback.
+/// "auto" = race oauth vs web with strict oauth preference (macOS
+/// `ClaudeSourcePlanner` parity): a web success while oauth is still pending
+/// is only *provisional* — it wins once oauth settles as a failure, but a
+/// trusted oauth result always takes core even when it resolves after web.
+/// `select_biased!` resolves a simultaneous completion to oauth; when both
+/// arms fail the web error is surfaced, same as the old sequential fallback.
+/// OAuth's arm is internally bounded (file read + 30s refresh + 15s usage),
+/// so a provisional web result is never held indefinitely.
 async fn race_sources<O, W>(oauth: O, web: W) -> ProviderStatus
 where
     O: std::future::Future<Output = ProviderStatus>,
@@ -310,9 +314,17 @@ where
     let mut web = Box::pin(web).fuse();
     let mut oauth_err = None;
     let mut web_err = None;
+    let mut web_ok = None;
     loop {
-        if oauth_err.is_some() && web_err.is_some() {
-            return web_err.or(oauth_err).expect("both arms failed");
+        if oauth_err.is_some() {
+            // oauth settled as a failure — a provisional web success wins,
+            // else web's own (pending or failed) result decides the stage.
+            if let Some(ok) = web_ok.take() {
+                return ok;
+            }
+            if web_err.is_some() {
+                return web_err.or(oauth_err).expect("web arm failed");
+            }
         }
         futures::select_biased! {
             s = oauth => {
@@ -320,8 +332,12 @@ where
                 oauth_err = Some(s)
             }
             s = web => {
-                if s.error.is_none() { return s }
-                web_err = Some(s)
+                if s.error.is_none() {
+                    if oauth_err.is_some() { return s }
+                    web_ok = Some(s)
+                } else {
+                    web_err = Some(s)
+                }
             }
         }
     }
@@ -1059,19 +1075,49 @@ mod tests {
             .block_on(fut)
     }
 
-    /// Race parity probe: a fast web success must not wait behind a slow
-    /// oauth arm — the old sequential fallback blocked for its full duration.
+    /// Provisional web: a fast web success is held while oauth is pending —
+    /// once oauth settles as a failure the held result is promoted (no second
+    /// scrape), keeping the race's latency win over the old sequential
+    /// fallback.
     #[test]
-    fn race_sources_fast_success_does_not_wait_for_slow_arm() {
+    fn race_sources_provisional_web_wins_once_oauth_fails() {
         let slow_oauth = async {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            ProviderStatus::failure("claude", "Claude", "oauth too slow")
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            ProviderStatus::failure("claude", "Claude", "oauth failed")
         };
         let fast_web = async {
-            ProviderStatus { id: "claude".into(), ..Default::default() }
+            ProviderStatus {
+                id: "claude".into(),
+                source_label: Some("web".into()),
+                ..Default::default()
+            }
         };
         let status = block_on(race_sources(slow_oauth, fast_web));
-        assert!(status.error.is_none());
+        assert_eq!(status.source_label.as_deref(), Some("web"));
+    }
+
+    /// Strict oauth preference (macOS parity): oauth still wins core even
+    /// when web resolved first — the provisional web result must not displace
+    /// a pending oauth arm.
+    #[test]
+    fn race_sources_oauth_wins_even_when_web_resolves_first() {
+        let slow_oauth = async {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            ProviderStatus {
+                id: "claude".into(),
+                source_label: Some("oauth".into()),
+                ..Default::default()
+            }
+        };
+        let fast_web = async {
+            ProviderStatus {
+                id: "claude".into(),
+                source_label: Some("web".into()),
+                ..Default::default()
+            }
+        };
+        let status = block_on(race_sources(slow_oauth, fast_web));
+        assert_eq!(status.source_label.as_deref(), Some("oauth"));
     }
 
     /// An early-failed arm must not end the race — the other source still
