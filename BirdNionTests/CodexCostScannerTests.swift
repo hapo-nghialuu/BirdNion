@@ -472,10 +472,82 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertTrue(s.isEmpty)
     }
 
-    func testSharedScanWindowPreventsSummaryAndChartRangeThrash() {
-        XCTAssertEqual(CodexCostScanner.scanWindowDays(requestedWindowDays: 30), 120)
-        XCTAssertEqual(CodexCostScanner.scanWindowDays(requestedWindowDays: 120), 120)
-        XCTAssertEqual(CodexCostScanner.scanWindowDays(requestedWindowDays: 365), 365)
+    func testScanWindowFollowsSharedScanBackPlan() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-scan-window-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let historyURL = root.appendingPathComponent("cost-history.json")
+        let now = Date()
+
+        // Cold start (no stored Codex days): seed the whole chart window once.
+        XCTAssertEqual(
+            CodexCostScanner.scanWindowDays(requestedWindowDays: 30, now: now, url: historyURL), 120)
+        XCTAssertEqual(
+            CodexCostScanner.scanWindowDays(requestedWindowDays: 120, now: now, url: historyURL), 120)
+        XCTAssertEqual(
+            CodexCostScanner.scanWindowDays(requestedWindowDays: 365, now: now, url: historyURL), 365)
+
+        _ = CostHistoryStore.applyWithReceipt(
+            source: .codex,
+            liveDays: [(now, 1.0, 100, [("model", 1.0, 100)])],
+            now: now,
+            windowDays: 120,
+            url: historyURL,
+            liveScanSucceeded: true)
+
+        // With stored history the shared scan-back plan drives the window:
+        // the periodic deep pass first (no stamp yet), then routine passes
+        // only cover days that can still change.
+        XCTAssertEqual(
+            CodexCostScanner.scanWindowDays(requestedWindowDays: 30, now: now, url: historyURL),
+            CostHistoryStore.deepScanDays)
+        CostHistoryStore.markDeepScanSucceeded(source: .codex, at: now, url: historyURL)
+        XCTAssertEqual(
+            CodexCostScanner.scanWindowDays(requestedWindowDays: 30, now: now, url: historyURL),
+            CostHistoryStore.routineScanDays)
+        XCTAssertEqual(
+            CodexCostScanner.scanWindowDays(requestedWindowDays: 120, now: now, url: historyURL),
+            CostHistoryStore.routineScanDays)
+    }
+
+    func testMapSummaryFillsUnscannedDaysFromPersistedHistory() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = ISO8601DateFormatter().date(from: "2026-08-31T12:00:00Z")!
+        let entries = [
+            CostUsageDailyReport.Entry(
+                date: "2026-08-31", inputTokens: 40, outputTokens: 0,
+                totalTokens: 40, costUSD: 0.4, modelsUsed: nil, modelBreakdowns: nil),
+        ]
+        let snapshot = CostUsageTokenSnapshot(
+            sessionTokens: nil, sessionCostUSD: nil,
+            last30DaysTokens: nil, last30DaysCostUSD: nil,
+            historyDays: 1,
+            daily: entries,
+            updatedAt: now)
+        let persistedDays = [
+            CostHistoryStore.DayBucket(
+                date: ISO8601DateFormatter().date(from: "2026-08-30T00:00:00Z")!,
+                usd: 0.3, tokens: 30,
+                models: []),
+            CostHistoryStore.DayBucket(
+                date: ISO8601DateFormatter().date(from: "2026-08-31T00:00:00Z")!,
+                usd: 0.4, tokens: 40,
+                models: []),
+        ]
+
+        let summary = CodexCostScanner.mapSummary(
+            snapshot,
+            now: now,
+            windowDays: 30,
+            persistedDays: persistedDays,
+            calendar: calendar)
+
+        // Live owns 08-31; 08-30 comes from the store even though the routine
+        // scan never touched it. Store high-water never shrinks.
+        XCTAssertEqual(summary.todayTokens, 40)
+        XCTAssertEqual(summary.last30Tokens, 70)
+        XCTAssertEqual(summary.last30USD, 0.7, accuracy: 0.000_001)
     }
 
     func testMapSummarySlicesRequestedWindowFromWiderScan() {

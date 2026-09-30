@@ -569,6 +569,8 @@ enum CodexCostScanner {
         // chart and zero out the All-tab Codex column. Homes phụ đi kèm vì một
         // wrapper có thể chạy Codex với CODEX_HOME khác.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
+        let persistedDays = CostHistoryStore.window(
+            source: .codex, now: now, windowDays: requestedWindowDays)
         guard let snapshot = try? await CostUsageFetcher().loadTokenSnapshot(
             provider: .codex,
             now: now,
@@ -581,7 +583,8 @@ enum CodexCostScanner {
                 return mapSummary(
                     snapshot,
                     now: now,
-                    windowDays: requestedWindowDays)
+                    windowDays: requestedWindowDays,
+                    persistedDays: persistedDays)
             }
             return await Cache.shared.lastSummary(
                 windowDays: requestedWindowDays,
@@ -590,16 +593,32 @@ enum CodexCostScanner {
         let value = mapSummary(
             snapshot,
             now: now,
-            windowDays: requestedWindowDays)
+            windowDays: requestedWindowDays,
+            persistedDays: persistedDays)
         await Cache.shared.store(value, at: now, windowDays: requestedWindowDays)
         return value
     }
 
-    /// Both compact summary and 120-day chart share one durable core cache.
-    /// Always scan the wider requested window so those callers never replace
-    /// each other's pending generation (30d vs 120d by default).
-    static func scanWindowDays(requestedWindowDays: Int) -> Int {
-        max(chartWindowDays, max(1, min(365, requestedWindowDays)))
+    /// How far back a pass must enumerate session files. The persisted
+    /// CostHistoryStore supplies every day outside the scan window, so a
+    /// routine pass only has to cover logs that can still change —
+    /// `routineScanDays` with a `deepScanDays` pass on the shared cadence,
+    /// the same contract Claude/Grok/Kiro/OMP/Pi/Devin already follow.
+    /// Pending episodes resume with their own captured range regardless of
+    /// the requested window, so callers can never thrash a generation.
+    /// The full chart window is requested only until the store has Codex
+    /// history at all (cold start seeds every day once).
+    static func scanWindowDays(
+        requestedWindowDays: Int,
+        now: Date = Date(),
+        url: URL = CostHistoryStore.historyURL()) -> Int
+    {
+        let requested = max(1, min(365, requestedWindowDays))
+        let hasStoredDays = CostHistoryStore.read(url: url)
+            .sources?[CostHistoryStore.Source.codex.rawValue]?.isEmpty == false
+        guard hasStoredDays else { return max(chartWindowDays, requested) }
+        return CostHistoryStore.scanBackPlan(
+            source: .codex, now: now, url: url).days
     }
 
     /// Pure mapping (snapshot → BirdNion model), unit-testable. "session" totals
@@ -612,13 +631,15 @@ enum CodexCostScanner {
             last30Tokens: snapshot.last30DaysTokens ?? 0)
     }
 
-    /// Derives the user-configured summary window from the wider shared scan.
-    /// `CostUsageTokenSnapshot.last30Days*` describes the scan window itself,
-    /// so it cannot be used directly when the core scan is intentionally wider.
+    /// Derives the user-configured summary window from persisted history plus
+    /// the live scan. `CostUsageTokenSnapshot.last30Days*` describes the scan
+    /// window itself, and the scan window is narrower than the summary window
+    /// on routine passes, so neither can be used directly.
     static func mapSummary(
         _ snapshot: CostUsageTokenSnapshot,
         now: Date,
         windowDays: Int,
+        persistedDays: [CostHistoryStore.DayBucket] = [],
         calendar: Calendar = .current) -> CodexCostSummary
     {
         let clampedDays = max(1, min(365, windowDays))
@@ -627,14 +648,30 @@ enum CodexCostScanner {
             ?? today.addingTimeInterval(TimeInterval(-(clampedDays - 1) * 86_400))
         var byDay: [Date: (usd: Double, tokens: Int)] = [:]
 
+        // Persisted history is the base so a narrow routine scan (a few
+        // recent days) still reports correct last-N totals; live entries
+        // then raise their days — the store never shrinks a day on its own,
+        // so the summary keeps the same high-water contract.
+        for bucket in persistedDays {
+            let day = calendar.startOfDay(for: bucket.date)
+            guard day >= firstDay, day <= today else { continue }
+            byDay[day] = (usd: bucket.usd, tokens: bucket.tokens)
+        }
+        var liveByDay: [Date: (usd: Double, tokens: Int)] = [:]
         for entry in snapshot.daily {
             guard let parsed = parseDay(entry.date, calendar: calendar) else { continue }
             let day = calendar.startOfDay(for: parsed)
             guard day >= firstDay, day <= today else { continue }
-            var total = byDay[day] ?? (usd: 0, tokens: 0)
+            var total = liveByDay[day] ?? (usd: 0, tokens: 0)
             total.usd += entry.costUSD ?? 0
             total.tokens += entry.totalTokens ?? 0
-            byDay[day] = total
+            liveByDay[day] = total
+        }
+        for (day, live) in liveByDay {
+            let base = byDay[day] ?? (usd: 0, tokens: 0)
+            byDay[day] = (
+                usd: max(base.usd, live.usd),
+                tokens: max(base.tokens, live.tokens))
         }
 
         let latest = byDay
@@ -825,7 +862,8 @@ enum CodexCostScanner {
         // khai báo, vì wrapper tool có thể chạy Codex với CODEX_HOME riêng.
         let codexHome = CodexAccountStore.systemAuthURL().deletingLastPathComponent().path
         let fetcher = CostUsageFetcher()
-        let sharedScanWindowDays = scanWindowDays(requestedWindowDays: historyDays)
+        let scanPlan = CostHistoryStore.scanBackPlan(source: .codex, now: now)
+        let sharedScanWindowDays = scanWindowDays(requestedWindowDays: historyDays, now: now)
         let snapshot = try? await fetcher.loadTokenSnapshot(
             provider: .codex,
             now: now,
@@ -906,6 +944,9 @@ enum CodexCostScanner {
             now: now,
             windowDays: chartWindowDays,
             liveScanSucceeded: liveScanSucceeded)
+        if liveScanSucceeded, receipt.persisted, scanPlan.isDeep {
+            CostHistoryStore.markDeepScanSucceeded(source: .codex, at: now)
+        }
         let confidence = CostHistoryStore.confidence(
             source: .codex,
             liveScanSucceeded: liveScanSucceeded && receipt.persisted)
