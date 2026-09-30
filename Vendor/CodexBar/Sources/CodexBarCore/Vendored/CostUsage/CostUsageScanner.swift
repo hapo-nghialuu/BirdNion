@@ -4760,8 +4760,6 @@ enum CostUsageScanner {
             let flatDiscoveryIncomplete = flatDiscoveryOffsets != nil
             let files = fileManifest.keys.sorted().map { URL(fileURLWithPath: $0) }
             let filePathsInScan = Set(fileManifest.keys)
-            let scanDeadline = options.maxScanWallClock.map { Date().addingTimeInterval($0) }
-            let shouldStop = scanDeadline.map { deadline in { Date() >= deadline } }
             let filesToScan = files.filter { fileURL in
                 guard resumesPendingGeneration,
                       let target = fileManifest[fileURL.path],
@@ -4809,6 +4807,13 @@ enum CostUsageScanner {
             var sawUnavailableFrozenTarget = false
             var unavailableFrozenPaths: Set<String> = []
             var unavailableFrozenPathIdentities: Set<String> = []
+            // Neo deadline cho pha xử lý file ở đây, sau bookkeeping cố định của
+            // pass (load journal, plan, manifest, rehydrate dedupe). Nếu neo từ
+            // đầu pass thì bookkeeping ngốn hết budget trước khi index/resolver
+            // và vòng lặp file chạy — episode pending bị khóa vĩnh viễn ở cùng
+            // một checkpoint mà không parse được byte nào.
+            let fileScanDeadline = options.maxScanWallClock.map { Date().addingTimeInterval($0) }
+            let fileShouldStop = fileScanDeadline.map { deadline in { Date() >= deadline } }
             let fileIndex = CodexSessionFileIndex(
                 files: files,
                 roots: plan.roots,
@@ -4818,7 +4823,9 @@ enum CostUsageScanner {
                     roots: plan.roots,
                     knownExistingPaths: filePathsInScan),
                 checkCancellation: checkCancellation,
-                shouldStop: shouldStop,
+                // Scaffolding bắt buộc cho mọi file — phải build xong; giới hạn
+                // wall-clock dành cho phần parse phía dưới, không phải index.
+                shouldStop: nil,
                 generation: scanGeneration,
                 pendingParentDiscoveries: resumesPendingGeneration
                     ? (committedCache.codexPendingParentDiscoveries ?? [:])
@@ -4826,7 +4833,8 @@ enum CostUsageScanner {
             let inheritedResolver = CodexInheritedTotalsResolver(
                 fileIndex: fileIndex,
                 checkCancellation: checkCancellation,
-                shouldStop: shouldStop,
+                // Lazy resolution trong file loop chia sẻ budget của pha file.
+                shouldStop: fileShouldStop,
                 generation: scanGeneration,
                 pendingParentScans: resumesPendingGeneration
                     ? (committedCache.codexPendingParentScans ?? [:])
@@ -4843,7 +4851,7 @@ enum CostUsageScanner {
                 scanTruncated = true
             }
             for fileURL in scheduledFiles {
-                if let scanDeadline, Date() >= scanDeadline { scanTruncated = true; break }
+                if let fileScanDeadline, Date() >= fileScanDeadline { scanTruncated = true; break }
                 guard let target = fileManifest[fileURL.path] else { continue }
                 let fileOutcome: CodexFileScanOutcome
                 if turnIDBackfillPaths.contains(fileURL.path),
@@ -4855,7 +4863,7 @@ enum CostUsageScanner {
                         committed: committed,
                         working: cache.files[fileURL.path],
                         checkCancellation: checkCancellation,
-                        shouldStop: shouldStop,
+                        shouldStop: fileShouldStop,
                         scanGeneration: scanGeneration,
                         roots: plan.roots,
                         cache: &cache,
@@ -4877,7 +4885,7 @@ enum CostUsageScanner {
                             changedPriorityTurnIDs: plan.changedPriorityTurnIDs,
                             resources: resources,
                             checkCancellation: checkCancellation,
-                            shouldStop: shouldStop,
+                            shouldStop: fileShouldStop,
                             scanGeneration: scanGeneration,
                             roots: plan.roots),
                         cache: &cache,
@@ -5267,9 +5275,19 @@ enum CostUsageScanner {
         }
 
         if scanTruncated {
+            // Dữ liệu đã parse của episode pending là working set đầy đủ của
+            // range (được seed từ committed ngày đầu episode rồi cập nhật theo
+            // file). Overlay nó lên committed để report phản ánh tiến độ thật
+            // thay vì rơi về last-good — journal trên đĩa giữ nguyên.
+            var reportCache = committedCache
+            if let pendingDays = committedCache.codexPendingDays {
+                for (day, models) in pendingDays {
+                    reportCache.days[day] = models
+                }
+            }
             if committedGenerationCompleted {
                 let committedReport = Self.buildCodexReportFromCache(
-                    cache: committedCache,
+                    cache: reportCache,
                     range: range,
                     modelsDevCatalog: requestedPlan.modelsDevCatalog,
                     modelsDevCacheRoot: options.cacheRoot,
@@ -5282,7 +5300,18 @@ enum CostUsageScanner {
                     scanIncomplete: true,
                     completedFiniteScanGeneration: committedGenerationPersisted)
             }
-            return CostUsageDailyReport(data: [], summary: nil, scanIncomplete: true)
+            let inFlightReport = Self.buildCodexReportFromCache(
+                cache: reportCache,
+                range: range,
+                modelsDevCatalog: requestedPlan.modelsDevCatalog,
+                modelsDevCacheRoot: options.cacheRoot,
+                priorityTurns: requestedPlan.priorityTurns)
+            return CostUsageDailyReport(
+                data: inFlightReport.data,
+                summary: inFlightReport.summary,
+                projectBreakdown: inFlightReport.projectBreakdown,
+                projectRetractions: inFlightReport.projectRetractions,
+                scanIncomplete: true)
         }
         return Self.buildCodexReportFromCache(
             cache: committedCache,
