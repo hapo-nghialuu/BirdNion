@@ -4807,13 +4807,14 @@ enum CostUsageScanner {
             var sawUnavailableFrozenTarget = false
             var unavailableFrozenPaths: Set<String> = []
             var unavailableFrozenPathIdentities: Set<String> = []
-            // Neo deadline cho pha xử lý file ở đây, sau bookkeeping cố định của
-            // pass (load journal, plan, manifest, rehydrate dedupe). Nếu neo từ
-            // đầu pass thì bookkeeping ngốn hết budget trước khi index/resolver
-            // và vòng lặp file chạy — episode pending bị khóa vĩnh viễn ở cùng
-            // một checkpoint mà không parse được byte nào.
-            let fileScanDeadline = options.maxScanWallClock.map { Date().addingTimeInterval($0) }
-            let fileShouldStop = fileScanDeadline.map { deadline in { Date() >= deadline } }
+            // Scaffolding bắt buộc cho mọi file — index + resolver init phải
+            // build xong trước khi deadline neo, nên cả hai nhận forwarding
+            // closure trả false cho tới khi `lazyShouldStop` được gán. Lazy
+            // work trong vòng lặp (linear head-scan, discoverInRoots) bị bound
+            // đúng để discovery journalize vào pendingParentDiscoveries và
+            // resume qua các pass — unbounded ở đây làm resolver về tới
+            // shouldStop check luôn trả .stopped mà không persist gì.
+            var lazyShouldStop: (() -> Bool)?
             let fileIndex = CodexSessionFileIndex(
                 files: files,
                 roots: plan.roots,
@@ -4823,9 +4824,7 @@ enum CostUsageScanner {
                     roots: plan.roots,
                     knownExistingPaths: filePathsInScan),
                 checkCancellation: checkCancellation,
-                // Scaffolding bắt buộc cho mọi file — phải build xong; giới hạn
-                // wall-clock dành cho phần parse phía dưới, không phải index.
-                shouldStop: nil,
+                shouldStop: { lazyShouldStop?() ?? false },
                 generation: scanGeneration,
                 pendingParentDiscoveries: resumesPendingGeneration
                     ? (committedCache.codexPendingParentDiscoveries ?? [:])
@@ -4833,12 +4832,19 @@ enum CostUsageScanner {
             let inheritedResolver = CodexInheritedTotalsResolver(
                 fileIndex: fileIndex,
                 checkCancellation: checkCancellation,
-                // Lazy resolution trong file loop chia sẻ budget của pha file.
-                shouldStop: fileShouldStop,
+                shouldStop: { lazyShouldStop?() ?? false },
                 generation: scanGeneration,
                 pendingParentScans: resumesPendingGeneration
                     ? (committedCache.codexPendingParentScans ?? [:])
                     : [:])
+            // Neo deadline cho pha parse ở đây — sau bookkeeping cố định của
+            // pass (load journal, plan, manifest, rehydrate dedupe) VÀ sau
+            // init phía trên. Neo sớm hơn làm setup ngốn hết budget trước khi
+            // vòng lặp file chạy — episode pending khóa vĩnh viễn ở cùng một
+            // checkpoint mà không parse được byte nào.
+            let fileScanDeadline = options.maxScanWallClock.map { Date().addingTimeInterval($0) }
+            let fileShouldStop = fileScanDeadline.map { deadline in { Date() >= deadline } }
+            lazyShouldStop = fileShouldStop
             let resources = CodexScanResources(
                 fileIndex: fileIndex,
                 inheritedResolver: inheritedResolver,
