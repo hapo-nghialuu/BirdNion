@@ -1363,11 +1363,15 @@ final class CodexForkBaselineTests: XCTestCase {
             refreshPricingInBackground: false,
             scannerOptions: .init(cacheRoot: tmp, maxScanWallClock: 0))
         XCTAssertTrue(snapshot.scanIncomplete)
-        XCTAssertTrue(snapshot.daily.isEmpty)
-        XCTAssertNil(snapshot.sessionTokens)
-        XCTAssertNil(snapshot.sessionCostUSD)
-        XCTAssertNil(snapshot.last30DaysTokens)
-        XCTAssertNil(snapshot.last30DaysCostUSD)
+        // An incomplete pass still surfaces committed history — those days
+        // are already durable on disk, so the report overlays them while the
+        // pending episode drains. The unparsed 2026-01-15 file stays absent.
+        XCTAssertEqual(snapshot.daily.count, 1)
+        XCTAssertEqual(snapshot.daily.first?.date, "2026-01-10")
+        XCTAssertEqual(snapshot.sessionTokens, 777)
+        XCTAssertEqual(snapshot.sessionCostUSD ?? 0, 0.00097125, accuracy: 1e-9)
+        XCTAssertEqual(snapshot.last30DaysTokens, 777)
+        XCTAssertEqual(snapshot.last30DaysCostUSD ?? 0, 0.00097125, accuracy: 1e-9)
         XCTAssertNil(snapshot.projectBreakdown)
         XCTAssertNil(snapshot.projectRetractions)
 
