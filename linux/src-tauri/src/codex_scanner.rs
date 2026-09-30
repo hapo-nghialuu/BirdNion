@@ -307,6 +307,10 @@ pub struct CodexUsageScan {
     pub projects: Vec<ProjectContribution>,
     pub retractions: Vec<ProjectRetraction>,
     pub progress_fingerprint: Option<String>,
+    /// Days of history the completing generation actually covered (captured
+    /// `modified_since` at seed time, so a resumed deep generation still
+    /// reports its original deep range).
+    pub covered_days: i64,
 }
 
 pub enum GenerationOutcome {
@@ -715,7 +719,13 @@ fn usage_scan_generation_inner(
     let episode_budget = std::time::Duration::from_secs(2);
     let mut spool = incremental_spool::Spool::open_default().ok()?;
     let now = Local::now();
-    let fresh_modified_since = now - Duration::days(HISTORY_DAYS);
+    // Scan-back plan (macOS parity): routine passes only cover the few days
+    // that can still change; a deep pass reconciles 30d every 24h; a source
+    // with no stored history cold-starts at the full window. Resumed engines
+    // keep their own captured `modified_since_ms`, so this only affects the
+    // range a NEW generation discovers.
+    let scan_plan = crate::cost_history::scan_back_plan("codex");
+    let fresh_modified_since = now - Duration::days(scan_plan.days);
     let previous = journal::load();
     let committed = previous.as_ref().and_then(|value| value.committed.clone());
     let resumed_priority = previous
@@ -926,6 +936,14 @@ fn usage_scan_generation_inner(
         AggregationEpisode::Complete(scan) => scan,
     };
     let progress_fingerprint = engine.fingerprint.clone();
+    // Coverage of the generation that just finished, in days — the caller
+    // uses it to acknowledge the deep-scan slot only when the completed
+    // generation actually reconciled the deep range.
+    let covered_days = engine
+        .modified_since_ms
+        .and_then(|millis| Local.timestamp_millis_opt(millis).single())
+        .map(|since| (Local::now() - since).num_days() + 1)
+        .unwrap_or(HISTORY_DAYS);
     let engine = state.pending.as_mut()?.engine.take()?;
     state.pending = None;
     state.committed = Some(CommittedGeneration {
@@ -972,6 +990,7 @@ fn usage_scan_generation_inner(
     }
     Some(CodexUsageScan {
         progress_fingerprint: Some(progress_fingerprint),
+        covered_days,
         ..scan
     })
 }
@@ -1306,6 +1325,9 @@ impl StreamingAggregate {
             projects,
             retractions,
             progress_fingerprint: None,
+            // Overwritten by the generation episode with the real captured
+            // coverage; the direct aggregation path always used HISTORY_DAYS.
+            covered_days: HISTORY_DAYS,
         }
     }
 }
@@ -2393,6 +2415,7 @@ fn scan_with_inputs(
         projects,
         retractions,
         progress_fingerprint: None,
+        covered_days: HISTORY_DAYS,
     })
 }
 

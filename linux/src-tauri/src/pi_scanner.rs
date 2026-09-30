@@ -124,7 +124,9 @@ struct ParsedTurn {
     cwd: Option<String>,
 }
 
-pub fn scan_pi_usage(now: DateTime<Local>) -> PiUsageScan {
+/// `scan_days` comes from the shared scan-back plan (routine ~3d / deep 30d
+/// / cold 90d); persisted history fills the rest.
+pub fn scan_pi_usage(now: DateTime<Local>, scan_days: i64) -> PiUsageScan {
     let Some(root) = discover_session_root() else {
         return PiUsageScan {
             usage: UsageReport::default(),
@@ -132,13 +134,23 @@ pub fn scan_pi_usage(now: DateTime<Local>) -> PiUsageScan {
         };
     };
 
-    let cutoff_date = (now - Duration::days(HISTORY_DAYS)).date_naive();
+    let cutoff_date = (now - Duration::days(scan_days.max(1))).date_naive();
+    let cutoff_mtime = now - Duration::days(scan_days.max(1));
     let mut turns = Vec::new();
     let mut seen_turns: HashSet<(String, String)> = HashSet::new();
 
     for entry in WalkDir::new(root).into_iter().flatten() {
         let path = entry.path();
         if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        // A file untouched inside the window holds no in-window line.
+        if entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .is_some_and(|mtime| DateTime::<Local>::from(mtime) < cutoff_mtime)
+        {
             continue;
         }
 

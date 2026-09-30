@@ -241,8 +241,11 @@ pub fn default_roots() -> Vec<PathBuf> {
         .collect()
 }
 
-pub fn usage_scan() -> Option<UsageScan> {
-    scan_with_projects(&default_roots(), Local::now())
+/// Scan restricted to files touched inside `scan_days` — the shared
+/// scan-back plan (routine ~3d / deep 30d / cold 90d) decides the window;
+/// persisted history fills the rest through `cost_history::apply_and_report`.
+pub fn usage_scan_days(scan_days: i64) -> Option<UsageScan> {
+    scan_with_projects_window(&default_roots(), Local::now(), scan_days)
 }
 
 /// Walks every session jsonl once and produces the full report.
@@ -254,8 +257,17 @@ fn scan(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageReport> {
 
 /// Same single file pass as `scan`, with privacy-safe project contributions
 /// collected alongside the unchanged aggregate buckets.
+#[cfg(test)]
 pub fn scan_with_projects(roots: &[PathBuf], now: DateTime<Local>) -> Option<UsageScan> {
-    let cutoff = now - Duration::days(HISTORY_DAYS);
+    scan_with_projects_window(roots, now, HISTORY_DAYS)
+}
+
+pub fn scan_with_projects_window(
+    roots: &[PathBuf],
+    now: DateTime<Local>,
+    scan_days: i64,
+) -> Option<UsageScan> {
+    let cutoff = now - Duration::days(scan_days.max(1));
     let last30_cutoff = now - Duration::days(30);
     let hour_cutoff = now - Duration::hours(24);
     let start_of_today = now.date_naive();

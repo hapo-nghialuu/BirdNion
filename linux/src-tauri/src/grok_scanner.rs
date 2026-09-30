@@ -223,11 +223,21 @@ fn blended_usd(tokens: i64, model: &str) -> f64 {
     (tokens as f64) / 1_000_000.0 * blended
 }
 
-pub fn usage_scan() -> Option<GrokUsageScan> {
-    scan_with_projects(Local::now())
+/// Scan bounded to `scan_days` by the shared scan-back plan; persisted
+/// history fills the rest through `cost_history::apply_and_report`.
+pub fn usage_scan_days(scan_days: i64) -> Option<GrokUsageScan> {
+    scan_with_projects_window(Local::now(), scan_days)
 }
 
+#[cfg(test)]
 pub fn scan_with_projects(now: DateTime<Local>) -> Option<GrokUsageScan> {
+    scan_with_projects_window(now, HISTORY_DAYS)
+}
+
+pub fn scan_with_projects_window(
+    now: DateTime<Local>,
+    scan_days: i64,
+) -> Option<GrokUsageScan> {
     let root = grok_home()?.join("sessions");
     // Missing/not-a-dir root means Grok was never scanned on this machine —
     // return None (not a fabricated all-zero report) so the Data Confidence
@@ -238,7 +248,7 @@ pub fn scan_with_projects(now: DateTime<Local>) -> Option<GrokUsageScan> {
         return None;
     }
     let today = now.date_naive();
-    let cutoff = today - Duration::days(HISTORY_DAYS - 1);
+    let cutoff = today - Duration::days(scan_days.max(1) - 1);
 
     let mut buckets: HashMap<String, (f64, i64, HashMap<String, (f64, i64)>)> = HashMap::new();
     let mut project_buckets: HashMap<

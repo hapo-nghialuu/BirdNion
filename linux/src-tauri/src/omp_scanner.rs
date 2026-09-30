@@ -159,9 +159,12 @@ struct ParsedTurn {
     cwd: Option<String>,
 }
 
-pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
+/// `scan_days` comes from the shared scan-back plan (routine ~3d / deep 30d
+/// / cold 90d); persisted history fills the rest.
+pub fn scan_omp_usage(now: DateTime<Local>, scan_days: i64) -> OMPUsageScan {
     let roots = discover_session_roots();
-    let cutoff_date = (now - Duration::days(HISTORY_DAYS)).date_naive();
+    let cutoff_date = (now - Duration::days(scan_days.max(1))).date_naive();
+    let cutoff_mtime = now - Duration::days(scan_days.max(1));
     let mut turns = Vec::new();
     let mut seen_turns: HashSet<(String, String)> = HashSet::new();
 
@@ -169,6 +172,15 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
         for entry in WalkDir::new(root).into_iter().flatten() {
             let path = entry.path();
             if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                continue;
+            }
+            // A file untouched inside the window holds no in-window line.
+            if entry
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .is_some_and(|mtime| DateTime::<Local>::from(mtime) < cutoff_mtime)
+            {
                 continue;
             }
 
@@ -415,7 +427,6 @@ pub fn scan_omp_usage(now: DateTime<Local>) -> OMPUsageScan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     #[test]
     fn test_project_identity_from_cwd() {

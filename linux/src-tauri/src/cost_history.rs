@@ -15,6 +15,18 @@ use crate::usage::{DailyModel, DailyUsage, UsageReport};
 
 pub const RETAIN_DAYS: i64 = 400;
 pub const WINDOW_DAYS: i64 = 120;
+/// Routine pass only needs to cover days that can still change — a session
+/// file appended since the latest stored day. Matches macOS
+/// `CostHistoryStore.routineScanDays`.
+pub const ROUTINE_SCAN_DAYS: i64 = 3;
+/// Periodic deep pass reaches further back for sessions flushed late (machine
+/// asleep, CLI writing yesterday's turns this morning). Stored days never
+/// shrink on their own, so without this they would stay stale forever.
+pub const DEEP_SCAN_DAYS: i64 = 30;
+/// Cadence of that deep pass.
+pub const DEEP_SCAN_INTERVAL_MS: i64 = 24 * 3_600 * 1_000;
+/// Hard ceiling for any scan-back window, same as macOS `maxDays`.
+const MAX_SCAN_BACK_DAYS: i64 = 90;
 const DOCUMENT_VERSION: u32 = 1;
 const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 const MODEL_NAME_MAX_CHARS: usize = 128;
@@ -62,6 +74,11 @@ pub struct Document {
     /// winner after restart.
     #[serde(default, alias = "topModels")]
     pub top_models: HashMap<String, String>,
+    /// source → epoch millis of the most recent COMPLETED deep scan. Written
+    /// only after a deep plan's live data persisted; missing entries (older
+    /// documents, or a source that never deep-scanned) read back as "due".
+    #[serde(default, alias = "deepScanAt")]
+    pub deep_scan_at: HashMap<String, i64>,
 }
 
 /// Accept the fractional JSON milliseconds written by older macOS builds, but
@@ -274,6 +291,7 @@ fn validate_document(document: &Document, now_ms: i64) -> bool {
         || !valid_source_map(&document.scanned_at)
         || !valid_source_map(&document.counting_revision)
         || !valid_source_map(&document.top_models)
+        || !valid_source_map(&document.deep_scan_at)
         || document
             .scanned_at
             .values()
@@ -286,6 +304,10 @@ fn validate_document(document: &Document, now_ms: i64) -> bool {
             .top_models
             .values()
             .any(|name| !valid_model_name(name))
+        || document
+            .deep_scan_at
+            .values()
+            .any(|timestamp| *timestamp < 0 || *timestamp > latest_safe_scan)
     {
         return false;
     }
@@ -374,6 +396,88 @@ pub fn prefer_higher(a: &HistoryDay, b: &HistoryDay) -> HistoryDay {
 /// concurrently on blocking threads, and an unguarded interleave would let one
 /// source's merge overwrite another's just-written days.
 static HISTORY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScanBackPlan {
+    /// How far back the next live scan must reach, in days.
+    pub days: i64,
+    /// Whether this pass consumes the periodic deep-scan slot. Callers must
+    /// acknowledge it via `mark_deep_scan_succeeded` only after the deep
+    /// scan's data has persisted — a failed scan stays due.
+    pub is_deep: bool,
+}
+
+/// Pure core of `scan_back_plan` — facts in, decision out (macOS parity:
+/// `CostHistoryStore.scanBackPlan(daysSinceLatestStoredDay:lastDeepScan:now:)`).
+fn scan_back_plan_inner(
+    days_since_latest_stored_day: Option<i64>,
+    last_deep_scan_ms: Option<i64>,
+    now_ms: i64,
+) -> ScanBackPlan {
+    // Cold start (source has no stored days at all) covers the full window.
+    let Some(gap) = days_since_latest_stored_day else {
+        return ScanBackPlan {
+            days: MAX_SCAN_BACK_DAYS,
+            is_deep: true,
+        };
+    };
+    let routine = (gap + 1).clamp(ROUTINE_SCAN_DAYS, MAX_SCAN_BACK_DAYS);
+    let deep_due = match last_deep_scan_ms {
+        // A stamp in the future means the clock moved backwards — treat as
+        // due rather than trusting a timestamp that cannot have happened.
+        Some(stamp) => stamp > now_ms || now_ms - stamp >= DEEP_SCAN_INTERVAL_MS,
+        None => true,
+    };
+    if !deep_due {
+        return ScanBackPlan {
+            days: routine,
+            is_deep: false,
+        };
+    }
+    ScanBackPlan {
+        days: routine.max(DEEP_SCAN_DAYS).min(MAX_SCAN_BACK_DAYS),
+        is_deep: true,
+    }
+}
+
+/// Plans how far the next live scan must reach without consuming the deep
+/// slot. Planning is read-only: acknowledge a deep pass only after its data
+/// persisted, via `mark_deep_scan_succeeded`.
+pub fn scan_back_plan(source: &str) -> ScanBackPlan {
+    let _guard = HISTORY_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let now = Local::now();
+    let document = read_for_mutation(now.timestamp_millis()).unwrap_or_default();
+    let latest = document.sources.get(source).and_then(|days| {
+        days.keys()
+            .filter_map(|key| NaiveDate::parse_from_str(key, "%Y-%m-%d").ok())
+            .max()
+    });
+    let gap = latest.map(|day| (now.date_naive() - day).num_days());
+    scan_back_plan_inner(
+        gap,
+        document.deep_scan_at.get(source).copied(),
+        now.timestamp_millis(),
+    )
+}
+
+/// Acknowledges a successfully persisted deep scan. Call only when the deep
+/// pass's live data actually reached the store (i.e. the merged report's
+/// `live` flag is set) — otherwise the slot stays due for the next refresh.
+pub fn mark_deep_scan_succeeded(source: &str) {
+    let _guard = HISTORY_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let now_ms = Local::now().timestamp_millis();
+    let Ok(mut document) = read_for_mutation(now_ms) else {
+        return;
+    };
+    document
+        .deep_scan_at
+        .insert(source.to_string(), now_ms);
+    let _ = write(&document);
+}
 
 /// Merge live daily buckets for `source`, persist, return 120-day window as UsageReport.
 pub fn apply_and_report(source: &str, live: Option<&UsageReport>) -> UsageReport {
@@ -733,6 +837,7 @@ mod tests {
                 )]),
             )]),
             scanned_at: HashMap::from([("codex".to_string(), 1)]),
+            deep_scan_at: HashMap::new(),
             counting_revision: HashMap::from([("grok".to_string(), 3)]),
             top_models: HashMap::from([("codex".to_string(), "gpt-5".to_string())]),
         }
@@ -1754,5 +1859,76 @@ mod tests {
         assert!(!report.included);
         assert!(!report.live);
         assert_eq!(report.scanned_at, None);
+    }
+
+    #[test]
+    fn scan_back_plan_cold_start_covers_full_window() {
+        let now = 1_700_000_000_000i64;
+        assert_eq!(
+            scan_back_plan_inner(None, Some(now), now),
+            ScanBackPlan {
+                days: MAX_SCAN_BACK_DAYS,
+                is_deep: true
+            }
+        );
+    }
+
+    #[test]
+    fn scan_back_plan_routine_follows_stored_gap() {
+        let now = 1_700_000_000_000i64;
+        // Fresh stamp (deep not due) → routine window only.
+        assert_eq!(
+            scan_back_plan_inner(Some(0), Some(now - 1_000), now),
+            ScanBackPlan {
+                days: ROUTINE_SCAN_DAYS,
+                is_deep: false
+            }
+        );
+        // Gap + 1 so the latest stored day is re-checked, floor = routine.
+        assert_eq!(
+            scan_back_plan_inner(Some(5), Some(now - 1_000), now),
+            ScanBackPlan {
+                days: 6,
+                is_deep: false
+            }
+        );
+        // Huge gaps clamp to the hard ceiling.
+        assert_eq!(
+            scan_back_plan_inner(Some(200), Some(now - 1_000), now),
+            ScanBackPlan {
+                days: MAX_SCAN_BACK_DAYS,
+                is_deep: false
+            }
+        );
+    }
+
+    #[test]
+    fn scan_back_plan_deep_slot_and_future_stamp() {
+        let now = 1_700_000_000_000i64;
+        // No stamp → first pass after history exists is the deep one.
+        assert_eq!(
+            scan_back_plan_inner(Some(0), None, now),
+            ScanBackPlan {
+                days: DEEP_SCAN_DAYS,
+                is_deep: true
+            }
+        );
+        // Stale stamp → deep due again, 30d floor regardless of gap.
+        assert_eq!(
+            scan_back_plan_inner(Some(9), Some(now - DEEP_SCAN_INTERVAL_MS), now),
+            ScanBackPlan {
+                days: DEEP_SCAN_DAYS,
+                is_deep: true
+            }
+        );
+        // A stamp in the future means the clock moved backwards — treat as
+        // due rather than trusting a timestamp that cannot have happened.
+        assert_eq!(
+            scan_back_plan_inner(Some(0), Some(now + 1_000), now),
+            ScanBackPlan {
+                days: DEEP_SCAN_DAYS,
+                is_deep: true
+            }
+        );
     }
 }

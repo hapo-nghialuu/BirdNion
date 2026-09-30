@@ -83,9 +83,13 @@ async fn claude_usage_report() -> Option<usage::UsageReport> {
                 return report.clone();
             }
         }
-        let live = claude_scanner::usage_scan();
+        let plan = cost_history::scan_back_plan("claude");
+        let live = claude_scanner::usage_scan_days(plan.days);
         let merged =
             cost_history::apply_and_report("claude", live.as_ref().map(|scan| &scan.usage));
+        if plan.is_deep && merged.live {
+            cost_history::mark_deep_scan_succeeded("claude");
+        }
         if let Some(scan) = &live {
             // Insights storage is optional. Its failure must never make the
             // established aggregate usage command fail.
@@ -164,6 +168,12 @@ async fn codex_usage_report(app: tauri::AppHandle) -> Option<usage::UsageReport>
                 let _ = app.emit("birdnion-codex-usage-updated", terminal);
                 return;
             }
+            // Deep-slot acknowledgement follows the completed generation's
+            // actual coverage, not the requesting call's plan — a generation
+            // seeded during a deep pass still owns its 30d range on resume.
+            if live.covered_days >= cost_history::DEEP_SCAN_DAYS {
+                cost_history::mark_deep_scan_succeeded("codex");
+            }
             // Project insights are a secondary projection, as on macOS. A
             // project-history write failure must not roll back or suppress an
             // already durable exact aggregate; the next scan retries the
@@ -225,13 +235,17 @@ async fn grok_usage_report() -> Option<usage::UsageReport> {
                 return report.clone();
             }
         }
-        let live = grok_scanner::usage_scan();
+        let plan = cost_history::scan_back_plan("grok");
+        let live = grok_scanner::usage_scan_days(plan.days);
         // Ngữ nghĩa đếm của Grok đổi ở rev 3 (chia theo dòng thời gian session
         // thay vì dồn vào ngày hoạt động cuối). Các ngày đã lưu theo công thức
         // cũ bị phồng vì cùng một session để lại bản sao ở mỗi ngày nó từng là
         // "hoạt động cuối". History thay source và đóng dấu revision nguyên tử
         // khi có live hợp lệ; thiếu/hỏng live phải giữ nguyên revision cũ.
         let merged = merge_grok_usage(live.as_ref().map(|scan| &scan.usage));
+        if plan.is_deep && merged.live {
+            cost_history::mark_deep_scan_succeeded("grok");
+        }
         if let Some(scan) = &live {
             let _ = project_cost_history::apply("grok", &scan.projects, false);
         }
@@ -260,8 +274,12 @@ async fn omp_usage_report() -> Option<usage::UsageReport> {
             }
         }
         let now = chrono::Local::now();
-        let scan = omp_scanner::scan_omp_usage(now);
+        let plan = cost_history::scan_back_plan("omp");
+        let scan = omp_scanner::scan_omp_usage(now, plan.days);
         let merged = cost_history::apply_and_report("omp", Some(&scan.usage));
+        if plan.is_deep && merged.live {
+            cost_history::mark_deep_scan_succeeded("omp");
+        }
         let _ = project_cost_history::apply("omp", &scan.projects, false);
         USAGE_REPORT_CACHE
             .lock()
@@ -337,8 +355,12 @@ async fn pi_usage_report() -> Option<usage::UsageReport> {
             }
         }
         let now = chrono::Local::now();
-        let scan = pi_scanner::scan_pi_usage(now);
+        let plan = cost_history::scan_back_plan("pi");
+        let scan = pi_scanner::scan_pi_usage(now, plan.days);
         let merged = cost_history::apply_and_report("pi", Some(&scan.usage));
+        if plan.is_deep && merged.live {
+            cost_history::mark_deep_scan_succeeded("pi");
+        }
         let _ = project_cost_history::apply("pi", &scan.projects, false);
         USAGE_REPORT_CACHE
             .lock()
