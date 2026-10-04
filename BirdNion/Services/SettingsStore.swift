@@ -138,6 +138,10 @@ final class SettingsStore: ObservableObject {
     @AppStorage("kiroBudgetUSD") var kiroMonthlyBudgetUSD: Double = 0
     @AppStorage("ompBudgetUSD") var ompMonthlyBudgetUSD: Double = 0
     @AppStorage("piBudgetUSD") var piMonthlyBudgetUSD: Double = 0
+    /// Opt-in: post a notification when a source's spend in the configured
+    /// budget period crosses its budget (or the combined spend crosses the
+    /// overall budget). Same UserDefaults-only convention as the budgets.
+    @AppStorage(BudgetAlerts.enabledKey) var budgetAlertsEnabled: Bool = false
     /// Refresh every provider each time the menu-bar popover opens (CodexBar's
     /// `refreshAllProvidersOnMenuOpen`). `AppDelegate.showPanel()` reads this.
     @AppStorage("refreshOnMenuOpen") var refreshOnMenuOpen: Bool = false
