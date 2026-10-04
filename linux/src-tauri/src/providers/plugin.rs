@@ -792,6 +792,26 @@ const BUNDLED: &[(&str, &str)] = &[
         "litellm.js",
         include_str!("../../resources/plugins/litellm.js"),
     ),
+    (
+        "venice.js",
+        include_str!("../../resources/plugins/venice.js"),
+    ),
+    (
+        "clinepass.js",
+        include_str!("../../resources/plugins/clinepass.js"),
+    ),
+    (
+        "nous.js",
+        include_str!("../../resources/plugins/nous.js"),
+    ),
+    (
+        "muse.js",
+        include_str!("../../resources/plugins/muse.js"),
+    ),
+    (
+        "sakana.js",
+        include_str!("../../resources/plugins/sakana.js"),
+    ),
 ];
 
 pub fn plugins_dir() -> PathBuf {
