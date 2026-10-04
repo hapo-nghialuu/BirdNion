@@ -42,7 +42,7 @@ enum PopoverPanelSizing {
 /// manages a borderless DropdownPanel for the popover content. The menu bar
 /// icon is a dynamic NSImage redrawn from the latest QuotaService statuses.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Use the ServicesContainer already registered by `BirdNionApp.init`
     /// so the Settings scene and AppDelegate share the exact same instances.
     var services: ServicesContainer {
@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// attached only for the duration of a right-click (see `togglePanel`).
     private var statusMenu: NSMenu?
     private weak var settingsMenuItem: NSMenuItem?
+    private weak var updateMenuItem: NSMenuItem?
     private var panel: DropdownPanel!
     private var hostingController: NSHostingController<AnyView>!
     private let agentDetailCoordinator = AgentDetailPanelCoordinator()
@@ -141,6 +142,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsItem.target = self
             menu.addItem(settingsItem)
             self.settingsMenuItem = settingsItem
+
+            // One-click Homebrew upgrade (CodexBar port): while an update is
+            // available the top item reads "Update to x.y.z (brew)" and runs
+            // `brew upgrade` + quits; otherwise it offers a manual check.
+            let updateItem = NSMenuItem(
+                title: L10n.t("menu.checkUpdates", services.settings.appLanguage),
+                action: #selector(menuUpdateItemTapped(_:)),
+                keyEquivalent: "")
+            updateItem.target = self
+            menu.addItem(updateItem)
+            self.updateMenuItem = updateItem
+            menu.delegate = self
             statusMenu = menu
 
             button.image = MenuBarIconRenderer.iconImage()
@@ -380,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshLocalizedChrome() {
         settingsMenuItem?.title = L10n.t("popover.settings", services.settings.appLanguage)
+        refreshUpdateMenuItem()
     }
 
     // MARK: - Show / hide
@@ -698,6 +712,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateFrames(from: services.quotaService.displayStatuses)
             frameIndex = 0
             applyCurrentFrame()
+        }
+    }
+
+    // MARK: - Menu-bar update item (one-click brew upgrade)
+
+    /// Re-titles the update item each time the right-click menu opens:
+    /// "Update to x.y.z (brew)" when an upgrade is known available,
+    /// "Check for Updates…" otherwise (which also folds in the .checking
+    /// state so taps can't double-trigger a fetch).
+    private func refreshUpdateMenuItem() {
+        let language = services.settings.appLanguage
+        switch UpdateChecker.shared.state {
+        case .available(let version, _):
+            updateMenuItem?.title = L10n.f("menu.updateTo", language, version)
+            updateMenuItem?.isEnabled = true
+        case .checking:
+            updateMenuItem?.title = L10n.t("about.checking", language)
+            updateMenuItem?.isEnabled = false
+        default:
+            updateMenuItem?.title = L10n.t("menu.checkUpdates", language)
+            updateMenuItem?.isEnabled = true
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusMenu else { return }
+        refreshUpdateMenuItem()
+    }
+
+    @objc private func menuUpdateItemTapped(_ sender: AnyObject?) {
+        switch UpdateChecker.shared.state {
+        case .available:
+            UpdateChecker.shared.applyAvailableUpdate()
+        case .checking:
+            break
+        default:
+            Task { await UpdateChecker.shared.check() }
         }
     }
 
