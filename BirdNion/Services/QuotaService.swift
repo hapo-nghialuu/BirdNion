@@ -156,7 +156,10 @@ final class QuotaService: ObservableObject {
             guard let self else { return }
             self.failureEpisode.removeValue(forKey: id)
             self.warnState.removeValue(forKey: id)
+            self.credentialAlerted.remove(id)
+            self.credentialDelivered.remove(id)
             self.failureNotificationRemove(Self.failureNotificationID(for: id))
+            self.failureNotificationRemove(Self.credentialNotificationID(for: id))
             self.legacyFailureNotificationCleanup(id)
         }
         hooks.saveAccountSnapshot = { [weak self] status in
@@ -965,6 +968,68 @@ final class QuotaService: ObservableObject {
         "provider.failure.\(providerID)"
     }
 
+    // MARK: - Credential-expiry alerts (CodexBar `credential-notifications` port)
+
+    /// One alert per provider per failure episode — the sign-in itself is
+    /// broken, so it fires on first detection rather than waiting for the
+    /// generic 3-failure reliability notification. Alert text carries only
+    /// the provider name + a reconnect instruction (never emails, tokens,
+    /// or raw errors). A fresh successful fetch resets the episode.
+    /// `credentialAlerted` tracks episodes — kept even while the toggle is
+    /// off (upstream parity: suppressed deliveries still consume the episode).
+    /// `credentialDelivered` tracks episodes whose notification actually
+    /// posted, so resolve only removes ids that were really delivered.
+    private var credentialAlerted: Set<String> = []
+    private var credentialDelivered: Set<String> = []
+
+    /// Error kinds that mean the credential itself is dead — quota/billing
+    /// exhaustion, rate limits, and transport failures do not trigger.
+    private static let credentialAlertKinds: Set<ProviderErrorKind> = [
+        .tokenInvalidOrMissing,
+        .cookieExpiredOrMissing,
+        .browserDataDenied,
+        .browserDataUnreadable,
+    ]
+
+    static func credentialNotificationID(for providerID: String) -> String {
+        "provider.credential.\(providerID)"
+    }
+
+    /// Opt-in, default OFF (upstream parity — a separate, more sensitive
+    /// alert class from the reliability notification).
+    static var credentialExpiryNotificationsEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "credentialExpiryNotificationsEnabled")
+    }
+
+    private func evaluateCredentialEpisode(
+        id: String,
+        displayName: String,
+        kind: ProviderErrorKind
+    ) {
+        guard Self.credentialAlertKinds.contains(kind) else { return }
+        guard !credentialAlerted.contains(id) else { return }
+        // Episodes are tracked even while the toggle is off (upstream parity):
+        // re-enabling mid-episode must not fire a fresh alert.
+        credentialAlerted.insert(id)
+        guard Self.credentialExpiryNotificationsEnabled else { return }
+        failureNotificationPost(
+            Self.credentialNotificationID(for: id),
+            displayName,
+            L10n.t("notification.credentialExpired", nil))
+        credentialDelivered.insert(id)
+    }
+
+    private func resolveCredentialEpisode(id: String) {
+        credentialAlerted.remove(id)
+        guard credentialDelivered.remove(id) != nil else { return }
+        failureNotificationRemove(Self.credentialNotificationID(for: id))
+    }
+
+    /// Test seam for credential-episode assertions.
+    func credentialAlertActive(for id: String) -> Bool {
+        credentialAlerted.contains(id)
+    }
+
     /// Dedicated flag, default ON — reliability alerts must work out of the
     /// box and are NOT coupled to the quota-warning master toggle
     /// (`QuotaWarnConfig.enabled`, default off).
@@ -988,6 +1053,7 @@ final class QuotaService: ObservableObject {
 
         guard let error, !error.isEmpty else {
             state.consecutiveFailures = 0
+            resolveCredentialEpisode(id: id)
             guard state.isFailureActive else {
                 if !state.didRemoveOrphanStableNotification {
                     state.consecutiveSuccesses += 1
@@ -1027,6 +1093,7 @@ final class QuotaService: ObservableObject {
         state.consecutiveSuccesses = 0
         state.consecutiveFailures += 1
         let kind = classify(rawError: error) ?? .unknown
+        evaluateCredentialEpisode(id: id, displayName: displayName, kind: kind)
         Self.failureLog.warning(
             "failure provider=\(id, privacy: .public) kind=\(kind.rawValue, privacy: .public) count=\(state.consecutiveFailures, privacy: .public) raw=\(String(error.prefix(160)), privacy: .public)")
 

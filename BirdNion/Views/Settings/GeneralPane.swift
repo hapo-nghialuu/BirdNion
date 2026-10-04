@@ -210,6 +210,17 @@ struct GeneralPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
+                    title: L10n.t("settings.credentialExpiryNotifications.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.credentialExpiryNotifications.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.credentialExpiryNotificationsEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
                     title: L10n.t("settings.quotaWarningNotifications.title", settings.appLanguage),
                     subtitle: L10n.t("settings.quotaWarningNotifications.subtitle", settings.appLanguage)
                 ) {

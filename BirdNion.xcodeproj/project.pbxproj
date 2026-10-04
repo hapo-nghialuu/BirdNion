@@ -228,6 +228,7 @@
 		WDGT0005000000000000B005 /* WidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0005000000000000F005 /* WidgetSnapshotStore.swift */; };
 		WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */; };
 		STAW0001000000000000B002 /* StayAwakeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STAW0001000000000000F002 /* StayAwakeServiceTests.swift */; };
+		CRDA0001000000000000B001 /* CredentialAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CRDA0001000000000000F001 /* CredentialAlertTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -485,6 +486,7 @@
 		WDGT0005000000000000F005 /* WidgetSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Services/WidgetSnapshotStore.swift"; sourceTree = "<group>"; };
 		WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WidgetSnapshotTests.swift; sourceTree = "<group>"; };
 		STAW0001000000000000F002 /* StayAwakeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/StayAwakeServiceTests.swift; sourceTree = "<group>"; };
+		CRDA0001000000000000F001 /* CredentialAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CredentialAlertTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -558,6 +560,7 @@
 				FLCT0001000000000000B001 /* first-live-checkpoint-tests.swift in Sources */,
 				WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */,
 				STAW0001000000000000B002 /* StayAwakeServiceTests.swift in Sources */,
+				CRDA0001000000000000B001 /* CredentialAlertTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

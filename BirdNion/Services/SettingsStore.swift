@@ -152,6 +152,9 @@ final class SettingsStore: ObservableObject {
     /// Opt-in: keep the machine awake while a local agent session writes.
     /// `StayAwakeService` reads the same UserDefaults key on each poll.
     @AppStorage(StayAwakeConfig.enabledKey) var stayAwakeEnabled: Bool = false
+    /// Opt-in credential-expiry alerts (CodexBar parity — off by default).
+    /// `QuotaService` reads the same UserDefaults key directly.
+    @AppStorage("credentialExpiryNotificationsEnabled") var credentialExpiryNotificationsEnabled: Bool = false
     /// GitHub-releases update check (About pane). Auto-check runs at launch,
     /// throttled to once a day by `UpdateChecker`.
     @AppStorage("updateAutoCheckEnabled") var updateAutoCheckEnabled: Bool = true
