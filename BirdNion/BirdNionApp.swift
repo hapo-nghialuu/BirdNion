@@ -19,6 +19,10 @@ struct BirdNionApp: App {
         let services = ServicesContainer()
         ServicesContainer.register(services: services)
         services.settings.consumePendingPreferencesImport()
+        Task {
+            await CurrencyExchange.shared
+                .fetchLatestRatesIfNeeded(preferredCurrencyCode: PreferredCurrency.preference)
+        }
         _settings = State(initialValue: services.settings)
         _config = State(initialValue: services.configService)
         _quota = State(initialValue: services.quotaService)

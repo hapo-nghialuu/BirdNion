@@ -95,6 +95,7 @@ final class SettingsStore: ObservableObject {
     /// App-wide appearance: light / dark / auto (follow macOS). Applied via
     /// `applyAppearance()` on launch and whenever the picker changes.
     @AppStorage("appAppearance") var appAppearance: String = AppAppearance.auto.rawValue
+    @AppStorage(PreferredCurrency.defaultsKey) var preferredCurrencyCode: String = "auto"
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("refreshIntervalSeconds") var refreshIntervalSeconds: Double = RefreshFrequency.twoMinutes.rawValue
     @AppStorage("debugMenuEnabled") var debugMenuEnabled: Bool = false

@@ -92,6 +92,7 @@ struct PreferencesDocument: Codable {
         "claudeUsageDataSource",
         "claudeCookieSource",
         "claudeOAuthKeychainPromptMode",
+        PreferredCurrency.defaultsKey,
     ]
 
     private static let stringChoices: [String: [String]] = [

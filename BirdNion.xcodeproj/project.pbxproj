@@ -232,6 +232,8 @@
 		PRFD0001000000000000B001 /* PreferencesDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F001 /* PreferencesDocument.swift */; };
 		PRFD0001000000000000B002 /* SettingsStore+Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F002 /* SettingsStore+Preferences.swift */; };
 		PRFD0001000000000000B003 /* PreferencesDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F003 /* PreferencesDocumentTests.swift */; };
+		CURR0001000000000000B001 /* CurrencyExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURR0001000000000000F001 /* CurrencyExchange.swift */; };
+		CURR0001000000000000B002 /* CurrencyExchangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURR0001000000000000F002 /* CurrencyExchangeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -493,6 +495,8 @@
 		PRFD0001000000000000F001 /* PreferencesDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/PreferencesDocument.swift; sourceTree = "<group>"; };
 		PRFD0001000000000000F002 /* SettingsStore+Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Services/SettingsStore+Preferences.swift"; sourceTree = "<group>"; };
 		PRFD0001000000000000F003 /* PreferencesDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/PreferencesDocumentTests.swift; sourceTree = "<group>"; };
+		CURR0001000000000000F001 /* CurrencyExchange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CurrencyExchange.swift; sourceTree = "<group>"; };
+		CURR0001000000000000F002 /* CurrencyExchangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CurrencyExchangeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -568,6 +572,7 @@
 				STAW0001000000000000B002 /* StayAwakeServiceTests.swift in Sources */,
 				CRDA0001000000000000B001 /* CredentialAlertTests.swift in Sources */,
 				PRFD0001000000000000B003 /* PreferencesDocumentTests.swift in Sources */,
+				CURR0001000000000000B002 /* CurrencyExchangeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -939,6 +944,7 @@
 				STAW0001000000000000B001 /* StayAwakeService.swift in Sources */,
 				PRFD0001000000000000B001 /* PreferencesDocument.swift in Sources */,
 				PRFD0001000000000000B002 /* SettingsStore+Preferences.swift in Sources */,
+				CURR0001000000000000B001 /* CurrencyExchange.swift in Sources */,
 				URCO0001000000000000B001 /* UsageReportCoordinator.swift in Sources */,
 				PSTR0001000000000000B001 /* ProviderStatusStream.swift in Sources */,
 				DDDD0003000000000000B002 /* ConfigService.swift in Sources */,
