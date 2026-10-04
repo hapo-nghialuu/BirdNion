@@ -13,6 +13,79 @@ enum BudgetPeriod: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+/// Shared reporting period for cost surfaces (All-tab chart, top models,
+/// and any future menu/widget consumer): fixed trailing-day windows plus
+/// calendar month-to-date and the full recorded history. One stored choice
+/// drives every surface, mirroring CodexBar's `CostReportingPeriod`.
+enum CostReportingPeriod: String, CaseIterable, Identifiable, Codable, Sendable {
+    case day, week, month, quarter, season, monthToDate, allHistory
+
+    var id: String { rawValue }
+
+    /// Trailing window length for day-count periods; nil for the calendar
+    /// (month-to-date) and unbounded (all-history) periods.
+    var fixedDays: Int? {
+        switch self {
+        case .day: return 1
+        case .week: return 7
+        case .month: return 30
+        case .quarter: return 90
+        case .season: return 120
+        case .monthToDate, .allHistory: return nil
+        }
+    }
+
+    /// Legacy `popover.allChartDays` day-count → period, for migration.
+    init?(legacyDays: Int) {
+        switch legacyDays {
+        case 1: self = .day
+        case 7: self = .week
+        case 30: self = .month
+        case 90: self = .quarter
+        case 120: self = .season
+        default: return nil
+        }
+    }
+
+    static let defaultsKey = "costReportingPeriod"
+    static let legacyDaysKey = "popover.allChartDays"
+
+    /// Stored period, migrating the legacy day-count key on first read.
+    static var current: CostReportingPeriod {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.string(forKey: defaultsKey),
+           let period = CostReportingPeriod(rawValue: raw) {
+            return period
+        }
+        let legacy = defaults.integer(forKey: legacyDaysKey)
+        return CostReportingPeriod(legacyDays: legacy) ?? .month
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .day: return "24h"
+        case .week: return "7d"
+        case .month: return "30d"
+        case .quarter: return "90d"
+        case .season: return "120d"
+        case .monthToDate: return "MTD"
+        case .allHistory: return "All"
+        }
+    }
+
+    func label(vi: Bool) -> String {
+        switch self {
+        case .day: return "24h"
+        case .week: return vi ? "7 ngày" : "7 days"
+        case .month: return vi ? "30 ngày" : "30 days"
+        case .quarter: return vi ? "90 ngày" : "90 days"
+        case .season: return vi ? "120 ngày" : "120 days"
+        case .monthToDate: return vi ? "tháng này" : "month to date"
+        case .allHistory: return vi ? "toàn bộ" : "all history"
+        }
+    }
+}
+
 enum MenuBarPercentDisplay {
     static let defaultsKey = "showPercentInMenuBar"
 
@@ -118,10 +191,23 @@ final class SettingsStore: ObservableObject {
     @AppStorage(QuotaWarnConfig.alertKey) var quotaWarningOnScreenAlertEnabled: Bool = false
     /// All-tab budget period (week vs month). Default is month (preserving legacy behavior).
     @AppStorage("birdnion.budgetPeriod") var budgetPeriodRaw: String = BudgetPeriod.week.rawValue
+    @AppStorage(CostReportingPeriod.defaultsKey) private var costReportingPeriodRaw: String = ""
 
     var budgetPeriod: BudgetPeriod {
         get { BudgetPeriod(rawValue: budgetPeriodRaw) ?? .week }
         set { budgetPeriodRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    /// Shared cost reporting period; reads migrate the legacy
+    /// `popover.allChartDays` day-count once.
+    var costReportingPeriod: CostReportingPeriod {
+        get {
+            if let period = CostReportingPeriod(rawValue: costReportingPeriodRaw) {
+                return period
+            }
+            return CostReportingPeriod.current
+        }
+        set { costReportingPeriodRaw = newValue.rawValue; objectWillChange.send() }
     }
 
     /// All-tab budget (USD) for the local estimated Claude+Codex+Grok+Kiro+OMP+Pi
