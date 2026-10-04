@@ -2499,6 +2499,18 @@ struct WindowRow: View {
     /// marker stripe on the bar and the reserve/deficit detail line.
     private var pace: WindowPace? { WindowPace(window: window, now: Date()) }
 
+    /// Days until the window hits 0% at the observed burn rate — only for
+    /// windows that carry no reset schedule (pace is nil), from
+    /// `QuotaUsageHistory` samples. "~2 ngày" / "~3d".
+    private var runwayText: String? {
+        guard pace == nil, !window.isInactive,
+              let days = QuotaUsageHistory.runwayDays(
+                provider: providerID, window: window.label),
+              days.isFinite, days > 0
+        else { return nil }
+        return WindowPace.format(days * 86400)
+    }
+
     private var allowanceText: String? {
         guard !window.isInactive, let allowance = window.allowance else { return nil }
         return QuotaAllowanceFormatter.text(allowance, language: settings.appLanguage)
@@ -2560,6 +2572,10 @@ struct WindowRow: View {
                     } else if let pace, !pace.isOnTrack || !pace.lastsUntilReset {
                         // Design merges pace into left foot when off-track.
                         Text(paceLine(pace).uppercased())
+                    } else if let runwayText {
+                        // No reset schedule: fall back to the observed burn
+                        // rate — "ĐÃ DÙNG 82% · HẾT SAU ~2D".
+                        Text("\(L10n.f("quota.usedPct", settings.appLanguage, window.usedPct)) · \(L10n.f("quota.runsOutIn", settings.appLanguage, runwayText))".uppercased())
                     } else {
                         Text(L10n.f("quota.usedPct", settings.appLanguage, window.usedPct).uppercased())
                     }
