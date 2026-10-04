@@ -64,6 +64,9 @@ struct QuotaOverview: View {
     @State private var devinReportTaskId: String?
     @State private var loadingCostSources: Set<CostHistoryStore.Source> = []
     @State private var claudeCodeTargetRevision = 0
+    /// Today's total estimated local spend across cost sources — loaded
+    /// once per panel appearance for the glance line.
+    @State private var glanceTodayUSD: Double = 0
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
@@ -89,6 +92,10 @@ struct QuotaOverview: View {
                             statuses: quota.displayStatuses,
                             staleWarning: { quota.staleWarning(for: $0) }).count,
                         onOpenQuotaAgenda: openQuotaAgenda)
+                    GlanceLine(
+                        statuses: quota.displayStatuses,
+                        todayUSD: glanceTodayUSD,
+                        language: settings.appLanguage)
                     let selected = effectiveSelectedId()
                     ProviderTabs(
                         providers: quota.displayStatuses,
@@ -192,6 +199,7 @@ struct QuotaOverview: View {
         }
         .task {
             triggerReportsIfNeeded(providerId: selectedProviderId ?? effectiveSelectedId())
+            glanceTodayUSD = CostHistoryStore.todayTotalUSD()
         }
         .onReceive(NotificationCenter.default.publisher(for: .claudeCodeTargetChanged)) { _ in
             claudeCodeTargetRevision += 1
