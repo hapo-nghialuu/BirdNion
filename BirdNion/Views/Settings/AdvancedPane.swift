@@ -34,6 +34,22 @@ struct AdvancedPane: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.t("settings.section.power", settings.appLanguage))
+                    .plexEyebrow()
+                    .padding(.top, 22)
+                    .padding(.bottom, 4)
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.stayAwake.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.stayAwake.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.stayAwakeEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
                 Text(L10n.t("settings.section.developer", settings.appLanguage))
                     .plexEyebrow()
                     .padding(.top, 22)

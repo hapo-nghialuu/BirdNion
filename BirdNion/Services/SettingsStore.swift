@@ -149,6 +149,9 @@ final class SettingsStore: ObservableObject {
     /// Show each provider's on-disk data size in the Providers detail pane.
     /// `ProviderStorageScanner` only scans while this is on.
     @AppStorage("providerStorageFootprintsEnabled") var providerStorageFootprintsEnabled: Bool = false
+    /// Opt-in: keep the machine awake while a local agent session writes.
+    /// `StayAwakeService` reads the same UserDefaults key on each poll.
+    @AppStorage(StayAwakeConfig.enabledKey) var stayAwakeEnabled: Bool = false
     /// GitHub-releases update check (About pane). Auto-check runs at launch,
     /// throttled to once a day by `UpdateChecker`.
     @AppStorage("updateAutoCheckEnabled") var updateAutoCheckEnabled: Bool = true
