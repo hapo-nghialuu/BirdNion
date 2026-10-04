@@ -57,6 +57,18 @@ struct AdvancedPane: View {
                         .toggleStyle(.instrumentSwitch)
                 }
 
+                SettingsLabeledRow(
+                    title: L10n.t("settings.statuslineFeed.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.statuslineFeed.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { settings.statusLineFeedEnabled },
+                        set: { settings.statusLineFeedEnabled = $0 }
+                    ))
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
+                }
+
                 Text(LocalizedStringKey(L10n.t("settings.developer.footer", settings.appLanguage)))
                     .font(.plexSans(12))
                     .foregroundStyle(VocabbyTheme.tertiary)

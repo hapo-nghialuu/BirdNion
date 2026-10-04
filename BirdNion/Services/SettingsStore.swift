@@ -155,6 +155,17 @@ final class SettingsStore: ObservableObject {
     /// "stable" hides GitHub prereleases; "beta" includes them.
     @AppStorage("updateChannel") var updateChannel: String = "stable"
     @AppStorage("hidePersonalInfo") var hidePersonalInfo: Bool = false
+    /// Opt-in statusline feed (`StatusLineFeed`). Custom setter: turning it
+    /// off deletes the feed file so a stale line can't linger in the user's
+    /// statusLine config.
+    var statusLineFeedEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: StatusLineFeed.defaultsKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: StatusLineFeed.defaultsKey)
+            if !newValue { StatusLineFeed.removeFile() }
+            objectWillChange.send()
+        }
+    }
     /// Menu-bar percent rotation. Stored in UserDefaults under
     /// `MenuBarPercentDisplay.defaultsKey`. Not `@AppStorage`: projected
     /// Bindings of `@AppStorage` on this class can fail to write (toggle

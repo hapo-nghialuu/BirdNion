@@ -73,6 +73,7 @@
 		QWNC0001000000000000B01 /* QwenCostSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = QWNC0002000000000000F01 /* QwenCostSource.swift */; };
 		GOOC0001000000000000B01 /* GooseCostSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = GOOC0002000000000000F01 /* GooseCostSource.swift */; };
 		CURC0001000000000000B01 /* CursorCostSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURC0002000000000000F01 /* CursorCostSource.swift */; };
+		SLF00001000000000000B01 /* StatusLineFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLF00002000000000000F01 /* StatusLineFeed.swift */; };
 		PI000001000000000000B01 /* PiCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000002000000000000F01 /* PiCostScanner.swift */; };
 		OMP00005000000000000B01 /* OMPAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00006000000000000F01 /* OMPAgentConfigStore.swift */; };
 		PI000003000000000000B01 /* PiAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000004000000000000F01 /* PiAgentConfigStore.swift */; };
@@ -359,6 +360,7 @@
 		QWNC0002000000000000F01 /* QwenCostSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/QwenCostSource.swift; sourceTree = "<group>"; };
 		GOOC0002000000000000F01 /* GooseCostSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GooseCostSource.swift; sourceTree = "<group>"; };
 		CURC0002000000000000F01 /* CursorCostSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/CursorCostSource.swift; sourceTree = "<group>"; };
+		SLF00002000000000000F01 /* StatusLineFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/StatusLineFeed.swift; sourceTree = "<group>"; };
 		LCPR0002000000000000F01 /* LocalCostParsing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/LocalCost/LocalCostParsing.swift; sourceTree = "<group>"; };
 		PI000002000000000000F01 /* PiCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiCostScanner.swift; sourceTree = "<group>"; };
 		OMP00006000000000000F01 /* OMPAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPAgentConfigStore.swift; sourceTree = "<group>"; };
@@ -996,6 +998,7 @@
 				QWNC0001000000000000B01 /* QwenCostSource.swift in Sources */,
 				GOOC0001000000000000B01 /* GooseCostSource.swift in Sources */,
 				CURC0001000000000000B01 /* CursorCostSource.swift in Sources */,
+				SLF00001000000000000B01 /* StatusLineFeed.swift in Sources */,
 				PI000001000000000000B01 /* PiCostScanner.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
 				PCI00001000000000000B01 /* ProjectInsights.swift in Sources */,
