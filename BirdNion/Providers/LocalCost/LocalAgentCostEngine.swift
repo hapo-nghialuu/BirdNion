@@ -80,6 +80,7 @@ enum LocalAgentCostEngine {
         .opencode: OpenCodeCostSource.descriptor,
         .gemini: GeminiCostSource.descriptor,
         .copilot: CopilotCostSource.descriptor,
+        .antigravity: AntigravityCostSource.descriptor,
     ]
 
     /// Display names for every registered source (rawValue → label).

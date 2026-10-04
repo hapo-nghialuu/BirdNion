@@ -77,6 +77,7 @@ enum InstalledAgentID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .opencode: .opencode
         case .gemini: .gemini
         case .copilot: .copilot
+        case .antigravity: .antigravity
         default: nil
         }
     }
