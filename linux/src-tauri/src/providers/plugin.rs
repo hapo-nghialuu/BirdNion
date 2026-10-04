@@ -784,6 +784,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "raycast.js",
         include_str!("../../resources/plugins/raycast.js"),
     ),
+    (
+        "aixy.js",
+        include_str!("../../resources/plugins/aixy.js"),
+    ),
 ];
 
 pub fn plugins_dir() -> PathBuf {
