@@ -780,6 +780,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "xkiro.js",
         include_str!("../../resources/plugins/xkiro.js"),
     ),
+    (
+        "raycast.js",
+        include_str!("../../resources/plugins/raycast.js"),
+    ),
 ];
 
 pub fn plugins_dir() -> PathBuf {
