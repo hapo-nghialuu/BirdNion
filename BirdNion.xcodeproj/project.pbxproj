@@ -229,6 +229,9 @@
 		WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */; };
 		STAW0001000000000000B002 /* StayAwakeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = STAW0001000000000000F002 /* StayAwakeServiceTests.swift */; };
 		CRDA0001000000000000B001 /* CredentialAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CRDA0001000000000000F001 /* CredentialAlertTests.swift */; };
+		PRFD0001000000000000B001 /* PreferencesDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F001 /* PreferencesDocument.swift */; };
+		PRFD0001000000000000B002 /* SettingsStore+Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F002 /* SettingsStore+Preferences.swift */; };
+		PRFD0001000000000000B003 /* PreferencesDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F003 /* PreferencesDocumentTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -487,6 +490,9 @@
 		WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WidgetSnapshotTests.swift; sourceTree = "<group>"; };
 		STAW0001000000000000F002 /* StayAwakeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/StayAwakeServiceTests.swift; sourceTree = "<group>"; };
 		CRDA0001000000000000F001 /* CredentialAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CredentialAlertTests.swift; sourceTree = "<group>"; };
+		PRFD0001000000000000F001 /* PreferencesDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/PreferencesDocument.swift; sourceTree = "<group>"; };
+		PRFD0001000000000000F002 /* SettingsStore+Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Services/SettingsStore+Preferences.swift"; sourceTree = "<group>"; };
+		PRFD0001000000000000F003 /* PreferencesDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/PreferencesDocumentTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -561,6 +567,7 @@
 				WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */,
 				STAW0001000000000000B002 /* StayAwakeServiceTests.swift in Sources */,
 				CRDA0001000000000000B001 /* CredentialAlertTests.swift in Sources */,
+				PRFD0001000000000000B003 /* PreferencesDocumentTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -930,6 +937,8 @@
 				PSCH0001000000000000B001 /* ProviderScheduler.swift in Sources */,
 				QNFS0001000000000000B001 /* QuotaNotifications.swift in Sources */,
 				STAW0001000000000000B001 /* StayAwakeService.swift in Sources */,
+				PRFD0001000000000000B001 /* PreferencesDocument.swift in Sources */,
+				PRFD0001000000000000B002 /* SettingsStore+Preferences.swift in Sources */,
 				URCO0001000000000000B001 /* UsageReportCoordinator.swift in Sources */,
 				PSTR0001000000000000B001 /* ProviderStatusStream.swift in Sources */,
 				DDDD0003000000000000B002 /* ConfigService.swift in Sources */,

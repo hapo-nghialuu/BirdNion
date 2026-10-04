@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Advanced settings: privacy, developer toggles, and an inline Debug section
 /// (Display/Debug tabs folded in at remake P2).
 struct AdvancedPane: View {
     @EnvironmentObject var settings: SettingsStore
+    @State private var transferFailure: String?
 
     var body: some View {
         SettingsPage {
@@ -30,6 +32,31 @@ struct AdvancedPane: View {
                     Toggle("", isOn: $settings.hidePersonalInfo)
                         .labelsHidden()
                         .toggleStyle(.instrumentSwitch)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.t("settings.section.portable", settings.appLanguage))
+                    .plexEyebrow()
+                    .padding(.top, 22)
+                    .padding(.bottom, 4)
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.portable.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.portable.subtitle", settings.appLanguage)
+                ) {
+                    HStack(spacing: 8) {
+                        Button(L10n.t("settings.portable.export", settings.appLanguage)) {
+                            transferPreferences(importing: false)
+                        }
+                        .buttonStyle(.instrumentOutline)
+                        .pointingHandCursor()
+                        Button(L10n.t("settings.portable.import", settings.appLanguage)) {
+                            transferPreferences(importing: true)
+                        }
+                        .buttonStyle(.instrumentOutline)
+                        .pointingHandCursor()
+                    }
                 }
             }
 
@@ -119,6 +146,31 @@ struct AdvancedPane: View {
                         .padding(.top, 10)
                 }
             }
+        }
+        .alert(L10n.t("settings.portable.error", settings.appLanguage), isPresented: Binding(
+            get: { transferFailure != nil }, set: { if !$0 { transferFailure = nil } })
+        ) {
+            Button("OK") { transferFailure = nil }
+        } message: {
+            Text(transferFailure ?? "")
+        }
+    }
+
+    private func transferPreferences(importing: Bool) {
+        let panel: NSSavePanel = importing ? NSOpenPanel() : NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "birdnion-preferences.json"
+        if let open = panel as? NSOpenPanel { open.allowsMultipleSelection = false }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            if importing {
+                try settings.importPreferences(
+                    PreferencesDocument(data: Data(contentsOf: url)))
+            } else {
+                try settings.exportPreferences().encoded().write(to: url, options: .atomic)
+            }
+        } catch {
+            transferFailure = error.localizedDescription
         }
     }
 }
