@@ -183,27 +183,78 @@ enum ClaudeOAuthStore {
     /// back to the CLI credentials file.
     static func readKeychainData(allowPrompt: Bool) -> Data? {
         guard !UserDefaults.standard.bool(forKey: "debugDisableKeychainAccess") else { return nil }
+        if allowPrompt {
+            // Prompt-allowed reads go through /usr/bin/security so an "Always
+            // Allow" grant binds to the stable Apple-signed binary instead of
+            // this app's per-build ad-hoc signature (see helper below).
+            return readKeychainDataViaSecurityCLI()
+        }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        if !allowPrompt { KeychainNoUIQuery.apply(to: &query) }
+        KeychainNoUIQuery.apply(to: &query)
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        // Denial cooldown (CodexBar parity): only an interactive failure proves
-        // the user said no — a no-UI failure (`errSecInteractionNotAllowed`)
-        // just means the ACL would prompt, and must never arm the gate.
-        if allowPrompt,
-           status == errSecUserCanceled || status == errSecAuthFailed
-               || status == errSecNoAccessForItem {
-            ClaudeOAuthKeychainAccessGate.recordDenied()
-        }
-        guard status == errSecSuccess,
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }
         return data
     }
+
+    /// Reads the blob via `/usr/bin/security find-generic-password -w` instead
+    /// of `SecItemCopyMatching`. An "Always Allow" grant then binds to the
+    /// stable, Apple-signed `security` binary rather than this app's per-build
+    /// ad-hoc signature — a single confirmation survives rebuilds (a stable
+    /// Developer ID signature would make the direct read durable the same way;
+    /// until then the CLI indirection is what makes it stick). One in-flight
+    /// read at a time so a pending keychain dialog can't stack prompts across
+    /// refreshes.
+    static func readKeychainDataViaSecurityCLI() -> Data? {
+        guard securityCLIReadLock.try() else { return nil }
+        defer { securityCLIReadLock.unlock() }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        proc.arguments = ["find-generic-password", "-s", keychainService, "-w"]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        proc.standardInput = nil
+        do {
+            try proc.run()
+        } catch {
+            return nil
+        }
+        let exited = DispatchSemaphore(value: 0)
+        proc.terminationHandler = { _ in exited.signal() }
+        // Generous wait: when the ACL dialog shows, letting the user answer it
+        // is the whole point — terminating early would dismiss the dialog.
+        guard exited.wait(timeout: .now() + securityCLIReadTimeout) == .success else {
+            proc.terminate()
+            return nil
+        }
+        var data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        guard proc.terminationStatus == 0 else {
+            // Denial cooldown (CodexBar parity): the CLI reports cancellation
+            // on stderr — arm the 6h gate like an interactive SecItem denial.
+            let stderr = String(
+                data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8) ?? ""
+            if stderr.range(of: "cancel", options: .caseInsensitive) != nil {
+                ClaudeOAuthKeychainAccessGate.recordDenied()
+            }
+            return nil
+        }
+        while let last = data.last, last == 0x0A || last == 0x0D { data.removeLast() }
+        return data.isEmpty ? nil : data
+    }
+
+    /// One pending CLI read at a time — a second spawn while a dialog is open
+    /// would surface a duplicate prompt.
+    private static let securityCLIReadLock = NSLock()
+    /// Long enough for the user to reach and answer the keychain dialog.
+    private static let securityCLIReadTimeout: TimeInterval = 300
 
     // MARK: - Refresh grant
 

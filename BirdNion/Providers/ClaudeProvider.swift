@@ -271,19 +271,13 @@ final class ClaudeProvider: QuotaProvider {
     /// pattern as `cachedClaudeVersion`).
     private static var cachedKeychainBlob: Data?
 
-    /// Reads the raw `Claude Code-credentials` keychain blob so the plan + email
-    /// can be surfaced. Returns nil if absent or access is denied.
+    /// Reads the raw `Claude Code-credentials` keychain blob via
+    /// `/usr/bin/security` so an "Always Allow" grant binds to the stable
+    /// Apple-signed binary instead of this app's per-build ad-hoc signature —
+    /// one confirmation survives rebuilds. Returns nil if absent or denied.
     static func readKeychainData() -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return data
+        guard !UserDefaults.standard.bool(forKey: "debugDisableKeychainAccess") else { return nil }
+        return ClaudeOAuthStore.readKeychainDataViaSecurityCLI()
     }
 
     // MARK: - CLI version
