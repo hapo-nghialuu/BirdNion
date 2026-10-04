@@ -81,6 +81,12 @@ enum LocalAgentCostEngine {
         .gemini: GeminiCostSource.descriptor,
         .copilot: CopilotCostSource.descriptor,
         .antigravity: AntigravityCostSource.descriptor,
+        .cursor: CursorCostSource.descriptor,
+        .amp: AmpCostSource.descriptor,
+        .droid: DroidCostSource.descriptor,
+        .kimi: KimiCostSource.descriptor,
+        .qwen: QwenCostSource.descriptor,
+        .goose: GooseCostSource.descriptor,
     ]
 
     /// Display names for every registered source (rawValue → label).
