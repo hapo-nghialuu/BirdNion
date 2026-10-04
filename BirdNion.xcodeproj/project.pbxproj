@@ -61,7 +61,10 @@
 		OMP00001000000000000B01 /* OMPPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00002000000000000F01 /* OMPPaths.swift */; };
 		OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00004000000000000F01 /* OMPCostScanner.swift */; };
 		LCSA0001000000000000B01 /* LocalAgentCostEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = LCSA0002000000000000F01 /* LocalAgentCostEngine.swift */; };
+		LCPR0001000000000000B01 /* LocalCostParsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = LCPR0002000000000000F01 /* LocalCostParsing.swift */; };
 		OPCD0001000000000000B01 /* OpenCodeCostSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = OPCD0002000000000000F01 /* OpenCodeCostSource.swift */; };
+		GEMC0001000000000000B01 /* GeminiCostSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = GEMC0002000000000000F01 /* GeminiCostSource.swift */; };
+		CPLC0001000000000000B01 /* CopilotCostSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = CPLC0002000000000000F01 /* CopilotCostSource.swift */; };
 		PI000001000000000000B01 /* PiCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000002000000000000F01 /* PiCostScanner.swift */; };
 		OMP00005000000000000B01 /* OMPAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00006000000000000F01 /* OMPAgentConfigStore.swift */; };
 		PI000003000000000000B01 /* PiAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000004000000000000F01 /* PiAgentConfigStore.swift */; };
@@ -338,6 +341,9 @@
 		OMP00004000000000000F01 /* OMPCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPCostScanner.swift; sourceTree = "<group>"; };
 		LCSA0002000000000000F01 /* LocalAgentCostEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/LocalCost/LocalAgentCostEngine.swift; sourceTree = "<group>"; };
 		OPCD0002000000000000F01 /* OpenCodeCostSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OpenCodeCostSource.swift; sourceTree = "<group>"; };
+		GEMC0002000000000000F01 /* GeminiCostSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/GeminiCostSource.swift; sourceTree = "<group>"; };
+		CPLC0002000000000000F01 /* CopilotCostSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/CopilotCostSource.swift; sourceTree = "<group>"; };
+		LCPR0002000000000000F01 /* LocalCostParsing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/LocalCost/LocalCostParsing.swift; sourceTree = "<group>"; };
 		PI000002000000000000F01 /* PiCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiCostScanner.swift; sourceTree = "<group>"; };
 		OMP00006000000000000F01 /* OMPAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPAgentConfigStore.swift; sourceTree = "<group>"; };
 		PI000004000000000000F01 /* PiAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiAgentConfigStore.swift; sourceTree = "<group>"; };
@@ -962,7 +968,10 @@
 				OMP00001000000000000B01 /* OMPPaths.swift in Sources */,
 				OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */,
 				LCSA0001000000000000B01 /* LocalAgentCostEngine.swift in Sources */,
+				LCPR0001000000000000B01 /* LocalCostParsing.swift in Sources */,
 				OPCD0001000000000000B01 /* OpenCodeCostSource.swift in Sources */,
+				GEMC0001000000000000B01 /* GeminiCostSource.swift in Sources */,
+				CPLC0001000000000000B01 /* CopilotCostSource.swift in Sources */,
 				PI000001000000000000B01 /* PiCostScanner.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
 				PCI00001000000000000B01 /* ProjectInsights.swift in Sources */,

@@ -19,7 +19,8 @@ struct LocalAgentDailyUsage: Equatable, Identifiable, Sendable {
 
 /// Generic report shared by every local-log cost source added after the
 /// original seven (opencode, gemini, copilot, antigravity, cursor, amp,
-/// droid, kimi, qwen, goose). Same shape as `OMPUsageReport`.
+/// droid, kimi, qwen, goose) — each registers a `LocalCostSource` descriptor
+/// below. Same shape as `OMPUsageReport`.
 struct LocalAgentUsageReport: Equatable, Sendable {
     let todayUSD: Double
     let todayTokens: Int
@@ -77,6 +78,8 @@ enum LocalAgentCostEngine {
     /// Registered sources; each case's descriptor lives beside its parser.
     static let registry: [CostHistoryStore.Source: LocalCostSource] = [
         .opencode: OpenCodeCostSource.descriptor,
+        .gemini: GeminiCostSource.descriptor,
+        .copilot: CopilotCostSource.descriptor,
     ]
 
     /// Display names for every registered source (rawValue → label).

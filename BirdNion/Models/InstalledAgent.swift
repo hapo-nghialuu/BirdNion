@@ -75,6 +75,8 @@ enum InstalledAgentID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .pi: .pi
         case .devin: .devin
         case .opencode: .opencode
+        case .gemini: .gemini
+        case .copilot: .copilot
         default: nil
         }
     }
