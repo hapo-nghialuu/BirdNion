@@ -62,6 +62,7 @@
 		OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00004000000000000F01 /* OMPCostScanner.swift */; };
 		PI000001000000000000B01 /* PiCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000002000000000000F01 /* PiCostScanner.swift */; };
 		QUH00001000000000000B01 /* QuotaUsageHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = QUH00002000000000000F01 /* QuotaUsageHistory.swift */; };
+		QSP00001000000000000B01 /* QuotaSparkline.swift in Sources */ = {isa = PBXBuildFile; fileRef = QSP00002000000000000F01 /* QuotaSparkline.swift */; };
 		OMP00005000000000000B01 /* OMPAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00006000000000000F01 /* OMPAgentConfigStore.swift */; };
 		PI000003000000000000B01 /* PiAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000004000000000000F01 /* PiAgentConfigStore.swift */; };
 		OMPP0001000000000000B001 /* OMPPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMPP0002000000000000F001 /* OMPPane.swift */; };
@@ -337,6 +338,7 @@
 		OMP00004000000000000F01 /* OMPCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPCostScanner.swift; sourceTree = "<group>"; };
 		PI000002000000000000F01 /* PiCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiCostScanner.swift; sourceTree = "<group>"; };
 		QUH00002000000000000F01 /* QuotaUsageHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/QuotaUsageHistory.swift; sourceTree = "<group>"; };
+		QSP00002000000000000F01 /* QuotaSparkline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/QuotaSparkline.swift; sourceTree = "<group>"; };
 		OMP00006000000000000F01 /* OMPAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPAgentConfigStore.swift; sourceTree = "<group>"; };
 		PI000004000000000000F01 /* PiAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiAgentConfigStore.swift; sourceTree = "<group>"; };
 		OMPP0002000000000000F001 /* OMPPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/OMPPane.swift; sourceTree = "<group>"; };
@@ -961,6 +963,7 @@
 				OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */,
 				PI000001000000000000B01 /* PiCostScanner.swift in Sources */,
 				QUH00001000000000000B01 /* QuotaUsageHistory.swift in Sources */,
+				QSP00001000000000000B01 /* QuotaSparkline.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
 				PCI00001000000000000B01 /* ProjectInsights.swift in Sources */,
 				PCH00001000000000000B01 /* ProjectCostHistoryStore.swift in Sources */,

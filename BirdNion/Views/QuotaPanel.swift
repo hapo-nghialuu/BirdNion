@@ -2588,6 +2588,10 @@ struct WindowRow: View {
                 )
                 .lineLimit(2)
                 Spacer()
+                QuotaSparkline(
+                    samples: QuotaUsageHistory.samples(
+                        provider: providerID, window: window.label),
+                    color: barFillColor)
                 if !resetText.isEmpty {
                     Text(resetText.uppercased())
                         .font(.plexMono(10))
