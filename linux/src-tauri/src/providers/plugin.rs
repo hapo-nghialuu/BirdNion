@@ -771,10 +771,16 @@ fn json_val(ctx: &mut Context, v: serde_json::Value) -> JsResult<JsValue> {
 
 /// Bundled plugins compiled in (Resources/Plugins is a macOS bundle layout;
 /// on Linux we embed sources directly).
-const BUNDLED: &[(&str, &str)] = &[(
-    "atlascloud.js",
-    include_str!("../../resources/plugins/atlascloud.js"),
-)];
+const BUNDLED: &[(&str, &str)] = &[
+    (
+        "atlascloud.js",
+        include_str!("../../resources/plugins/atlascloud.js"),
+    ),
+    (
+        "xkiro.js",
+        include_str!("../../resources/plugins/xkiro.js"),
+    ),
+];
 
 pub fn plugins_dir() -> PathBuf {
     config::support_dir()
