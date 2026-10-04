@@ -922,7 +922,16 @@ final class CombinedUsageReportTests: XCTestCase {
                 evidence: [.init(kind: .applicationState, token: "~/.local/share/devin")],
                 capabilities: [],
                 providerIDs: ["devin"]),
-        ]
+        ] + [
+            InstalledAgentID.opencode, .copilot, .antigravity, .cursor, .amp,
+            .droid, .kimi, .qwen, .goose,
+        ].map { id in
+            InstalledAgentRecord(
+                id: id,
+                evidence: [.init(kind: .applicationState, token: "~/.\(id.rawValue)")],
+                capabilities: [],
+                providerIDs: [])
+        }
 
         let sources = AllUsageSourceAuthorization.sources(
             enabledProviderIDs: ["claude", "codex", "grok", "gemini"],
