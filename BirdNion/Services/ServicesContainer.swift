@@ -47,7 +47,11 @@ final class ServicesContainer: ObservableObject {
         // Bind so settings.pushRefreshInterval() can push changes into the loop.
         store.bind(quotaService: quotaService)
         // Poll loop reads the toggle itself — no rebinding needed.
-        stayAwake.start()
+        // Skipped in CLI mode: a headless fetch must never hold a sleep
+        // assertion.
+        if !BirdNionCLI.active {
+            stayAwake.start()
+        }
     }
 
     /// Build the ordered list of `QuotaProvider` instances from
