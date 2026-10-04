@@ -788,6 +788,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "aixy.js",
         include_str!("../../resources/plugins/aixy.js"),
     ),
+    (
+        "litellm.js",
+        include_str!("../../resources/plugins/litellm.js"),
+    ),
 ];
 
 pub fn plugins_dir() -> PathBuf {
