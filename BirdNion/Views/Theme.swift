@@ -112,6 +112,24 @@ enum VocabbyTheme {
     static let chartPi     = dyn(0x06B6D4, 0x22D3EE)  // --pi (Cyan)
     static let chartKiro   = dyn(0x8B47F9, 0xA766FF)  // --kiro (Violet)
 
+    /// Chart tints for the post-v1 local cost sources (LocalAgentCostEngine
+    /// registry). Reuses provider brand tints where one already exists.
+    static func chartExtraSource(_ id: String) -> Color {
+        switch id {
+        case "opencode": return openCode
+        case "gemini": return gemini
+        case "copilot": return copilot
+        case "antigravity": return antigravity
+        case "cursor": return cursor
+        case "qwen": return alibaba
+        case "amp": return dyn(0x059669, 0x34D399)
+        case "droid": return dyn(0x0284C7, 0x38BDF8)
+        case "kimi": return dyn(0x4F46E5, 0x818CF8)
+        case "goose": return dyn(0xB45309, 0xFBBF24)
+        default: return tertiary
+        }
+    }
+
     /// OMP vẽ bằng gradient tím → hồng ở những mảng đủ lớn để thấy dải màu
     /// (cột chart, thanh tỉ trọng, mini bar). Dot 6px, tint logo và icon vẫn
     /// dùng `chartOMP` đặc — ở kích thước đó gradient chỉ thành một màu trung bình.

@@ -55,6 +55,11 @@ final class UsageReportCoordinator {
         /// TTL + single-flight dedupe as the full reports.
         var claudeSummary: @Sendable () async -> ClaudeCostSummary?
         var codexSummary: @Sendable () async -> CodexCostSummary?
+        /// All registered extra local cost sources (opencode, gemini,
+        /// copilot, ...) in one call — `LocalAgentCostEngine` already runs
+        /// them concurrently.
+        var extras: @Sendable (Set<CostHistoryStore.Source>) async -> [CostHistoryStore.Source: LocalAgentUsageReport]
+        var seededExtras: @Sendable (Set<CostHistoryStore.Source>) async -> [CostHistoryStore.Source: LocalAgentUsageReport]
         var now: @Sendable () -> Date
 
         static let live = Scans(
@@ -74,6 +79,8 @@ final class UsageReportCoordinator {
             seededDevin: { await DevinCostScanner.seededReport() },
             claudeSummary: { await ClaudeCostScanner.summary() },
             codexSummary: { await CodexCostScanner.summary() },
+            extras: { await LocalAgentCostEngine.loadReports(sources: $0) },
+            seededExtras: { await LocalAgentCostEngine.seededReports(sources: $0) },
             now: { Date() })
     }
 
@@ -88,6 +95,7 @@ final class UsageReportCoordinator {
     private var devinLane = SingleFlightCache<DevinCLIUsageReport>()
     private var claudeSummaryLane = SingleFlightCache<ClaudeCostSummary>()
     private var codexSummaryLane = SingleFlightCache<CodexCostSummary>()
+    private var extrasLane = SingleFlightCache<[CostHistoryStore.Source: LocalAgentUsageReport]>()
 
     nonisolated init(scans: Scans = .live) {
         self.scans = scans
@@ -123,6 +131,20 @@ final class UsageReportCoordinator {
         await report(\.devinLane, scan: scans.devin)
     }
 
+    /// Extra local cost sources in one single-flight lane — scanning all
+    /// requested sources at once shares the in-flight task across callers.
+    func extraReports(
+        sources: Set<CostHistoryStore.Source>
+    ) async -> [CostHistoryStore.Source: LocalAgentUsageReport] {
+        await report(\.extrasLane) { await self.scans.extras(sources) } ?? [:]
+    }
+
+    func seededExtraReports(
+        sources: Set<CostHistoryStore.Source>
+    ) async -> [CostHistoryStore.Source: LocalAgentUsageReport] {
+        await scans.seededExtras(sources)
+    }
+
     func claudeSummary() async -> ClaudeCostSummary? {
         await report(\.claudeSummaryLane, scan: scans.claudeSummary)
     }
@@ -155,6 +177,7 @@ final class UsageReportCoordinator {
         devinLane.cached = nil
         claudeSummaryLane.cached = nil
         codexSummaryLane.cached = nil
+        extrasLane.cached = nil
     }
 
     // MARK: - Single-flight core

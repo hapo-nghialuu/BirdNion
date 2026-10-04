@@ -31,6 +31,8 @@ enum CostHistoryStore {
 
     enum Source: String, CaseIterable {
         case claude, codex, grok, kiro, omp, pi, devin
+        case opencode, gemini, copilot, antigravity, cursor, amp
+        case droid, kimi, qwen, goose
     }
 
     // MARK: - Schema
@@ -941,6 +943,46 @@ enum CostHistoryStore {
                     date: $0.date, usd: $0.usd, tokens: $0.tokens,
                     models: $0.models.map {
                         OMPDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
+                    })
+            },
+            hourly: hourly,
+            topModel: top,
+            scanConfidence: confidence)
+    }
+
+    /// Generic report builder for sources served by `LocalAgentCostEngine` —
+    /// identical math to the per-source makers above.
+    static func makeLocalReport(
+        window: [DayBucket],
+        hourly: [HourlyUsage] = [],
+        confidence: UsageScanConfidence = .unavailable) -> LocalAgentUsageReport
+    {
+        let last30 = window.suffix(30)
+        let today = window.last
+        var modelTotals: [String: (usd: Double, tokens: Int)] = [:]
+        for d in last30 {
+            for m in d.models {
+                var t = modelTotals[m.name] ?? (0, 0)
+                t.usd += m.usd
+                t.tokens += m.tokens
+                modelTotals[m.name] = t
+            }
+        }
+        let top = modelTotals.max {
+            $0.value.usd == $1.value.usd
+                ? $0.value.tokens < $1.value.tokens
+                : $0.value.usd < $1.value.usd
+        }?.key
+        return LocalAgentUsageReport(
+            todayUSD: today?.usd ?? 0,
+            todayTokens: today?.tokens ?? 0,
+            last30USD: last30.map(\.usd).reduce(0, +),
+            last30Tokens: last30.map(\.tokens).reduce(0, +),
+            daily: window.map {
+                LocalAgentDailyUsage(
+                    date: $0.date, usd: $0.usd, tokens: $0.tokens,
+                    models: $0.models.map {
+                        LocalAgentDailyModel(name: $0.name, usd: $0.usd, tokens: $0.tokens)
                     })
             },
             hourly: hourly,
