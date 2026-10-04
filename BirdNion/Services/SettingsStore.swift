@@ -210,6 +210,28 @@ final class SettingsStore: ObservableObject {
         set { costReportingPeriodRaw = newValue.rawValue; objectWillChange.send() }
     }
 
+    /// Provider switcher shortcuts (action → normalized combo, JSON-coded).
+    /// Invalid JSON or invalid combos fall back to the defaults.
+    @AppStorage("providerSwitcherShortcuts") private var providerSwitcherShortcutsJSON: String = ""
+
+    var providerSwitcherShortcuts: [String: String] {
+        get {
+            if let data = providerSwitcherShortcutsJSON.data(using: .utf8),
+               let overrides = try? JSONDecoder().decode([String: String].self, from: data),
+               let validated = try? ProviderSwitcherShortcuts.validated(overrides) {
+                return validated
+            }
+            return ProviderSwitcherShortcuts.defaults
+        }
+        set {
+            guard let validated = try? ProviderSwitcherShortcuts.validated(newValue),
+                  let data = try? JSONEncoder().encode(validated),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            providerSwitcherShortcutsJSON = json
+            objectWillChange.send()
+        }
+    }
+
     /// All-tab budget (USD) for the local estimated Claude+Codex+Grok+Kiro+OMP+Pi
     /// cost — 0 means "not configured" (the budget card stays hidden).
     @AppStorage("monthlyBudgetUSD") var monthlyBudgetUSD: Double = 0
