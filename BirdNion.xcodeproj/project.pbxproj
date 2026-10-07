@@ -232,6 +232,14 @@
 		WDGT0004000000000000B004 /* BirdNionWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = WDGT00000000000000APX1 /* BirdNionWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		WDGT0005000000000000B005 /* WidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0005000000000000F005 /* WidgetSnapshotStore.swift */; };
 		WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */; };
+		CRDA0001000000000000B001 /* CredentialAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CRDA0001000000000000F001 /* CredentialAlertTests.swift */; };
+		PRFD0001000000000000B001 /* PreferencesDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F001 /* PreferencesDocument.swift */; };
+		PRFD0001000000000000B002 /* SettingsStore+Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F002 /* SettingsStore+Preferences.swift */; };
+		PRFD0001000000000000B003 /* PreferencesDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PRFD0001000000000000F003 /* PreferencesDocumentTests.swift */; };
+		CURR0001000000000000B001 /* CurrencyExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURR0001000000000000F001 /* CurrencyExchange.swift */; };
+		CURR0001000000000000B002 /* CurrencyExchangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURR0001000000000000F002 /* CurrencyExchangeTests.swift */; };
+		BCLI0001000000000000B001 /* BirdNionCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCLI0001000000000000F001 /* BirdNionCLI.swift */; };
+		BCLI0001000000000000B002 /* BirdNionCLITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCLI0001000000000000F002 /* BirdNionCLITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -493,6 +501,14 @@
 		WDGT0004000000000000F004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		WDGT0005000000000000F005 /* WidgetSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Services/WidgetSnapshotStore.swift"; sourceTree = "<group>"; };
 		WDGT0006000000000000F006 /* WidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WidgetSnapshotTests.swift; sourceTree = "<group>"; };
+		CRDA0001000000000000F001 /* CredentialAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CredentialAlertTests.swift; sourceTree = "<group>"; };
+		PRFD0001000000000000F001 /* PreferencesDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/PreferencesDocument.swift; sourceTree = "<group>"; };
+		PRFD0001000000000000F002 /* SettingsStore+Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BirdNion/Services/SettingsStore+Preferences.swift"; sourceTree = "<group>"; };
+		PRFD0001000000000000F003 /* PreferencesDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/PreferencesDocumentTests.swift; sourceTree = "<group>"; };
+		CURR0001000000000000F001 /* CurrencyExchange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/CurrencyExchange.swift; sourceTree = "<group>"; };
+		CURR0001000000000000F002 /* CurrencyExchangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CurrencyExchangeTests.swift; sourceTree = "<group>"; };
+		BCLI0001000000000000F001 /* BirdNionCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/CLI/BirdNionCLI.swift; sourceTree = "<group>"; };
+		BCLI0001000000000000F002 /* BirdNionCLITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/BirdNionCLITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -566,6 +582,10 @@
 				WABT0001000000000000B001 /* WeeklyActivityBucketBuilderTests.swift in Sources */,
 				FLCT0001000000000000B001 /* first-live-checkpoint-tests.swift in Sources */,
 				WDGT0006000000000000B006 /* WidgetSnapshotTests.swift in Sources */,
+				CRDA0001000000000000B001 /* CredentialAlertTests.swift in Sources */,
+				PRFD0001000000000000B003 /* PreferencesDocumentTests.swift in Sources */,
+				CURR0001000000000000B002 /* CurrencyExchangeTests.swift in Sources */,
+				BCLI0001000000000000B002 /* BirdNionCLITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -938,6 +958,10 @@
 				BBBB0003000000000000B002 /* QuotaProvider.swift in Sources */,
 				PSCH0001000000000000B001 /* ProviderScheduler.swift in Sources */,
 				QNFS0001000000000000B001 /* QuotaNotifications.swift in Sources */,
+				PRFD0001000000000000B001 /* PreferencesDocument.swift in Sources */,
+				PRFD0001000000000000B002 /* SettingsStore+Preferences.swift in Sources */,
+				CURR0001000000000000B001 /* CurrencyExchange.swift in Sources */,
+				BCLI0001000000000000B001 /* BirdNionCLI.swift in Sources */,
 				URCO0001000000000000B001 /* UsageReportCoordinator.swift in Sources */,
 				PSTR0001000000000000B001 /* ProviderStatusStream.swift in Sources */,
 				DDDD0003000000000000B002 /* ConfigService.swift in Sources */,
