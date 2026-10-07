@@ -61,6 +61,10 @@
 		OMP00001000000000000B01 /* OMPPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00002000000000000F01 /* OMPPaths.swift */; };
 		OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00004000000000000F01 /* OMPCostScanner.swift */; };
 		PI000001000000000000B01 /* PiCostScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000002000000000000F01 /* PiCostScanner.swift */; };
+		QUH00001000000000000B01 /* QuotaUsageHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = QUH00002000000000000F01 /* QuotaUsageHistory.swift */; };
+		QSP00001000000000000B01 /* QuotaSparkline.swift in Sources */ = {isa = PBXBuildFile; fileRef = QSP00002000000000000F01 /* QuotaSparkline.swift */; };
+		BAL00001000000000000B01 /* BudgetAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAL00002000000000000F01 /* BudgetAlerts.swift */; };
+		GLN00001000000000000B01 /* GlanceLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = GLN00002000000000000F01 /* GlanceLine.swift */; };
 		OMP00005000000000000B01 /* OMPAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00006000000000000F01 /* OMPAgentConfigStore.swift */; };
 		PI000003000000000000B01 /* PiAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000004000000000000F01 /* PiAgentConfigStore.swift */; };
 		OMPP0001000000000000B001 /* OMPPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMPP0002000000000000F001 /* OMPPane.swift */; };
@@ -242,6 +246,7 @@
 		CURR0001000000000000B002 /* CurrencyExchangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CURR0001000000000000F002 /* CurrencyExchangeTests.swift */; };
 		BCLI0001000000000000B001 /* BirdNionCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCLI0001000000000000F001 /* BirdNionCLI.swift */; };
 		BCLI0001000000000000B002 /* BirdNionCLITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCLI0001000000000000F002 /* BirdNionCLITests.swift */; };
+		QUHT0006000000000000B006 /* QuotaUsageHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QUHT0006000000000000F006 /* QuotaUsageHistoryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -351,6 +356,10 @@
 		OMP00002000000000000F01 /* OMPPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPPaths.swift; sourceTree = "<group>"; };
 		OMP00004000000000000F01 /* OMPCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPCostScanner.swift; sourceTree = "<group>"; };
 		PI000002000000000000F01 /* PiCostScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiCostScanner.swift; sourceTree = "<group>"; };
+		QUH00002000000000000F01 /* QuotaUsageHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/QuotaUsageHistory.swift; sourceTree = "<group>"; };
+		QSP00002000000000000F01 /* QuotaSparkline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/QuotaSparkline.swift; sourceTree = "<group>"; };
+		BAL00002000000000000F01 /* BudgetAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BudgetAlerts.swift; sourceTree = "<group>"; };
+		GLN00002000000000000F01 /* GlanceLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/GlanceLine.swift; sourceTree = "<group>"; };
 		OMP00006000000000000F01 /* OMPAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPAgentConfigStore.swift; sourceTree = "<group>"; };
 		PI000004000000000000F01 /* PiAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiAgentConfigStore.swift; sourceTree = "<group>"; };
 		OMPP0002000000000000F001 /* OMPPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/OMPPane.swift; sourceTree = "<group>"; };
@@ -513,6 +522,7 @@
 		CURR0001000000000000F002 /* CurrencyExchangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/CurrencyExchangeTests.swift; sourceTree = "<group>"; };
 		BCLI0001000000000000F001 /* BirdNionCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/CLI/BirdNionCLI.swift; sourceTree = "<group>"; };
 		BCLI0001000000000000F002 /* BirdNionCLITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/BirdNionCLITests.swift; sourceTree = "<group>"; };
+		QUHT0006000000000000F006 /* QuotaUsageHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/QuotaUsageHistoryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -591,6 +601,7 @@
 				PRFD0001000000000000B003 /* PreferencesDocumentTests.swift in Sources */,
 				CURR0001000000000000B002 /* CurrencyExchangeTests.swift in Sources */,
 				BCLI0001000000000000B002 /* BirdNionCLITests.swift in Sources */,
+				QUHT0006000000000000B006 /* QuotaUsageHistoryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1004,6 +1015,10 @@
 				OMP00001000000000000B01 /* OMPPaths.swift in Sources */,
 				OMP00003000000000000B01 /* OMPCostScanner.swift in Sources */,
 				PI000001000000000000B01 /* PiCostScanner.swift in Sources */,
+				QUH00001000000000000B01 /* QuotaUsageHistory.swift in Sources */,
+				QSP00001000000000000B01 /* QuotaSparkline.swift in Sources */,
+				BAL00001000000000000B01 /* BudgetAlerts.swift in Sources */,
+				GLN00001000000000000B01 /* GlanceLine.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
 				PCI00001000000000000B01 /* ProjectInsights.swift in Sources */,
 				PCH00001000000000000B01 /* ProjectCostHistoryStore.swift in Sources */,

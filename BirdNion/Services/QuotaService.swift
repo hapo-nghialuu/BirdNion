@@ -56,7 +56,10 @@ final class QuotaService: ObservableObject {
     /// Every publish also feeds the Burn Down widget snapshot — the store is
     /// idempotent and writes atomically, so didSet is the single hook point.
     @Published private(set) var statuses: [ProviderStatus] = [] {
-        didSet { WidgetSnapshotStore.save(statuses) }
+        didSet {
+            WidgetSnapshotStore.save(statuses)
+            QuotaUsageHistory.record(statuses)
+        }
     }
     @Published private(set) var displayStatuses: [ProviderStatus] = []
     /// Derived from the scheduler's in-flight lane set — true while any

@@ -96,31 +96,31 @@ final class UsageReportCoordinator {
     // MARK: - Typed report API
 
     func claudeReport() async -> ClaudeUsageReport? {
-        await report(\.claudeLane, scan: scans.claude)
+        await report(\.claudeLane, scan: scans.claude, source: .claude)
     }
 
     func codexReport() async -> CodexUsageReport? {
-        await report(\.codexLane, scan: scans.codex)
+        await report(\.codexLane, scan: scans.codex, source: .codex)
     }
 
     func grokReport() async -> GrokUsageReport? {
-        await report(\.grokLane, scan: scans.grok)
+        await report(\.grokLane, scan: scans.grok, source: .grok)
     }
 
     func kiroReport() async -> KiroUsageReport? {
-        await report(\.kiroLane, scan: scans.kiro)
+        await report(\.kiroLane, scan: scans.kiro, source: .kiro)
     }
 
     func ompReport() async -> OMPUsageReport? {
-        await report(\.ompLane, scan: scans.omp)
+        await report(\.ompLane, scan: scans.omp, source: .omp)
     }
 
     func piReport() async -> PiUsageReport? {
-        await report(\.piLane, scan: scans.pi)
+        await report(\.piLane, scan: scans.pi, source: .pi)
     }
 
     func devinReport() async -> DevinCLIUsageReport? {
-        await report(\.devinLane, scan: scans.devin)
+        await report(\.devinLane, scan: scans.devin, source: .devin)
     }
 
     func claudeSummary() async -> ClaudeCostSummary? {
@@ -163,7 +163,8 @@ final class UsageReportCoordinator {
     /// (failed/empty) scan is never cached, so the next caller retries.
     private func report<Report: Sendable>(
         _ lane: ReferenceWritableKeyPath<UsageReportCoordinator, SingleFlightCache<Report>>,
-        scan: @escaping @Sendable () async -> Report?
+        scan: @escaping @Sendable () async -> Report?,
+        source: CostHistoryStore.Source? = nil
     ) async -> Report? {
         if let cached = self[keyPath: lane].cached,
            scans.now().timeIntervalSince(cached.at) < Self.cacheTTL {
@@ -178,6 +179,9 @@ final class UsageReportCoordinator {
         self[keyPath: lane].inFlight = nil
         if let result {
             self[keyPath: lane].cached = (result, scans.now())
+            if let source, let spend = result as? SpendReport {
+                BudgetAlerts.record(source: source, report: spend)
+            }
         }
         return result
     }

@@ -64,6 +64,9 @@ struct QuotaOverview: View {
     @State private var devinReportTaskId: String?
     @State private var loadingCostSources: Set<CostHistoryStore.Source> = []
     @State private var claudeCodeTargetRevision = 0
+    /// Today's total estimated local spend across cost sources — loaded
+    /// once per panel appearance for the glance line.
+    @State private var glanceTodayUSD: Double = 0
     /// Local keyDown monitor feeding the provider-switcher shortcuts
     /// (left/right cycle, cmd+1…9 selects) while the panel is key.
     @State private var switcherMonitor: Any?
@@ -92,6 +95,10 @@ struct QuotaOverview: View {
                             statuses: quota.displayStatuses,
                             staleWarning: { quota.staleWarning(for: $0) }).count,
                         onOpenQuotaAgenda: openQuotaAgenda)
+                    GlanceLine(
+                        statuses: quota.displayStatuses,
+                        todayUSD: glanceTodayUSD,
+                        language: settings.appLanguage)
                     let selected = effectiveSelectedId()
                     ProviderTabs(
                         providers: quota.displayStatuses,
@@ -197,6 +204,7 @@ struct QuotaOverview: View {
         }
         .task {
             triggerReportsIfNeeded(providerId: selectedProviderId ?? effectiveSelectedId())
+            glanceTodayUSD = CostHistoryStore.todayTotalUSD()
         }
         .onReceive(NotificationCenter.default.publisher(for: .claudeCodeTargetChanged)) { _ in
             claudeCodeTargetRevision += 1
@@ -2577,6 +2585,18 @@ struct WindowRow: View {
     /// marker stripe on the bar and the reserve/deficit detail line.
     private var pace: WindowPace? { WindowPace(window: window, now: Date()) }
 
+    /// Days until the window hits 0% at the observed burn rate — only for
+    /// windows that carry no reset schedule (pace is nil), from
+    /// `QuotaUsageHistory` samples. "~2 ngày" / "~3d".
+    private var runwayText: String? {
+        guard pace == nil, !window.isInactive,
+              let days = QuotaUsageHistory.runwayDays(
+                provider: providerID, window: window.label),
+              days.isFinite, days > 0
+        else { return nil }
+        return WindowPace.format(days * 86400)
+    }
+
     private var allowanceText: String? {
         guard !window.isInactive, let allowance = window.allowance else { return nil }
         return QuotaAllowanceFormatter.text(allowance, language: settings.appLanguage)
@@ -2638,6 +2658,10 @@ struct WindowRow: View {
                     } else if let pace, !pace.isOnTrack || !pace.lastsUntilReset {
                         // Design merges pace into left foot when off-track.
                         Text(paceLine(pace).uppercased())
+                    } else if let runwayText {
+                        // No reset schedule: fall back to the observed burn
+                        // rate — "ĐÃ DÙNG 82% · HẾT SAU ~2D".
+                        Text("\(L10n.f("quota.usedPct", settings.appLanguage, window.usedPct)) · \(L10n.f("quota.runsOutIn", settings.appLanguage, runwayText))".uppercased())
                     } else {
                         Text(L10n.f("quota.usedPct", settings.appLanguage, window.usedPct).uppercased())
                     }
@@ -2650,6 +2674,10 @@ struct WindowRow: View {
                 )
                 .lineLimit(2)
                 Spacer()
+                QuotaSparkline(
+                    samples: QuotaUsageHistory.samples(
+                        provider: providerID, window: window.label),
+                    color: barFillColor)
                 if !resetText.isEmpty {
                     Text(resetText.uppercased())
                         .font(.plexMono(10))

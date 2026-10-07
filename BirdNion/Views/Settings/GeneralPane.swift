@@ -164,6 +164,16 @@ struct GeneralPane: View {
                     .instrumentControlFieldStyle()
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.budgetAlerts.title", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.budgetAlertsEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
+                }
             }
 
             SettingsCard(

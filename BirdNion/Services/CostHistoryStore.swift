@@ -149,6 +149,15 @@ enum CostHistoryStore {
 
     // MARK: - Read / write
 
+    /// Sum of every source's USD spend for the given day (default today) —
+    /// used by the popover's glance line. Zero when no day entries exist.
+    static func todayTotalUSD(now: Date = Date()) -> Double {
+        let key = dayKey(now)
+        return read().sources?.values.reduce(0) { total, days in
+            total + (days[key]?.usd ?? 0)
+        } ?? 0
+    }
+
     static func read(url: URL = historyURL()) -> Document {
         guard let data = try? readBoundedData(url: url),
               let doc = try? JSONDecoder().decode(Document.self, from: data),
