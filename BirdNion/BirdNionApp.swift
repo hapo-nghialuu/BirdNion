@@ -10,6 +10,11 @@ struct BirdNionApp: App {
     @State private var installedAgents: InstalledAgentCatalog
     @State private var agentVisibility: InstalledAgentVisibilityStore
     init() {
+        // CLI mode: `birdnion usage --json`, `serve`, `config import`, …
+        // skips the GUI path entirely — AppDelegate branches on `active`.
+        if BirdNionCLI.wantsCLIMode(ProcessInfo.processInfo.arguments) {
+            BirdNionCLI.activate()
+        }
         AppFonts.registerBundledFonts()
         do {
             try CostUsageFetcher.performPrivacyMigrations()
@@ -18,6 +23,15 @@ struct BirdNionApp: App {
         }
         let services = ServicesContainer()
         ServicesContainer.register(services: services)
+        // CLI runs never consume queued imports (they can only queue them)
+        // and don't need display-currency rates.
+        if !BirdNionCLI.active {
+            services.settings.consumePendingPreferencesImport()
+            Task {
+                await CurrencyExchange.shared
+                    .fetchLatestRatesIfNeeded(preferredCurrencyCode: PreferredCurrency.preference)
+            }
+        }
         _settings = State(initialValue: services.settings)
         _config = State(initialValue: services.configService)
         _quota = State(initialValue: services.quotaService)

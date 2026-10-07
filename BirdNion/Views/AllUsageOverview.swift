@@ -560,8 +560,11 @@ struct CombinedWindowTotals: Equatable {
 
 extension CombinedUsageReport {
     func totals(lastDays days: Int) -> CombinedWindowTotals {
-        let window = daily.suffix(days)
-        return CombinedWindowTotals(
+        totals(over: Array(daily.suffix(days)))
+    }
+
+    func totals(over window: [CombinedDailyUsage]) -> CombinedWindowTotals {
+        CombinedWindowTotals(
             usd: window.reduce(0) { $0 + $1.usd },
             tokens: window.reduce(0) { $0 + $1.tokens },
             claudeUSD: window.reduce(0) { $0 + $1.claudeUSD },
@@ -581,8 +584,10 @@ extension CombinedUsageReport {
     }
 
     func topModels(lastDays days: Int, limit: Int = 6) -> (models: [CombinedModelCost], windowTokens: Int) {
-        let n = max(days, 1)
-        let window = Array(daily.suffix(n))
+        topModels(over: Array(daily.suffix(max(days, 1))), limit: limit)
+    }
+
+    func topModels(over window: [CombinedDailyUsage], limit: Int = 6) -> (models: [CombinedModelCost], windowTokens: Int) {
         var usdByKey: [String: Double] = [:]
         var tokensByKey: [String: Int] = [:]
         var metaByKey: [String: (name: String, source: String)] = [:]
@@ -615,6 +620,26 @@ extension CombinedUsageReport {
             models = Array(models.prefix(limit))
         }
         return (models, max(windowTokens, 1))
+    }
+}
+
+extension CostReportingPeriod {
+    /// Slice a calendar-aligned daily series for this period: fixed windows
+    /// take the trailing N days, month-to-date keeps the current calendar
+    /// month, all-history keeps everything.
+    func slice(_ daily: [CombinedDailyUsage],
+               calendar: Calendar = .current,
+               now: Date = Date()) -> [CombinedDailyUsage] {
+        switch self {
+        case .allHistory:
+            return daily
+        case .monthToDate:
+            return daily.filter {
+                calendar.isDate($0.date, equalTo: now, toGranularity: .month)
+            }
+        default:
+            return Array(daily.suffix(fixedDays ?? daily.count))
+        }
     }
 }
 
@@ -972,12 +997,10 @@ struct AllUsageOverview: View {
         .map(\.row)
     }
 
-    /// Cost by ăn theo đúng cửa sổ chart (key AppStorage chung với period chips):
+    /// Cost by ăn theo đúng cửa sổ chart (costReportingPeriod dùng chung):
     /// tổng per-source tính lại từ `report.daily` thay vì đóng cứng last30.
-    @AppStorage("popover.allChartDays") private var allChartDays = 30
-
     private func costRows(daily: [CombinedDailyUsage]) -> [AgentCostRow] {
-        let window = Array(daily.suffix(max(allChartDays, 1)))
+        let window = settings.costReportingPeriod.slice(daily)
         func sums(_ usd: (CombinedDailyUsage) -> Double,
                   _ tokens: (CombinedDailyUsage) -> Int) -> (usd: Double, tokens: Int) {
             (window.reduce(0) { $0 + usd($1) }, window.reduce(0) { $0 + tokens($1) })
@@ -1026,7 +1049,7 @@ struct AllUsageOverview: View {
 
     /// Gộp model theo đúng window chart (MODEL = $, TOKEN = tokens).
     private func modelRows(daily: [CombinedDailyUsage]) -> [AgentModelRow] {
-        let window = Array(daily.suffix(max(allChartDays, 1)))
+        let window = settings.costReportingPeriod.slice(daily)
         var totals: [String: (usd: Double, tokens: Int, sourceTokens: [String: Int])] = [:]
         for model in window.flatMap(\.models) where !model.isKiroSyntheticAggregate {
             var entry = totals[model.name] ?? (0, 0, [:])
@@ -1398,15 +1421,12 @@ struct CombinedChartCard: View {
     @State private var hoveredDay: CombinedDailyUsage?
     @State private var pinnedDay: CombinedDailyUsage?
     @State private var hoveredHour: CombinedHourlyUsage?
-    @AppStorage("popover.allChartDays") private var periodDays = 30
-
-    private static let periods = [1, 7, 30, 90, 120]
+    private var period: CostReportingPeriod { settings.costReportingPeriod }
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
-    private var is24h: Bool { periodDays == 1 }
-    private var periodWindowDays: Int { min(max(periodDays, 1), max(report.daily.count, 1)) }
-    private var windowDaily: [CombinedDailyUsage] { Array(report.daily.suffix(periodWindowDays)) }
-    private var windowTotals: CombinedWindowTotals { report.totals(lastDays: periodWindowDays) }
+    private var is24h: Bool { period == .day }
+    private var windowDaily: [CombinedDailyUsage] { period.slice(report.daily) }
+    private var windowTotals: CombinedWindowTotals { report.totals(over: windowDaily) }
     private var maxBarTokens: Int { max(windowDaily.map(\.tokens).max() ?? 0, 1) }
 
     private var hourly24USD: Double { report.hourly.reduce(0) { $0 + $1.usd } }
@@ -1416,20 +1436,7 @@ struct CombinedChartCard: View {
     private var kiroTodayUSD: Double { report.daily.last?.kiroUSD ?? 0 }
     private var kiroTodayTokens: Int { report.daily.last?.kiroTokens ?? 0 }
 
-    private func periodLabel(_ days: Int) -> String {
-        days == 1 ? "24h" : "\(days) \(vi ? "ngày" : "days")"
-    }
-
-    private func periodShortLabel(_ days: Int) -> String {
-        switch days {
-        case 1: return "24h"
-        case 7: return "7d"
-        case 30: return "30d"
-        case 90: return "90d"
-        case 120: return "120d"
-        default: return "\(days)d"
-        }
-    }
+    private var periodLabel: String { period.label(vi: vi) }
 
     private var periodTotalUSD: Double {
         is24h
@@ -1477,7 +1484,7 @@ struct CombinedChartCard: View {
     private var costHero: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text((vi ? "Tổng chi phí " : "Total cost ") + periodLabel(periodDays))
+                Text((vi ? "Tổng chi phí " : "Total cost ") + periodLabel)
                     .plexEyebrow(size: 10, color: VocabbyTheme.secondary, tracking: 0.2)
                     .lineLimit(1)
                 Text(AllUsageFormat.usd(periodTotalUSD))
@@ -1516,17 +1523,17 @@ struct CombinedChartCard: View {
 
     private var periodPicker: some View {
         HStack(spacing: 4) {
-            ForEach(Self.periods, id: \.self) { days in
-                let active = periodDays == days
+            ForEach(CostReportingPeriod.allCases) { option in
+                let active = period == option
                 Button {
-                    periodDays = days
+                    settings.costReportingPeriod = option
                     hoveredDay = nil
                     pinnedDay = nil
                     hoveredHour = nil
                     // Đổi cửa sổ thời gian → ngày ghim không còn thuộc window, đóng panel.
                     NotificationCenter.default.post(name: .birdnionCloseDayDetail, object: nil)
                 } label: {
-                    Text(periodShortLabel(days))
+                    Text(option.shortLabel)
                         .font(.plexMono(9, weight: active ? .semibold : .medium))
                         .foregroundStyle(active ? VocabbyTheme.background : VocabbyTheme.secondary)
                         .frame(width: 30, height: 22)
@@ -1587,7 +1594,7 @@ struct CombinedChartCard: View {
                                 name: .birdnionOpenDayDetail, object: nil,
                                 userInfo: ["day": day, "pinned": false,
                                            "windowUSD": periodTotalUSD,
-                                           "windowLabel": periodShortLabel(periodDays)])
+                                           "windowLabel": period.shortLabel])
                         } else if hoveredDay?.id == day.id {
                             hoveredDay = nil
                             NotificationCenter.default.post(
@@ -1601,7 +1608,7 @@ struct CombinedChartCard: View {
                             name: .birdnionOpenDayDetail, object: nil,
                             userInfo: ["day": day, "pinned": true,
                                        "windowUSD": periodTotalUSD,
-                                       "windowLabel": periodShortLabel(periodDays)])
+                                       "windowLabel": period.shortLabel])
                     }
                     .help("\(dayLabel(day.date)): \(AllUsageFormat.tokens(day.tokens)) · \(AllUsageFormat.usd(day.usd))")
                 }
@@ -2073,12 +2080,12 @@ struct CombinedHeatmapCard: View {
 struct CombinedTopModelsCard: View {
     @EnvironmentObject var settings: SettingsStore
     let report: CombinedUsageReport
-    @AppStorage("popover.allChartDays") private var periodDays = 30
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
     var body: some View {
-        let (models, _) = report.topModels(lastDays: periodDays)
+        let window = settings.costReportingPeriod.slice(report.daily)
+        let (models, _) = report.topModels(over: window)
         if !models.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text(vi ? "MODEL HÀNG ĐẦU" : "TOP MODELS")
@@ -2130,30 +2137,13 @@ struct CombinedTopModelsCard: View {
 
 enum AllUsageFormat {
     static func usd(_ amount: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencySymbol = "$"
-        formatter.locale = Locale(identifier: "en_US")
-        if amount >= 1000 {
-            formatter.maximumFractionDigits = 0
-            formatter.minimumFractionDigits = 0
-        } else {
-            formatter.maximumFractionDigits = 2
-            formatter.minimumFractionDigits = 2
-        }
-        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
+        PreferredCurrency.format(usd: amount)
     }
 
-    /// Whole-dollar variant for tight stat strips ("$425", "$1,208") where
+    /// Whole-amount variant for tight stat strips ("$425", "₫11,0tr") where
     /// cents would force mid-number wrapping.
     static func usdWhole(_ amount: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencySymbol = "$"
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.maximumFractionDigits = 0
-        formatter.minimumFractionDigits = 0
-        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.0f", amount)
+        PreferredCurrency.format(usd: amount, wholeFraction: true)
     }
 
     static func tokens(_ count: Int) -> String {

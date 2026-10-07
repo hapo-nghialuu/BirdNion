@@ -167,6 +167,20 @@ struct ProjectRankingRow: Equatable, Sendable, Identifiable {
     let tokens: Int
 }
 
+extension ProjectUsageRecord {
+    /// Personal-info-safe name: hashed placeholder when the user asked the
+    /// app to hide personal info (mirrors CodexBar's masked session names).
+    func displayName(hidePersonalInfo: Bool) -> String {
+        hidePersonalInfo ? "Project \(projectKey.prefix(8))" : displayName
+    }
+}
+
+extension ProjectRankingRow {
+    func displayName(hidePersonalInfo: Bool) -> String {
+        hidePersonalInfo ? "Project \(projectKey.prefix(8))" : displayName
+    }
+}
+
 struct ProjectInsightsConfidence: Equatable, Sendable {
     let live: [ProjectUsageSource]
     let historyOnly: [ProjectUsageSource]

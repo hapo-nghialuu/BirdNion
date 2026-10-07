@@ -34,6 +34,26 @@ private actor DevinCandidateTransport: ProviderHTTPTransport {
 /// hooks; these cover the three hand-written API-key parsers.
 @MainActor
 final class NewProviderTests: XCTestCase {
+    private var savedCurrencyPreference: Any?
+
+    /// Some tests assert USD-formatted subtitles; pin the preferred currency
+    /// so a non-USD system locale does not reroute `usdString` through
+    /// `PreferredCurrency.format`.
+    override func setUp() {
+        super.setUp()
+        savedCurrencyPreference = UserDefaults.standard.object(forKey: PreferredCurrency.defaultsKey)
+        UserDefaults.standard.set("USD", forKey: PreferredCurrency.defaultsKey)
+    }
+
+    override func tearDown() {
+        if let savedCurrencyPreference {
+            UserDefaults.standard.set(savedCurrencyPreference, forKey: PreferredCurrency.defaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: PreferredCurrency.defaultsKey)
+        }
+        super.tearDown()
+    }
+
     private func withCodexMenuBarPreferences(
         metric: CodexMenuBarMetric,
         genericPreference: MenuBarMetricPreference? = nil,

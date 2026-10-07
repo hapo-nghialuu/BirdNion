@@ -50,6 +50,6 @@ struct ProviderCostSnapshot: Equatable, Codable, Sendable {
 /// (e.g. pt-BR users still see "$54.72", not "US$ 54,72").
 enum UsageFormatter {
     static func usdString(_ value: Double) -> String {
-        value.formatted(.currency(code: "USD").locale(Locale(identifier: "en_US")))
+        PreferredCurrency.formatPrecise(usd: value)
     }
 }

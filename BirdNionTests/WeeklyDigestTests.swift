@@ -9,6 +9,25 @@ final class WeeklyDigestTests: XCTestCase {
     private let calendar = Calendar.current
     private lazy var now = Date()
     private lazy var startOfToday = calendar.startOfDay(for: now)
+    private var savedCurrencyPreference: Any?
+
+    /// Digest lines embed USD-formatted amounts; pin the preferred currency
+    /// so a non-USD system locale does not reroute `usdString` through
+    /// `PreferredCurrency.format`.
+    override func setUp() {
+        super.setUp()
+        savedCurrencyPreference = UserDefaults.standard.object(forKey: PreferredCurrency.defaultsKey)
+        UserDefaults.standard.set("USD", forKey: PreferredCurrency.defaultsKey)
+    }
+
+    override func tearDown() {
+        if let savedCurrencyPreference {
+            UserDefaults.standard.set(savedCurrencyPreference, forKey: PreferredCurrency.defaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: PreferredCurrency.defaultsKey)
+        }
+        super.tearDown()
+    }
 
     private func day(_ offset: Int) -> Date {
         calendar.date(byAdding: .day, value: offset, to: startOfToday)!
