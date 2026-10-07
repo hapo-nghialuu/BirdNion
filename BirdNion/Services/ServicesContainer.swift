@@ -19,8 +19,6 @@ final class ServicesContainer: ObservableObject {
     let agentVisibility = InstalledAgentVisibilityStore.shared
     /// Refreshes when the system `~/.codex` login changes (terminal `codex login`).
     let codexAccountObserver = CodexSystemAccountObserver()
-    /// Keeps the machine awake while a local agent session is live (opt-in).
-    let stayAwake = StayAwakeService()
     /// Single-flight + TTL owner for the local cost scanners.
     let usageReports = UsageReportCoordinator.shared
     /// Process-wide instance. Set by `BirdNionApp.init` so the Settings
@@ -46,12 +44,6 @@ final class ServicesContainer: ObservableObject {
         quotaService.restorePersistedStatuses()
         // Bind so settings.pushRefreshInterval() can push changes into the loop.
         store.bind(quotaService: quotaService)
-        // Poll loop reads the toggle itself — no rebinding needed.
-        // Skipped in CLI mode: a headless fetch must never hold a sleep
-        // assertion.
-        if !BirdNionCLI.active {
-            stayAwake.start()
-        }
     }
 
     /// Build the ordered list of `QuotaProvider` instances from

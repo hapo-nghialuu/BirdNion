@@ -38,7 +38,6 @@ struct PreferencesDocument: Codable {
         "providerFailureNotificationsEnabled",
         "quotaWarningNotificationsEnabled",
         "credentialExpiryNotificationsEnabled",
-        "stayAwakeEnabled",
         "weeklyDigestEnabled",
         "quotaWarningSoundEnabled",
         "quotaWarningOnScreenAlertEnabled",

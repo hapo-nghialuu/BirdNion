@@ -150,9 +150,6 @@ final class SettingsStore: ObservableObject {
     /// Show each provider's on-disk data size in the Providers detail pane.
     /// `ProviderStorageScanner` only scans while this is on.
     @AppStorage("providerStorageFootprintsEnabled") var providerStorageFootprintsEnabled: Bool = false
-    /// Opt-in: keep the machine awake while a local agent session writes.
-    /// `StayAwakeService` reads the same UserDefaults key on each poll.
-    @AppStorage(StayAwakeConfig.enabledKey) var stayAwakeEnabled: Bool = false
     /// Opt-in credential-expiry alerts (CodexBar parity — off by default).
     /// `QuotaService` reads the same UserDefaults key directly.
     @AppStorage("credentialExpiryNotificationsEnabled") var credentialExpiryNotificationsEnabled: Bool = false
