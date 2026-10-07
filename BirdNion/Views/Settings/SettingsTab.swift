@@ -3,7 +3,7 @@ import SwiftUI
 /// Settings navigation items for the vertical sidebar (remake P2).
 /// Display folded into General; Debug folded into Advanced.
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, actionCenter, providers, agents, aiCoding, insights, advanced, about
+    case general, actionCenter, providers, agents, aiCoding, insights, hooks, advanced, about
     var id: String { rawValue }
 
     func title(language: String? = nil) -> String {
@@ -14,6 +14,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .agents: L10n.languageCode(language) == "vi" ? "Agent" : "Agents"
         case .aiCoding: L10n.t("settings.tab.aiCoding", language)
         case .insights: L10n.t("settings.tab.insights", language)
+        case .hooks: L10n.t("settings.tab.hooks", language)
         case .advanced: L10n.t("settings.tab.advanced", language)
         case .about: L10n.t("settings.tab.about", language)
         }
@@ -28,6 +29,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .agents: "chart.bar.doc.horizontal"
         case .aiCoding: "terminal"
         case .insights: "chart.xyaxis.line"
+        case .hooks: "bolt.horizontal.circle"
         case .advanced: "slider.horizontal.3"
         case .about: "info.circle"
         }
@@ -39,7 +41,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     /// cần sửa, mở dạng sheet từ nút cảnh báo (popover header / General),
     /// không phải một mục cấu hình thường trực (2026-08-24).
     static let allSidebar: [SettingsTab] = [
-        .general, .providers, .agents, .insights, .aiCoding, .advanced, .about,
+        .general, .providers, .agents, .insights, .aiCoding, .hooks, .advanced, .about,
     ]
 
     static func restored(_ raw: String?) -> SettingsTab {
