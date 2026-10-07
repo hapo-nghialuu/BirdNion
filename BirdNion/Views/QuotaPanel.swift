@@ -67,6 +67,9 @@ struct QuotaOverview: View {
     /// Today's total estimated local spend across cost sources — loaded
     /// once per panel appearance for the glance line.
     @State private var glanceTodayUSD: Double = 0
+    /// Local keyDown monitor feeding the provider-switcher shortcuts
+    /// (left/right cycle, cmd+1…9 selects) while the panel is key.
+    @State private var switcherMonitor: Any?
     var body: some View {
         ZStack {
             VocabbyTheme.background.ignoresSafeArea()
@@ -108,12 +111,7 @@ struct QuotaOverview: View {
                                 // NSISEngine recursion on HostingScrollView).
                                 // The deferred fitting-size path then resumes
                                 // normal auto-fit after the layout pass.
-                                if $0 == "all", selected != "all" {
-                                    NotificationCenter.default.post(
-                                        name: .birdnionAllTabWillOpen, object: nil)
-                                }
-                                selectedProviderId = $0
-                                UserDefaults.standard.set($0, forKey: Self.selectedTabKey)
+                                selectTab($0)
                             }
                         ),
                         showAllTab: hasLocalCostSources
@@ -166,6 +164,13 @@ struct QuotaOverview: View {
         .onAppear {
             if selectedProviderId == nil {
                 selectedProviderId = hasLocalCostSources ? "all" : quota.displayStatuses.first?.id
+            }
+            installSwitcherMonitor()
+        }
+        .onDisappear {
+            if let monitor = switcherMonitor {
+                NSEvent.removeMonitor(monitor)
+                switcherMonitor = nil
             }
         }
         .onChange(of: selectedProviderId) { id in
@@ -868,6 +873,79 @@ struct QuotaOverview: View {
         guard quota.displayStatuses.contains(where: { $0.id == providerID }) else { return }
         selectedProviderId = providerID
         UserDefaults.standard.set(providerID, forKey: Self.selectedTabKey)
+    }
+
+    // MARK: - Provider switcher shortcuts
+
+    /// Visible tab order: "all" first when the local-cost tab is shown,
+    /// then the provider tabs in display order — what cmd+1…9 targets.
+    private var switcherTabIds: [String] {
+        (hasLocalCostSources ? ["all"] : []) + quota.displayStatuses.map(\.id)
+    }
+
+    private func selectTab(_ id: String) {
+        // Pre-expand panel to a safe seed BEFORE state mutates so
+        // NSHostingView has stable bounds while AllUsageOverview lays out
+        // (avoids NSISEngine recursion on HostingScrollView). The deferred
+        // fitting-size path then resumes normal auto-fit after the pass.
+        if id == "all", effectiveSelectedId() != "all" {
+            NotificationCenter.default.post(
+                name: .birdnionAllTabWillOpen, object: nil)
+        }
+        selectedProviderId = id
+        UserDefaults.standard.set(id, forKey: Self.selectedTabKey)
+    }
+
+    private func applySwitcherAction(_ action: String) {
+        let tabs = switcherTabIds
+        guard !tabs.isEmpty else { return }
+        switch action {
+        case "previous", "next":
+            let index = tabs.firstIndex(of: effectiveSelectedId()) ?? 0
+            let step = action == "previous" ? -1 : 1
+            selectTab(tabs[(index + step + tabs.count) % tabs.count])
+        default:
+            guard action.hasPrefix("select"),
+                  let n = Int(action.dropFirst("select".count)),
+                  n >= 1, n <= tabs.count else { return }
+            selectTab(tabs[n - 1])
+        }
+    }
+
+    private static func switcherAction(for event: NSEvent,
+                                       mapping: [String: String]) -> String? {
+        let key: String
+        switch event.keyCode {
+        case 123: key = "left"
+        case 124: key = "right"
+        default:
+            guard let chars = event.charactersIgnoringModifiers,
+                  !chars.isEmpty else { return nil }
+            key = chars
+        }
+        var modifiers: [String] = []
+        if event.modifierFlags.contains(.control) { modifiers.append("ctrl") }
+        if event.modifierFlags.contains(.option) { modifiers.append("alt") }
+        if event.modifierFlags.contains(.shift) { modifiers.append("shift") }
+        if event.modifierFlags.contains(.command) { modifiers.append("cmd") }
+        return ProviderSwitcherShortcuts.action(
+            characters: key, modifiers: modifiers, mapping: mapping)
+    }
+
+    private func installSwitcherMonitor() {
+        guard switcherMonitor == nil else { return }
+        switcherMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: .keyDown
+        ) { event in
+            guard Thread.isMainThread else { return event }
+            return MainActor.assumeIsolated {
+                guard let action = Self.switcherAction(
+                    for: event, mapping: settings.providerSwitcherShortcuts)
+                else { return event }
+                self.applySwitcherAction(action)
+                return nil
+            }
+        }
     }
 
     private func combinedReport() -> CombinedUsageReport {

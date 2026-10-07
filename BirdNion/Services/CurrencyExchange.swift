@@ -140,6 +140,16 @@ enum PreferredCurrency {
         return CurrencyExchange.supportedCurrencies.contains(localeCode) ? localeCode : "USD"
     }
 
+    /// Subtitle rule: USD always keeps two fraction digits ("$1,320.00"),
+    /// matching the pre-currency `UsageFormatter.usdString` contract.
+    /// Converted currencies keep the standard display rule.
+    static func formatPrecise(usd amount: Double) -> String {
+        if Self.resolvedCode == "USD" {
+            return amount.formatted(.currency(code: "USD").locale(Locale(identifier: "en_US")))
+        }
+        return Self.format(usd: amount)
+    }
+
     /// Display/convert a USD amount in the preferred currency. Falls back to
     /// en_US USD formatting when conversion isn't possible.
     static func format(usd amount: Double, wholeFraction: Bool = false) -> String {

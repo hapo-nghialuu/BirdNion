@@ -132,7 +132,7 @@ struct InsightsHighlightCard: View {
             return vi ? "Chưa có tín hiệu dự án trong 7 ngày" : "No project signal in the last 7 days"
         }
         let prefix = vi ? "Đứng đầu: " : "Top: "
-        return prefix + top.displayName
+        return prefix + top.displayName(hidePersonalInfo: settings.hidePersonalInfo)
     }
 
     private var confidenceLine: String {

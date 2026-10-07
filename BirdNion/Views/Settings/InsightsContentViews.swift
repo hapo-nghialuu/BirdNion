@@ -84,6 +84,10 @@ struct InsightsProjectsContent: View {
     let report: ProjectInsightsReport
     @Binding var days: Int
     @State private var selectedID: String?
+    /// Lazy ledger: newest 30 daily rows collapsed behind "Show all",
+    /// mirroring CodexBar's Usage & Spend row cap.
+    @State private var showsAllDays = false
+    private static let collapsedRowCount = 30
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
     private var ranking: [ProjectRankingRow] { report.ranking(days: days) }
 
@@ -148,12 +152,12 @@ struct InsightsProjectsContent: View {
             ? Int((row.usd / rankingTotalUSD * 100).rounded())
             : 0
         let selected = row.id == (selectedID ?? ranking.first?.id)
-        return Button { selectedID = row.id } label: {
+        return Button { selectedID = row.id; showsAllDays = false } label: {
             HStack(alignment: .center, spacing: RankCols.gap) {
                 ProviderLogoMark(id: row.source.rawValue, tint: sourceColor(row.source))
                     .frame(width: RankCols.icon, height: RankCols.icon)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.displayName)
+                    Text(row.displayName(hidePersonalInfo: settings.hidePersonalInfo))
                         .font(.plexSans(13, weight: .semibold))
                         .foregroundStyle(SettingsTheme.primary)
                         .lineLimit(1)
@@ -183,16 +187,32 @@ struct InsightsProjectsContent: View {
         .hairlineTop(SettingsTheme.hairline)
     }
     private func projectDetail(_ project: ProjectUsageRecord) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(project.displayName).font(.plexSans(17, weight: .semibold)).lineLimit(1)
+        let daysDesc = project.daily.reversed()
+        let visibleDays = showsAllDays ? Array(daysDesc) : Array(daysDesc.prefix(Self.collapsedRowCount))
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(project.displayName(hidePersonalInfo: settings.hidePersonalInfo))
+                .font(.plexSans(17, weight: .semibold)).lineLimit(1)
             Text(project.source.displayName).plexEyebrow()
-            ForEach(project.daily.reversed()) { day in
+            ForEach(visibleDays) { day in
                 HStack {
                     Text(Self.dateFormatter.string(from: day.date)).font(.plexMono(10))
                     Spacer()
                     Text(AllUsageFormat.tokensAndUSD(day.tokens, day.usd)).font(.plexMono(10))
                 }
                 .padding(.vertical, 5).hairlineTop(SettingsTheme.hairline)
+            }
+            if daysDesc.count > Self.collapsedRowCount {
+                Button {
+                    showsAllDays.toggle()
+                } label: {
+                    Text(showsAllDays
+                         ? (vi ? "Thu gọn" : "Show less")
+                         : (vi ? "Hiện tất cả (\(daysDesc.count))" : "Show all (\(daysDesc.count))"))
+                        .font(.plexMono(10))
+                        .foregroundStyle(SettingsTheme.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 5)
             }
             let models = Self.foldedModels(project.daily)
             if !models.isEmpty {
@@ -222,7 +242,10 @@ struct InsightsProjectsContent: View {
             }
     }
     private func selectFirstIfNeeded(force: Bool = false) {
-        if force || !ranking.contains(where: { $0.id == selectedID }) { selectedID = ranking.first?.id }
+        if force || !ranking.contains(where: { $0.id == selectedID }) {
+            selectedID = ranking.first?.id
+            showsAllDays = false
+        }
     }
     private func sourceColor(_ source: ProjectUsageSource) -> Color {
         switch source {
