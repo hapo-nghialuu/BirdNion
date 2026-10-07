@@ -88,6 +88,7 @@ final class QuotaService: ObservableObject {
 
     /// Merge a lane emission into `statuses`, preserving provider order.
     private func mergePublished(_ status: ProviderStatus) {
+        hookEngine.observe(status)
         if let index = statuses.firstIndex(where: { $0.id == status.id }) {
             statuses[index] = status
         } else {
@@ -108,6 +109,10 @@ final class QuotaService: ObservableObject {
     /// Per provider+window warning state: last seen remaining % and the set of
     /// thresholds already fired (so we notify once per crossing, not every poll).
     private var warnState: [String: [String: (last: Int, fired: Set<Int>)]] = [:]
+
+    /// User hook rules: observes every published status for quota/provider
+    /// transitions and runs matching shell commands off the main actor.
+    let hookEngine = HookEngine()
 
     /// Current stale-data warning for a provider, if its last refresh failed
     /// transiently while a last-good snapshot was preserved. `nil` once a
@@ -158,6 +163,7 @@ final class QuotaService: ObservableObject {
             self.warnState.removeValue(forKey: id)
             self.credentialAlerted.remove(id)
             self.credentialDelivered.remove(id)
+            self.hookEngine.reset(provider: id)
             self.failureNotificationRemove(Self.failureNotificationID(for: id))
             self.failureNotificationRemove(Self.credentialNotificationID(for: id))
             self.legacyFailureNotificationCleanup(id)
