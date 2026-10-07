@@ -62,6 +62,10 @@ struct QuotaOverview: View {
     /// Lazy-scanned Devin CLI usage report from local session transcripts.
     @State private var devinReport: DevinCLIUsageReport?
     @State private var devinReportTaskId: String?
+    /// Generic extra local cost sources (opencode, gemini, copilot, ...) —
+    /// scanned as one set via `LocalAgentCostEngine`.
+    @State private var extraReports: [CostHistoryStore.Source: LocalAgentUsageReport] = [:]
+    @State private var extraReportTaskId: String?
     @State private var loadingCostSources: Set<CostHistoryStore.Source> = []
     @State private var claudeCodeTargetRevision = 0
     var body: some View {
@@ -123,6 +127,7 @@ struct QuotaOverview: View {
                             omp: ompReport,
                             pi: piReport,
                             devin: devinReport,
+                            extra: extraReports,
                             visibleAgentRecords: visibleAgentRecords,
                             allAgentRecords: projectedAgentRecords,
                             providerStatuses: quota.displayStatuses,
@@ -418,6 +423,7 @@ struct QuotaOverview: View {
         triggerOMPReportIfNeeded(providerId: providerId)
         triggerPiReportIfNeeded(providerId: providerId)
         triggerDevinReportIfNeeded(providerId: providerId)
+        triggerExtrasReportIfNeeded(providerId: providerId)
     }
 
     /// Trigger the Claude 30-day scan only when the user actually views the
@@ -677,6 +683,9 @@ struct QuotaOverview: View {
         if ompReport?.scanConfidence.included == true { sources.insert(.omp) }
         if piReport?.scanConfidence.included == true { sources.insert(.pi) }
         if devinReport?.scanConfidence.included == true { sources.insert(.devin) }
+        for (source, report) in extraReports where report.scanConfidence.included {
+            sources.insert(source)
+        }
         return sources
     }
 
@@ -847,6 +856,41 @@ struct QuotaOverview: View {
         }
     }
 
+    /// Generic extra local cost sources scan — all registered extras are
+    /// scanned as one set (single coordinator lane) whenever the All tab is
+    /// open and they are authorized.
+    private func triggerExtrasReportIfNeeded(providerId: String) {
+        let taskId = UUID().uuidString
+        extraReportTaskId = taskId
+        let needed = authorizedCostSources.intersection(LocalAgentCostEngine.extraSources)
+        guard providerId == "all", !needed.isEmpty else {
+            loadingCostSources.subtract(LocalAgentCostEngine.extraSources)
+            extraReports = [:]
+            return
+        }
+        loadingCostSources.formUnion(needed)
+        let needsSeed = extraReports.isEmpty
+        Task {
+            if needsSeed {
+                let seeds = await UsageReportCoordinator.shared.seededExtraReports(sources: needed)
+                if !seeds.isEmpty {
+                    await MainActor.run {
+                        guard extraReportTaskId == taskId,
+                              extraReports.isEmpty
+                        else { return }
+                        extraReports = seeds
+                    }
+                }
+            }
+            let reports = await UsageReportCoordinator.shared.extraReports(sources: needed)
+            await MainActor.run {
+                guard extraReportTaskId == taskId else { return }
+                extraReports = reports
+                loadingCostSources.subtract(needed)
+            }
+        }
+    }
+
     private func effectiveSelectedId() -> String {
         if selectedProviderId == "all", hasLocalCostSources { return "all" }
         if let sel = selectedProviderId, sel != "all",
@@ -871,13 +915,15 @@ struct QuotaOverview: View {
             omp: ompReport,
             pi: piReport,
             devin: devinReport,
+            extraReports: extraReports,
             includeClaude: authorizedCostSources.contains(.claude),
             includeCodex: authorizedCostSources.contains(.codex),
             includeGrok: authorizedCostSources.contains(.grok),
             includeKiro: authorizedCostSources.contains(.kiro),
             includeOMP: authorizedCostSources.contains(.omp),
             includePi: authorizedCostSources.contains(.pi),
-            includeDevin: authorizedCostSources.contains(.devin))
+            includeDevin: authorizedCostSources.contains(.devin),
+            extraInclude: authorizedCostSources.intersection(extraReports.keys))
     }
 
     private func openAgentDetail(_ record: InstalledAgentRecord, pinned: Bool = true, tab: String? = nil) {

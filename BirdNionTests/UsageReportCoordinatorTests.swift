@@ -52,6 +52,7 @@ final class UsageReportCoordinatorTests: XCTestCase {
             seededKiro: { nil }, seededOMP: { nil }, seededPi: { nil },
             seededDevin: { nil },
             claudeSummary: { nil }, codexSummary: { nil },
+            extras: { _ in [:] }, seededExtras: { _ in [:] },
             now: { clock?.now() ?? Date() })
         return scans
     }
