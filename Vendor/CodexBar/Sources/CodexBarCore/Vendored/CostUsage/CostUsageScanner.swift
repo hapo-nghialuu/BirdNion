@@ -1313,8 +1313,13 @@ enum CostUsageScanner {
         roots: [URL],
         knownExistingPaths: Set<String>) -> [String: URL]
     {
+        // Pending-generation entries stay invisible in `files` until the
+        // episode commits, so without them every resumed pass would rebuild
+        // the session->file index with a cold linear walk over the manifest.
+        var sources = cache.codexPendingFiles ?? [:]
+        sources.merge(cache.files) { _, committed in committed }
         var out: [String: URL] = [:]
-        for (path, usage) in cache.files {
+        for (path, usage) in sources {
             guard let sessionId = usage.sessionId, !sessionId.isEmpty else { continue }
             let fileURL = URL(fileURLWithPath: path).standardizedFileURL
             if knownExistingPaths.contains(fileURL.path) {
@@ -2532,6 +2537,19 @@ enum CostUsageScanner {
         discardingTruncatedLine: Bool,
         scanComplete: Bool)
     {
+        // A frozen target with no unread bytes is trivially complete; see the
+        // matching guard in parseCodexFileCancellable.
+        if let endOffset, endOffset <= startOffset {
+            return (
+                sessionId: initialSessionId,
+                cutoffTotals: initialCutoffTotals,
+                parsedBytes: endOffset,
+                previousTotals: initialPreviousTotals,
+                rawTotalsBaseline: initialRawTotalsBaseline,
+                hasDivergentTotals: initialHasDivergentTotals,
+                discardingTruncatedLine: false,
+                scanComplete: true)
+        }
         var sessionId = initialSessionId
         var previousTotals = initialPreviousTotals
         var rawTotalsBaseline = initialRawTotalsBaseline
@@ -2811,12 +2829,15 @@ enum CostUsageScanner {
             unresolvedForkTotalWatermark: nil,
             hasDivergentTotals: initialHasDivergentTotals)
 
-        func rollbackResult() -> CodexParseResult {
+        func rollbackResult(
+            parsedBytes: Int64? = nil,
+            scanComplete: Bool = false) -> CodexParseResult
+        {
             let counted = rollbackState.lastCountedTotals
             let raw = rollbackState.lastRawTotalsBaseline
             return CodexParseResult(
                 days: [:],
-                parsedBytes: startOffset,
+                parsedBytes: parsedBytes ?? startOffset,
                 lastModel: rollbackState.currentModel,
                 lastTotals: rollbackState.hasDivergentTotals && !Self.codexTotalsEqual(raw, counted)
                     ? nil
@@ -2832,8 +2853,16 @@ enum CostUsageScanner {
                 projectName: rollbackState.projectName,
                 projectAttributionAmbiguous: rollbackState.projectAttributionAmbiguous,
                 rows: [],
-                scanComplete: false,
+                scanComplete: scanComplete,
                 resumeState: rollbackState)
+        }
+
+        // A frozen target with no unread bytes is trivially complete. Skipping
+        // the resumable scan keeps zero-length rollout files (and resume
+        // checkpoints that already reached the frozen EOF) out of the pending
+        // journal even when the pass deadline has already expired.
+        if let endOffset, endOffset <= startOffset {
+            return rollbackResult(parsedBytes: endOffset, scanComplete: true)
         }
 
         var currentModel = initialResumeState?.currentModel ?? initialModel
