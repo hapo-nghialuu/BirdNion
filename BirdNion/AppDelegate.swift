@@ -91,7 +91,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isRunningUnitTests else { return }
+        // CLI mode: run the subcommand and exit — no status item, no polling.
+        if BirdNionCLI.active {
+            Task { @MainActor in
+                let code = await BirdNionCLI.run(
+                    arguments: ProcessInfo.processInfo.arguments)
+                exit(code)
+            }
+            return
+        }
         services.start()
+        // Consume portable-preferences imports queued by `birdnion config
+        // import` while the app is running (init() alone only covers launch).
+        Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
+            Task { @MainActor in
+                ServicesContainer.shared?.settings.consumePendingPreferencesImport()
+            }
+        }
         // Restore the user's appearance choice before any window shows.
         services.settings.applyAppearance()
         // Mount the keepalive WindowGroup early so the first Settings open
