@@ -52,6 +52,26 @@ struct GeneralPane: View {
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
+                    title: L10n.t("settings.currency.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.currency.subtitle", settings.appLanguage)
+                ) {
+                    InstrumentMenuSelect(
+                        options: [("auto", L10n.t("settings.currency.auto", settings.appLanguage))]
+                            + CurrencyExchange.supportedCurrencies.compactMap { code in
+                                CurrencyExchange.pickerLabel(for: code).map { (code, $0) }
+                            },
+                        selection: $settings.preferredCurrencyCode)
+                    .onChange(of: settings.preferredCurrencyCode) { newValue in
+                        Task {
+                            await CurrencyExchange.shared
+                                .fetchLatestRatesIfNeeded(preferredCurrencyCode: newValue)
+                        }
+                    }
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
                     title: L10n.t("settings.showPercentInMenuBar.title", settings.appLanguage),
                     subtitle: L10n.t("settings.showPercentInMenuBar.subtitle", settings.appLanguage)
                 ) {
@@ -213,6 +233,17 @@ struct GeneralPane: View {
                     subtitle: L10n.t("settings.providerFailureNotifications.subtitle", settings.appLanguage)
                 ) {
                     Toggle("", isOn: $settings.providerFailureNotificationsEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.instrumentSwitch)
+                }
+
+                SettingsRowDivider()
+
+                SettingsLabeledRow(
+                    title: L10n.t("settings.credentialExpiryNotifications.title", settings.appLanguage),
+                    subtitle: L10n.t("settings.credentialExpiryNotifications.subtitle", settings.appLanguage)
+                ) {
+                    Toggle("", isOn: $settings.credentialExpiryNotificationsEnabled)
                         .labelsHidden()
                         .toggleStyle(.instrumentSwitch)
                 }

@@ -95,6 +95,7 @@ final class SettingsStore: ObservableObject {
     /// App-wide appearance: light / dark / auto (follow macOS). Applied via
     /// `applyAppearance()` on launch and whenever the picker changes.
     @AppStorage("appAppearance") var appAppearance: String = AppAppearance.auto.rawValue
+    @AppStorage(PreferredCurrency.defaultsKey) var preferredCurrencyCode: String = "auto"
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("refreshIntervalSeconds") var refreshIntervalSeconds: Double = RefreshFrequency.twoMinutes.rawValue
     @AppStorage("debugMenuEnabled") var debugMenuEnabled: Bool = false
@@ -153,6 +154,9 @@ final class SettingsStore: ObservableObject {
     /// Show each provider's on-disk data size in the Providers detail pane.
     /// `ProviderStorageScanner` only scans while this is on.
     @AppStorage("providerStorageFootprintsEnabled") var providerStorageFootprintsEnabled: Bool = false
+    /// Opt-in credential-expiry alerts (CodexBar parity — off by default).
+    /// `QuotaService` reads the same UserDefaults key directly.
+    @AppStorage("credentialExpiryNotificationsEnabled") var credentialExpiryNotificationsEnabled: Bool = false
     /// GitHub-releases update check (About pane). Auto-check runs at launch,
     /// throttled to once a day by `UpdateChecker`.
     @AppStorage("updateAutoCheckEnabled") var updateAutoCheckEnabled: Bool = true

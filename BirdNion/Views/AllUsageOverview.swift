@@ -2130,30 +2130,13 @@ struct CombinedTopModelsCard: View {
 
 enum AllUsageFormat {
     static func usd(_ amount: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencySymbol = "$"
-        formatter.locale = Locale(identifier: "en_US")
-        if amount >= 1000 {
-            formatter.maximumFractionDigits = 0
-            formatter.minimumFractionDigits = 0
-        } else {
-            formatter.maximumFractionDigits = 2
-            formatter.minimumFractionDigits = 2
-        }
-        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
+        PreferredCurrency.format(usd: amount)
     }
 
-    /// Whole-dollar variant for tight stat strips ("$425", "$1,208") where
+    /// Whole-amount variant for tight stat strips ("$425", "₫11,0tr") where
     /// cents would force mid-number wrapping.
     static func usdWhole(_ amount: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencySymbol = "$"
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.maximumFractionDigits = 0
-        formatter.minimumFractionDigits = 0
-        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.0f", amount)
+        PreferredCurrency.format(usd: amount, wholeFraction: true)
     }
 
     static func tokens(_ count: Int) -> String {
