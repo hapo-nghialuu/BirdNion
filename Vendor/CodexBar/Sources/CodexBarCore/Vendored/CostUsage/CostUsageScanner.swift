@@ -561,6 +561,15 @@ enum CostUsageScanner {
                 try self.checkCancellation?()
                 if self.shouldStop?() == true { return nil }
                 let fileURL = self.files[self.nextUnindexedFile]
+                // `rollout-*` names embed their own session id (`payload.id`);
+                // a rollout file whose name lacks the target id cannot match,
+                // so skip the read entirely. Other names still get parsed.
+                if !CostUsageScanner.codexRolloutFilenameMayContainSession(
+                    fileURL.lastPathComponent, sessionId: sessionId)
+                {
+                    self.nextUnindexedFile += 1
+                    continue
+                }
                 let root = CostUsageScanner.codexContainingRoot(
                     fileURL: fileURL,
                     roots: self.roots)
@@ -751,6 +760,17 @@ enum CostUsageScanner {
                         }
                         guard entry.pathExtension.lowercased() == "jsonl"
                         else {
+                            entryIndex += 1
+                            journal.directoryStack[cursorIndex].nextEntryIndex = entryIndex
+                            journal.directoryStack[cursorIndex].lastEntryName = entryName
+                            continue
+                        }
+                        // Same filename convention as the linear walk above:
+                        // rollout files embed the session id in their name, so
+                        // non-matching names are skipped without a read.
+                        if !CostUsageScanner.codexRolloutFilenameMayContainSession(
+                            entryName, sessionId: sessionId)
+                        {
                             entryIndex += 1
                             journal.directoryStack[cursorIndex].nextEntryIndex = entryIndex
                             journal.directoryStack[cursorIndex].lastEntryName = entryName
@@ -2383,6 +2403,15 @@ enum CostUsageScanner {
         case found(String)
         case definitivelyAbsent
         case retryableIOFailure
+    }
+
+    /// Codex CLI names rollout files `rollout-<timestamp>-<sessionId>...jsonl`;
+    /// the session's own `payload.id` is embedded in the name. A rollout file
+    /// whose name lacks the target id cannot be its match, so callers may skip
+    /// the content read. Non-rollout names are not filtered.
+    static func codexRolloutFilenameMayContainSession(_ name: String, sessionId: String) -> Bool {
+        !name.hasPrefix("rollout-")
+            || name.lowercased().contains(sessionId.lowercased())
     }
 
     static func parseCodexSessionIdentifier(
