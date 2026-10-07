@@ -8,6 +8,25 @@ final class CombinedUsageReportTests: XCTestCase {
     private let calendar = Calendar.current
     private lazy var now = Date()
     private lazy var startOfToday = calendar.startOfDay(for: now)
+    private var savedCurrencyPreference: Any?
+
+    /// These tests assert USD-formatted strings; without pinning, a
+    /// non-USD system locale (e.g. vi → VND) reroutes `usdString` through
+    /// `PreferredCurrency.format` and breaks the assertions.
+    override func setUp() {
+        super.setUp()
+        savedCurrencyPreference = UserDefaults.standard.object(forKey: PreferredCurrency.defaultsKey)
+        UserDefaults.standard.set("USD", forKey: PreferredCurrency.defaultsKey)
+    }
+
+    override func tearDown() {
+        if let savedCurrencyPreference {
+            UserDefaults.standard.set(savedCurrencyPreference, forKey: PreferredCurrency.defaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: PreferredCurrency.defaultsKey)
+        }
+        super.tearDown()
+    }
 
     private func day(_ offset: Int) -> Date {
         calendar.date(byAdding: .day, value: offset, to: startOfToday)!
