@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "birdnion"
-version = "0.10.47"
+version = "0.10.48"
 dependencies = [
  "base64 0.22.1",
  "boa_engine",

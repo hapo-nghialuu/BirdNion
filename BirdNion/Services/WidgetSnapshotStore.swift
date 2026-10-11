@@ -43,8 +43,13 @@ enum WidgetSnapshotStore {
     static func snapshotURL(
         env: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default) -> URL {
+        // `containerURL` can return a URL for a group container that was never
+        // materialized — on unsigned builds (no group entitlement) the system
+        // can't create it, and `createDirectory` against that path blocks
+        // instead of failing. Only use the container once it exists on disk.
         if let container = fileManager
-            .containerURL(forSecurityApplicationGroupIdentifier: appGroupID) {
+            .containerURL(forSecurityApplicationGroupIdentifier: appGroupID),
+            fileManager.fileExists(atPath: container.path) {
             return container.appendingPathComponent(filename)
         }
         return BirdNionConfigStore.configURL(env: env, fileManager: fileManager)
@@ -53,9 +58,14 @@ enum WidgetSnapshotStore {
     }
 
     /// Write the snapshot derived from the latest published statuses and ask
-    /// WidgetKit to reload timelines. Cheap enough to run on every publish.
+    /// WidgetKit to reload timelines. Runs off the caller's queue — this is
+    /// called from `QuotaService.statuses.didSet` on the main actor, and file
+    /// I/O must never stall publishing.
     static func save(_ statuses: [ProviderStatus]) {
-        save(statuses, to: snapshotURL(), reloadTimelines: true)
+        let url = snapshotURL()
+        DispatchQueue.global(qos: .utility).async {
+            save(statuses, to: url, reloadTimelines: true)
+        }
     }
 
     static func save(_ statuses: [ProviderStatus],

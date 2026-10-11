@@ -63,6 +63,8 @@ enum BirdNionConfigStore {
         var claudeCodeProfiles: [ClaudeCodeProfile]?
         /// User-defined third-party Codex CLI backends (Settings → "Codex").
         var codexProfiles: [CodexProfile]?
+        /// User hook rules run on quota/provider events (Settings → "Hooks").
+        var hooks: HooksConfig?
     }
 
     /// One third-party backend for Codex CLI. Codex only speaks the OpenAI
@@ -863,6 +865,19 @@ enum BirdNionConfigStore {
     static func removeCodexProfile(id: String, url: URL = configURL()) throws {
         try mutateConfig(url: url) { config in
             config.codexProfiles?.removeAll { $0.id == id }
+        }
+    }
+
+    // MARK: - Hooks
+
+    static func hooks(url: URL = configURL()) -> HooksConfig? {
+        read(url: url)?.hooks
+    }
+
+    /// Upsert the whole hooks section (atomic write, preserves providers).
+    static func saveHooks(_ hooks: HooksConfig, url: URL = configURL()) throws {
+        try mutateConfig(url: url) { config in
+            config.hooks = hooks
         }
     }
 

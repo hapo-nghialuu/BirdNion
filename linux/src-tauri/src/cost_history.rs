@@ -79,6 +79,17 @@ pub struct Document {
     /// documents, or a source that never deep-scanned) read back as "due".
     #[serde(default, alias = "deepScanAt")]
     pub deep_scan_at: HashMap<String, i64>,
+    /// source → epoch millis of the most recent persist that merged live
+    /// days. macOS writes this for its footer freshness label — it advances
+    /// on every live merge including incomplete/partial passes, unlike
+    /// `scanned_at` which callers may withhold for unfinished scans. Kept
+    /// here so a Linux write round-trips the shared file without dropping it.
+    #[serde(
+        default,
+        alias = "updatedAt",
+        deserialize_with = "deserialize_scanned_at"
+    )]
+    pub updated_at: HashMap<String, i64>,
 }
 
 /// Accept the fractional JSON milliseconds written by older macOS builds, but
@@ -292,8 +303,13 @@ fn validate_document(document: &Document, now_ms: i64) -> bool {
         || !valid_source_map(&document.counting_revision)
         || !valid_source_map(&document.top_models)
         || !valid_source_map(&document.deep_scan_at)
+        || !valid_source_map(&document.updated_at)
         || document
             .scanned_at
+            .values()
+            .any(|timestamp| *timestamp < 0 || *timestamp > latest_safe_scan)
+        || document
+            .updated_at
             .values()
             .any(|timestamp| *timestamp < 0 || *timestamp > latest_safe_scan)
         || document
@@ -620,6 +636,13 @@ where
         .get(source)
         .and_then(|days| trailing_top_model(source, days, today));
 
+    // Data-freshness stamp (shared with macOS `updated_at`): live days
+    // actually landed, regardless of whether the caller counted this pass as
+    // a completed scan — a draining incremental episode stays truthful.
+    if live.is_some_and(|report| !report.daily.is_empty()) {
+        doc.updated_at
+            .insert(source.to_string(), now.timestamp_millis());
+    }
     // Data Confidence Pass: stamp the last successful live-scan time so a
     // later history-only cycle (live == None) can still report freshness.
     if live.is_some() {
@@ -838,6 +861,7 @@ mod tests {
             )]),
             scanned_at: HashMap::from([("codex".to_string(), 1)]),
             deep_scan_at: HashMap::new(),
+            updated_at: HashMap::new(),
             counting_revision: HashMap::from([("grok".to_string(), 3)]),
             top_models: HashMap::from([("codex".to_string(), "gpt-5".to_string())]),
         }

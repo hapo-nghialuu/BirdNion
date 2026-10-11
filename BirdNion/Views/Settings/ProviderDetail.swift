@@ -603,14 +603,28 @@ extension ProvidersPane {
 // so the same factory powers init() and the live rebuild path triggered
 // by .birdnionProvidersChanged.
 
+    /// Sidebar health dot (CodexBar-style): a statuspage feed reading wins
+    /// over local fetch health when present; providers without a feed keep
+    /// the local green/amber signal; gray until anything is known.
     @ViewBuilder
     func statusDot(for row: BirdNionConfigStore.Provider) -> some View {
+        let unknown = SettingsTheme.disabled.opacity(0.55)
+        let s = status(for: row.id)
         let color: Color = {
-            if row.enabled != true { return SettingsTheme.disabled.opacity(0.55) }
-            guard let s = status(for: row.id) else { return SettingsTheme.disabled.opacity(0.55) }
+            if row.enabled != true { return unknown }
+            if let level = s?.serviceStatusLevel, !level.isEmpty {
+                switch level {
+                case "none": return SettingsTheme.success
+                case "minor": return SettingsTheme.warningFill
+                case "major", "critical": return SettingsTheme.critical
+                default: return unknown // maintenance / unrecognized levels
+                }
+            }
+            guard let s else { return unknown }
             return s.error == nil ? SettingsTheme.success : SettingsTheme.warningFill
         }()
         Circle().fill(color).frame(width: 7, height: 7)
+            .help(s.flatMap { ProviderStatusPage.detailText(for: $0) } ?? "")
     }
 
     // MARK: - Detail
