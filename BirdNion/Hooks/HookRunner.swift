@@ -104,9 +104,14 @@ enum HookRunner {
                 return
             }
 
-            // Write payload then close so the child sees EOF.
-            stdinPipe.fileHandleForWriting.write(payload)
-            try? stdinPipe.fileHandleForWriting.close()
+            // Write payload then close so the child sees EOF. A hook that exits
+            // without reading stdin closes the pipe; without F_SETNOSIGPIPE the
+            // write would raise SIGPIPE and kill the whole app instead of
+            // failing with EPIPE, which is safe to ignore here.
+            let writer = stdinPipe.fileHandleForWriting
+            _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+            try? writer.write(contentsOf: payload)
+            try? writer.close()
         }
     }
 

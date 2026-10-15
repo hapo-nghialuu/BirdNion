@@ -254,8 +254,10 @@ extension CodexAppServerRPC {
         private func send(_ payload: [String: Any]) throws {
             let data = try JSONSerialization.data(withJSONObject: payload)
             let handle = stdinPipe.fileHandleForWriting
-            handle.write(data)
-            handle.write(Data([0x0A]))
+            // If `codex app-server` has exited, fail this call with EPIPE
+            // instead of letting SIGPIPE terminate BirdNion.
+            _ = fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1)
+            try handle.write(contentsOf: data + Data([0x0A]))
         }
 
         private func readNextMessage() async throws -> [String: Any] {
