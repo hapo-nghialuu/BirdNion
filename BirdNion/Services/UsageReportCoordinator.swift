@@ -55,6 +55,11 @@ final class UsageReportCoordinator {
         /// TTL + single-flight dedupe as the full reports.
         var claudeSummary: @Sendable () async -> ClaudeCostSummary?
         var codexSummary: @Sendable () async -> CodexCostSummary?
+        /// All registered extra local cost sources (opencode, gemini,
+        /// copilot, ...) in one call — `LocalAgentCostEngine` already runs
+        /// them concurrently.
+        var extras: @Sendable (Set<CostHistoryStore.Source>) async -> [CostHistoryStore.Source: LocalAgentUsageReport]
+        var seededExtras: @Sendable (Set<CostHistoryStore.Source>) async -> [CostHistoryStore.Source: LocalAgentUsageReport]
         var now: @Sendable () -> Date
 
         static let live = Scans(
@@ -74,6 +79,8 @@ final class UsageReportCoordinator {
             seededDevin: { await DevinCostScanner.seededReport() },
             claudeSummary: { await ClaudeCostScanner.summary() },
             codexSummary: { await CodexCostScanner.summary() },
+            extras: { await LocalAgentCostEngine.loadReports(sources: $0) },
+            seededExtras: { await LocalAgentCostEngine.seededReports(sources: $0) },
             now: { Date() })
     }
 
@@ -88,6 +95,10 @@ final class UsageReportCoordinator {
     private var devinLane = SingleFlightCache<DevinCLIUsageReport>()
     private var claudeSummaryLane = SingleFlightCache<ClaudeCostSummary>()
     private var codexSummaryLane = SingleFlightCache<CodexCostSummary>()
+    private var extrasLane = SingleFlightCache<[CostHistoryStore.Source: LocalAgentUsageReport]>()
+    /// The source set `extrasLane` was filled for; a different set must not
+    /// be served from (or written into) that lane.
+    private var extrasSources: Set<CostHistoryStore.Source> = []
 
     nonisolated init(scans: Scans = .live) {
         self.scans = scans
@@ -96,31 +107,57 @@ final class UsageReportCoordinator {
     // MARK: - Typed report API
 
     func claudeReport() async -> ClaudeUsageReport? {
-        await report(\.claudeLane, scan: scans.claude)
+        await report(\.claudeLane, scan: scans.claude, source: .claude)
     }
 
     func codexReport() async -> CodexUsageReport? {
-        await report(\.codexLane, scan: scans.codex)
+        await report(\.codexLane, scan: scans.codex, source: .codex)
     }
 
     func grokReport() async -> GrokUsageReport? {
-        await report(\.grokLane, scan: scans.grok)
+        await report(\.grokLane, scan: scans.grok, source: .grok)
     }
 
     func kiroReport() async -> KiroUsageReport? {
-        await report(\.kiroLane, scan: scans.kiro)
+        await report(\.kiroLane, scan: scans.kiro, source: .kiro)
     }
 
     func ompReport() async -> OMPUsageReport? {
-        await report(\.ompLane, scan: scans.omp)
+        await report(\.ompLane, scan: scans.omp, source: .omp)
     }
 
     func piReport() async -> PiUsageReport? {
-        await report(\.piLane, scan: scans.pi)
+        await report(\.piLane, scan: scans.pi, source: .pi)
     }
 
     func devinReport() async -> DevinCLIUsageReport? {
-        await report(\.devinLane, scan: scans.devin)
+        await report(\.devinLane, scan: scans.devin, source: .devin)
+    }
+
+    /// Extra local cost sources in one single-flight lane — scanning all
+    /// requested sources at once shares the in-flight task across callers.
+    func extraReports(
+        sources: Set<CostHistoryStore.Source>
+    ) async -> [CostHistoryStore.Source: LocalAgentUsageReport] {
+        if sources != extrasSources {
+            // Re-key only when no scan for the old set is mid-flight, so its
+            // result can't land in the new set's cache; otherwise scan uncached.
+            guard extrasLane.inFlight == nil else { return await scans.extras(sources) }
+            extrasLane = SingleFlightCache()
+            extrasSources = sources
+        }
+        return await report(\.extrasLane, scan: { await self.scans.extras(sources) },
+                            onFreshScan: { reports in
+                                for (source, report) in reports {
+                                    BudgetAlerts.record(source: source, report: report)
+                                }
+                            }) ?? [:]
+    }
+
+    func seededExtraReports(
+        sources: Set<CostHistoryStore.Source>
+    ) async -> [CostHistoryStore.Source: LocalAgentUsageReport] {
+        await scans.seededExtras(sources)
     }
 
     func claudeSummary() async -> ClaudeCostSummary? {
@@ -145,7 +182,9 @@ final class UsageReportCoordinator {
     /// Keeps scanner-level invalidation (`CodexCostScanner.invalidateCaches()`
     /// after extra-home changes, counting-revision bumps) effective — without
     /// this, a warm coordinator cache would serve stale reports for up to TTL.
-    func invalidateAll() {
+    /// Also clears the extras engine's own report cache, which would otherwise
+    /// keep serving the old result for its full TTL.
+    func invalidateAll() async {
         claudeLane.cached = nil
         codexLane.cached = nil
         grokLane.cached = nil
@@ -155,6 +194,8 @@ final class UsageReportCoordinator {
         devinLane.cached = nil
         claudeSummaryLane.cached = nil
         codexSummaryLane.cached = nil
+        extrasLane.cached = nil
+        await LocalAgentCostEngine.invalidateCaches()
     }
 
     // MARK: - Single-flight core
@@ -163,7 +204,9 @@ final class UsageReportCoordinator {
     /// (failed/empty) scan is never cached, so the next caller retries.
     private func report<Report: Sendable>(
         _ lane: ReferenceWritableKeyPath<UsageReportCoordinator, SingleFlightCache<Report>>,
-        scan: @escaping @Sendable () async -> Report?
+        scan: @escaping @Sendable () async -> Report?,
+        source: CostHistoryStore.Source? = nil,
+        onFreshScan: ((Report) -> Void)? = nil
     ) async -> Report? {
         if let cached = self[keyPath: lane].cached,
            scans.now().timeIntervalSince(cached.at) < Self.cacheTTL {
@@ -178,6 +221,10 @@ final class UsageReportCoordinator {
         self[keyPath: lane].inFlight = nil
         if let result {
             self[keyPath: lane].cached = (result, scans.now())
+            if let source, let spend = result as? SpendReport {
+                BudgetAlerts.record(source: source, report: spend)
+            }
+            onFreshScan?(result)
         }
         return result
     }
