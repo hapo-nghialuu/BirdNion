@@ -120,7 +120,7 @@ enum AntigravityCostSource {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
             database,
-            "SELECT idx, data FROM main.gen_metadata LIMIT 10000",
+            "SELECT idx, data FROM main.gen_metadata ORDER BY idx DESC LIMIT 10000",
             -1, &statement, nil) == SQLITE_OK
         else { return nil }
         defer { sqlite3_finalize(statement) }

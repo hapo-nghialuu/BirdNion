@@ -96,6 +96,9 @@ final class UsageReportCoordinator {
     private var claudeSummaryLane = SingleFlightCache<ClaudeCostSummary>()
     private var codexSummaryLane = SingleFlightCache<CodexCostSummary>()
     private var extrasLane = SingleFlightCache<[CostHistoryStore.Source: LocalAgentUsageReport]>()
+    /// The source set `extrasLane` was filled for; a different set must not
+    /// be served from (or written into) that lane.
+    private var extrasSources: Set<CostHistoryStore.Source> = []
 
     nonisolated init(scans: Scans = .live) {
         self.scans = scans
@@ -136,7 +139,14 @@ final class UsageReportCoordinator {
     func extraReports(
         sources: Set<CostHistoryStore.Source>
     ) async -> [CostHistoryStore.Source: LocalAgentUsageReport] {
-        await report(\.extrasLane) { await self.scans.extras(sources) } ?? [:]
+        if sources != extrasSources {
+            // Re-key only when no scan for the old set is mid-flight, so its
+            // result can't land in the new set's cache; otherwise scan uncached.
+            guard extrasLane.inFlight == nil else { return await scans.extras(sources) }
+            extrasLane = SingleFlightCache()
+            extrasSources = sources
+        }
+        return await report(\.extrasLane) { await self.scans.extras(sources) } ?? [:]
     }
 
     func seededExtraReports(
@@ -167,7 +177,9 @@ final class UsageReportCoordinator {
     /// Keeps scanner-level invalidation (`CodexCostScanner.invalidateCaches()`
     /// after extra-home changes, counting-revision bumps) effective — without
     /// this, a warm coordinator cache would serve stale reports for up to TTL.
-    func invalidateAll() {
+    /// Also clears the extras engine's own report cache, which would otherwise
+    /// keep serving the old result for its full TTL.
+    func invalidateAll() async {
         claudeLane.cached = nil
         codexLane.cached = nil
         grokLane.cached = nil
@@ -178,6 +190,7 @@ final class UsageReportCoordinator {
         claudeSummaryLane.cached = nil
         codexSummaryLane.cached = nil
         extrasLane.cached = nil
+        await LocalAgentCostEngine.invalidateCaches()
     }
 
     // MARK: - Single-flight core

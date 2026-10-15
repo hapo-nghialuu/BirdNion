@@ -10,7 +10,7 @@ enum GeminiCostSource {
     static let descriptor = LocalCostSource(
         source: .gemini,
         displayName: "Gemini CLI",
-        countingRevision: 1,
+        countingRevision: 2,
         roots: { GeminiCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GeminiCostSource.turns(roots: roots, cutoff: cutoff)
@@ -36,12 +36,10 @@ enum GeminiCostSource {
     }
 
     private static func records(in file: URL, cutoff: Date) -> [LocalTurnRecord] {
-        let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? cutoff
         if file.pathExtension.lowercased() == "jsonl" {
             return LocalCostParsing.jsonLines(url: file).enumerated().compactMap { index, record in
                 turn(record: record, session: file.deletingPathExtension().lastPathComponent,
-                     ordinal: index, mtime: mtime, cutoff: cutoff)
+                     ordinal: index, cutoff: cutoff)
             }
         }
         guard let data = try? Data(contentsOf: file),
@@ -52,15 +50,17 @@ enum GeminiCostSource {
         let messages = object["messages"] as? [[String: Any]] ?? []
         return messages.enumerated().compactMap { index, message in
             turn(record: message, session: session, ordinal: index,
-                 mtime: mtime, cutoff: cutoff)
+                 cutoff: cutoff)
         }
     }
 
-    private static func turn(
+    /// `input`/`prompt` already includes the cached tokens, so the total is
+    /// not topped up with `cached` and only the non-cached part is priced as
+    /// fresh input. Records without a timestamp are dropped.
+    static func turn(
         record: [String: Any],
         session: String,
         ordinal: Int,
-        mtime: Date,
         cutoff: Date
     ) -> LocalTurnRecord? {
         guard let tokens = LocalCostParsing.dict(record, keys: ["tokens", "usage", "stats", "tokenUsage"])
@@ -71,13 +71,12 @@ enum GeminiCostSource {
         let thoughts = firstInt(tokens, ["thoughts", "thought", "reasoning"]) ?? 0
         let tool = firstInt(tokens, ["tool", "tool_tokens"]) ?? 0
         let explicitTotal = firstInt(tokens, ["total", "total_tokens", "totalTokens"])
-        let total = explicitTotal ?? (input + output + cached + thoughts + tool)
+        let total = explicitTotal ?? (input + output + thoughts + tool)
         guard total > 0 else { return nil }
-        let date = LocalCostParsing.timestamp(in: record, fallback: mtime)
-        guard date >= cutoff else { return nil }
+        guard let date = LocalCostParsing.timestamp(in: record), date >= cutoff else { return nil }
         let model = (record["model"] as? String) ?? (record["model_name"] as? String) ?? "unknown"
         let usd = GeminiModelPrice.cost(
-            model: model, input: input, output: output + thoughts + tool, cached: cached)
+            model: model, input: max(0, input - cached), output: output + thoughts + tool, cached: cached)
         return LocalTurnRecord(
             date: date, model: model, tokens: total, usd: usd,
             dedupeKey: "gemini:\(session):\(ordinal):\(model)")

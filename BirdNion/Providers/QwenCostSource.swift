@@ -9,7 +9,7 @@ enum QwenCostSource {
     static let descriptor = LocalCostSource(
         source: .qwen,
         displayName: "Qwen Code",
-        countingRevision: 1,
+        countingRevision: 2,
         roots: { QwenCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GenericJsonCostSource.turns(

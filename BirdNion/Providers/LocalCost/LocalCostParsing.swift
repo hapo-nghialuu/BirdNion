@@ -1,41 +1,49 @@
 import Foundation
+import SQLite3
 
 /// Shared lenient JSON helpers for the local-log cost sources. Everything
 /// fails soft: a drifting record shape yields nil, not a crash — the
 /// scanner just counts fewer turns.
 enum LocalCostParsing {
 
-    /// Best-effort timestamp from a log record: tries ISO-8601 strings,
-    /// epoch seconds and epoch milliseconds across common key names.
+    /// Best-effort timestamp from a log record: ISO-8601 strings and epoch
+    /// s/ms/µs/ns across common key names. Nil when the record has none —
+    /// callers drop such turns instead of guessing a day.
     static func timestamp(
         in record: [String: Any],
-        keys: [String] = ["timestamp", "time", "created", "createdAt", "created_at", "startTime", "lastUpdated"],
-        fallback: Date
-    ) -> Date {
+        keys: [String] = ["timestamp", "time", "created", "createdAt", "created_at", "startTime", "lastUpdated"]
+    ) -> Date? {
         for key in keys {
             if let date = parseTimestamp(record[key]) { return date }
         }
-        return fallback
+        return nil
     }
 
     static func parseTimestamp(_ value: Any?) -> Date? {
-        if let seconds = value as? Double {
-            // Heuristic: values above 1e12 are milliseconds.
-            return Date(timeIntervalSince1970: seconds > 1e12 ? seconds / 1000 : seconds)
-        }
-        if let int = value as? Int {
-            return Date(timeIntervalSince1970: int > 1_000_000_000_000 ? Double(int) / 1000 : Double(int))
-        }
+        if let seconds = value as? Double { return epochDate(seconds) }
+        if let int = value as? Int { return epochDate(Double(int)) }
         if let string = value as? String {
             if let date = isoFormatterWithFractional.date(from: string)
                 ?? isoFormatter.date(from: string) {
                 return date
             }
-            if let seconds = Double(string) {
-                return Date(timeIntervalSince1970: seconds > 1e12 ? seconds / 1000 : seconds)
-            }
+            if let number = Double(string) { return epochDate(number) }
         }
         return nil
+    }
+
+    /// Epoch unit by magnitude: seconds (<1e11), milliseconds (<1e14),
+    /// microseconds (<1e17), otherwise nanoseconds (OTel `timeUnixNano`).
+    static func epochDate(_ value: Double) -> Date? {
+        guard value > 0 else { return nil }
+        let seconds: Double
+        switch value {
+        case ..<1e11: seconds = value
+        case ..<1e14: seconds = value / 1e3
+        case ..<1e17: seconds = value / 1e6
+        default: seconds = value / 1e9
+        }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     private static let isoFormatter: ISO8601DateFormatter = {
@@ -64,13 +72,6 @@ enum LocalCostParsing {
             if let dict = record[key] as? [String: Any], !dict.isEmpty { return dict }
         }
         return nil
-    }
-
-    /// Sum of every numeric field whose key contains `needle` (case-insensitive).
-    static func tokenSum(_ dict: [String: Any], keyContains needle: String) -> Int {
-        dict.reduce(0) { acc, pair in
-            pair.key.lowercased().contains(needle) ? acc + (int(pair.value) ?? 0) : acc
-        }
     }
 
     /// Enumerate files under `root`, filtering by extension and parent-dir
@@ -119,5 +120,22 @@ enum LocalCostParsing {
             else { return nil }
             return dict
         }
+    }
+
+    /// Opens a possibly live SQLite database read-only (`mode=ro`, never
+    /// `immutable=1`, which would ignore a WAL the app is still writing).
+    /// Nil when it can't be opened.
+    static func openReadOnlyDatabase(_ url: URL) -> OpaquePointer? {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "%?#")
+        guard let path = url.path.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(
+            "file:\(path)?mode=ro", &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
+        else {
+            if handle != nil { sqlite3_close(handle) }
+            return nil
+        }
+        return handle
     }
 }

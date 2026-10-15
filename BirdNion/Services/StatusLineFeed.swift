@@ -37,13 +37,20 @@ enum StatusLineFeed {
         }.joined(separator: " | ")
     }
 
+    /// All file mutations run here in submission order, so the last write
+    /// wins and a removal can never be overtaken by an older write.
+    private static let ioQueue = DispatchQueue(label: "birdnion.statusline-feed", qos: .utility)
+
     /// Called from `QuotaService.statuses.didSet` — same seam as the widget
     /// snapshot. No-op when disabled; never throws.
     static func write(_ statuses: [ProviderStatus]) {
         guard isEnabled else { return }
         let line = render(statuses)
         let url = fileURL
-        DispatchQueue.global(qos: .utility).async {
+        ioQueue.async {
+            // Re-checked on the queue: the toggle may have been turned off
+            // after this write was queued, and the file must stay removed.
+            guard isEnabled else { return }
             try? FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
@@ -54,7 +61,8 @@ enum StatusLineFeed {
     /// Remove the feed file when the toggle turns off so a stale line can't
     /// linger in the user's statusline.
     static func removeFile() {
-        try? FileManager.default.removeItem(at: fileURL)
+        let url = fileURL
+        ioQueue.async { try? FileManager.default.removeItem(at: url) }
     }
 
     private static func format(_ number: Double) -> String {

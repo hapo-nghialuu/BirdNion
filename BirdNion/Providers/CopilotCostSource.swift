@@ -19,7 +19,7 @@ enum CopilotCostSource {
     static let descriptor = LocalCostSource(
         source: .copilot,
         displayName: "Copilot CLI",
-        countingRevision: 1,
+        countingRevision: 2,
         roots: { CopilotCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             CopilotCostSource.turns(roots: roots, cutoff: cutoff)
@@ -62,33 +62,34 @@ enum CopilotCostSource {
         file: URL, cutoff: Date
     ) -> (turns: [LocalTurnRecord], pairs: Set<String>) {
         let session = file.deletingLastPathComponent().lastPathComponent
-        var lastTotals: [String: Int] = [:]   // model -> cumulative tokens seen
+        var last: [String: CopilotTokenCounts] = [:]   // model -> cumulative counts seen
         var snapshotOrdinal = 0
         var pairs: Set<String> = []
         var out: [LocalTurnRecord] = []
         for event in LocalCostParsing.jsonLines(url: file) {
             let type = (event["type"] as? String) ?? ""
             guard type == "session.shutdown" || type == "session_shutdown" else { continue }
-            let date = LocalCostParsing.timestamp(in: event, fallback: cutoff)
+            defer { snapshotOrdinal += 1 }
             let data = event["data"] as? [String: Any] ?? event
+            // A snapshot without its own timestamp has no honest day: drop it.
+            let date = LocalCostParsing.timestamp(in: event)
+                ?? LocalCostParsing.timestamp(in: data)
             let metrics = (data["modelMetrics"] as? [String: Any])
                 ?? (data["model_metrics"] as? [String: Any]) ?? [:]
             for (model, raw) in metrics {
-                guard let usage = raw as? [String: Any] else { continue }
-                let total = LocalCostParsing.tokenSum(usage, keyContains: "token")
-                guard total > 0 else { continue }
+                guard let metric = raw as? [String: Any] else { continue }
+                let usage = (metric["usage"] as? [String: Any]) ?? metric
+                let counts = CopilotTokenCounts(usage: usage)
+                guard counts.total > 0 else { continue }
                 pairs.insert("\(session)|\(model)")
-                let previous = lastTotals[model] ?? 0
-                let delta = max(0, total - previous)
-                lastTotals[model] = total
-                guard delta > 0 else { continue }
-                guard date >= cutoff else { continue }
+                let delta = counts.delta(from: last[model] ?? CopilotTokenCounts())
+                last[model] = counts
+                guard delta.total > 0, let date, date >= cutoff else { continue }
                 out.append(LocalTurnRecord(
-                    date: date, model: model, tokens: delta,
-                    usd: CopilotModelPrice.estimate(model: model, tokens: delta),
+                    date: date, model: model, tokens: delta.total,
+                    usd: CopilotModelPrice.estimate(model: model, counts: delta),
                     dedupeKey: "copilot:\(session):\(model):s\(snapshotOrdinal)"))
             }
-            snapshotOrdinal += 1
         }
         return (out, pairs)
     }
@@ -114,12 +115,14 @@ enum CopilotCostSource {
             let session = (flat["session.id"] as? String)
                 ?? (flat["service.session.id"] as? String) ?? file.deletingPathExtension().lastPathComponent
             if covered.contains("\(session)|\(model)") { return nil }
-            let date = LocalCostParsing.timestamp(
-                in: flat, keys: ["timestamp", "timeUnixNano", "observedTimeUnixNano"], fallback: cutoff)
-            guard date >= cutoff else { return nil }
+            guard let date = LocalCostParsing.timestamp(
+                in: flat, keys: ["timestamp", "timeUnixNano", "observedTimeUnixNano"]),
+                date >= cutoff else { return nil }
+            let counts = CopilotTokenCounts(
+                input: input, output: output + reasoning, cacheRead: cached)
             return LocalTurnRecord(
                 date: date, model: model, tokens: total,
-                usd: CopilotModelPrice.estimate(model: model, tokens: total),
+                usd: CopilotModelPrice.estimate(model: model, counts: counts),
                 dedupeKey: "copilot-otel:\(file.lastPathComponent):\(index)")
         }
     }
@@ -168,22 +171,66 @@ enum CopilotCostSource {
     }
 }
 
+/// Token counters of one Copilot usage snapshot. Component fields are
+/// preferred; `totalOnly` carries a bare total when the log has no breakdown
+/// (never added on top of components, which would double count).
+struct CopilotTokenCounts: Equatable {
+    var input = 0
+    var output = 0
+    var cacheRead = 0
+    var cacheWrite = 0
+    var totalOnly = 0
+
+    init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite: Int = 0, totalOnly: Int = 0) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+        self.totalOnly = totalOnly
+    }
+
+    init(usage: [String: Any]) {
+        func pick(_ keys: [String]) -> Int {
+            for key in keys { if let v = LocalCostParsing.int(usage[key]) { return v } }
+            return 0
+        }
+        input = pick(["inputTokens", "input_tokens"])
+        output = pick(["outputTokens", "output_tokens"])
+        cacheRead = pick(["cacheReadTokens", "cache_read_tokens", "cacheReadInputTokens"])
+        cacheWrite = pick(["cacheWriteTokens", "cache_write_tokens", "cacheCreationTokens"])
+        totalOnly = input + output + cacheRead + cacheWrite == 0
+            ? pick(["totalTokens", "total_tokens", "total"]) : 0
+    }
+
+    var total: Int { input + output + cacheRead + cacheWrite + totalOnly }
+
+    /// Per-component growth since `previous` (counters are cumulative).
+    func delta(from previous: CopilotTokenCounts) -> CopilotTokenCounts {
+        CopilotTokenCounts(
+            input: max(0, input - previous.input),
+            output: max(0, output - previous.output),
+            cacheRead: max(0, cacheRead - previous.cacheRead),
+            cacheWrite: max(0, cacheWrite - previous.cacheWrite),
+            totalOnly: max(0, totalOnly - previous.totalOnly))
+    }
+}
+
 /// USD estimate for Copilot CLI models: Claude-family via the shared Claude
 /// price table, GPT-family via the table below, else $0 (tokens still count).
 enum CopilotModelPrice {
-    static func estimate(model: String, tokens: Int) -> Double {
+    static func estimate(model: String, counts: CopilotTokenCounts) -> Double {
         let m = model.lowercased()
         if m.contains("claude") {
-            if let price = ClaudeModelPrice.price(for: m) {
-                // Split the cumulative token count evenly across input/output
-                // — session-state doesn't break it down.
-                let half = Double(tokens) / 2
-                return (half * price.inputPerM + half * price.outputPerM) / 1_000_000
-            }
-            return 0
+            guard let price = ClaudeModelPrice.price(for: m) else { return 0 }
+            // A bare total has no input/output split; price it at the input
+            // rate (the lower bound) instead of inventing a split.
+            return (Double(counts.input + counts.totalOnly) * price.inputPerM
+                + Double(counts.cacheWrite) * price.inputPerM
+                + Double(counts.cacheRead) * price.cacheReadPerM
+                + Double(counts.output) * price.outputPerM) / 1_000_000
         }
         guard let perM = gptPerMTok(for: m) else { return 0 }
-        return Double(tokens) * perM / 1_000_000
+        return Double(counts.total) * perM / 1_000_000
     }
 
     /// Blended per-million rate for GPT-family models (input+output mixed).

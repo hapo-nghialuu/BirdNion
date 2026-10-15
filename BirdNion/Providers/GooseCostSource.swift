@@ -14,7 +14,7 @@ enum GooseCostSource {
     static let descriptor = LocalCostSource(
         source: .goose,
         displayName: "Goose",
-        countingRevision: 1,
+        countingRevision: 2,
         roots: { GooseCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GooseCostSource.turns(roots: roots, cutoff: cutoff)
@@ -39,26 +39,13 @@ enum GooseCostSource {
     }
 
     private static func turns(database url: URL, cutoff: Date) -> [LocalTurnRecord] {
-        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? cutoff
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "%?#")
-        guard let path = url.path.addingPercentEncoding(withAllowedCharacters: allowed) else { return [] }
-        var handle: OpaquePointer?
-        guard sqlite3_open_v2(
-            "file:\(path)?immutable=1",
-            &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
-        else {
-            if handle != nil { sqlite3_close(handle) }
-            return []
-        }
-        guard let database = handle else { return [] }
+        guard let database = LocalCostParsing.openReadOnlyDatabase(url) else { return [] }
         defer { sqlite3_close(database) }
 
         guard let table = sessionsTable(database) else { return [] }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
-            database, "SELECT rowid, * FROM main.\(table) LIMIT 5000",
+            database, "SELECT rowid, * FROM main.\(table) ORDER BY rowid DESC LIMIT 5000",
             -1, &statement, nil) == SQLITE_OK
         else { return [] }
         defer { sqlite3_finalize(statement) }
@@ -90,8 +77,7 @@ enum GooseCostSource {
             // The remainder beyond input+output is output-priced reasoning.
             let extra = max(0, total - input - output)
             let model = modelName(columns)
-            let date = timestamp(columns, fallback: mtime)
-            guard date >= cutoff else { continue }
+            guard let date = sessionStart(columns), date >= cutoff else { continue }
             out.append(LocalTurnRecord(
                 date: date, model: model, tokens: total,
                 usd: LocalCostPricing.estimate(
@@ -142,10 +128,15 @@ enum GooseCostSource {
         return (columns["model"] as? String) ?? "unknown"
     }
 
-    private static func timestamp(_ columns: [String: Any], fallback: Date) -> Date {
-        for key in ["updated_at", "created_at", "timestamp", "start_timestamp", "completed_at"] {
+    /// Goose stores session-cumulative totals, so the whole total is
+    /// attributed to the session's own start day: that date never moves,
+    /// whereas `updated_at` would shift the same tokens to a new day on every
+    /// scan and the history high-water merge would then keep both. Rows with
+    /// no start timestamp are dropped rather than guessed.
+    private static func sessionStart(_ columns: [String: Any]) -> Date? {
+        for key in ["created_at", "start_timestamp", "timestamp"] {
             if let date = LocalCostParsing.parseTimestamp(columns[key]) { return date }
         }
-        return fallback
+        return nil
     }
 }

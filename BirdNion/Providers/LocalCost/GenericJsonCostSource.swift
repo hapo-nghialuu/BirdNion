@@ -63,25 +63,27 @@ struct JsonLogSourceSpec: Sendable {
 enum GenericJsonCostSource {
 
     /// Turns extracted from one parsed JSON object (a whole file, one JSONL
-    /// line, or one DB value). `fallbackDate` applies when no timestamp hint
-    /// is found; `cutoff` drops older turns.
+    /// line, or one DB value). Turns with no timestamp hint are dropped;
+    /// `cutoff` drops older turns.
     static func turns(
         in object: Any,
         spec: JsonLogSourceSpec = .default,
-        fallbackDate: Date,
         cutoff: Date,
         dedupePrefix: String
     ) -> [LocalTurnRecord] {
         var out: [LocalTurnRecord] = []
         var ordinal = 0
-        collectUsageRecords(object, spec: spec) { usageDict, context in
+        collectUsageRecords(object, spec: spec) { usageDict, record, parent in
             defer { ordinal += 1 }
             let tokens = splitTokens(usageDict, spec: spec)
             guard tokens.total > 0 else { return }
-            let date = deepFirst(context, keys: spec.timestampKeys, as: LocalCostParsing.parseTimestamp)
-                ?? fallbackDate
-            guard date >= cutoff else { return }
-            let model = deepFirst(context, keys: spec.modelKeys) { $0 as? String } ?? "unknown"
+            // Own record first, parent only for the fields it lacks. Turns
+            // without a real timestamp are dropped: guessing a day (mtime,
+            // cutoff) would move cumulative data between scans.
+            guard let date = hint(record, parent, keys: spec.timestampKeys,
+                                  as: LocalCostParsing.parseTimestamp),
+                  date >= cutoff else { return }
+            let model = hint(record, parent, keys: spec.modelKeys) { $0 as? String } ?? "unknown"
             out.append(LocalTurnRecord(
                 date: date, model: model, tokens: tokens.total,
                 usd: LocalCostPricing.estimate(
@@ -106,19 +108,17 @@ enum GenericJsonCostSource {
                 under: root, extensions: extensions, modifiedSince: cutoff
             ).flatMap { file -> [LocalTurnRecord] in
                 if let fileFilter, !fileFilter(file) { return [] }
-                let mtime = (try? file.resourceValues(
-                    forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? cutoff
                 let prefix = "\(dedupePrefix):\(file.path)"
                 if file.pathExtension.lowercased() == "jsonl" {
                     return LocalCostParsing.jsonLines(url: file).enumerated().flatMap { index, line in
-                        turns(in: line, spec: spec, fallbackDate: mtime, cutoff: cutoff,
+                        turns(in: line, spec: spec, cutoff: cutoff,
                               dedupePrefix: "\(prefix):\(index)")
                     }
                 }
                 guard let data = try? Data(contentsOf: file),
                       let object = try? JSONSerialization.jsonObject(with: data)
                 else { return [] }
-                return turns(in: object, spec: spec, fallbackDate: mtime, cutoff: cutoff,
+                return turns(in: object, spec: spec, cutoff: cutoff,
                              dedupePrefix: prefix)
             }
         }
@@ -132,14 +132,16 @@ enum GenericJsonCostSource {
         _ object: Any,
         spec: JsonLogSourceSpec,
         context: [String: Any]? = nil,
-        visit: ([String: Any], [String: Any]) -> Void
+        visit: ([String: Any], [String: Any], [String: Any]?) -> Void
     ) {
         switch object {
         case let dict as [String: Any]:
             var emitted = false
             for key in spec.usageContainerKeys {
                 if let usage = dict[key] as? [String: Any], !usage.isEmpty {
-                    visit(usage, context ?? dict)
+                    // The record that owns the usage is the primary context;
+                    // the enclosing parent only fills fields it lacks.
+                    visit(usage, dict, context)
                     emitted = true
                 }
             }
@@ -156,11 +158,46 @@ enum GenericJsonCostSource {
         }
     }
 
-    /// Classifies numeric leaves of a usage dict: cache-creation/write,
-    /// cache-read, input/prompt side, output/reasoning side. Unclassifiable
-    /// counters count as output-priced usage.
+    /// Looks `keys` up in the record that owns the usage first, then in the
+    /// parent context.
+    private static func hint<T>(
+        _ record: [String: Any], _ parent: [String: Any]?, keys: [String],
+        as extract: (Any) -> T?
+    ) -> T? {
+        deepFirst(record, keys: keys, as: extract)
+            ?? parent.flatMap { deepFirst($0, keys: keys, as: extract) }
+    }
+
+    private enum TokenBucket { case input, cacheRead, cacheWrite, output }
+
+    /// Allowlist classification of a counter key; nil for anything that is
+    /// not a token count (timestamps, ids, credits, cost, aggregate totals).
+    private static func bucket(forKey key: String) -> TokenBucket? {
+        let k = key.lowercased()
+        // Aggregates and non-token counters that happen to share a keyword.
+        if ["total", "time", "credit", "cost", "price"].contains(where: { k.contains($0) }) {
+            return nil
+        }
+        if k.contains("cache") || k.contains("cached") {
+            if k.contains("creation") || k.contains("write") { return .cacheWrite }
+            if k.contains("read") || k.contains("cached") || k.hasSuffix("cache") { return .cacheRead }
+            return nil
+        }
+        if k.contains("input") || k.contains("prompt") { return .input }
+        if k.contains("output") || k.contains("completion") || k.contains("candidates")
+            || k.contains("reasoning") || k.contains("thoughts") || k.contains("thinking")
+            || k == "thought" { return .output }
+        return nil
+    }
+
+    /// Classifies the numeric leaves of a usage dict into input / cache read /
+    /// cache write / output via a token-key allowlist; unknown keys are
+    /// ignored rather than guessed at. `prompt`-style input that already
+    /// includes cached tokens (Gemini/Qwen shape) is reduced by the cached
+    /// count so cached tokens are priced once.
     static func splitTokens(_ usage: [String: Any], spec: JsonLogSourceSpec) -> LocalUsageTokens {
         var tokens = LocalUsageTokens()
+        var promptIncludesCache = false
         for (key, value) in usage {
             if let total = LocalCostParsing.int(value), spec.explicitTotalKeys.contains(key) {
                 tokens.explicitTotal = total
@@ -168,7 +205,11 @@ enum GenericJsonCostSource {
             }
             guard let count = LocalCostParsing.int(value) else {
                 // Nested usage objects (rare) still contribute their leaves.
-                if let nested = value as? [String: Any] {
+                // Sub-breakdowns of output/cache counters repeat tokens already
+                // counted by the parent key, so they are skipped.
+                let k = key.lowercased()
+                if let nested = value as? [String: Any],
+                   !["cache", "output", "completion"].contains(where: { k.contains($0) }) {
                     let inner = splitTokens(nested, spec: spec)
                     tokens.input += inner.input
                     tokens.cacheRead += inner.cacheRead
@@ -177,18 +218,18 @@ enum GenericJsonCostSource {
                 }
                 continue
             }
-            let k = key.lowercased()
-            if k.contains("cache") && (k.contains("creation") || k.contains("write")) {
-                tokens.cacheWrite += count
-            } else if k.contains("cache") || k.contains("cached") {
-                tokens.cacheRead += count
-            } else if k.contains("input") || k.contains("prompt") {
+            switch bucket(forKey: key) {
+            case .cacheWrite: tokens.cacheWrite += count
+            case .cacheRead: tokens.cacheRead += count
+            case .input:
                 tokens.input += count
-            } else {
-                // output/candidates/completion/reasoning/thoughts/thinking
-                // and unclassifiable counters.
-                tokens.output += count
+                if key.lowercased().contains("prompt") { promptIncludesCache = true }
+            case .output: tokens.output += count
+            case nil: break
             }
+        }
+        if promptIncludesCache {
+            tokens.input = max(0, tokens.input - tokens.cacheRead)
         }
         return tokens
     }

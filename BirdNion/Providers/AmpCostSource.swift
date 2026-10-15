@@ -8,7 +8,7 @@ enum AmpCostSource {
     static let descriptor = LocalCostSource(
         source: .amp,
         displayName: "Amp",
-        countingRevision: 1,
+        countingRevision: 2,
         roots: { AmpCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GenericJsonCostSource.turns(

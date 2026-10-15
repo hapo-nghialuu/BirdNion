@@ -12,7 +12,7 @@ enum CursorCostSource {
     static let descriptor = LocalCostSource(
         source: .cursor,
         displayName: "Cursor",
-        countingRevision: 1,
+        countingRevision: 2,
         roots: { CursorCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             CursorCostSource.turns(roots: roots, cutoff: cutoff)
@@ -32,20 +32,7 @@ enum CursorCostSource {
     }
 
     private static func turns(database url: URL, cutoff: Date) -> [LocalTurnRecord] {
-        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? cutoff
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "%?#")
-        guard let path = url.path.addingPercentEncoding(withAllowedCharacters: allowed) else { return [] }
-        var handle: OpaquePointer?
-        guard sqlite3_open_v2(
-            "file:\(path)?immutable=1",
-            &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK
-        else {
-            if handle != nil { sqlite3_close(handle) }
-            return []
-        }
-        guard let database = handle else { return [] }
+        guard let database = LocalCostParsing.openReadOnlyDatabase(url) else { return [] }
         defer { sqlite3_close(database) }
 
         var hasTable = false
@@ -62,7 +49,7 @@ enum CursorCostSource {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
             database,
-            "SELECT key, value FROM main.cursorDiskKV WHERE key LIKE 'bubbleId:%' LIMIT 20000",
+            "SELECT key, value FROM main.cursorDiskKV WHERE key LIKE 'bubbleId:%' ORDER BY rowid DESC LIMIT 20000",
             -1, &statement, nil) == SQLITE_OK
         else { return [] }
         defer { sqlite3_finalize(statement) }
@@ -82,7 +69,7 @@ enum CursorCostSource {
             }
             guard let object = try? JSONSerialization.jsonObject(with: data) else { continue }
             out.append(contentsOf: GenericJsonCostSource.turns(
-                in: object, spec: .default, fallbackDate: mtime, cutoff: cutoff,
+                in: object, spec: .default, cutoff: cutoff,
                 dedupePrefix: "cursor:\(key)"))
         }
         return out

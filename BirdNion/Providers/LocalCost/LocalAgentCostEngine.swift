@@ -115,9 +115,16 @@ enum LocalAgentCostEngine {
             return entry.value
         }
 
+        func invalidate() { reports.removeAll() }
+
         func storeReport(_ value: LocalAgentUsageReport, source: CostHistoryStore.Source, at: Date) {
             reports[source] = (at, value)
         }
+    }
+
+    /// Drops every cached report so the next load rescans.
+    static func invalidateCaches() async {
+        await Cache.shared.invalidate()
     }
 
     /// Persisted-history report for the instant first paint — no session I/O.
