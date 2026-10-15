@@ -771,10 +771,48 @@ fn json_val(ctx: &mut Context, v: serde_json::Value) -> JsResult<JsValue> {
 
 /// Bundled plugins compiled in (Resources/Plugins is a macOS bundle layout;
 /// on Linux we embed sources directly).
-const BUNDLED: &[(&str, &str)] = &[(
-    "atlascloud.js",
-    include_str!("../../resources/plugins/atlascloud.js"),
-)];
+const BUNDLED: &[(&str, &str)] = &[
+    (
+        "atlascloud.js",
+        include_str!("../../resources/plugins/atlascloud.js"),
+    ),
+    (
+        "xkiro.js",
+        include_str!("../../resources/plugins/xkiro.js"),
+    ),
+    (
+        "raycast.js",
+        include_str!("../../resources/plugins/raycast.js"),
+    ),
+    (
+        "aixy.js",
+        include_str!("../../resources/plugins/aixy.js"),
+    ),
+    (
+        "litellm.js",
+        include_str!("../../resources/plugins/litellm.js"),
+    ),
+    (
+        "venice.js",
+        include_str!("../../resources/plugins/venice.js"),
+    ),
+    (
+        "clinepass.js",
+        include_str!("../../resources/plugins/clinepass.js"),
+    ),
+    (
+        "nous.js",
+        include_str!("../../resources/plugins/nous.js"),
+    ),
+    (
+        "muse.js",
+        include_str!("../../resources/plugins/muse.js"),
+    ),
+    (
+        "sakana.js",
+        include_str!("../../resources/plugins/sakana.js"),
+    ),
+];
 
 pub fn plugins_dir() -> PathBuf {
     config::support_dir()

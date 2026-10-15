@@ -750,7 +750,8 @@ struct QuotaOverview: View {
             guard quota.displayStatuses.contains(where: { $0.id == id }),
                   let confidence, confidence.included else { return }
             out.append(FooterSourceState(
-                id: id, tint: tint, live: confidence.live, scannedAt: confidence.scannedAt))
+                id: id, tint: tint, live: confidence.live,
+                scannedAt: confidence.updatedAt ?? confidence.scannedAt))
         }
         add("claude", VocabbyTheme.chartClaude, claudeReport?.scanConfidence)
         add("codex", VocabbyTheme.chartCodex, codexReport?.scanConfidence)
