@@ -59,6 +59,7 @@ final class QuotaService: ObservableObject {
         didSet {
             WidgetSnapshotStore.save(statuses)
             StatusLineFeed.write(statuses)
+            QuotaUsageHistory.record(statuses)
         }
     }
     @Published private(set) var displayStatuses: [ProviderStatus] = []
