@@ -33,9 +33,15 @@ enum BudgetAlerts {
         }
     }
 
-    /// Latest per-source spend in the current period — feeds the overall
-    /// (`monthlyBudgetUSD`) check as the sum across sources.
-    private static var periodSpend: [CostHistoryStore.Source: Double] = [:]
+    /// Latest per-source spend, tagged with the period it was measured in —
+    /// feeds the overall (`monthlyBudgetUSD`) check as the sum across sources.
+    /// Entries from an earlier period are ignored so a source that hasn't
+    /// rescanned since the boundary can't carry last period's spend forward.
+    private static var periodSpend: [CostHistoryStore.Source: (periodKey: String, usd: Double)] = [:]
+
+    /// Scopes whose notification is being posted right now, so a second scan
+    /// landing before the post settles can't fire a duplicate.
+    private static var inFlight: Set<String> = []
 
     /// Called from `UsageReportCoordinator` when a fresh scan lands.
     static func record(source: CostHistoryStore.Source, report: SpendReport, now: Date = Date()) {
@@ -44,7 +50,7 @@ enum BudgetAlerts {
         let spend = report.spendDays.reduce(0) { total, day in
             day.date >= periodStart && day.date <= now ? total + max(0, day.usd) : total
         }
-        periodSpend[source] = spend
+        periodSpend[source] = (periodKey, spend)
         let budgetPeriod = budgetPeriodSetting
 
         if let key = budgetKey(for: source) {
@@ -57,16 +63,21 @@ enum BudgetAlerts {
         }
 
         let totalBudget = UserDefaults.standard.double(forKey: "monthlyBudgetUSD")
-        let total = periodSpend.values.reduce(0, +)
+        let total = periodSpend.values
+            .filter { $0.periodKey == periodKey }
+            .reduce(0) { $0 + $1.usd }
         if totalBudget > 0, total > totalBudget {
             fireOnce(scope: "total", periodKey: periodKey) {
-                ("Tất cả nguồn", total, totalBudget, budgetPeriod)
+                (isVietnamese ? "Tất cả nguồn" : "All sources", total, totalBudget, budgetPeriod)
             }
         }
     }
 
     /// Test hook — clear accumulated per-source period spend.
-    static func reset() { periodSpend = [:] }
+    static func reset() {
+        periodSpend = [:]
+        inFlight = []
+    }
 
     // MARK: - Period helpers
 
@@ -100,24 +111,45 @@ enum BudgetAlerts {
     }
 
     /// Fires the notification at most once per scope per period — the fired
-    /// marker persists in UserDefaults so an app relaunch can't re-fire.
+    /// marker persists in UserDefaults so an app relaunch can't re-fire. The
+    /// marker is only written once the notification was actually delivered,
+    /// so a denied/unavailable notification permission retries on a later
+    /// scan instead of silently swallowing the whole period's alert.
     private static func fireOnce(
         scope: String, periodKey: String,
         payload: () -> (name: String, spend: Double, budget: Double, period: BudgetPeriod)
     ) {
-        let key = "budgetAlert.fired.\(scope).\(periodKey)"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
+        let key = firedKey(scope: scope, periodKey: periodKey)
+        guard !UserDefaults.standard.bool(forKey: key), !inFlight.contains(key) else { return }
+        inFlight.insert(key)
         let (name, spend, budget, period) = payload()
-        let vi = L10n.languageCode(
-            UserDefaults.standard.string(forKey: "appLanguage")) == "vi"
+        let vi = isVietnamese
         let periodText = period == .week ? (vi ? "tuần" : "the week") : (vi ? "tháng" : "the month")
-        QuotaNotifier.post(
-            id: "budgetAlert.\(scope).\(periodKey)",
-            title: vi ? "Vượt ngân sách" : "Budget exceeded",
-            body: vi
-                ? "\(name) đã chi \(formatUSD(spend)) trong \(periodText) — vượt ngân sách \(formatUSD(budget))"
-                : "\(name) spent \(formatUSD(spend)) in \(periodText) — over the \(formatUSD(budget)) budget")
+        let id = "budgetAlert.\(scope).\(periodKey)"
+        let title = vi ? "Vượt ngân sách" : "Budget exceeded"
+        let body = vi
+            ? "\(name) đã chi \(formatUSD(spend)) trong \(periodText) — vượt ngân sách \(formatUSD(budget))"
+            : "\(name) spent \(formatUSD(spend)) in \(periodText) — over the \(formatUSD(budget)) budget"
+        Task { @MainActor in
+            let posted = await poster(id, title, body)
+            if posted { UserDefaults.standard.set(true, forKey: key) }
+            inFlight.remove(key)
+        }
+    }
+
+    static func firedKey(scope: String, periodKey: String) -> String {
+        "budgetAlert.fired.\(scope).\(periodKey)"
+    }
+
+    /// Delivers one alert and reports whether it was actually posted.
+    /// Swappable so tests don't touch the real notification center.
+    static var poster: @MainActor (_ id: String, _ title: String, _ body: String) async -> Bool = {
+        id, title, body in
+        await QuotaNotifier.postAndWait(id: id, title: title, body: body)
+    }
+
+    private static var isVietnamese: Bool {
+        L10n.languageCode(UserDefaults.standard.string(forKey: "appLanguage")) == "vi"
     }
 
     private static func displayName(for source: CostHistoryStore.Source) -> String {

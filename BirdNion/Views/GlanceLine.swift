@@ -9,11 +9,12 @@ struct GlanceLine: View {
     let language: String
 
     /// Provider+window with the highest usedPct — the "worst" quota state.
-    /// Inactive (not-applicable) windows never win.
+    /// Inactive (not-applicable) and supplementary (bonus/extra-usage)
+    /// windows never win.
     private var worst: (name: String, label: String, usedPct: Int)? {
         statuses
             .flatMap { status in status.windows.map { (status.displayName, $0) } }
-            .filter { !$0.1.isInactive }
+            .filter { !$0.1.isInactive && !$0.1.isSupplementary }
             .max { $0.1.usedPct < $1.1.usedPct }
             .map { (name: $0.0, label: $0.1.label, usedPct: $0.1.usedPct) }
     }

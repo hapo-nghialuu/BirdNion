@@ -6,8 +6,9 @@ import Foundation
 ///
 /// One `QuotaUsageSample` per (provider, windowLabel) every `minSampleInterval`
 /// on each `QuotaService.statuses` publish, persisted to
-/// `~/.config/birdnion/quota-history.json` (atomic, debounced). Fail soft: a
-/// write error only leaves a stale file.
+/// `quota-history.json` beside the BirdNion settings file (atomic, debounced).
+/// Fail soft: a write error only leaves a stale file. Unit-test runs never
+/// read or write the file, so fixture statuses can't pollute a dev's history.
 struct QuotaUsageSample: Codable, Equatable, Sendable {
     let at: Date
     let remainingPct: Int
@@ -23,9 +24,18 @@ enum QuotaUsageHistory {
     /// Burn rate needs at least this much span between first/last sample.
     static let minBurnSpan: TimeInterval = 6 * 3600
 
+    /// Upper bound for the persisted file — 30 days of 30-minute samples for
+    /// a few dozen windows is well under this.
+    static let maxFileBytes = 4 * 1024 * 1024
+
     static var fileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/birdnion/quota-history.json")
+        BirdNionConfigStore.configURL()
+            .deletingLastPathComponent()
+            .appendingPathComponent("quota-history.json")
+    }
+
+    private static var persistenceEnabled: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
     }
 
     static func key(provider: String, window: String) -> String {
@@ -76,10 +86,17 @@ enum QuotaUsageHistory {
 
     /// Pure calculation — unit-testable. Uses the oldest sample within the
     /// last 7 days against the newest; requires ≥ minBurnSpan of coverage.
+    /// Only the run since the most recent refill (remaining % going up) is
+    /// used — a slope across a refill would understate the burn rate.
     static func runwayDays(
         samples: [QuotaUsageSample], now: Date = Date()
     ) -> Double? {
-        let recent = samples.filter { now.timeIntervalSince($0.at) <= 7 * 86400 }
+        var recent = samples.filter { now.timeIntervalSince($0.at) <= 7 * 86400 }
+        if let refill = recent.indices.dropFirst().last(where: {
+            recent[$0].remainingPct > recent[$0 - 1].remainingPct
+        }) {
+            recent = Array(recent[refill...])
+        }
         guard let first = recent.first, let last = recent.last,
               last.at.timeIntervalSince(first.at) >= minBurnSpan
         else { return nil }
@@ -94,9 +111,13 @@ enum QuotaUsageHistory {
 
     /// Loaded once, kept warm; `record` mutates it before scheduling a write.
     private static var allSamples: [String: [QuotaUsageSample]] = {
-        (try? JSONDecoder().decode(
-            [String: [QuotaUsageSample]].self,
-            from: Data(contentsOf: fileURL))) ?? [:]
+        guard persistenceEnabled,
+              let size = (try? FileManager.default.attributesOfItem(
+                atPath: fileURL.path))?[.size] as? Int,
+              size <= maxFileBytes,
+              let data = try? Data(contentsOf: fileURL)
+        else { return [:] }
+        return (try? JSONDecoder().decode([String: [QuotaUsageSample]].self, from: data)) ?? [:]
     }()
 
     private static func loadAll() -> [String: [QuotaUsageSample]] { allSamples }
@@ -104,6 +125,7 @@ enum QuotaUsageHistory {
     private static var writeTask: Task<Void, Never>?
 
     private static func scheduleWrite(_ samples: [String: [QuotaUsageSample]]) {
+        guard persistenceEnabled else { return }
         writeTask?.cancel()
         let url = fileURL
         writeTask = Task.detached(priority: .utility) {

@@ -2590,7 +2590,7 @@ struct WindowRow: View {
     /// windows that carry no reset schedule (pace is nil), from
     /// `QuotaUsageHistory` samples. "~2 ngày" / "~3d".
     private var runwayText: String? {
-        guard pace == nil, !window.isInactive,
+        guard pace == nil, window.resetDate == nil, !window.isInactive,
               let days = QuotaUsageHistory.runwayDays(
                 provider: providerID, window: window.label),
               days.isFinite, days > 0
