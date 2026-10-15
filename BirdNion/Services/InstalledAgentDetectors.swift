@@ -283,6 +283,25 @@ enum InstalledAgentDetectors {
             providerIDs: []
         ),
         .init(
+            id: .kimi,
+            binaries: ["kimi"],
+            markers: [
+                (".kimi", .configuration),
+                (".kimi-code", .configuration),
+                (".kimi/sessions", .applicationState)
+            ],
+            providerIDs: []
+        ),
+        .init(
+            id: .droid,
+            binaries: ["droid"],
+            markers: [
+                (".factory", .configuration),
+                (".factory/sessions", .applicationState)
+            ],
+            providerIDs: []
+        ),
+        .init(
             id: .devin,
             binaries: ["devin"],
             markers: [

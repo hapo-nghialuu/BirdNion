@@ -32,7 +32,13 @@ const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 const MODEL_NAME_MAX_CHARS: usize = 128;
 const MAX_MODELS_PER_DAY: usize = 32;
 const MAX_SCANNED_AT_FUTURE_MS: i64 = 5 * 60 * 1_000;
-const KNOWN_SOURCES: [&str; 7] = ["claude", "codex", "grok", "kiro", "omp", "pi", "devin"];
+/// Must list every key macOS `CostHistoryStore.Source` can write: the history
+/// file is shared and the validator rejects documents with unknown sources.
+const KNOWN_SOURCES: [&str; 17] = [
+    "claude", "codex", "grok", "kiro", "omp", "pi", "devin",
+    "opencode", "gemini", "copilot", "antigravity", "cursor", "amp",
+    "droid", "kimi", "qwen", "goose",
+];
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct HistoryModel {
@@ -1686,6 +1692,19 @@ mod tests {
 
         std::env::remove_var("BIRDNION_CONFIG");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn validator_accepts_every_source_macos_can_write() {
+        let now_ms = Local::now().timestamp_millis();
+        for source in [
+            "opencode", "gemini", "copilot", "antigravity", "cursor", "amp",
+            "droid", "kimi", "qwen", "goose",
+        ] {
+            let mut document = valid_document_for_today();
+            document.sources.insert(source.to_string(), HashMap::new());
+            assert!(validate_document(&document, now_ms), "{source} must validate");
+        }
     }
 
     #[test]

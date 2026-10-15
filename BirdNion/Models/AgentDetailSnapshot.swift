@@ -229,7 +229,10 @@ extension AgentDetailSnapshot {
         case .omp: return (day.ompUSD, day.ompTokens)
         case .pi: return (day.piUSD, day.piTokens)
         case .devin: return (day.devinUSD, day.devinTokens)
-        default: return (0, 0)
+        default:
+            // Generic local-cost agents (gemini, cursor, ...) live in `extras`.
+            let slice = day.extras[id.rawValue]
+            return (slice?.usd ?? 0, slice?.tokens ?? 0)
         }
     }
 
@@ -245,7 +248,9 @@ extension AgentDetailSnapshot {
         case .omp: return combined.ompConfidence
         case .pi: return combined.piConfidence
         case .devin: return combined.devinConfidence
-        default: return nil
+        default:
+            return CostHistoryStore.Source(rawValue: id.rawValue)
+                .flatMap { combined.extraConfidences[$0] }
         }
     }
 }

@@ -190,3 +190,7 @@ extension PiUsageReport: SpendReport {
 extension DevinCLIUsageReport: SpendReport {
     var spendDays: [(date: Date, usd: Double)] { daily.map { ($0.date, $0.usd) } }
 }
+
+extension LocalAgentUsageReport: SpendReport {
+    var spendDays: [(date: Date, usd: Double)] { daily.map { ($0.date, $0.usd) } }
+}
