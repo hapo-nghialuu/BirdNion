@@ -146,6 +146,44 @@ final class CodexForkBaselineTests: XCTestCase {
         XCTAssertEqual(forkDay?.totalTokens ?? -1, 55_000, accuracy: 1_000)
     }
 
+    /// The filename fast-path must never filter out a real parent: a session
+    /// file whose name does not follow the `rollout-*` convention is still
+    /// opened and classified by content.
+    func testForkBaselineStillFindsParentWithoutRolloutFilename() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-fork-rename-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try write(
+            tmp.appendingPathComponent("sessions/2026/01/05/renamed-parent.jsonl"),
+            [
+                sessionMeta(id: "renamed-parent", timestamp: "2026-01-05T00:00:00.000Z"),
+                tokenCount(timestamp: "2026-01-05T00:01:00.000Z", totalTokens: 1_000_000, lastTokens: 1_000_000),
+            ])
+        try write(
+            tmp.appendingPathComponent("sessions/2026/01/15/rollout-2026-01-15T00-00-00-fork-session.jsonl"),
+            [
+                sessionMeta(id: "fork-session", forkedFrom: "renamed-parent", cliVersion: "0.149.0",
+                           timestamp: "2026-01-15T00:00:00.000Z"),
+                tokenCount(timestamp: "2026-01-15T00:00:01.000Z", totalTokens: 1_000_000, lastTokens: 998_900),
+                tokenCount(timestamp: "2026-01-15T00:00:02.000Z", totalTokens: 1_055_000, lastTokens: 55_000),
+            ])
+
+        let snapshot = try await CostUsageFetcher(cacheRoot: tmp.appendingPathComponent("cache"))
+            .loadTokenSnapshot(
+                provider: .codex,
+                now: DateComponents(calendar: .init(identifier: .gregorian),
+                                    timeZone: TimeZone(identifier: "UTC"),
+                                    year: 2026, month: 1, day: 20).date!,
+                forceRefresh: true,
+                codexHomePath: tmp.path,
+                historyDays: 30)
+
+        let forkDay = snapshot.daily.first { $0.date == "2026-01-15" }
+        XCTAssertNotNil(forkDay, "expected a 2026-01-15 bucket in the scan")
+        XCTAssertEqual(forkDay?.totalTokens ?? -1, 55_000, accuracy: 1_000)
+    }
+
     func testCompactForkCountsFirstAndLaterTurnsWithoutParentLifetimeTotal() async throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("birdnion-codex-compact-fork-test-\(UUID().uuidString)")

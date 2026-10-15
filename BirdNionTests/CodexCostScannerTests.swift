@@ -4848,4 +4848,94 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertEqual(waiterResult.value?.todayTokens, 17)
         XCTAssertEqual(callCount, 1)
     }
+
+    /// Regression: a zero-byte rollout (or a resume checkpoint that already
+    /// reached the frozen EOF) must never enter the incomplete journal. Codex
+    /// can create 0-byte session files, and an expired pass deadline used to
+    /// checkpoint them as `scanComplete == false` forever.
+    func testExhaustedFrozenFileParsesCompleteEvenWhenDeadlineExpired() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-empty-file-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let range = CostUsageScanner.CostUsageDayRange(
+            scanSinceKey: "2026-08-19",
+            scanUntilKey: "2026-08-21")
+
+        let empty = root.appendingPathComponent("empty.jsonl")
+        try Data().write(to: empty)
+        let emptyResult = try CostUsageScanner.parseCodexFileCancellable(
+            fileURL: empty,
+            range: range,
+            shouldStop: { true },
+            endOffset: 0)
+        XCTAssertTrue(emptyResult.scanComplete)
+        XCTAssertEqual(emptyResult.parsedBytes, 0)
+
+        let partial = root.appendingPathComponent("partial.jsonl")
+        let partialBytes = Int64("{\"timestamp\":\"2026-08-20T10:00:00.000Z\"}\n".utf8.count)
+        try Data("{\"timestamp\":\"2026-08-20T10:00:00.000Z\"}\n".utf8).write(to: partial)
+        let resumed = try CostUsageScanner.parseCodexFileCancellable(
+            fileURL: partial,
+            range: range,
+            startOffset: partialBytes,
+            shouldStop: { true },
+            endOffset: partialBytes)
+        XCTAssertTrue(resumed.scanComplete)
+        XCTAssertEqual(resumed.parsedBytes, partialBytes)
+    }
+
+    /// Regression: a 0-byte session file inside a bounded scan episode must
+    /// journal as complete and must not keep the generation pending.
+    func testEmptySessionFileDoesNotBlockScanCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-empty-session-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let cacheRoot = root.appendingPathComponent("cache")
+        seedFreshModelsDevPricingCache(at: cacheRoot)
+        let traceDatabaseURL = root.appendingPathComponent("missing-codex-trace.sqlite")
+        try writeCodexFixture(root: home, sessionID: "with-content", cwds: ["/tmp/content"])
+        let emptyFile = home.appendingPathComponent(
+            "sessions/2026/08/20/rollout-2026-08-20T11-00-00-empty.jsonl")
+        try FileManager.default.createDirectory(
+            at: emptyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: emptyFile)
+        let now = ISO8601DateFormatter().date(from: "2026-08-20T18:00:00Z")!
+
+        // Seed a bounded episode: the zero-byte file lands in the frozen
+        // manifest alongside real sessions.
+        let seeded = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(
+                cacheRoot: cacheRoot,
+                codexTraceDatabaseURL: traceDatabaseURL,
+                maxScanWallClock: 0))
+        XCTAssertTrue(seeded.scanIncomplete)
+
+        let complete = try await CostUsageFetcher.loadTokenSnapshot(
+            provider: .codex,
+            now: now,
+            forceRefresh: true,
+            codexHomePath: home.path,
+            historyDays: 7,
+            refreshPricingInBackground: false,
+            scannerOptions: .init(
+                cacheRoot: cacheRoot,
+                codexTraceDatabaseURL: traceDatabaseURL))
+        XCTAssertFalse(complete.scanIncomplete)
+
+        let cache = CostUsageCacheIO.load(provider: .codex, cacheRoot: cacheRoot)
+        XCTAssertNil(cache.codexPendingScanGeneration)
+        let entry = try XCTUnwrap(cache.files[emptyFile.standardizedFileURL.path])
+        XCTAssertEqual(entry.codexScanComplete, true)
+        XCTAssertEqual(entry.parsedBytes, 0)
+        XCTAssertEqual(entry.codexScanTargetSize, 0)
+        XCTAssertEqual(complete.last30DaysTokens, 150)
+    }
 }

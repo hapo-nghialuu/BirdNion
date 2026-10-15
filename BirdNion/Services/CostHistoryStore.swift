@@ -64,6 +64,13 @@ enum CostHistoryStore {
         /// Canonical trailing-window top model per source. This preserves the
         /// real winner when daily chart payloads contain an aggregate bucket.
         var topModels: [String: String]? = nil
+        /// source id → epoch millis of the most recent persist that merged
+        /// live days for that source. Unlike `scannedAt` — which only marks
+        /// completed scan generations — this also advances while a pending
+        /// episode's parsed days keep landing, so the freshness label tracks
+        /// "when did the data last move" instead of "when did a full scan
+        /// last finish".
+        var updatedAt: [String: Int64]? = nil
     }
 
     // MARK: - Data Confidence Pass
@@ -85,6 +92,17 @@ enum CostHistoryStore {
         /// history-only cycle can still report freshness. `nil` when no
         /// live scan has ever succeeded for this source.
         let scannedAt: Date?
+        /// Most recent persist that merged live data for this source —
+        /// counts pending-episode merges, not only completed generations.
+        /// `nil` when nothing has ever landed for the source.
+        let updatedAt: Date?
+
+        init(included: Bool, live: Bool, scannedAt: Date?, updatedAt: Date? = nil) {
+            self.included = included
+            self.live = live
+            self.scannedAt = scannedAt
+            self.updatedAt = updatedAt
+        }
 
         /// Neutral placeholder for reports built without going through
         /// `CostHistoryStore` (memberwise inits, previews, tests).
@@ -107,10 +125,14 @@ enum CostHistoryStore {
         let scannedAt = doc.scannedAt?[source.rawValue].map {
             Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
         }
+        let updatedAt = doc.updatedAt?[source.rawValue].map {
+            Date(timeIntervalSince1970: TimeInterval($0) / 1_000)
+        }
         return UsageScanConfidence(
             included: liveScanSucceeded || historyHasData,
             live: liveScanSucceeded,
-            scannedAt: scannedAt)
+            scannedAt: scannedAt,
+            updatedAt: updatedAt)
     }
 
     // MARK: - Path
@@ -247,6 +269,8 @@ enum CostHistoryStore {
               sources.keys.allSatisfy(knownSources.contains),
               document.scannedAt?.count ?? 0 <= knownSources.count,
               document.scannedAt?.keys.allSatisfy(knownSources.contains) ?? true,
+              document.updatedAt?.count ?? 0 <= knownSources.count,
+              document.updatedAt?.keys.allSatisfy(knownSources.contains) ?? true,
               document.countingRevision?.count ?? 0 <= knownSources.count,
               document.countingRevision?.keys.allSatisfy(knownSources.contains) ?? true,
               document.topModels?.count ?? 0 <= knownSources.count,
@@ -257,6 +281,9 @@ enum CostHistoryStore {
                 .rounded(.towardZero))
         let today = storageCalendar(for: calendar).startOfDay(for: now)
         if document.scannedAt?.values.contains(where: { $0 < 0 || $0 > latestSafeScan }) == true {
+            return false
+        }
+        if document.updatedAt?.values.contains(where: { $0 < 0 || $0 > latestSafeScan }) == true {
             return false
         }
         if document.topModels?.values.contains(where: { !validModelName($0) }) == true {
@@ -370,15 +397,16 @@ enum CostHistoryStore {
         }
 
         sources[source.rawValue] = byDay
-        // Preserve the confidence-pass timestamp map untouched — `apply`
-        // stamps it separately, based on `liveScanSucceeded`, not on
+        // Preserve the confidence-pass timestamp maps untouched — `apply`
+        // stamps them separately, based on `liveScanSucceeded` and on
         // whether `liveDays` merged anything.
         let updated = Document(
             version: version,
             sources: sources,
             scannedAt: document.scannedAt,
             countingRevision: document.countingRevision,
-            topModels: document.topModels)
+            topModels: document.topModels,
+            updatedAt: document.updatedAt)
         let window = buildWindow(
             byDay: byDay, now: now, calendar: calendar, windowDays: windowDays)
         return (updated, window)
@@ -510,6 +538,15 @@ enum CostHistoryStore {
                 revisions[source.rawValue] = countingRevision
                 updated.countingRevision = revisions
             }
+        }
+        // Data-freshness stamp: live days actually landed for this source,
+        // including pending-episode merges that precede a completed
+        // generation — so a draining episode does not read as stale data.
+        if !liveDays.isEmpty {
+            var updatedAt = updated.updatedAt ?? [:]
+            updatedAt[source.rawValue] = Int64(
+                (now.timeIntervalSince1970 * 1_000).rounded(.towardZero))
+            updated.updatedAt = updatedAt
         }
         if updateTopModel {
             var topModels = updated.topModels ?? [:]
@@ -1074,10 +1111,11 @@ extension CostHistoryStore.Document {
         case scannedAt = "scanned_at"
         case countingRevision = "counting_revision"
         case topModels = "top_models"
+        case updatedAt = "updated_at"
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
-        case scannedAt, countingRevision, topModels
+        case scannedAt, countingRevision, topModels, updatedAt
     }
 
     /// macOS builds before the shared schema fix encoded epoch milliseconds as
@@ -1150,6 +1188,17 @@ extension CostHistoryStore.Document {
             forKey: .topModels, in: canonical,
             debugDescription: "Conflicting top_models and topModels values") }
         topModels = canonicalTopModels ?? legacyTopModels
+
+        let canonicalUpdatedAt = try Self.decodeMilliseconds(
+            from: canonical, forKey: .updatedAt)
+        let legacyUpdatedAt = try Self.decodeMilliseconds(
+            from: legacy, forKey: .updatedAt)
+        guard canonicalUpdatedAt == nil || legacyUpdatedAt == nil
+                || canonicalUpdatedAt == legacyUpdatedAt
+        else { throw DecodingError.dataCorruptedError(
+            forKey: .updatedAt, in: canonical,
+            debugDescription: "Conflicting updated_at and updatedAt values") }
+        updatedAt = canonicalUpdatedAt ?? legacyUpdatedAt
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1159,5 +1208,6 @@ extension CostHistoryStore.Document {
         try container.encodeIfPresent(scannedAt, forKey: .scannedAt)
         try container.encodeIfPresent(countingRevision, forKey: .countingRevision)
         try container.encodeIfPresent(topModels, forKey: .topModels)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
     }
 }

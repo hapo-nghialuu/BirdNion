@@ -561,6 +561,15 @@ enum CostUsageScanner {
                 try self.checkCancellation?()
                 if self.shouldStop?() == true { return nil }
                 let fileURL = self.files[self.nextUnindexedFile]
+                // `rollout-*` names embed their own session id (`payload.id`);
+                // a rollout file whose name lacks the target id cannot match,
+                // so skip the read entirely. Other names still get parsed.
+                if !CostUsageScanner.codexRolloutFilenameMayContainSession(
+                    fileURL.lastPathComponent, sessionId: sessionId)
+                {
+                    self.nextUnindexedFile += 1
+                    continue
+                }
                 let root = CostUsageScanner.codexContainingRoot(
                     fileURL: fileURL,
                     roots: self.roots)
@@ -751,6 +760,17 @@ enum CostUsageScanner {
                         }
                         guard entry.pathExtension.lowercased() == "jsonl"
                         else {
+                            entryIndex += 1
+                            journal.directoryStack[cursorIndex].nextEntryIndex = entryIndex
+                            journal.directoryStack[cursorIndex].lastEntryName = entryName
+                            continue
+                        }
+                        // Same filename convention as the linear walk above:
+                        // rollout files embed the session id in their name, so
+                        // non-matching names are skipped without a read.
+                        if !CostUsageScanner.codexRolloutFilenameMayContainSession(
+                            entryName, sessionId: sessionId)
+                        {
                             entryIndex += 1
                             journal.directoryStack[cursorIndex].nextEntryIndex = entryIndex
                             journal.directoryStack[cursorIndex].lastEntryName = entryName
@@ -1313,8 +1333,13 @@ enum CostUsageScanner {
         roots: [URL],
         knownExistingPaths: Set<String>) -> [String: URL]
     {
+        // Pending-generation entries stay invisible in `files` until the
+        // episode commits, so without them every resumed pass would rebuild
+        // the session->file index with a cold linear walk over the manifest.
+        var sources = cache.codexPendingFiles ?? [:]
+        sources.merge(cache.files) { _, committed in committed }
         var out: [String: URL] = [:]
-        for (path, usage) in cache.files {
+        for (path, usage) in sources {
             guard let sessionId = usage.sessionId, !sessionId.isEmpty else { continue }
             let fileURL = URL(fileURLWithPath: path).standardizedFileURL
             if knownExistingPaths.contains(fileURL.path) {
@@ -2380,6 +2405,15 @@ enum CostUsageScanner {
         case retryableIOFailure
     }
 
+    /// Codex CLI names rollout files `rollout-<timestamp>-<sessionId>...jsonl`;
+    /// the session's own `payload.id` is embedded in the name. A rollout file
+    /// whose name lacks the target id cannot be its match, so callers may skip
+    /// the content read. Non-rollout names are not filtered.
+    static func codexRolloutFilenameMayContainSession(_ name: String, sessionId: String) -> Bool {
+        !name.hasPrefix("rollout-")
+            || name.lowercased().contains(sessionId.lowercased())
+    }
+
     static func parseCodexSessionIdentifier(
         fileURL: URL,
         checkCancellation: CancellationCheck? = nil,
@@ -2532,6 +2566,19 @@ enum CostUsageScanner {
         discardingTruncatedLine: Bool,
         scanComplete: Bool)
     {
+        // A frozen target with no unread bytes is trivially complete; see the
+        // matching guard in parseCodexFileCancellable.
+        if let endOffset, endOffset <= startOffset {
+            return (
+                sessionId: initialSessionId,
+                cutoffTotals: initialCutoffTotals,
+                parsedBytes: endOffset,
+                previousTotals: initialPreviousTotals,
+                rawTotalsBaseline: initialRawTotalsBaseline,
+                hasDivergentTotals: initialHasDivergentTotals,
+                discardingTruncatedLine: false,
+                scanComplete: true)
+        }
         var sessionId = initialSessionId
         var previousTotals = initialPreviousTotals
         var rawTotalsBaseline = initialRawTotalsBaseline
@@ -2811,12 +2858,15 @@ enum CostUsageScanner {
             unresolvedForkTotalWatermark: nil,
             hasDivergentTotals: initialHasDivergentTotals)
 
-        func rollbackResult() -> CodexParseResult {
+        func rollbackResult(
+            parsedBytes: Int64? = nil,
+            scanComplete: Bool = false) -> CodexParseResult
+        {
             let counted = rollbackState.lastCountedTotals
             let raw = rollbackState.lastRawTotalsBaseline
             return CodexParseResult(
                 days: [:],
-                parsedBytes: startOffset,
+                parsedBytes: parsedBytes ?? startOffset,
                 lastModel: rollbackState.currentModel,
                 lastTotals: rollbackState.hasDivergentTotals && !Self.codexTotalsEqual(raw, counted)
                     ? nil
@@ -2832,8 +2882,16 @@ enum CostUsageScanner {
                 projectName: rollbackState.projectName,
                 projectAttributionAmbiguous: rollbackState.projectAttributionAmbiguous,
                 rows: [],
-                scanComplete: false,
+                scanComplete: scanComplete,
                 resumeState: rollbackState)
+        }
+
+        // A frozen target with no unread bytes is trivially complete. Skipping
+        // the resumable scan keeps zero-length rollout files (and resume
+        // checkpoints that already reached the frozen EOF) out of the pending
+        // journal even when the pass deadline has already expired.
+        if let endOffset, endOffset <= startOffset {
+            return rollbackResult(parsedBytes: endOffset, scanComplete: true)
         }
 
         var currentModel = initialResumeState?.currentModel ?? initialModel
