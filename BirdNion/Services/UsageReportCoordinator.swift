@@ -146,7 +146,12 @@ final class UsageReportCoordinator {
             extrasLane = SingleFlightCache()
             extrasSources = sources
         }
-        return await report(\.extrasLane) { await self.scans.extras(sources) } ?? [:]
+        return await report(\.extrasLane, scan: { await self.scans.extras(sources) },
+                            onFreshScan: { reports in
+                                for (source, report) in reports {
+                                    BudgetAlerts.record(source: source, report: report)
+                                }
+                            }) ?? [:]
     }
 
     func seededExtraReports(
@@ -200,7 +205,8 @@ final class UsageReportCoordinator {
     private func report<Report: Sendable>(
         _ lane: ReferenceWritableKeyPath<UsageReportCoordinator, SingleFlightCache<Report>>,
         scan: @escaping @Sendable () async -> Report?,
-        source: CostHistoryStore.Source? = nil
+        source: CostHistoryStore.Source? = nil,
+        onFreshScan: ((Report) -> Void)? = nil
     ) async -> Report? {
         if let cached = self[keyPath: lane].cached,
            scans.now().timeIntervalSince(cached.at) < Self.cacheTTL {
@@ -218,6 +224,7 @@ final class UsageReportCoordinator {
             if let source, let spend = result as? SpendReport {
                 BudgetAlerts.record(source: source, report: spend)
             }
+            onFreshScan?(result)
         }
         return result
     }
