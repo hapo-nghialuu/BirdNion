@@ -210,8 +210,31 @@ jobs:
           rm -f "$RUNNER_TEMP/birdnion-sign.p12"
           security find-identity -v -p codesigning | grep -i "Developer ID"
 
+      - name: Import notarization API key
+        # release.sh notarizes + staples Developer ID builds when these
+        # secrets exist; without them it ships signed but not notarized.
+        if: steps.state.outputs.skip != 'true'
+        env:
+          NOTARY_KEY_B64: ${{ secrets.BIRDNION_NOTARY_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.BIRDNION_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.BIRDNION_NOTARY_ISSUER }}
+        run: |
+          if [ -z "$NOTARY_KEY_B64" ] || [ "${BIRDNION_CODE_SIGN_IDENTITY:-}" = "-" ]; then
+            echo "::warning::Notarization skipped (no BIRDNION_NOTARY_API_KEY or ad-hoc build)"
+            exit 0
+          fi
+          KEY_PATH="$RUNNER_TEMP/birdnion-notary.p8"
+          echo "$NOTARY_KEY_B64" | base64 -d > "$KEY_PATH"
+          {
+            echo "BIRDNION_NOTARY_KEY_PATH=$KEY_PATH"
+            echo "BIRDNION_NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "BIRDNION_NOTARY_ISSUER=$NOTARY_ISSUER"
+          } >> "$GITHUB_ENV"
+
       - name: Run release (verification gate → build → publish)
         if: steps.state.outputs.skip != 'true'
+        env:
+          BIRDNION_TEAM_ID: ${{ secrets.BIRDNION_TEAM_ID }}
         run: ./Scripts/release.sh "${{ steps.version.outputs.value }}"
 
   linux:

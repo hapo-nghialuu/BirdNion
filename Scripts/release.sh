@@ -53,6 +53,8 @@ ASSET_REPO="hapo-nghialuu/BirdNion"
 TAP_REPO="hapo-nghialuu/homebrew-tap"
 ZIP_NAME="BirdNion-${VERSION}.zip"
 DESKTOP="$HOME/Desktop"
+DEFAULT_SIGN_IDENTITY="Developer ID Application"
+SIGN_IDENTITY="${BIRDNION_CODE_SIGN_IDENTITY:-$DEFAULT_SIGN_IDENTITY}"
 
 RELEASE_BRANCH="${RELEASE_BRANCH:-main}"
 CURRENT_BRANCH=$(git -C "$REPO_ROOT" branch --show-current)
@@ -187,13 +189,29 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   # (Full Disk Access etc.) survive app updates — ad-hoc cdhash signatures
   # invalidate every grant on each rebuild. Machines without the cert can
   # opt back into ad-hoc via BIRDNION_CODE_SIGN_IDENTITY=-.
+  SIGN_FLAGS=()
+  if [[ "$SIGN_IDENTITY" != "-" ]]; then
+    # Notarization requires a secure timestamp and rejects the debug-only
+    # get-task-allow entitlement Xcode injects into plain `build` products.
+    SIGN_FLAGS=(OTHER_CODE_SIGN_FLAGS=--timestamp CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO)
+    # The generic "Developer ID Application" identity needs an explicit team;
+    # it comes from the environment so the team ID stays out of the repo.
+    SIGN_FLAGS+=(DEVELOPMENT_TEAM="${BIRDNION_TEAM_ID:?BIRDNION_TEAM_ID is required for Developer ID signing (or set BIRDNION_CODE_SIGN_IDENTITY=- for ad-hoc)}")
+  fi
+  # A command-line CODE_SIGN_IDENTITY applies to every target, including the
+  # automatically signed SwiftPM resource bundles, which then demand a team.
+  # The app and widget Release configs already name the default identity, so
+  # override only when a different one (e.g. ad-hoc "-") is requested.
+  if [[ "$SIGN_IDENTITY" != "$DEFAULT_SIGN_IDENTITY" ]]; then
+    SIGN_FLAGS+=(CODE_SIGN_IDENTITY="$SIGN_IDENTITY")
+  fi
   run xcodebuild -quiet -project "$REPO_ROOT/BirdNion.xcodeproj" \
       -scheme BirdNion -configuration Release \
       -destination 'platform=macOS' \
       -derivedDataPath "$REPO_ROOT/build/DerivedData" \
       ONLY_ACTIVE_ARCH=NO \
       CLIPROXYAPI_UNIVERSAL=1 \
-      CODE_SIGN_IDENTITY="${BIRDNION_CODE_SIGN_IDENTITY:-Developer ID Application: BACH VAN NHAT TAN (YLQWQL7ZFT)}" \
+      ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} \
       HAPO_BASE_URL="${HAPO_BASE_URL:-}" \
       HAPO_ME_URL="${HAPO_ME_URL:-}" \
       HAPO_AUTH_TEMPLATE="$HAPO_AUTH_TEMPLATE_VALUE" \
@@ -256,6 +274,31 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ "$ACTUAL_HAPO_AUTH_TEMPLATE" != "$HAPO_AUTH_TEMPLATE_VALUE" ]]; then
     echo "Built app HapoAuthTemplate does not match the release environment." >&2
     exit 1
+  fi
+fi
+
+# 5b. Notarize + staple Developer ID builds so Gatekeeper opens them without
+# the cask's quarantine postflight. Credentials come from either a local
+# `notarytool store-credentials` profile or an App Store Connect API key (CI).
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  NOTARY_AUTH=()
+  if [[ -n "${BIRDNION_NOTARY_PROFILE:-}" ]]; then
+    NOTARY_AUTH=(--keychain-profile "$BIRDNION_NOTARY_PROFILE")
+  elif [[ -n "${BIRDNION_NOTARY_KEY_PATH:-}" ]]; then
+    NOTARY_AUTH=(--key "$BIRDNION_NOTARY_KEY_PATH"
+      --key-id "${BIRDNION_NOTARY_KEY_ID:?BIRDNION_NOTARY_KEY_ID is required with BIRDNION_NOTARY_KEY_PATH}"
+      --issuer "${BIRDNION_NOTARY_ISSUER:?BIRDNION_NOTARY_ISSUER is required with BIRDNION_NOTARY_KEY_PATH}")
+  fi
+  if [[ ${#NOTARY_AUTH[@]} -eq 0 ]]; then
+    echo "warning: no notarization credentials (BIRDNION_NOTARY_PROFILE or BIRDNION_NOTARY_KEY_PATH) — shipping signed but not notarized" >&2
+  else
+    echo "==> Notarizing"
+    NOTARY_ZIP="$(mktemp -d)/BirdNion-notarize.zip"
+    run ditto -c -k --keepParent "$DESKTOP/BirdNion.app" "$NOTARY_ZIP"
+    run xcrun notarytool submit "$NOTARY_ZIP" "${NOTARY_AUTH[@]}" --wait
+    run xcrun stapler staple "$DESKTOP/BirdNion.app"
+    run xcrun stapler validate "$DESKTOP/BirdNion.app"
+    run rm -f "$NOTARY_ZIP"
   fi
 fi
 
