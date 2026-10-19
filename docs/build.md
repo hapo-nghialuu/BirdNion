@@ -597,9 +597,23 @@ xcrun notarytool log <submission-id> --keychain-profile <profile>
 
 Lỗi thường gặp: binary lồng bên trong thiếu `--options runtime` / `--timestamp`, hoặc còn entitlement `com.apple.security.get-task-allow`.
 
-### Hạn cert
+### Hạn cert và gia hạn
 
 Cert hiện tại hết hạn **2027-11-15**. Bản đã phát hành có timestamp nên vẫn chạy sau ngày đó; chỉ build mới cần cert mới. Cert mới cùng team giữ nguyên quyền TCC của user. Chỉ revoke khi cert bị lộ — revoke có thể khiến Gatekeeper chặn cả bản cũ.
+
+Apple không gia hạn cert cũ — tạo cert mới cùng team, làm trước hạn ~1 tháng, trên chính máy sẽ giữ private key:
+
+1. Keychain Access → Certificate Assistant → *Request a Certificate From a Certificate Authority…* → *Saved to disk* (private key sinh trên máy này).
+2. developer.apple.com → Certificates → **+** → **Developer ID Application** → G2 Sub-CA → upload CSR → tải `.cer` → double-click. Cần quyền Account Holder.
+3. `security find-identity -v -p codesigning` phải ra 1 identity hợp lệ. `CSSMERR_TP_NOT_TRUSTED` = thiếu intermediate *Developer ID Certification Authority G2* (https://www.apple.com/certificateauthority/).
+4. Export `.p12` (cert + key, đặt password) → backup vào password manager.
+5. Cập nhật secrets: `base64 -i <file>.p12 | gh secret set BIRDNION_SIGN_P12` và `gh secret set BIRDNION_SIGN_P12_PASSWORD`. Không cần sửa code (repo chỉ ghi identity chung, team ID không đổi).
+
+Không revoke cert cũ — để nó tự hết hạn.
+
+**Apple Developer Program ($99/năm)** cũng phải gia hạn: hết membership thì không notarize và không tạo cert mới được (app đã phát hành vẫn chạy). Ngày hết hạn ở developer.apple.com → *Membership details*.
+
+Không phải gia hạn: API key `.p8` (chỉ mất hiệu lực khi bị revoke), app-specific password của profile notarize local (mất hiệu lực khi đổi mật khẩu Apple ID hoặc bị revoke).
 
 ## Provider tokens & config
 
