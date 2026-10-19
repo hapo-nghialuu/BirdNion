@@ -49,7 +49,7 @@ Không dùng URL shortener, referral link, UTM hoặc query tracking.
 ```text
 BirdNion is now available as an open-source desktop companion for AI coding quotas.
 
-It keeps the quota and reset information exposed by Claude, Codex, Gemini, Cursor, Grok, and other supported sources one click away in the macOS menu bar or Linux system tray. Supported Claude, Codex, and Grok session logs can also produce local cost history.
+It keeps the quota and reset information exposed by Claude, Codex, Gemini, Cursor, Grok, and other supported sources one click away in the macOS menu bar or Linux system tray. Supported session logs from 17 local agent sources (Claude, Codex, Grok, Kiro, Oh My Pi, Pi, Devin, OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid, Kimi, Qwen Code, Goose) can also produce local cost history.
 
 BirdNion is free and MIT-licensed. There is no BirdNion account or backend: you choose each provider source, and the app keeps source, freshness, and error state explicit.
 
@@ -70,7 +70,7 @@ If you try it, which coding-tool quota or reset signal still makes you open anot
 ```text
 BirdNion đã sẵn sàng dưới dạng ứng dụng desktop mã nguồn mở để theo dõi quota AI coding.
 
-Ứng dụng giữ quota và thời điểm reset mà Claude, Codex, Gemini, Cursor, Grok cùng các nguồn được hỗ trợ cung cấp ngay trên menu bar macOS hoặc system tray Linux. Session log Claude, Codex và Grok được hỗ trợ cũng có thể tạo lịch sử chi phí local.
+Ứng dụng giữ quota và thời điểm reset mà Claude, Codex, Gemini, Cursor, Grok cùng các nguồn được hỗ trợ cung cấp ngay trên menu bar macOS hoặc system tray Linux. Session log của 17 nguồn agent local được hỗ trợ (Claude, Codex, Grok, Kiro, Oh My Pi, Pi, Devin, OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid, Kimi, Qwen Code, Goose) cũng có thể tạo lịch sử chi phí local.
 
 BirdNion miễn phí, giấy phép MIT, không có BirdNion account hoặc backend. Bạn chọn từng provider source; ứng dụng luôn thể hiện rõ source, freshness và error state.
 

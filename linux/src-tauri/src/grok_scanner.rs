@@ -234,10 +234,7 @@ pub fn scan_with_projects(now: DateTime<Local>) -> Option<GrokUsageScan> {
     scan_with_projects_window(now, HISTORY_DAYS)
 }
 
-pub fn scan_with_projects_window(
-    now: DateTime<Local>,
-    scan_days: i64,
-) -> Option<GrokUsageScan> {
+pub fn scan_with_projects_window(now: DateTime<Local>, scan_days: i64) -> Option<GrokUsageScan> {
     let root = grok_home()?.join("sessions");
     // Missing/not-a-dir root means Grok was never scanned on this machine —
     // return None (not a fabricated all-zero report) so the Data Confidence

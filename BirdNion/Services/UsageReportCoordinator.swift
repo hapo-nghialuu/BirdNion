@@ -1,7 +1,9 @@
 import Foundation
 
-/// Single owner for the seven local cost scanners (Claude, Codex, Grok, Kiro,
-/// OMP, Pi, Devin). Centralizes the 300s cache TTL + per-source single-flight
+/// Single owner for the 17 local cost sources — the seven typed scanners
+/// (Claude, Codex, Grok, Kiro, OMP, Pi, Devin) plus the LocalAgentCostEngine
+/// extras (OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp,
+/// Droid, Kimi, Qwen Code, Goose). Centralizes the 300s cache TTL + per-source single-flight
 /// so concurrent callers (QuotaPanel, InsightsPane, WeeklyDigest) share one
 /// scan instead of triplicating work. The scanners' own internal caches stay
 /// as a second layer — this coordinator only dedupes the entry points.

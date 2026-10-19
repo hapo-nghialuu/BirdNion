@@ -175,7 +175,7 @@ Mục tiêu đợt hiện tại là biến capability đã có bằng chứng th
 
 ### P5 — OpenCode cost scanner sau contract discovery
 
-- [ ] [both] Chỉ thiết kế/triển khai OpenCode cost scanner sau khi discovery xác minh nguồn dữ liệu thật, schema, đơn vị, ownership và giới hạn scan; nếu chưa có contract đủ tin cậy thì giữ `Unknown` và không ship scanner suy đoán.
+- [x] [both] Chỉ thiết kế/triển khai OpenCode cost scanner sau khi discovery xác minh nguồn dữ liệu thật, schema, đơn vị, ownership và giới hạn scan; nếu chưa có contract đủ tin cậy thì giữ `Unknown` và không ship scanner suy đoán.
 
 ### Chủ động defer
 

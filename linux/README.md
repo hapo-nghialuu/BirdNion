@@ -7,15 +7,20 @@ Stack: Tauri v2 (Rust core + web UI vanilla TS). Dùng chung schema config
 ## Tính năng (parity với macOS)
 
 - [x] Tray icon (Show/Quit, tooltip % quota động), đóng window = ẩn xuống tray
-- [x] Tab **All**: tổng cost **Claude + Codex + Grok** — period picker 24h/7/30/90 ngày,
-      stacked bars 3 nguồn (màu Grok `#111827`), heatmap 90 ngày (soft greens), top models
-- [x] Cost scanners: Claude (`claude_scanner.rs`) + Codex (`codex_scanner.rs`) +
-      Grok (`grok_scanner.rs` — `~/.grok/sessions/**/signals.json`)
+- [x] Tab **All**: tổng cost 17 nguồn local — period picker 24h/7/30/90 ngày,
+      stacked bars theo nguồn, heatmap 90 ngày (soft greens), top models
+- [x] Cost scanners: 6 typed (`claude_scanner.rs`, `codex_scanner.rs`,
+      `grok_scanner.rs` — `~/.grok/sessions/**/signals.json`, `omp_scanner.rs`,
+      `pi_scanner.rs`, `kiro_scanner.rs`) + generic engine `local_cost/` cho
+      Devin, OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid,
+      Kimi, Qwen Code, Goose (parity `LocalAgentCostEngine` macOS)
 - [x] **Cost history** high-water (`cost_history.rs` → `~/.config/birdnion/cost-history.json`):
-      bar ngày không co khi xóa session local (Claude/Codex/Grok)
-- [x] **26 providers** (roster + registry): 23 cũ + **Grok**, **OpenAI** (Admin spend), **Ollama**
+      bar ngày không co khi xóa session local (cả 17 nguồn)
+- [x] **38 providers** (roster + registry + 10 JS plugin): 28 native + plugin
+      Aixy, Atlas Cloud, ClinePass, LiteLLM, Muse Code, Nous Portal, Raycast,
+      Sakana AI, Venice, xKiro
 - [x] Tab per-provider: quota windows + reset countdown + chart 30 ngày
-      (Claude/Codex/Grok) + Claude Admin card khi có admin key
+      (Claude/Codex/Grok/Kiro) + Claude Admin card khi có admin key
 - [x] Settings (section nav): Providers / General / About —
       bật/tắt, API key, cookie, project id (OpenAI), autostart, polling, about/update
 - [x] Notifications cảnh báo quota ≤20% + failure episodes, i18n vi/en
@@ -66,6 +71,7 @@ sudo apt install ./BirdNion_<version>_amd64.deb   # Ubuntu/Debian
 - `src-tauri/src/claude_scanner.rs` / `codex_scanner.rs` / `grok_scanner.rs` — cost scanners
 - `src-tauri/src/cost_history.rs` — high-water merge shared với macOS schema
 - `src-tauri/src/config.rs` — settings.json reader/writer (schema chung macOS)
-- `src-tauri/src/providers/` — 26 provider + `browser_cookies.rs` (rookie) + registry
+- `src-tauri/src/providers/` — 28 provider native + 10 JS plugin + `browser_cookies.rs` (rookie) + registry
+- `src-tauri/src/local_cost/` — generic local cost engine (parsing, pricing, readers, generic walker)
 - `src/` — web UI: `all-tab.ts`, `provider-tab.ts`, `source-chart.ts`, `settings-tab.ts`
-  (sections), `i18n.ts`, `usage.ts` (combine 3 nguồn)
+  (sections), `i18n.ts`, `usage.ts` (combine 6 nguồn typed + extras map)

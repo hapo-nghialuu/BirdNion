@@ -35,9 +35,23 @@ const MAX_SCANNED_AT_FUTURE_MS: i64 = 5 * 60 * 1_000;
 /// Must list every key macOS `CostHistoryStore.Source` can write: the history
 /// file is shared and the validator rejects documents with unknown sources.
 const KNOWN_SOURCES: [&str; 17] = [
-    "claude", "codex", "grok", "kiro", "omp", "pi", "devin",
-    "opencode", "gemini", "copilot", "antigravity", "cursor", "amp",
-    "droid", "kimi", "qwen", "goose",
+    "claude",
+    "codex",
+    "grok",
+    "kiro",
+    "omp",
+    "pi",
+    "devin",
+    "opencode",
+    "gemini",
+    "copilot",
+    "antigravity",
+    "cursor",
+    "amp",
+    "droid",
+    "kimi",
+    "qwen",
+    "goose",
 ];
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -495,9 +509,7 @@ pub fn mark_deep_scan_succeeded(source: &str) {
     let Ok(mut document) = read_for_mutation(now_ms) else {
         return;
     };
-    document
-        .deep_scan_at
-        .insert(source.to_string(), now_ms);
+    document.deep_scan_at.insert(source.to_string(), now_ms);
     let _ = write(&document);
 }
 
@@ -1698,12 +1710,23 @@ mod tests {
     fn validator_accepts_every_source_macos_can_write() {
         let now_ms = Local::now().timestamp_millis();
         for source in [
-            "opencode", "gemini", "copilot", "antigravity", "cursor", "amp",
-            "droid", "kimi", "qwen", "goose",
+            "opencode",
+            "gemini",
+            "copilot",
+            "antigravity",
+            "cursor",
+            "amp",
+            "droid",
+            "kimi",
+            "qwen",
+            "goose",
         ] {
             let mut document = valid_document_for_today();
             document.sources.insert(source.to_string(), HashMap::new());
-            assert!(validate_document(&document, now_ms), "{source} must validate");
+            assert!(
+                validate_document(&document, now_ms),
+                "{source} must validate"
+            );
         }
     }
 

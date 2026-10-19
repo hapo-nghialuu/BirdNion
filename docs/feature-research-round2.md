@@ -48,15 +48,13 @@ still worth building, ordered by estimated value/effort.
 
 ## From ccusage (cost-scan coverage gap)
 
-BirdNion scans 7 local sources (Claude, Codex, Grok, Kiro, OMP, Pi, Devin).
-ccusage covers ~19. Missing sources whose data is local files:
-
-16. **OpenCode / OpenCode Go cost** — providers exist, no local cost scanner.
-17. **Gemini CLI / Copilot CLI cost** — JSONL logs, same scanner shape.
-18. **Antigravity local history** — upstream decodes its local DB as a marked
-    lower bound; BirdNion only reads quota.
-19. **Cursor agent / Amp / Droid / Kimi / Qwen / Goose** — local JSONL usage;
-    each is a `*CostScanner` port.
+BirdNion scans 17 local sources (Claude, Codex, Grok, Kiro, OMP, Pi, Devin,
+OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid, Kimi,
+Qwen Code, Goose). ccusage covers ~19. Missing sources whose data is local files:
+18. ~~**Antigravity local history**~~ — shipped: local DB decoded into
+    cost history.
+19. ~~**Cursor agent / Amp / Droid / Kimi / Qwen / Goose**~~ — shipped: each
+    reads local usage via the generic local-cost engine.
 20. **Statusline feed** — ccusage emits a compact line for Claude Code's
     statusLine hook; BirdNion could write the same from live quota state so
     the terminal shows quota while coding.

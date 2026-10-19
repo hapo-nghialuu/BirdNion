@@ -12,7 +12,7 @@
 [![Homebrew](https://img.shields.io/badge/brew-hapo--nghialuu%2Ftap%2Fbirdnion-orange?style=flat-square)](https://github.com/hapo-nghialuu/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/license-MIT-6e5aff?style=flat-square)](LICENSE)
 
-25+ providers. BirdNion is a small macOS 14+ menu-bar app and Linux tray app that keeps AI coding limits visible, shows when each window resets, and centralizes how each coding agent is read. Codex, Claude, MiniMax, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, Grok, xAI, OpenAI, Ollama, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, FreeModel, and Devin.
+38 providers. BirdNion is a small macOS 14+ menu-bar app and Linux tray app that keeps AI coding limits visible, shows when each window resets, and centralizes how each coding agent is read. Codex, Claude, MiniMax, OpenRouter, DeepSeek, z.ai, ElevenLabs, Deepgram, Groq, Grok, xAI, OpenAI, Ollama, GitHub Copilot, Kilo, Command Code, Xiaomi MiMo, Alibaba/Qwen, Cursor, Gemini, Kiro, OpenCode, OpenCode Go, Antigravity, AWS Bedrock, FreeModel, Devin, and Hapo AI Hub — plus JavaScript plugin providers (Aixy, Atlas Cloud, ClinePass, LiteLLM, Muse Code, Nous Portal, Raycast, Sakana AI, Venice, xKiro).
 
 The native macOS app uses SwiftUI/AppKit and a vendored, trimmed `CodexBarCore` subset. The Linux port lives in `linux/` and uses Tauri v2 with a Rust core and vanilla TypeScript UI. Both platforms share the same XDG provider configuration schema.
 
@@ -205,7 +205,7 @@ The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in m
 - Provider source selectors for OAuth, CLI, web cookies, Admin API, local app state, and static keys.
 - Per-provider refresh intervals and menu-bar visibility.
 - Cookie-source picker with Auto, Manual, and Off modes for cookie-backed providers.
-- Claude, Codex, and Grok local cost charts with persistent high-water history. Stored bars seed the UI immediately while a narrower live scan refreshes recent days.
+- Local cost charts for 17 agent sources — Claude, Codex, Grok, Kiro, Oh My Pi, Pi, Devin, OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid, Kimi, Qwen Code, and Goose — with persistent high-water history. Stored bars seed the UI immediately while a narrower live scan refreshes recent days.
 - A compact All-tab Insights highlight opens Settings -> Insights for 7-day comparisons and 7/30/90-day project rankings. Claude, Codex, and Grok derive privacy-safe project identities from their local session metadata; only the residual usage that cannot be attributed stays explicitly `Unknown`.
 - Claude Admin API 30-day chart and Codex web dashboard extras where enabled.
 - Kiro custom display values: credits left, percent, used/total, and overage modes.
@@ -227,7 +227,7 @@ The macOS menu-bar icon is the BirdNion bird by default. When "Show percent in m
 | Antigravity OAuth accounts | `~/.config/birdnion/antigravity-oauth.json` |
 | Copilot OAuth accounts | `~/.config/birdnion/copilot-accounts.json` |
 | FreeModel managed accounts | macOS: `~/Library/Application Support/BirdNion/freemodel-accounts.json`; Linux: `~/.config/birdnion/freemodel-accounts.json` |
-| Daily cost history (All tab) | `~/.config/birdnion/cost-history.json` (sibling of settings; high-water merge so deleted Claude/Codex/Grok sessions keep past bars) |
+| Daily cost history (All tab) | `~/.config/birdnion/cost-history.json` (sibling of settings; high-water merge so deleted agent sessions keep past bars) |
 | Project cost history (Insights) | `~/.config/birdnion/project-cost-history.json` (separate optional store; SHA-256 project keys/retraction IDs, safe basenames, aggregate-bounded high-water merge, `0600`) |
 | macOS UI preferences | `UserDefaults` (`showPercentInMenuBar`, visibility, refresh, source, and display settings) |
 | Linux UI preferences | Tauri WebView `localStorage`; provider cookie/visibility/refresh fields remain in `settings.json` |
@@ -243,7 +243,7 @@ The config file is written atomically and set to permission `0600`.
 
 ## Privacy Note
 
-BirdNion does not perform an unrestricted filesystem crawl. It reads documented locations only when the related provider/source is enabled: provider config files, CLI auth files, browser cookie stores, local IDE databases, and Claude/Codex/Grok session logs. Provider tokens live in the BirdNion config file with restrictive permissions. OAuth, Keychain, and CLI session files remain owned by their original tools.
+BirdNion does not perform an unrestricted filesystem crawl. It reads documented locations only when the related provider/source is enabled: provider config files, CLI auth files, browser cookie stores, local IDE databases, and local agent session logs. Provider tokens live in the BirdNion config file with restrictive permissions. OAuth, Keychain, and CLI session files remain owned by their original tools.
 
 No passwords are stored. Browser cookies are reused only when the user chooses a cookie-backed source. Insights never persists a full project path: Claude hashes its stable session-directory token, Codex hashes a validated absolute `cwd`, and Grok hashes its encoded session-directory token. Verified paths may only improve the sanitized basename label; the UI and copy summary receive that safe label or an explicit residual `Unknown` bucket.
 
