@@ -217,8 +217,7 @@ build/zip
               └─► User: brew tap hapo-nghialuu/tap && brew install --cask birdnion
                      → downloads zip
                      → copies to /Applications
-                     → postflight: xattr -dr com.apple.quarantine
-                     → opens app, no Gatekeeper dialog
+                     → Gatekeeper accepts the stapled notarization ticket
 ```
 
 ### Verify sau khi release
@@ -226,7 +225,8 @@ build/zip
 ```bash
 brew tap hapo-nghialuu/tap
 brew reinstall --cask birdnion
-xattr -l /Applications/BirdNion.app   # should NOT contain com.apple.quarantine
+spctl -a -vvv -t exec /Applications/BirdNion.app   # accepted, source=Notarized Developer ID
+xcrun stapler validate /Applications/BirdNion.app
 plutil -p /Applications/BirdNion.app/Contents/Info.plist | grep CFBundleShortVersionString
 ```
 
@@ -546,34 +546,60 @@ Không thay `birdnion` bằng tên project/agent khác.
 - Native Linux packaging cần runner Ubuntu/Linux; local macOS chỉ nên build helper hoặc chạy frontend/Rust tests.
 - Không dùng checksum được tạo với absolute path; checksum file phải tham chiếu basename đúng với file download.
 - Không xoá tag/release để thay package Linux. Xác định numeric asset id, xoá đúng ba package, rồi xác minh lại toàn bộ asset sau workflow.
-- macOS hiện ad-hoc signed; Homebrew cask dùng postflight xoá quarantine. Notarization/Developer ID vẫn là việc riêng nếu cần phân phối production không qua postflight.
+- macOS release từ 0.10.50 được ký Developer ID + notarize + staple; Homebrew cask không còn postflight xoá quarantine.
 
 ## Code signing
 
-Hiện tại **ad-hoc signed** (`Sign to Run Locally`). Cách bypass Gatekeeper:
+Từ **0.10.50**, bản Release được ký **Developer ID Application**, bật Hardened Runtime, có secure timestamp, được Apple **notarize** và **staple** vé vào app trước khi zip. Gatekeeper mở thẳng (`source=Notarized Developer ID`), và quyền TCC (Full Disk Access) / Keychain "Always Allow" giữ nguyên qua các bản update vì danh tính ký cố định theo team.
 
-- `Scripts/release.sh` đã thêm `postflight do … xattr -dr com.apple.quarantine` nên user mở thẳng, không cần Right-click → Open.
+Debug build vẫn ad-hoc (`CODE_SIGN_IDENTITY = "-"`).
 
-Để user mở thẳng **không cần** postflight (và không cần `xattr` hack), cần:
+### Repo không chứa danh tính cụ thể
 
-1. **Apple Developer Program** ($99/năm) — https://developer.apple.com/programs/
-2. Tạo **Developer ID Application** cert trong Xcode → Keychain
-3. Setup notarization credentials:
-   ```bash
-   xcrun notarytool store-credentials "AC_PASSWORD" \
-     --apple-id your@email.com --team-id TEAMID
-   ```
-4. Update `Scripts/release.sh` (sau đoạn `xcodebuild`, trước `zip`):
-   ```bash
-   codesign --deep --force --options runtime \
-     --sign "Developer ID Application: TÊN BẠN (TEAMID)" \
-     "$DESKTOP/BirdNion.app"
-   ditto -c -k --sequesterRsrc --keepParent \
-     "$DESKTOP/BirdNion.app" "$DESKTOP/BirdNion.zip"
-   xcrun notarytool submit "$DESKTOP/BirdNion.zip" --wait
-   rm "$DESKTOP/BirdNion.zip"
-   ```
-5. Drop the `postflight xattr` block (no longer needed).
+- `project.pbxproj` (Release của `BirdNion` + `BirdNionWidget`) và `Scripts/release.sh` chỉ ghi tên chung `"Developer ID Application"`.
+- Team ID đến từ env `BIRDNION_TEAM_ID` (local: `Scripts/dev-env.sh`, gitignored; CI: secret). Thiếu biến này thì `release.sh` dừng ngay.
+- Build Release bằng nút ▶ trong Xcode sẽ báo thiếu team — dùng `release.sh`, hoặc chọn team tạm thời trong *Signing & Capabilities* và không commit.
+
+### Cách `release.sh` ký
+
+| Thành phần | Cách ký |
+|---|---|
+| App + widget | `xcodebuild` với `OTHER_CODE_SIGN_FLAGS=--timestamp`, `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO` (bỏ `get-task-allow`), `DEVELOPMENT_TEAM=$BIRDNION_TEAM_ID` |
+| `cliproxyapi` | Build phase *Embed CLIProxyAPI Core* ký `--options runtime --timestamp` khi identity khác `-` |
+| Notarize | Bước 5b: `ditto` → `notarytool submit --wait` → `stapler staple` → `stapler validate`, chạy **trước** bước zip |
+
+Không truyền `CODE_SIGN_IDENTITY` qua dòng lệnh khi dùng identity mặc định: setting dòng lệnh áp cho mọi target, kể cả SwiftPM resource bundle (automatic signing), và chúng sẽ báo thiếu team. Script chỉ override khi identity khác mặc định (ví dụ `-`).
+
+### Credentials
+
+| Môi trường | Ký | Notarize |
+|---|---|---|
+| Local | Cert + private key trong Keychain login (cần intermediate *Developer ID Certification Authority G2*) | `BIRDNION_NOTARY_PROFILE=<profile>` — profile tạo bằng `xcrun notarytool store-credentials` (app-specific password) |
+| CI (`release.yml`) | Secrets `BIRDNION_SIGN_P12` (base64), `BIRDNION_SIGN_P12_PASSWORD`, `BIRDNION_TEAM_ID` | Secrets `BIRDNION_NOTARY_API_KEY` (base64 `.p8`), `BIRDNION_NOTARY_KEY_ID`, `BIRDNION_NOTARY_ISSUER` — App Store Connect Team Key quyền *Developer* |
+
+Thiếu credentials notarize → script cảnh báo và phát hành bản đã ký nhưng chưa notarize. Thiếu `.p12` trên CI → fallback ad-hoc (`BIRDNION_CODE_SIGN_IDENTITY=-`).
+
+```bash
+# Local release đã ký + notarize
+BIRDNION_NOTARY_PROFILE=<profile> ./Scripts/release.sh X.Y.Z
+
+# Kiểm tra bản phát hành
+spctl -a -vvv -t exec BirdNion.app          # accepted, source=Notarized Developer ID
+xcrun stapler validate BirdNion.app
+codesign -dvv BirdNion.app/Contents/Resources/cliproxyapi 2>&1 | grep -E "Authority|Timestamp|flags"
+```
+
+### Khi notarize báo Invalid
+
+```bash
+xcrun notarytool log <submission-id> --keychain-profile <profile>
+```
+
+Lỗi thường gặp: binary lồng bên trong thiếu `--options runtime` / `--timestamp`, hoặc còn entitlement `com.apple.security.get-task-allow`.
+
+### Hạn cert
+
+Cert hiện tại hết hạn **2027-11-15**. Bản đã phát hành có timestamp nên vẫn chạy sau ngày đó; chỉ build mới cần cert mới. Cert mới cùng team giữ nguyên quyền TCC của user. Chỉ revoke khi cert bị lộ — revoke có thể khiến Gatekeeper chặn cả bản cũ.
 
 ## Provider tokens & config
 
@@ -690,7 +716,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 | `release.sh` SHA mismatch on upload | GitHub release-asset cache | Đổi filename (`v0.x.y` → `0.x.y`) — script tự dùng `BirdNion-${VERSION}.zip` |
 | `cargo test`: `resource path binaries/cliproxyapi doesn't exist` | tauri-build đòi bundle resource ngay cả khi test | `linux/scripts/build-cliproxy.sh` (cần `CLIPROXYAPI_SOURCE` + Go ≥1.26); `binaries/` được gitignore |
 | Test fail chỉ trên CI, local pass | `xcodebuild test` không forward env vào test process — runner UTC, không `~/.codex` | Workflow `release.yml` đã set `systemsetup -settimezone Asia/Ho_Chi_Minh` + seed `~/.codex/auth.json`; đừng cố export `TZ`/`CODEX_HOME` |
-| BirdNion mở ra dialog Gatekeeper | postflight chưa chạy / cask version cũ | `brew reinstall --cask birdnion` |
+| BirdNion bị Gatekeeper chặn | Bản cũ ≤ 0.10.49 (ad-hoc) hoặc build chưa notarize | `brew upgrade --cask birdnion`; kiểm tra bằng `spctl -a -vvv -t exec /Applications/BirdNion.app` |
 | App icon trắng trong Finder | `ASSETCATALOG_COMPILER_APPICON_NAME` chưa set = `AppIcon` | Check project.pbxproj (đã fix ở `5e8ee0a`) |
 | Claude tab "Đang tải…" load lâu | OAuth + cookie fetch chậm khi cold | Đặt `refreshInterval.claude` lớn hơn (UI: Settings popover) |
 

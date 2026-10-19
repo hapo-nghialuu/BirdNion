@@ -36,12 +36,12 @@ The native macOS app uses SwiftUI/AppKit and a vendored, trimmed `CodexBarCore` 
 
 Download pre-built bundles from [GitHub Releases](https://github.com/hapo-nghialuu/BirdNion/releases):
 
-- `BirdNion-<version>.zip` - universal macOS app, ad-hoc signed.
+- `BirdNion-<version>.zip` - universal macOS app, signed with Developer ID and notarized by Apple.
 - `BirdNion_<version>_amd64.deb` - Ubuntu/Debian package.
 - `BirdNion-<version>-1.x86_64.rpm` - Fedora/RHEL package.
 - `BirdNion_<version>_amd64.AppImage` - portable Linux bundle.
 - SHA256 is used by the Homebrew cask.
-- The cask postflight removes the Gatekeeper quarantine flag from the staged app. If macOS still blocks the first launch, use Right-click -> Open.
+- The notarization ticket is stapled to the app, so Gatekeeper opens it directly (even offline) after the standard "downloaded from the Internet" confirmation.
 
 ### macOS via Homebrew
 

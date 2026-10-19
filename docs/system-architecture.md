@@ -417,7 +417,7 @@ Scripts/
 - [x] Drag-drop reorder in Settings sidebar
 - [x] Search box + active-first sort
 - [x] Menu-bar visibility toggle per provider
-- [x] Ad-hoc signed, Gatekeeper auto-strip qua Homebrew cask postflight
+- [x] Developer ID signed + Hardened Runtime + notarized/stapled Release (0.10.50); Debug vẫn ad-hoc
 - [x] `xcodebuild` Release universal clean; full macOS suite `726` tests (`725` pass, `1` live skip, `0` fail) (2026-08-26)
 - [x] Local token scanner: 30-day chart for Claude usage
 - [x] Data confidence + freshness + last-good service status trên macOS/Linux
@@ -438,7 +438,7 @@ Scripts/
 | Quyết định | Lý do |
 |---|---|
 | Swift + SwiftUI + AppKit (NSPopover-style) | Native, giống CodexBar |
-| Ad-hoc signed + cask postflight xattr | Free, $0/yr, user mở thẳng (không cần Developer ID cho test nội bộ) |
+| Developer ID + notarize + staple (thay ad-hoc + cask postflight xattr từ 0.10.50) | Gatekeeper mở thẳng không cần lách quarantine; danh tính ký cố định theo team nên quyền TCC/Keychain giữ qua update. Repo chỉ ghi identity chung, team ID đến từ env/secret |
 | Local CodexBarCore SPM (path-based) | Tận dụng `ClaudeWebAPIFetcher` + `RateWindow` battle-tested |
 | Seed pending with old statuses on refresh | User không thấy flash empty khi provider fetch chậm |
 | Per-provider refresh interval | Provider chậm/rate-limited poll ít hơn, user tự chỉnh |
@@ -456,7 +456,6 @@ Scripts/
 
 ## 10. Open questions / future
 
-- **Apple Developer Program** ($99/năm) — cần nếu muốn user cài đặt thẳng không cần postflight xattr
 - **Codex multi-account** đã có, còn polish UI
 - **Sparkle auto-update** — optional, cần server
 - **Mac App Store** — nếu muốn mass distribution, cần review process

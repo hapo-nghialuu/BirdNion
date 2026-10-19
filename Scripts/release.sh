@@ -180,7 +180,7 @@ with open(path, 'w') as f:
 PY
 fi
 
-# 4. Build (Release, ad-hoc)
+# 4. Build (Release, Developer ID — or ad-hoc via BIRDNION_CODE_SIGN_IDENTITY=-)
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> xcodebuild"
   # Publish a universal macOS app so both Apple Silicon and Intel users can
@@ -412,5 +412,5 @@ cat <<EOF
   Release:  https://github.com/${ASSET_REPO}/releases/tag/${TAG}
   Install:  brew install --cask hapo-nghialuu/tap/birdnion
   Upgrade:  brew update && brew upgrade --cask birdnion
-  Verify:   brew reinstall --cask birdnion && xattr -l /Applications/BirdNion.app
+  Verify:   spctl -a -vvv -t exec /Applications/BirdNion.app   # source=Notarized Developer ID
 EOF

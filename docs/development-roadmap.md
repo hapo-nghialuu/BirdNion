@@ -63,8 +63,8 @@ BirdNion — app theo dõi AI quota/cost, **2 nền tảng chung 1 roadmap**:
 - [x] Releases published through v0.8.6
 - [x] Update check via GitHub Releases API (About pane — no Sparkle needed)
 
-> Phân phối chuẩn hiện tại: **brew tap** (ad-hoc signed + postflight strip).
-> Đủ tốt cho người dùng kỹ thuật — đúng tệp người dùng của app.
+> Phân phối chuẩn hiện tại: **brew tap** với bản Developer ID signed + notarized
+> (từ 0.10.50, 2026-10-19); cask không còn postflight strip quarantine.
 
 ## ✅ Phase 6 — Provider expansion + All tab (shipped v0.4.0 → v0.8.x)
 - [x] 15 provider mới port từ CodexBar (tổng ~23: Groq, Copilot, Kilo, Cursor, Gemini, Kiro, Bedrock, Antigravity, cookie-based…)
@@ -144,7 +144,7 @@ Mục tiêu đợt hiện tại là biến capability đã có bằng chứng th
 - [ ] Chứng minh clean install và privacy bằng journey có receipt; dùng asset macOS/Linux và screenshot capability thật.
 - [ ] Giữ surface độc lập với app native/Tauri: không backend, account, email capture, auto telemetry, paid ads hoặc analytics stack đầy đủ.
 - [ ] Launch lane hiện tại: GitHub → Cursor Community Forum → r/ClaudeCode Weekly Showcase → Product Hunt sau khi hấp thụ feedback cộng đồng. Private cohort và Show HN tạm hoãn theo quyết định maintainer; không được ghi các bài là live khi chưa có URL thật.
-- [ ] Public copy dùng English chính + bản companion tiếng Việt, cân bằng macOS/Linux và disclose rõ macOS hiện ad-hoc signed trong khi Developer ID/notarization đang pause.
+- [ ] Public copy dùng English chính + bản companion tiếng Việt, cân bằng macOS/Linux; macOS từ 0.10.50 đã Developer ID signed + notarized.
 
 ## 🧭 Product roadmap đã duyệt — hướng tương lai (P0–P5)
 
@@ -191,7 +191,7 @@ Landing và soft launch đã chuyển lên initiative active **Public Proof & La
 - [ ] **Broad campaigns**: chuẩn bị đúng hai community lane (Cursor Showcase + r/ClaudeCode Weekly Showcase) và Product Hunt; không dùng paid ads, newsletter gate, tracked link, fake metric hoặc claim Windows/P1/P2 khi chưa có receipt riêng
 
 ## 💰 Blocked on budget (làm ngay khi có $99/năm Apple Developer)
-- [ ] Developer ID + notarization → cài đặt không cần strip quarantine, mở rộng được tệp người dùng không kỹ thuật
+- [x] Developer ID + notarization → cài đặt không cần strip quarantine, mở rộng được tệp người dùng không kỹ thuật (0.10.50, 2026-10-19)
 - [ ] Sparkle auto-update (yêu cầu app đã ký)
 - [ ] Mac App Store (cũng cần giải bài toán sandbox — cookie/Keychain scraping sẽ bị chặn; cân nhắc kỹ)
 

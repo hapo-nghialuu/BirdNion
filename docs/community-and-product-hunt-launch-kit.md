@@ -21,7 +21,7 @@ BirdNion là desktop companion miễn phí, mã nguồn mở MIT, giữ quota AI
 - Không có BirdNion account hoặc BirdNion backend.
 - Chỉ đọc nguồn đã được tài liệu hóa khi người dùng bật provider/source tương ứng. Một số source có thể dùng local CLI/OAuth state, browser cookie, API key hoặc gọi provider API.
 - Không lưu password và không quét toàn bộ filesystem.
-- Bản macOS hiện `ad-hoc signed`; Developer ID/notarization đang pause. README ghi rõ Homebrew/Gatekeeper behavior.
+- Bản macOS từ 0.10.50 được ký Developer ID và notarize bởi Apple; Gatekeeper mở thẳng. README ghi rõ cách cài Homebrew.
 - Linux phát hành cho `x86_64` dưới dạng `.deb`, `.rpm` và `.AppImage`.
 - Không quảng bá Windows, auto-update, metric người dùng hoặc capability chưa có evidence.
 
@@ -60,7 +60,7 @@ Platforms:
 Landing: https://birdnion.vercel.app/
 Source and downloads: https://github.com/hapo-nghialuu/BirdNion
 
-Current limitation: the macOS build is ad-hoc signed rather than Developer ID notarized. The README documents the exact Homebrew and Gatekeeper behavior.
+The macOS build is signed with Developer ID and notarized by Apple, so Gatekeeper opens it directly. The README documents the Homebrew install.
 
 If you try it, which coding-tool quota or reset signal still makes you open another dashboard?
 ```
@@ -81,7 +81,7 @@ Nền tảng:
 Landing: https://birdnion.vercel.app/
 Source và tải xuống: https://github.com/hapo-nghialuu/BirdNion
 
-Giới hạn hiện tại: bản macOS được ad-hoc signed, chưa có Developer ID/notarization. README ghi rõ cách cài Homebrew và xử lý Gatekeeper.
+Bản macOS được ký Developer ID và notarize bởi Apple nên Gatekeeper mở thẳng. README ghi rõ cách cài Homebrew.
 
 Nếu dùng thử, quota hoặc reset signal nào vẫn khiến bạn phải mở thêm dashboard?
 ```
@@ -91,7 +91,7 @@ Nếu dùng thử, quota hoặc reset signal nào vẫn khiến bạn phải m�
 - [x] Description, homepage và topics công khai đã đồng bộ.
 - [x] Latest release có đủ bốn package macOS/Linux.
 - [x] Landing, release và privacy anchor mở được.
-- [x] macOS ad-hoc signing được disclose trên landing và README.
+- [x] Trạng thái ký macOS (Developer ID + notarized) được ghi đúng trên landing và README.
 - [ ] Maintainer đăng bài soft-launch thủ công và điền URL thật vào bảng publication.
 
 ## 2. Cursor Community Forum
@@ -130,7 +130,7 @@ Current platforms:
 Source and install: https://github.com/hapo-nghialuu/BirdNion
 Privacy map: https://github.com/hapo-nghialuu/BirdNion#privacy-note
 
-One current limitation worth stating up front: the macOS release is ad-hoc signed, not Developer ID notarized. The exact install and Gatekeeper behavior is documented in the README.
+The macOS release is signed with Developer ID and notarized by Apple; the install steps are documented in the README.
 
 If you use Cursor, I’d value one very specific kind of feedback: which usage or reset signal is missing or differs from what you see in Cursor’s dashboard?
 ```
@@ -142,7 +142,7 @@ Tôi là maintainer của BirdNion, ứng dụng desktop miễn phí và mã ngu
 
 BirdNion đặt usage của Cursor ngay trên menu bar macOS hoặc system tray Linux. Billing-cycle reset của Cursor hiện được surface trên macOS; Linux chưa hiển thị cycle date này. Ứng dụng ưu tiên state.vscdb cục bộ và có thể dùng browser session làm fallback khi người dùng bật nguồn đó. BirdNion không lưu password và không quét filesystem không giới hạn.
 
-Nền tảng hiện tại là macOS 14+ và Linux x86_64. Bản macOS đang ad-hoc signed, chưa có Developer ID/notarization; README ghi rõ cách cài và Gatekeeper behavior.
+Nền tảng hiện tại là macOS 14+ và Linux x86_64. Bản macOS được ký Developer ID và notarize bởi Apple; README ghi rõ cách cài.
 
 Source/cài đặt: https://github.com/hapo-nghialuu/BirdNion
 Privacy map: https://github.com/hapo-nghialuu/BirdNion#privacy-note
@@ -176,7 +176,7 @@ The biggest implementation lesson so far: “quota” is not one universal API. 
 Source/install: https://github.com/hapo-nghialuu/BirdNion
 Privacy map: https://github.com/hapo-nghialuu/BirdNion#privacy-note
 
-Current limitation: the macOS release is ad-hoc signed rather than Developer ID notarized; Linux x86_64 packages are available as .deb, .rpm, and .AppImage.
+The macOS release is signed with Developer ID and notarized by Apple; Linux x86_64 packages are available as .deb, .rpm, and .AppImage.
 
 I’d especially like to hear which Claude quota window or reset signal you still have to open another page to verify.
 ```
@@ -188,7 +188,7 @@ Tôi duy trì BirdNion, ứng dụng miễn phí, mã nguồn mở MIT chạy �
 
 BirdNion giữ các cửa sổ 5-hour, weekly, Opus và Sonnet của Claude dễ nhìn, kèm thời điểm reset và local cost insight được hỗ trợ. Người dùng chọn OAuth, browser session, CLI hoặc Admin API; UI luôn nói rõ source/error state.
 
-Bản macOS dùng SwiftUI/AppKit native; bản Linux dùng Tauri với Rust core. BirdNion không có account/backend riêng. Privacy map ghi rõ dữ liệu nào có thể được đọc. Bản macOS hiện ad-hoc signed, chưa có Developer ID/notarization.
+Bản macOS dùng SwiftUI/AppKit native; bản Linux dùng Tauri với Rust core. BirdNion không có account/backend riêng. Privacy map ghi rõ dữ liệu nào có thể được đọc. Bản macOS được ký Developer ID và notarize bởi Apple.
 
 Source/cài đặt: https://github.com/hapo-nghialuu/BirdNion
 Privacy map: https://github.com/hapo-nghialuu/BirdNion#privacy-note
@@ -233,7 +233,7 @@ I built it after too many coding sessions were interrupted by a quota I could ha
 
 The difficult part was not drawing a percentage. Different tools expose quota through different local files, CLI/OAuth sessions, browser sources, or APIs. BirdNion keeps that source, freshness, and failure state visible so a number is not presented with more confidence than its evidence supports.
 
-Today BirdNion runs in the macOS menu bar and Linux system tray. It is free, MIT-licensed, and has no BirdNion backend or account. The README documents every supported data path and the current signing limitation: macOS is ad-hoc signed, not yet Developer ID notarized.
+Today BirdNion runs in the macOS menu bar and Linux system tray. It is free, MIT-licensed, and has no BirdNion backend or account. The README documents every supported data path and that the macOS app is Developer ID signed and notarized by Apple.
 
 I’m here for concrete feedback, especially:
 1. Which coding-tool quota still surprises you?
@@ -249,7 +249,7 @@ Quota AI coding ngay trên menu bar hoặc Linux tray
 
 BirdNion đặt quota AI coding, thời điểm reset và local cost được hỗ trợ ngay trên macOS hoặc Linux. Miễn phí, mã nguồn mở MIT, không cần BirdNion account/backend.
 
-Tôi làm BirdNion sau nhiều lần phiên code bị ngắt bởi một quota lẽ ra có thể dự đoán nếu thời điểm reset luôn hiện trước mắt. Mỗi coding tool cung cấp quota qua local file, CLI/OAuth session, browser source hoặc API khác nhau, nên BirdNion luôn giữ source, freshness và failure state dễ thấy. Bản macOS hiện ad-hoc signed, chưa có Developer ID/notarization.
+Tôi làm BirdNion sau nhiều lần phiên code bị ngắt bởi một quota lẽ ra có thể dự đoán nếu thời điểm reset luôn hiện trước mắt. Mỗi coding tool cung cấp quota qua local file, CLI/OAuth session, browser source hoặc API khác nhau, nên BirdNion luôn giữ source, freshness và failure state dễ thấy. Bản macOS được ký Developer ID và notarize bởi Apple.
 ```
 
 ### Media contract
@@ -270,7 +270,7 @@ Ba gallery trên là explanatory marketing cards, không phải native product s
 - [x] Thumbnail 240×240; ba gallery image 1270×760; mọi file dưới 3 MB.
 - [x] Maintainer chấp nhận dùng explanatory cards thay native captures trong iteration này; asset/copy không gọi các card là product capture.
 - [x] Landing, release, install commands và privacy anchor mở được.
-- [x] macOS ad-hoc signing được disclose.
+- [x] Trạng thái ký macOS (Developer ID + notarized) được ghi đúng.
 - [x] Không tracked/short link, fake urgency, testimonial, metric hoặc coordinated upvote.
 - [ ] Maintainer có thời gian trực launch window.
 - [ ] Cursor account đã có đóng góp hữu ích trước self-promotion; không dùng account mới chỉ để drop link.
