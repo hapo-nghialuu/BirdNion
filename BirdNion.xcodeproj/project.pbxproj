@@ -78,7 +78,6 @@
 		QUH00001000000000000B01 /* QuotaUsageHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = QUH00002000000000000F01 /* QuotaUsageHistory.swift */; };
 		QSP00001000000000000B01 /* QuotaSparkline.swift in Sources */ = {isa = PBXBuildFile; fileRef = QSP00002000000000000F01 /* QuotaSparkline.swift */; };
 		BAL00001000000000000B01 /* BudgetAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAL00002000000000000F01 /* BudgetAlerts.swift */; };
-		GLN00001000000000000B01 /* GlanceLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = GLN00002000000000000F01 /* GlanceLine.swift */; };
 		OMP00005000000000000B01 /* OMPAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMP00006000000000000F01 /* OMPAgentConfigStore.swift */; };
 		PI000003000000000000B01 /* PiAgentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PI000004000000000000F01 /* PiAgentConfigStore.swift */; };
 		OMPP0001000000000000B001 /* OMPPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = OMPP0002000000000000F001 /* OMPPane.swift */; };
@@ -389,7 +388,6 @@
 		QUH00002000000000000F01 /* QuotaUsageHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/QuotaUsageHistory.swift; sourceTree = "<group>"; };
 		QSP00002000000000000F01 /* QuotaSparkline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/QuotaSparkline.swift; sourceTree = "<group>"; };
 		BAL00002000000000000F01 /* BudgetAlerts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BudgetAlerts.swift; sourceTree = "<group>"; };
-		GLN00002000000000000F01 /* GlanceLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/GlanceLine.swift; sourceTree = "<group>"; };
 		OMP00006000000000000F01 /* OMPAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/OMP/OMPAgentConfigStore.swift; sourceTree = "<group>"; };
 		PI000004000000000000F01 /* PiAgentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/Pi/PiAgentConfigStore.swift; sourceTree = "<group>"; };
 		OMPP0002000000000000F001 /* OMPPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Views/Settings/OMPPane.swift; sourceTree = "<group>"; };
@@ -705,7 +703,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\nsource_path=\"${CLIPROXYAPI_SOURCE:-$SRCROOT/../CLIProxyAPI}\"\noutput_dir=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\noutput=\"$output_dir/cliproxyapi\"\ntemporary_dir=\"$TARGET_TEMP_DIR/cliproxyapi\"\n\nif [ ! -d \"$source_path\" ]; then\n  echo \"error: CLIProxyAPI source not found at $source_path. Set CLIPROXYAPI_SOURCE before building BirdNion.\" >&2\n  exit 1\nfi\n\ngo_bin=\"$(command -v go || true)\"\nif [ -z \"$go_bin\" ]; then\n  for candidate in /opt/homebrew/bin/go /usr/local/bin/go; do\n    if [ -x \"$candidate\" ]; then\n      go_bin=\"$candidate\"\n      break\n    fi\n  done\nfi\nif [ -z \"$go_bin\" ]; then\n  echo \"error: Go is required to embed CLIProxyAPI.\" >&2\n  exit 1\nfi\n\nmkdir -p \"$output_dir\" \"$temporary_dir\"\ncd \"$source_path\"\ngo_flags=-trimpath\nif [ \"${CONFIGURATION:-}\" = \"Debug\" ] || [ \"${CLIPROXYAPI_UNIVERSAL:-1}\" = \"0\" ]; then\n  case \"$(/usr/bin/uname -m)\" in x86_64) debug_goarch=amd64 ;; *) debug_goarch=arm64 ;; esac\n  /bin/rm -f \"$output\"\n  CGO_ENABLED=0 GOOS=darwin GOARCH=\"$debug_goarch\" \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$output\" ./cmd/server\nelse\n  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$temporary_dir/cliproxyapi-arm64\" ./cmd/server\n  CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$temporary_dir/cliproxyapi-x86_64\" ./cmd/server\n  /usr/bin/lipo -create -output \"$output\" \"$temporary_dir/cliproxyapi-arm64\" \"$temporary_dir/cliproxyapi-x86_64\"\nfi\n/bin/chmod 755 \"$output\"\n/usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$output\"\n";
+			shellScript = "set -eu\nsource_path=\"${CLIPROXYAPI_SOURCE:-$SRCROOT/../CLIProxyAPI}\"\noutput_dir=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\noutput=\"$output_dir/cliproxyapi\"\ntemporary_dir=\"$TARGET_TEMP_DIR/cliproxyapi\"\n\nif [ ! -d \"$source_path\" ]; then\n  echo \"error: CLIProxyAPI source not found at $source_path. Set CLIPROXYAPI_SOURCE before building BirdNion.\" >&2\n  exit 1\nfi\n\ngo_bin=\"$(command -v go || true)\"\nif [ -z \"$go_bin\" ]; then\n  for candidate in /opt/homebrew/bin/go /usr/local/bin/go; do\n    if [ -x \"$candidate\" ]; then\n      go_bin=\"$candidate\"\n      break\n    fi\n  done\nfi\nif [ -z \"$go_bin\" ]; then\n  echo \"error: Go is required to embed CLIProxyAPI.\" >&2\n  exit 1\nfi\n\nmkdir -p \"$output_dir\" \"$temporary_dir\"\ncd \"$source_path\"\ngo_flags=-trimpath\nif [ \"${CONFIGURATION:-}\" = \"Debug\" ] || [ \"${CLIPROXYAPI_UNIVERSAL:-1}\" = \"0\" ]; then\n  case \"$(/usr/bin/uname -m)\" in x86_64) debug_goarch=amd64 ;; *) debug_goarch=arm64 ;; esac\n  /bin/rm -f \"$output\"\n  CGO_ENABLED=0 GOOS=darwin GOARCH=\"$debug_goarch\" \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$output\" ./cmd/server\nelse\n  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$temporary_dir/cliproxyapi-arm64\" ./cmd/server\n  CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \"$go_bin\" build $go_flags -ldflags \"-s -w\" -o \"$temporary_dir/cliproxyapi-x86_64\" ./cmd/server\n  /usr/bin/lipo -create -output \"$output\" \"$temporary_dir/cliproxyapi-arm64\" \"$temporary_dir/cliproxyapi-x86_64\"\nfi\n/bin/chmod 755 \"$output\"\nsign_identity=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\nif [ \"$sign_identity\" = \"-\" ]; then\n  /usr/bin/codesign --force --sign - \"$output\"\nelse\n  # Notarization rejects nested executables without hardened runtime and a secure timestamp.\n  /usr/bin/codesign --force --options runtime --timestamp --sign \"$sign_identity\" \"$output\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1066,7 +1064,6 @@
 				QUH00001000000000000B01 /* QuotaUsageHistory.swift in Sources */,
 				QSP00001000000000000B01 /* QuotaSparkline.swift in Sources */,
 				BAL00001000000000000B01 /* BudgetAlerts.swift in Sources */,
-				GLN00001000000000000B01 /* GlanceLine.swift in Sources */,
 				CHS00001000000000000B01 /* CostHistoryStore.swift in Sources */,
 				PCI00001000000000000B01 /* ProjectInsights.swift in Sources */,
 				PCH00001000000000000B01 /* ProjectCostHistoryStore.swift in Sources */,
@@ -1263,7 +1260,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.49;
+				MARKETING_VERSION = 0.10.50;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1275,7 +1272,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Developer ID Application: BACH VAN NHAT TAN (YLQWQL7ZFT)";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -1290,7 +1287,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.49;
+				MARKETING_VERSION = 0.10.50;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1386,7 +1383,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.49;
+				MARKETING_VERSION = 0.10.50;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -1398,9 +1395,10 @@
 		WDGT0000000000000000C002 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "Developer ID Application: BACH VAN NHAT TAN (YLQWQL7ZFT)";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BirdNionWidget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1409,7 +1407,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.49;
+				MARKETING_VERSION = 0.10.50;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

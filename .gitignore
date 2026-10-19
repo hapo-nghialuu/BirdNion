@@ -48,3 +48,9 @@ plans/*
 .codexbar-ref/
 .vercel
 .omp/
+
+# Code signing secrets (never commit)
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
