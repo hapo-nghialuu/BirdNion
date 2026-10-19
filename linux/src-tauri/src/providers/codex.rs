@@ -677,8 +677,13 @@ enum FetchAttempt {
 /// refreshed creds plus the staleness guard, a cookie-fallback marker, or a
 /// terminal `FetchAttempt` (failure status / stale) the caller returns as-is.
 enum ResolvedAuth {
-    Creds { guard: FetchGuard, creds: Credentials },
-    CookieOnly { guard: FetchGuard },
+    Creds {
+        guard: FetchGuard,
+        creds: Credentials,
+    },
+    CookieOnly {
+        guard: FetchGuard,
+    },
     Done(FetchAttempt),
 }
 
@@ -1095,9 +1100,7 @@ fn extras_status(
         credits_remaining: cookie_enrichment.and_then(credits_balance),
         reset_credits_available,
         signed_in_email: extras.as_ref().and_then(|e| e.signed_in_email.clone()),
-        credits_purchase_url: extras
-            .as_ref()
-            .and_then(|e| e.credits_purchase_url.clone()),
+        credits_purchase_url: extras.as_ref().and_then(|e| e.credits_purchase_url.clone()),
         credits_history_count: extras.as_ref().and_then(|e| e.credits_history_count),
         version: side.version.clone(),
         service_status: side.service.as_ref().map(|(d, _)| d.clone()),
@@ -1702,8 +1705,7 @@ mod tests {
         let assert_read_failure = |home: &std::path::Path| {
             std::env::set_var("CODEX_HOME", home);
             let selection = codex_accounts::active_selection();
-            let outcome =
-                block_on(fetch_uncached(&cfg, &selection, &LIVE_OPERATIONS, true));
+            let outcome = block_on(fetch_uncached(&cfg, &selection, &LIVE_OPERATIONS, true));
             let FetchAttempt::Ready(status, _) = outcome else {
                 panic!("unchanged unreadable auth must return its failure status");
             };

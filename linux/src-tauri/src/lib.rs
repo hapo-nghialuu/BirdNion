@@ -15,6 +15,7 @@ mod freemodel_accounts;
 mod grok_scanner;
 mod installed_agents;
 mod kiro_scanner;
+mod local_cost;
 mod omp_scanner;
 mod pi_scanner;
 mod platform;
@@ -433,8 +434,27 @@ async fn project_insights_report(
     .map_err(|error| error.to_string())?
 }
 
-/// Nguồn chi phí cục bộ quét được từ log trên máy.
-const LOCAL_COST_SOURCES: [&str; 6] = ["claude", "codex", "grok", "omp", "pi", "kiro"];
+/// Nguồn chi phí cục bộ quét được từ log trên máy — 6 typed scanner + các
+/// nguồn qua local_cost::load_report (macOS registry parity).
+const LOCAL_COST_SOURCES: [&str; 17] = [
+    "claude",
+    "codex",
+    "grok",
+    "omp",
+    "pi",
+    "kiro",
+    "devin",
+    "opencode",
+    "gemini",
+    "copilot",
+    "antigravity",
+    "cursor",
+    "amp",
+    "droid",
+    "kimi",
+    "qwen",
+    "goose",
+];
 
 /// Agent phát hiện được trên máy, cache 5 phút — dò PATH nên không gọi mỗi lần
 /// dựng báo cáo.
@@ -481,6 +501,36 @@ fn sorted_usage_source_ids(sources: &HashSet<String>) -> Vec<String> {
     let mut ids: Vec<String> = sources.iter().cloned().collect();
     ids.sort();
     ids
+}
+
+/// Extra local cost sources (devin, opencode, gemini, copilot, antigravity,
+/// cursor, amp, droid, kimi, qwen, goose) via the generic local-cost engine —
+/// same spawn-blocking + cache + authorize pattern as the typed scanners
+/// (macOS LocalAgentCostEngine parity).
+#[tauri::command]
+async fn local_agent_usage_report(source: String) -> Option<usage::UsageReport> {
+    let id = local_cost::canonical_id(&source)?;
+    let started_sources = enabled_usage_sources();
+    if !started_sources.contains(id) {
+        return None;
+    }
+    let report = tauri::async_runtime::spawn_blocking(move || -> Option<usage::UsageReport> {
+        if let Some((at, report)) = USAGE_REPORT_CACHE.lock().unwrap().get(id) {
+            if at.elapsed() < USAGE_REPORT_TTL {
+                return Some(report.clone());
+            }
+        }
+        let merged = local_cost::load_report(id)?;
+        USAGE_REPORT_CACHE
+            .lock()
+            .unwrap()
+            .insert(id, (Instant::now(), merged.clone()));
+        Some(merged)
+    })
+    .await
+    .ok()
+    .flatten();
+    authorize_usage_report(id, report, &started_sources, &enabled_usage_sources())
 }
 
 /// Canonical local cost sources enabled by provider settings or detected
@@ -551,10 +601,10 @@ mod usage_source_gating_tests {
     }
 
     #[test]
-    fn only_the_six_local_cost_sources_are_ever_returned() {
+    fn only_registered_local_cost_sources_are_ever_returned() {
         // Provider bật nhưng không phải nguồn cost cục bộ (vd. openai admin)
         // không được kéo theo một scanner không tồn tại.
-        let sources = usage_sources_for(&ids(&["openai", "gemini", "claude"]), &HashSet::new());
+        let sources = usage_sources_for(&ids(&["openai", "minimax", "claude"]), &HashSet::new());
         assert_eq!(sources, ids(&["claude"]));
     }
 
@@ -2280,6 +2330,7 @@ pub fn run() {
             kiro_usage_report,
             omp_usage_report,
             pi_usage_report,
+            local_agent_usage_report,
             enabled_local_usage_source_ids,
             project_insights_report,
             provider_statuses,
