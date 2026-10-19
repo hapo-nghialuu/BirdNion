@@ -267,6 +267,182 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertTrue(ClaudeProvider.allowKeychainPrompt(mode: .onlyOnUserAction, interaction: .userInitiated))
     }
 
+    // MARK: - Keychain read targeting
+
+    /// Mirrors Claude Code's own account rule so BirdNion reads the item
+    /// Claude Code reads.
+    func testClaudeKeychainAccountRule() {
+        XCTAssertEqual(
+            ClaudeOAuthStore.claudeKeychainAccount(environment: ["USER": "alice"], systemUserName: "bob"),
+            "alice")
+        XCTAssertEqual(
+            ClaudeOAuthStore.claudeKeychainAccount(environment: ["USER": ""], systemUserName: "bob"),
+            "bob")
+        XCTAssertEqual(
+            ClaudeOAuthStore.claudeKeychainAccount(environment: [:], systemUserName: "bob.smith-1_x"),
+            "bob.smith-1_x")
+        XCTAssertEqual(
+            ClaudeOAuthStore.claudeKeychainAccount(environment: ["USER": "Nguyễn Văn"], systemUserName: "bob"),
+            "claude-code-user")
+        XCTAssertEqual(
+            ClaudeOAuthStore.claudeKeychainAccount(environment: [:], systemUserName: ""),
+            "claude-code-user")
+    }
+
+    /// The pinned read retries without the account only on "not found" (44),
+    /// inside the one shared deadline; a denial, a timeout (`nil`) or an
+    /// exhausted deadline never triggers a second run (a second prompt).
+    func testSecurityCLIReadRetriesUnpinnedOnlyOnNotFound() {
+        let suite = "birdnion.tests.claudeKeychain.cliRead"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let standardBefore = UserDefaults.standard.object(forKey: ClaudeOAuthKeychainAccessGate.defaultsKey) as? Double
+        let timeout = ClaudeOAuthStore.securityCLIReadTimeout
+
+        // Each scripted run advances the fake clock by `cost` seconds.
+        func read(_ script: [(result: ClaudeOAuthStore.SecurityCLIRunResult?, cost: TimeInterval)])
+            -> (data: Data?, calls: [(args: [String], timeout: TimeInterval)]) {
+            var now = Date(timeIntervalSince1970: 1_000_000)
+            var calls: [(args: [String], timeout: TimeInterval)] = []
+            var remaining = script
+            let data = ClaudeOAuthStore.readKeychainDataViaSecurityCLI(
+                account: "alice", defaults: defaults, clock: { now },
+                runner: { args, timeout in
+                    calls.append((args, timeout))
+                    guard !remaining.isEmpty else {
+                        XCTFail("unexpected extra security run: \(args)")
+                        return nil
+                    }
+                    let step = remaining.removeFirst()
+                    now = now.addingTimeInterval(step.cost)
+                    return step.result
+                })
+            return (data, calls)
+        }
+        let blob = Data("{\"claudeAiOauth\":{\"accessToken\":\"t\"}}\n".utf8)
+        let pinned = ["find-generic-password", "-s", "Claude Code-credentials", "-a", "alice", "-w"]
+        let unpinned = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+
+        // Pinned hit: one run, trailing newline trimmed.
+        var outcome = read([((0, blob, ""), 1)])
+        XCTAssertEqual(outcome.calls.map(\.args), [pinned])
+        XCTAssertEqual(outcome.calls.first?.timeout, timeout)
+        XCTAssertEqual(outcome.data, blob.dropLast())
+
+        // Not found → one unpinned retry with only the remaining time.
+        outcome = read([((44, Data(), "could not be found"), 40), ((0, blob, ""), 1)])
+        XCTAssertEqual(outcome.calls.map(\.args), [pinned, unpinned])
+        XCTAssertEqual(outcome.calls.last?.timeout, timeout - 40)
+        XCTAssertNotNil(outcome.data)
+
+        // Not found after the whole deadline was spent → no retry.
+        outcome = read([((44, Data(), "could not be found"), timeout)])
+        XCTAssertEqual(outcome.calls.count, 1)
+        XCTAssertNil(outcome.data)
+
+        // Timeout / spawn failure → no retry.
+        outcome = read([(nil, timeout)])
+        XCTAssertEqual(outcome.calls.count, 1)
+        XCTAssertNil(outcome.data)
+
+        // Denial → no retry, cooldown armed in the injected defaults only.
+        XCTAssertTrue(ClaudeOAuthKeychainAccessGate.shouldAllowPrompt(defaults: defaults))
+        outcome = read([((128, Data(), "User canceled the operation."), 5)])
+        XCTAssertEqual(outcome.calls.count, 1)
+        XCTAssertNil(outcome.data)
+        XCTAssertFalse(ClaudeOAuthKeychainAccessGate.shouldAllowPrompt(defaults: defaults))
+        XCTAssertEqual(
+            UserDefaults.standard.object(forKey: ClaudeOAuthKeychainAccessGate.defaultsKey) as? Double,
+            standardBefore)
+    }
+
+    /// `security -w` prints hex for blobs with non-printable or non-ASCII
+    /// bytes; those must parse exactly like the text form.
+    func testDecodeSecurityCLIPasswordOutput() {
+        func hex(_ string: String) -> Data {
+            Data(Data(string.utf8).map { String(format: "%02x", $0) }.joined().utf8)
+        }
+        let plain = Data("{\"claudeAiOauth\":{\"accessToken\":\"tok\"}}".utf8)
+        XCTAssertEqual(ClaudeOAuthStore.decodeSecurityCLIPasswordOutput(plain), plain)
+
+        let withNewline = "{\"claudeAiOauth\":{\"accessToken\":\"tok\"}}\n"
+        let decodedNewline = ClaudeOAuthStore.decodeSecurityCLIPasswordOutput(hex(withNewline))
+        XCTAssertEqual(decodedNewline, Data(withNewline.utf8))
+        XCTAssertEqual(ClaudeOAuthCredentials.parse(data: decodedNewline)?.accessToken, "tok")
+
+        let nonASCII = "{\"claudeAiOauth\":{\"accessToken\":\"tok\",\"email\":\"nghĩa@example.com\"}}"
+        let decodedNonASCII = ClaudeOAuthStore.decodeSecurityCLIPasswordOutput(hex(nonASCII))
+        XCTAssertEqual(decodedNonASCII, Data(nonASCII.utf8))
+        XCTAssertEqual(ClaudeOAuthCredentials.parse(data: decodedNonASCII)?.email, "nghĩa@example.com")
+
+        let upper = Data(Data(withNewline.utf8).map { String(format: "%02X", $0) }.joined().utf8)
+        XCTAssertEqual(ClaudeOAuthStore.decodeSecurityCLIPasswordOutput(upper), Data(withNewline.utf8))
+
+        let oddLength = Data("7b7".utf8)
+        XCTAssertEqual(ClaudeOAuthStore.decodeSecurityCLIPasswordOutput(oddLength), oddLength)
+        let notHex = Data("7b7z".utf8)
+        XCTAssertEqual(ClaudeOAuthStore.decodeSecurityCLIPasswordOutput(notHex), notHex)
+        XCTAssertEqual(ClaudeOAuthStore.decodeSecurityCLIPasswordOutput(Data()), Data())
+    }
+
+    /// Output larger than the pipe buffer must not stall the runner until
+    /// its timeout.
+    func testSecurityCLIRunnerDrainsLargeOutput() {
+        let started = Date()
+        let result = ClaudeOAuthStore.runSecurityCLI(
+            ["-c", "head -c 200000 /dev/zero | tr '\\0' a"],
+            timeout: 30,
+            executable: "/bin/sh")
+        XCTAssertEqual(result?.status, 0)
+        XCTAssertEqual(result?.stdout.count, 200_000)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+    }
+
+    /// The silent Security-framework read pins the account first and repeats
+    /// by service alone only on not-found; every query stays no-UI.
+    func testNoUIKeychainReadRetriesWithoutAccountOnlyOnNotFound() {
+        func read(_ statuses: [OSStatus]) -> (data: Data?, queries: [[String: Any]]) {
+            var queries: [[String: Any]] = []
+            var remaining = statuses
+            let data = ClaudeOAuthStore.readKeychainDataWithoutUI(account: "alice") { query in
+                queries.append(query)
+                guard !remaining.isEmpty else {
+                    XCTFail("unexpected extra keychain query")
+                    return (errSecItemNotFound, nil)
+                }
+                let status = remaining.removeFirst()
+                return (status, status == errSecSuccess ? Data("{}".utf8) : nil)
+            }
+            return (data, queries)
+        }
+        func assertNoUI(_ queries: [[String: Any]], file: StaticString = #filePath, line: UInt = #line) {
+            for query in queries {
+                XCTAssertNotNil(query[kSecUseAuthenticationContext as String], file: file, line: line)
+                XCTAssertNotNil(query[kSecUseAuthenticationUI as String], file: file, line: line)
+                XCTAssertEqual(query[kSecAttrService as String] as? String, "Claude Code-credentials",
+                               file: file, line: line)
+            }
+        }
+
+        var outcome = read([errSecSuccess])
+        XCTAssertEqual(outcome.queries.count, 1)
+        XCTAssertEqual(outcome.queries[0][kSecAttrAccount as String] as? String, "alice")
+        XCTAssertNotNil(outcome.data)
+        assertNoUI(outcome.queries)
+
+        outcome = read([errSecItemNotFound, errSecSuccess])
+        XCTAssertEqual(outcome.queries.count, 2)
+        XCTAssertEqual(outcome.queries[0][kSecAttrAccount as String] as? String, "alice")
+        XCTAssertNil(outcome.queries[1][kSecAttrAccount as String])
+        XCTAssertNotNil(outcome.data)
+        assertNoUI(outcome.queries)
+
+        outcome = read([errSecInteractionNotAllowed])
+        XCTAssertEqual(outcome.queries.count, 1)
+        XCTAssertNil(outcome.data)
+        assertNoUI(outcome.queries)
+    }
+
     // MARK: - OAuth usage mapping
 
     func testMapOAuthUsageWindowsCostRoutines() throws {

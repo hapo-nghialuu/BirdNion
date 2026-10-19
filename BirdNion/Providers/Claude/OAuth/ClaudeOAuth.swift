@@ -184,69 +184,169 @@ enum ClaudeOAuthStore {
     static func readKeychainData(allowPrompt: Bool) -> Data? {
         guard !UserDefaults.standard.bool(forKey: "debugDisableKeychainAccess") else { return nil }
         if allowPrompt {
-            // Prompt-allowed reads go through /usr/bin/security so an "Always
-            // Allow" grant binds to the stable Apple-signed binary instead of
-            // this app's per-build ad-hoc signature (see helper below).
+            // Prompt-allowed reads go through /usr/bin/security: Claude Code
+            // rewrites the item (resetting its ACL) on every token refresh, so
+            // an "Always Allow" bound to the Apple-signed `security` binary is
+            // the grant that keeps working (see helper below).
             return readKeychainDataViaSecurityCLI()
         }
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        KeychainNoUIQuery.apply(to: &query)
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
+        return readKeychainDataWithoutUI()
+    }
+
+    /// The Keychain account Claude Code reads and writes its credentials
+    /// under: `$USER`, else the OS user name, replaced by `claude-code-user`
+    /// when it is not a plain token (Claude Code 2.1.303's own rule). Pinning
+    /// it keeps a stale same-service item from being returned instead.
+    static func claudeKeychainAccount(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        systemUserName: String = NSUserName()) -> String {
+        let user = environment["USER"].flatMap { $0.isEmpty ? nil : $0 } ?? systemUserName
+        guard !user.isEmpty,
+              user.range(of: "^[a-zA-Z0-9._-]+$", options: .regularExpression) != nil
+        else { return "claude-code-user" }
+        return user
+    }
+
+    /// Silent read via Security framework: never surfaces a macOS prompt. The
+    /// account-pinned query runs first; only a not-found result repeats it by
+    /// service alone, so an older item written under another account is still
+    /// found exactly as before.
+    static func readKeychainDataWithoutUI(
+        account: String = claudeKeychainAccount(),
+        copyMatching: ([String: Any]) -> (OSStatus, Data?) = liveCopyMatching) -> Data? {
+        func query(account: String?) -> [String: Any] {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: keychainService,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            if let account { query[kSecAttrAccount as String] = account }
+            KeychainNoUIQuery.apply(to: &query)
+            return query
+        }
+        var (status, data) = copyMatching(query(account: account))
+        if status == errSecItemNotFound {
+            (status, data) = copyMatching(query(account: nil))
+        }
+        guard status == errSecSuccess, let data else { return nil }
         return data
     }
 
-    /// Reads the blob via `/usr/bin/security find-generic-password -w` instead
-    /// of `SecItemCopyMatching`. An "Always Allow" grant then binds to the
-    /// stable, Apple-signed `security` binary rather than this app's per-build
-    /// ad-hoc signature — a single confirmation survives rebuilds (a stable
-    /// Developer ID signature would make the direct read durable the same way;
-    /// until then the CLI indirection is what makes it stick). One in-flight
-    /// read at a time so a pending keychain dialog can't stack prompts across
-    /// refreshes.
-    static func readKeychainDataViaSecurityCLI() -> Data? {
-        guard securityCLIReadLock.try() else { return nil }
-        defer { securityCLIReadLock.unlock() }
+    static func liveCopyMatching(_ query: [String: Any]) -> (OSStatus, Data?) {
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        return (status, item as? Data)
+    }
+
+    typealias SecurityCLIRunResult = (status: Int32, stdout: Data, stderr: String)
+
+    /// Runs `security` once. Returns nil when it cannot be spawned or is still
+    /// running at `timeout` (it is then terminated). Both pipes are drained
+    /// while the process runs: a blob larger than the pipe buffer would
+    /// otherwise block the child until the timeout.
+    static func runSecurityCLI(_ arguments: [String],
+                               timeout: TimeInterval,
+                               executable: String = "/usr/bin/security") -> SecurityCLIRunResult? {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        proc.arguments = ["find-generic-password", "-s", keychainService, "-w"]
+        proc.executableURL = URL(fileURLWithPath: executable)
+        proc.arguments = arguments
         let outPipe = Pipe()
         let errPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = errPipe
         proc.standardInput = nil
+        let exited = DispatchSemaphore(value: 0)
+        proc.terminationHandler = { _ in exited.signal() }
         do {
             try proc.run()
         } catch {
             return nil
         }
-        let exited = DispatchSemaphore(value: 0)
-        proc.terminationHandler = { _ in exited.signal() }
+        let drained = DispatchGroup()
+        var stdout = Data()
+        var stderrData = Data()
+        DispatchQueue.global(qos: .utility).async(group: drained) {
+            stdout = outPipe.fileHandleForReading.readDataToEndOfFile()
+        }
+        DispatchQueue.global(qos: .utility).async(group: drained) {
+            stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        }
         // Generous wait: when the ACL dialog shows, letting the user answer it
         // is the whole point — terminating early would dismiss the dialog.
-        guard exited.wait(timeout: .now() + securityCLIReadTimeout) == .success else {
+        guard exited.wait(timeout: .now() + timeout) == .success else {
             proc.terminate()
             return nil
         }
-        var data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        guard proc.terminationStatus == 0 else {
+        // The child has exited, so both reads hit EOF promptly; the bound only
+        // guards against a descendant still holding the pipe open.
+        guard drained.wait(timeout: .now() + 5) == .success else { return nil }
+        return (proc.terminationStatus, stdout, String(data: stderrData, encoding: .utf8) ?? "")
+    }
+
+    /// `security -w` prints the secret as lowercase hex when it holds
+    /// non-printable or non-ASCII bytes (e.g. a trailing newline or an accented
+    /// character in the JSON). A credentials blob is JSON and so starts with
+    /// `{`, never a hex digit, so an all-hex even-length output is decoded and
+    /// anything else is returned unchanged.
+    static func decodeSecurityCLIPasswordOutput(_ data: Data) -> Data {
+        func nibble(_ byte: UInt8) -> UInt8? {
+            switch byte {
+            case 0x30...0x39: return byte - 0x30
+            case 0x41...0x46: return byte - 0x41 + 10
+            case 0x61...0x66: return byte - 0x61 + 10
+            default: return nil
+            }
+        }
+        guard !data.isEmpty, data.count % 2 == 0 else { return data }
+        var decoded = Data(capacity: data.count / 2)
+        var index = data.startIndex
+        while index < data.endIndex {
+            guard let high = nibble(data[index]),
+                  let low = nibble(data[data.index(after: index)]) else { return data }
+            decoded.append(high << 4 | low)
+            index = data.index(index, offsetBy: 2)
+        }
+        return decoded
+    }
+
+    /// Reads the blob via `/usr/bin/security find-generic-password -w` instead
+    /// of `SecItemCopyMatching`, pinned to the account Claude Code uses. Exit
+    /// 44 (item not found) retries once without the account so items written
+    /// under another account keep resolving; a denial, timeout or any other
+    /// failure never retries, so the user sees at most one dialog. Both runs
+    /// share one deadline. One in-flight read at a time so a pending keychain
+    /// dialog can't stack prompts across refreshes.
+    static func readKeychainDataViaSecurityCLI(
+        account: String = claudeKeychainAccount(),
+        defaults: UserDefaults = .standard,
+        clock: () -> Date = Date.init,
+        runner: ([String], TimeInterval) -> SecurityCLIRunResult? = { runSecurityCLI($0, timeout: $1) }) -> Data? {
+        guard securityCLIReadLock.try() else { return nil }
+        defer { securityCLIReadLock.unlock() }
+        let deadline = clock().addingTimeInterval(securityCLIReadTimeout)
+        guard var result = runner(
+            ["find-generic-password", "-s", keychainService, "-a", account, "-w"],
+            deadline.timeIntervalSince(clock()))
+        else { return nil }
+        if result.status == securityCLIItemNotFoundStatus {
+            let remaining = deadline.timeIntervalSince(clock())
+            guard remaining > 0,
+                  let unpinned = runner(["find-generic-password", "-s", keychainService, "-w"], remaining)
+            else { return nil }
+            result = unpinned
+        }
+        guard result.status == 0 else {
             // Denial cooldown (CodexBar parity): the CLI reports cancellation
             // on stderr — arm the 6h gate like an interactive SecItem denial.
-            let stderr = String(
-                data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                encoding: .utf8) ?? ""
-            if stderr.range(of: "cancel", options: .caseInsensitive) != nil {
-                ClaudeOAuthKeychainAccessGate.recordDenied()
+            if result.stderr.range(of: "cancel", options: .caseInsensitive) != nil {
+                ClaudeOAuthKeychainAccessGate.recordDenied(defaults: defaults)
             }
             return nil
         }
+        var data = result.stdout
         while let last = data.last, last == 0x0A || last == 0x0D { data.removeLast() }
+        data = decodeSecurityCLIPasswordOutput(data)
         return data.isEmpty ? nil : data
     }
 
@@ -254,7 +354,9 @@ enum ClaudeOAuthStore {
     /// would surface a duplicate prompt.
     private static let securityCLIReadLock = NSLock()
     /// Long enough for the user to reach and answer the keychain dialog.
-    private static let securityCLIReadTimeout: TimeInterval = 300
+    static let securityCLIReadTimeout: TimeInterval = 300
+    /// `security` exits with the low byte of `errSecItemNotFound` (-25300).
+    static let securityCLIItemNotFoundStatus: Int32 = 44
 
     // MARK: - Refresh grant
 
