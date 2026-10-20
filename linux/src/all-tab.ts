@@ -5,7 +5,8 @@
 
 import {
   Combined, CombinedDay, HourlyUsage, UsageReport, UsageSourceId, BudgetStatus,
-  USAGE_SOURCE_IDS, combinedDaySourceUsage, isKiroSyntheticAggregate,
+  USAGE_SOURCE_IDS, EXTRA_USAGE_SOURCE_IDS, AnyUsageSourceId,
+  combinedDaySourceUsage, isKiroSyntheticAggregate,
   usd, usdWhole, tokens, tokensAndUsd, dayLabel, scanConfidence, monthlyForecast,
 } from "./usage";
 import { t, currentLang } from "./i18n";
@@ -23,13 +24,27 @@ const PERIODS = [1, 7, 30, 90, 120]; // 1 = the 24h hourly view
 const PERIOD_CHANGE_EVENT = "birdnion-all-period";
 /** Cap model rows in day-detail so the breakdown stays shorter than the chart. */
 const MAX_DETAIL_MODELS = 6;
-const SOURCE_LABELS: Record<UsageSourceId, string> = {
+const ALL_COST_SOURCE_IDS: readonly AnyUsageSourceId[] = [
+  ...USAGE_SOURCE_IDS, ...EXTRA_USAGE_SOURCE_IDS,
+];
+const SOURCE_LABELS: Record<AnyUsageSourceId, string> = {
   claude: "Claude",
   codex: "Codex",
   grok: "Grok",
   kiro: "Kiro",
   omp: "Oh My Pi",
   pi: "Pi",
+  devin: "Devin",
+  opencode: "OpenCode",
+  gemini: "Gemini CLI",
+  copilot: "Copilot CLI",
+  antigravity: "Antigravity",
+  cursor: "Cursor",
+  amp: "Amp",
+  droid: "Droid",
+  kimi: "Kimi",
+  qwen: "Qwen Code",
+  goose: "Goose",
 };
 
 function el(tag: string, className: string, text?: string): HTMLElement {
@@ -170,7 +185,7 @@ export function chartCard(
     const claude24Tokens = claudeHourly.reduce((s, h) => s + h.tokens, 0);
     const today = combined.daily[combined.daily.length - 1];
 
-    const nonHourlySources = USAGE_SOURCE_IDS.filter((source) => source !== "claude");
+    const nonHourlySources = ALL_COST_SOURCE_IDS.filter((source) => source !== "claude");
     const periodUsd = is24h
       ? claude24Usd + nonHourlySources.reduce(
         (sum, source) => sum + (today ? combinedDaySourceUsage(today, source).usd : 0),
@@ -329,7 +344,7 @@ function showDayDetail(detail: HTMLElement, day: CombinedDay) {
     .sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
   if (models.length === 0) {
     // Fallback: source totals when model detail missing.
-    for (const source of USAGE_SOURCE_IDS) {
+    for (const source of ALL_COST_SOURCE_IDS) {
       const usage = combinedDaySourceUsage(day, source);
       if (usage.usd > 0 || usage.tokens > 0) {
         detail.append(compactModelRow(source, SOURCE_LABELS[source], usage.tokens, usage.usd));
@@ -402,7 +417,7 @@ function stackedBarChart(days: CombinedDay[], pin: PinApi): HTMLElement {
       const heightPct = Math.max((day.tokens / max) * 100, 5);
       const stack = el("div", "bar-stack");
       stack.style.height = `${heightPct}%`;
-      for (const source of USAGE_SOURCE_IDS) {
+      for (const source of ALL_COST_SOURCE_IDS) {
         const segment = el("div", `bar-seg ${source}`);
         segment.style.flexGrow = String(
           Math.max(combinedDaySourceUsage(day, source).tokens, 0.0001),
@@ -505,6 +520,7 @@ function heatmapWindow(daily: CombinedDay[], weekCount: number): CombinedDay[] {
         ompUsd: 0, ompTokens: 0,
         piUsd: 0, piTokens: 0,
         kiroUsd: 0, kiroTokens: 0,
+        extras: {},
         usd: 0, tokens: 0, active: false, models: [],
       });
     }
@@ -570,6 +586,7 @@ function trailingDays(daily: CombinedDay[], n: number): CombinedDay[] {
         ompUsd: 0, ompTokens: 0,
         piUsd: 0, piTokens: 0,
         kiroUsd: 0, kiroTokens: 0,
+        extras: {},
         usd: 0, tokens: 0, active: false, models: [],
       });
     }

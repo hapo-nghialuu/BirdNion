@@ -98,7 +98,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["gemini"],
         config_paths: &[".gemini/settings.json", ".gemini/oauth_creds.json"],
         provider_id: Some("gemini"),
-        cost_source: None,
+        cost_source: Some("gemini"),
     },
     AgentDescriptor {
         id: "opencode",
@@ -107,7 +107,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["opencode"],
         config_paths: &[".config/opencode", ".local/share/opencode"],
         provider_id: Some("opencode"),
-        cost_source: None,
+        cost_source: Some("opencode"),
     },
     AgentDescriptor {
         id: "kiro",
@@ -125,7 +125,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["agy"],
         config_paths: &[".gemini/antigravity", ".config/antigravity"],
         provider_id: Some("antigravity"),
-        cost_source: None,
+        cost_source: Some("antigravity"),
     },
     AgentDescriptor {
         id: "copilot",
@@ -134,7 +134,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["copilot"],
         config_paths: &[".copilot/config.json", ".config/github-copilot"],
         provider_id: Some("copilot"),
-        cost_source: None,
+        cost_source: Some("copilot"),
     },
     AgentDescriptor {
         id: "auggie",
@@ -152,7 +152,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["amp"],
         config_paths: &[".config/amp/settings.json"],
         provider_id: None,
-        cost_source: None,
+        cost_source: Some("amp"),
     },
     AgentDescriptor {
         id: "cursor",
@@ -161,7 +161,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["cursor", "cursor-agent"],
         config_paths: &[".cursor", ".config/Cursor"],
         provider_id: Some("cursor"),
-        cost_source: None,
+        cost_source: Some("cursor"),
     },
     AgentDescriptor {
         id: "aider",
@@ -179,7 +179,7 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["qwen"],
         config_paths: &[".qwen"],
         provider_id: None,
-        cost_source: None,
+        cost_source: Some("qwen"),
     },
     AgentDescriptor {
         id: "goose",
@@ -188,7 +188,34 @@ const DESCRIPTORS: &[AgentDescriptor] = &[
         binaries: &["goose"],
         config_paths: &[".config/goose"],
         provider_id: None,
-        cost_source: None,
+        cost_source: Some("goose"),
+    },
+    AgentDescriptor {
+        id: "kimi",
+        display_name: "Kimi",
+        kind: "cli",
+        binaries: &["kimi"],
+        config_paths: &[".kimi", ".kimi-code", ".kimi/sessions"],
+        provider_id: None,
+        cost_source: Some("kimi"),
+    },
+    AgentDescriptor {
+        id: "droid",
+        display_name: "Droid",
+        kind: "cli",
+        binaries: &["droid"],
+        config_paths: &[".factory", ".factory/sessions"],
+        provider_id: None,
+        cost_source: Some("droid"),
+    },
+    AgentDescriptor {
+        id: "devin",
+        display_name: "Devin",
+        kind: "cli",
+        binaries: &["devin"],
+        config_paths: &[".devin", ".config/devin", ".local/share/devin"],
+        provider_id: Some("devin"),
+        cost_source: Some("devin"),
     },
 ];
 

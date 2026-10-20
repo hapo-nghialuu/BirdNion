@@ -1127,7 +1127,10 @@ mod tests {
         let oauth = async { ProviderStatus::failure("claude", "Claude", "no creds") };
         let web = async {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            ProviderStatus { id: "claude".into(), ..Default::default() }
+            ProviderStatus {
+                id: "claude".into(),
+                ..Default::default()
+            }
         };
         let status = block_on(race_sources(oauth, web));
         assert!(status.error.is_none());

@@ -2,6 +2,7 @@
 // combined-report math ported from the macOS `CombinedUsageReport.build`
 // (Claude + Codex + Grok).
 
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "./i18n.ts";
 
 export type DailyModel = { name: string; usd: number; tokens: number };
@@ -52,6 +53,26 @@ export type UsageSourceId = "claude" | "codex" | "grok" | "omp" | "pi" | "kiro";
 export const USAGE_SOURCE_IDS: readonly UsageSourceId[] = [
   "claude", "codex", "grok", "kiro", "omp", "pi",
 ];
+/** Extra local cost sources served by the generic local-cost engine
+ * (macOS LocalAgentCostEngine registry parity, same order). */
+export type ExtraUsageSourceId =
+  | "devin" | "opencode" | "gemini" | "copilot" | "antigravity" | "cursor"
+  | "amp" | "droid" | "kimi" | "qwen" | "goose";
+export const EXTRA_USAGE_SOURCE_IDS: readonly ExtraUsageSourceId[] = [
+  "devin", "opencode", "gemini", "copilot", "antigravity", "cursor",
+  "amp", "droid", "kimi", "qwen", "goose",
+];
+export type AnyUsageSourceId = UsageSourceId | ExtraUsageSourceId;
+
+/** Scan command dispatch: the six typed scanners own `${id}_usage_report`;
+ * every extra source goes through the generic local_cost engine command. */
+export function fetchLocalUsageReport(
+  source: AnyUsageSourceId,
+): Promise<UsageReport | null> {
+  return (USAGE_SOURCE_IDS as readonly string[]).includes(source)
+    ? invoke<UsageReport | null>(`${source}_usage_report`)
+    : invoke<UsageReport | null>("local_agent_usage_report", { source });
+}
 export const KIRO_AGGREGATE_MODEL_NAME = "Other";
 export type ScanConfidence = "live" | "history" | "unavailable";
 
@@ -97,7 +118,7 @@ export type CombinedModel = {
   name: string;
   usd: number;
   tokens: number;
-  source: UsageSourceId;
+  source: AnyUsageSourceId;
 };
 
 export type CombinedDay = {
@@ -114,6 +135,9 @@ export type CombinedDay = {
   piTokens: number;
   kiroUsd: number;
   kiroTokens: number;
+  /** Per-source totals for the generic local-cost sources — keyed map
+   * instead of fixed fields so adding a source stays additive. */
+  extras: Partial<Record<ExtraUsageSourceId, { usd: number; tokens: number }>>;
   usd: number;
   tokens: number;
   active: boolean;
@@ -127,7 +151,7 @@ export type SourceUsageTotals = { usd: number; tokens: number };
  * cards, digests, or provider budgets. */
 export function combinedDaySourceUsage(
   day: CombinedDay,
-  source: UsageSourceId,
+  source: AnyUsageSourceId,
 ): SourceUsageTotals {
   switch (source) {
     case "claude": return { usd: day.claudeUsd, tokens: day.claudeTokens };
@@ -136,6 +160,7 @@ export function combinedDaySourceUsage(
     case "kiro": return { usd: day.kiroUsd, tokens: day.kiroTokens };
     case "omp": return { usd: day.ompUsd, tokens: day.ompTokens };
     case "pi": return { usd: day.piUsd, tokens: day.piTokens };
+    default: return day.extras[source] ?? { usd: 0, tokens: 0 };
   }
 }
 
@@ -158,6 +183,21 @@ export function combinedWindowSourceTotals(
 export function activeUsageSourceIds(days: readonly CombinedDay[]): UsageSourceId[] {
   const totals = combinedWindowSourceTotals(days);
   return USAGE_SOURCE_IDS.filter((id) => totals[id].usd > 0 || totals[id].tokens > 0);
+}
+
+/** Extra sources with any usage in the window, registry order — for
+ * stacked-bar segments and source breakdowns. */
+export function activeExtraUsageSourceIds(
+  days: readonly CombinedDay[],
+): ExtraUsageSourceId[] {
+  const seen = new Set<ExtraUsageSourceId>();
+  for (const day of days) {
+    for (const id of EXTRA_USAGE_SOURCE_IDS) {
+      const usage = day.extras[id];
+      if (usage && (usage.usd > 0 || usage.tokens > 0)) seen.add(id);
+    }
+  }
+  return EXTRA_USAGE_SOURCE_IDS.filter((id) => seen.has(id));
 }
 
 export type Combined = {
@@ -184,8 +224,50 @@ export function combine(
   omp: UsageReport | null = null,
   pi: UsageReport | null = null,
   kiro: UsageReport | null = null,
+  extras: Partial<Record<ExtraUsageSourceId, UsageReport | null>> = {},
 ): Combined {
   const byDate = new Map<string, CombinedDay>();
+  const retotal = (day: CombinedDay) => {
+    let usd = day.claudeUsd + day.codexUsd + day.grokUsd
+      + day.ompUsd + day.piUsd + day.kiroUsd;
+    let tokens = day.claudeTokens + day.codexTokens + day.grokTokens
+      + day.ompTokens + day.piTokens + day.kiroTokens;
+    for (const id of EXTRA_USAGE_SOURCE_IDS) {
+      const extra = day.extras[id];
+      if (extra) { usd += extra.usd; tokens += extra.tokens; }
+    }
+    day.usd = usd;
+    day.tokens = tokens;
+    day.active = day.usd > 0 || day.tokens > 0;
+  };
+  const seedExtra = (r: UsageReport | null, source: ExtraUsageSourceId) => {
+    for (const d of r?.daily ?? []) {
+      let day = byDate.get(d.date);
+      if (!day) {
+        day = {
+          date: d.date,
+          claudeUsd: 0, claudeTokens: 0,
+          codexUsd: 0, codexTokens: 0,
+          grokUsd: 0, grokTokens: 0,
+          ompUsd: 0, ompTokens: 0,
+          piUsd: 0, piTokens: 0,
+          kiroUsd: 0, kiroTokens: 0,
+          extras: {},
+          usd: 0, tokens: 0, active: false, models: [],
+        };
+        byDate.set(d.date, day);
+      }
+      const slot = day.extras[source] ?? (day.extras[source] = { usd: 0, tokens: 0 });
+      slot.usd += d.usd;
+      slot.tokens += d.tokens;
+      retotal(day);
+      for (const m of d.models) {
+        const existing = day.models.find((x) => x.source === source && x.name === m.name);
+        if (existing) { existing.usd += m.usd; existing.tokens += m.tokens; }
+        else { day.models.push({ name: m.name, usd: m.usd, tokens: m.tokens, source }); }
+      }
+    }
+  };
   const seed = (r: UsageReport | null, source: UsageSourceId) => {
     for (const d of r?.daily ?? []) {
       let day = byDate.get(d.date);
@@ -198,6 +280,7 @@ export function combine(
           ompUsd: 0, ompTokens: 0,
           piUsd: 0, piTokens: 0,
           kiroUsd: 0, kiroTokens: 0,
+          extras: {},
           usd: 0, tokens: 0, active: false, models: [],
         };
         byDate.set(d.date, day);
@@ -208,10 +291,7 @@ export function combine(
       else if (source === "omp") { day.ompUsd += d.usd; day.ompTokens += d.tokens; }
       else if (source === "pi") { day.piUsd += d.usd; day.piTokens += d.tokens; }
       else if (source === "kiro") { day.kiroUsd += d.usd; day.kiroTokens += d.tokens; }
-      day.usd = day.claudeUsd + day.codexUsd + day.grokUsd + day.ompUsd + day.piUsd + day.kiroUsd;
-      day.tokens = day.claudeTokens + day.codexTokens + day.grokTokens + day.ompTokens
-        + day.piTokens + day.kiroTokens;
-      day.active = day.usd > 0 || day.tokens > 0;
+      retotal(day);
       for (const m of d.models) {
         const existing = day.models.find((x) => x.source === source && x.name === m.name);
         if (existing) { existing.usd += m.usd; existing.tokens += m.tokens; }
@@ -225,6 +305,7 @@ export function combine(
   seed(omp, "omp");
   seed(pi, "pi");
   seed(kiro, "kiro");
+  for (const id of EXTRA_USAGE_SOURCE_IDS) seedExtra(extras[id] ?? null, id);
   const daily = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   // Token-first ranking (matches macOS All chart + top-models list).
   for (const d of daily) d.models.sort((a, b) => (b.tokens - a.tokens) || (b.usd - a.usd));
@@ -306,7 +387,7 @@ export function digestWindowStats(
   daily: CombinedDay[],
   startDate: string,
   endDate: string,
-  enabledSources: ReadonlySet<UsageSourceId>,
+  enabledSources: ReadonlySet<AnyUsageSourceId>,
 ): DigestWindowStats {
   const bySource: Record<UsageSourceId, { usd: number; tokens: number }> = {
     claude: { usd: 0, tokens: 0 },

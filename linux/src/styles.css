@@ -47,6 +47,17 @@
   --omp-v: linear-gradient(180deg, #8B5CF6, #EC4899);
   --pi: #06B6D4;
   --kiro: #8B47F9;
+  --devin: #317CFF;
+  --opencode: #3B82F6;
+  --gemini-cli: #AB87EA;
+  --copilot-cli: #A855F7;
+  --antigravity: #60BA7E;
+  --cursor: #00BFA5;
+  --amp: #E0427B;
+  --droid: #F97316;
+  --kimi: #4D6BFE;
+  --qwen: #FF6A00;
+  --goose: #A16207;
   /* Một chiều cao control cho mọi pane Settings (macOS InstrumentMetrics). */
   --control-height: 28px;
   --commandcode: #16150F;
@@ -1375,6 +1386,17 @@ html.popover-capped .app-body {
   .bar-seg.kiro { background: var(--kiro); }
   .bar-seg.omp { background: var(--omp-v); }
   .bar-seg.pi { background: var(--pi); }
+.bar-seg.devin { background: var(--devin); }
+.bar-seg.opencode { background: var(--opencode); }
+.bar-seg.gemini { background: var(--gemini-cli); }
+.bar-seg.copilot { background: var(--copilot-cli); }
+.bar-seg.antigravity { background: var(--antigravity); }
+.bar-seg.cursor { background: var(--cursor); }
+.bar-seg.amp { background: var(--amp); }
+.bar-seg.droid { background: var(--droid); }
+.bar-seg.kimi { background: var(--kimi); }
+.bar-seg.qwen { background: var(--qwen); }
+.bar-seg.goose { background: var(--goose); }
 .bar-idle { height: 1px; background: var(--track); border-radius: 2px; }
 
 .legend { display: flex; gap: 12px; margin-bottom: 6px; }

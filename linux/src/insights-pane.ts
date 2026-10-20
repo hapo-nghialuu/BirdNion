@@ -3,7 +3,10 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "./i18n";
-import { tokens, usd, combine, USAGE_SOURCE_IDS } from "./usage";
+import {
+  tokens, usd, combine, USAGE_SOURCE_IDS, EXTRA_USAGE_SOURCE_IDS,
+  AnyUsageSourceId, ExtraUsageSourceId, fetchLocalUsageReport,
+} from "./usage";
 import type { UsageReport, UsageSourceId } from "./usage";
 import { activityContent } from "./insights-activity";
 
@@ -57,7 +60,9 @@ export type InsightsSegment = "overview" | "activity" | "projects";
 const SEGMENT_KEY = "birdnion.insightsSegment";
 const DAYS_KEY = "birdnion.insightsDays";
 const PROJECT_KEY = "birdnion.insightsProjectKey";
-const USAGE_SOURCES: readonly UsageSourceId[] = USAGE_SOURCE_IDS;
+const USAGE_SOURCES: readonly AnyUsageSourceId[] = [
+  ...USAGE_SOURCE_IDS, ...EXTRA_USAGE_SOURCE_IDS,
+];
 const SOURCE_NAMES: Readonly<Record<string, string>> = {
   claude: "Claude",
   codex: "Codex",
@@ -115,16 +120,17 @@ type AuthorizedRequestResult<T> = {
   value: T | null;
 };
 
-type UsageReports = Record<UsageSourceId, UsageReport | null>;
+type UsageReports = Record<UsageSourceId, UsageReport | null>
+  & Partial<Record<ExtraUsageSourceId, UsageReport | null>>;
 
 type SourceAuthorizationDependencies = {
-  readCanonicalSources: () => Promise<ReadonlySet<UsageSourceId> | null>;
+  readCanonicalSources: () => Promise<ReadonlySet<AnyUsageSourceId> | null>;
 };
 
 function intersectSources(
-  started: ReadonlySet<UsageSourceId>,
-  final: ReadonlySet<UsageSourceId>,
-): ReadonlySet<UsageSourceId> {
+  started: ReadonlySet<AnyUsageSourceId>,
+  final: ReadonlySet<AnyUsageSourceId>,
+): ReadonlySet<AnyUsageSourceId> {
   return new Set(USAGE_SOURCES.filter((source) => started.has(source) && final.has(source)));
 }
 
@@ -142,8 +148,8 @@ function createSourceAuthorizedRequestCoordinator(
       activeGeneration += 1;
     },
     async run<T>(
-      request: (started: ReadonlySet<UsageSourceId>) => Promise<T | null>,
-      restrict: (value: T, allowed: ReadonlySet<UsageSourceId>) => T | null,
+      request: (started: ReadonlySet<AnyUsageSourceId>) => Promise<T | null>,
+      restrict: (value: T, allowed: ReadonlySet<AnyUsageSourceId>) => T | null,
     ): Promise<AuthorizedRequestResult<T>> {
       const generation = ++activeGeneration;
       const started = await readSources();
@@ -159,7 +165,7 @@ function createSourceAuthorizedRequestCoordinator(
   };
 }
 
-async function readCanonicalUsageSources(): Promise<ReadonlySet<UsageSourceId> | null> {
+async function readCanonicalUsageSources(): Promise<ReadonlySet<AnyUsageSourceId> | null> {
   try {
     const sourceIds = await invoke<unknown>("enabled_local_usage_source_ids");
     if (!Array.isArray(sourceIds)) return null;
@@ -170,7 +176,7 @@ async function readCanonicalUsageSources(): Promise<ReadonlySet<UsageSourceId> |
 }
 
 type ActivityRequestDependencies = SourceAuthorizationDependencies & {
-  scanSource: (source: UsageSourceId) => Promise<UsageReport | null>;
+  scanSource: (source: AnyUsageSourceId) => Promise<UsageReport | null>;
 };
 
 export function createInsightsActivityRequestCoordinator(
@@ -197,7 +203,7 @@ export function createInsightsActivityRequestCoordinator(
 
 function reportUsesOnlySources(
   report: ProjectInsightsReport,
-  allowed: ReadonlySet<UsageSourceId>,
+  allowed: ReadonlySet<AnyUsageSourceId>,
 ): boolean {
   const sources = [
     ...report.overview.confidence.map((item) => item.source),
@@ -462,6 +468,7 @@ function activityView(
       reports.omp,
       reports.pi,
       reports.kiro,
+      reports,
     )));
   })();
   return host;
@@ -472,7 +479,7 @@ export async function insightsPane(): Promise<HTMLElement> {
   const page = el("div", "settings-page insights-page");
   const activityRequests = createInsightsActivityRequestCoordinator({
     readCanonicalSources: readCanonicalUsageSources,
-    scanSource: (source) => invoke<UsageReport | null>(`${source}_usage_report`),
+    scanSource: (source) => fetchLocalUsageReport(source),
   });
   const historyRequests = createInsightsHistoryRequestCoordinator({
     readCanonicalSources: readCanonicalUsageSources,

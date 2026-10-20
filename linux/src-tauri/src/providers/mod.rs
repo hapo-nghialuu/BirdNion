@@ -453,8 +453,11 @@ pub async fn fetch_filtered<F>(ids: Option<&[String]>, emit_extras: F) -> Vec<Pr
 where
     F: Fn(ProviderStatus) + Send + Sync + Clone + 'static,
 {
-    fetch_core_and_spawn_extras(&filter_enabled(config::enabled_providers(), ids), emit_extras)
-        .await
+    fetch_core_and_spawn_extras(
+        &filter_enabled(config::enabled_providers(), ids),
+        emit_extras,
+    )
+    .await
 }
 
 /// The two-phase pipeline over an explicit provider list — split out so tests
@@ -666,7 +669,8 @@ mod tests {
 
             // The extras tail sleeps 300ms — nothing may be emitted yet.
             assert!(
-                rx.recv_timeout(std::time::Duration::from_millis(100)).is_err(),
+                rx.recv_timeout(std::time::Duration::from_millis(100))
+                    .is_err(),
                 "extras emitted before its fetch resolved"
             );
             let merged = rx
@@ -687,11 +691,10 @@ mod tests {
             let cfg = provider("probe-two-phase");
             let (tx, rx) = std::sync::mpsc::channel();
             let start = std::time::Instant::now();
-            let statuses =
-                fetch_core_and_spawn_extras(&[cfg], move |merged| {
-                    let _ = tx.send(merged);
-                })
-                .await;
+            let statuses = fetch_core_and_spawn_extras(&[cfg], move |merged| {
+                let _ = tx.send(merged);
+            })
+            .await;
             assert!(
                 start.elapsed() < std::time::Duration::from_millis(250),
                 "pipeline waited on the 300ms extras tail: {:?}",
@@ -721,7 +724,8 @@ mod tests {
                 let _ = tx.send(merged);
             });
             assert!(
-                rx.recv_timeout(std::time::Duration::from_millis(500)).is_err(),
+                rx.recv_timeout(std::time::Duration::from_millis(500))
+                    .is_err(),
                 "non-split provider must not emit an extras event"
             );
         });

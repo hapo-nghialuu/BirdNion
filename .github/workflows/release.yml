@@ -21,6 +21,10 @@ name: release
 #   BIRDNION_SIGN_P12, BIRDNION_SIGN_P12_PASSWORD — base64 PKCS12 of the
 #     "Developer ID Application" cert; optional but recommended: without it the
 #     app is ad-hoc signed and users' Full Disk Access grants reset each update.
+#   BIRDNION_TEAM_ID — Apple team for the generic Developer ID identity.
+#   BIRDNION_NOTARY_API_KEY (base64 .p8), BIRDNION_NOTARY_KEY_ID,
+#     BIRDNION_NOTARY_ISSUER — App Store Connect API key used to notarize and
+#     staple the app; without them the build ships signed but not notarized.
 
 on:
   push:

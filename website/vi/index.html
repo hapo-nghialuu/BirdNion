@@ -70,7 +70,7 @@
             <button type="button" data-copy-target="hero-brew-command" data-status-target="hero-copy-status" data-copy-label="Sao chép" data-copied-label="Đã sao chép" data-selected-label="Đã chọn" data-copied-status="Đã sao chép lệnh cài đặt." data-selected-status="Không thể truy cập clipboard. Lệnh đã được chọn để bạn sao chép.">Sao chép</button>
           </div>
           <p class="copy-status" id="hero-copy-status" aria-live="polite"></p>
-          <p class="hero-install-note">Ký ad-hoc, chưa notarize; Homebrew gỡ quarantine trong lúc cài. Trên Linux x86_64, <a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">tải .deb, .rpm hoặc AppImage <span aria-hidden="true">↗</span></a></p>
+          <p class="hero-install-note">Ký Developer ID và được Apple notarize. Trên Linux x86_64, <a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">tải .deb, .rpm hoặc AppImage <span aria-hidden="true">↗</span></a></p>
         </div>
         <div class="hero-actions">
           <a class="text-link" href="#proof">Xem cách hoạt động <span aria-hidden="true">↓</span></a>
@@ -240,7 +240,7 @@
           </figure>
         </li>
       </ol>
-      <p class="answers-footnote">Trên cả macOS và Linux: chi phí local theo ngày từ session log của Claude, Codex, Grok, Kiro, Oh My Pi và Pi. macOS đọc thêm Devin.</p>
+      <p class="answers-footnote">Trên cả macOS và Linux: chi phí local theo ngày từ session log của 17 nguồn — Claude, Codex, Grok, Kiro, Oh My Pi, Pi, Devin, OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid, Kimi, Qwen Code và Goose.</p>
     </section>
 
     <section class="install-section" id="install" aria-labelledby="install-title">
@@ -261,7 +261,7 @@
           <button type="button" data-copy-target="brew-command" data-status-target="install-copy-status" data-copy-label="Sao chép" data-copied-label="Đã sao chép" data-selected-label="Đã chọn" data-copied-status="Đã sao chép lệnh cài đặt." data-selected-status="Không thể truy cập clipboard. Lệnh đã được chọn để bạn sao chép.">Sao chép</button>
         </div>
         <p class="copy-status" id="install-copy-status" aria-live="polite"></p>
-        <p class="signing-note"><strong>Trạng thái ký trên macOS:</strong> ứng dụng đang được ký ad-hoc, chưa có Developer ID notarization. Homebrew gỡ quarantine trong lúc cài đặt.</p>
+        <p class="signing-note"><strong>Trạng thái ký trên macOS:</strong> ứng dụng được ký Developer ID và được Apple notarize, nên Gatekeeper mở thẳng.</p>
         <p class="install-fit">Linux x86_64 · giấy phép MIT · không cần đăng ký BirdNion</p>
         <a class="button button-light" href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Tải cho macOS hoặc Linux <span aria-hidden="true">↗</span></a>
       </div>
@@ -281,7 +281,7 @@
         <h3 class="platform-limits-title">Giới hạn hiện tại</h3>
         <!-- [html-validate-disable-next no-redundant-role] -->
         <ul class="platform-limits" role="list">
-          <li><span>macOS</span>Ký ad-hoc, chưa notarize bằng Developer ID</li>
+          <li><span>macOS</span>Ký Developer ID và đã notarize</li>
           <li><span>Linux</span>Chỉ có gói x86_64</li>
           <li><span>Linux</span>Không có hotkey toàn cục, không có tooltip khi rê chuột trên panel</li>
         </ul>
@@ -318,7 +318,7 @@
         <details><summary>Mọi provider có cung cấp cùng một loại dữ liệu không?</summary><p>Không. Mỗi card chỉ phản ánh đúng dữ liệu provider hoặc nguồn local thực sự cung cấp, kể cả trạng thái không có dữ liệu.</p></details>
         <details><summary>Linux khác macOS ở điểm nào?</summary><p>Trên Linux, icon tray hiện phần trăm ngay từ đầu, còn phần trăm trên menu bar macOS phải tự bật. Linux không có hotkey toàn cục, không có tooltip khi rê chuột trên panel, chỉ có gói x86_64 và không hiển thị usage code review của Codex.</p></details>
         <details><summary>BirdNion có mất phí không?</summary><p>Không. BirdNion dùng giấy phép MIT và không cần tài khoản BirdNion. Gói dịch vụ và giá API của từng provider vẫn áp dụng như bình thường.</p></details>
-        <details><summary>macOS có cảnh báo ở lần chạy đầu không?</summary><p>Bản hiện tại được ký ad-hoc. Homebrew gỡ quarantine khi cài; nếu macOS vẫn chặn, hãy nhấp chuột phải vào ứng dụng rồi chọn <span lang="en">Open</span>.</p></details>
+        <details><summary>macOS có cảnh báo ở lần chạy đầu không?</summary><p>Chỉ có hộp thoại xác nhận “tải từ Internet” thông thường ở lần mở đầu. Ứng dụng được ký Developer ID và được Apple notarize nên Gatekeeper chấp nhận.</p></details>
       </div>
     </section>
   </main>

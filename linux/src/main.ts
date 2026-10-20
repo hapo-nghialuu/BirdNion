@@ -9,6 +9,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import {
   combine,
+  EXTRA_USAGE_SOURCE_IDS,
+  ExtraUsageSourceId,
+  fetchLocalUsageReport,
   resolveRefreshedUsageReport,
   scanFreshness,
   UsageReport,
@@ -212,9 +215,14 @@ const FOOTER_ROTATE_MS = 5000;
 let footerShowingSources = false;
 let footerRotateTimer: number | null = null;
 
-/** Local usage-report sources scanned from disk. */
+/** Local usage-report sources with a typed per-source scan command. */
 const SCAN_SOURCES = ["claude", "codex", "grok", "omp", "pi", "kiro"] as const;
-type ScanSource = (typeof SCAN_SOURCES)[number];
+/** Extra sources scanned through the generic local-cost engine command
+ * (macOS LocalAgentCostEngine parity). */
+const EXTRA_SCAN_SOURCES = EXTRA_USAGE_SOURCE_IDS;
+const ALL_SCAN_SOURCES = [...SCAN_SOURCES, ...EXTRA_SCAN_SOURCES] as const;
+type ScanSource = (typeof ALL_SCAN_SOURCES)[number];
+type ExtraScanSource = (typeof EXTRA_SCAN_SOURCES)[number];
 const SCAN_SOURCE_LABELS: Record<ScanSource, string> = {
   claude: "Claude",
   codex: "Codex",
@@ -222,11 +230,22 @@ const SCAN_SOURCE_LABELS: Record<ScanSource, string> = {
   kiro: "Kiro",
   omp: "Oh My Pi",
   pi: "Pi",
+  devin: "Devin",
+  opencode: "OpenCode",
+  gemini: "Gemini CLI",
+  copilot: "Copilot CLI",
+  antigravity: "Antigravity",
+  cursor: "Cursor",
+  amp: "Amp",
+  droid: "Droid",
+  kimi: "Kimi",
+  qwen: "Qwen Code",
+  goose: "Goose",
 };
 
 export function localUsageScanSourceLabels(sources: Iterable<ScanSource>): string[] {
   const active = new Set(sources);
-  return SCAN_SOURCES.filter((source) => active.has(source))
+  return ALL_SCAN_SOURCES.filter((source) => active.has(source))
     .map((source) => SCAN_SOURCE_LABELS[source]);
 }
 
@@ -497,6 +516,9 @@ type State = {
   omp: UsageReport | null;
   pi: UsageReport | null;
   kiro: UsageReport | null;
+  /** Reports for the extra local-cost sources (keyed map — fixed fields
+   * above stay for the six typed scanners). */
+  extras: Partial<Record<ExtraUsageSourceId, UsageReport | null>>;
   statuses: ProviderStatus[];
   /** Agent phát hiện trên máy (`list_installed_agents`) — nguồn cho hàng "đã
    *  cấu hình", Quota Agenda và visibility. Null khi chưa nạp xong. */
@@ -520,6 +542,7 @@ const state: State = {
   omp: null,
   pi: null,
   kiro: null,
+  extras: {},
   statuses: [],
   agents: null,
   claudeAdmin: null,
@@ -532,6 +555,20 @@ const state: State = {
   scanning: new Set<ScanSource>(),
   authorizedScanning: new Set<ScanSource>(),
 };
+
+function localUsageReport(id: ScanSource): UsageReport | null {
+  return (SCAN_SOURCES as readonly string[]).includes(id)
+    ? state[id as UsageSourceId]
+    : state.extras[id as ExtraScanSource] ?? null;
+}
+
+function setLocalUsageReport(id: ScanSource, report: UsageReport | null): void {
+  if ((SCAN_SOURCES as readonly string[]).includes(id)) {
+    state[id as UsageSourceId] = report;
+  } else {
+    state.extras[id as ExtraScanSource] = report;
+  }
+}
 
 let providerStatusStateRevision = 0;
 
@@ -1043,9 +1080,9 @@ function tabsStrip(): HTMLElement {
  *  tổng (parity macOS `footerSourceStates`). */
 function footerSourceStates(): { id: ScanSource; live: boolean; scannedAt: number | null }[] {
   const out: { id: ScanSource; live: boolean; scannedAt: number | null }[] = [];
-  for (const id of SCAN_SOURCES) {
+  for (const id of ALL_SCAN_SOURCES) {
     if (!state.statuses.some((s) => s.id === id)) continue;
-    const report = state[id];
+    const report = localUsageReport(id);
     if (!report?.included) continue;
     out.push({ id, live: report.live === true, scannedAt: report.scannedAt ?? null });
   }
@@ -1084,7 +1121,7 @@ function popoverFooter(): HTMLElement {
   const caption = latest > 0 ? relativeTime(latest) : null;
   const slot = el("div", "footer-rotate-slot");
   const sources = footerSourceStates();
-  const scanning = SCAN_SOURCES.filter((source) => state.authorizedScanning.has(source));
+  const scanning = ALL_SCAN_SOURCES.filter((source) => state.authorizedScanning.has(source));
 
   const paintSlot = () => {
     slot.textContent = "";
@@ -1195,11 +1232,11 @@ function refreshQuotaAgendaPanelIfOpen(): void {
  *  ("20.3B tokens · 6 agent"), parity macOS `CombinedUsageReport
  *  .includedSourceCount`. */
 function includedSourceCount(): number {
-  return SCAN_SOURCES.filter((id) => state[id]?.included === true).length;
+  return ALL_SCAN_SOURCES.filter((id) => localUsageReport(id)?.included === true).length;
 }
 
 function pendingScanSources(): ScanSource[] {
-  return SCAN_SOURCES.filter((s) => state.scanning.has(s) && !state[s]);
+  return ALL_SCAN_SOURCES.filter((s) => state.scanning.has(s) && !localUsageReport(s));
 }
 
 export function shouldShowFirstProviderCTA(
@@ -1442,7 +1479,8 @@ function render() {
   if (state.tab === "all") {
     const pending = pendingScanSources();
     const sourceCount = includedSourceCount();
-    const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi, state.kiro);
+    const combined = combine(state.claude, state.codex, state.grok, state.omp, state.pi, state.kiro,
+    state.extras);
     if (sourceCount === 0) {
       // No data yet: skeleton card while scans are in flight (macOS
       // AllUsageOverview), "no logs" only once every scan came back empty.
@@ -2306,7 +2344,7 @@ function reconcileCanonicalProviderSettings(
 async function readCanonicalLocalUsageSources(): Promise<Set<ScanSource>> {
   const ids = await invoke<string[]>("enabled_local_usage_source_ids");
   return new Set(ids.filter((id): id is ScanSource =>
-    SCAN_SOURCES.includes(id as ScanSource)));
+    (ALL_SCAN_SOURCES as readonly string[]).includes(id)));
 }
 
 const codexUsageCompletionCoordinator = createCodexUsageCompletionCoordinator({
@@ -2320,16 +2358,16 @@ const codexUsageCompletionCoordinator = createCodexUsageCompletionCoordinator({
 });
 
 const refreshLocalUsageReports = createLocalUsageRefreshCoordinator({
-  sources: SCAN_SOURCES,
+  sources: ALL_SCAN_SOURCES,
   readCanonicalSources: readCanonicalLocalUsageSources,
   scanSource: (source) => {
     if (source === "codex") codexUsageCompletionCoordinator.beginRequest();
-    return invoke<UsageReport | null>(`${source}_usage_report`);
+    return fetchLocalUsageReport(source);
   },
-  previousReport: (source) => state[source],
+  previousReport: (source) => localUsageReport(source),
   beginRefresh: () => {
     codexUsageCompletionCoordinator.invalidate();
-    state.scanning = new Set(SCAN_SOURCES);
+    state.scanning = new Set(ALL_SCAN_SOURCES);
     state.authorizedScanning = new Set<ScanSource>();
     render();
   },
@@ -2343,7 +2381,7 @@ const refreshLocalUsageReports = createLocalUsageRefreshCoordinator({
       state.scanning.delete(source);
       state.authorizedScanning.delete(source);
     }
-    state[source] = report;
+    setLocalUsageReport(source, report);
     render();
     if (source === "codex") {
       void codexUsageCompletionCoordinator.observeReport(report);
@@ -2485,7 +2523,7 @@ async function load(manual = false) {
   state.refreshing = true;
   // Marked up-front (not per-invoke) so the very first paint below already
   // shows the All-tab skeleton instead of "no logs found".
-  state.scanning = new Set(SCAN_SOURCES);
+  state.scanning = new Set(ALL_SCAN_SOURCES);
   state.authorizedScanning = new Set<ScanSource>();
 
   // Publish one source's result and repaint. Chrome-only repaint while a

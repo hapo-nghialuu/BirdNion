@@ -157,7 +157,7 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
 - **Installed Agent Catalog**: Quét có giới hạn (bounded allowlist) bằng `InstalledAgentDetectors` kiểm tra file thực thi thật (`isExecutableFile`) và config/session marker paths trên máy; lưu preferences visibility/pinning trong namespace `birdnion.agentVisibility.v1.*`.
 - Visibility/pinning chỉ điều khiển trình bày roster. Ẩn agent không tắt scanner, không sửa provider/config, không làm mất capability evidence và không loại cost khỏi aggregate.
 - **Popover All 4 Khối**:
-  1. *Tổng chi phí*: 6 nguồn cost (`claude`, `codex`, `grok`, `kiro`, `omp`, `pi`), period chips `[24h, 7d, 30d, 90d, 120d]`, dòng stats mở nhanh panel Hoạt động.
+  1. *Tổng chi phí*: 17 nguồn cost (6 typed `claude`, `codex`, `grok`, `kiro`, `omp`, `pi` + extras `devin`, `opencode`, `gemini`, `copilot`, `antigravity`, `cursor`, `amp`, `droid`, `kimi`, `qwen`, `goose`), period chips `[24h, 7d, 30d, 90d, 120d]`, dòng stats mở nhanh panel Hoạt động.
   2. *Quota*: lọc provider có quota window thực tế, cắt 3 dòng + dòng gộp "+N".
   3. *Chi phí theo*: toggle Agent / Model, thanh phân bố màu liên tục.
   4. *Đã cấu hình*: danh sách agent chỉ có config (ẩn khi rỗng).
@@ -165,7 +165,7 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
 - **Agent Detail Child Panel**: NSPanel 340px độc lập neo bên phải popover chính, hiển thị 3 tab `Quota`, `Chi phí`, `Config` lấy đường dẫn và model từ dữ liệu quét thật.
 - Quota row dùng window chính đang active qua `ProviderStatusSummary.lowestWindow`; supplementary/inactive window không được thay quota chính. Detail chỉ hiện số cost khi có evidence thực, và chỉ nói quota/upstream/health khi snapshot có bridge/status tương ứng. Request mở child panel có generation guard để intent cũ không ghi đè click mới.
 - OMP/Pi stream JSONL theo chunk 64 KiB với read cursor tuyến tính và file cap 64 MiB; chỉ compact prefix đã consume. Malformed complete line, missing root, enumeration/read error, cancellation hoặc entry-limit truncation đều làm scan incomplete. Partial result không được merge vào high-water history hoặc cache/stamp như live; malformed unterminated tail đang được writer append mới được bỏ qua. Dedup chỉ claim key sau khi record có timestamp/usage hợp lệ, nên duplicate rỗng không chặn record usage hợp lệ phía sau. Trên Linux, Kiro detector và scanner cùng nhận current CLI, legacy archive/SQLite và custom `XDG_DATA_HOME`, có fallback về DB mặc định khi custom DB không tồn tại; provider tắt không làm ẩn log thật. Scanner trả typed completion theo từng source: container/turn array rỗng **không** đủ làm live evidence; thiếu turn array, turn rỗng hoặc identity field sai type/value là semantic failure. Numeric integral như `1.0` được parser và validator hai nền tảng xử lý giống nhau; token/context tối đa 10B, percentage tối đa 100, metering/credit tối đa 1B mỗi turn và mọi aggregate dùng checked arithmetic. Alias token plural/cache chưa có parser contract bị fail-closed thay vì tạo live zero-usage. Partial source không được stamp live/cache.
-- `CostHistoryStore.applyWithReceipt` chỉ công bố merged window/freshness sau durable atomic write. Mutation read chỉ tạo document mới khi file thật sự chưa tồn tại; file hiện hữu unreadable/malformed làm receipt fail-closed và không bị ghi đè. Persist failure trả lại persisted window cũ; Claude/Codex/Grok/Kiro/OMP/Pi không phát `live` hoặc advance pricing/counting revision từ state chỉ tồn tại trong memory. Shared schema dùng snake_case `scanned_at`/`counting_revision`/`top_models`, timestamp mili-giây nguyên và day key Gregorian `yyyy-MM-dd` theo múi giờ local; model label non-empty sau trim nhưng giới hạn/control được kiểm trên original Unicode scalars (tối đa 128) ở cả hai nền tảng. Cả hai bản migrate alias camelCase và timestamp macOS cũ có phần lẻ. Reader bị chặn 8 MiB, 32 model/ngày, source/version/future-day/future-scan và đường dẫn symlink/FIFO. Claude cũng không publish/cache hourly live khi daily history chưa persist.
+- `CostHistoryStore.applyWithReceipt` chỉ công bố merged window/freshness sau durable atomic write. Mutation read chỉ tạo document mới khi file thật sự chưa tồn tại; file hiện hữu unreadable/malformed làm receipt fail-closed và không bị ghi đè. Persist failure trả lại persisted window cũ; Các nguồn cost không phát `live` hoặc advance pricing/counting revision từ state chỉ tồn tại trong memory. Shared schema dùng snake_case `scanned_at`/`counting_revision`/`top_models`, timestamp mili-giây nguyên và day key Gregorian `yyyy-MM-dd` theo múi giờ local; model label non-empty sau trim nhưng giới hạn/control được kiểm trên original Unicode scalars (tối đa 128) ở cả hai nền tảng. Cả hai bản migrate alias camelCase và timestamp macOS cũ có phần lẻ. Reader bị chặn 8 MiB, 32 model/ngày, source/version/future-day/future-scan và đường dẫn symlink/FIFO. Claude cũng không publish/cache hourly live khi daily history chưa persist.
 - **52-week Activity Ledger**: Tổng hợp daily token evidence thật từ 400 ngày trong `CostHistoryStore` thành đúng 52 tuần; future/out-of-window evidence bị loại, zero-day có evidence khác missing-day, streak/current/longest tính theo ngày liên tiếp.
 
 #### 3.6.1 Bản Linux (Tauri) — cùng mô hình (2026-08-24)
@@ -173,7 +173,7 @@ Tracked state: UserDefaults key `codexCLISwitchedAccount` lưu managed account i
 Bản Linux port nguyên mô hình trên sang Tauri v2 + TypeScript:
 
 - Catalog: `installed_agents.rs` giữ đúng allowlist bounded và kiểm tra mode bit thực thi; visibility lưu ở `localStorage` key `birdnion.agentVisibility`, vẫn chỉ ảnh hưởng hiển thị.
-- Sáu nguồn cost giống macOS sau khi thêm `kiro_scanner.rs` (CLI sessions với credit tính phí thật, SQLite v1/v2, archive JSON).
+- 17 nguồn cost giống macOS: 6 typed scanner (Claude/Codex/Grok/Kiro/OMP/Pi) + generic engine `local_cost/` port từ `LocalAgentCostEngine` cho Devin, OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid, Kimi, Qwen Code và Goose.
 - Kiro giữ bucket tổng hợp `Other` trong daily chart để bảo toàn USD/token, nhưng loại nó khỏi top-model và digest ranking; winner thật được lưu riêng trong `top_models`.
 - Cost tách khỏi provider toggle: `enabled_usage_sources()` là hợp của provider đang bật và agent phát hiện được, nên CLI tắt provider vẫn báo chi phí.
 - Panel phụ không nằm trong popover 420px mà là cửa sổ Tauri riêng (`panel.html`, 340px, frameless, always-on-top) neo cạnh popover — tương đương NSPanel con bên macOS, giữ nguyên vòng đời hover-transient / click-pin.
@@ -219,7 +219,7 @@ Adaptive refresh dùng chính polling/tick hiện có, không thêm timer hay da
 
 ### 4.1 Data confidence và last-good state
 
-Mỗi scanner Claude/Codex/Grok/Kiro/OMP/Pi trả metadata `included`, `live`, `scannedAt` (`UsageScanConfidence` trên macOS, `UsageReport` trên Linux):
+Mỗi nguồn cost local (17 nguồn) trả metadata `included`, `live`, `scannedAt` (`UsageScanConfidence` trên macOS, `UsageReport` trên Linux):
 
 - `live`: scan hiện tại thành công; `history-only`: không live nhưng có lịch sử; `unavailable`: không có cả hai.
 - `scannedAt` được lưu cùng cost history dưới key chung `scanned_at` dạng epoch-millisecond integer để vẫn hiển thị freshness khi chu kỳ hiện tại chỉ dùng lịch sử.
@@ -228,7 +228,7 @@ Mỗi scanner Claude/Codex/Grok/Kiro/OMP/Pi trả metadata `included`, `live`, `
 
 ### 4.2 Budget tuần/tháng, forecast và weekly digest
 
-- Budget tổng trong All dùng cùng kỳ `week`/`month`, cộng sáu nguồn local Claude/Codex/Grok/Kiro/OMP/Pi có confidence `included`, rồi linear-project tới cuối kỳ. Không có nguồn included thì hiện “chưa có dữ liệu chi phí”, không tạo trạng thái on-track giả. Budget là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API.
+- Budget tổng trong All dùng cùng kỳ `week`/`month`, cộng 17 nguồn cost local có confidence `included`, rồi linear-project tới cuối kỳ. Không có nguồn included thì hiện “chưa có dữ liệu chi phí”, không tạo trạng thái on-track giả. Budget là local preference; `0`/blank nghĩa là tắt card. Đây không phải billing API.
 - **Budget per-source** (sáu nguồn, độc lập với budget tổng): cùng công thức forecast nhưng chỉ cộng daily USD của đúng 1 source. Lưu bằng sáu key `<source>BudgetUSD` trong UserDefaults (macOS) hoặc `birdnion.<source>BudgetUSD` trong localStorage (Linux) — **không** ghi vào provider `settings.json`.
   - Tab Claude/Codex/Grok/Kiro có `ProviderBudgetCard`/`providerBudgetCard`; OMP/Pi không có provider tab nên chỉ có Settings + weekly digest. Card chỉ hiện khi budget > 0: period-to-date, projection, remaining/over và status.
   - Trust rule: provider có `confidence == .unavailable` (không live lẫn không lịch sử) hiện "chưa có dữ liệu chi phí" thay vì tính forecast — không bao giờ hiện on-track (xanh) giả khi thiếu bằng chứng. History-only vẫn tính bình thường.
@@ -417,7 +417,7 @@ Scripts/
 - [x] Drag-drop reorder in Settings sidebar
 - [x] Search box + active-first sort
 - [x] Menu-bar visibility toggle per provider
-- [x] Ad-hoc signed, Gatekeeper auto-strip qua Homebrew cask postflight
+- [x] Developer ID signed + Hardened Runtime + notarized/stapled Release (0.10.50); Debug vẫn ad-hoc
 - [x] `xcodebuild` Release universal clean; full macOS suite `726` tests (`725` pass, `1` live skip, `0` fail) (2026-08-26)
 - [x] Local token scanner: 30-day chart for Claude usage
 - [x] Data confidence + freshness + last-good service status trên macOS/Linux
@@ -438,7 +438,7 @@ Scripts/
 | Quyết định | Lý do |
 |---|---|
 | Swift + SwiftUI + AppKit (NSPopover-style) | Native, giống CodexBar |
-| Ad-hoc signed + cask postflight xattr | Free, $0/yr, user mở thẳng (không cần Developer ID cho test nội bộ) |
+| Developer ID + notarize + staple (thay ad-hoc + cask postflight xattr từ 0.10.50) | Gatekeeper mở thẳng không cần lách quarantine; danh tính ký cố định theo team nên quyền TCC/Keychain giữ qua update. Repo chỉ ghi identity chung, team ID đến từ env/secret |
 | Local CodexBarCore SPM (path-based) | Tận dụng `ClaudeWebAPIFetcher` + `RateWindow` battle-tested |
 | Seed pending with old statuses on refresh | User không thấy flash empty khi provider fetch chậm |
 | Per-provider refresh interval | Provider chậm/rate-limited poll ít hơn, user tự chỉnh |
@@ -456,7 +456,6 @@ Scripts/
 
 ## 10. Open questions / future
 
-- **Apple Developer Program** ($99/năm) — cần nếu muốn user cài đặt thẳng không cần postflight xattr
 - **Codex multi-account** đã có, còn polish UI
 - **Sparkle auto-update** — optional, cần server
 - **Mac App Store** — nếu muốn mass distribution, cần review process

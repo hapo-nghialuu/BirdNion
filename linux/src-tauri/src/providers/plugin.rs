@@ -16,15 +16,14 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use boa_engine::{
-    js_string,
-    Context, Finalize, JsArgs, JsData, JsError, JsNativeError, JsResult, JsValue,
+    js_string, Context, Finalize, JsArgs, JsData, JsError, JsNativeError, JsResult, JsValue,
     NativeFunction, Source, Trace,
 };
 use chrono::TimeZone;
 use serde::Deserialize;
 
-use crate::config;
 use super::{display_name, ProviderStatus, QuotaWindow};
+use crate::config;
 
 // ---------------------------------------------------------------------------
 // Manifest types (upstream contract)
@@ -247,7 +246,11 @@ struct Engine {
 }
 
 impl Engine {
-    fn new(source: &str, secret: Option<String>, setting_base: Option<String>) -> Result<Self, String> {
+    fn new(
+        source: &str,
+        secret: Option<String>,
+        setting_base: Option<String>,
+    ) -> Result<Self, String> {
         let mut context = Context::default();
         context
             .eval(Source::from_bytes(PRELUDE))
@@ -299,7 +302,9 @@ impl Engine {
 
     fn fetch_usage(&mut self) -> Result<PluginResult, String> {
         self.context
-            .eval(Source::from_bytes("globalThis.__birdnionResult = undefined"))
+            .eval(Source::from_bytes(
+                "globalThis.__birdnionResult = undefined",
+            ))
             .map_err(|e| js_err(e))?;
         self.context
             .eval(Source::from_bytes(FETCH_DRIVER))
@@ -317,15 +322,16 @@ impl Engine {
                 .unwrap_or_else(|| "plugin error".into());
             return Err(msg);
         }
-        let ok = js_prop_str(&result, "ok", &mut self.context)
-            .ok_or("empty fetch result")?;
+        let ok = js_prop_str(&result, "ok", &mut self.context).ok_or("empty fetch result")?;
         let v: serde_json::Value =
             serde_json::from_str(&ok).map_err(|e| format!("bad snapshot JSON: {e}"))?;
         // FetchResult union: {usage, sourceLabel} or bare snapshot.
         let (snap_json, label) = if v.get("usage").is_some() {
             (
                 v.get("usage").cloned().unwrap_or_default(),
-                v.get("sourceLabel").and_then(|l| l.as_str()).map(String::from),
+                v.get("sourceLabel")
+                    .and_then(|l| l.as_str())
+                    .map(String::from),
             )
         } else {
             (v, None)
@@ -363,14 +369,38 @@ fn js_prop_str(v: &JsValue, key: &str, ctx: &mut Context) -> Option<String> {
 fn install_bridge(ctx: &mut Context) -> Result<(), String> {
     let fns: &[(&str, NativeFunction)] = &[
         ("__birdnionHttp", NativeFunction::from_fn_ptr(http_native)),
-        ("__birdnionGetSecret", NativeFunction::from_fn_ptr(secret_native)),
-        ("__birdnionStorageGet", NativeFunction::from_fn_ptr(storage_get)),
-        ("__birdnionStorageSet", NativeFunction::from_fn_ptr(storage_set)),
-        ("__birdnionStorageRemove", NativeFunction::from_fn_ptr(storage_remove)),
-        ("__birdnionFormatUSD", NativeFunction::from_fn_ptr(format_usd)),
-        ("__birdnionFormatCurrency", NativeFunction::from_fn_ptr(format_currency)),
-        ("__birdnionFormatNumber", NativeFunction::from_fn_ptr(format_number)),
-        ("__birdnionNextDailyReset", NativeFunction::from_fn_ptr(next_daily_reset)),
+        (
+            "__birdnionGetSecret",
+            NativeFunction::from_fn_ptr(secret_native),
+        ),
+        (
+            "__birdnionStorageGet",
+            NativeFunction::from_fn_ptr(storage_get),
+        ),
+        (
+            "__birdnionStorageSet",
+            NativeFunction::from_fn_ptr(storage_set),
+        ),
+        (
+            "__birdnionStorageRemove",
+            NativeFunction::from_fn_ptr(storage_remove),
+        ),
+        (
+            "__birdnionFormatUSD",
+            NativeFunction::from_fn_ptr(format_usd),
+        ),
+        (
+            "__birdnionFormatCurrency",
+            NativeFunction::from_fn_ptr(format_currency),
+        ),
+        (
+            "__birdnionFormatNumber",
+            NativeFunction::from_fn_ptr(format_number),
+        ),
+        (
+            "__birdnionNextDailyReset",
+            NativeFunction::from_fn_ptr(next_daily_reset),
+        ),
         ("__birdnionLog", NativeFunction::from_fn_ptr(log_native)),
     ];
     for (name, f) in fns {
@@ -399,7 +429,9 @@ fn state(ctx: &Context) -> PluginState {
 /// https origin, or with the resolved base of a `{setting, policy}` endpoint
 /// (http additionally allowed for loopback/private hosts per policy).
 fn url_allowed(state: &PluginState, url: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(url) else { return false };
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
     for ep in &state.endpoints {
         let base_raw = match (&ep.origin, &ep.setting_key) {
             (Some(o), _) => Some(o.clone()),
@@ -407,7 +439,9 @@ fn url_allowed(state: &PluginState, url: &str) -> bool {
             _ => None,
         };
         let Some(base_raw) = base_raw else { continue };
-        let Ok(base) = url::Url::parse(&base_raw) else { continue };
+        let Ok(base) = url::Url::parse(&base_raw) else {
+            continue;
+        };
         if same_origin(&parsed, &base) {
             return true;
         }
@@ -461,7 +495,10 @@ struct HttpRequestJson {
 /// never created inside a tokio runtime thread.
 fn http_native(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let Some(req_json) = arg_str(args, 0, ctx) else {
-        return Ok(json_val(ctx, serde_json::json!({ "error": "bad request" }))?);
+        return Ok(json_val(
+            ctx,
+            serde_json::json!({ "error": "bad request" }),
+        )?);
     };
     let st = state(ctx);
     let result = std::thread::spawn(move || http_request(&req_json, &st))
@@ -480,10 +517,7 @@ fn http_request(req_json: &str, st: &PluginState) -> Result<serde_json::Value, S
     if !url_allowed(st, &req.url) {
         return Err(format!("endpoint not allowed: {}", req.url));
     }
-    let timeout = req
-        .timeout_seconds
-        .unwrap_or(15.0)
-        .clamp(1.0, 90.0);
+    let timeout = req.timeout_seconds.unwrap_or(15.0).clamp(1.0, 90.0);
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(std::time::Duration::from_secs_f64(timeout)))
@@ -724,7 +758,11 @@ fn format_usd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
 fn format_currency(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let n = args.get_or_undefined(0).to_number(ctx).unwrap_or(0.0);
     let code = arg_str(args, 1, ctx).unwrap_or_else(|| "usd".into());
-    Ok(JsValue::from(js_string!(format!("{n:.2} {}", code.to_uppercase()).as_str())))
+    Ok(JsValue::from(js_string!(format!(
+        "{n:.2} {}",
+        code.to_uppercase()
+    )
+    .as_str())))
 }
 
 fn format_number(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -749,11 +787,12 @@ fn next_daily_reset(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     Ok(JsValue::from(js_string!(format!(
         "{}",
         candidate.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    ).as_str())))
-        .map(|v| {
-            let _ = millis;
-            v
-        })
+    )
+    .as_str())))
+    .map(|v| {
+        let _ = millis;
+        v
+    })
 }
 
 fn log_native(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -776,18 +815,12 @@ const BUNDLED: &[(&str, &str)] = &[
         "atlascloud.js",
         include_str!("../../resources/plugins/atlascloud.js"),
     ),
-    (
-        "xkiro.js",
-        include_str!("../../resources/plugins/xkiro.js"),
-    ),
+    ("xkiro.js", include_str!("../../resources/plugins/xkiro.js")),
     (
         "raycast.js",
         include_str!("../../resources/plugins/raycast.js"),
     ),
-    (
-        "aixy.js",
-        include_str!("../../resources/plugins/aixy.js"),
-    ),
+    ("aixy.js", include_str!("../../resources/plugins/aixy.js")),
     (
         "litellm.js",
         include_str!("../../resources/plugins/litellm.js"),
@@ -800,14 +833,8 @@ const BUNDLED: &[(&str, &str)] = &[
         "clinepass.js",
         include_str!("../../resources/plugins/clinepass.js"),
     ),
-    (
-        "nous.js",
-        include_str!("../../resources/plugins/nous.js"),
-    ),
-    (
-        "muse.js",
-        include_str!("../../resources/plugins/muse.js"),
-    ),
+    ("nous.js", include_str!("../../resources/plugins/nous.js")),
+    ("muse.js", include_str!("../../resources/plugins/muse.js")),
     (
         "sakana.js",
         include_str!("../../resources/plugins/sakana.js"),
@@ -930,9 +957,13 @@ pub async fn fetch(cfg: &config::Provider) -> ProviderStatus {
 fn map_status(result: &PluginResult, id: &str, display_name: &str) -> ProviderStatus {
     let s = &result.snapshot;
     let mut windows = Vec::new();
-    for (position, w) in [s.primary.as_ref(), s.secondary.as_ref(), s.tertiary.as_ref()]
-        .into_iter()
-        .enumerate()
+    for (position, w) in [
+        s.primary.as_ref(),
+        s.secondary.as_ref(),
+        s.tertiary.as_ref(),
+    ]
+    .into_iter()
+    .enumerate()
     {
         if let Some(w) = w {
             windows.push(map_window(w, positional_label(w, position)));
@@ -1219,7 +1250,8 @@ mod tests {
 
     #[test]
     fn manifest_parses() {
-        let e = engine(r#"
+        let e = engine(
+            r#"
             defineProvider({
               id: "demo", name: "Demo Provider",
               endpoints: ["https://api.demo.test"],
@@ -1228,7 +1260,8 @@ mod tests {
               capabilities: ["http-status"],
               fetchUsage(ctx) { return { empty: true }; }
             });
-        "#);
+        "#,
+        );
         assert_eq!(e.manifest.id, "demo");
         assert_eq!(e.manifest.name, "Demo Provider");
         assert_eq!(e.manifest.auth.unwrap().kind, "bearer");
@@ -1242,19 +1275,22 @@ mod tests {
 
     #[test]
     fn sync_throw_surfaces_error() {
-        let mut e = engine(r#"
+        let mut e = engine(
+            r#"
             defineProvider({
               id: "failer", name: "Failer", endpoints: [], settings: [],
               fetchUsage(ctx) { throw ctx.fail.rateLimited("slow down"); }
             });
-        "#);
+        "#,
+        );
         let err = e.fetch_usage().unwrap_err();
         assert!(err.contains("slow down"), "{err}");
     }
 
     #[test]
     fn blocked_endpoint_surfaces_network_failure() {
-        let mut e = engine(r#"
+        let mut e = engine(
+            r#"
             defineProvider({
               id: "evil", name: "Evil", endpoints: ["https://ok.test"],
               settings: [],
@@ -1263,14 +1299,16 @@ mod tests {
                   .then(function () { return { empty: true }; });
               }
             });
-        "#);
+        "#,
+        );
         let err = e.fetch_usage().unwrap_err();
         assert!(err.contains("endpoint not allowed"), "{err}");
     }
 
     #[test]
     fn window_mapping() {
-        let mut e = engine(r#"
+        let mut e = engine(
+            r#"
             defineProvider({
               id: "quota-demo", name: "Quota Demo", endpoints: [], settings: [],
               fetchUsage(ctx) {
@@ -1283,7 +1321,8 @@ mod tests {
                 };
               }
             });
-        "#);
+        "#,
+        );
         let result = e.fetch_usage().unwrap();
         let status = map_status(&result, "quota-demo", "Quota Demo");
         assert_eq!(status.windows.len(), 3);
@@ -1314,7 +1353,8 @@ mod tests {
     #[test]
     fn undeclared_setting_key_resolves_null() {
         std::env::set_var("BIRDNION_TEST_LEAK", "leaked-secret");
-        let mut e = engine(r#"
+        let mut e = engine(
+            r#"
             defineProvider({
               id: "nosnoop", name: "Nosnoop", endpoints: [], settings: [],
               fetchUsage(ctx) {
@@ -1322,7 +1362,8 @@ mod tests {
                 return { primary: { usedPercent: (v === undefined || v === null) ? 7 : 99 } };
               }
             });
-        "#);
+        "#,
+        );
         let result = e.fetch_usage().unwrap();
         std::env::remove_var("BIRDNION_TEST_LEAK");
         let status = map_status(&result, "nosnoop", "Nosnoop");
@@ -1333,7 +1374,8 @@ mod tests {
     /// upstream plugins read as a presence check (e.g. gitkraken).
     #[test]
     fn declared_keys_resolve() {
-        let mut e = engine(r#"
+        let mut e = engine(
+            r#"
             defineProvider({
               id: "declared", name: "Declared", endpoints: ["https://api.d.test"],
               auth: { type: "bearer", secret: "DEMO_TOKEN" },
@@ -1343,7 +1385,8 @@ mod tests {
                 return { primary: { usedPercent: secret === "sk-demo" ? 33 : 0 } };
               }
             });
-        "#);
+        "#,
+        );
         let result = e.fetch_usage().unwrap();
         let status = map_status(&result, "declared", "Declared");
         assert_eq!(status.windows[0].used_pct, 33);
@@ -1353,7 +1396,8 @@ mod tests {
     /// fall back to the provider's stored credential.
     #[test]
     fn declared_plain_setting_never_returns_secret() {
-        let mut e = engine(r#"
+        let mut e = engine(
+            r#"
             defineProvider({
               id: "plain", name: "Plain", endpoints: ["https://api.p.test"],
               auth: { type: "bearer", secret: "PLAIN_TOKEN" },
@@ -1363,7 +1407,8 @@ mod tests {
                 return { primary: { usedPercent: (region === undefined || region === null) ? 11 : 0 } };
               }
             });
-        "#);
+        "#,
+        );
         let result = e.fetch_usage().unwrap();
         let status = map_status(&result, "plain", "Plain");
         assert_eq!(status.windows[0].used_pct, 11);

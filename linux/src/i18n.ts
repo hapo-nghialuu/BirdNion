@@ -41,12 +41,12 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   totalCostPeriod: { vi: "Tổng chi phí {period}", en: "Total cost {period}" },
   estTotal: { vi: "Ước tính {n} ngày", en: "Est. {n}-day total" },
   estFootnote: {
-    vi: "Ước tính từ sáu nguồn log chi phí cục bộ.",
-    en: "Estimated from six local cost-log sources.",
+    vi: "Ước tính từ 17 nguồn log chi phí cục bộ.",
+    en: "Estimated from 17 local cost-log sources.",
   },
   hourBarsNote: {
-    vi: "Cột giờ chỉ gồm Claude — Codex/Grok chỉ có độ phân giải theo ngày.",
-    en: "Hour bars are Claude-only — Codex/Grok logs have day resolution.",
+    vi: "Cột giờ chỉ gồm Claude — các nguồn khác chỉ có độ phân giải theo ngày.",
+    en: "Hour bars are Claude-only — the other sources have day resolution.",
   },
   codexToday: { vi: "Codex (hôm nay)", en: "Codex (today)" },
   activity90: { vi: "Hoạt động 90 ngày", en: "90-day activity" },
@@ -63,8 +63,8 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   latestTokens: { vi: "Token mới nhất", en: "Latest tokens" },
   lastUpdated: { vi: "Cập nhật {time}", en: "Updated {time}" },
   noLogs: {
-    vi: "Không tìm thấy log chi phí Claude, Codex, Grok, Kiro, Oh My Pi hoặc Pi.",
-    en: "No Claude, Codex, Grok, Kiro, Oh My Pi, or Pi cost logs found.",
+    vi: "Không tìm thấy log chi phí của agent nào được hỗ trợ.",
+    en: "No supported-agent cost logs found.",
   },
   scanningSources: { vi: "Đang tính lịch sử {names}…", en: "Calculating history for {names}…" },
   grokFootnote: {
@@ -350,8 +350,8 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   },
   settingsMonthlyBudget: { vi: "Ngân sách tuần (USD)", en: "Weekly budget (USD)" },
   settingsMonthlyBudgetSub: {
-    vi: "Ngân sách theo tuần lịch — ước tính từ sáu nguồn chi phí cục bộ trên tab All.",
-    en: "Calendar-week budget from all six local cost sources on the All tab.",
+    vi: "Ngân sách theo tuần lịch — ước tính từ 17 nguồn chi phí cục bộ trên tab All.",
+    en: "Calendar-week budget from all 17 local cost sources on the All tab.",
   },
   settingsMonthlyBudgetPlaceholder: { vi: "Tắt", en: "Off" },
   budgetPerProviderTitle: { vi: "Ngân sách tuần theo nguồn", en: "Per-source weekly budgets" },
@@ -612,8 +612,8 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   budgetOverBy: { vi: "Vượt {amount}", en: "Over by {amount}" },
   budgetOfLimit: { vi: "{spent} / {budget}", en: "{spent} / {budget}" },
   budgetHint: {
-    vi: "Ước tính local Claude+Codex+Grok — đã chi {mtd}, dự phóng {projected} cuối tuần, ngân sách tuần {budget} ({status}).",
-    en: "Estimated from local Claude+Codex+Grok — spent {mtd}, projected {projected} by week end, weekly budget {budget} ({status}).",
+    vi: "Ước tính từ log chi phí cục bộ — đã chi {mtd}, dự phóng {projected} cuối tuần, ngân sách tuần {budget} ({status}).",
+    en: "Estimated from local cost logs — spent {mtd}, projected {projected} by week end, weekly budget {budget} ({status}).",
   },
   peakDayShort: { vi: "Cao nhất", en: "Peak" },
   avgActiveShort: { vi: "TB/ngày", en: "Avg/day" },

@@ -6,7 +6,7 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 
 | Area | macOS | Linux target | Status |
 |---|---|---|---|
-| Providers roster | 29 ids | 29 ids in registry + Settings ROSTER, gồm cả `xai` | **done** |
+| Providers roster | 28 native ids + 10 JS plugin (38) | 28 ids in registry + Settings ROSTER + 10 plugin trong `resources/plugins/` | **done** |
 | OpenAI Admin/API | OpenAIProvider.swift | `providers/openai.rs` | **done** |
 | Ollama cloud | OllamaProvider.swift | `providers/ollama.rs` | **done** |
 | Grok quota | GrokProvider.swift | `providers/grok.rs` | **done** |
@@ -16,8 +16,8 @@ Trước đó (2026-08-21): Data Confidence, budget/forecast, profile health, ad
 | Guided Setup + First Live Checkpoint + Action Center v1 | exact remediation flow; save-first real self-test; AppKit draw acknowledgment; receipt dùng atomic UUID journal + tri-state commit | cùng flow; hai animation frame + native visible/restored/focused; receipt exact-schema/fail-closed | **done** — response id/generation/config-account đều bind đúng attempt; failure/cache/stale completion/root storage hỏng không tạo hoặc ghi đè receipt; commit không xác định hiện cảnh báo trung lập, không giả Live/Fail; không lưu credential/path/token/raw error |
 | Data confidence | `UsageScanConfidence` (`included` / `live` / `scannedAt`) + freshness badges | `UsageReport` cùng metadata + freshness badges | **done** |
 | Last-good provider status | giữ `serviceStatus`/level khi refresh mới thiếu status | giữ `serviceStatus`/level từ cached status | **done** |
-| All-tab local cost aggregate 6 sources | `AllUsageOverview` (Claude/Codex/Grok/Kiro/OMP/Pi) | `usage.ts` + `all-tab.ts` cùng canonical source set | **done** — Kiro nằm trong 24h/30d, top source/model, agent panel, provider chart, digest và budget riêng |
-| Total monthly budget + forecast | local `monthlyBudgetUSD`, Claude+Codex+Grok linear forecast | local `birdnion.monthlyBudgetUSD`, cùng scope/logic | **done** |
+| All-tab local cost aggregate 17 sources | `AllUsageOverview` (6 typed + `LocalAgentCostEngine`: Devin/OpenCode/Gemini/Copilot/Antigravity/Cursor/Amp/Droid/Kimi/Qwen/Goose) | `local_cost/` engine + `usage.ts` extras map + `all-tab.ts` cùng canonical source set | **done** — extras nằm trong tổng, stacked bars, top models, agent panel; digest và budget riêng giữ scope 6 nguồn |
+| Total monthly budget + forecast | local `monthlyBudgetUSD`, tổng cả 17 nguồn cost | local `birdnion.monthlyBudgetUSD`, cùng scope/logic | **done** |
 | Per-source budget (6 nguồn) | `UserDefaults` cho Claude/Codex/Grok/Kiro/OMP/Pi; card trong tab Claude/Codex/Grok/Kiro; OMP/Pi tham gia Settings + digest | `localStorage` cùng 6 key và cùng card/digest scope | **done** — trust-unavailable, không false-green |
 | Adaptive refresh | base interval × 1/2/4/8; forced/manual bypass + success reset | cùng multiplier/bypass/reset, dùng tick sẵn có | **done** |
 | Weekly digest | rolling 7 ngày, default OFF, partial-data caveat, cảnh báo budget tổng + per-provider chỉ khi forecast-over/already-over | cùng cửa sổ/cadence, default OFF, cùng logic cảnh báo budget | **done** |

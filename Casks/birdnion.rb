@@ -16,13 +16,6 @@ cask "birdnion" do
 
   app "BirdNion.app"
 
-  # Ad-hoc signed — strip Gatekeeper quarantine flag so users don't
-  # have to Right-click → Open on first launch.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{staged_path}/BirdNion.app"]
-  end
-
   zap trash: [
     # BirdNion config + tokens
     "~/.config/birdnion",
