@@ -23,6 +23,10 @@ enum MenuBarIconRenderer {
         /// display-mode picker uses this to show credits / used÷total / overage
         /// instead of percent).
         case provider(id: String, name: String, percents: [Int], text: String?)
+        /// A provider's spend readout (e.g. "$4.20/$20") from its
+        /// `ProviderCostSnapshot`. Only emitted when `MenuBarShowSpend` is on
+        /// and the provider reports a cost budget or nonzero spend.
+        case spend(id: String, name: String, text: String)
     }
 
     enum PercentTitleLayout {
@@ -215,6 +219,7 @@ enum MenuBarIconRenderer {
     ) -> [Frame] {
         guard showPercent else { return [.bird] }
         let frames = providerFrames(from: statuses, visibility: visibility, now: now)
+            + spendFrames(from: statuses, visibility: visibility)
         return frames.isEmpty ? [.bird] : frames
     }
 
@@ -237,6 +242,32 @@ enum MenuBarIconRenderer {
                 .map(\.frame)
         }
         return resolved.map(\.frame).sorted(by: menuBarFrameSort)
+    }
+
+    /// Optional Spend items (CodexBar's menu-bar Spend tokens): one frame per
+    /// provider that reports a `ProviderCostSnapshot` with spend or a budget.
+    static func spendFrames(
+        from statuses: [ProviderStatus],
+        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
+    ) -> [Frame] {
+        guard MenuBarShowSpend.isEnabled else { return [] }
+        return statuses.compactMap { status -> Frame? in
+            guard visibility(status.id), let cost = status.cost else { return nil }
+            guard cost.used > 0 || cost.limit > 0 else { return nil }
+            return .spend(id: status.id, name: status.displayName, text: spendText(cost))
+        }.sorted(by: menuBarFrameSort)
+    }
+
+    private static func spendText(_ cost: ProviderCostSnapshot) -> String {
+        let used = spendNumber(cost.used)
+        guard cost.limit > 0 else { return "$\(used)" }
+        return "$\(used)/$\(spendNumber(cost.limit))"
+    }
+
+    private static func spendNumber(_ value: Double) -> String {
+        if value >= 100 { return String(format: "%.0f", value) }
+        if value == value.rounded() { return String(format: "%.0f", value) }
+        return String(format: "%.2f", value)
     }
 
     /// CodexBar's depletion-risk ordering for Auto quotas: exhausted windows
@@ -270,6 +301,10 @@ enum MenuBarIconRenderer {
         case let .provider(_, _, percents, _):
             // remaining under 100 ⇔ used over 0 for the usual 0…100 clamp.
             return percents.contains { $0 < 100 }
+        case .spend:
+            // A spend frame only exists when there is spend or a budget to
+            // show — its presence already means the provider is in use.
+            return true
         }
     }
 
@@ -277,6 +312,7 @@ enum MenuBarIconRenderer {
         switch frame {
         case .bird: return ""
         case let .provider(_, name, _, _): return name
+        case let .spend(_, name, _): return name
         }
     }
 
@@ -699,6 +735,13 @@ enum MenuBarLayoutStyle: String, CaseIterable, Identifiable {
     func label(language: String) -> String {
         L10n.t("settings.menuBarStyle.\(rawValue)", language)
     }
+}
+
+/// Show provider spend (ProviderCostSnapshot) as extra menu-bar frames
+/// (CodexBar's Spend items in menu-bar layouts).
+enum MenuBarShowSpend {
+    static let defaultsKey = "menuBarShowSpend"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
 }
 
 /// Rank rotating provider frames by depletion risk instead of

@@ -357,6 +357,7 @@ final class SettingsStore: ObservableObject {
     @AppStorage(MenuBarLargeText.defaultsKey) var menuBarLargeText: Bool = false
     @AppStorage(MenuBarShowWindowLabels.defaultsKey) var menuBarShowWindowLabels: Bool = false
     @AppStorage(MenuBarSortByDepletion.defaultsKey) var menuBarSortByDepletion: Bool = false
+    @AppStorage(MenuBarShowSpend.defaultsKey) var menuBarShowSpend: Bool = false
 
     /// OpenAI web extras for Codex (off by default — loads chatgpt.com in a
     /// hidden WebView, heavier on battery/network). `CodexWebDashboard` reads

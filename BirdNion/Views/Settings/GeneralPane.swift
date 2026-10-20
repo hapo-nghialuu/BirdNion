@@ -130,6 +130,18 @@ struct GeneralPane: View {
                             .toggleStyle(.instrumentSwitch)
                             .onChange(of: settings.menuBarSortByDepletion) { _ in refreshMenuBarFrames() }
                     }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarShowSpend.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.menuBarShowSpend.subtitle", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.menuBarShowSpend)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
+                            .onChange(of: settings.menuBarShowSpend) { _ in refreshMenuBarFrames() }
+                    }
                 }
 
                 SettingsRowDivider()

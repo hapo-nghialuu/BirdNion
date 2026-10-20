@@ -704,6 +704,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let title = "\(numbers) "
                 button.title = title
             }
+        case let .spend(id, _, text):
+            // Spend readout ("$4.20/$20") + brand logo — same layout as a
+            // percent frame so the rotation stays visually consistent.
+            button.imagePosition = .imageRight
+            button.image = MenuBarIconRenderer.providerLogo(for: id)
+            button.font = NSFont.monospacedDigitSystemFont(
+                ofSize: MenuBarLargeText.isEnabled ? 15 : 12, weight: .semibold)
+            button.title = text.isEmpty ? "" : "\(text) "
         }
     }
 
