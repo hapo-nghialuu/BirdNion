@@ -9,11 +9,23 @@
   <link rel="canonical" href="https://birdnion.vercel.app/">
   <link rel="alternate" hreflang="en" href="https://birdnion.vercel.app/">
   <link rel="alternate" hreflang="vi" href="https://birdnion.vercel.app/vi/">
+  <link rel="alternate" hreflang="zh" href="https://birdnion.vercel.app/zh/">
+  <link rel="alternate" hreflang="ja" href="https://birdnion.vercel.app/ja/">
+  <link rel="alternate" hreflang="ko" href="https://birdnion.vercel.app/ko/">
+  <link rel="alternate" hreflang="es" href="https://birdnion.vercel.app/es/">
+  <link rel="alternate" hreflang="de" href="https://birdnion.vercel.app/de/">
+  <link rel="alternate" hreflang="fr" href="https://birdnion.vercel.app/fr/">
   <link rel="alternate" hreflang="x-default" href="https://birdnion.vercel.app/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="BirdNion">
   <meta property="og:locale" content="en_US">
   <meta property="og:locale:alternate" content="vi_VN">
+  <meta property="og:locale:alternate" content="zh_CN">
+  <meta property="og:locale:alternate" content="ja_JP">
+  <meta property="og:locale:alternate" content="ko_KR">
+  <meta property="og:locale:alternate" content="es_ES">
+  <meta property="og:locale:alternate" content="de_DE">
+  <meta property="og:locale:alternate" content="fr_FR">
   <meta property="og:title" content="BirdNion — AI coding quotas, one click away">
   <meta property="og:description" content="See what is left, when it resets, and which source needs attention on macOS or Linux.">
   <meta property="og:url" content="https://birdnion.vercel.app/">
@@ -36,6 +48,7 @@
   <link rel="stylesheet" href="styles/friendly-brand.css?v=landing-remake-2">
   <link rel="stylesheet" href="styles/app-replica.css?v=landing-remake-3">
   <link rel="stylesheet" href="styles/responsive.css?v=landing-remake-4">
+  <script src="scripts/language-menu.js" defer></script>
   <script src="scripts/install-command-copy.js?v=landing-remake-1" defer></script>
 </head>
 <body>
@@ -51,7 +64,19 @@
       <a href="#install">Install</a>
     </nav>
     <div class="header-actions">
-      <a class="language-link" href="/vi/" lang="vi">Tiếng Việt</a>
+      <details class="language-menu">
+        <summary lang="en" aria-label="Language">English</summary>
+        <nav class="language-list" aria-label="Languages">
+        <a href="/" lang="en" aria-current="true">English</a>
+        <a href="/vi/" lang="vi">Tiếng Việt</a>
+        <a href="/zh/" lang="zh">中文</a>
+        <a href="/ja/" lang="ja">日本語</a>
+        <a href="/ko/" lang="ko">한국어</a>
+        <a href="/es/" lang="es">Español</a>
+        <a href="/de/" lang="de">Deutsch</a>
+        <a href="/fr/" lang="fr">Français</a>
+        </nav>
+      </details>
       <a class="header-link" href="https://github.com/hapo-nghialuu/BirdNion">View source <span aria-hidden="true">↗</span></a>
     </div>
   </header>
@@ -326,7 +351,7 @@
   <footer class="site-footer">
     <div><img class="brand-mark" src="assets/birdnion-logo.png" width="34" height="34" alt=""><strong>BirdNion</strong></div>
     <p>A small, cheerful quota companion.</p>
-    <nav aria-label="Footer navigation"><a href="/vi/" lang="vi">Tiếng Việt</a><a href="https://github.com/hapo-nghialuu/BirdNion">GitHub</a><a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Releases</a><a href="https://github.com/hapo-nghialuu/BirdNion/blob/main/LICENSE">MIT License</a></nav>
+    <nav aria-label="Footer navigation"><a href="/vi/" lang="vi">Tiếng Việt</a><a href="/zh/" lang="zh">中文</a><a href="/ja/" lang="ja">日本語</a><a href="/ko/" lang="ko">한국어</a><a href="/es/" lang="es">Español</a><a href="/de/" lang="de">Deutsch</a><a href="/fr/" lang="fr">Français</a><a href="https://github.com/hapo-nghialuu/BirdNion">GitHub</a><a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Releases</a><a href="https://github.com/hapo-nghialuu/BirdNion/blob/main/LICENSE">MIT License</a></nav>
   </footer>
 </body>
 </html>
