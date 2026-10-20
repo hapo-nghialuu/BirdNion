@@ -269,9 +269,29 @@ private struct InstrumentMenuPanelContent<Value: Hashable>: View {
     let options: [(value: Value, title: String)]
     let selection: Value
     let width: CGFloat
+    /// Set when the list is taller than the room on screen; it then scrolls.
+    var maxHeight: CGFloat? = nil
     let onPick: (Value) -> Void
 
     var body: some View {
+        Group {
+            if let maxHeight {
+                ScrollView(.vertical) { list }
+                    .frame(height: maxHeight)
+            } else {
+                list
+            }
+        }
+        .frame(width: width, alignment: .leading)
+        .background(VocabbyTheme.background)
+        .overlay(
+            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                .strokeBorder(VocabbyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+    }
+
+    private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                 if index > 0 {
@@ -307,13 +327,26 @@ private struct InstrumentMenuPanelContent<Value: Hashable>: View {
             }
         }
         .padding(.vertical, 4)
-        .frame(width: width, alignment: .leading)
-        .background(VocabbyTheme.background)
-        .overlay(
-            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                .strokeBorder(VocabbyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
+    }
+}
+
+/// Where a select's option panel goes, in screen coordinates. A borderless
+/// panel is never constrained by AppKit, so a list taller than the room left
+/// below its trigger used to be moved onto another display — the currency
+/// list (29 rows) on a laptop screen opened invisibly on the external one.
+/// Opens below when it fits, else above when that fits, else on the roomier
+/// side clamped to the screen (the content then scrolls).
+enum InstrumentMenuPanelLayout {
+    static let gap: CGFloat = 4
+
+    static func frame(anchor: NSRect, contentHeight: CGFloat, width: CGFloat, visibleFrame: NSRect) -> NSRect {
+        let spaceBelow = max(0, anchor.minY - gap - visibleFrame.minY)
+        let spaceAbove = max(0, visibleFrame.maxY - (anchor.maxY + gap))
+        let opensBelow = contentHeight <= spaceBelow || (contentHeight > spaceAbove && spaceBelow >= spaceAbove)
+        let height = min(contentHeight, opensBelow ? spaceBelow : spaceAbove)
+        let y = opensBelow ? anchor.minY - gap - height : anchor.maxY + gap
+        let x = min(max(anchor.minX, visibleFrame.minX), visibleFrame.maxX - width)
+        return NSRect(x: x, y: y, width: width, height: height)
     }
 }
 
@@ -374,8 +407,7 @@ private struct InstrumentMenuPanelBridge<Value: Hashable>: NSViewRepresentable {
             if panel == nil {
                 present(from: anchor)
             } else {
-                refreshContent(anchorWidth: anchor.bounds.width)
-                reposition(from: anchor)
+                layout(from: anchor)
             }
         }
 
@@ -391,18 +423,11 @@ private struct InstrumentMenuPanelBridge<Value: Hashable>: NSViewRepresentable {
 
         private func present(from anchor: NSView) {
             guard let parentWindow = anchor.window else { return }
-            let width = max(anchor.bounds.width, 180)
-            let root = makeContent(width: width)
-            let host = NSHostingView(rootView: root)
+            let host = NSHostingView(rootView: makeContent(width: max(anchor.bounds.width, 180), maxHeight: nil))
             host.appearance = NSApp.effectiveAppearance
-            let fitting = host.fittingSize
-            let size = NSSize(
-                width: width,
-                height: max(fitting.height, CGFloat(options.count) * 32 + 8))
-            host.frame = NSRect(origin: .zero, size: size)
 
             let newPanel = NSPanel(
-                contentRect: NSRect(origin: .zero, size: size),
+                contentRect: .zero,
                 styleMask: [.borderless],
                 backing: .buffered,
                 defer: false)
@@ -419,7 +444,7 @@ private struct InstrumentMenuPanelBridge<Value: Hashable>: NSViewRepresentable {
 
             hosting = host
             panel = newPanel
-            reposition(from: anchor)
+            layout(from: anchor)
             parentWindow.addChildWindow(newPanel, ordered: .above)
             newPanel.orderFront(nil)
 
@@ -432,25 +457,12 @@ private struct InstrumentMenuPanelBridge<Value: Hashable>: NSViewRepresentable {
             }
         }
 
-        private func refreshContent(anchorWidth: CGFloat) {
-            let width = max(anchorWidth, 180)
-            hosting?.rootView = makeContent(width: width)
-            guard let hosting, let panel else { return }
-            let fitting = hosting.fittingSize
-            let size = NSSize(
-                width: width,
-                height: max(fitting.height, CGFloat(options.count) * 32 + 8))
-            hosting.frame = NSRect(origin: .zero, size: size)
-            var frame = panel.frame
-            frame.size = size
-            panel.setFrame(frame, display: true)
-        }
-
-        private func makeContent(width: CGFloat) -> InstrumentMenuPanelContent<Value> {
+        private func makeContent(width: CGFloat, maxHeight: CGFloat?) -> InstrumentMenuPanelContent<Value> {
             InstrumentMenuPanelContent(
                 options: options,
                 selection: selection.wrappedValue,
                 width: width,
+                maxHeight: maxHeight,
                 onPick: { [weak self] value in
                     guard let self else { return }
                     self.selection.wrappedValue = value
@@ -459,15 +471,22 @@ private struct InstrumentMenuPanelBridge<Value: Hashable>: NSViewRepresentable {
                 })
         }
 
-        private func reposition(from anchor: NSView) {
-            guard let panel, let parentWindow = anchor.window else { return }
-            let rectInWindow = anchor.convert(anchor.bounds, to: nil)
-            let screenRect = parentWindow.convertToScreen(rectInWindow)
-            let size = panel.frame.size
-            let origin = NSPoint(
-                x: screenRect.minX,
-                y: screenRect.minY - 4 - size.height)
-            panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        /// Sizes and places the panel on the trigger's own screen; a list
+        /// that does not fit there scrolls instead of growing past it.
+        private func layout(from anchor: NSView) {
+            guard let panel, let hosting, let parentWindow = anchor.window else { return }
+            let width = max(anchor.bounds.width, 180)
+            let fitting = NSHostingView(rootView: makeContent(width: width, maxHeight: nil)).fittingSize
+            let contentHeight = max(fitting.height, CGFloat(options.count) * 32 + 8)
+            let anchorRect = parentWindow.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            let anchorPoint = NSPoint(x: anchorRect.midX, y: anchorRect.midY)
+            let screen = NSScreen.screens.first { $0.frame.contains(anchorPoint) } ?? parentWindow.screen
+            guard let visibleFrame = screen?.visibleFrame else { return }
+            let frame = InstrumentMenuPanelLayout.frame(
+                anchor: anchorRect, contentHeight: contentHeight, width: width, visibleFrame: visibleFrame)
+            hosting.rootView = makeContent(width: width, maxHeight: frame.height < contentHeight ? frame.height : nil)
+            hosting.frame = NSRect(origin: .zero, size: frame.size)
+            panel.setFrame(frame, display: true)
         }
 
         private func installMonitor() {
