@@ -1,20 +1,35 @@
 import Foundation
 
 enum L10n {
+    /// Language codes with a full string table. Kept in sync with
+    /// `SettingsStore.Language` (raw values) and the `tables` lookup below.
+    static let supportedCodes = ["en", "vi", "zh", "ja", "ko", "es", "de", "fr"]
+
     static func languageCode(_ preference: String? = nil) -> String {
         let selected = preference ?? UserDefaults.standard.string(forKey: "appLanguage")
-        if selected == SettingsStore.Language.english.rawValue { return "en" }
-        if selected == SettingsStore.Language.vietnamese.rawValue { return "vi" }
+        if let selected, supportedCodes.contains(selected) { return selected }
         let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
-        return preferred.hasPrefix("vi") ? "vi" : "en"
+        // "zh" ships Simplified only; zh-Hant/TW/HK still map to it since
+        // Simplified is closer than English for Traditional readers.
+        for code in supportedCodes where preferred.hasPrefix(code) { return code }
+        return "en"
     }
 
     static func locale(_ preference: String? = nil) -> Locale {
-        Locale(identifier: languageCode(preference) == "vi" ? "vi_VN" : "en_US")
+        Locale(identifier: localeIdentifiers[languageCode(preference)] ?? "en_US")
+    }
+
+    private static let localeIdentifiers: [String: String] = [
+        "en": "en_US", "vi": "vi_VN", "zh": "zh_CN", "ja": "ja_JP",
+        "ko": "ko_KR", "es": "es_ES", "de": "de_DE", "fr": "fr_FR",
+    ]
+
+    private static var tables: [String: [String: String]] {
+        ["en": en, "vi": vi, "zh": zh, "ja": ja, "ko": ko, "es": es, "de": de, "fr": fr]
     }
 
     static func t(_ key: String, _ preference: String? = nil) -> String {
-        let table = languageCode(preference) == "vi" ? vi : en
+        let table = tables[languageCode(preference)] ?? en
         return table[key] ?? en[key] ?? vi[key] ?? key
     }
 
@@ -23,18 +38,31 @@ enum L10n {
     }
 
     static func duration(_ seconds: Double, preference: String? = nil) -> String {
-        let code = languageCode(preference)
+        let units = durationUnits[languageCode(preference)] ?? durationUnits["en"]!
         if seconds >= 3600 {
             let value = Int(seconds / 3600)
-            return code == "vi" ? "\(value) giờ" : "\(value) hour" + (value == 1 ? "" : "s")
+            return "\(value) \(value == 1 ? units.h.0 : units.h.1)"
         }
         if seconds >= 60 {
             let value = Int(seconds / 60)
-            return code == "vi" ? "\(value) phút" : "\(value) minute" + (value == 1 ? "" : "s")
+            return "\(value) \(value == 1 ? units.m.0 : units.m.1)"
         }
         let value = Int(seconds)
-        return code == "vi" ? "\(value) giây" : "\(value) second" + (value == 1 ? "" : "s")
+        return "\(value) \(value == 1 ? units.s.0 : units.s.1)"
     }
+
+    /// (singular, plural) unit names per language code; CJK languages reuse
+    /// one form for both.
+    private static let durationUnits: [String: (h: (String, String), m: (String, String), s: (String, String))] = [
+        "en": (("hour", "hours"), ("minute", "minutes"), ("second", "seconds")),
+        "vi": (("giờ", "giờ"), ("phút", "phút"), ("giây", "giây")),
+        "zh": (("小时", "小时"), ("分钟", "分钟"), ("秒", "秒")),
+        "ja": (("時間", "時間"), ("分", "分"), ("秒", "秒")),
+        "ko": (("시간", "시간"), ("분", "분"), ("초", "초")),
+        "es": (("hora", "horas"), ("minuto", "minutos"), ("segundo", "segundos")),
+        "de": (("Stunde", "Stunden"), ("Minute", "Minuten"), ("Sekunde", "Sekunden")),
+        "fr": (("heure", "heures"), ("minute", "minutes"), ("seconde", "secondes")),
+    ]
 
     /// `now` defaults to the wall clock but can be injected so callers (e.g.
     /// the All-tab Data Confidence badge) get a deterministic, unit-testable
@@ -76,7 +104,7 @@ enum L10n {
     static func dayMonth(_ date: Date, preference: String? = nil) -> String {
         let formatter = DateFormatter()
         formatter.locale = locale(preference)
-        formatter.dateFormat = languageCode(preference) == "vi" ? "d MMM" : "MMM d"
+        formatter.setLocalizedDateFormatFromTemplate("Md")
         return formatter.string(from: date)
     }
 
@@ -373,6 +401,12 @@ enum L10n {
         "language.system": "Theo hệ thống",
         "language.english": "Tiếng Anh",
         "language.vietnamese": "Tiếng Việt",
+        "language.chinese": "Tiếng Trung",
+        "language.japanese": "Tiếng Nhật",
+        "language.korean": "Tiếng Hàn",
+        "language.spanish": "Tiếng Tây Ban Nha",
+        "language.german": "Tiếng Đức",
+        "language.french": "Tiếng Pháp",
         "settings.tab.general": "Cài chung",
         "settings.tab.providers": "Nhà cung cấp",
         "settings.tab.display": "Hiển thị",
@@ -1076,6 +1110,12 @@ enum L10n {
         "language.system": "System",
         "language.english": "English",
         "language.vietnamese": "Vietnamese",
+        "language.chinese": "Chinese",
+        "language.japanese": "Japanese",
+        "language.korean": "Korean",
+        "language.spanish": "Spanish",
+        "language.german": "German",
+        "language.french": "French",
         "settings.tab.general": "General",
         "settings.tab.providers": "Providers",
         "settings.tab.display": "Display",

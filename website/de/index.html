@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="BirdNion ist dein praktischer Desktop-Begleiter für KI-Coding-Kontingente, Reset-Zeiten und lokale Kosten unterstützter Agents auf macOS und Linux.">
+  <meta name="theme-color" content="#fbfaf7">
+  <title>BirdNion — Dein praktischer Begleiter für KI-Kontingente</title>
+  <link rel="canonical" href="https://birdnion.vercel.app/de/">
+  <link rel="alternate" hreflang="en" href="https://birdnion.vercel.app/">
+  <link rel="alternate" hreflang="vi" href="https://birdnion.vercel.app/vi/">
+  <link rel="alternate" hreflang="zh" href="https://birdnion.vercel.app/zh/">
+  <link rel="alternate" hreflang="ja" href="https://birdnion.vercel.app/ja/">
+  <link rel="alternate" hreflang="ko" href="https://birdnion.vercel.app/ko/">
+  <link rel="alternate" hreflang="es" href="https://birdnion.vercel.app/es/">
+  <link rel="alternate" hreflang="de" href="https://birdnion.vercel.app/de/">
+  <link rel="alternate" hreflang="fr" href="https://birdnion.vercel.app/fr/">
+  <link rel="alternate" hreflang="x-default" href="https://birdnion.vercel.app/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="BirdNion">
+  <meta property="og:locale" content="de_DE">
+  <meta property="og:locale:alternate" content="en_US">
+  <meta property="og:locale:alternate" content="vi_VN">
+  <meta property="og:locale:alternate" content="zh_CN">
+  <meta property="og:locale:alternate" content="ja_JP">
+  <meta property="og:locale:alternate" content="ko_KR">
+  <meta property="og:locale:alternate" content="es_ES">
+  <meta property="og:locale:alternate" content="fr_FR">
+  <meta property="og:title" content="BirdNion — KI-Coding-Kontingente, nur einen Klick entfernt">
+  <meta property="og:description" content="Sieh auf macOS oder Linux, wie viel übrig ist, wann das Kontingent zurückgesetzt wird und welche Quelle deine Aufmerksamkeit braucht.">
+  <meta property="og:url" content="https://birdnion.vercel.app/de/">
+  <meta property="og:image" content="https://birdnion.vercel.app/assets/product-hunt-gallery-01-overview.png">
+  <meta property="og:image:alt" content="BirdNion-Übersichtskarte für KI-Coding-Kontingente, Reset-Zeiten und lokale Kosten">
+  <meta property="og:image:width" content="1270">
+  <meta property="og:image:height" content="760">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="BirdNion — KI-Coding-Kontingente, nur einen Klick entfernt">
+  <meta name="twitter:description" content="Sieh auf macOS oder Linux, wie viel übrig ist, wann das Kontingent zurückgesetzt wird und welche Quelle deine Aufmerksamkeit braucht.">
+  <meta name="twitter:image" content="https://birdnion.vercel.app/assets/product-hunt-gallery-01-overview.png">
+  <link rel="icon" type="image/png" sizes="128x128" href="../assets/birdnion-logo.png">
+  <link rel="preload" href="../assets/fonts/ibm-plex-sans-regular.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../styles/design-tokens.css">
+  <link rel="stylesheet" href="../styles/base-layout.css">
+  <link rel="stylesheet" href="../styles/landing-hero.css?v=landing-remake-1">
+  <link rel="stylesheet" href="../styles/first-live-path.css?v=landing-remake-1">
+  <link rel="stylesheet" href="../styles/landing-sections.css?v=landing-remake-6">
+  <link rel="stylesheet" href="../styles/landing-utility-sections.css?v=landing-remake-2">
+  <link rel="stylesheet" href="../styles/friendly-brand.css?v=landing-remake-2">
+  <link rel="stylesheet" href="../styles/app-replica.css?v=landing-remake-3">
+  <link rel="stylesheet" href="../styles/responsive.css?v=landing-remake-4">
+  <script src="../scripts/language-menu.js" defer></script>
+  <script src="../scripts/install-command-copy.js?v=landing-remake-1" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Zum Inhalt springen</a>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="BirdNion-Startseite">
+      <img class="brand-mark" src="../assets/birdnion-logo.png" width="42" height="42" alt="">
+      <span>BirdNion</span>
+    </a>
+    <nav class="primary-nav" aria-label="Hauptnavigation">
+      <a href="#proof">So hilft es dir</a>
+      <a href="#privacy">Was es ausliest</a>
+      <a href="#install">Installieren</a>
+    </nav>
+    <div class="header-actions">
+      <details class="language-menu">
+        <summary lang="de" aria-label="Sprache">Deutsch</summary>
+        <nav class="language-list" aria-label="Sprachen">
+        <a href="/" lang="en">English</a>
+        <a href="/vi/" lang="vi">Tiếng Việt</a>
+        <a href="/zh/" lang="zh">中文</a>
+        <a href="/ja/" lang="ja">日本語</a>
+        <a href="/ko/" lang="ko">한국어</a>
+        <a href="/es/" lang="es">Español</a>
+        <a href="/de/" lang="de" aria-current="true">Deutsch</a>
+        <a href="/fr/" lang="fr">Français</a>
+        </nav>
+      </details>
+      <a class="header-link" href="https://github.com/hapo-nghialuu/BirdNion">Quellcode ansehen <span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span> Dein kleiner Kontingent-Begleiter auf dem Desktop</p>
+        <h1 id="hero-title">Code einfach weiter.<br>BirdNion behält die Limits im Blick.</h1>
+        <p class="hero-lede">Claude, Codex, Gemini und andere Tools zeigen ihren Verbrauch an unterschiedlichen Stellen. Mit BirdNion siehst du mit einem Klick, wie viel übrig ist und wann das Kontingent zurückgesetzt wird — nur über die von dir gewählten Anbieter-Verbindungen.</p>
+        <p class="provider-line">Claude · Codex · Gemini · Cursor · Grok · <a href="https://github.com/hapo-nghialuu/BirdNion#providers">genauen Funktionsumfang ansehen</a></p>
+        <div class="hero-install">
+          <p class="hero-install-label">macOS 14+ · Homebrew</p>
+          <div class="command-row">
+            <code id="hero-brew-command">brew install --cask hapo-nghialuu/tap/birdnion</code>
+            <button type="button" data-copy-target="hero-brew-command" data-status-target="hero-copy-status" data-copy-label="Kopieren" data-copied-label="Kopiert" data-selected-label="Markiert" data-copied-status="Installationsbefehl in die Zwischenablage kopiert." data-selected-status="Zwischenablage nicht verfügbar. Der Befehl ist für dich markiert.">Kopieren</button>
+          </div>
+          <p class="copy-status" id="hero-copy-status" aria-live="polite"></p>
+          <p class="hero-install-note">Mit Developer ID signiert und von Apple notarisiert. Für Linux x86_64: <a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">.deb, .rpm oder AppImage herunterladen <span aria-hidden="true">↗</span></a></p>
+        </div>
+        <div class="hero-actions">
+          <a class="text-link" href="#proof">So funktioniert es <span aria-hidden="true">↓</span></a>
+        </div>
+      </div>
+
+      <figure class="product-proof">
+        <div class="hero-mascot" aria-hidden="true">
+          <img src="../assets/birdnion-readme-bird-quota-384.png?v=1" width="384" height="384" alt="" fetchpriority="low" decoding="async">
+        </div>
+        <div class="proof-label">
+          <span>01 / EXEMPLARISCHE PRODUKTOBERFLÄCHE</span>
+          <span>Gerendertes Beispiel</span>
+        </div>
+        <div class="screen-crop">
+          <img src="../assets/usage-overview.png" width="840" height="1562" alt="Gerenderte BirdNion-Oberfläche für lokale Kosten mit exemplarischen Tagesaktivitäten und Modelldaten" fetchpriority="high">
+        </div>
+        <figcaption>Auf Basis der aktuellen BirdNion-Oberfläche gerendert · exemplarische Beispieldaten · keine native Bildschirmaufnahme</figcaption>
+      </figure>
+    </section>
+
+    <section class="proof-section" id="proof" aria-labelledby="proof-title">
+      <div class="section-heading">
+        <p class="eyebrow">MITTEN IM ARBEITSALLTAG</p>
+        <h2 id="proof-title">Ein Blick statt fünf Dashboards.</h2>
+        <p>Öffne BirdNion vor einer längeren Aufgabe oder einem Tool-Wechsel. Es beantwortet drei Fragen anhand der tatsächlichen Angaben jeder aktivierten Quelle — und meldet Verbindungsprobleme, statt eine Zahl zu erfinden.</p>
+      </div>
+      <ol class="answer-rows">
+        <li class="answer-row">
+          <div class="answer-copy">
+            <span>01</span>
+            <h3>Wie viel ist noch übrig?</h3>
+            <p>Jede Karte zeigt die Kontingentfenster, die der Anbieter bereitstellt — 5 Stunden, wöchentlich, monatlich, Guthaben oder Budget. Meldet der Anbieter ein Fenster nicht, bleibt es als nicht verfügbar gekennzeichnet.</p>
+          </div>
+          <figure class="capture-frame">
+            <div class="proof-label"><span>02 / Kontingentkarte</span><span>Gerendertes Beispiel</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Gerendertes Beispiel einer Claude-Kontingentkarte: niedrigstes Kontingent 38% für die Woche sowie 5-Stunden-, Wochen- und Opus-Fenster mit Reset-Zeiten">
+        <div class="app-replica" inert>
+          <div class="container">
+            <div class="app-body">
+              <div class="provider-stack">
+              <div class="card provider-header-card">
+                <div class="provider-head-row">
+                  <div class="provider-logo-plate"><span class="provider-logo-ink tab-logo-mono replica-logo replica-logo-claude"></span></div>
+                  <div class="provider-head-text">
+                    <div class="provider-name">Claude</div>
+                    <div class="provider-meta">MAX · OAUTH · VOR 2 MIN.</div>
+                  </div>
+                  <div class="mb-vis"><span class="mb-vis-label">INFOBEREICH</span><button type="button" class="mb-vis-switch on"><span class="mb-vis-knob"></span></button></div>
+                </div>
+              </div>
+              <div class="card provider-body-card">
+                <div class="quota-summary">
+                  <div class="quota-summary-label">NIEDRIGSTES KONTINGENT · WOCHE</div>
+                  <div class="quota-summary-row">
+                    <div class="quota-summary-pct warning">38%</div>
+                    <div class="quota-summary-right"><div class="quota-summary-meta">RESET IN 2T</div><div class="quota-summary-meta">62% VERBRAUCHT</div></div>
+                  </div>
+                </div>
+                <div class="provider-divider"></div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">5 STUNDEN</span><span class="window-pct ok">71%</span></div>
+                  <div class="window-track"><div class="window-fill ok" style="width: 71%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">29% VERBRAUCHT</span><span class="window-subtitle">RESET IN 3H</span></div>
+                </div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">WOCHE</span><span class="window-pct warning">38%</span></div>
+                  <div class="window-track"><div class="window-fill warning" style="width: 38%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">62% VERBRAUCHT</span><span class="window-subtitle">RESET IN 2T</span></div>
+                </div>
+                <div class="window-row">
+                  <div class="window-head"><span class="window-label">OPUS</span><span class="window-pct ok">84%</span></div>
+                  <div class="window-track"><div class="window-fill ok" style="width: 84%"></div></div>
+                  <div class="window-foot"><span class="window-subtitle">16% VERBRAUCHT</span><span class="window-subtitle">RESET IN 2T</span></div>
+                </div>
+              </div>
+              </div>
+            </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Nachgebildet mit den aktuellen Oberflächenstilen von BirdNion für Linux · Beispieldaten · keine native Bildschirmaufnahme</figcaption>
+          </figure>
+        </li>
+        <li class="answer-row">
+          <div class="answer-copy">
+            <span>02</span>
+            <h3>Wann kann ich es wieder nutzen?</h3>
+            <p>Reset-Countdowns zeigen dir, ob du warten, das Tool wechseln oder weitermachen solltest. Quota Agenda ordnet die nächsten Resets anbieterübergreifend — ausschließlich anhand der von den Anbietern gemeldeten Zeiten.</p>
+          </div>
+          <figure class="capture-frame">
+            <div class="proof-label"><span>03 / Quota Agenda</span><span>Gerendertes Beispiel</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Gerendertes Beispiel des Quota Agenda-Panels mit Codex, Claude und Grok, geordnet nach dem nächsten Reset">
+        <div class="app-replica" inert>
+          <div class="panel-root">
+            <div class="panel-content quota-agenda-panel">
+              <div class="panel-head quota-agenda-panel-head">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" aria-hidden="true" class="quota-agenda-panel-icon"><rect x="3.7" y="5.2" width="16.6" height="15" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/><path fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" d="M7.8 3.8v3M16.2 3.8v3M3.7 9.2h16.6"/><circle cx="7.4" cy="12.4" r=".75" fill="currentColor"/><circle cx="12" cy="12.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="12.4" r=".75" fill="currentColor"/><circle cx="7.4" cy="16.4" r=".75" fill="currentColor"/><circle cx="12" cy="16.4" r=".75" fill="currentColor"/><circle cx="16.6" cy="16.4" r=".75" fill="currentColor"/></svg>
+                <div class="panel-head-text"><div class="panel-title">Quota Agenda</div><div class="panel-subtitle">3 Anbieter mit Daten</div></div>
+                <button type="button" class="panel-close">✕</button>
+              </div>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-codex replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Codex CLI</span><span class="quota-agenda-provider">· Codex</span></span>
+                <span class="quota-agenda-percent is-current tone-critical">12%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">5 STUNDEN</span><span class="quota-agenda-reset is-scheduled">Reset in 47 Min.</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">OAuth</span><span class="quota-agenda-account">Konto ausgeblendet</span><span class="quota-agenda-freshness">gerade aktualisiert</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-claude replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Claude Code</span><span class="quota-agenda-provider">· Claude</span></span>
+                <span class="quota-agenda-percent is-current tone-warning">38%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">WOCHE</span><span class="quota-agenda-reset is-scheduled">Reset in 1T 14h</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">OAuth</span><span class="quota-agenda-account">Konto ausgeblendet</span><span class="quota-agenda-freshness">vor 2 Min.</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <button type="button" class="quota-agenda-row is-scheduled">
+                <span class="quota-agenda-logo replica-logo replica-logo-grok replica-tint"></span>
+                <span class="quota-agenda-identity"><span class="quota-agenda-agent">Grok CLI</span><span class="quota-agenda-provider">· Grok</span></span>
+                <span class="quota-agenda-percent is-current tone-ok">64%</span>
+                <span class="quota-agenda-reset-line"><span class="quota-agenda-window">WOCHE</span><span class="quota-agenda-reset is-scheduled">Reset in 4T 6h</span></span>
+                <span class="quota-agenda-meta"><span class="quota-agenda-source">grok-web</span><span class="quota-agenda-account">Konto ausgeblendet</span><span class="quota-agenda-freshness">vor 5 Min.</span></span>
+                <span class="quota-agenda-chevron">›</span>
+              </button>
+              <div class="quota-agenda-trust">NUR AUSDRÜCKLICH GEMELDETE RESET-ZEITEN</div>
+            </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Nachgebildet mit den aktuellen Oberflächenstilen von BirdNion für Linux · Beispieldaten · keine native Bildschirmaufnahme</figcaption>
+          </figure>
+        </li>
+        <li class="answer-row">
+          <div class="answer-copy">
+            <span>03</span>
+            <h3>Braucht diese Quelle deine Aufmerksamkeit?</h3>
+            <p>Wenn eine Anmeldung abläuft oder ein Schlüssel nicht mehr funktioniert, zeigt die Karte das an. Spring direkt zur passenden Anbieter-Einstellung, behebe das Problem mit der Quelle und führe die tatsächliche Prüfung erneut aus.</p>
+          </div>
+          <figure class="capture-frame">
+            <div class="proof-label"><span>04 / Handlungsbedarf</span><span>Gerendertes Beispiel</span></div>
+            <div class="screen-crop replica-stage" role="img" aria-label="Gerendertes Beispiel einer Codex-Karte mit Handlungsbedarf: Cookie abgelaufen, mit den Schaltflächen Erneut versuchen und Beheben">
+        <div class="app-replica" inert>
+          <div class="container">
+            <div class="app-body">
+              <div class="provider-stack">
+              <div class="card provider-header-card">
+                <div class="provider-head-row">
+                  <div class="provider-logo-plate"><span class="provider-logo-ink tab-logo-mono replica-logo replica-logo-codex"></span></div>
+                  <div class="provider-head-text">
+                    <div class="provider-name">Codex</div>
+                    <div class="provider-meta">COOKIE · VOR 1 MIN.</div>
+                  </div>
+                  <div class="mb-vis"><span class="mb-vis-label err">INFOBEREICH</span><button type="button" class="mb-vis-switch on"><span class="mb-vis-knob"></span></button></div>
+                </div>
+              </div>
+              <div class="card provider-body-card">
+                <div class="provider-error">Cookie abgelaufen — melde dich erneut im Browser an</div>
+                <div class="provider-error-actions"><button type="button" class="sw-pill-btn">Erneut versuchen</button><button type="button" class="sw-pill-btn">Beheben</button></div>
+              </div>
+              </div>
+            </div>
+          </div>
+        </div>
+            </div>
+            <figcaption>Nachgebildet mit den aktuellen Oberflächenstilen von BirdNion für Linux · Beispieldaten · keine native Bildschirmaufnahme</figcaption>
+          </figure>
+        </li>
+      </ol>
+      <p class="answers-footnote">Ebenfalls auf macOS und Linux: tägliche lokale Kosten aus 17 Agent-Quellen — den Sitzungsprotokollen von Claude, Codex, Grok, Kiro, Oh My Pi, Pi, Devin, OpenCode, Gemini CLI, Copilot CLI, Antigravity, Cursor, Amp, Droid, Kimi, Qwen Code und Goose.</p>
+    </section>
+
+    <section class="install-section" id="install" aria-labelledby="install-title">
+      <div class="install-journey">
+        <p class="eyebrow">STARTE MIT EINEM TOOL</p>
+        <h2 id="install-title">Verbinde einen Anbieter.<br>Sieh eine echte Reset-Karte.</h2>
+        <ol class="install-steps">
+          <li><span>01</span><strong>BirdNion installieren</strong><p>Nutze Homebrew auf macOS oder ein Release-Paket auf Linux.</p></li>
+          <li><span>02</span><strong>Einen Anbieter wählen</strong><p>Für Claude, Codex und Grok gibt es einen geführten Einstieg bis zur ersten Live-Verbindung.</p></li>
+          <li><span>03</span><strong>Verbindung bestätigen</strong><p>BirdNion speichert deine Auswahl und prüft dann die tatsächliche Quelle, bevor es die Verbindung als live kennzeichnet.</p></li>
+          <li><span>04</span><strong>Verbleibendes Kontingent sehen</strong><p>Eine echte Kontingent- und Reset-Karte — keine Demodaten — bestätigt, dass die Verbindung funktioniert.</p></li>
+        </ol>
+      </div>
+      <div class="install-panel">
+        <p>macOS 14+ über Homebrew</p>
+        <div class="command-row">
+          <code id="brew-command">brew install --cask hapo-nghialuu/tap/birdnion</code>
+          <button type="button" data-copy-target="brew-command" data-status-target="install-copy-status" data-copy-label="Kopieren" data-copied-label="Kopiert" data-selected-label="Markiert" data-copied-status="Installationsbefehl in die Zwischenablage kopiert." data-selected-status="Zwischenablage nicht verfügbar. Der Befehl ist für dich markiert.">Kopieren</button>
+        </div>
+        <p class="copy-status" id="install-copy-status" aria-live="polite"></p>
+        <p class="signing-note"><strong>Aktuelle macOS-Signierung:</strong> Die App ist mit Developer ID signiert und von Apple notarisiert. Gatekeeper öffnet sie daher direkt.</p>
+        <p class="install-fit">Linux x86_64 · MIT-Lizenz · keine BirdNion-Registrierung</p>
+        <a class="button button-light" href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Für macOS oder Linux herunterladen <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+
+    <section class="platform-section" id="platforms" aria-labelledby="platform-title">
+      <div class="platform-copy">
+        <p class="eyebrow">BLEIBT DEZENT IM HINTERGRUND</p>
+        <h2 id="platform-title">Alles im Blick, ohne den Editor zu verlassen.</h2>
+        <p>Auf macOS sitzt BirdNion in der Menüleiste. Aktiviere dort die Prozentanzeige, um neben dem Symbol zu sehen, wie viel übrig ist. Auf Linux zeigt das Symbol im Infobereich selbst den Prozentwert und das Anbieterlogo — standardmäßig. Beide wechseln zwischen deinen Anbietern, zuerst denen mit bereits genutztem Kontingent.</p>
+        <!-- Safari/VoiceOver needs an explicit list role when list markers are removed. -->
+        <!-- [html-validate-disable-next no-redundant-role] -->
+        <ul class="platform-rows" role="list">
+          <li><span>macOS 14+</span><strong>Universal-App · Menüleiste</strong></li>
+          <li><span>Linux x86_64</span><strong>DEB · RPM · AppImage</strong></li>
+        </ul>
+        <h3 class="platform-limits-title">Aktuelle Einschränkungen</h3>
+        <!-- [html-validate-disable-next no-redundant-role] -->
+        <ul class="platform-limits" role="list">
+          <li><span>macOS</span>Mit Developer ID signiert und notarisiert</li>
+          <li><span>Linux</span>Nur x86_64-Pakete</li>
+          <li><span>Linux</span>Kein globaler Hotkey und kein Tooltip beim Überfahren des Panels</li>
+        </ul>
+      </div>
+      <div class="platform-captures">
+        <figure class="capture-frame">
+          <div class="proof-label"><span>05 / BEDIENOBERFLÄCHE</span><span>Nachbildung der aktuellen Einstellungen</span></div>
+          <img src="../assets/control-surface-redraw.jpg" width="920" height="1200" alt="Illustration der BirdNion-Einstellungen unter Linux mit Optionen für Sprache, Darstellung, Infobereich, Aktualisierung und Budget" loading="lazy">
+          <figcaption>Illustrierte Bedienoberfläche · auf Basis der aktuellen Linux-Einstellungen.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="privacy-section" id="privacy" aria-labelledby="privacy-title">
+      <div class="privacy-intro">
+        <p class="eyebrow">WAS ES AUSLIEST</p>
+        <h2 id="privacy-title">Kein BirdNion-Backend<br>und kein Konto.</h2>
+        <p>BirdNion liest die dokumentierten Quellen der von dir aktivierten Anbieter sowie für den Kostenverlauf die lokalen Sitzungsprotokolle von Coding-Agents, die es unter festgelegten Installationspfaden findet. Kein Scan der gesamten Festplatte. Du kannst die Quelle jedes Anbieters in den Einstellungen ändern. Eine aktivierte Quelle kommuniziert weiterhin mit ihrem jeweiligen Anbieter.</p>
+      </div>
+      <dl class="read-map">
+        <div><dt>Passwörter</dt><dd>Werden von BirdNion nie gespeichert.</dd></div>
+        <div><dt>Bestehende Anmeldungen</dt><dd>Werden wiederverwendet, soweit unterstützt. OAuth-, Keychain- und CLI-Sitzungen bleiben bei den zugehörigen Tools.</dd></div>
+        <div><dt>Von dir eingegebene Schlüssel</dt><dd>Werden als Klartext in lokalen BirdNion-Dateien gespeichert, die nur dein Benutzerkonto lesen kann.</dd></div>
+        <div><dt>Browser-Cookies</dt><dd>Im Standardmodus Automatisch liest ein Anbieter mit Cookie-Unterstützung nur die Cookies seiner eigenen Website aus deinem Browser. Du kannst für jeden Anbieter auf Manuell oder Aus umstellen.</dd></div>
+        <div><dt>Projektauswertungen</dt><dd>Gespeichert werden ein Ordnername und eine gehashte ID, nie der vollständige Pfad.</dd></div>
+      </dl>
+    </section>
+
+    <section class="faq-section" aria-labelledby="faq-title">
+      <h2 id="faq-title">Fragen, bevor du diesen Vogel bei dir einziehen lässt</h2>
+      <div class="faq-list">
+        <details><summary>Durchsucht BirdNion meinen ganzen Computer?</summary><p>Nein. Es prüft eine feste Liste von Installationspfaden auf Coding-Agents, liest deren lokale Sitzungsprotokolle für den Kostenverlauf und die dokumentierten Quellen der von dir aktivierten Anbieter. Das Dateisystem wird nicht rekursiv durchsucht.</p></details>
+        <details><summary>Muss ich mich erneut anmelden?</summary><p>Das hängt vom Anbieter ab. BirdNion kann unterstützte CLI-, OAuth- oder Browser-Sitzungen wiederverwenden. Andere Quellen benötigen einen ausdrücklich angegebenen Schlüssel oder eine Konfiguration.</p></details>
+        <details><summary>Liefert jeder Anbieter dieselben Daten?</summary><p>Nein. Jede Karte zeigt nur, was der jeweilige Anbieter oder die lokale Quelle tatsächlich bereitstellt — auch, wenn Daten nicht verfügbar sind.</p></details>
+        <details><summary>Wie unterscheidet sich Linux von macOS?</summary><p>Unter Linux zeigt das Symbol im Infobereich standardmäßig den Prozentwert. Unter macOS muss die Prozentanzeige in der Menüleiste erst aktiviert werden. Unter Linux gibt es keinen globalen Hotkey und keinen Tooltip beim Überfahren des Panels, nur x86_64-Pakete und keine Anzeige des Codex-Verbrauchs für Code-Reviews.</p></details>
+        <details><summary>Kostet BirdNion etwas?</summary><p>Nein. BirdNion steht unter der MIT-Lizenz und benötigt kein BirdNion-Konto. Die Tarife und API-Preise deiner Anbieter gelten weiterhin.</p></details>
+        <details><summary>Zeigt macOS beim ersten Start eine Warnung?</summary><p>Beim ersten Start erscheint nur die übliche Bestätigung, dass die App aus dem Internet geladen wurde. Die App ist mit Developer ID signiert und von Apple notarisiert. Gatekeeper akzeptiert sie daher.</p></details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div><img class="brand-mark" src="../assets/birdnion-logo.png" width="34" height="34" alt=""><strong>BirdNion</strong></div>
+    <p>Ein kleiner, gut gelaunter Kontingent-Begleiter.</p>
+    <nav aria-label="Fußzeilennavigation"><a href="/" lang="en">English</a><a href="/vi/" lang="vi">Tiếng Việt</a><a href="/zh/" lang="zh">中文</a><a href="/ja/" lang="ja">日本語</a><a href="/ko/" lang="ko">한국어</a><a href="/es/" lang="es">Español</a><a href="/fr/" lang="fr">Français</a><a href="https://github.com/hapo-nghialuu/BirdNion">GitHub</a><a href="https://github.com/hapo-nghialuu/BirdNion/releases/latest">Versionen</a><a href="https://github.com/hapo-nghialuu/BirdNion/blob/main/LICENSE">MIT-Lizenz</a></nav>
+  </footer>
+</body>
+</html>

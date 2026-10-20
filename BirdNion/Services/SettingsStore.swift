@@ -129,6 +129,12 @@ final class SettingsStore: ObservableObject {
         case system = ""        // empty string = use AppleLanguages as-is
         case english = "en"
         case vietnamese = "vi"
+        case chinese = "zh"
+        case japanese = "ja"
+        case korean = "ko"
+        case spanish = "es"
+        case german = "de"
+        case french = "fr"
 
         var id: String { rawValue }
         func displayName(language: String? = nil) -> String {
@@ -136,6 +142,12 @@ final class SettingsStore: ObservableObject {
             case .system: L10n.t("language.system", language)
             case .english: L10n.t("language.english", language)
             case .vietnamese: L10n.t("language.vietnamese", language)
+            case .chinese: L10n.t("language.chinese", language)
+            case .japanese: L10n.t("language.japanese", language)
+            case .korean: L10n.t("language.korean", language)
+            case .spanish: L10n.t("language.spanish", language)
+            case .german: L10n.t("language.german", language)
+            case .french: L10n.t("language.french", language)
             }
         }
     }
