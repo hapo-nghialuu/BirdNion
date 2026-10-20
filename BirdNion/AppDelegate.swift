@@ -693,7 +693,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             button.imagePosition = .imageRight
             button.image = MenuBarIconRenderer.providerLogo(for: id)
-            let menuBarFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+            let menuBarFont = NSFont.monospacedDigitSystemFont(
+                ofSize: MenuBarLargeText.isEnabled ? 15 : 12, weight: .semibold)
             button.font = menuBarFont
             if let text {
                 // Display-mode override (Kiro credits). Empty = logo only.

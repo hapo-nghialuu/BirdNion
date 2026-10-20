@@ -83,7 +83,8 @@ enum MenuBarIconRenderer {
     ) -> NSImage {
         let showPercent = style == .barAndPercent
         let font = NSFont.monospacedDigitSystemFont(
-            ofSize: stackedTitleFontSize, weight: .semibold)
+            ofSize: MenuBarLargeText.isEnabled ? 11 : stackedTitleFontSize,
+            weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.controlTextColor,
@@ -94,7 +95,7 @@ enum MenuBarIconRenderer {
             ? ceil(max(1, labels.map { ($0 as NSString).size(withAttributes: attributes).width }.max() ?? 1))
             : 0
         let logoSize = providerLogoPointSize(for: id)
-        let barWidth: CGFloat = 24
+        let barWidth: CGFloat = MenuBarLargeText.isEnabled ? 30 : 24
         let targetSize = NSSize(
             width: textWidth + (showPercent ? 2 : 0) + barWidth + stackedProviderLogoGap + logoSize,
             height: stackedProviderImageHeight)
@@ -146,7 +147,7 @@ enum MenuBarIconRenderer {
     /// keeping the native status-button cell for all other frames.
     static func stackedProviderImage(for id: String, percents: [Int]) -> NSImage {
         let font = NSFont.monospacedDigitSystemFont(
-            ofSize: stackedTitleFontSize, weight: .semibold)
+            ofSize: MenuBarLargeText.isEnabled ? 11 : stackedTitleFontSize, weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.controlTextColor,
@@ -638,6 +639,12 @@ enum MenuBarLayoutStyle: String, CaseIterable, Identifiable {
     func label(language: String) -> String {
         L10n.t("settings.menuBarStyle.\(rawValue)", language)
     }
+}
+
+/// Larger menu-bar text / meter glyphs (CodexBar's "large text" option).
+enum MenuBarLargeText {
+    static let defaultsKey = "menuBarLargeText"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
 }
 
 // MARK: - Kiro menu-bar display mode (mirrors CodexBar's KiroMenuBarDisplayMode)

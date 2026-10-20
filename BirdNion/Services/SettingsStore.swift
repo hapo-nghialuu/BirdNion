@@ -354,6 +354,7 @@ final class SettingsStore: ObservableObject {
     /// Menu-bar layout style (percent / progress bar / bar + percent) —
     /// `MenuBarIconRenderer` reads the same key directly.
     @AppStorage(MenuBarLayoutStyle.defaultsKey) var menuBarLayoutStyle: String = MenuBarLayoutStyle.percent.rawValue
+    @AppStorage(MenuBarLargeText.defaultsKey) var menuBarLargeText: Bool = false
 
     /// OpenAI web extras for Codex (off by default — loads chatgpt.com in a
     /// hidden WebView, heavier on battery/network). `CodexWebDashboard` reads
