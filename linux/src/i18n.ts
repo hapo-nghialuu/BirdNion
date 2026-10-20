@@ -3,26 +3,33 @@
 // Lựa chọn lưu ở localStorage; mặc định "system" = theo locale hệ điều hành,
 // đúng như macOS `SettingsStore.Language.system`.
 
+import { STRINGS_ZH } from "./i18n-zh";
+import { STRINGS_JA } from "./i18n-ja";
+import { STRINGS_KO } from "./i18n-ko";
+import { STRINGS_ES } from "./i18n-es";
+import { STRINGS_DE } from "./i18n-de";
+import { STRINGS_FR } from "./i18n-fr";
+
 const LANG_KEY = "birdnion.lang";
 
-export type Lang = "vi" | "en";
+export const SUPPORTED_LANGS = ["vi", "en", "zh", "ja", "ko", "es", "de", "fr"] as const;
+export type Lang = (typeof SUPPORTED_LANGS)[number];
 /** Lựa chọn người dùng: "" = theo hệ thống (macOS Language.system). */
 export type LangPreference = Lang | "";
 
-/** Ngôn ngữ hệ thống quy về vi/en; không nhận diện được thì dùng vi. */
+/** Ngôn ngữ hệ thống quy về bảng đã dịch gần nhất; không nhận diện được thì dùng vi. */
 function systemLang(): Lang {
   const tags = navigator.languages?.length ? navigator.languages : [navigator.language];
   for (const tag of tags) {
     const base = (tag || "").toLowerCase().split("-")[0];
-    if (base === "vi") return "vi";
-    if (base === "en") return "en";
+    if ((SUPPORTED_LANGS as readonly string[]).includes(base)) return base as Lang;
   }
   return "vi";
 }
 
 export function langPreference(): LangPreference {
   const raw = localStorage.getItem(LANG_KEY);
-  return raw === "en" || raw === "vi" ? raw : "";
+  return (SUPPORTED_LANGS as readonly string[]).includes(raw ?? "") ? (raw as Lang) : "";
 }
 
 export function currentLang(): Lang {
@@ -1052,6 +1059,12 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "language.system": { vi: "Theo hệ thống", en: "System" },
   "language.vietnamese": { vi: "Tiếng Việt", en: "Vietnamese" },
   "language.english": { vi: "Tiếng Anh", en: "English" },
+  "language.chinese": { vi: "Tiếng Trung", en: "Chinese" },
+  "language.japanese": { vi: "Tiếng Nhật", en: "Japanese" },
+  "language.korean": { vi: "Tiếng Hàn", en: "Korean" },
+  "language.spanish": { vi: "Tiếng Tây Ban Nha", en: "Spanish" },
+  "language.german": { vi: "Tiếng Đức", en: "German" },
+  "language.french": { vi: "Tiếng Pháp", en: "French" },
   "nAgents": { vi: "{n} agent", en: "{n} agents" },
   "daysWord": { vi: "ngày", en: "days" },
   "less": { vi: "ÍT", en: "LESS" },
@@ -1114,10 +1127,23 @@ const STRINGS: Record<string, { vi: string; en: string }> = {
   "link.apiKeys": { vi: "API keys", en: "API keys" },
 };
 
+const EXTRA_TABLES: Partial<Record<Lang, Record<string, string>>> = {
+  zh: STRINGS_ZH, ja: STRINGS_JA, ko: STRINGS_KO,
+  es: STRINGS_ES, de: STRINGS_DE, fr: STRINGS_FR,
+};
+
 /** t("estTotal", {n: 30}) — placeholder substitution via {name}. */
 export function t(key: string, params?: Record<string, string | number>): string {
   const entry = STRINGS[key];
-  let s = entry ? entry[currentLang()] : key;
+  const lang = currentLang();
+  let s: string;
+  if (!entry) {
+    s = EXTRA_TABLES[lang]?.[key] ?? key;
+  } else if (lang === "vi" || lang === "en") {
+    s = entry[lang];
+  } else {
+    s = EXTRA_TABLES[lang]?.[key] ?? entry.en;
+  }
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       s = s.split(`{${k}}`).join(String(v));

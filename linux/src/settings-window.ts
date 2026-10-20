@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { t, currentLang, langPreference, setLang, type LangPreference } from "./i18n";
+import { t, currentLang, langPreference, setLang, SUPPORTED_LANGS, type LangPreference } from "./i18n";
 import {
   getPollSeconds, setPollSeconds, isManualRefresh, isRefreshOnOpenEnabled,
   setRefreshOnOpenEnabledPublic, isProviderStorageEnabled, setProviderStorageEnabledPublic,
@@ -226,13 +226,16 @@ async function generalPane(onRefreshMain: () => void): Promise<HTMLElement> {
   // Language
   const langSelect = document.createElement("select");
   langSelect.className = "sw-select";
-  // Ba lựa chọn như macOS: theo hệ thống / Tiếng Việt / Tiếng Anh.
-  for (const val of ["", "vi", "en"] as const) {
+  // Theo hệ thống + 8 ngôn ngữ, đồng bộ SettingsStore.Language bên macOS.
+  const langKeys: Record<string, string> = {
+    vi: "language.vietnamese", en: "language.english", zh: "language.chinese",
+    ja: "language.japanese", ko: "language.korean", es: "language.spanish",
+    de: "language.german", fr: "language.french",
+  };
+  for (const val of ["", ...SUPPORTED_LANGS] as const) {
     const o = document.createElement("option");
     o.value = val;
-    o.textContent = val === ""
-      ? t("language.system")
-      : t(val === "vi" ? "language.vietnamese" : "language.english");
+    o.textContent = val === "" ? t("language.system") : t(langKeys[val]);
     langSelect.append(o);
   }
   langSelect.value = langPreference();
