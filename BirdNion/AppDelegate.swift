@@ -675,10 +675,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // provider display name in the title (that lives in the tooltip
             // / popover). Trailing space keeps the last digit off the logo.
             let layoutStyle = MenuBarLayoutStyle.current
-            if layoutStyle != .percent, text == nil, !percents.isEmpty {
+            // Non-empty `text` (window labels "5h 91%  Wk 42%", or a
+            // display-mode override like Kiro credits) becomes the bar row
+            // label; an empty string still means "logo only".
+            let labelText = (text?.isEmpty == false) ? text : nil
+            if layoutStyle != .percent, text != "", !percents.isEmpty {
                 button.imagePosition = .imageOnly
                 button.image = MenuBarIconRenderer.meteredProviderImage(
-                    for: id, percents: percents, style: layoutStyle)
+                    for: id, percents: percents, style: layoutStyle, text: labelText)
                 button.title = ""
                 break
             }

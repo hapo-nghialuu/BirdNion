@@ -98,9 +98,9 @@ enum MenuBarIconRenderer {
     static func meteredProviderImage(
         for id: String,
         percents: [Int],
-        style: MenuBarLayoutStyle
+        style: MenuBarLayoutStyle,
+        text: String? = nil
     ) -> NSImage {
-        let showPercent = style == .barAndPercent
         let font = NSFont.monospacedDigitSystemFont(
             ofSize: MenuBarLargeText.isEnabled ? 11 : stackedTitleFontSize,
             weight: .semibold)
@@ -109,21 +109,30 @@ enum MenuBarIconRenderer {
             .foregroundColor: NSColor.controlTextColor,
         ]
         let rows = Array(percents.prefix(2))
-        let labels = rows.map { "\(max(0, min(100, $0)))%" }
-        let textWidth = showPercent
+        // `text` carries the caller's label line (window labels "5h 91%  Wk
+        // 42%" or a display-mode string like Kiro's credits). Split on the
+        // double-space row separator; fall back to bare percents per row.
+        let provided = (text?.isEmpty == false)
+            ? text!.components(separatedBy: "  ") : nil
+        let labels = rows.enumerated().map { index, pct in
+            if let provided, index < provided.count { return provided[index] }
+            return "\(max(0, min(100, pct)))%"
+        }
+        let drawText = style == .barAndPercent || provided != nil
+        let textWidth = drawText
             ? ceil(max(1, labels.map { ($0 as NSString).size(withAttributes: attributes).width }.max() ?? 1))
             : 0
         let logoSize = providerLogoPointSize(for: id)
         let barWidth: CGFloat = MenuBarLargeText.isEnabled ? 30 : 24
         let targetSize = NSSize(
-            width: textWidth + (showPercent ? 2 : 0) + barWidth + stackedProviderLogoGap + logoSize,
+            width: textWidth + (drawText ? 2 : 0) + barWidth + stackedProviderLogoGap + logoSize,
             height: stackedProviderImageHeight)
         let image = NSImage(size: targetSize)
 
         image.lockFocus()
         NSGraphicsContext.current?.imageInterpolation = .high
         let barHeight: CGFloat = rows.count > 1 ? 4 : 7
-        let barX = textWidth + (showPercent ? 2 : 0)
+        let barX = textWidth + (drawText ? 2 : 0)
         let lineHeight = ceil(font.ascender - font.descender)
         for (index, pct) in rows.enumerated() {
             let rowY: CGFloat = index == 0
@@ -138,7 +147,7 @@ enum MenuBarIconRenderer {
             let fillRect = NSRect(x: barX, y: rowY, width: fillWidth, height: barHeight)
             NSColor.controlTextColor.setFill()
             NSBezierPath(roundedRect: fillRect, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
-            if showPercent {
+            if drawText {
                 let text = labels[index] as NSString
                 let textY = index == 0
                     ? (rows.count > 1 ? targetSize.height - lineHeight - 1 : (targetSize.height - lineHeight) / 2)
@@ -253,15 +262,23 @@ enum MenuBarIconRenderer {
         guard MenuBarShowSpend.isEnabled else { return [] }
         return statuses.compactMap { status -> Frame? in
             guard visibility(status.id), let cost = status.cost else { return nil }
-            guard cost.used > 0 || cost.limit > 0 else { return nil }
+            // Only true budget consumption in a real currency: `used > 0`
+            // against a `limit` (rules out Zen-style balances reported as
+            // used/limit=0) and an ISO-style code (rules out MiniMax "pts").
+            guard cost.limit > 0, cost.used >= 0, isCurrencyCode(cost.currencyCode) else { return nil }
             return .spend(id: status.id, name: status.displayName, text: spendText(cost))
         }.sorted(by: menuBarFrameSort)
     }
 
+    private static func isCurrencyCode(_ code: String) -> Bool {
+        code.count == 3 && code == code.uppercased() && code.allSatisfy(\.isLetter)
+    }
+
     private static func spendText(_ cost: ProviderCostSnapshot) -> String {
+        let unit = cost.currencyCode == "USD" ? "$" : "\(cost.currencyCode) "
         let used = spendNumber(cost.used)
-        guard cost.limit > 0 else { return "$\(used)" }
-        return "$\(used)/$\(spendNumber(cost.limit))"
+        guard cost.limit > 0 else { return "\(unit)\(used)" }
+        return "\(unit)\(used)/\(unit)\(spendNumber(cost.limit))"
     }
 
     private static func spendNumber(_ value: Double) -> String {
@@ -274,7 +291,11 @@ enum MenuBarIconRenderer {
     /// first, then the window whose current pace depletes before its reset
     /// (soonest ETA first), then the highest used percentage.
     private static func riskKey(_ windows: [QuotaWindow], now: Date) -> (tier: Int, negEta: Double, usedPct: Int) {
-        windows.map { window -> (Int, Double, Int) in
+        // Rank only the windows the frame actually displays: special paths
+        // keep hidden supplementary/inactive windows (e.g. FreeModel bonus
+        // balances) in `windows`, and those must not drive the ordering.
+        let shown = windows.filter { !$0.isSupplementary && !$0.isInactive }
+        return (shown.isEmpty ? windows : shown).map { window -> (Int, Double, Int) in
             if window.usedPct >= 100 || window.remainingPct <= 0 { return (2, 0, window.usedPct) }
             if let eta = WindowPace(window: window, now: now)?.etaSeconds {
                 return (1, -eta, window.usedPct)
