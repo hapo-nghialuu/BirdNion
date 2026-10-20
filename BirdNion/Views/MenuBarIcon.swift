@@ -72,6 +72,75 @@ enum MenuBarIconRenderer {
         }
     }
 
+    /// Graphical progress-bar frame (`MenuBarLayoutStyle` `bar` /
+    /// `barAndPercent`): one bar per window, filled to `remainingPct`,
+    /// provider logo on the right. Rendered as a template image like
+    /// `stackedProviderImage` so AppKit tints it correctly per appearance.
+    static func meteredProviderImage(
+        for id: String,
+        percents: [Int],
+        style: MenuBarLayoutStyle
+    ) -> NSImage {
+        let showPercent = style == .barAndPercent
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: stackedTitleFontSize, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.controlTextColor,
+        ]
+        let rows = Array(percents.prefix(2))
+        let labels = rows.map { "\(max(0, min(100, $0)))%" }
+        let textWidth = showPercent
+            ? ceil(max(1, labels.map { ($0 as NSString).size(withAttributes: attributes).width }.max() ?? 1))
+            : 0
+        let logoSize = providerLogoPointSize(for: id)
+        let barWidth: CGFloat = 24
+        let targetSize = NSSize(
+            width: textWidth + (showPercent ? 2 : 0) + barWidth + stackedProviderLogoGap + logoSize,
+            height: stackedProviderImageHeight)
+        let image = NSImage(size: targetSize)
+
+        image.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        let barHeight: CGFloat = rows.count > 1 ? 4 : 7
+        let barX = textWidth + (showPercent ? 2 : 0)
+        let lineHeight = ceil(font.ascender - font.descender)
+        for (index, pct) in rows.enumerated() {
+            let rowY: CGFloat = index == 0
+                ? (rows.count > 1 ? targetSize.height - barHeight - 1 : (targetSize.height - barHeight) / 2)
+                : 1
+            let barRect = NSRect(x: barX, y: rowY, width: barWidth, height: barHeight)
+            let track = NSBezierPath(roundedRect: barRect, xRadius: barHeight / 2, yRadius: barHeight / 2)
+            NSColor.controlTextColor.withAlphaComponent(0.22).setFill()
+            track.fill()
+            let clamped = CGFloat(max(0, min(100, pct))) / 100
+            let fillWidth = max(barHeight, barWidth * clamped)
+            let fillRect = NSRect(x: barX, y: rowY, width: fillWidth, height: barHeight)
+            NSColor.controlTextColor.setFill()
+            NSBezierPath(roundedRect: fillRect, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
+            if showPercent {
+                let text = labels[index] as NSString
+                let textY = index == 0
+                    ? (rows.count > 1 ? targetSize.height - lineHeight - 1 : (targetSize.height - lineHeight) / 2)
+                    : 1
+                text.draw(at: NSPoint(x: 0, y: textY), withAttributes: attributes)
+            }
+        }
+        let logo = providerLogo(for: id, pointSize: logoSize)
+        logo.draw(
+            in: NSRect(
+                x: barX + barWidth + stackedProviderLogoGap,
+                y: (targetSize.height - logoSize) / 2,
+                width: logoSize,
+                height: logoSize),
+            from: NSRect(origin: .zero, size: logo.size),
+            operation: .sourceOver,
+            fraction: 1)
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
+    }
+
     /// Render the exact-two-value provider frame as one template image. This
     /// avoids AppKit's relaunch-dependent multiline title positioning while
     /// keeping the native status-button cell for all other frames.
@@ -546,6 +615,28 @@ enum MenuBarIconRenderer {
         out.unlockFocus()
         out.isTemplate = isTemplate
         return out
+    }
+}
+
+// MARK: - Menu-bar layout options (CodexBar layout-display parity)
+
+/// How provider quota is drawn in the menu bar, persisted under `defaultsKey`.
+/// CodexBar exposes a full layout editor; BirdNion's rotating frame model gets
+/// the equivalent as a style picker.
+enum MenuBarLayoutStyle: String, CaseIterable, Identifiable {
+    case percent
+    case bar
+    case barAndPercent
+
+    static let defaultsKey = "menuBarLayoutStyle"
+    var id: String { rawValue }
+
+    static var current: MenuBarLayoutStyle {
+        MenuBarLayoutStyle(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .percent
+    }
+
+    func label(language: String) -> String {
+        L10n.t("settings.menuBarStyle.\(rawValue)", language)
     }
 }
 

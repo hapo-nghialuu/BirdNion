@@ -81,6 +81,22 @@ struct GeneralPane: View {
                         .accessibilityLabel(L10n.t("settings.showPercentInMenuBar.title", settings.appLanguage))
                 }
 
+                if settings.showPercentInMenuBar {
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarStyle.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.menuBarStyle.subtitle", settings.appLanguage)
+                    ) {
+                        InstrumentMenuSelect(
+                            options: MenuBarLayoutStyle.allCases.map {
+                                ($0.rawValue, $0.label(language: settings.appLanguage))
+                            },
+                            selection: $settings.menuBarLayoutStyle)
+                            .onChange(of: settings.menuBarLayoutStyle) { _ in refreshMenuBarFrames() }
+                    }
+                }
+
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
@@ -344,6 +360,13 @@ struct GeneralPane: View {
             .padding(.top, 18)
             .hairlineTop(SettingsTheme.hairline)
         }
+    }
+
+    /// Re-render the menu bar immediately after a layout/display option
+    /// changes — reuses the same notification the per-provider visibility
+    /// toggles post, which AppDelegate listens for and rebuilds frames.
+    private func refreshMenuBarFrames() {
+        NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
     }
 
     /// One per-provider budget field — same blank/invalid/non-positive →

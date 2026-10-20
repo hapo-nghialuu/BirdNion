@@ -674,6 +674,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Percent on the left, brand logo on the right — never the
             // provider display name in the title (that lives in the tooltip
             // / popover). Trailing space keeps the last digit off the logo.
+            let layoutStyle = MenuBarLayoutStyle.current
+            if layoutStyle != .percent, text == nil, !percents.isEmpty {
+                button.imagePosition = .imageOnly
+                button.image = MenuBarIconRenderer.meteredProviderImage(
+                    for: id, percents: percents, style: layoutStyle)
+                button.title = ""
+                break
+            }
             let isStacked = text == nil && percents.count == 2
             if isStacked {
                 button.imagePosition = .imageOnly
