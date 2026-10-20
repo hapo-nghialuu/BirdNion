@@ -106,6 +106,18 @@ struct GeneralPane: View {
                             .toggleStyle(.instrumentSwitch)
                             .onChange(of: settings.menuBarLargeText) { _ in refreshMenuBarFrames() }
                     }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarShowWindowLabels.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.menuBarShowWindowLabels.subtitle", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.menuBarShowWindowLabels)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
+                            .onChange(of: settings.menuBarShowWindowLabels) { _ in refreshMenuBarFrames() }
+                    }
                 }
 
                 SettingsRowDivider()

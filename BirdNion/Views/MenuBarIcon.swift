@@ -72,6 +72,21 @@ enum MenuBarIconRenderer {
         }
     }
 
+    /// Compact label for a quota window shown before its percent when
+    /// `MenuBarShowWindowLabels` is on ("5h 91%"). Derived from the window
+    /// length so provider-specific labels stay out of the menu bar.
+    static func shortWindowLabel(_ window: QuotaWindow) -> String {
+        guard let seconds = window.windowSeconds, seconds > 0 else {
+            return String(window.label.prefix(3))
+        }
+        let hours = Double(seconds) / 3600
+        if hours <= 23 { return "\(Int(hours.rounded()))h" }
+        let days = seconds / (24 * 3600)
+        if days <= 8 { return "Wk" }
+        if days <= 32 { return "Mo" }
+        return "\(days)d"
+    }
+
     /// Graphical progress-bar frame (`MenuBarLayoutStyle` `bar` /
     /// `barAndPercent`): one bar per window, filled to `remainingPct`,
     /// provider logo on the right. Rendered as a template image like
@@ -260,6 +275,17 @@ enum MenuBarIconRenderer {
             : nil
         if text == "" { return nil }
 
+        /// Bakes the optional per-window label prefix ("5h 91%") into `text`
+        /// when `MenuBarShowWindowLabels` is on. Only applied where the
+        /// percent-to-window mapping is known 1:1.
+        func labeledTitle(percents: [Int], windows: [QuotaWindow]) -> String? {
+            guard MenuBarShowWindowLabels.isEnabled,
+                  percents.count == windows.count else { return nil }
+            return zip(windows, percents).map { window, pct in
+                "\(shortWindowLabel(window)) \(max(0, min(100, pct)))%"
+            }.joined(separator: "  ")
+        }
+
         // Use the new generic resolver for all providers except Kiro (which has its own mode)
         // and providers with special logic (Codex, Antigravity, FreeModel).
         if status.id == "kiro" || status.id == "freemodel" || status.id == "antigravity" {
@@ -307,7 +333,9 @@ enum MenuBarIconRenderer {
             if let selectedWindows {
                 let percents = selectedWindows.map(\.remainingPct)
                 guard !percents.isEmpty else { return nil }
-                return .provider(id: status.id, name: status.displayName, percents: percents, text: nil)
+                return .provider(
+                    id: status.id, name: status.displayName, percents: percents,
+                    text: labeledTitle(percents: percents, windows: selectedWindows))
             }
             return nil
         }
@@ -639,6 +667,14 @@ enum MenuBarLayoutStyle: String, CaseIterable, Identifiable {
     func label(language: String) -> String {
         L10n.t("settings.menuBarStyle.\(rawValue)", language)
     }
+}
+
+/// Prefix percents with a short window label — "5h 91%" instead of "91%"
+/// (the inverse of CodexBar's "show window labels" toggle, default off to
+/// keep the compact readout).
+enum MenuBarShowWindowLabels {
+    static let defaultsKey = "menuBarShowWindowLabels"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
 }
 
 /// Larger menu-bar text / meter glyphs (CodexBar's "large text" option).
