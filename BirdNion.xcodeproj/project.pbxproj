@@ -147,6 +147,7 @@
 		WKDG0001000000000000B001 /* WeeklyDigest.swift in Sources */ = {isa = PBXBuildFile; fileRef = WKDG0002000000000000F001 /* WeeklyDigest.swift */; };
 		WKDG0003000000000000B002 /* WeeklyDigestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = WKDG0004000000000000F002 /* WeeklyDigestTests.swift */; };
 		L10N0001000000000000B001 /* AppLocalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N0002000000000000F001 /* AppLocalizer.swift */; };
+		L10N0001000000000000B002 /* AppLocalizer+Languages.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N0002000000000000F002 /* AppLocalizer+Languages.swift */; };
 		FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FR0002000000000000F001 /* BirdNionConfigStore.swift */; };
 		CCBK0001000000000000B001 /* ClaudeCodeBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCBK0002000000000000F001 /* ClaudeCodeBackend.swift */; };
 		CCMF0001000000000000B001 /* ClaudeCodeModelsFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCMF0002000000000000F001 /* ClaudeCodeModelsFetcher.swift */; };
@@ -442,6 +443,7 @@
 		WKDG0002000000000000F001 /* WeeklyDigest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/WeeklyDigest.swift; sourceTree = "<group>"; };
 		WKDG0004000000000000F002 /* WeeklyDigestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNionTests/WeeklyDigestTests.swift; sourceTree = "<group>"; };
 		L10N0002000000000000F001 /* AppLocalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalizer.swift; sourceTree = "<group>"; };
+		L10N0002000000000000F002 /* AppLocalizer+Languages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppLocalizer+Languages.swift"; sourceTree = "<group>"; };
 		FR0002000000000000F001 /* BirdNionConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Services/BirdNionConfigStore.swift; sourceTree = "<group>"; };
 		CCBK0002000000000000F001 /* ClaudeCodeBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeCodeBackend.swift; sourceTree = "<group>"; };
 		CCMF0002000000000000F001 /* ClaudeCodeModelsFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BirdNion/Providers/ClaudeCodeModelsFetcher.swift; sourceTree = "<group>"; };
@@ -755,6 +757,7 @@
 			children = (
 				FFFF0004000000000000F002 /* ServicesContainer.swift */,
 				L10N0002000000000000F001 /* AppLocalizer.swift */,
+				L10N0002000000000000F002 /* AppLocalizer+Languages.swift */,
 				CLPX0002000000000000F001 /* CLIProxyAPIConfiguration.swift */,
 				CLPX0004000000000000F001 /* EmbeddedCLIProxyService.swift */,
 				CLPM0002000000000000F001 /* LocalProxyProcessController.swift */,
@@ -1100,6 +1103,7 @@
 				PSWC0001000000000000B001 /* ProviderSwitcherShortcuts.swift in Sources */,
 				WKDG0001000000000000B001 /* WeeklyDigest.swift in Sources */,
 				L10N0001000000000000B001 /* AppLocalizer.swift in Sources */,
+				L10N0001000000000000B002 /* AppLocalizer+Languages.swift in Sources */,
 				FR0001000000000000B001 /* BirdNionConfigStore.swift in Sources */,
 				CCBK0001000000000000B001 /* ClaudeCodeBackend.swift in Sources */,
 				CCMF0001000000000000B001 /* ClaudeCodeModelsFetcher.swift in Sources */,
@@ -1260,7 +1264,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.51;
+				MARKETING_VERSION = 0.10.52;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1287,7 +1291,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.51;
+				MARKETING_VERSION = 0.10.52;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1383,7 +1387,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.51;
+				MARKETING_VERSION = 0.10.52;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -1407,7 +1411,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.10.51;
+				MARKETING_VERSION = 0.10.52;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.local.birdnion.BirdNionWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

@@ -182,3 +182,70 @@ figcaption {
   font-size: 10px;
   line-height: 1.5;
 }
+
+.language-menu {
+  position: relative;
+}
+
+.language-menu summary {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.language-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.language-menu summary::after {
+  content: "▾";
+  font-size: 9px;
+}
+
+.language-menu summary:hover {
+  color: var(--blue);
+}
+
+.language-menu .language-list {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  min-width: 128px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  box-shadow: 0 8px 24px rgba(22, 21, 15, .08);
+}
+
+.language-list a {
+  padding: 8px 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.language-list a:hover {
+  color: var(--blue);
+  background: var(--paper-deep);
+}
+
+.language-list a[aria-current] {
+  color: var(--blue);
+}
