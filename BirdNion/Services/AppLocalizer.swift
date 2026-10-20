@@ -9,6 +9,8 @@ enum L10n {
         let selected = preference ?? UserDefaults.standard.string(forKey: "appLanguage")
         if let selected, supportedCodes.contains(selected) { return selected }
         let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
+        // "zh" ships Simplified only; zh-Hant/TW/HK still map to it since
+        // Simplified is closer than English for Traditional readers.
         for code in supportedCodes where preferred.hasPrefix(code) { return code }
         return "en"
     }
