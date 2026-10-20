@@ -3,12 +3,12 @@
 // Lựa chọn lưu ở localStorage; mặc định "system" = theo locale hệ điều hành,
 // đúng như macOS `SettingsStore.Language.system`.
 
-import { STRINGS_ZH } from "./i18n-zh";
-import { STRINGS_JA } from "./i18n-ja";
-import { STRINGS_KO } from "./i18n-ko";
-import { STRINGS_ES } from "./i18n-es";
-import { STRINGS_DE } from "./i18n-de";
-import { STRINGS_FR } from "./i18n-fr";
+import { STRINGS_ZH } from "./i18n-zh.ts";
+import { STRINGS_JA } from "./i18n-ja.ts";
+import { STRINGS_KO } from "./i18n-ko.ts";
+import { STRINGS_ES } from "./i18n-es.ts";
+import { STRINGS_DE } from "./i18n-de.ts";
+import { STRINGS_FR } from "./i18n-fr.ts";
 
 const LANG_KEY = "birdnion.lang";
 
