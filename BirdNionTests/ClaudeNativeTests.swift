@@ -481,6 +481,31 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(evaluate(nil, SecKeychainPromptSelector(rawValue: 1)), .rejected)
     }
 
+    /// A login-keychain item rewritten by `/usr/bin/security` (as Claude Code
+    /// does on every token refresh) carries only the `apple-tool:` partition,
+    /// and reading it from another team's app raises the password dialog even
+    /// when the decrypt ACL trusts that app.
+    func testPreflightPartitionListRules() {
+        typealias Preflight = KeychainAccessPreflight
+        XCTAssertEqual(Preflight.evaluatePartitionList(nil, clientPartition: "teamid:ABCDE12345"), .allowed)
+        XCTAssertEqual(Preflight.evaluatePartitionList(["apple-tool:"], clientPartition: "teamid:ABCDE12345"), .rejected)
+        XCTAssertEqual(
+            Preflight.evaluatePartitionList(["apple-tool:", "teamid:ABCDE12345"], clientPartition: "teamid:ABCDE12345"),
+            .allowed)
+        XCTAssertEqual(Preflight.evaluatePartitionList(["apple-tool:"], clientPartition: nil), .indeterminate)
+
+        // The partition entry's description is a hex-encoded XML plist.
+        let plist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict><key>Partitions</key><array>\
+        <string>apple-tool:</string><string>teamid:ABCDE12345</string></array></dict></plist>
+        """
+        let hex = Data(plist.utf8).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(Preflight.partitions(fromACLDescription: hex), ["apple-tool:", "teamid:ABCDE12345"])
+        XCTAssertNil(Preflight.partitions(fromACLDescription: "Claude Code-credentials"))
+    }
+
     /// Real Security-framework run on a throwaway keychain (never the login
     /// keychain): an item that does not trust this process is reported as
     /// needing interaction without any dialog, a trusting item as allowed.

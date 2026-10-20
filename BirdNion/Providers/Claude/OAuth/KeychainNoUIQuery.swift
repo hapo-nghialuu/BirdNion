@@ -143,9 +143,16 @@ enum KeychainAccessPreflight {
         else { return .indeterminate }
 
         var access: SecAccess?
-        guard copyItemAccess(item, &access) == errSecSuccess,
-              let access,
-              let rawACLs = copyMatchingACLs(access, kSecACLAuthorizationDecrypt)?.takeRetainedValue(),
+        guard copyItemAccess(item, &access) == errSecSuccess, let access else { return .indeterminate }
+        // The partition list is enforced on top of the decrypt ACL: a trusted
+        // app outside it still gets the "enter the login keychain password"
+        // dialog, so it must pass first.
+        switch evaluatePartitionList(partitionList(of: access), clientPartition: currentPartitionID()) {
+        case .allowed: break
+        case .rejected: return .rejected
+        case .indeterminate: return .indeterminate
+        }
+        guard let rawACLs = copyMatchingACLs(access, kSecACLAuthorizationDecrypt)?.takeRetainedValue(),
               let acls = rawACLs as? [SecACL],
               !acls.isEmpty
         else { return .indeterminate }
@@ -176,6 +183,73 @@ enum KeychainAccessPreflight {
             }
         }
         return inspectionIncomplete ? .indeterminate : .rejected
+    }
+
+    /// Pure rule for the item's partition list (nil when the item has none,
+    /// as in keychains without partition IDs). Only a listed partition for
+    /// this process counts as allowed; an unknown own partition proves nothing.
+    static func evaluatePartitionList(_ partitions: [String]?, clientPartition: String?) -> DecryptACLEvaluation {
+        guard let partitions else { return .allowed }
+        guard let clientPartition else { return .indeterminate }
+        return partitions.contains(clientPartition) ? .allowed : .rejected
+    }
+
+    /// The partition entry's description is a hex-encoded XML plist
+    /// `{ Partitions = [...] }`; anything else yields nil.
+    static func partitions(fromACLDescription description: String) -> [String]? {
+        let hex = Array(description.utf8)
+        guard !hex.isEmpty, hex.count % 2 == 0 else { return nil }
+        var bytes = Data(capacity: hex.count / 2)
+        for index in stride(from: 0, to: hex.count, by: 2) {
+            guard let byte = UInt8(String(decoding: hex[index...index + 1], as: UTF8.self), radix: 16) else {
+                return nil
+            }
+            bytes.append(byte)
+        }
+        guard let plist = try? PropertyListSerialization.propertyList(from: bytes, format: nil) as? [String: Any]
+        else { return nil }
+        return plist["Partitions"] as? [String]
+    }
+
+    /// The item's partition list, read from the ACL entry carrying the
+    /// partition-ID authorization. An entry that cannot be parsed yields an
+    /// empty list, which matches no caller.
+    private static func partitionList(of access: SecAccess) -> [String]? {
+        guard let copyACLList = securityFunction(named: "SecAccessCopyACLList", as: SecAccessCopyACLListFunction.self),
+              let copyAuthorizations = securityFunction(
+                  named: "SecACLCopyAuthorizations", as: SecACLCopyAuthorizationsFunction.self),
+              let copyACLContents = securityFunction(named: "SecACLCopyContents", as: SecACLCopyContentsFunction.self)
+        else { return [] }
+        var rawACLs: CFArray?
+        guard copyACLList(access, &rawACLs) == errSecSuccess, let acls = rawACLs as? [SecACL] else { return [] }
+        let partitionAuthorization = kSecACLAuthorizationPartitionID as String
+        guard let entry = acls.first(where: {
+            (copyAuthorizations($0).takeRetainedValue() as? [String] ?? []).contains(partitionAuthorization)
+        }) else { return nil }
+        var applications: CFArray?
+        var description: CFString?
+        var selector = SecKeychainPromptSelector()
+        guard copyACLContents(entry, &applications, &description, &selector) == errSecSuccess,
+              let description
+        else { return [] }
+        return partitions(fromACLDescription: description as String) ?? []
+    }
+
+    /// This process's keychain partition: `teamid:<team>` for a
+    /// team-signed build. Ad-hoc and unsigned builds report nil, so their
+    /// silent reads never pass a partition-listed item.
+    private static func currentPartitionID() -> String? {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(
+                  staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let team = (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String,
+              !team.isEmpty
+        else { return nil }
+        return "teamid:\(team)"
     }
 
     /// Checks one trusted application against the running code: its stored
@@ -213,6 +287,9 @@ enum KeychainAccessPreflight {
         UnsafeMutablePointer<CFArray?>,
         UnsafeMutablePointer<CFString?>,
         UnsafeMutablePointer<SecKeychainPromptSelector>) -> OSStatus
+    private typealias SecAccessCopyACLListFunction = @convention(c) (
+        SecAccess, UnsafeMutablePointer<CFArray?>) -> OSStatus
+    private typealias SecACLCopyAuthorizationsFunction = @convention(c) (SecACL) -> Unmanaged<CFArray>
     private typealias SecTrustedApplicationValidateWithPathFunction = @convention(c) (
         SecTrustedApplication, UnsafePointer<CChar>) -> OSStatus
     private typealias SecTrustedApplicationCopyRequirementFunction = @convention(c) (
