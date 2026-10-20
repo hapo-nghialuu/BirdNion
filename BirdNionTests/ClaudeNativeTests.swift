@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import BirdNion
 
@@ -398,49 +399,139 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 10)
     }
 
-    /// The silent Security-framework read pins the account first and repeats
-    /// by service alone only on not-found; every query stays no-UI.
-    func testNoUIKeychainReadRetriesWithoutAccountOnlyOnNotFound() {
-        func read(_ statuses: [OSStatus]) -> (data: Data?, queries: [[String: Any]]) {
+    /// The silent read requests the secret only after the ACL preflight
+    /// allows it: the pinned account first, the service alone only when the
+    /// pinned item does not exist. The payload query stays no-UI.
+    func testNoUIKeychainReadRequestsPayloadOnlyWhenPreflightAllows() {
+        typealias Outcome = KeychainAccessPreflight.Outcome
+        func read(_ outcomes: [Outcome]) -> (data: Data?, preflights: [String?], queries: [[String: Any]]) {
+            var preflights: [String?] = []
             var queries: [[String: Any]] = []
-            var remaining = statuses
-            let data = ClaudeOAuthStore.readKeychainDataWithoutUI(account: "alice") { query in
-                queries.append(query)
-                guard !remaining.isEmpty else {
-                    XCTFail("unexpected extra keychain query")
-                    return (errSecItemNotFound, nil)
-                }
-                let status = remaining.removeFirst()
-                return (status, status == errSecSuccess ? Data("{}".utf8) : nil)
-            }
-            return (data, queries)
-        }
-        func assertNoUI(_ queries: [[String: Any]], file: StaticString = #filePath, line: UInt = #line) {
-            for query in queries {
-                XCTAssertNotNil(query[kSecUseAuthenticationContext as String], file: file, line: line)
-                XCTAssertNotNil(query[kSecUseAuthenticationUI as String], file: file, line: line)
-                XCTAssertEqual(query[kSecAttrService as String] as? String, "Claude Code-credentials",
-                               file: file, line: line)
-            }
+            var remaining = outcomes
+            let data = ClaudeOAuthStore.readKeychainDataWithoutUI(
+                account: "alice",
+                preflight: { account in
+                    preflights.append(account)
+                    guard !remaining.isEmpty else {
+                        XCTFail("unexpected extra preflight")
+                        return .unavailable
+                    }
+                    return remaining.removeFirst()
+                },
+                copyMatching: { query in
+                    queries.append(query)
+                    return (errSecSuccess, Data("{}".utf8))
+                })
+            return (data, preflights, queries)
         }
 
-        var outcome = read([errSecSuccess])
+        // Trusted pinned item: one payload read, pinned, no-UI.
+        var outcome = read([.allowed])
+        XCTAssertEqual(outcome.preflights, ["alice"])
         XCTAssertEqual(outcome.queries.count, 1)
-        XCTAssertEqual(outcome.queries[0][kSecAttrAccount as String] as? String, "alice")
+        XCTAssertEqual(outcome.queries.first?[kSecAttrAccount as String] as? String, "alice")
+        XCTAssertNotNil(outcome.queries.first?[kSecUseAuthenticationContext as String])
+        XCTAssertNotNil(outcome.queries.first?[kSecUseAuthenticationUI as String])
+        XCTAssertEqual(outcome.queries.first?[kSecAttrService as String] as? String, "Claude Code-credentials")
         XCTAssertNotNil(outcome.data)
-        assertNoUI(outcome.queries)
 
-        outcome = read([errSecItemNotFound, errSecSuccess])
-        XCTAssertEqual(outcome.queries.count, 2)
-        XCTAssertEqual(outcome.queries[0][kSecAttrAccount as String] as? String, "alice")
-        XCTAssertNil(outcome.queries[1][kSecAttrAccount as String])
-        XCTAssertNotNil(outcome.data)
-        assertNoUI(outcome.queries)
-
-        outcome = read([errSecInteractionNotAllowed])
+        // Pinned item missing, unpinned trusted: one unpinned payload read.
+        outcome = read([.notFound, .allowed])
+        XCTAssertEqual(outcome.preflights, ["alice", nil])
         XCTAssertEqual(outcome.queries.count, 1)
-        XCTAssertNil(outcome.data)
-        assertNoUI(outcome.queries)
+        XCTAssertNil(outcome.queries.first?[kSecAttrAccount as String])
+        XCTAssertNotNil(outcome.queries.first?[kSecUseAuthenticationContext as String])
+        XCTAssertNotNil(outcome.queries.first?[kSecUseAuthenticationUI as String])
+        XCTAssertNotNil(outcome.data)
+
+        // Allowed preflight but the payload read still fails: nil, no retry.
+        var payloadQueries = 0
+        let failed = ClaudeOAuthStore.readKeychainDataWithoutUI(
+            account: "alice",
+            preflight: { _ in .allowed },
+            copyMatching: { _ in
+                payloadQueries += 1
+                return (errSecInteractionNotAllowed, nil)
+            })
+        XCTAssertNil(failed)
+        XCTAssertEqual(payloadQueries, 1)
+
+        // The ACL would prompt, or could not be inspected: never ask for the payload.
+        for blocked in [[Outcome.interactionRequired], [.unavailable],
+                        [.notFound, .interactionRequired], [.notFound, .notFound]] {
+            outcome = read(blocked)
+            XCTAssertEqual(outcome.queries.count, 0, "payload requested after \(blocked)")
+            XCTAssertNil(outcome.data)
+        }
+    }
+
+    func testPreflightDecryptACLRules() {
+        let verifyFailed = OSStatus(CSSMERR_CSP_VERIFY_FAILED)
+        let none = SecKeychainPromptSelector()
+        func evaluate(_ statuses: [OSStatus?]?, _ selector: SecKeychainPromptSelector = none)
+            -> KeychainAccessPreflight.DecryptACLEvaluation {
+            KeychainAccessPreflight.evaluateDecryptACL(
+                trustedApplicationValidationStatuses: statuses, promptSelector: selector)
+        }
+        XCTAssertEqual(evaluate(nil), .allowed)
+        XCTAssertEqual(evaluate([verifyFailed, errSecSuccess]), .allowed)
+        XCTAssertEqual(evaluate([verifyFailed, verifyFailed]), .rejected)
+        XCTAssertEqual(evaluate([verifyFailed, nil]), .indeterminate)
+        XCTAssertEqual(evaluate([]), .rejected)
+        XCTAssertEqual(evaluate(nil, SecKeychainPromptSelector(rawValue: 1)), .rejected)
+    }
+
+    /// Real Security-framework run on a throwaway keychain (never the login
+    /// keychain): an item that does not trust this process is reported as
+    /// needing interaction without any dialog, a trusting item as allowed.
+    func testPreflightOnThrowawayKeychain() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-preflight-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appendingPathComponent("test.keychain-db").path
+        @discardableResult
+        func security(_ arguments: [String]) -> Int32 {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            proc.arguments = arguments
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            guard (try? proc.run()) != nil else { return -1 }
+            proc.waitUntilExit()
+            return proc.terminationStatus
+        }
+        defer {
+            security(["delete-keychain", path])
+            try? FileManager.default.removeItem(at: dir)
+        }
+        XCTAssertEqual(security(["create-keychain", "-p", "pw", path]), 0)
+        XCTAssertEqual(security(["unlock-keychain", "-p", "pw", path]), 0)
+        let executable = try XCTUnwrap(Bundle.main.executablePath)
+        XCTAssertEqual(security(["add-generic-password", "-s", "rejected", "-a", "t", "-T", "", "-w", "x", path]), 0)
+        XCTAssertEqual(security(["add-generic-password", "-s", "trusted", "-a", "t", "-T", executable, "-w", "x", path]), 0)
+
+        var keychain: SecKeychain?
+        XCTAssertEqual(SecKeychainOpen(path, &keychain), errSecSuccess)
+        let searchList = [try XCTUnwrap(keychain)]
+        let started = Date()
+        XCTAssertEqual(
+            KeychainAccessPreflight.checkGenericPassword(service: "rejected", account: nil, searchList: searchList),
+            .interactionRequired)
+        XCTAssertEqual(
+            KeychainAccessPreflight.checkGenericPassword(service: "trusted", account: nil, searchList: searchList),
+            .allowed)
+        XCTAssertEqual(
+            KeychainAccessPreflight.checkGenericPassword(service: "missing", account: nil, searchList: searchList),
+            .notFound)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "preflight must never wait on a dialog")
+
+        // Locked keychain: no unlock dialog, no allowed verdict.
+        XCTAssertEqual(security(["lock-keychain", path]), 0)
+        let lockedStarted = Date()
+        XCTAssertNotEqual(
+            KeychainAccessPreflight.checkGenericPassword(service: "trusted", account: nil, searchList: searchList),
+            .allowed)
+        XCTAssertLessThan(Date().timeIntervalSince(lockedStarted), 5, "locked keychain must not wait on a dialog")
     }
 
     // MARK: - OAuth usage mapping

@@ -208,27 +208,36 @@ enum ClaudeOAuthStore {
     }
 
     /// Silent read via Security framework: never surfaces a macOS prompt. The
-    /// account-pinned query runs first; only a not-found result repeats it by
-    /// service alone, so an older item written under another account is still
-    /// found exactly as before.
+    /// payload is requested only after the ACL preflight proves this process
+    /// is trusted — on macOS 27 the no-UI query flags alone still let the
+    /// legacy "wants to access" dialog through. The account-pinned item is
+    /// tried first; only a not-found result falls back to the service alone,
+    /// so an older item written under another account is still found.
     static func readKeychainDataWithoutUI(
         account: String = claudeKeychainAccount(),
+        preflight: (_ account: String?) -> KeychainAccessPreflight.Outcome = {
+            KeychainAccessPreflight.checkGenericPassword(service: keychainService, account: $0)
+        },
         copyMatching: ([String: Any]) -> (OSStatus, Data?) = liveCopyMatching) -> Data? {
-        func query(account: String?) -> [String: Any] {
-            var query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: keychainService,
-                kSecReturnData as String: true,
-                kSecMatchLimit as String: kSecMatchLimitOne,
-            ]
-            if let account { query[kSecAttrAccount as String] = account }
-            KeychainNoUIQuery.apply(to: &query)
-            return query
+        var target: String? = account
+        switch preflight(account) {
+        case .allowed:
+            break
+        case .notFound:
+            guard preflight(nil) == .allowed else { return nil }
+            target = nil
+        case .interactionRequired, .unavailable:
+            return nil
         }
-        var (status, data) = copyMatching(query(account: account))
-        if status == errSecItemNotFound {
-            (status, data) = copyMatching(query(account: nil))
-        }
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if let target { query[kSecAttrAccount as String] = target }
+        KeychainNoUIQuery.apply(to: &query)
+        let (status, data) = copyMatching(query)
         guard status == errSecSuccess, let data else { return nil }
         return data
     }
