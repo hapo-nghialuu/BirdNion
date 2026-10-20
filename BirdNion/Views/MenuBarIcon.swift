@@ -210,20 +210,46 @@ enum MenuBarIconRenderer {
     static func frames(
         from statuses: [ProviderStatus],
         showPercent: Bool = MenuBarPercentDisplay.isEnabled,
-        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
+        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) },
+        now: Date = Date()
     ) -> [Frame] {
         guard showPercent else { return [.bird] }
-        let frames = providerFrames(from: statuses, visibility: visibility)
+        let frames = providerFrames(from: statuses, visibility: visibility, now: now)
         return frames.isEmpty ? [.bird] : frames
+    }
+
+    /// One resolved provider frame plus the quota windows that produced it.
+    /// The windows are retained so ordering can rank by depletion risk.
+    private struct ResolvedFrame {
+        let frame: Frame
+        let windows: [QuotaWindow]
     }
 
     static func providerFrames(
         from statuses: [ProviderStatus],
-        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) }
+        visibility: (String) -> Bool = { MenuBarVisibility.isShown(providerId: $0) },
+        now: Date = Date()
     ) -> [Frame] {
-        statuses
-            .compactMap { menuBarFrame(from: $0, visibility: visibility) }
-            .sorted(by: menuBarFrameSort)
+        let resolved = statuses.compactMap { menuBarFrame(from: $0, visibility: visibility) }
+        if MenuBarSortByDepletion.isEnabled {
+            return resolved
+                .sorted { riskKey($0.windows, now: now) > riskKey($1.windows, now: now) }
+                .map(\.frame)
+        }
+        return resolved.map(\.frame).sorted(by: menuBarFrameSort)
+    }
+
+    /// CodexBar's depletion-risk ordering for Auto quotas: exhausted windows
+    /// first, then the window whose current pace depletes before its reset
+    /// (soonest ETA first), then the highest used percentage.
+    private static func riskKey(_ windows: [QuotaWindow], now: Date) -> (tier: Int, negEta: Double, usedPct: Int) {
+        windows.map { window -> (Int, Double, Int) in
+            if window.usedPct >= 100 || window.remainingPct <= 0 { return (2, 0, window.usedPct) }
+            if let eta = WindowPace(window: window, now: now)?.etaSeconds {
+                return (1, -eta, window.usedPct)
+            }
+            return (0, 0, window.usedPct)
+        }.max { ($0.0, $0.1, $0.2) < ($1.0, $1.1, $1.2) } ?? (0, 0, 0)
     }
 
     /// Active frames sort before idle full-quota ones; ties break A→Z by name.
@@ -257,7 +283,7 @@ enum MenuBarIconRenderer {
     private static func menuBarFrame(
         from status: ProviderStatus,
         visibility: (String) -> Bool
-    ) -> Frame? {
+    ) -> ResolvedFrame? {
         guard visibility(status.id) else { return nil }
         let codexMetric = status.id == "codex" ? CodexMenuBarMetric.current : nil
         let windows: [QuotaWindow]
@@ -300,7 +326,9 @@ enum MenuBarIconRenderer {
 
             if pref == .average {
                 let avg = windows.map(\.remainingPct).reduce(0, +) / max(1, windows.count)
-                return .provider(id: status.id, name: status.displayName, percents: [avg], text: L10n.f("menuBar.avg", nil, "\(avg)"))
+                return ResolvedFrame(
+                    frame: .provider(id: status.id, name: status.displayName, percents: [avg], text: L10n.f("menuBar.avg", nil, "\(avg)")),
+                    windows: windows)
             }
 
             let canonicalAutomaticWindows: [QuotaWindow]
@@ -333,9 +361,11 @@ enum MenuBarIconRenderer {
             if let selectedWindows {
                 let percents = selectedWindows.map(\.remainingPct)
                 guard !percents.isEmpty else { return nil }
-                return .provider(
-                    id: status.id, name: status.displayName, percents: percents,
-                    text: labeledTitle(percents: percents, windows: selectedWindows))
+                return ResolvedFrame(
+                    frame: .provider(
+                        id: status.id, name: status.displayName, percents: percents,
+                        text: labeledTitle(percents: percents, windows: selectedWindows)),
+                    windows: selectedWindows)
             }
             return nil
         }
@@ -351,12 +381,14 @@ enum MenuBarIconRenderer {
             percents = windows.map { $0.remainingPct }
         }
         guard !percents.isEmpty else { return nil }
-        return .provider(
-            id: status.id,
-            name: status.displayName,
-            percents: percents,
-            text: text
-        )
+        return ResolvedFrame(
+            frame: .provider(
+                id: status.id,
+                name: status.displayName,
+                percents: percents,
+                text: text
+            ),
+            windows: windows)
     }
 
     /// Automatic preserves Antigravity's original single representative.
@@ -667,6 +699,13 @@ enum MenuBarLayoutStyle: String, CaseIterable, Identifiable {
     func label(language: String) -> String {
         L10n.t("settings.menuBarStyle.\(rawValue)", language)
     }
+}
+
+/// Rank rotating provider frames by depletion risk instead of
+/// active-then-alphabetical (CodexBar's Auto-quota depletion ranking).
+enum MenuBarSortByDepletion {
+    static let defaultsKey = "menuBarSortByDepletion"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
 }
 
 /// Prefix percents with a short window label — "5h 91%" instead of "91%"
