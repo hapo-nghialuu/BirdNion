@@ -101,14 +101,20 @@ enum MenuBarIconRenderer {
         style: MenuBarLayoutStyle,
         text: String? = nil
     ) -> NSImage {
+        // Single-window bars share the inline-title point size so adjacent
+        // percent/spend frames don't jump between font sizes; two stacked
+        // rows keep the compact stacked size.
+        let rows = Array(percents.prefix(2))
+        let pointSize: CGFloat = rows.count > 1
+            ? (MenuBarLargeText.isEnabled ? 11 : stackedTitleFontSize)
+            : (MenuBarLargeText.isEnabled ? 15 : 12)
         let font = NSFont.monospacedDigitSystemFont(
-            ofSize: MenuBarLargeText.isEnabled ? 11 : stackedTitleFontSize,
+            ofSize: pointSize,
             weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.controlTextColor,
         ]
-        let rows = Array(percents.prefix(2))
         // `text` carries the caller's label line (window labels "5h 91%  Wk
         // 42%" or a display-mode string like Kiro's credits). Split on the
         // double-space row separator; fall back to bare percents per row.
