@@ -81,6 +81,69 @@ struct GeneralPane: View {
                         .accessibilityLabel(L10n.t("settings.showPercentInMenuBar.title", settings.appLanguage))
                 }
 
+                if settings.showPercentInMenuBar {
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarStyle.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.menuBarStyle.subtitle", settings.appLanguage)
+                    ) {
+                        InstrumentMenuSelect(
+                            options: MenuBarLayoutStyle.allCases.map {
+                                ($0.rawValue, $0.label(language: settings.appLanguage))
+                            },
+                            selection: $settings.menuBarLayoutStyle)
+                            .onChange(of: settings.menuBarLayoutStyle) { _ in refreshMenuBarFrames() }
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarLargeText.title", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.menuBarLargeText)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
+                            .onChange(of: settings.menuBarLargeText) { _ in refreshMenuBarFrames() }
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarShowWindowLabels.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.menuBarShowWindowLabels.subtitle", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.menuBarShowWindowLabels)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
+                            .onChange(of: settings.menuBarShowWindowLabels) { _ in refreshMenuBarFrames() }
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarSortByDepletion.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.menuBarSortByDepletion.subtitle", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.menuBarSortByDepletion)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
+                            .onChange(of: settings.menuBarSortByDepletion) { _ in refreshMenuBarFrames() }
+                    }
+
+                    SettingsRowDivider()
+
+                    SettingsLabeledRow(
+                        title: L10n.t("settings.menuBarShowSpend.title", settings.appLanguage),
+                        subtitle: L10n.t("settings.menuBarShowSpend.subtitle", settings.appLanguage)
+                    ) {
+                        Toggle("", isOn: $settings.menuBarShowSpend)
+                            .labelsHidden()
+                            .toggleStyle(.instrumentSwitch)
+                            .onChange(of: settings.menuBarShowSpend) { _ in refreshMenuBarFrames() }
+                    }
+                }
+
                 SettingsRowDivider()
 
                 SettingsLabeledRow(
@@ -344,6 +407,13 @@ struct GeneralPane: View {
             .padding(.top, 18)
             .hairlineTop(SettingsTheme.hairline)
         }
+    }
+
+    /// Re-render the menu bar immediately after a layout/display option
+    /// changes — reuses the same notification the per-provider visibility
+    /// toggles post, which AppDelegate listens for and rebuilds frames.
+    private func refreshMenuBarFrames() {
+        NotificationCenter.default.post(name: .menuBarVisibilityChanged, object: nil)
     }
 
     /// One per-provider budget field — same blank/invalid/non-positive →

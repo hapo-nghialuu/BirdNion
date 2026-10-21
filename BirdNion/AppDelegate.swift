@@ -674,6 +674,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Percent on the left, brand logo on the right — never the
             // provider display name in the title (that lives in the tooltip
             // / popover). Trailing space keeps the last digit off the logo.
+            let layoutStyle = MenuBarLayoutStyle.current
+            // Non-empty `text` (window labels "5h 91%  Wk 42%", or a
+            // display-mode override like Kiro credits) becomes the bar row
+            // label; an empty string still means "logo only".
+            let labelText = (text?.isEmpty == false) ? text : nil
+            if layoutStyle != .percent, text != "", !percents.isEmpty {
+                button.imagePosition = .imageOnly
+                button.image = MenuBarIconRenderer.meteredProviderImage(
+                    for: id, percents: percents, style: layoutStyle, text: labelText)
+                button.title = ""
+                break
+            }
             let isStacked = text == nil && percents.count == 2
             if isStacked {
                 button.imagePosition = .imageOnly
@@ -685,7 +697,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
             button.imagePosition = .imageRight
             button.image = MenuBarIconRenderer.providerLogo(for: id)
-            let menuBarFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+            let menuBarFont = NSFont.monospacedDigitSystemFont(
+                ofSize: MenuBarLargeText.isEnabled ? 15 : 12, weight: .semibold)
             button.font = menuBarFont
             if let text {
                 // Display-mode override (Kiro credits). Empty = logo only.
@@ -695,6 +708,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let title = "\(numbers) "
                 button.title = title
             }
+        case let .spend(id, _, text):
+            // Spend readout ("$4.20/$20") + brand logo — same layout as a
+            // percent frame so the rotation stays visually consistent.
+            button.imagePosition = .imageRight
+            button.image = MenuBarIconRenderer.providerLogo(for: id)
+            button.font = NSFont.monospacedDigitSystemFont(
+                ofSize: MenuBarLargeText.isEnabled ? 15 : 12, weight: .semibold)
+            button.title = text.isEmpty ? "" : "\(text) "
         }
     }
 
