@@ -840,11 +840,13 @@ actor ClaudeCLISession {
     /// `ClaudeCLIAuthStatusProbe` for the cheap `auth status` precheck.
     static func runDirectProcess(binary: String,
                                  arguments: [String],
-                                 timeout: TimeInterval) async throws -> String {
+                                 timeout: TimeInterval,
+                                 environment: [String: String]? = nil) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(with: Result {
-                    try runDirectProcessSync(binary: binary, arguments: arguments, timeout: timeout)
+                    try runDirectProcessSync(binary: binary, arguments: arguments, timeout: timeout,
+                                             environment: environment)
                 })
             }
         }
@@ -855,11 +857,12 @@ actor ClaudeCLISession {
     /// deadlock the 64KB pipe buffer while we wait for exit.
     static func runDirectProcessSync(binary: String,
                                      arguments: [String],
-                                     timeout: TimeInterval) throws -> String {
+                                     timeout: TimeInterval,
+                                     environment: [String: String]? = nil) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = arguments
-        proc.environment = launchEnvironment()
+        proc.environment = environment ?? launchEnvironment()
         proc.currentDirectoryURL = preparedProbeWorkingDirectoryURL()
         proc.standardInput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
@@ -1221,13 +1224,16 @@ actor ClaudeCLISession {
 
     // MARK: - Environment
 
-    private static func launchEnvironment() -> [String: String] {
+    static func launchEnvironment(
+        configDir: String? = ClaudeCLIAccountStore.activeConfigDir()) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         // Remove any ANTHROPIC_ vars (tokens etc.) so the probe session uses
         // the user's own stored credentials, not injected overrides.
         for key in env.keys where key.hasPrefix("ANTHROPIC_") { env.removeValue(forKey: key) }
         // Remove OAuth env keys commonly set by CodexBar/BirdNion
         for key in ["CLAUDE_OAUTH_TOKEN", "CLAUDE_OAUTH_SCOPES"] { env.removeValue(forKey: key) }
+        // Probe the Claude Code account selected in BirdNion (nil = ~/.claude).
+        if let configDir { env["CLAUDE_CONFIG_DIR"] = configDir }
         return env
     }
 

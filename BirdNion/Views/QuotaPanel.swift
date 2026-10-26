@@ -262,6 +262,12 @@ struct QuotaOverview: View {
         VStack(alignment: .leading, spacing: 0) {
             ProviderHeaderCard(status: s, isPlaceholder: s.popoverIsAwaitingFirstContent,
                                isFetching: quota.fetchingIDs.contains(s.id))
+            // Which login the quota below belongs to; opens the switcher.
+            if s.id == "claude" {
+                ClaudeAccountStrip()
+            } else if s.id == "codex" {
+                CodexAccountStrip()
+            }
             // Antigravity lists every account below, the active one included,
             // so the hero would just repeat that account's first row.
             if s.error == nil, !s.windows.isEmpty, s.id != "antigravity" {
@@ -334,11 +340,10 @@ struct QuotaOverview: View {
                     daily: codexBudgetCombined?.daily ?? [],
                     source: .codex)
             }
-            // Codex-specific: account list (click to reveal) +
-            // CLI switch. Below the chart per user preference.
+            // Codex backend profiles; the account switcher lives in the
+            // header chip.
             if s.id == "codex" {
                 CodexProfileSwitchSection()
-                CodexAccountsPopoverSection()
             }
             // FreeModel: account switcher (per-browser sessions
             // + pasted cookies), same collapsed-card pattern.
@@ -1965,534 +1970,722 @@ private struct StaleQuotaBanner: View {
     }
 }
 
-// MARK: - Codex accounts (popover)
+// MARK: - Account strip + menu (Claude Code / Codex)
 
-/// Popover-native Codex account switcher: a compact "Accounts" row that
-/// reveals the signed-in accounts on hover. Selecting one calls
-/// `CodexAccountStore.setActive(id)`, which drives the existing
-/// `.birdnionCodexAccountChanged` snapshot-then-refetch flow in
-/// `QuotaService` so the quota card swaps to that account. Mirrors
-/// `ProvidersPane.CodexAccountsCard` but scoped for the popover surface.
-struct CodexAccountsPopoverSection: View {
-    @EnvironmentObject var settings: SettingsStore
+/// One account as shown in a provider's account menu, provider-neutral.
+struct AccountMenuEntry: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let isDefault: Bool
+    let isActive: Bool
+    let needsLogin: Bool
+    let canRemove: Bool
+    let quotaRemaining: Int?
+}
 
-    @State private var accounts: [CodexAccount] = []
-    @State private var activeID = "system"
-    @State private var cliID: String?
-    @State private var revealed = false
-    @State private var busy = false
-    @State private var addAccountErrorText: String?
-    @State private var accountActionErrorText: String?
-    @State private var switchErrorText: String?
-    @State private var accountPendingRemoval: CodexAccount?
+/// Last known quota (lowest window, % left) for one account, from the
+/// per-account snapshot written whenever that account was the active one.
+private func lastKnownRemaining(_ store: AccountSnapshotStore, accountID: String) -> Int? {
+    store.snapshot(forAccount: accountID)
+        .flatMap { ProviderStatusSummary.lowestWindow($0) }?.remainingPct
+}
+
+/// Flat row under the provider header — same language as the service status
+/// strip (mono eyebrow left, value right, inset hairline below). Opens the
+/// account menu at the row's full width.
+struct AccountSwitchStrip<Menu: View>: View {
+    let language: String
+    let value: String
+    @Binding var isOpen: Bool
+    @ViewBuilder let menu: () -> Menu
 
     var body: some View {
-        // Click (not hover) toggles the account list — hover-reveal collapsed
-        // the moment the pointer drifted off the card, which made the Switch
-        // card unreachable and felt jumpy.
-        VStack(alignment: .leading, spacing: 0) {
-            collapsedRow
-            if revealed {
-                Divider()
-                    .overlay(VocabbyTheme.border)
-                    .padding(.vertical, 6)
-                ForEach(accounts) { account in
-                    accountRow(account)
-                }
-                if let accountActionErrorText {
-                    Text(L10n.f("provider.removeAccountFailed", settings.appLanguage, accountActionErrorText))
-                        .font(.plexSans(10))
-                        .foregroundStyle(VocabbyTheme.critical)
-                        .lineLimit(2)
-                        .padding(.vertical, 4)
-                }
-                addAccountRow
-                switchRow
-            }
-        }
-        .vocabbyCard()
-        .onAppear(perform: reload)
-    }
-
-    private var collapsedRow: some View {
-        // Mirrors the quick-apply card header: framed icon + title/subtitle,
-        // so the collapsed state carries real info (which account's quota is
-        // on screen) instead of a thin label with dead space.
-        let lang = settings.appLanguage
-        let active = accounts.first(where: { $0.id == activeID })
-        let activeLabel = active?.email
-            ?? L10n.t(active?.isSystem == true ? "provider.systemAccount" : "provider.accountGeneric", lang)
-        return HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "person.crop.circle")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.blue)
-                .frame(width: 30, height: 30)
-                .background(VocabbyTheme.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.t("popover.accounts", lang))
-                    .font(.plexSans(12, weight: .semibold))
-                    .foregroundStyle(VocabbyTheme.primary)
-                Text(activeLabel)
-                    .font(.plexSans(11))
-                    .foregroundStyle(VocabbyTheme.secondary)
+        Button {
+            isOpen.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text(L10n.t("popover.accounts", language).uppercased())
+                    .font(.plexMono(10, weight: .medium))
+                    .foregroundStyle(VocabbyTheme.muted)
+                    .tracking(0.6)
+                Spacer(minLength: 8)
+                Image(systemName: "person.crop.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isOpen ? VocabbyTheme.blue : VocabbyTheme.tertiary)
+                Text(value)
+                    .font(.plexMono(11, weight: .medium))
+                    .foregroundStyle(isOpen ? VocabbyTheme.blue : VocabbyTheme.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(VocabbyTheme.tertiary)
             }
+            .frame(minHeight: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(L10n.t("acctMenu.chipHelp", language))
+        .accessibilityLabel(L10n.t("acctMenu.chipHelp", language) + ": " + value)
+        .background {
+            AnchoredMenuPanelBridge(isOpen: $isOpen, content: menu)
+        }
+        .popoverContentInset()
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) { PopoverInsetHairline() }
+    }
+}
 
-            Spacer(minLength: 8)
+/// Value shown in the strip: the email, or "Account N" when personal info is
+/// hidden.
+private func accountStripValue(email: String?, index: Int, hidePersonal: Bool, language: String) -> String {
+    if hidePersonal || email == nil {
+        return "\(L10n.t("provider.accountGeneric", language)) \(index + 1)"
+    }
+    return email ?? ""
+}
 
-            Text("\(accounts.count)")
-                .font(.plexMono(11, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
+/// 24pt icon-only action (switch, log in, cancel, remove…). The tooltip and
+/// accessibility label carry the meaning the missing text would.
+private struct AccountMenuIconButton: View {
+    let systemName: String
+    let help: String
+    var tint: Color = VocabbyTheme.blue
+    var filled = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(filled ? VocabbyTheme.background : tint)
+                .frame(width: 24, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                        .fill(VocabbyTheme.segment)
+                        .fill(filled ? tint : tint.opacity(0.10))
                 )
-            Image(systemName: revealed ? "chevron.up" : "chevron.down")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(VocabbyTheme.tertiary)
+                .contentShape(Rectangle())
         }
-        // No extra padding: `.vocabbyCard()` already pads the whole section
-        // by 10pt — stacking row padding on top was doubling the whitespace.
-        .contentShape(Rectangle())
-        .onTapGesture {
-            revealed.toggle()
-            if revealed { reload() }
-        }
+        .buttonStyle(.plain)
         .pointingHandCursor()
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// Initial on a 4pt plate — the account's "avatar", blue when in use.
+private struct AccountMonogram: View {
+    let title: String
+    let active: Bool
+
+    var body: some View {
+        Text(String(title.prefix(1)).uppercased())
+            .font(.plexMono(11, weight: .semibold))
+            .foregroundStyle(active ? Color.white : VocabbyTheme.secondary)
+            .frame(width: 24, height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .fill(active ? VocabbyTheme.blue : VocabbyTheme.group)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                    .strokeBorder(active ? Color.clear : VocabbyTheme.border, lineWidth: 1)
+            )
+    }
+}
+
+/// Last known % left as a mini bar + number; empty until the account has
+/// been used once (keeps its width so rows stay aligned).
+private struct AccountQuotaGauge: View {
+    let remaining: Int?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let remaining {
+                let color = VocabbyTheme.quotaColor(remaining: remaining)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(VocabbyTheme.track)
+                    Capsule().fill(color)
+                        .frame(width: 28 * CGFloat(max(0, min(100, remaining))) / 100)
+                }
+                .frame(width: 28, height: 4)
+                Text("\(remaining)%")
+                    .font(.plexMono(11, weight: .semibold))
+                    .foregroundStyle(color)
+                    .frame(minWidth: 34, alignment: .trailing)
+            }
+        }
+        .frame(minWidth: 68, alignment: .trailing)
+    }
+}
+
+/// One account row: monogram, email + mono meta, last known quota, then an
+/// icon: ✓ when in use, ⇄ to switch (the whole row switches too), and a
+/// trash revealed on hover that confirms in place.
+private struct AccountMenuRowView: View {
+    let entry: AccountMenuEntry
+    let language: String
+    let disabled: Bool
+    let confirmingRemoval: Bool
+    let removeConfirmText: String
+    let onSwitch: () -> Void
+    let onLogin: () -> Void
+    let onAskRemove: () -> Void
+    let onCancelRemove: () -> Void
+    let onConfirmRemove: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Group {
+            if confirmingRemoval { confirmRow } else { accountRow }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(hovering && canSwitch ? VocabbyTheme.hoverSurface : Color.clear)
+        .onHover { hovering = $0 }
     }
 
-    private func accountRow(_ account: CodexAccount) -> some View {
-        let quota = accountQuotaBadge(for: account)
-        return HStack(spacing: 10) {
-            Image(systemName: account.id == activeID ? "largecircle.fill.circle" : "circle")
-                .font(.system(size: 14))
-                .foregroundStyle(account.id == activeID ? VocabbyTheme.blue : VocabbyTheme.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(account.email ?? (account.isSystem
-                                       ? L10n.t("provider.systemAccount", settings.appLanguage)
-                                       : L10n.t("provider.accountGeneric", settings.appLanguage)))
-                    .font(.plexSans(12, weight: .medium))
+    private var canSwitch: Bool { !entry.isActive && !entry.needsLogin && !disabled }
+
+    private var meta: String {
+        var parts = entry.subtitle.isEmpty ? [] : [entry.subtitle]
+        if entry.isDefault { parts.append(L10n.t("acctMenu.default", language)) }
+        return parts.joined(separator: " · ").uppercased()
+    }
+
+    private var accountRow: some View {
+        HStack(spacing: 10) {
+            AccountMonogram(title: entry.title, active: entry.isActive)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.title)
+                    .font(.plexSans(12, weight: entry.isActive ? .semibold : .regular))
                     .foregroundStyle(VocabbyTheme.primary)
                     .lineLimit(1)
-                Text(account.isSystem
-                     ? L10n.t("provider.systemManaged", settings.appLanguage)
-                     : L10n.t("provider.appManaged", settings.appLanguage))
-                    .font(.plexSans(10))
-                    .foregroundStyle(VocabbyTheme.secondary)
-            }
-            Spacer(minLength: 6)
-            Text(quota.text)
-                .font(.plexMono(10, weight: .semibold))
-                .foregroundStyle(quota.color)
-                .lineLimit(1)
-                .accessibilityLabel(quota.help)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .frame(minWidth: 34)
-                .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(quota.surface)
-                )
-                .help(quota.help)
-            if isCLIIdentity(account) {
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 9, weight: .bold))
-                    Text(L10n.t("popover.accountSelected", settings.appLanguage))
-                        .font(.plexMono(9, weight: .semibold))
+                    .truncationMode(.middle)
+                if !meta.isEmpty {
+                    Text(meta)
+                        .font(.plexMono(10))
+                        .foregroundStyle(entry.needsLogin ? VocabbyTheme.yellow : VocabbyTheme.muted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                .foregroundStyle(VocabbyTheme.success)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !entry.needsLogin {
+                AccountQuotaGauge(remaining: entry.quotaRemaining)
+            }
+            Group {
+                if entry.needsLogin {
+                    AccountMenuIconButton(systemName: "person.badge.key",
+                                          help: L10n.t("acctMenu.login", language), action: onLogin)
+                        .disabled(disabled)
+                } else if entry.isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(VocabbyTheme.success)
+                        .frame(width: 24, height: 24)
+                        .help(L10n.t("acctMenu.inUse", language))
+                        .accessibilityLabel(L10n.t("acctMenu.inUse", language))
+                } else {
+                    AccountMenuIconButton(systemName: "arrow.left.arrow.right",
+                                          help: L10n.f("popover.cliCard.switchTo", language, entry.title),
+                                          tint: disabled ? VocabbyTheme.disabled : VocabbyTheme.blue,
+                                          action: onSwitch)
+                        .disabled(disabled)
+                }
+            }
+            AccountMenuIconButton(systemName: "trash", help: L10n.t("acctMenu.removeHelp", language),
+                                  tint: VocabbyTheme.critical, action: onAskRemove)
+                .opacity(entry.canRemove && hovering ? 1 : 0)
+                .disabled(disabled || !entry.canRemove || !hovering)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if canSwitch { onSwitch() } }
+        .pointingHandCursor(enabled: canSwitch)
+    }
+
+    private var confirmRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(VocabbyTheme.critical)
+                .frame(width: 24, height: 24)
+            Text(removeConfirmText)
+                .font(.plexSans(11))
+                .foregroundStyle(VocabbyTheme.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            AccountMenuIconButton(systemName: "xmark", help: L10n.t("acctMenu.cancel", language),
+                                  tint: VocabbyTheme.secondary, action: onCancelRemove)
+                .disabled(disabled)
+            AccountMenuIconButton(systemName: "trash.fill", help: L10n.t("acctMenu.remove", language),
+                                  tint: VocabbyTheme.critical, filled: true, action: onConfirmRemove)
+                .disabled(disabled)
+        }
+    }
+}
+
+/// Spinner row while a browser login for a new account is in progress.
+private struct AccountMenuWaitingRow: View {
+    let language: String
+    let onCancel: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small).frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.t("acctMenu.waiting", language))
+                    .font(.plexSans(12))
+                    .foregroundStyle(VocabbyTheme.primary)
+                Text(L10n.t("acctMenu.waitingHint", language))
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let onCancel {
+                AccountMenuIconButton(systemName: "xmark", help: L10n.t("acctMenu.cancel", language),
+                                      tint: VocabbyTheme.secondary, action: onCancel)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+}
+
+/// Inline note inside a menu (hint, prompt, warning) with optional buttons.
+private struct AccountMenuNote<Actions: View>: View {
+    let icon: String
+    let text: String
+    var warning = false
+    @ViewBuilder let actions: () -> Actions
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 24)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(text)
+                    .font(.plexSans(11))
+                    .fixedSize(horizontal: false, vertical: true)
+                actions()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .foregroundStyle(warning ? VocabbyTheme.yellow : VocabbyTheme.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(warning ? VocabbyTheme.warningSurface : VocabbyTheme.group)
+    }
+}
+
+/// Text button for the one decision that needs words (the Terminal prompt).
+private struct AccountMenuButton: View {
+    let title: String
+    var primary = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.plexSans(11, weight: .semibold))
+                .foregroundStyle(primary ? VocabbyTheme.background : VocabbyTheme.secondary)
+                .padding(.horizontal, 10)
+                .frame(height: 24)
                 .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(VocabbyTheme.successSurface)
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .fill(primary ? VocabbyTheme.blue : Color.clear)
                 )
-            } else {
-                Button {
-                    Task { await switchCLI(to: account) }
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.blue)
-                        .frame(width: 20, height: 20)
+                .overlay(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .strokeBorder(primary ? Color.clear : VocabbyTheme.border, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+}
+
+/// Hairline between menu sections.
+private struct AccountMenuRule: View {
+    var body: some View { VocabbyTheme.hairline.frame(height: 1) }
+}
+
+/// "+ Add account" row and a one-line footer: terminal icon, state, and an
+/// optional icon action (enable for Terminal).
+private struct AccountMenuFooter: View {
+    let language: String
+    let addDisabled: Bool
+    let footerText: String
+    var footerOK = true
+    var footerAction: (title: String, run: () -> Void)?
+    let onAdd: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onAdd) {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 24, height: 24)
                         .background(
                             RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                                .fill(VocabbyTheme.blue.opacity(0.10))
+                                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                         )
+                    Text(L10n.t("acctMenu.add", language)).font(.plexSans(12))
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
-                .help(switchHelp(for: account))
-                .accessibilityLabel(switchHelp(for: account))
-                .disabled(busy)
+                .foregroundStyle(addDisabled ? VocabbyTheme.disabled : VocabbyTheme.blue)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
             }
-            if canRemove(account) {
-                if accountPendingRemoval?.id == account.id {
-                    // Xác nhận xoá NGAY TẠI DÒNG (thay overlay popup — đồng nhất
-                    // với tab Antigravity).
-                    Button {
-                        dismissRemoveConfirmation()
-                    } label: {
-                        Text(L10n.t("ccx.pasteJSON.cancel", settings.appLanguage))
-                            .font(.plexSans(11, weight: .medium))
-                            .foregroundStyle(VocabbyTheme.secondary)
-                            .padding(.horizontal, 8)
-                            .frame(height: 24)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busy)
-                    Button {
-                        removeAccount(account)
-                    } label: {
-                        Text(removeConfirmationButtonTitle)
-                            .font(.plexSans(11, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.background)
-                            .padding(.horizontal, 10)
-                            .frame(height: 24)
-                            .background(
-                                RoundedRectangle(
-                                    cornerRadius: InstrumentShape.controlRadius,
-                                    style: .continuous
-                                )
-                                .fill(VocabbyTheme.critical)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(busy)
-                } else {
-                    Button {
-                        confirmRemove(account)
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(VocabbyTheme.critical)
-                            .frame(width: 18, height: 18)
-                    }
-                    .buttonStyle(.plain)
-                    .help(removeHelp(for: account))
-                    .disabled(busy)
+            .buttonStyle(.plain)
+            .disabled(addDisabled)
+            .pointingHandCursor(enabled: !addDisabled)
+            AccountMenuRule()
+            HStack(spacing: 10) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(footerOK ? VocabbyTheme.success : VocabbyTheme.tertiary)
+                    .frame(width: 24)
+                Text(footerText.uppercased())
+                    .font(.plexMono(10))
+                    .foregroundStyle(VocabbyTheme.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 6)
+                if let footerAction {
+                    AccountMenuIconButton(systemName: "power", help: footerAction.title,
+                                          action: footerAction.run)
                 }
             }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 36)
         }
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            // Selecting a row also installs it into ~/.codex/auth.json —
-            // "selected" must mean the CLI account, not just the viewed one.
-            Task { await switchCLI(to: account) }
+    }
+}
+
+// MARK: Claude Code accounts
+
+/// Shared state for the Claude Code account menu. A singleton so a pending
+/// Terminal login keeps polling while the popover is closed.
+@MainActor
+final class ClaudeAccountMenuModel: ObservableObject {
+    static let shared = ClaudeAccountMenuModel()
+
+    enum Message: Equatable { case duplicate, failure(String) }
+
+    @Published private(set) var accounts: [ClaudeCLIAccount] = ClaudeCLIAccountStore.allAccounts()
+    @Published private(set) var activeID = ClaudeCLIAccountStore.activeID()
+    @Published private(set) var waitingLoginID: String?
+    @Published private(set) var wrapperInstalled = ClaudeCLIAccountStore.isShellWrapperInstalled()
+    @Published private(set) var backendName = ClaudeCLIAccountStore.customBackendName()
+    @Published var showTerminalPrompt = false
+    @Published var pendingRemovalID: String?
+    @Published var message: Message?
+    @Published private(set) var busy = false
+
+    var active: ClaudeCLIAccount? { accounts.first { $0.id == activeID } }
+
+    func messageText(language: String) -> String? {
+        switch message {
+        case .duplicate: L10n.t("acctMenu.duplicate", language)
+        case .failure(let text): text
+        case nil: nil
         }
-        .pointingHandCursor(enabled: !busy && !isCLIIdentity(account))
-        .help(isCLIIdentity(account)
-              ? L10n.t("popover.accountSelectedHelp", settings.appLanguage)
-              : L10n.f("popover.cliCard.switchTo", settings.appLanguage, accountLabel(account)))
     }
 
-    private struct AccountQuotaBadge {
-        let text: String
-        let color: Color
-        let surface: Color
-        let help: String
+    func reload() {
+        accounts = ClaudeCLIAccountStore.allAccounts()
+        activeID = ClaudeCLIAccountStore.activeID()
+        wrapperInstalled = ClaudeCLIAccountStore.isShellWrapperInstalled()
+        backendName = ClaudeCLIAccountStore.customBackendName()
     }
 
-    private func accountQuotaBadge(for account: CodexAccount) -> AccountQuotaBadge {
-        guard let snapshot = AccountSnapshotStore.codex.snapshot(forAccount: account.id),
-              let lowest = ProviderStatusSummary.lowestWindow(snapshot)
-        else {
-            return AccountQuotaBadge(
-                text: "—",
-                color: VocabbyTheme.tertiary,
-                surface: VocabbyTheme.segment,
-                help: L10n.t("popover.accountQuotaMissing", settings.appLanguage)
-            )
+    func refreshIdentities() async {
+        reload()
+        accounts = await ClaudeCLIAccountStore.refreshIdentities()
+    }
+
+    /// Returns true when the menu can close (no follow-up prompt to show).
+    @discardableResult
+    func switchTo(_ id: String) -> Bool {
+        message = nil
+        do {
+            try ClaudeCLIAccountStore.setActive(id)
+            reload()
+        } catch {
+            message = .failure(error.localizedDescription)
+            return false
         }
-
-        let label = L10n.windowLabel(lowest.label, preference: settings.appLanguage)
-        let color = VocabbyTheme.quotaColor(remaining: lowest.remainingPct)
-        return AccountQuotaBadge(
-            text: "\(lowest.remainingPct)%",
-            color: color,
-            surface: quotaBadgeSurface(remaining: lowest.remainingPct),
-            help: L10n.f("popover.accountQuotaHelp", settings.appLanguage, label, lowest.remainingPct)
-        )
+        if !wrapperInstalled && !UserDefaults.standard.bool(forKey: ClaudeCLIAccountStore.terminalPromptDismissedKey) {
+            showTerminalPrompt = true
+            return false
+        }
+        return true
     }
 
-    private func quotaBadgeSurface(remaining: Int) -> Color {
-        if remaining <= 20 { return VocabbyTheme.criticalSurface }
-        if remaining <= 50 { return VocabbyTheme.warningSurface }
-        return VocabbyTheme.successSurface
+    func enableTerminal() {
+        do {
+            try ClaudeCLIAccountStore.installShellWrapper()
+            showTerminalPrompt = false
+            reload()
+        } catch {
+            message = .failure(error.localizedDescription)
+        }
     }
 
-    /// Whether `account` is the one currently installed in the Codex CLI —
-    /// distinct from `activeID` (which account's quota is being *viewed*).
-    private func isCLIIdentity(_ account: CodexAccount) -> Bool {
+    func dismissTerminalPrompt() {
+        UserDefaults.standard.set(true, forKey: ClaudeCLIAccountStore.terminalPromptDismissedKey)
+        showTerminalPrompt = false
+    }
+
+    func addAccount() {
+        message = nil
+        do {
+            let id = try ClaudeCLIAccountStore.createManagedAccount()
+            reload()
+            startLogin(id)
+        } catch {
+            message = .failure(error.localizedDescription)
+        }
+    }
+
+    /// Opens Terminal on `claude auth login`, then polls `claude auth status`
+    /// for up to 5 minutes. A login that never completes, or lands on an
+    /// account already listed, removes the empty account again.
+    func startLogin(_ id: String) {
+        message = nil
+        do {
+            try ClaudeCLIAccountStore.openLoginInTerminal(id: id)
+        } catch {
+            message = .failure(error.localizedDescription)
+            return
+        }
+        waitingLoginID = id
+        Task {
+            var loggedIn = false
+            for _ in 0..<100 {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard waitingLoginID == id else { return }
+                let updated = await ClaudeCLIAccountStore.refreshIdentities()
+                accounts = updated
+                if updated.first(where: { $0.id == id })?.loggedIn == true { loggedIn = true; break }
+            }
+            guard waitingLoginID == id else { return }
+            waitingLoginID = nil
+            if !loggedIn {
+                await discardIfEmpty(id)
+            } else if isDuplicate(id) {
+                try? await ClaudeCLIAccountStore.removeManagedAccount(id)
+                message = .duplicate
+                reload()
+            }
+        }
+    }
+
+    func cancelLogin() {
+        guard let id = waitingLoginID else { return }
+        waitingLoginID = nil
+        Task { await discardIfEmpty(id) }
+    }
+
+    private func discardIfEmpty(_ id: String) async {
+        guard accounts.first(where: { $0.id == id })?.loggedIn != true else { return }
+        try? await ClaudeCLIAccountStore.removeManagedAccount(id)
+        reload()
+    }
+
+    private func isDuplicate(_ id: String) -> Bool {
+        guard let email = accounts.first(where: { $0.id == id })?.email?.lowercased() else { return false }
+        return accounts.contains { $0.id != id && $0.email?.lowercased() == email }
+    }
+
+    func remove(_ id: String) async {
+        busy = true
+        message = nil
+        defer { busy = false; pendingRemovalID = nil }
+        do {
+            try await ClaudeCLIAccountStore.removeManagedAccount(id)
+            if waitingLoginID == id { waitingLoginID = nil }
+            reload()
+        } catch {
+            message = .failure(error.localizedDescription)
+        }
+    }
+
+    func entries(language: String) -> [AccountMenuEntry] {
+        accounts.filter { $0.id != waitingLoginID }.map { account in
+            let title = account.email
+                ?? L10n.t(account.isSystem ? "provider.systemAccount" : "provider.accountGeneric", language)
+            let plan = account.subscriptionType.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            let subtitle = account.loggedIn
+                ? [plan, account.orgName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                : L10n.t("acctMenu.loginRequired", language)
+            return AccountMenuEntry(
+                id: account.id, title: title, subtitle: subtitle,
+                isDefault: account.isSystem, isActive: account.id == activeID,
+                needsLogin: !account.loggedIn && !account.isSystem,
+                canRemove: !account.isSystem,
+                quotaRemaining: lastKnownRemaining(.claude, accountID: account.id))
+        }
+    }
+}
+
+struct ClaudeAccountStrip: View {
+    @EnvironmentObject var settings: SettingsStore
+    @ObservedObject private var model = ClaudeAccountMenuModel.shared
+    @State private var isOpen = false
+
+    var body: some View {
+        let index = model.accounts.firstIndex { $0.id == model.activeID } ?? 0
+        AccountSwitchStrip(
+            language: settings.appLanguage,
+            value: accountStripValue(email: model.active?.email, index: index,
+                                     hidePersonal: settings.hidePersonalInfo, language: settings.appLanguage),
+            isOpen: $isOpen
+        ) {
+            ClaudeAccountMenu(model: model, language: settings.appLanguage) { isOpen = false }
+        }
+        .onAppear { model.reload() }
+        .onChange(of: isOpen) { _, open in
+            if open { Task { await model.refreshIdentities() } } else { model.pendingRemovalID = nil }
+        }
+    }
+}
+
+private struct ClaudeAccountMenu: View {
+    @ObservedObject var model: ClaudeAccountMenuModel
+    let language: String
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let backend = model.backendName {
+                AccountMenuNote(icon: "exclamationmark.triangle",
+                                text: L10n.f("acctMenu.backendNotice", language, backend),
+                                warning: true) { EmptyView() }
+                AccountMenuRule()
+            }
+            ForEach(model.entries(language: language)) { entry in
+                AccountMenuRowView(
+                    entry: entry, language: language, disabled: model.busy,
+                    confirmingRemoval: model.pendingRemovalID == entry.id,
+                    removeConfirmText: L10n.f("acctMenu.removeConfirm", language, entry.title),
+                    onSwitch: { if model.switchTo(entry.id) { close() } },
+                    onLogin: { model.startLogin(entry.id) },
+                    onAskRemove: { model.pendingRemovalID = entry.id },
+                    onCancelRemove: { model.pendingRemovalID = nil },
+                    onConfirmRemove: { Task { await model.remove(entry.id) } })
+                AccountMenuRule()
+            }
+            if model.waitingLoginID != nil {
+                AccountMenuWaitingRow(language: language) { model.cancelLogin() }
+                AccountMenuRule()
+            }
+            if model.showTerminalPrompt {
+                AccountMenuNote(icon: "terminal", text: L10n.t("acctMenu.terminalPrompt", language)) {
+                    HStack(spacing: 6) {
+                        AccountMenuButton(title: L10n.t("acctMenu.enableTerminal", language), primary: true) {
+                            model.enableTerminal()
+                        }
+                        AccountMenuButton(title: L10n.t("acctMenu.quotaOnly", language)) {
+                            model.dismissTerminalPrompt()
+                            close()
+                        }
+                    }
+                }
+                AccountMenuRule()
+            } else if model.accounts.count == 1 && model.waitingLoginID == nil {
+                AccountMenuNote(icon: "person.2", text: L10n.t("acctMenu.singleHint", language)) { EmptyView() }
+                AccountMenuRule()
+            }
+            if let message = model.messageText(language: language) {
+                Text(message)
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.critical)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                AccountMenuRule()
+            }
+            AccountMenuFooter(
+                language: language,
+                addDisabled: model.waitingLoginID != nil || model.busy,
+                footerText: L10n.t(model.wrapperInstalled ? "acctMenu.claudeFooter" : "acctMenu.claudeFooterOff",
+                                   language),
+                footerOK: model.wrapperInstalled,
+                footerAction: model.wrapperInstalled || model.showTerminalPrompt
+                    ? nil : (L10n.t("acctMenu.enableTerminal", language), { model.enableTerminal() }),
+                onAdd: { model.addAccount() })
+        }
+    }
+}
+
+// MARK: Codex accounts
+
+/// Shared state for the Codex account menu. Switching installs the account
+/// into `~/.codex/auth.json` (or restores the original system login) and
+/// restarts the `codex app-server` daemon that caches the credential.
+@MainActor
+final class CodexAccountMenuModel: ObservableObject {
+    static let shared = CodexAccountMenuModel()
+
+    @Published private(set) var accounts: [CodexAccount] = []
+    @Published private(set) var cliID: String?
+    @Published private(set) var busy = false
+    @Published private(set) var adding = false
+    @Published var pendingRemovalID: String?
+    @Published var errorText: String?
+
+    func reload() {
+        // preferManagedID keeps the switched-in managed account listed after
+        // a CLI switch (the system row becomes its mirror and is hidden).
+        cliID = CodexAccountStore.cliSwitchedID()
+        accounts = CodexAccountStore.allAccounts(preferManagedID: cliID)
+        if !accounts.contains(where: { $0.id == CodexAccountStore.activeID() }), let first = accounts.first {
+            CodexAccountStore.setActive(first.id)
+        }
+    }
+
+    /// Whether `account` is the one currently installed in the Codex CLI.
+    func isCLIIdentity(_ account: CodexAccount) -> Bool {
         account.id == "system" ? cliID == nil : account.id == cliID
     }
 
-    private func canRemove(_ account: CodexAccount) -> Bool {
-        !account.isSystem || accounts.count > 1
-    }
+    var active: CodexAccount? { accounts.first(where: isCLIIdentity) }
 
-    private func accountLabel(_ account: CodexAccount) -> String {
-        account.email ?? L10n.t(account.isSystem ? "provider.systemAccount" : "provider.accountGeneric",
-                                settings.appLanguage)
-    }
-
-    private var removeConfirmationTitle: String {
-        guard let accountPendingRemoval else {
-            return L10n.t("provider.removeAccount", settings.appLanguage)
-        }
-        return L10n.f("provider.removeAccountTitle", settings.appLanguage, accountLabel(accountPendingRemoval))
-    }
-
-    private var removeConfirmationButtonTitle: String {
-        guard let accountPendingRemoval, accountPendingRemoval.isSystem else {
-            return L10n.t("provider.removeAccount", settings.appLanguage)
-        }
-        return L10n.t("provider.removeSystemAccount", settings.appLanguage)
-    }
-
-    private var removeConfirmationMessage: String {
-        guard let accountPendingRemoval else { return "" }
-        return L10n.t(accountPendingRemoval.isSystem
-                     ? "provider.removeSystemAccountMessage"
-                     : "provider.removeAccountMessage",
-                     settings.appLanguage)
-    }
-
-    private func removeHelp(for account: CodexAccount) -> String {
-        L10n.t(account.isSystem ? "provider.removeSystemAccount" : "provider.removeAccount",
-               settings.appLanguage)
-    }
-
-    private func switchHelp(for account: CodexAccount) -> String {
-        if isCLIIdentity(account) {
-            return L10n.t("popover.accountSelectedHelp", settings.appLanguage)
-        }
-        if account.isSystem {
-            return L10n.t("popover.restoreCLI", settings.appLanguage)
-        }
-        return L10n.f("popover.cliCard.switchTo", settings.appLanguage, accountLabel(account))
-    }
-
-    private func confirmRemove(_ account: CodexAccount) {
-        accountPendingRemoval = account
-    }
-
-    private func dismissRemoveConfirmation() {
-        accountPendingRemoval = nil
-    }
-
-    private var addAccountRow: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 7) {
-                if busy {
-                    ProgressView().controlSize(.small)
-                    Text(L10n.t("provider.waitingLogin", settings.appLanguage))
-                        .font(.plexSans(11))
-                        .foregroundStyle(VocabbyTheme.secondary)
-                } else {
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 12))
-                    Text(L10n.t("provider.addAccount", settings.appLanguage))
-                        .font(.plexSans(12))
-                }
-            }
-            if let addAccountErrorText {
-                Text(L10n.f("provider.addAccountFailed", settings.appLanguage, addAccountErrorText))
-                    .font(.plexSans(10))
-                    .foregroundStyle(VocabbyTheme.critical)
-                    .lineLimit(2)
-            }
-        }
-        .foregroundStyle(VocabbyTheme.blue)
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !busy else { return }
-            Task { await addAccount() }
-        }
-        .pointingHandCursor(enabled: !busy)
-    }
-
-    /// CLI switch card: terminal context on the left, explicit account-switch
-    /// button on the right. The action installs the selected account into the
-    /// CLI (or restores the original system login when the system account is
-    /// selected), so the control must not look like an app power toggle.
-    private var switchRow: some View {
-        let lang = settings.appLanguage
-        let alreadyInCLI = CodexAccountStore.isAlreadyCLIIdentity(selectedID: activeID, trackedID: cliID)
-        let tint = alreadyInCLI ? VocabbyTheme.success : VocabbyTheme.blue
-        let selected = accounts.first(where: { $0.id == activeID })
-        let selectedLabel = selected?.email
-            ?? L10n.t(selected?.isSystem == true ? "provider.systemAccount" : "provider.accountGeneric", lang)
-        let hint = alreadyInCLI
-            ? L10n.t("popover.accountSelectedHelp", lang)
-            : (activeID == "system"
-               ? L10n.t("popover.restoreCLI", lang)
-               : L10n.f("popover.cliCard.switchTo", lang, selectedLabel))
-
-        return HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "terminal")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 30, height: 30)
-                .background(tint.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text(L10n.t("popover.cliCard.title", lang))
-                        .font(.plexSans(12, weight: .semibold))
-                        .foregroundStyle(VocabbyTheme.primary)
-                    HStack(spacing: 3) {
-                        Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath.circle.fill")
-                            .font(.system(size: 9, weight: .bold))
-                        Text(L10n.t(alreadyInCLI ? "popover.accountSelected" : "popover.switchReady", lang))
-                            .font(.plexMono(10, weight: .semibold))
-                    }
-                    .foregroundStyle(tint)
-                }
-                Text(hint)
-                    .font(.plexSans(11))
-                    .foregroundStyle(VocabbyTheme.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let switchErrorText {
-                    Text(L10n.f("popover.switchFailed", lang, switchErrorText))
-                        .font(.plexSans(10))
-                        .foregroundStyle(VocabbyTheme.critical)
-                        .lineLimit(1)
-                } else {
-                    Text("~/.codex/auth.json")
-                        .font(.plexMono(10))
-                        .foregroundStyle(VocabbyTheme.tertiary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            Button {
-                guard !alreadyInCLI else { return }
-                Task { await switchCLI() }
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(switchButtonGradient(alreadyInCLI: alreadyInCLI))
-                        .frame(width: 58, height: 58)
-                        .shadow(
-                            color: alreadyInCLI ? .clear : VocabbyTheme.brandBlue.opacity(0.45),
-                            radius: alreadyInCLI ? 0 : 16
-                        )
-                        .overlay(
-                            Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
-                        )
-
-                    if busy && !alreadyInCLI {
-                        ProgressView()
-                            .controlSize(.regular)
-                            .tint(.white)
-                    } else {
-                        Image(systemName: alreadyInCLI ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                }
-                .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(busy || alreadyInCLI)
-            .help(hint)
-            .accessibilityLabel(hint)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(VocabbyTheme.group)
-        .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
-                .stroke(VocabbyTheme.border, lineWidth: 1)
-        )
-        .padding(.top, 6)
-    }
-
-    private func switchButtonGradient(alreadyInCLI: Bool) -> LinearGradient {
-        if alreadyInCLI {
-            return LinearGradient(
-                colors: [VocabbyTheme.success.opacity(0.90), VocabbyTheme.success],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-        return LinearGradient(
-            colors: [VocabbyTheme.brandBlue, VocabbyTheme.blue],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private func reload() {
-        // preferManagedID keeps the switched-in managed account listed after
-        // a CLI switch (the system row becomes its mirror and is hidden), so
-        // the selection marker and "In CLI" badge stay attached to real rows.
-        cliID = CodexAccountStore.cliSwitchedID()
-        accounts = CodexAccountStore.allAccounts(preferManagedID: cliID)
-        activeID = CodexAccountStore.activeID()
-        if !accounts.contains(where: { $0.id == activeID }), let first = accounts.first {
-            CodexAccountStore.setActive(first.id)
-            activeID = first.id
-        }
-    }
-
-    private func addAccount() async {
+    @discardableResult
+    func switchTo(_ account: CodexAccount) async -> Bool {
         busy = true
-        addAccountErrorText = nil
-        accountActionErrorText = nil
+        errorText = nil
         defer { busy = false }
+        let wasCLIIdentity = account.id != "system" && CodexAccountStore.cliSwitchedID() == account.id
         do {
-            _ = try await CodexAccountStore.addAccount()
-            reload()
-        } catch {
-            addAccountErrorText = error.localizedDescription
-        }
-    }
-
-    private func switchCLI(to account: CodexAccount? = nil) async {
-        let targetID = account?.id ?? activeID
-        busy = true
-        switchErrorText = nil
-        accountActionErrorText = nil
-        defer { busy = false }
-        let wasCLIIdentity = targetID != "system" && CodexAccountStore.cliSwitchedID() == targetID
-        do {
-            if targetID == "system" {
+            if account.id == "system" {
                 try CodexAccountStore.restoreSystemCLI()
             } else {
-                try CodexAccountStore.switchCLI(to: targetID)
+                try CodexAccountStore.switchCLI(to: account.id)
             }
-            CodexAccountStore.setActive(targetID)
-            activeID = targetID
-            cliID = CodexAccountStore.cliSwitchedID()
-            if !wasCLIIdentity {
-                restartCodexAppServer()
-            }
+            CodexAccountStore.setActive(account.id)
+            if !wasCLIIdentity { restartCodexAppServer() }
             reload()
+            return true
         } catch {
-            switchErrorText = error.localizedDescription
+            errorText = error.localizedDescription
+            return false
         }
     }
 
-    /// The `codex` TUI doesn't read `auth.json` directly — it talks to a
-    /// long-running `codex app-server` managed daemon that caches the
-    /// credential in memory. Kill it (and its code-mode host) so the next
-    /// `codex` launch respawns it against the freshly written auth.json.
-    /// No-op when nothing is running. Bracket trick keeps pkill from
-    /// matching its own invocation.
+    /// The `codex` TUI talks to a long-running `codex app-server` daemon that
+    /// caches the credential in memory. Kill it (and its code-mode host) so
+    /// the next `codex` launch respawns against the new auth.json. Bracket
+    /// trick keeps pkill from matching its own invocation.
     private func restartCodexAppServer() {
         for pattern in ["[c]odex app-server", "[c]odex-code-mode-host"] {
             let p = Process()
@@ -2503,15 +2696,114 @@ struct CodexAccountsPopoverSection: View {
         }
     }
 
-    private func removeAccount(_ account: CodexAccount) {
-        accountActionErrorText = nil
+    func addAccount() async {
+        adding = true
+        errorText = nil
+        defer { adding = false }
+        do {
+            _ = try await CodexAccountStore.addAccount()
+            reload()
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    func remove(_ account: CodexAccount) {
+        errorText = nil
         do {
             try CodexAccountStore.remove(account: account, from: accounts)
             reload()
         } catch {
-            accountActionErrorText = error.localizedDescription
+            errorText = error.localizedDescription
         }
-        accountPendingRemoval = nil
+        pendingRemovalID = nil
+    }
+
+    func entries(language: String) -> [AccountMenuEntry] {
+        accounts.map { account in
+            let title = account.email
+                ?? L10n.t(account.isSystem ? "provider.systemAccount" : "provider.accountGeneric", language)
+            let snapshot = AccountSnapshotStore.codex.snapshot(forAccount: account.id)
+            return AccountMenuEntry(
+                id: account.id, title: title,
+                subtitle: snapshot?.planName ?? snapshot?.planType ?? "",
+                isDefault: account.isSystem, isActive: isCLIIdentity(account),
+                needsLogin: false,
+                canRemove: !account.isSystem || accounts.count > 1,
+                quotaRemaining: lastKnownRemaining(.codex, accountID: account.id))
+        }
+    }
+}
+
+struct CodexAccountStrip: View {
+    @EnvironmentObject var settings: SettingsStore
+    @ObservedObject private var model = CodexAccountMenuModel.shared
+    @State private var isOpen = false
+
+    var body: some View {
+        let index = model.accounts.firstIndex(where: model.isCLIIdentity) ?? 0
+        AccountSwitchStrip(
+            language: settings.appLanguage,
+            value: accountStripValue(email: model.active?.email, index: index,
+                                     hidePersonal: settings.hidePersonalInfo, language: settings.appLanguage),
+            isOpen: $isOpen
+        ) {
+            CodexAccountMenu(model: model, language: settings.appLanguage) { isOpen = false }
+        }
+        .onAppear { model.reload() }
+        .onChange(of: isOpen) { _, open in
+            if open { model.reload() } else { model.pendingRemovalID = nil }
+        }
+    }
+}
+
+private struct CodexAccountMenu: View {
+    @ObservedObject var model: CodexAccountMenuModel
+    let language: String
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.entries(language: language)) { entry in
+                let account = model.accounts.first { $0.id == entry.id }
+                AccountMenuRowView(
+                    entry: entry, language: language, disabled: model.busy || model.adding,
+                    confirmingRemoval: model.pendingRemovalID == entry.id,
+                    removeConfirmText: account?.isSystem == true
+                        ? L10n.t("provider.removeSystemAccountMessage", language)
+                        : L10n.f("acctMenu.removeConfirm", language, entry.title),
+                    onSwitch: {
+                        guard let account else { return }
+                        Task { if await model.switchTo(account) { close() } }
+                    },
+                    onLogin: {},
+                    onAskRemove: { model.pendingRemovalID = entry.id },
+                    onCancelRemove: { model.pendingRemovalID = nil },
+                    onConfirmRemove: { if let account { model.remove(account) } })
+                AccountMenuRule()
+            }
+            if model.adding {
+                AccountMenuWaitingRow(language: language, onCancel: nil)
+                AccountMenuRule()
+            } else if model.accounts.count == 1 {
+                AccountMenuNote(icon: "person.2", text: L10n.t("acctMenu.singleHint", language)) { EmptyView() }
+                AccountMenuRule()
+            }
+            if let errorText = model.errorText {
+                Text(errorText)
+                    .font(.plexSans(11))
+                    .foregroundStyle(VocabbyTheme.critical)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                AccountMenuRule()
+            }
+            AccountMenuFooter(
+                language: language,
+                addDisabled: model.adding || model.busy,
+                footerText: L10n.t("acctMenu.codexFooter", language),
+                onAdd: { Task { await model.addAccount() } })
+        }
     }
 }
 
@@ -3448,8 +3740,8 @@ struct AntigravityAccountsPopoverSection: View {
 
 // MARK: - FreeModel accounts (popover)
 
-/// FreeModel account switcher — same collapsed-card pattern as
-/// `CodexAccountsPopoverSection`: header row (icon + active account + count +
+/// FreeModel account switcher — collapsed-card pattern:
+/// header row (icon + active account + count +
 /// chevron) and expandable rows with a radio + switch/remove. Per-browser
 /// sessions are auto-detected so two browsers signed in to two accounts
 /// appear as two entries. (No add-cookie form here — the popover is a fast

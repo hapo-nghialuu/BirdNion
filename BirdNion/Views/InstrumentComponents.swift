@@ -906,3 +906,155 @@ extension View {
             .contentShape(Rectangle())
     }
 }
+
+/// Presents arbitrary SwiftUI content (the popover account menus) in a
+/// borderless child `NSPanel` anchored under its trigger, right edges aligned
+/// — same chrome and dismissal as `InstrumentMenuPanelBridge`. Content must not
+/// rely on environment objects: it is hosted in its own window, so callers
+/// pass plain values and shared models instead.
+struct AnchoredMenuPanelBridge<Content: View>: NSViewRepresentable {
+    @Binding var isOpen: Bool
+    /// nil = as wide as the trigger.
+    var width: CGFloat? = nil
+    let content: () -> Content
+
+    func makeCoordinator() -> Coordinator { Coordinator(isOpen: $isOpen) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.anchorView = view
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.anchorView = nsView
+        coordinator.isOpen = $isOpen
+        coordinator.width = width ?? max(nsView.bounds.width, 240)
+        coordinator.makeContent = { AnyView(self.content()) }
+        if isOpen {
+            coordinator.showOrUpdate()
+        } else {
+            coordinator.hide()
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.hide()
+    }
+
+    final class Coordinator {
+        var isOpen: Binding<Bool>
+        var width: CGFloat = 300
+        var makeContent: () -> AnyView = { AnyView(EmptyView()) }
+        weak var anchorView: NSView?
+        private var panel: NSPanel?
+        private var hosting: NSHostingView<AnyView>?
+        private var monitor: Any?
+        private var openGeneration = 0
+
+        init(isOpen: Binding<Bool>) { self.isOpen = isOpen }
+
+        func showOrUpdate() {
+            guard let anchor = anchorView, anchor.window != nil else { return }
+            if panel == nil { present(from: anchor) } else { layout(from: anchor) }
+        }
+
+        func hide() {
+            removeMonitor()
+            if let panel {
+                panel.parent?.removeChildWindow(panel)
+                panel.orderOut(nil)
+            }
+            panel = nil
+            hosting = nil
+        }
+
+        private func chrome(_ view: AnyView) -> AnyView {
+            AnyView(view
+                .frame(width: width, alignment: .leading)
+                .background(VocabbyTheme.background)
+                .overlay(
+                    RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)
+                        .strokeBorder(VocabbyTheme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: InstrumentShape.controlRadius, style: .continuous)))
+        }
+
+        private func present(from anchor: NSView) {
+            guard let parentWindow = anchor.window else { return }
+            let host = NSHostingView(rootView: chrome(makeContent()))
+            host.appearance = NSApp.effectiveAppearance
+            let newPanel = NSPanel(contentRect: .zero, styleMask: [.borderless],
+                                   backing: .buffered, defer: false)
+            newPanel.isOpaque = false
+            newPanel.hasShadow = true
+            newPanel.level = .popUpMenu
+            newPanel.isFloatingPanel = true
+            newPanel.hidesOnDeactivate = true
+            newPanel.becomesKeyOnlyIfNeeded = true
+            newPanel.appearance = NSApp.effectiveAppearance
+            newPanel.backgroundColor = .clear
+            newPanel.contentView = host
+            newPanel.isReleasedWhenClosed = false
+            hosting = host
+            panel = newPanel
+            layout(from: anchor)
+            parentWindow.addChildWindow(newPanel, ordered: .above)
+            newPanel.orderFront(nil)
+
+            openGeneration += 1
+            let generation = openGeneration
+            // Skip the mouse-down that opened the menu.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.openGeneration == generation else { return }
+                self.installMonitor()
+            }
+        }
+
+        /// Re-measures on every update so rows appearing or disappearing
+        /// (a pending login, an inline prompt) resize the panel.
+        private func layout(from anchor: NSView) {
+            guard let panel, let hosting, let parentWindow = anchor.window else { return }
+            let root = chrome(makeContent())
+            let fitting = NSHostingView(rootView: root).fittingSize
+            let anchorRect = parentWindow.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            let rightAligned = NSRect(x: anchorRect.maxX - width, y: anchorRect.minY,
+                                      width: width, height: anchorRect.height)
+            let anchorPoint = NSPoint(x: anchorRect.midX, y: anchorRect.midY)
+            let screen = NSScreen.screens.first { $0.frame.contains(anchorPoint) } ?? parentWindow.screen
+            guard let visibleFrame = screen?.visibleFrame else { return }
+            let frame = InstrumentMenuPanelLayout.frame(
+                anchor: rightAligned, contentHeight: fitting.height, width: width, visibleFrame: visibleFrame)
+            hosting.rootView = root
+            hosting.frame = NSRect(origin: .zero, size: frame.size)
+            panel.setFrame(frame, display: true)
+        }
+
+        private func installMonitor() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                guard let self, self.isOpen.wrappedValue else { return event }
+                if let panel = self.panel, event.window === panel { return event }
+                // A click on the trigger itself is left to its own toggle;
+                // closing here too would reopen the menu on mouse-up.
+                if let anchor = self.anchorView, anchor.window === event.window,
+                   anchor.bounds.contains(anchor.convert(event.locationInWindow, from: nil)) {
+                    return event
+                }
+                DispatchQueue.main.async {
+                    self.isOpen.wrappedValue = false
+                    self.hide()
+                }
+                return event
+            }
+        }
+
+        private func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+    }
+}

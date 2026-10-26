@@ -617,6 +617,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func closePanelIfClickOutside(event: NSEvent) {
         guard panel.isVisible else { return }
         if event.window == panel || agentDetailCoordinator.contains(window: event.window) { return }
+        // Menus anchored inside the popover (account switcher) live in child
+        // panels of it; a click there is inside the popover.
+        if let window = event.window, window.parent === panel { return }
         if let button = statusItem.button, event.window == button.window { return }
         hidePanel()
     }

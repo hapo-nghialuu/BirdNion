@@ -18,6 +18,9 @@ final class AccountSnapshotStore: @unchecked Sendable {
     /// than polling every account on every cycle.
     static let antigravity = AccountSnapshotStore(
         fileName: "antigravity-account-snapshots.json")
+    /// Keyed by `ClaudeCLIAccountStore` account id ("system" or a managed
+    /// UUID), so the account menu shows each login's last known quota.
+    static let claude = AccountSnapshotStore(fileName: "claude-account-snapshots.json")
     private static let maxStoredBytes = 2 * 1024 * 1024
 
     private let lock = NSLock()
