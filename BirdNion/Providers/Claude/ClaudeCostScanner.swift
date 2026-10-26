@@ -308,10 +308,14 @@ enum ClaudeCostScanner {
             if !roots.isEmpty { return roots }
         }
         let home = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory())
+        // Sessions of Claude Code accounts managed by BirdNion live under each
+        // account's own CLAUDE_CONFIG_DIR, so they are scanned too.
+        let managedDirs = (try? FileManager.default.contentsOfDirectory(
+            at: ClaudeCLIAccountStore.accountsDirURL(), includingPropertiesForKeys: nil)) ?? []
         return [
             home.appendingPathComponent(".config/claude/projects", isDirectory: true),
             home.appendingPathComponent(".claude/projects", isDirectory: true),
-        ]
+        ] + managedDirs.map { $0.appendingPathComponent("projects", isDirectory: true) }
     }
 
     /// Cached, off-main scan. Returns nil only if no projects root is readable.

@@ -196,10 +196,14 @@ final class ClaudeProvider: QuotaProvider {
 
         // Plan + account email come from the same Keychain blob the token lives
         // in. Only read when prompting is allowed; otherwise reuse the cache.
+        // The cache is keyed by Keychain service so switching the Claude Code
+        // account never shows the previous account's plan/email.
+        let service = ClaudeOAuthStore.keychainService
+        if cachedKeychainBlob?.service != service { cachedKeychainBlob = nil }
         if allowKeychainRead, let fresh = readKeychainData() {
-            cachedKeychainBlob = fresh
+            cachedKeychainBlob = (service, fresh)
         }
-        let keychain = KeychainRoot.decode(keychainData: cachedKeychainBlob)
+        let keychain = KeychainRoot.decode(keychainData: cachedKeychainBlob?.data)
         let planName = ClaudePlanLabeler.label(subscriptionType: keychain?.subscriptionType,
                                                rateLimitTier: keychain?.rateLimitTier)
             ?? ClaudePlanLabeler.label(fromLoginMethod: snapshot.loginMethod)
@@ -269,7 +273,7 @@ final class ClaudeProvider: QuotaProvider {
     /// Last successfully read Keychain blob — lets background refreshes keep
     /// showing plan + email without re-touching the Keychain (same memoization
     /// pattern as `cachedClaudeVersion`).
-    private static var cachedKeychainBlob: Data?
+    private static var cachedKeychainBlob: (service: String, data: Data)?
 
     /// Reads the raw `Claude Code-credentials` keychain blob via
     /// `/usr/bin/security` so an "Always Allow" grant binds to the stable

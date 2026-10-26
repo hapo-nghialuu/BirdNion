@@ -85,7 +85,11 @@ struct ClaudeOAuthCredentials: Sendable {
 
 /// Resolves + refreshes Claude OAuth credentials.
 enum ClaudeOAuthStore {
-    static let keychainService = "Claude Code-credentials"
+    /// Follows the Claude Code account selected in BirdNion: each managed
+    /// `CLAUDE_CONFIG_DIR` has its own hash-suffixed Keychain item.
+    static var keychainService: String {
+        ClaudeCLIAccountStore.keychainService(forConfigDir: ClaudeCLIAccountStore.activeConfigDir())
+    }
     static let credentialsRelativePath = ".claude/.credentials.json"
     static let defaultClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let refreshEndpoint = URL(string: "https://platform.claude.com/v1/oauth/token")!
@@ -169,7 +173,9 @@ enum ClaudeOAuthStore {
 
     private static func loadFromFile(environment: [String: String]) -> ClaudeOAuthCredentials? {
         let home = environment["HOME"] ?? NSHomeDirectory()
-        let url = URL(fileURLWithPath: home).appendingPathComponent(credentialsRelativePath)
+        let url = ClaudeCLIAccountStore.activeConfigDir()
+            .map { URL(fileURLWithPath: $0).appendingPathComponent(".credentials.json") }
+            ?? URL(fileURLWithPath: home).appendingPathComponent(credentialsRelativePath)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return ClaudeOAuthCredentials.parse(data: data)
     }

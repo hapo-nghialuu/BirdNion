@@ -199,12 +199,21 @@ final class QuotaService: ObservableObject {
         let snapshotAccountKey: String? = switch status.id {
         case "codex": CodexAccountStore.activeSelection().id
         case "antigravity": AntigravityOAuthStore.load().activeLabel
+        case "claude": ClaudeCLIAccountStore.activeID()
         default: nil
         }
         guard let snapshotAccountKey else { return }
         switch status.id {
         case "codex": codexSnapshotSave(status, snapshotAccountKey)
         case "antigravity": antigravitySnapshotSave(status, snapshotAccountKey)
+        case "claude":
+            // A web-cookie fallback can report another account's quota; only
+            // keep a snapshot whose email matches the selected login.
+            let expected = ClaudeCLIAccountStore.allAccounts()
+                .first { $0.id == snapshotAccountKey }?.email?.lowercased()
+            if let expected, let label = status.accountLabel?.lowercased(),
+               label.contains("@"), label != expected { return }
+            AccountSnapshotStore.claude.save(status, forAccount: snapshotAccountKey)
         default: break
         }
     }
@@ -433,6 +442,17 @@ final class QuotaService: ObservableObject {
                 self.invalidateProviderContext(for: "codex")
                 self.applyCachedCodexStatus()
                 self.scheduleSettingsRefresh(for: "codex")
+            }
+        })
+        // Claude account switch (Claude Code login or web/admin token): drop
+        // the old account's context and refetch.
+        notificationObservers.append(NotificationCenter.default.addObserver(
+            forName: .birdnionClaudeAccountChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.invalidateProviderContext(for: "claude")
+                self.scheduleSettingsRefresh(for: "claude")
             }
         })
         loopTask = Task { [weak self] in
