@@ -902,10 +902,6 @@ enum GrokCostScanner {
     }
 
     private static func parseISO8601(_ raw: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: raw) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: raw)
+        LocalCostParsing.isoDate(raw)
     }
 }

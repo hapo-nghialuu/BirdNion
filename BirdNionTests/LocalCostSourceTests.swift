@@ -3,6 +3,14 @@ import XCTest
 
 final class LocalCostSourceTests: XCTestCase {
 
+    func testISODateParsesWithAndWithoutFractionalSeconds() {
+        XCTAssertEqual(LocalCostParsing.isoDate("2026-07-15T06:20:44.636Z")?.timeIntervalSince1970 ?? 0,
+                       1_784_096_444.636, accuracy: 0.001)
+        XCTAssertEqual(LocalCostParsing.isoDate("2026-07-15T06:20:44Z")?.timeIntervalSince1970, 1_784_096_444)
+        XCTAssertNil(LocalCostParsing.isoDate("not a date"))
+    }
+
+
     private func turns(_ object: Any, cutoff: Date = .distantPast) -> [LocalTurnRecord] {
         GenericJsonCostSource.turns(in: object, cutoff: cutoff, dedupePrefix: "t")
     }
