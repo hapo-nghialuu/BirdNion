@@ -931,10 +931,6 @@ enum ClaudeCostScanner {
 
     private static func parseISODate(_ s: String?) -> Date? {
         guard let s, !s.isEmpty else { return nil }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
+        return LocalCostParsing.isoDate(s)
     }
 }

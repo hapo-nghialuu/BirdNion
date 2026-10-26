@@ -23,13 +23,17 @@ enum LocalCostParsing {
         if let seconds = value as? Double { return epochDate(seconds) }
         if let int = value as? Int { return epochDate(Double(int)) }
         if let string = value as? String {
-            if let date = isoFormatterWithFractional.date(from: string)
-                ?? isoFormatter.date(from: string) {
-                return date
-            }
+            if let date = isoDate(string) { return date }
             if let number = Double(string) { return epochDate(number) }
         }
         return nil
+    }
+
+    /// ISO-8601 with or without fractional seconds. Formatters are costly to
+    /// build (ICU locale data), and log scanners call this once per line, so
+    /// the shared instances are reused; ISO8601DateFormatter is thread-safe.
+    static func isoDate(_ string: String) -> Date? {
+        isoFormatterWithFractional.date(from: string) ?? isoFormatter.date(from: string)
     }
 
     /// Epoch unit by magnitude: seconds (<1e11), milliseconds (<1e14),

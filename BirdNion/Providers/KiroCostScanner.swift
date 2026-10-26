@@ -1486,11 +1486,7 @@ enum KiroCostScanner {
     /// ISO8601 with or without fractional seconds ("2026-07-15T06:20:44.636576Z").
     static func parseISODate(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: raw) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: raw)
+        return LocalCostParsing.isoDate(raw)
     }
 
     private static func activityDeadline(now: Date) -> Date {
