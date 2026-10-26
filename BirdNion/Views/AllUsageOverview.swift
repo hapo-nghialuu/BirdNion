@@ -1877,7 +1877,7 @@ struct DayDetailPanelRoot: View {
 
     private var vi: Bool { L10n.languageCode(settings.appLanguage) == "vi" }
 
-    private struct AgentSlice: Identifiable {
+    struct AgentSlice: Identifiable {
         let id: String
         let name: String
         let color: AnyShapeStyle
@@ -1885,8 +1885,11 @@ struct DayDetailPanelRoot: View {
         let tokens: Int
     }
 
-    private var slices: [AgentSlice] {
-        [
+    private var slices: [AgentSlice] { Self.agentSlices(for: day) }
+
+    /// Agents used on `day`, busiest first. Unused agents get no row.
+    static func agentSlices(for day: CombinedDailyUsage) -> [AgentSlice] {
+        ([
             AgentSlice(id: "claude", name: "Claude Code", color: AnyShapeStyle(VocabbyTheme.chartClaude),
                        usd: day.claudeUSD, tokens: day.claudeTokens),
             AgentSlice(id: "codex", name: "Codex CLI", color: AnyShapeStyle(VocabbyTheme.chartCodex),
@@ -1905,7 +1908,9 @@ struct DayDetailPanelRoot: View {
             AgentSlice(id: key, name: LocalAgentCostEngine.displayName(sourceRawValue: key),
                        color: AnyShapeStyle(VocabbyTheme.chartExtraSource(key)),
                        usd: day.extras[key]?.usd ?? 0, tokens: day.extras[key]?.tokens ?? 0)
-        }
+        })
+        // Parenthesized so filter and sort cover the built-in agents too, not
+        // only the extras appended last.
         .filter { $0.usd > 0 || $0.tokens > 0 }
         // Xếp theo TOKEN, không theo tiền: giá mỗi model chênh nhau hàng chục
         // lần nên thứ tự theo tiền che mất nơi khối lượng thật sự nằm ở đâu.

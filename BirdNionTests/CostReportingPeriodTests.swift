@@ -63,4 +63,17 @@ final class CostReportingPeriodTests: XCTestCase {
         XCTAssertEqual(CostReportingPeriod(legacyDays: 120), .season)
         XCTAssertNil(CostReportingPeriod(legacyDays: 0))
     }
+
+    // Day detail lists only agents that were used that day, busiest first.
+    func testDayDetailAgentRowsHideUnusedAgentsAndSortByTokens() {
+        var day = CombinedDailyUsage(
+            date: Date(timeIntervalSince1970: 0),
+            claudeUSD: 1, claudeTokens: 100,
+            codexUSD: 2, codexTokens: 500)
+        day.extras = [
+            "gemini": SourceUsageSlice(usd: 0, tokens: 0),
+            "copilot": SourceUsageSlice(usd: 0, tokens: 300),
+        ]
+        XCTAssertEqual(DayDetailPanelRoot.agentSlices(for: day).map(\.id), ["codex", "copilot", "claude"])
+    }
 }
