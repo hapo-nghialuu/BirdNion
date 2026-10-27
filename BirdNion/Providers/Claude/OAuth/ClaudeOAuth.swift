@@ -189,7 +189,11 @@ enum ClaudeOAuthStore {
     /// back to the CLI credentials file.
     static func readKeychainData(allowPrompt: Bool) -> Data? {
         guard !UserDefaults.standard.bool(forKey: "debugDisableKeychainAccess") else { return nil }
-        if allowPrompt {
+        // A BirdNion-managed account's item is written by Claude Code through
+        // /usr/bin/security, which is therefore on its ACL and reads it without
+        // a dialog. The app itself was never granted access to that new item,
+        // so the no-UI read below would fail on every background refresh.
+        if allowPrompt || ClaudeCLIAccountStore.activeConfigDir() != nil {
             // Prompt-allowed reads go through /usr/bin/security: Claude Code
             // rewrites the item (resetting its ACL) on every token refresh, so
             // an "Always Allow" bound to the Apple-signed `security` binary is
