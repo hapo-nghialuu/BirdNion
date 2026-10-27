@@ -200,7 +200,10 @@ final class ClaudeProvider: QuotaProvider {
         // account never shows the previous account's plan/email.
         let service = ClaudeOAuthStore.keychainService
         if cachedKeychainBlob?.service != service { cachedKeychainBlob = nil }
-        if allowKeychainRead, let fresh = readKeychainData() {
+        // Managed accounts read silently via /usr/bin/security (see
+        // ClaudeOAuthStore.readKeychainData), so background refreshes may too.
+        let canReadKeychain = allowKeychainRead || ClaudeCLIAccountStore.activeConfigDir() != nil
+        if canReadKeychain, let fresh = readKeychainData() {
             cachedKeychainBlob = (service, fresh)
         }
         let keychain = KeychainRoot.decode(keychainData: cachedKeychainBlob?.data)
