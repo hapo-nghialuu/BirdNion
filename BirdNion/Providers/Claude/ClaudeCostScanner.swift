@@ -473,6 +473,13 @@ enum ClaudeCostScanner {
         var scannedBytes = 0
         var scannedEntries = 0
 
+        // Walk every root first, then scan newest files first: when the byte
+        // budget runs out on a large history, only the oldest days are cut
+        // (they are already kept by CostHistoryStore). Walking roots in order
+        // and files by path let a 2GB+ `~/.claude` exhaust the budget before
+        // today's sessions, or a later root such as a managed account dir,
+        // were ever read.
+        var files: [(url: URL, root: URL, size: Int, mtime: Date)] = []
         rootLoop:
         for root in roots {
             if Task.isCancelled {
@@ -502,8 +509,6 @@ enum ClaudeCostScanner {
                 continue
             }
             anyRoot = true
-            var files: [(url: URL, size: Int)] = []
-            var fileBudgetExhausted = false
             for case let url as URL in enumerator {
                 if Task.isCancelled {
                     completed = false
@@ -511,16 +516,13 @@ enum ClaudeCostScanner {
                 }
                 if walkedEntries >= maxWalkEntries {
                     completed = false
-                    fileBudgetExhausted = true
-                    enumerator.skipDescendants()
-                    break
+                    break rootLoop
                 }
                 walkedEntries += 1
                 guard url.pathExtension == "jsonl" else { continue }
-                if scannedFiles + files.count >= maxScanFiles {
+                if files.count >= maxScanFiles {
                     completed = false
-                    fileBudgetExhausted = true
-                    break
+                    break rootLoop
                 }
                 guard let values = try? url.resourceValues(forKeys: [
                     .contentModificationDateKey, .fileSizeKey, .isRegularFileKey,
@@ -542,48 +544,48 @@ enum ClaudeCostScanner {
                     completed = false
                     continue
                 }
-                files.append((url, size))
+                files.append((url, root, size, mtime))
             }
             if enumerationFailed { completed = false }
-            // Sorted so keep-last dedup is deterministic across runs.
-            for file in files.sorted(by: { $0.url.path < $1.url.path }) {
-                if Task.isCancelled
-                    || scannedFiles >= maxScanFiles
-                    || scannedBytes > maxScanBytes - file.size
-                    || scannedEntries >= maxScanEntries
-                {
-                    completed = false
-                    break rootLoop
-                }
-                let fileScan = scanFileWithDay(
-                    file.url,
-                    root: root,
-                    calendar: calendar,
-                    entryLimit: maxScanEntries - scannedEntries,
-                    byteLimit: min(
-                        maxSessionFileBytes,
-                        maxScanBytes - scannedBytes))
-                scannedFiles += 1
-                scannedBytes += fileScan.bytesRead
-                scannedEntries += fileScan.entries.count
-                if !fileScan.completed { completed = false }
-                for entry in fileScan.entries {
-                    if let key = entry.key {
-                        if let current = keyed[key] {
-                            let resolution = reconciledProject(
-                                current.project, entry.project,
-                                alreadyAmbiguous: current.projectAmbiguous)
-                            keyed[key] = entry.withProject(
-                                resolution.project, ambiguous: resolution.ambiguous)
-                        } else {
-                            keyed[key] = entry
-                        }
+        }
+        // Newest first; ties by path so keep-last dedup stays deterministic.
+        files.sort { $0.mtime != $1.mtime ? $0.mtime > $1.mtime : $0.url.path < $1.url.path }
+        for file in files {
+            if Task.isCancelled
+                || scannedFiles >= maxScanFiles
+                || scannedBytes > maxScanBytes - file.size
+                || scannedEntries >= maxScanEntries
+            {
+                completed = false
+                break
+            }
+            let fileScan = scanFileWithDay(
+                file.url,
+                root: file.root,
+                calendar: calendar,
+                entryLimit: maxScanEntries - scannedEntries,
+                byteLimit: min(
+                    maxSessionFileBytes,
+                    maxScanBytes - scannedBytes))
+            scannedFiles += 1
+            scannedBytes += fileScan.bytesRead
+            scannedEntries += fileScan.entries.count
+            if !fileScan.completed { completed = false }
+            for entry in fileScan.entries {
+                if let key = entry.key {
+                    if let current = keyed[key] {
+                        let resolution = reconciledProject(
+                            current.project, entry.project,
+                            alreadyAmbiguous: current.projectAmbiguous)
+                        keyed[key] = entry.withProject(
+                            resolution.project, ambiguous: resolution.ambiguous)
                     } else {
-                        unkeyed.append(entry)
+                        keyed[key] = entry
                     }
+                } else {
+                    unkeyed.append(entry)
                 }
             }
-            if fileBudgetExhausted { break rootLoop }
         }
         // Missing optional roots are normal. A cancelled/failed attempt still
         // returns an explicit incomplete result so callers cannot mistake the
