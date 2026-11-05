@@ -59,6 +59,9 @@ final class ProviderErrorClassifierTests: XCTestCase {
         XCTAssertEqual(classify(rawError: "Claude: timeout sau 12s"), .networkUnreachableOrTimeout)
         XCTAssertEqual(classify(rawError: "Network: could not connect to host"), .networkUnreachableOrTimeout)
         XCTAssertEqual(classify(rawError: "Mất kết nối mạng"), .networkUnreachableOrTimeout)
+        // The Claude PTY probe's real wording says "timed out", not "timeout".
+        XCTAssertEqual(classify(rawError: "Claude: Claude CLI session timed out."), .networkUnreachableOrTimeout)
+        XCTAssertEqual(classify(rawError: "Claude usage probe timed out."), .networkUnreachableOrTimeout)
     }
 
     func testTokenInvalid() {
@@ -293,6 +296,7 @@ final class ProviderErrorClassifierTests: XCTestCase {
 
     func testNetworkTimeoutAndRateLimitAreTransient() {
         XCTAssertTrue(isTransientForLastGood(rawError: "Claude: timeout sau 12s"))
+        XCTAssertTrue(isTransientForLastGood(rawError: "Claude: Claude CLI session timed out."))
         XCTAssertTrue(isTransientForLastGood(rawError: "Network: could not connect to host"))
         XCTAssertTrue(isTransientForLastGood(rawError: "HTTP 429 rate limit exceeded"))
     }

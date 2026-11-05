@@ -108,7 +108,7 @@ func classify(rawError: String?) -> ProviderErrorKind? {
                              "đã chặn", "quyền truy cập", "macos denied"]
     let cookieMarkers = ["cookie", "session cookie", "cần auth", "__host-auth", "sessionkey"]
     let rateMarkers = ["rate limit", "too many", "quá nhiều"]
-    let networkMarkers = ["timeout", "network", "mạng", "offline", "could not connect"]
+    let networkMarkers = ["timeout", "timed out", "network", "mạng", "offline", "could not connect"]
     // "Never configured/logged in" is distinct from "token present but wrong":
     // the former needs the user to CONNECT a source; the latter needs them to
     // RE-PASTE/refresh one. Checked before `tokenMarkers` since several of
