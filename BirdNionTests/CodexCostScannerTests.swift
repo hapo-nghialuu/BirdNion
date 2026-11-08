@@ -4938,4 +4938,56 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertEqual(entry.codexScanTargetSize, 0)
         XCTAssertEqual(complete.last30DaysTokens, 150)
     }
+
+    /// Regression: newer Codex CLIs record a mid-session `/model` switch only as
+    /// an `event_msg` of type `thread_settings_applied`; no new `turn_context`
+    /// follows. Tokens after the switch must be attributed to the new model,
+    /// including after a compaction re-emits the session's original
+    /// `turn_context` immediately before re-applying the current settings.
+    func testThreadSettingsModelSwitchAttributesLaterTokensToNewModel() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-codex-model-switch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        func tokenCount(_ ts: String, total: Int, last: Int) -> String {
+            """
+            {"timestamp":"\(ts)","type":"event_msg","payload":{"type":"token_count","info":{\
+            "total_token_usage":{"input_tokens":\(total),"cached_input_tokens":0,"output_tokens":0},\
+            "last_token_usage":{"input_tokens":\(last),"cached_input_tokens":0,"output_tokens":0}}}}
+            """
+        }
+        func settings(_ ts: String, model: String) -> String {
+            """
+            {"timestamp":"\(ts)","type":"event_msg","payload":{"type":"thread_settings_applied",\
+            "thread_id":"switch","thread_settings":{"model":"\(model)","model_provider_id":"openai"}}}
+            """
+        }
+        let lines = [
+            #"{"timestamp":"2026-08-20T10:00:00.000Z","type":"session_meta","payload":{"id":"switch","timestamp":"2026-08-20T10:00:00.000Z"}}"#,
+            #"{"timestamp":"2026-08-20T10:00:01.000Z","type":"turn_context","payload":{"model":"gpt-6-astra"}}"#,
+            settings("2026-08-20T10:00:01.000Z", model: "gpt-6-astra"),
+            tokenCount("2026-08-20T10:00:02.000Z", total: 100, last: 100),
+            settings("2026-08-20T10:05:00.000Z", model: "gpt-6.1-sol"),
+            tokenCount("2026-08-20T10:05:01.000Z", total: 300, last: 200),
+            // Compaction: the original turn_context is re-emitted, then the
+            // current settings are re-applied.
+            #"{"timestamp":"2026-08-20T10:10:00.000Z","type":"turn_context","payload":{"model":"gpt-6-astra"}}"#,
+            settings("2026-08-20T10:10:00.000Z", model: "gpt-6.1-sol"),
+            tokenCount("2026-08-20T10:10:01.000Z", total: 340, last: 40),
+        ]
+        let file = root.appendingPathComponent("rollout-2026-08-20T10-00-00-switch.jsonl")
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: file)
+
+        let result = try CostUsageScanner.parseCodexFileCancellable(
+            fileURL: file,
+            range: CostUsageScanner.CostUsageDayRange(
+                scanSinceKey: "2026-08-19",
+                scanUntilKey: "2026-08-21"))
+
+        let day = try XCTUnwrap(result.days.values.first)
+        XCTAssertEqual(day["gpt-6-astra"]?.first, 100)
+        XCTAssertEqual(day["gpt-6.1-sol"]?.first, 240)
+        XCTAssertEqual(result.lastModel, "gpt-6.1-sol")
+    }
 }
