@@ -2074,6 +2074,7 @@ enum CostUsageScanner {
     private static let codexJSONFieldParentSessionId = Array("parent_session_id".utf8)
     private static let codexJSONFieldParentSessionIdCamel = Array("parentSessionId".utf8)
     private static let codexJSONFieldPayload = Array("payload".utf8)
+    private static let codexJSONFieldThreadSettings = Array("thread_settings".utf8)
     private static let codexJSONFieldSessionId = Array("session_id".utf8)
     private static let codexJSONFieldSessionIdCamel = Array("sessionId".utf8)
     private static let codexJSONFieldTimestamp = Array("timestamp".utf8)
@@ -2337,6 +2338,24 @@ enum CostUsageScanner {
 
                 if payloadType == "task_started" {
                     return .taskStarted(turnID: Self.codexTurnID(from: rawBuffer, in: payloadRange))
+                }
+
+                // Newer CLIs record a mid-session `/model` switch only here — no
+                // fresh `turn_context` follows — so it updates the current model
+                // exactly like a turn context does.
+                if payloadType == "thread_settings_applied" {
+                    let model = Self.extractJSONByteObjectField(
+                        Self.codexJSONFieldThreadSettings,
+                        from: rawBuffer,
+                        in: payloadRange,
+                        atDepth: 1).flatMap {
+                        Self.extractJSONByteStringField(
+                            Self.codexJSONFieldModel,
+                            from: rawBuffer,
+                            in: $0,
+                            atDepth: 1)
+                    }
+                    return .turnContext(model: model)
                 }
 
                 guard payloadType == "token_count",
@@ -3331,7 +3350,8 @@ enum CostUsageScanner {
 
                     if line.bytes.containsAscii(#""type":"event_msg""#),
                        !line.bytes.containsAscii(#""token_count""#),
-                       !line.bytes.containsAscii(#""task_started""#)
+                       !line.bytes.containsAscii(#""task_started""#),
+                       !line.bytes.containsAscii(#""thread_settings_applied""#)
                     {
                         return
                     }
@@ -3408,6 +3428,14 @@ enum CostUsageScanner {
                         guard let payload = obj["payload"] as? [String: Any] else { return }
                         if (payload["type"] as? String) == "task_started" {
                             currentTurnID = Self.codexTurnID(from: payload)
+                            return
+                        }
+                        if (payload["type"] as? String) == "thread_settings_applied" {
+                            if let settings = payload["thread_settings"] as? [String: Any],
+                               let model = settings["model"] as? String
+                            {
+                                currentModel = model
+                            }
                             return
                         }
                         guard (payload["type"] as? String) == "token_count" else { return }
