@@ -111,6 +111,12 @@ struct ClaudeModelPrice {
         if let price = hapoPrice(for: m, inputSideTokens: inputSideTokens) {
             return price
         }
+        // Fable 5.2 — $8 / $10 / $0.20 / $40 per-M, cheaper than 5.1 and 5.
+        // Checked before the `fable-5` prefix below, which would claim it.
+        if m.contains("fable-5-2") {
+            return ClaudeModelPrice(inputPerM: 8.0, cacheWritePerM: 10.0,
+                                    cacheReadPerM: 0.20, outputPerM: 40.0)
+        }
         // Fable 5.1 discounts cached reads to $0.25/M; plain Fable 5 stays at
         // $1.00/M. Checked first so the `fable-5` prefix below cannot claim it.
         if m.contains("fable-5-1") {
@@ -133,6 +139,12 @@ struct ClaudeModelPrice {
                                     cacheReadPerM: over512k ? 0.12 : 0.06,
                                     outputPerM: over512k ? 2.40 : 1.20)
         }
+        // Opus 5.5 — $4 / $5 / $0.20 / $20 per-M. Matched ahead of the generic
+        // `opus` branch, which carries Opus 5's higher card.
+        if m.contains("opus-5-5") {
+            return ClaudeModelPrice(inputPerM: 4.0, cacheWritePerM: 5.0,
+                                    cacheReadPerM: 0.20, outputPerM: 20.0)
+        }
         // Opus 4 and 4.1 kept the original $15/$75 card; only Opus 4.8 and
         // Opus 5 moved to $5/$25. Matched ahead of the generic `opus` branch.
         if m.contains("opus-4-1") || m.contains("opus-4-2025") {
@@ -144,10 +156,24 @@ struct ClaudeModelPrice {
             return ClaudeModelPrice(inputPerM: 5.0, cacheWritePerM: 6.25,
                                     cacheReadPerM: 0.50, outputPerM: 25.0)
         }
+        // Haiku 5.5 has two cards split at a 100K-token prompt: $0.10 / $0.50
+        // up to it, $0.50 / $2.50 above. Cache writes 1.25x, reads 0.1x input.
+        if m.contains("haiku-5-5") {
+            let longPrompt = inputSideTokens > 100_000
+            let input = longPrompt ? 0.50 : 0.10
+            return ClaudeModelPrice(inputPerM: input, cacheWritePerM: input * 1.25,
+                                    cacheReadPerM: input * 0.1,
+                                    outputPerM: longPrompt ? 2.50 : 0.50)
+        }
         // Haiku 4.x — $1 / $1.25 / $0.10 / $5 per-M.
         if m.contains("haiku") {
             return ClaudeModelPrice(inputPerM: 1.0, cacheWritePerM: 1.25,
                                     cacheReadPerM: 0.10, outputPerM: 5.0)
+        }
+        // Sonnet 5.5 keeps Sonnet 5's card except cached reads at $0.10/M.
+        if m.contains("sonnet-5-5") {
+            return ClaudeModelPrice(inputPerM: 2.0, cacheWritePerM: 2.50,
+                                    cacheReadPerM: 0.10, outputPerM: 10.0)
         }
         // Sonnet 5 — $2 / $2.50 / $0.20 / $10 per-M, cheaper than Sonnet 4.x.
         // Matched ahead of the generic `sonnet` branch.
@@ -248,7 +274,9 @@ enum ClaudeCostScanner {
     /// numbers: the store never shrinks a day on its own.
     /// 3 — Sonnet 5 to $2/$10, Fable 5.1 cache-read to $0.25, Opus 4/4.1 back to
     /// the $15/$75 card, and 1-hour cache writes billed at 2x fresh input.
-    static let pricingRevision = 3
+    /// 4 — own cards for Fable 5.2, Opus 5.5, Sonnet 5.5 and Haiku 5.5, which
+    /// had been priced at their older family's rates.
+    static let pricingRevision = 4
     private static let pricingRevisionKey = "claudeCostPricingRevision"
 
     static func scanDaysForHistory(storedPricingRevision: Int,
