@@ -923,6 +923,28 @@ final class ClaudeNativeTests: XCTestCase {
         XCTAssertEqual(fable5.cacheReadPerM, 1.0, accuracy: 0.0001)
     }
 
+    /// The 5.5 / 5.2 generation is cheaper than the family it would otherwise
+    /// fall into through the generic `fable-5` / `opus` / `sonnet-5` / `haiku`
+    /// prefixes. Rates are Anthropic's published per-MTok card.
+    func testClaudeCurrentGenerationPrices() throws {
+        func assertPrice(_ model: String, inputSide: Int = 0,
+                         _ input: Double, _ write: Double, _ read: Double, _ output: Double) throws {
+            let p = try XCTUnwrap(ClaudeModelPrice.price(for: model, inputSideTokens: inputSide), model)
+            XCTAssertEqual(p.inputPerM, input, accuracy: 0.0001, "\(model) input")
+            XCTAssertEqual(p.cacheWritePerM, write, accuracy: 0.0001, "\(model) cache write")
+            XCTAssertEqual(p.cacheReadPerM, read, accuracy: 0.0001, "\(model) cache read")
+            XCTAssertEqual(p.outputPerM, output, accuracy: 0.0001, "\(model) output")
+        }
+        try assertPrice("claude-fable-5-2", 8.0, 10.0, 0.20, 40.0)
+        try assertPrice("claude-opus-5-5", 4.0, 5.0, 0.20, 20.0)
+        try assertPrice("claude-sonnet-5-5", 2.0, 2.50, 0.10, 10.0)
+        // Haiku 5.5 has two cards split at a 100K-token prompt.
+        try assertPrice("claude-haiku-5-5", inputSide: 100_000, 0.10, 0.125, 0.01, 0.50)
+        try assertPrice("claude-haiku-5-5", inputSide: 100_001, 0.50, 0.625, 0.05, 2.50)
+        // Older Haiku keeps its flat card.
+        try assertPrice("claude-haiku-4-5", 1.0, 1.25, 0.10, 5.0)
+    }
+
     func testHapoModelPricesAndPricingRevision() throws {
         let luna = try XCTUnwrap(ClaudeModelPrice.price(for: "openai.gpt-5.6-luna"))
         XCTAssertEqual(luna.inputPerM, 1.0, accuracy: 0.0001)
