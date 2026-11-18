@@ -92,6 +92,12 @@ struct ClaudeProjectScanResult: Equatable {
     /// Callers may high-water merge the aggregate, but must not publish it as
     /// a complete live snapshot or replace persisted history/project data.
     let completed: Bool
+    /// Set when the pass stopped only because its size budget ran out: every
+    /// day from this one on was read in full (files are read newest first and
+    /// a file's mtime is >= its newest entry), so those days are exact even
+    /// though older ones were cut. Nil when the pass completed, or when it
+    /// also skipped input for another reason and no day can be trusted.
+    var exactFrom: Date? = nil
 }
 
 /// Per-million-token prices (USD) for models recorded by Claude Code. Claude
@@ -266,6 +272,24 @@ enum ClaudeCostScanner {
     private static let maxScanWalkEntries = 100_000
     private static let maxScanBytes = 1024 * 1024 * 1024
     private static let maxScanEntries = 2_000_000
+
+    /// Size limits of one pass. Routine refreshes keep the tight defaults; a
+    /// pricing-revision rescan, which happens once, uses `.rebuild` so it can
+    /// read the whole history (several GB) and rebuild every day exactly.
+    struct ScanBudget: Equatable {
+        var files: Int
+        var bytes: Int
+        var entries: Int
+        /// Largest single session file read; long sessions pass 256MB.
+        var sessionFileBytes: Int
+
+        static let routine = ScanBudget(
+            files: maxScanFiles, bytes: maxScanBytes, entries: maxScanEntries,
+            sessionFileBytes: maxSessionFileBytes)
+        static let rebuild = ScanBudget(
+            files: 200_000, bytes: 64 * 1024 * 1024 * 1024, entries: 50_000_000,
+            sessionFileBytes: 4 * 1024 * 1024 * 1024)
+    }
     /// Bump when model pricing or counting semantics change. Existing
     /// persisted days need one full rescan; `usageReport` then applies with
     /// `replacingSource: true` so inflated high-water marks are replaced
@@ -321,11 +345,17 @@ enum ClaudeCostScanner {
     /// set it wins (comma-separated, each entry's `projects/` subdir); otherwise
     /// BOTH `~/.config/claude/projects` and `~/.claude/projects` are scanned —
     /// fixing the "reports 0 tokens" case when sessions live under `.config`.
+    /// Every place Claude Code sessions can live, so the cost covers all
+    /// accounts: the default login, each BirdNion-managed account, and any
+    /// dir named by `CLAUDE_CONFIG_DIR`. An inherited `CLAUDE_CONFIG_DIR` adds
+    /// to the list rather than replacing it — a terminal host such as Orca
+    /// exports its own profile, and the app must not narrow its scan to it.
     static func defaultProjectsRoots(
-        environment: [String: String] = ProcessInfo.processInfo.environment) -> [URL] {
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        managedAccountsDir: URL = ClaudeCLIAccountStore.accountsDirURL()) -> [URL] {
+        var roots: [URL] = []
         if let raw = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !raw.isEmpty {
-            var roots: [URL] = []
             for part in raw.split(separator: ",") {
                 let p = String(part).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !p.isEmpty else { continue }
@@ -333,17 +363,45 @@ enum ClaudeCostScanner {
                 roots.append(url.lastPathComponent == "projects"
                              ? url : url.appendingPathComponent("projects", isDirectory: true))
             }
-            if !roots.isEmpty { return roots }
         }
         let home = URL(fileURLWithPath: environment["HOME"] ?? NSHomeDirectory())
         // Sessions of Claude Code accounts managed by BirdNion live under each
         // account's own CLAUDE_CONFIG_DIR, so they are scanned too.
         let managedDirs = (try? FileManager.default.contentsOfDirectory(
-            at: ClaudeCLIAccountStore.accountsDirURL(), includingPropertiesForKeys: nil)) ?? []
-        return [
+            at: managedAccountsDir, includingPropertiesForKeys: nil)) ?? []
+        // Orca runs Claude Code under its own per-profile config dirs; those
+        // sessions are the user's usage too, wherever BirdNion was launched.
+        let orcaProfiles = home.appendingPathComponent(
+            "Library/Application Support/orca/claude-profiles", isDirectory: true)
+        let orcaDirs = (try? FileManager.default.contentsOfDirectory(
+            at: orcaProfiles, includingPropertiesForKeys: nil)) ?? []
+        roots += [
             home.appendingPathComponent(".config/claude/projects", isDirectory: true),
             home.appendingPathComponent(".claude/projects", isDirectory: true),
         ] + managedDirs.map { $0.appendingPathComponent("projects", isDirectory: true) }
+          + orcaDirs.map { $0.appendingPathComponent("home/projects", isDirectory: true) }
+        // The env dir is usually one of the managed ones; scan each dir once,
+        // comparing real paths so a symlinked spelling is not counted twice.
+        var seen = Set<String>()
+        return roots.filter { seen.insert(canonicalPath($0)).inserted }
+    }
+
+    /// Real path of `url`, resolving symlinks through its nearest existing
+    /// ancestor (a `projects` dir may not exist yet), so `/var/…` and
+    /// `/private/var/…` compare equal.
+    private static func canonicalPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var tail: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path), existing.path != "/" {
+            tail.insert(existing.lastPathComponent, at: 0)
+            existing.deleteLastPathComponent()
+        }
+        let resolved = (existing.path as NSString).resolvingSymlinksInPath
+        let real = realpath(resolved, nil).map { pointer -> String in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        } ?? resolved
+        return ([real] + tail).joined(separator: "/")
     }
 
     /// Cached, off-main scan. Returns nil only if no projects root is readable.
@@ -386,9 +444,19 @@ enum ClaudeCostScanner {
                 storedPricingRevision: storedPricingRevision,
                 incrementalDays: scanPlan.days,
                 hasStoredClaudeProjects: hasStoredClaudeProjects)
-            let projectScan = scanFullWithProjects(roots: roots, now: now, scanDays: scanDays)
+            let projectScan = scanFullWithProjects(
+                roots: roots, now: now, scanDays: scanDays,
+                maxWalkEntries: storedPricingRevision < pricingRevision
+                    ? max(maxScanWalkEntries, ScanBudget.rebuild.files * 2) : maxScanWalkEntries,
+                budget: storedPricingRevision < pricingRevision ? .rebuild : .routine)
             let live = projectScan?.report
             let completed = projectScan?.completed == true
+            let revisionPending = storedPricingRevision < pricingRevision
+            // A rescan too large to finish in one budget (GBs of logs) still
+            // reprices the days it read in full, then counts as done; without
+            // this the revision never lands and every refresh rescans it all.
+            let exactFrom = revisionPending && live != nil && !completed
+                ? projectScan?.exactFrom : nil
             let liveDays = (live?.daily ?? []).map {
                 ($0.date, $0.usd, $0.tokens,
                  $0.models.map { (name: $0.name, usd: $0.usd, tokens: $0.tokens) })
@@ -396,7 +464,7 @@ enum ClaudeCostScanner {
             // Revision bump + successful scan: replace Claude days in one
             // atomic write. If live is nil, keep prior history and leave
             // revision unset so the next run can still rescan.
-            let replacing = storedPricingRevision < pricingRevision && live != nil && completed
+            let replacing = revisionPending && live != nil && completed
             let liveScanSucceeded = live != nil && completed
             let receipt = CostHistoryStore.applyWithReceipt(
                 source: .claude,
@@ -404,6 +472,7 @@ enum ClaudeCostScanner {
                 now: now,
                 windowDays: historyDays,
                 replacingSource: replacing,
+                overwriteFrom: exactFrom,
                 liveScanSucceeded: liveScanSucceeded)
             let confidence = CostHistoryStore.confidence(
                 source: .claude,
@@ -413,12 +482,12 @@ enum ClaudeCostScanner {
                 hourly: receipt.persisted && completed ? (live?.hourly ?? []) : [],
                 now: now,
                 confidence: confidence)
-            if let projectScan, projectScan.completed {
+            if let projectScan, projectScan.completed || exactFrom != nil {
                 _ = ProjectCostHistoryStore.apply(
                     source: .claude, liveProjects: projectScan.projects,
-                    now: now, replacingSource: replacing)
+                    now: now, replacingSource: replacing, overwriteFrom: exactFrom)
             }
-            if live != nil, completed, receipt.persisted {
+            if live != nil, completed || exactFrom != nil, receipt.persisted {
                 UserDefaults.standard.set(pricingRevision, forKey: pricingRevisionKey)
                 if scanPlan.isDeep {
                     CostHistoryStore.markDeepScanSucceeded(source: .claude, at: now)
@@ -476,7 +545,8 @@ enum ClaudeCostScanner {
         roots: [URL],
         now: Date,
         scanDays: Int = historyDays,
-        maxWalkEntries: Int = maxScanWalkEntries
+        maxWalkEntries: Int = maxScanWalkEntries,
+        budget: ScanBudget = .routine
     ) -> ClaudeProjectScanResult? {
         let fm = FileManager.default
         let calendar = Calendar.current
@@ -548,7 +618,7 @@ enum ClaudeCostScanner {
                 }
                 walkedEntries += 1
                 guard url.pathExtension == "jsonl" else { continue }
-                if files.count >= maxScanFiles {
+                if files.count >= budget.files {
                     completed = false
                     break rootLoop
                 }
@@ -568,7 +638,7 @@ enum ClaudeCostScanner {
                 // Fast-path skip: files untouched inside the scan window hold
                 // no usable line (a file's mtime is >= its newest entry).
                 guard mtime >= cutoff else { continue }
-                if size > maxSessionFileBytes {
+                if size > budget.sessionFileBytes {
                     completed = false
                     continue
                 }
@@ -578,27 +648,38 @@ enum ClaudeCostScanner {
         }
         // Newest first; ties by path so keep-last dedup stays deterministic.
         files.sort { $0.mtime != $1.mtime ? $0.mtime > $1.mtime : $0.url.path < $1.url.path }
+        let walkCompleted = completed
+        var filesCompleted = true
+        var budgetStopMtime: Date?
         for file in files {
-            if Task.isCancelled
-                || scannedFiles >= maxScanFiles
-                || scannedBytes > maxScanBytes - file.size
-                || scannedEntries >= maxScanEntries
+            if Task.isCancelled {
+                completed = false
+                filesCompleted = false
+                break
+            }
+            if scannedFiles >= budget.files
+                || scannedBytes > budget.bytes - file.size
+                || scannedEntries >= budget.entries
             {
                 completed = false
+                budgetStopMtime = file.mtime
                 break
             }
             let fileScan = scanFileWithDay(
                 file.url,
                 root: file.root,
                 calendar: calendar,
-                entryLimit: maxScanEntries - scannedEntries,
+                entryLimit: budget.entries - scannedEntries,
                 byteLimit: min(
-                    maxSessionFileBytes,
-                    maxScanBytes - scannedBytes))
+                    budget.sessionFileBytes,
+                    budget.bytes - scannedBytes))
             scannedFiles += 1
             scannedBytes += fileScan.bytesRead
             scannedEntries += fileScan.entries.count
-            if !fileScan.completed { completed = false }
+            if !fileScan.completed {
+                completed = false
+                filesCompleted = false
+            }
             for entry in fileScan.entries {
                 if let key = entry.key {
                     if let current = keyed[key] {
@@ -716,7 +797,15 @@ enum ClaudeCostScanner {
                             .sorted { $0.tokens > $1.tokens }.prefix(5).map { $0 })
                 })
         }.sorted { $0.projectKey < $1.projectKey }
-        return ClaudeProjectScanResult(report: report, projects: projects, completed: completed)
+        // Unread files all have mtime <= the first one skipped, so they hold
+        // nothing after that file's day.
+        let exactFrom: Date? = completed || !walkCompleted || !filesCompleted
+            ? nil
+            : budgetStopMtime.flatMap {
+                calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0))
+            }
+        return ClaudeProjectScanResult(
+            report: report, projects: projects, completed: completed, exactFrom: exactFrom)
     }
 
     /// One model's running totals within a day.

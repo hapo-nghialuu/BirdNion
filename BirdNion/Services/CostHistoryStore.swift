@@ -195,6 +195,46 @@ enum CostHistoryStore {
         return document
     }
 
+    /// How often the single `.bak` copy is refreshed while the app writes.
+    static let backupInterval: TimeInterval = 2 * 3_600
+
+    /// `cost-history.json.bak`, next to the history file.
+    static func backupURL(for url: URL) -> URL {
+        url.appendingPathExtension("bak")
+    }
+
+    /// Refreshes the single `.bak` copy of the history file: right before a
+    /// rescan rewrites days (`beforeRescan`), otherwise at most every
+    /// `backupInterval`. A copy that holds clearly fewer stored days than the
+    /// existing backup is not written, so a history that just lost days never
+    /// overwrites the last good backup. Best effort: never blocks the write.
+    static func backupBeforeWrite(url: URL, now: Date, beforeRescan: Bool,
+                                  fileManager: FileManager = .default) {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        let backup = backupURL(for: url)
+        if !beforeRescan,
+           let modified = (try? fileManager.attributesOfItem(atPath: backup.path))?[.modificationDate] as? Date,
+           now.timeIntervalSince(modified) < backupInterval, modified <= now {
+            return
+        }
+        if fileManager.fileExists(atPath: backup.path) {
+            let current = read(url: url).sources ?? [:]
+            let saved = read(url: backup).sources ?? [:]
+            let currentDays = current.values.reduce(0) { $0 + $1.count }
+            let savedDays = saved.values.reduce(0) { $0 + $1.count }
+            // Daily pruning drops at most about one day per source between
+            // refreshes; anything beyond that is lost history.
+            if currentDays + max(saved.count, 1) < savedDays { return }
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            try data.write(to: backup, options: .atomic)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
+        } catch {
+            // The backup is a safety net only; keep persisting live usage.
+        }
+    }
+
     static func write(_ doc: Document, url: URL = historyURL()) throws {
         guard validateDocument(doc) else { throw ValidationError.invalidDocument }
         _ = try mutationPathExistsAsRegularFile(url)
@@ -357,10 +397,13 @@ enum CostHistoryStore {
     /// Merge live day buckets into the document for one source. Returns the
     /// updated document and the contiguous daily series for the UI window.
     ///
-    /// When `replacingSource` is true, ignore previously stored days for that
-    /// source and write only the live set (atomic wipe+replace in one write
-    /// via `apply`). Used after a counting/pricing revision so high-water
-    /// cannot keep inflated pre-fix totals.
+    /// When `replacingSource` is true, every live day overwrites its stored
+    /// day instead of keeping the higher of the two. Used after a
+    /// counting/pricing revision so high-water cannot keep inflated pre-fix
+    /// totals. `overwriteFrom` does the same for live days on or after that
+    /// day only (a rescan that stopped early is exact only for its newest
+    /// days). Stored days the live scan did not report are never removed:
+    /// their session logs may be gone, and the history is the only record.
     static func merge(
         document: Document,
         source: Source,
@@ -369,10 +412,14 @@ enum CostHistoryStore {
         calendar: Calendar = .current,
         windowDays: Int = 90,
         retainDays: Int = retainDays,
-        replacingSource: Bool = false) -> (document: Document, window: [DayBucket])
+        replacingSource: Bool = false,
+        overwriteFrom: Date? = nil) -> (document: Document, window: [DayBucket])
     {
         var sources = document.sources ?? [:]
-        var byDay: [String: Day] = replacingSource ? [:] : (sources[source.rawValue] ?? [:])
+        var byDay: [String: Day] = sources[source.rawValue] ?? [:]
+        let overwriteStart: Date? = replacingSource
+            ? .distantPast
+            : overwriteFrom.map { calendar.startOfDay(for: $0) }
 
         for live in liveDays {
             let key = dayKey(live.date, calendar: calendar)
@@ -380,7 +427,8 @@ enum CostHistoryStore {
                 usd: live.usd,
                 tokens: live.tokens,
                 models: live.models.map { Model(name: $0.name, usd: $0.usd, tokens: $0.tokens) })
-            if !replacingSource, let existing = byDay[key] {
+            let overwrites = overwriteStart.map { live.date >= $0 } ?? false
+            if !overwrites, let existing = byDay[key] {
                 byDay[key] = preferHigher(existing, incoming)
             } else if incoming.tokens > 0 || incoming.usd > 0 {
                 byDay[key] = incoming
@@ -490,6 +538,7 @@ enum CostHistoryStore {
         windowDays: Int = 90,
         url: URL = historyURL(),
         replacingSource: Bool = false,
+        overwriteFrom: Date? = nil,
         liveScanSucceeded: Bool = false,
         updateTopModel: Bool = false,
         topModel: String? = nil,
@@ -527,7 +576,8 @@ enum CostHistoryStore {
             now: now,
             calendar: calendar,
             windowDays: windowDays,
-            replacingSource: replacingSource)
+            replacingSource: replacingSource,
+            overwriteFrom: overwriteFrom)
         if liveScanSucceeded {
             var scannedAt = updated.scannedAt ?? [:]
             scannedAt[source.rawValue] = Int64(
@@ -564,6 +614,11 @@ enum CostHistoryStore {
             updated.topModels = topModels
         }
         do {
+            // Refresh the `.bak` copy before a rescan rewrites days, and every
+            // two hours, so persisted usage can always be restored by hand.
+            backupBeforeWrite(
+                url: url, now: now,
+                beforeRescan: replacingSource || overwriteFrom != nil)
             try write(updated, url: url)
             return ApplyReceipt(window: window, persisted: true)
         } catch {

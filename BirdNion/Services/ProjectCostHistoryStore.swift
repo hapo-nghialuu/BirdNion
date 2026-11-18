@@ -117,10 +117,16 @@ enum ProjectCostHistoryStore {
         calendar: Calendar = .current,
         retainDays: Int = retainDays,
         replacingSource: Bool = false,
+        overwriteFrom: Date? = nil,
         retractions: [Retraction] = []
     ) -> Document {
         var sources = document.sources ?? [:]
-        var projects = replacingSource ? [:] : (sources[source.rawValue] ?? [:])
+        // Replacing overwrites the days the live scan reports; stored days it
+        // did not reach stay, since their session logs may already be gone.
+        var projects = sources[source.rawValue] ?? [:]
+        let overwriteStart: Date? = replacingSource
+            ? .distantPast
+            : overwriteFrom.map { calendar.startOfDay(for: $0) }
         var applied = document.appliedRetractionIDs ?? [:]
         var appliedForSource = Set(applied[source.rawValue] ?? [])
 
@@ -184,7 +190,8 @@ enum ProjectCostHistoryStore {
                             usd: $0.usd,
                             tokens: $0.tokens)
                     })
-                if !replacingSource, let current = stored.days[dayKey] {
+                let overwrites = overwriteStart.map { row.date >= $0 } ?? false
+                if !overwrites, let current = stored.days[dayKey] {
                     stored.days[dayKey] = preferHigher(current, incoming)
                 } else if incoming.usd > 0 || incoming.tokens > 0 {
                     stored.days[dayKey] = incoming
@@ -216,6 +223,7 @@ enum ProjectCostHistoryStore {
         calendar: Calendar = .current,
         url: URL = historyURL(),
         replacingSource: Bool = false,
+        overwriteFrom: Date? = nil,
         retractions: [Retraction] = []
     ) -> Document {
         ioLock.lock()
@@ -223,7 +231,7 @@ enum ProjectCostHistoryStore {
         let updated = merge(
             document: read(url: url), source: source, liveProjects: liveProjects,
             now: now, calendar: calendar, replacingSource: replacingSource,
-            retractions: retractions)
+            overwriteFrom: overwriteFrom, retractions: retractions)
         try? write(updated, url: url)
         return updated
     }

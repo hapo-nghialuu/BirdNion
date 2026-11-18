@@ -2416,6 +2416,7 @@ final class ClaudeAccountMenuModel: ObservableObject {
     }
 
     func reload() {
+        ClaudeCLIAccountStore.upgradeShellWrapperOnce()
         accounts = ClaudeCLIAccountStore.allAccounts()
         activeID = ClaudeCLIAccountStore.activeID()
         wrapperInstalled = ClaudeCLIAccountStore.isShellWrapperInstalled()

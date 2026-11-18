@@ -143,4 +143,34 @@ final class LocalCostSourceTests: XCTestCase {
         XCTAssertEqual(GeminiModelPrice.price(for: "gemini-3.1-pro-preview", promptTokens: 200_000)?.inputPerM, 2.0)
         XCTAssertEqual(GeminiModelPrice.price(for: "gemini-3.1-pro-preview", promptTokens: 200_001)?.inputPerM, 4.0)
     }
+
+    // Antigravity: newer builds leave the generation record without a time;
+    // it is recovered from `steps.metadata` through the shared step id.
+    private func pbVarint(_ value: UInt64) -> [UInt8] {
+        var v = value; var out: [UInt8] = []
+        repeat { var b = UInt8(v & 0x7F); v >>= 7; if v != 0 { b |= 0x80 }; out.append(b) } while v != 0
+        return out
+    }
+    private func pbField(_ number: Int, _ value: UInt64) -> [UInt8] {
+        pbVarint(UInt64(number << 3)) + pbVarint(value)
+    }
+    private func pbField(_ number: Int, _ bytes: [UInt8]) -> [UInt8] {
+        pbVarint(UInt64(number << 3 | 2)) + pbVarint(UInt64(bytes.count)) + bytes
+    }
+
+    func testAntigravityTurnTimeComesFromStepMetadata() throws {
+        let stepID = Array("6e2dd6f4-9c3a-4b9d-9d3a-762500a3e778".utf8)
+        let usage = pbField(2, 100) + pbField(9, 50)
+        let chat = pbField(4, usage) + pbField(19, Array("gemini-flash-worker-agy".utf8))
+        let generation = pbField(1, chat) + pbField(4, stepID)
+
+        let turn = try XCTUnwrap(AntigravityTurnDecoder.parseTurn(generation))
+        XCTAssertNil(turn.timestampMs, "the generation record carries no time")
+        XCTAssertEqual(turn.stepID, String(decoding: stepID, as: UTF8.self))
+
+        let created = pbField(1, 1_795_000_000) + pbField(2, 500_000_000)
+        let step = try XCTUnwrap(AntigravityTurnDecoder.parseStepTime(pbField(1, created) + pbField(12, stepID)))
+        XCTAssertEqual(step.id, turn.stepID)
+        XCTAssertEqual(step.timestampMs, 1_795_000_000_500)
+    }
 }
