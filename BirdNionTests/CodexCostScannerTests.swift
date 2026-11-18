@@ -4990,4 +4990,47 @@ final class CodexCostScannerTests: XCTestCase {
         XCTAssertEqual(day["gpt-6.1-sol"]?.first, 240)
         XCTAssertEqual(result.lastModel, "gpt-6.1-sol")
     }
+
+    // MARK: - GPT-6 pricing
+
+    /// Empty models.dev cache root so only the built-in card is consulted.
+    private func gpt6Cost(_ model: String, input: Int, cached: Int = 0, output: Int) throws -> Double {
+        let emptyRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("birdnion-no-modelsdev-\(UUID().uuidString)", isDirectory: true)
+        return try XCTUnwrap(CostUsagePricing.codexCostUSD(
+            model: model, inputTokens: input, cachedInputTokens: cached,
+            outputTokens: output, modelsDevCacheRoot: emptyRoot))
+    }
+
+    func testGPT6FamilyIsPricedAtItsStandardCard() throws {
+        let cards: [(String, Double, Double, Double)] = [
+            ("gpt-6-astra", 10, 1, 50),
+            ("gpt-6.2-astra", 8, 0.40, 40),
+            ("gpt-6.1-sol", 2, 0.10, 10),
+            ("gpt-6.2-sol", 2, 0.10, 10),
+            ("gpt-6.1-terra", 1, 0.05, 5),
+            ("gpt-6-luna", 0.10, 0.01, 0.50),
+        ]
+        for (model, input, cached, output) in cards {
+            // 100K prompt (40K cached) + 10K output.
+            let expected = (60_000 * input + 40_000 * cached + 10_000 * output) / 1_000_000
+            XCTAssertEqual(
+                try gpt6Cost(model, input: 100_000, cached: 40_000, output: 10_000),
+                expected, accuracy: 1e-9, model)
+        }
+    }
+
+    func testGPT6LongContextBillsWholeRequestAtLongCard() throws {
+        // 300K prompt crosses 272K: 2x input/cache, 1.5x output for all of it.
+        let expected = (300_000 * 16.0 + 10_000 * 60.0) / 1_000_000
+        XCTAssertEqual(
+            try gpt6Cost("gpt-6.2-astra", input: 300_000, output: 10_000),
+            expected, accuracy: 1e-9)
+    }
+
+    func testGPT6FastModeIsTwiceStandard() throws {
+        let priority = try XCTUnwrap(CostUsagePricing.codexPriorityCostUSD(
+            model: "gpt-6.1-sol", inputTokens: 100_000, outputTokens: 10_000))
+        XCTAssertEqual(priority, (100_000 * 4.0 + 10_000 * 20.0) / 1_000_000, accuracy: 1e-9)
+    }
 }

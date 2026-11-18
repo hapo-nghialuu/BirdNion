@@ -10,7 +10,7 @@ enum GeminiCostSource {
     static let descriptor = LocalCostSource(
         source: .gemini,
         displayName: "Gemini CLI",
-        countingRevision: 2,
+        countingRevision: 3,
         roots: { GeminiCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GeminiCostSource.turns(roots: roots, cutoff: cutoff)
@@ -76,7 +76,8 @@ enum GeminiCostSource {
         guard let date = LocalCostParsing.timestamp(in: record), date >= cutoff else { return nil }
         let model = (record["model"] as? String) ?? (record["model_name"] as? String) ?? "unknown"
         let usd = GeminiModelPrice.cost(
-            model: model, input: max(0, input - cached), output: output + thoughts + tool, cached: cached)
+            model: model, input: max(0, input - cached), output: output + thoughts + tool, cached: cached,
+            date: date)
         return LocalTurnRecord(
             date: date, model: model, tokens: total, usd: usd,
             dedupeKey: "gemini:\(session):\(ordinal):\(model)")
@@ -90,23 +91,62 @@ enum GeminiCostSource {
     }
 }
 
-/// Per-million-token USD prices for Gemini models (Google rate card,
-/// ≤200k tier). Unknown models still count tokens but cost $0 — same
-/// convention as `ClaudeModelPrice`.
+/// Per-million-token USD prices for Gemini models (Google paid-tier rate
+/// card). Unknown models still count tokens but cost $0 — same convention as
+/// `ClaudeModelPrice`. Several current cards change on a fixed date, so a
+/// turn is priced at the card in force on the day it happened.
 struct GeminiModelPrice {
     let inputPerM: Double
     let outputPerM: Double
     let cachedPerM: Double
 
-    static func cost(model: String, input: Int, output: Int, cached: Int) -> Double {
-        guard let price = price(for: model) else { return 0 }
+    /// Gemini 4 Carbon/Argon double their card from this day.
+    static let gemini4PriceRiseDate = utcDate(year: 2026, month: 12, day: 1)
+    /// Gemini 3.6/3.8 Flash double their card from this day.
+    static let gemini3FlashPriceRiseDate = utcDate(year: 2027, month: 1, day: 1)
+
+    static func cost(model: String, input: Int, output: Int, cached: Int,
+                     date: Date = Date()) -> Double {
+        guard let price = price(for: model, on: date, promptTokens: input + cached) else { return 0 }
         return (Double(input) * price.inputPerM
             + Double(output) * price.outputPerM
             + Double(cached) * price.cachedPerM) / 1_000_000
     }
 
-    static func price(for model: String) -> GeminiModelPrice? {
+    /// - Parameters:
+    ///   - date: when the turn happened; selects the dated card.
+    ///   - promptTokens: whole prompt size; Gemini 3.1 Pro bills prompts over
+    ///     200K tokens at its long-context card.
+    static func price(for model: String, on date: Date = Date(),
+                      promptTokens: Int = 0) -> GeminiModelPrice? {
         let m = model.lowercased()
+        if m.hasPrefix("gemini-4-carbon") || m.hasPrefix("gemini-4-argon") {
+            return date < gemini4PriceRiseDate
+                ? GeminiModelPrice(inputPerM: 2.00, outputPerM: 10.00, cachedPerM: 0.10)
+                : GeminiModelPrice(inputPerM: 4.00, outputPerM: 20.00, cachedPerM: 0.20)
+        }
+        if m.hasPrefix("gemini-4-hydrogen") {
+            return GeminiModelPrice(inputPerM: 1.50, outputPerM: 7.50, cachedPerM: 0.075)
+        }
+        if m.hasPrefix("gemini-3.8-flash") || m.hasPrefix("gemini-3.6-flash") {
+            return date < gemini3FlashPriceRiseDate
+                ? GeminiModelPrice(inputPerM: 0.75, outputPerM: 3.75, cachedPerM: 0.075)
+                : GeminiModelPrice(inputPerM: 1.50, outputPerM: 7.50, cachedPerM: 0.15)
+        }
+        if m.hasPrefix("gemini-3.5-flash-lite") {
+            return GeminiModelPrice(inputPerM: 0.30, outputPerM: 2.50, cachedPerM: 0.03)
+        }
+        if m.hasPrefix("gemini-3.1-flash-lite") {
+            return GeminiModelPrice(inputPerM: 0.25, outputPerM: 1.50, cachedPerM: 0.025)
+        }
+        if m.hasPrefix("gemini-3.1-pro") {
+            return promptTokens > 200_000
+                ? GeminiModelPrice(inputPerM: 4.00, outputPerM: 18.00, cachedPerM: 0.40)
+                : GeminiModelPrice(inputPerM: 2.00, outputPerM: 12.00, cachedPerM: 0.20)
+        }
+        if m.hasPrefix("gemini-3-flash") {
+            return GeminiModelPrice(inputPerM: 0.50, outputPerM: 3.00, cachedPerM: 0.05)
+        }
         if m.hasPrefix("gemini-2.5-flash-lite") || m.hasPrefix("gemini-flash-lite") {
             return GeminiModelPrice(inputPerM: 0.10, outputPerM: 0.40, cachedPerM: 0.025)
         }
@@ -129,5 +169,11 @@ struct GeminiModelPrice {
             return GeminiModelPrice(inputPerM: 0.075, outputPerM: 0.30, cachedPerM: 0.02)
         }
         return nil
+    }
+
+    private static func utcDate(year: Int, month: Int, day: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return calendar.date(from: DateComponents(year: year, month: month, day: day)) ?? .distantFuture
     }
 }

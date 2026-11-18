@@ -121,4 +121,26 @@ final class LocalCostSourceTests: XCTestCase {
         XCTAssertEqual(turn.usd, expected, accuracy: 1e-12)
         XCTAssertEqual(turn.tokens, 1100)
     }
+
+    // Gemini 4 Carbon doubles its card on 1 Dec 2026; a turn keeps the card
+    // in force on its own day.
+    func testGeminiDatedCardFollowsTurnDate() throws {
+        let iso = ISO8601DateFormatter()
+        let before = try XCTUnwrap(iso.date(from: "2026-11-30T12:00:00Z"))
+        let after = try XCTUnwrap(iso.date(from: "2026-12-01T12:00:00Z"))
+        XCTAssertEqual(GeminiModelPrice.price(for: "gemini-4-carbon", on: before)?.inputPerM, 2.0)
+        XCTAssertEqual(GeminiModelPrice.price(for: "gemini-4-carbon", on: after)?.inputPerM, 4.0)
+    }
+
+    // Flash models must not fall through to the generic Gemini 3 (Pro) card.
+    func testGeminiFlashModelsUseTheirOwnCards() {
+        XCTAssertEqual(GeminiModelPrice.price(for: "gemini-3-flash-preview")?.outputPerM, 3.0)
+        XCTAssertEqual(GeminiModelPrice.price(for: "gemini-3.1-flash-lite")?.outputPerM, 1.5)
+        XCTAssertEqual(GeminiModelPrice.price(for: "gemini-3.5-flash-lite")?.outputPerM, 2.5)
+    }
+
+    func testGemini31ProLongPromptUsesLongCard() {
+        XCTAssertEqual(GeminiModelPrice.price(for: "gemini-3.1-pro-preview", promptTokens: 200_000)?.inputPerM, 2.0)
+        XCTAssertEqual(GeminiModelPrice.price(for: "gemini-3.1-pro-preview", promptTokens: 200_001)?.inputPerM, 4.0)
+    }
 }

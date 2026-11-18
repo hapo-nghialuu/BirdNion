@@ -10,7 +10,7 @@ enum KimiCostSource {
     static let descriptor = LocalCostSource(
         source: .kimi,
         displayName: "Kimi",
-        countingRevision: 2,
+        countingRevision: 3,
         roots: { KimiCostSource.dataRoots() },
         turnReader: { roots, cutoff in
             GenericJsonCostSource.turns(
