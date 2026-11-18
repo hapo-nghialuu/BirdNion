@@ -95,6 +95,11 @@ struct AgentCostRow: Identifiable {
         }
     }
 
+    /// Bar/swatch fill; Antigravity uses the Google gradient.
+    var fill: AnyShapeStyle {
+        record.id == .antigravity ? AnyShapeStyle(VocabbyTheme.googleGradient()) : AnyShapeStyle(color)
+    }
+
     var id: InstalledAgentID { record.id }
 }
 
@@ -125,7 +130,7 @@ struct ModelOverflowPanelRoot: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(sorted) { item in
                     HStack(spacing: 8) {
-                        Rectangle().fill(item.color).frame(width: 6, height: 6)
+                        Rectangle().fill(item.fill).frame(width: 6, height: 6)
                         Text(AllUsageFormat.shortName(item.name))
                             .font(.plexSans(12))
                             .foregroundStyle(VocabbyTheme.primary)
@@ -171,6 +176,11 @@ struct AgentModelRow: Identifiable {
         case "devin": VocabbyTheme.devin
         default: VocabbyTheme.tertiary
         }
+    }
+
+    /// Bar/swatch fill; Antigravity models use the Google gradient.
+    var fill: AnyShapeStyle {
+        source == "antigravity" ? AnyShapeStyle(VocabbyTheme.googleGradient()) : AnyShapeStyle(color)
     }
 }
 

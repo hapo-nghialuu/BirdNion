@@ -1309,14 +1309,15 @@ final class AntigravityProvider: QuotaProvider {
         guard let account = AntigravityOAuthStore.activeAccount(in: store),
               let refreshToken = AntigravityIsolatedAgy.agyRefreshToken(
                   forAccountLabel: account.label),
-              let groups = try? await AntigravityAccountCloudQuota.fetchQuotaGroups(
+              let quota = try? await AntigravityAccountCloudQuota.fetchQuota(
                   refreshToken: refreshToken)
         else { return nil }
-        let windows = quotaWindowsFromSummary(groups)
+        let windows = quotaWindowsFromSummary(quota.groups)
         guard !windows.isEmpty else { return nil }
         return ProviderStatus(
             id: id, displayName: displayName, windows: windows, lastUpdated: Date(),
-            error: nil, accountLabel: account.email ?? account.label, sourceLabel: "Cloud")
+            error: nil, accountLabel: account.email ?? account.label,
+            planName: quota.planName, sourceLabel: "Cloud")
     }
 
     /// OAuth remote path: uses the active stored Google account to fetch quota
@@ -1752,10 +1753,13 @@ enum AntigravityAccountCloudQuota {
 
     /// Raw `groups` from RetrieveUserQuotaSummary, shaped exactly like the
     /// local language server's, so `quotaWindowsFromSummary` maps both.
-    static func fetchQuotaGroups(
+    /// Quota groups plus the plan name `loadCodeAssist` reported for the
+    /// current token ("Google AI Ultra"); the plan rides along with the cached
+    /// session, so it costs no extra request.
+    static func fetchQuota(
         refreshToken: String,
         timeout: TimeInterval = 20
-    ) async throws -> [[String: Any]] {
+    ) async throws -> (groups: [[String: Any]], planName: String?) {
         // Behave like the real client: mint an access token only when the
         // cached one is about to expire (~hourly), and run `loadCodeAssist`
         // once per fresh token, so a routine poll is a single quota request.
@@ -1764,17 +1768,18 @@ enum AntigravityAccountCloudQuota {
             session = cached
         } else {
             let minted = try await refreshAccessToken(refreshToken: refreshToken, timeout: timeout)
-            _ = try await post(
+            let assist = try await post(
                 method: "loadCodeAssist", body: loadCodeAssistBody,
                 accessToken: minted.token, timeout: timeout)
-            session = SessionCache.Session(token: minted.token, expiresAt: minted.expiresAt)
+            session = SessionCache.Session(
+                token: minted.token, expiresAt: minted.expiresAt, planName: planName(from: assist))
             await SessionCache.shared.store(session, for: refreshToken)
         }
         do {
             let data = try await post(
                 method: "retrieveUserQuotaSummary", body: Data("{}".utf8),
                 accessToken: session.token, timeout: timeout)
-            return try AgResponseParser.parseQuotaSummary(data).groups
+            return (try AgResponseParser.parseQuotaSummary(data).groups, session.planName)
         } catch {
             // A rejected token is dropped so the next poll mints a new one;
             // no immediate retry, which would only add requests.
@@ -1783,9 +1788,23 @@ enum AntigravityAccountCloudQuota {
         }
     }
 
+    /// `paidTier.name` is the subscription ("Google AI Ultra"); `currentTier`
+    /// is only the product tier ("Antigravity"), used when there is no paid one.
+    static func planName(from loadCodeAssist: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: loadCodeAssist) as? [String: Any]
+        else { return nil }
+        for key in ["paidTier", "currentTier"] {
+            if let name = (json[key] as? [String: Any])?["name"] as? String,
+               !name.trimmingCharacters(in: .whitespaces).isEmpty {
+                return name
+            }
+        }
+        return nil
+    }
+
     /// Access tokens per refresh token, in memory only (never persisted).
     actor SessionCache {
-        struct Session { let token: String; let expiresAt: Date }
+        struct Session { let token: String; let expiresAt: Date; var planName: String? = nil }
         static let shared = SessionCache()
         private var sessions: [String: Session] = [:]
 

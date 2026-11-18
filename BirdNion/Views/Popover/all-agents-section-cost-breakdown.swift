@@ -38,7 +38,7 @@ struct AllAgentsCostBreakdownSection: View {
         let amount: Double
         /// Chuỗi hiển thị cột phải, đã format theo mode ($ hoặc tokens).
         let display: String
-        let color: Color
+        let fill: AnyShapeStyle
         let agentID: InstalledAgentID?
     }
 
@@ -56,7 +56,7 @@ struct AllAgentsCostBreakdownSection: View {
                     display: tokenOnly
                         ? AllUsageFormat.tokensShort($0.tokens)
                         : AllUsageFormat.usd($0.periodUSD),
-                    color: $0.color,
+                    fill: $0.fill,
                     agentID: $0.id
                 )
             }.sorted { $0.amount > $1.amount }
@@ -67,7 +67,7 @@ struct AllAgentsCostBreakdownSection: View {
                     name: AllUsageFormat.shortName($0.name),
                     amount: $0.usd,
                     display: AllUsageFormat.usd($0.usd),
-                    color: $0.color,
+                    fill: $0.fill,
                     agentID: nil
                 )
             }.sorted { $0.amount > $1.amount }
@@ -79,7 +79,7 @@ struct AllAgentsCostBreakdownSection: View {
                     name: AllUsageFormat.shortName($0.name),
                     amount: Double($0.tokens),
                     display: AllUsageFormat.tokensShort($0.tokens),
-                    color: $0.color,
+                    fill: $0.fill,
                     agentID: nil
                 )
             }.sorted { $0.amount > $1.amount }
@@ -160,7 +160,7 @@ struct AllAgentsCostBreakdownSection: View {
             HStack(spacing: 0) {
                 ForEach(displayRows) { row in
                     Rectangle()
-                        .fill(row.color)
+                        .fill(row.fill)
                         .frame(width: geometry.size.width * CGFloat(row.amount / max(totalUSD, 0.01)))
                 }
             }
@@ -171,7 +171,7 @@ struct AllAgentsCostBreakdownSection: View {
 
     private func rowView(_ row: DisplayRow) -> some View {
         HStack(spacing: 8) {
-            Rectangle().fill(row.color).frame(width: 3, height: 12)
+            Rectangle().fill(row.fill).frame(width: 3, height: 12)
             if let id = row.agentID {
                 if hasBrandLogo(id) {
                     ProviderLogoMark(id: id.rawValue).frame(width: 16, height: 16)
@@ -185,7 +185,7 @@ struct AllAgentsCostBreakdownSection: View {
                         }
                 }
             } else {
-                Rectangle().fill(row.color).frame(width: 7, height: 7).padding(.horizontal, 4.5)
+                Rectangle().fill(row.fill).frame(width: 7, height: 7).padding(.horizontal, 4.5)
             }
             Text(row.name)
                 .font(.plexSans(13, weight: .medium))
